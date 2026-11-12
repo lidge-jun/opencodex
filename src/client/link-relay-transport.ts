@@ -1,6 +1,6 @@
 import { Agent, request, type IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import { serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { clearableDeadline } from "../lib/abort";
@@ -13,6 +13,7 @@ import {
   linkRelayChallenge, linkRelayProofMatches,
 } from "../link/relay-auth";
 import { forgetVerifiedHomeConnection, recordVerifiedHomeConnection } from "./link-connection";
+import { childLinkTraffic, type LinkTrafficBook, type LinkTrafficFlow } from "../link/traffic";
 
 export interface BoundLinkRelayTarget {
   tunnelPort: number;
@@ -64,9 +65,17 @@ class SingleConnectionAgent extends Agent {
 }
 
 function requestOnConnection(
-  url: URL, init: RequestInit, agent: SingleConnectionAgent, authenticatedSocket?: Socket,
+  url: URL, init: RequestInit, agent: SingleConnectionAgent, authenticatedSocket?: Socket, onSent?: (bytes: number) => void,
+  onUploadSettled?: (finished: boolean) => void,
 ): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
+    // Once: true when every body write completed, false when the request or its socket closed first.
+    let uploadSettled = false;
+    const settleUpload = (finished: boolean) => {
+      if (uploadSettled) return;
+      uploadSettled = true;
+      onUploadSettled?.(finished);
+    };
     const headers = Object.fromEntries(new Headers(init.headers));
     // No implicit decompression negotiation; handle an explicitly encoded response below anyway.
     headers["accept-encoding"] = "identity";
@@ -75,9 +84,12 @@ function requestOnConnection(
       maxHeaderSize: 64 * 1024,
     }, resolve);
     outgoing.on("error", reject);
+    outgoing.once("close", () => settleUpload(false));
     outgoing.on("upgrade", (_response, socket) => { socket.destroy(); reject(new LinkRelayAuthenticationError()); });
     outgoing.on("socket", socket => {
       if (authenticatedSocket && socket !== authenticatedSocket) outgoing.destroy(new LinkRelayAuthenticationError());
+      // Before the agent's own close listener, so a cut upload is settled before the request reports its end.
+      socket.once("close", () => settleUpload(false));
     });
     void (async () => {
       const body = init.body;
@@ -94,7 +106,9 @@ function requestOnConnection(
             // Await the write callback: upstream backpressure never buffers the whole upload.
             await new Promise<void>((done, fail) => outgoing.write(next.value,
               error => error ? fail(error) : done()));
+            onSent?.(next.value.byteLength);
           }
+          settleUpload(true);
         } finally {
           init.signal?.removeEventListener("abort", abort);
           outgoing.removeListener("close", abort);
@@ -102,12 +116,41 @@ function requestOnConnection(
           reader.releaseLock();
         }
       } else if (body != null) {
-        if (typeof body === "string" || body instanceof Uint8Array) outgoing.write(body);
-        else throw new TypeError("unsupported link relay body");
-      }
+        if (typeof body === "string" || body instanceof Uint8Array) {
+          // Counted once the socket took it, like each streamed chunk; a write that never completes counts nothing.
+          const bytes = typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
+          outgoing.write(body, error => {
+            if (error) { settleUpload(false); return; }
+            onSent?.(bytes);
+            settleUpload(true);
+          });
+        } else throw new TypeError("unsupported link relay body");
+      } else settleUpload(true);
       outgoing.end();
-    })().catch(error => { outgoing.destroy(error instanceof Error ? error : new Error("link upload failed")); reject(error); });
+    })().catch(error => {
+      settleUpload(false);
+      outgoing.destroy(error instanceof Error ? error : new Error("link upload failed"));
+      reject(error);
+    });
   });
+}
+
+/**
+ * A data request's flow that ends only once both halves settled: the response (through `end`) and
+ * the upload (through `uploaded`). It is complete only when both finished, so a Home that answered in
+ * full before reading the whole body still leaves the request incomplete and `toHomeBytes` flagged as
+ * a lower bound.
+ */
+function untilBothSettled(flow: LinkTrafficFlow): { flow: LinkTrafficFlow; uploaded(finished: boolean): void } {
+  let response: boolean | undefined, upload: boolean | undefined;
+  const settle = () => { if (response !== undefined && upload !== undefined) flow.end(response && upload); };
+  return {
+    flow: {
+      toHome: bytes => flow.toHome(bytes), fromHome: bytes => flow.fromHome(bytes), uncounted: () => flow.uncounted(),
+      end(complete) { if (response === undefined) { response = complete; settle(); } },
+    },
+    uploaded(finished) { if (upload === undefined) { upload = finished; settle(); } },
+  };
 }
 
 function responseHeaders(incoming: IncomingMessage): Headers {
@@ -118,13 +161,20 @@ function responseHeaders(incoming: IncomingMessage): Headers {
   return headers;
 }
 
-/** Node HTTP compatibility is confined here; the relay continues to expose a Web Response/stream. */
-async function responseOnConnection(incoming: IncomingMessage, agent: SingleConnectionAgent, method: string): Promise<Response> {
+/**
+ * Node HTTP compatibility is confined here; the relay continues to expose a Web Response/stream.
+ * `flow` counts the response body as it arrives on the socket, before any decoding, and ends
+ * complete when the body reached its end, incomplete on a cancel or an error.
+ */
+async function responseOnConnection(
+  incoming: IncomingMessage, agent: SingleConnectionAgent, method: string, flow?: LinkTrafficFlow,
+): Promise<Response> {
   const headers = responseHeaders(incoming);
   const status = incoming.statusCode ?? 502;
   if (method === "HEAD" || status === 204 || status === 205 || status === 304) {
-    for await (const _chunk of incoming) { /* drain a header-only response */ }
+    for await (const chunk of incoming) flow?.fromHome((chunk as Buffer).byteLength);
     await agent.close();
+    flow?.end(true);
     return new Response(null, { status, headers });
   }
   let source: Readable = incoming;
@@ -134,9 +184,19 @@ async function responseOnConnection(incoming: IncomingMessage, agent: SingleConn
   if (encoding && encoding !== "identity" && !decoder) {
     throw new Error("unsupported link response encoding");
   }
+  // Counted as the bytes leave the socket's stream, before any adapter queue or decoder, so a
+  // cancel after they were read still counts them; pipe() keeps the caller's backpressure.
+  const counter = flow ? new Transform({
+    transform(chunk: Buffer, _encoding, done) { flow.fromHome(chunk.byteLength); done(null, chunk); },
+  }) : undefined;
+  if (counter) {
+    incoming.on("error", error => counter.destroy(error));
+    source = incoming.pipe(counter);
+  }
   if (decoder) {
-    incoming.on("error", error => decoder.destroy(error));
-    source = incoming.pipe(decoder);
+    const upstream = source;
+    upstream.on("error", error => decoder.destroy(error));
+    source = upstream.pipe(decoder);
   }
   const reader = (Readable.toWeb(source) as unknown as ReadableStream<Uint8Array>).getReader();
   let finished = false;
@@ -144,6 +204,7 @@ async function responseOnConnection(incoming: IncomingMessage, agent: SingleConn
     if (finished) return agent.close();
     finished = true;
     if (source !== incoming) source.destroy();
+    counter?.destroy();
     await agent.close();
     try { reader.releaseLock(); } catch { /* a cancelled read may still be settling */ }
   };
@@ -151,15 +212,20 @@ async function responseOnConnection(incoming: IncomingMessage, agent: SingleConn
     async pull(controller) {
       try {
         const next = await reader.read();
-        if (next.done) { await finish(); controller.close(); }
+        if (next.done) { flow?.end(true); await finish(); controller.close(); }
         else controller.enqueue(next.value);
-      } catch (error) { await finish(); controller.error(error); }
+      } catch (error) { flow?.end(false); await finish(); controller.error(error); }
     },
     async cancel(reason) {
+      flow?.end(false);
       try { await reader.cancel(reason); } finally { await finish(); }
     },
   }, { highWaterMark: 0 }), { status, headers });
 }
+
+/** Test seam: the response half alone, over any readable that looks like an IncomingMessage. */
+export const linkResponseOnConnectionForTests = (incoming: IncomingMessage, close: () => Promise<void>, method: string, flow?: LinkTrafficFlow) =>
+  responseOnConnection(incoming, { close } as SingleConnectionAgent, method, flow);
 
 let peerReport: Record<string, string> | undefined;
 
@@ -236,10 +302,15 @@ export async function probeLinkRelayPreflight(
  * Authenticate and stream one request on the SAME socket; never fall back to an ordinary fetch.
  * LinkRelayAuthTimeoutError certifies that only the credential-free preflight expired before
  * data-request construction. Caller aborts and failures after that boundary keep their own errors.
+ *
+ * Every link body is counted here (#3023), so the relay and the Child's own reads of the Home
+ * count alike: a request from the moment its data request starts on the authenticated socket,
+ * each request-body chunk once the socket took it, and each response-body chunk as it arrives,
+ * before any decoding. A failed challenge or a refused connection sent no data and counts nothing.
  */
 export async function fetchBoundLinkRelay(
   target: BoundLinkRelayTarget, destination: string, init: RequestInit,
-  options: { authTimeoutMs?: number } = {},
+  options: { authTimeoutMs?: number; traffic?: LinkTrafficBook } = {},
 ): Promise<Response> {
   const authTimeoutMs = options.authTimeoutMs ?? LINK_RELAY_AUTH_TIMEOUT_MS;
   if (!Number.isFinite(authTimeoutMs) || authTimeoutMs <= 0) throw new RangeError("invalid link relay auth timeout");
@@ -250,6 +321,7 @@ export async function fetchBoundLinkRelay(
   const agent = new SingleConnectionAgent({ keepAlive: true, maxSockets: 1, maxFreeSockets: 1 });
   const deadline = clearableDeadline(authTimeoutMs, init.signal ?? undefined);
   let dataRequestStarted = false;
+  let flow: ReturnType<typeof untilBothSettled> | undefined;
   try {
     const response = await requestOnConnection(probe, { method: "GET", signal: deadline.signal, headers: preflightHeaders }, agent);
     const socket = agent.socket;
@@ -269,12 +341,17 @@ export async function fetchBoundLinkRelay(
     const headers = new Headers(init.headers);
     headers.set(LINK_RELAY_SESSION_HEADER, challenge.nonce);
     dataRequestStarted = true;
-    const incoming = await requestOnConnection(url, { ...init, headers }, agent, socket);
-    return await responseOnConnection(incoming, agent, init.method ?? "GET");
+    flow = target.linkId ? untilBothSettled((options.traffic ?? childLinkTraffic).begin(target.linkId)) : undefined;
+    const incoming = await requestOnConnection(url, { ...init, headers }, agent, socket, bytes => flow?.flow.toHome(bytes),
+      finished => flow?.uploaded(finished));
+    return await responseOnConnection(incoming, agent, init.method ?? "GET", flow?.flow);
   } catch (error) {
+    flow?.flow.end(false);
     const authDeadlineExpired = !dataRequestStarted && deadline.didExpire()
       && !(error instanceof LinkRelayAuthenticationError);
     await agent.close();
+    // The connection is gone, so an upload that has not settled yet never will.
+    flow?.uploaded(false);
     if (authDeadlineExpired && !init.signal?.aborted) throw new LinkRelayAuthTimeoutError();
     throw error;
   } finally { deadline.clear(); }
