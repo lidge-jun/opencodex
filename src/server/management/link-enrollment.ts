@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { assertSshAlias, buildExecArgv, buildFingerprintArgv, buildProbeArgv, REMOTE_COMMAND_NOT_FOUND, remoteOcxArgv } from "../../link/ssh-argv";
 import { plantUnavailableGuidance, resolveChildBinarySource } from "../../link/child-binary-source";
 import { parseFingerprintLine } from "../../link/fingerprint";
+import { confirmedLineTrustedIn } from "../../link/route-trust";
 import { isDetachedEphemeralChildConfig } from "../../link/ephemeral-child";
 import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
 import { requireRemotePlatform } from "../../link/remote-platform";
@@ -200,6 +201,12 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
   });
 }
 
+function confirmedLineTrusted(path: string, alias: string, line: string): boolean {
+  let text = "";
+  try { text = readFileSync(path, "utf8"); } catch { return false; }
+  return confirmedLineTrustedIn(text, alias, line);
+}
+
 function linkPinConflict(): Response {
   return fail("link_pin_conflict", "A Home-initiated link already pins another key for this alias; remove that link before trusting another key.", 409);
 }
@@ -314,11 +321,19 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       phase = "home_setup";
       const id = newLinkId(), issued = issueKey(ctx, "link:" + alias);
       record = { id, alias, direction: "hub-initiated", hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date(now()).toISOString(), remotePlatform, childKind: ephemeralChild ? "ephemeral" : "full" };
-      withConfigMutationLockSync(() => {
+      // Under the same lock as the store write: no Home-initiated link may own this alias in any
+      // case, and the live known_hosts must still trust exactly the confirmed line for it (another
+      // confirmation, under any spelling, may have replaced it since this one).
+      const created = withConfigMutationLockSync((): "written" | "exists" | "key_changed" => {
         const current = readStoreFor(ctx);
-        if (current.links.some(link => link.alias === alias && link.direction === "hub-initiated")) throw new Error("link exists");
+        const wanted = alias.toLowerCase();
+        if (current.links.some(link => link.alias.toLowerCase() === wanted && link.direction === "hub-initiated")) return "exists";
+        if (!confirmedLineTrusted(knownHostsFile(ctx), alias, confirmed.knownHostLine)) return "key_changed";
         writeStoreFor(ctx, { ...current, links: [...current.links, record!] });
+        return "written";
       });
+      if (created === "exists") { return await failed(fail("link_exists", "A link for this alias already exists.", 409)); }
+      if (created === "key_changed") { return await failed(fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409)); }
       await state.listener.ensureStarted();
       if (state.listener.status().state !== "listening") return await failed(fail("listener_unavailable", "The link listener is unavailable.", 503));
       await state.supervisor.ensureStarted();

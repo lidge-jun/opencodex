@@ -48,3 +48,15 @@ export function withoutAliasLines(text: string, alias: string): string[] {
   return text.split(/\r?\n/).filter(line => line && hostField(line).toLowerCase() !== wanted && !line.startsWith(alias + ","));
 }
 
+/**
+ * Does the file still trust exactly the line a confirmation wrote for alias? The line must be there,
+ * and no other line may name the alias in any case (OpenSSH would accept its key too).
+ */
+export function confirmedLineTrustedIn(text: string, alias: string, confirmedLine: string): boolean {
+  const lines = text.split(/\r?\n/).filter(meaningful).map(line => line.trim());
+  const target = confirmedLine.trim();
+  if (!lines.includes(target)) return false;
+  const wanted = alias.toLowerCase();
+  return lines.every(line => line === target || hostField(line).toLowerCase() !== wanted);
+}
+

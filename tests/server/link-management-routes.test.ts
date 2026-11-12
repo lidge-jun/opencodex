@@ -1135,3 +1135,50 @@ for (const remotePlatform of [undefined, "windows", "posix"] as const) {
     expect(h.store.links).toEqual([]);
   });
 }
+
+test("apply refuses when the confirmed key is no longer the one trusted for its alias", async () => {
+  temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-pin-"));
+  const knownHosts = join(temp, "known_hosts");
+  const scenario = async (mutate?: () => void) => {
+    const h = harness();
+    const base = applyRunner(h);
+    const deps = {
+      ...h.deps,
+      sshRunner: {
+        ...base,
+        async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
+          if ((argv.at(-1) ?? "") === "echo ocx-link-probe") {
+            const destination = argv[argv.indexOf("--") + 1]!;
+            const file = argv.find(value => value.startsWith("UserKnownHostsFile="))!.slice("UserKnownHostsFile=".length);
+            // Each spelling answers with its own key, as two machines would.
+            writeFileSync(file, destination + " ssh-ed25519 KEY" + destination + "\n");
+            return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
+          }
+          if ((argv.at(-1) ?? "") === remoteOcx(["link", "port"])) mutate?.();
+          return base.run(argv, options);
+        },
+      },
+    };
+    const confirm = async (alias: string) => {
+      expect((await call("/api/link/probe", "POST", { alias }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+      expect((await call("/api/link/confirm-host", "POST", { alias, fingerprint: "SHA256:abcdefghijklmnop" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    };
+    return { h, confirm, apply: (alias: string) => call("/api/link/apply", "POST", { alias }, deps, "gui-session", true, "pairing", true, h.config) };
+  };
+  // Two confirmations under case variants with different keys, before either is applied.
+  const variants = await scenario();
+  await variants.confirm("Home");
+  await variants.confirm("home");
+  const refused = await variants.apply("Home");
+  expect(refused?.status).toBe(409);
+  expect((await refused!.json() as { error: { code: string } }).error.code).toBe("host_key_changed");
+  expect(variants.h.store.links).toEqual([]);
+  expect(variants.h.events).toContain("revoke");
+  // The trusted line changes while apply runs its SSH work.
+  const during = await scenario(() => writeFileSync(knownHosts, "HOME ssh-ed25519 KEYother\n"));
+  await during.confirm("home");
+  const changed = await during.apply("home");
+  expect(changed?.status).toBe(409);
+  expect((await changed!.json() as { error: { code: string } }).error.code).toBe("host_key_changed");
+  expect(during.h.store.links).toEqual([]);
+});

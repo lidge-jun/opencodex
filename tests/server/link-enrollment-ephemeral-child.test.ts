@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -162,6 +162,8 @@ function buildHarness() {
     remotePlatform: "posix",
     ocxVersion: "2.98.0",
   });
+  // A real confirm-host also trusts the probed line; apply checks it is still the trusted one.
+  writeFileSync(knownHosts, "devbox ssh-ed25519 AAAA\nbarebox ssh-ed25519 AAAA\n", { flag: "a" });
 
   async function request(method: string, path: string, body?: unknown, principal: "admin-token" | "gui-session" = "admin-token") {
     const url = new URL(`http://127.0.0.1:10100${path}`);
