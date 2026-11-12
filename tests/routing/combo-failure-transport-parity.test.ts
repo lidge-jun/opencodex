@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { comboFailureCooldownScope, comboFailureDecision } from "../../src/combos/failover";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { preflightComboStreamResponse } from "../../src/server/responses/combo-stream-preflight";
+import { preflightNativeMessagesResponse } from "../../src/server/messages-native-preflight";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import type { RequestLogContext } from "../../src/server/request-log";
 
 /**
@@ -149,4 +151,42 @@ describe("combo failure verdict parity across HTTP and SSE", () => {
       if (row.scope !== undefined) expect(http.scope).toBe(row.scope);
     });
   }
+});
+
+describe("a moderation verdict survives the rebuilt preflight envelope", () => {
+  const loop = async (response: Response) => {
+    const failure = await consumeComboFailure(response);
+    const options = {
+      code: failure.upstreamCode, rootCode: failure.upstreamRootCode,
+      malformedResponseFormat: failure.malformedResponseFormat, openRouterOpaque400: failure.openRouterOpaque400,
+      providerModerationRefusal: failure.providerModerationRefusal,
+    };
+    return {
+      decision: comboFailureDecision(failure.response.status, failure.classificationText, options),
+      scope: comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal }),
+    };
+  };
+
+  test("a root-coded responses stream refusal hops without cooling, as over HTTP", async () => {
+    for (const code of ["content_filter", "moderation_refusal"]) {
+      const event = { type: "error", status: 400, code, error: { type: "invalid_request_error", message: "The input was refused by moderation." } };
+      const result = await preflightComboStreamResponse(new Response(
+        "data: " + JSON.stringify(event) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+      ), logCtx());
+      expect(result.kind).toBe("failed");
+      expect({ code, ...(await loop(result.response)) }).toEqual({ code, decision: "hop", scope: "none" });
+    }
+  });
+
+  test("an Azure-style native Messages refusal keeps its moderation evidence", async () => {
+    const event = { type: "error", error: { code: "content_filter", message: "The response was filtered.",
+      innererror: { code: "ResponsibleAIPolicyViolation", content_filter_result: { hate: { filtered: true, severity: "high" } } } } };
+    const prelude = 'event: message_start\ndata: {"type":"message_start","message":{"content":[],"usage":{"input_tokens":5,"output_tokens":0}}}\n\n';
+    const result = await preflightNativeMessagesResponse(new Response(
+      prelude + "event: error\ndata: " + JSON.stringify(event) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+    ), { model: "fixture", provider: "anth" }, createTestTranslatorBudget());
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+    expect(await loop(result.response)).toEqual({ decision: "hop", scope: "none" });
+  });
 });

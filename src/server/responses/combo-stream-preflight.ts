@@ -20,7 +20,7 @@ import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { createSseInspector } from "../relay";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
-import { isPausedTurn } from "../../lib/client-error-body";
+import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
@@ -532,6 +532,12 @@ export async function preflightComboStreamResponse(
         && !outputCommitted && retryableTerminalPayload) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
         const failed = failedTerminalResponse(response, retryableTerminalPayload, logCtx);
+        // The rebuilt envelope keeps only the record; a moderation verdict judged on the whole frame
+        // (a root code, an innererror) must reach the combo loop's classification intact.
+        if ((failed.status === 400 || failed.status === 422)
+          && isProviderModerationRefusal(failed.status, JSON.stringify(retryableTerminalPayload), undefined, true)) {
+          attachComboFailureEvidence(failed, JSON.stringify(retryableTerminalPayload));
+        }
         return { kind: "failed", response: failed,
           ...(failed.status === 400
             ? { codexModelRefusal: terminalModelRefusal(failed.status, retryableTerminalPayload) } : {}) };

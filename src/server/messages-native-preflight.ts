@@ -1,5 +1,6 @@
 import { comboFailureDecision } from "../combos";
 import { isProviderModerationRefusal } from "../combos/failover";
+import { attachComboFailureEvidence } from "../lib/client-error-body";
 import { httpStatusFromTerminalError } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { sseFieldValue } from "../lib/sse-decoder";
@@ -71,6 +72,8 @@ export async function preflightNativeMessagesResponse(
   let terminal = false;
   let failure: Rec | undefined;
   let failureStatus = 502;
+  /** The whole error event, kept when a moderation verdict decided the hop. */
+  let failureEvidence: string | undefined;
   let usage: Rec = {};
   const inspector = new BoundedSseFrameBuffer();
   const decoder = new TextDecoder();
@@ -94,17 +97,22 @@ export async function preflightNativeMessagesResponse(
         // Protocol liveness is not output.
       } else if (payload.type === "error" && isRec(payload.error)) {
         const error = payload.error;
-        const status = httpStatusFromTerminalError({ type: typeof error.type === "string" ? error.type : undefined,
+        const wholeEvent = JSON.stringify(payload);
+        // A structured moderation verdict on the whole event is a request-level refusal, whatever
+        // status the terminal mapping infers for its code; judge it like the HTTP reader does.
+        const moderation = isProviderModerationRefusal(400, wholeEvent, undefined, true);
+        const mapped = httpStatusFromTerminalError({ type: typeof error.type === "string" ? error.type : undefined,
           code: typeof error.code === "string" ? error.code : undefined,
           message: typeof error.message === "string" ? error.message : undefined }) ?? 502;
+        const status = moderation && mapped !== 400 && mapped !== 422 ? 400 : mapped;
         if (logCtx.terminalSource !== "synthetic" && logCtx.errorCode !== UNDECLARED_TOOL_CALL_ERROR_CODE
           && comboFailureDecision(status, typeof error.message === "string" ? error.message : "", {
           code: typeof error.code === "string" ? error.code : undefined,
           rootCode: typeof payload.code === "string" ? payload.code : undefined,
           // The whole event, as the HTTP and stream readers judge it, so transports cannot disagree.
           providerModerationRefusal: status === 400 || status === 422
-            ? isProviderModerationRefusal(status, JSON.stringify(payload), undefined, true) : undefined,
-        }) === "hop") { failure = error; failureStatus = status; }
+            ? isProviderModerationRefusal(status, wholeEvent, undefined, true) : undefined,
+        }) === "hop") { failure = error; failureStatus = status; failureEvidence = moderation ? wholeEvent : undefined; }
         else committed = true;
       } else if (payload.type === "message_stop") terminal = true;
       else committed = true;
@@ -145,11 +153,13 @@ export async function preflightNativeMessagesResponse(
       release();
       const headers = new Headers(response.headers);
       headers.set("content-type", "application/json"); headers.delete("content-length"); headers.delete("content-encoding");
-      return { kind: "failed", response: Response.json({ error: {
+      const failed = Response.json({ error: {
         ...(typeof failure.type === "string" ? { type: failure.type } : {}),
         ...(typeof failure.code === "string" ? { code: failure.code } : {}),
         message,
-      } }, { status: failureStatus, headers }) };
+      } }, { status: failureStatus, headers });
+      // The rebuilt envelope drops the evidence (root code, innererror) the verdict was judged on.
+      return { kind: "failed", response: failureEvidence === undefined ? failed : attachComboFailureEvidence(failed, failureEvidence) };
     }
     let index = 0;
     const body = new ReadableStream<Uint8Array>({
