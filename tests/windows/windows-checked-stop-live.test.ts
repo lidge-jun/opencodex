@@ -97,17 +97,49 @@ describe("capped command answers", () => {
 });
 
 describe("Part B port sampler and listener identity", () => {
-  test("free, listening, unreadable, and an exited owner's row is cleared", () => {
-    expect(sampleWindowsStopPort(10100, { scan: () => ({ ok: true, pids: [] }) })).toEqual({ state: "free" });
-    expect(sampleWindowsStopPort(10100, { scan: () => ({ ok: false }) })).toEqual({ state: "unknown" });
-    expect(sampleWindowsStopPort(10100, { scan: () => ({ ok: true, pids: [77] }), alive: () => true }))
+  test("free, listening, unreadable, and an exited owner's row is cleared", async () => {
+    expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: true, pids: [] }) })).toEqual({ state: "free" });
+    expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: false }) })).toEqual({ state: "unknown" });
+    expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: true, pids: [77] }), alive: () => true }))
       .toEqual({ state: "listening", ownerPid: 77 });
     const drops: number[] = [];
-    expect(sampleWindowsStopPort(10100, { scan: () => ({ ok: true, pids: [77] }), alive: () => false, drop: port => drops.push(port) }))
+    expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: true, pids: [77] }), alive: () => false, drop: port => drops.push(port) }))
       .toEqual({ state: "listening", ownerPid: 77 });
     expect(drops).toEqual([10100]);
     // The stopping process's own socket is not a listener on the stopped port.
-    expect(sampleWindowsStopPort(10100, { scan: () => ({ ok: true, pids: [5] }), selfPid: 5 })).toEqual({ state: "free" });
+    expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: true, pids: [5] }), selfPid: 5 })).toEqual({ state: "free" });
+  });
+
+  test("the sample honors its timeout: an unfinished scan is unknown, never a hung part", async () => {
+    const seen: number[] = [];
+    const started = Date.now();
+    // The scan never answers; the sample must give up on the timeout.
+    const sample = await sampleWindowsStopPort(10100, 60, {
+      scan: (_port, timeoutMs) => {
+        seen.push(timeoutMs);
+        return new Promise(() => undefined);
+      },
+    });
+    expect(sample).toEqual({ state: "unknown" });
+    expect(seen).toEqual([60]);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  test("a sub-millisecond timeout samples nothing: execFile reads 0 as unlimited", async () => {
+    let scans = 0;
+    expect(await sampleWindowsStopPort(10100, 0.4, { scan: () => { scans++; return { ok: true, pids: [] }; } }))
+      .toEqual({ state: "unknown" });
+    expect(await sampleWindowsStopPort(10100, 0, { scan: () => { scans++; return { ok: true, pids: [] }; } }))
+      .toEqual({ state: "unknown" });
+    expect(scans).toBe(0);
+  });
+
+  test("the scan sees a floored whole-millisecond budget", async () => {
+    let seen = -1;
+    expect(await sampleWindowsStopPort(10100, 499.9, {
+      scan: (_port, timeoutMs) => { seen = timeoutMs; return { ok: true, pids: [] }; },
+    })).toEqual({ state: "free" });
+    expect(seen).toBe(499);
   });
 
   test("ours, foreign, exited, unknown", () => {

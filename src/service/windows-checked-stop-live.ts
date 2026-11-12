@@ -28,7 +28,7 @@ import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSchtasksExe, resolveTrustedWindowsSystemDirectory, toWindowsSchtasksError } from "../lib/windows-elevation";
 import { WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
 import { decodeWindowsTextBytes } from "../lib/windows-text";
-import { scanListenPids } from "../server/port-reclaim";
+import { parseListenPidsFromNetstat, type ListenPidScan } from "../server/port-reclaim";
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
 import { ancestorWrapperPids } from "./windows-guarded-manager";
@@ -278,13 +278,70 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
   };
 }
 
-/** One port sample. A listener whose owner has exited is cleared like reclaimListenPort does. */
-export function sampleWindowsStopPort(
+/** One listener scan, bounded by the caller's timeout; a scan that misses it is unreadable. */
+export type WindowsStopPortScan = (port: number, timeoutMs: number) => ListenPidScan | Promise<ListenPidScan>;
+
+const WINDOWS_STOP_SCAN_MAX_BUFFER = 4 * 1024 * 1024;
+
+/**
+ * The production listener scan: netstat -ano through execFile with the caller's timeout.
+ *
+ * `netstat -ano` is asked directly rather than through `cmd /c chcp 437`: the locale-safe
+ * wildcard-foreign rule in parseListenEntriesFromNetstat already recognizes a listen row, and
+ * running the program itself means the timeout terminates the only helper spawned. The table
+ * is read from the trusted System32 path — SystemRoot is caller-controlled.
+ */
+export function scanWindowsStopListenPids(port: number, timeoutMs: number): Promise<ListenPidScan> {
+  const whole = wholeTimeoutMs(timeoutMs);
+  if (whole === null) return Promise.resolve({ ok: false, error: "no positive timeout to sample with" });
+  let netstat: string;
+  try {
+    netstat = join(resolveTrustedWindowsSystemDirectory(), "netstat.exe");
+  } catch (error) {
+    return Promise.resolve({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+  return new Promise(resolve => {
+    // execFile's timeout terminates the helper; the callback then answers unreadable.
+    execFile(netstat, ["-ano", "-p", "tcp"], {
+      encoding: "buffer",
+      timeout: whole,
+      killSignal: "SIGKILL",
+      windowsHide: true,
+      maxBuffer: WINDOWS_STOP_SCAN_MAX_BUFFER,
+    }, (error, stdout) => {
+      if (error) {
+        resolve({ ok: false, error: error.message });
+        return;
+      }
+      const text = typeof stdout === "string" ? stdout : decodeWindowsTextBytes(stdout);
+      resolve({ ok: true, pids: parseListenPidsFromNetstat(text, port) });
+    });
+  });
+}
+
+/**
+ * One port sample, capped by `timeoutMs`. A listener whose owner has exited is cleared like
+ * reclaimListenPort does.
+ *
+ * A scan that does not answer within the budget is "unknown": Part B's closing sample is
+ * bounded (030 "Time budget"), and a synchronous scan both ignored that cap and could stall
+ * the stop for the helper's own 5 s. The timeout is floored and a value below 1 ms samples
+ * nothing, because execFile reads 0 as unlimited — the same rule as the command runner.
+ */
+export async function sampleWindowsStopPort(
   port: number,
-  io: { scan?: typeof scanListenPids; alive?: (pid: number) => boolean; drop?: (port: number) => unknown; selfPid?: number } = {},
-): WindowsPortSample {
-  const scan = (io.scan ?? scanListenPids)(port);
-  if (!scan.ok) return { state: "unknown" };
+  timeoutMs: number,
+  io: {
+    scan?: WindowsStopPortScan;
+    alive?: (pid: number) => boolean;
+    drop?: (port: number) => unknown;
+    selfPid?: number;
+  } = {},
+): Promise<WindowsPortSample> {
+  const whole = wholeTimeoutMs(timeoutMs);
+  if (whole === null) return { state: "unknown" };
+  const scan = await runBoundedScan(port, whole, io.scan ?? scanWindowsStopListenPids);
+  if (scan === null || !scan.ok) return { state: "unknown" };
   const pids = scan.pids.filter(pid => pid !== (io.selfPid ?? process.pid));
   if (pids.length === 0) return { state: "free" };
   const alive = io.alive ?? isProcessAlive;
@@ -294,6 +351,29 @@ export function sampleWindowsStopPort(
     try { (io.drop ?? dropWindowsTcpRowsForLocalPort)(port); } catch { /* the next sample decides */ }
   }
   return { state: "listening", ownerPid: live[0] ?? pids[0] ?? null };
+}
+
+/** Resolve null once the budget is spent; a scan that never answers cannot hold the stop. */
+function runBoundedScan(port: number, timeoutMs: number, scan: WindowsStopPortScan): Promise<ListenPidScan | null> {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (result: ListenPidScan | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    timer.unref?.();
+    let pending: ListenPidScan | Promise<ListenPidScan>;
+    try {
+      pending = scan(port, timeoutMs);
+    } catch {
+      finish(null);
+      return;
+    }
+    Promise.resolve(pending).then(finish, () => finish(null));
+  });
 }
 
 /**
@@ -332,7 +412,7 @@ export function windowsStopConfirmLiveDeps(
     port,
     remainingMs,
     canonicalPaths: windowsStopCanonicalPaths(),
-    samplePort: samplePort => sampleWindowsStopPort(samplePort),
+    samplePort: (samplePort, timeoutMs) => sampleWindowsStopPort(samplePort, timeoutMs),
     identifyListener: (_port, ownerPid) => identifyWindowsStopListener(ownerPid),
     enumerate: timeoutMs => (options.snapshot ?? windowsStopSnapshot)(timeoutMs),
   };
