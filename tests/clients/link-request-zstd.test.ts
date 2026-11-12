@@ -9,6 +9,7 @@ import { LINK_REQUEST_ZSTD_FEATURE } from "../../src/link/request-compression";
 import { forgetLinkHomeFeaturesForTests } from "../../src/client/link-home-features";
 import { readJsonRequestBody } from "../../src/server/request-decompress";
 import { buildPeerFeatures } from "../../src/remote/features";
+import { createInboundBodyBudget } from "../../src/server/inbound-body-budget";
 
 const key = `ocx_data_${"a".repeat(40)}`;
 const keyId = "test-link-key", linkId = "lnk_0123456789abcdef";
@@ -98,6 +99,27 @@ describe("per-body zstd from Child to Home (#3023)", () => {
     await relay(post("/v1/responses", big), h.port);
     expect(h.seen[1]).toMatchObject({ encoding: null, length: String(encoder.encode(big).byteLength) });
     expect(new TextDecoder().decode(h.seen[1]!.wire)).toBe(big);
+  });
+
+  test("a body that would compress past the Home's ratio bound goes as it is, and the request succeeds", async () => {
+    const h = home(() => [LINK_REQUEST_ZSTD_FEATURE]);
+    await relay(post("/v1/responses", big), h.port);
+    const repetitive = JSON.stringify({ input: "a".repeat(9 * 1024 * 1024) });
+    const response = await relay(post("/v1/responses", repetitive), h.port);
+    expect(response.status).toBe(200);
+    expect(h.seen[1]).toMatchObject({ encoding: null, length: String(encoder.encode(repetitive).byteLength) });
+  });
+
+  test("bodies being prepared share one bounded allowance; a body that does not fit streams unchanged", async () => {
+    const h = home(() => [LINK_REQUEST_ZSTD_FEATURE]);
+    await relay(post("/v1/responses", big), h.port);
+    const budget = createInboundBodyBudget(2 * encoder.encode(big).byteLength - 1, 0);
+    await relay(post("/v1/responses", big), h.port, { requestCompression: { budget } });
+    expect(h.seen[1]).toMatchObject({ encoding: null });
+    const roomy = createInboundBodyBudget(2 * encoder.encode(big).byteLength, 0);
+    await relay(post("/v1/responses", big), h.port, { requestCompression: { budget: roomy } });
+    expect(h.seen[2]).toMatchObject({ encoding: "zstd" });
+    expect(roomy.snapshot()).toEqual({ reservedBytes: 0, activeLeases: 0, queuedRequests: 0 });
   });
 
   test("a compressor that fails sends the original body and the request succeeds", async () => {

@@ -15,8 +15,10 @@ import type { LinkTrafficBook } from "../link/traffic";
 import { LINK_REQUEST_ZSTD_FEATURE } from "../link/request-compression";
 import { linkHomeAcceptsRequestZstd } from "./link-home-features";
 import {
-  chooseLinkBody, compressLinkBody, linkRequestCompressible, readDeclaredBody, type LinkBodyCompressor, type PreparedLinkBody,
+  chooseLinkBody, compressLinkBody, linkRequestCompressible, linkRequestPrepareBudget, readDeclaredBody, type LinkBodyCompressor,
+  type PreparedLinkBody,
 } from "./link-request-compression";
+import type { InboundBodyBudget } from "../server/inbound-body-budget";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
@@ -100,7 +102,7 @@ export interface LinkRelayDeps {
    * `link-request-zstd/1` on its last verified answer and again on the connection carrying the body.
    * Test seams: the compressor and the Home's last answer.
    */
-  requestCompression?: { enabled?: boolean; compress?: LinkBodyCompressor; homeAccepts?: (linkId: string) => boolean };
+  requestCompression?: { enabled?: boolean; compress?: LinkBodyCompressor; homeAccepts?: (linkId: string) => boolean; budget?: InboundBodyBudget };
 }
 
 export const LINK_RELAY_RETRY_AFTER_SECONDS = 1;
@@ -420,7 +422,9 @@ export async function relayLinkDataRequest(
   };
   const onClientAbort = () => relayAbort.abort(req.signal.reason);
   req.signal.addEventListener("abort", onClientAbort, { once: true });
+  let releasePrepared = () => {};
   const cleanup = () => {
+    releasePrepared();
     stopHeaderDeadline();
     req.signal.removeEventListener("abort", onClientAbort);
   };
@@ -431,8 +435,13 @@ export async function relayLinkDataRequest(
   // once; every other body streams exactly as before.
   const compression = deps.requestCompression;
   let prepared: PreparedLinkBody | null = null;
-  if (compression?.enabled !== false && target.linkId && declaredLength !== null && Number(declaredLength) <= bodyLimit
-    && linkRequestCompressible(url, req, declaredLength) && (compression?.homeAccepts ?? linkHomeAcceptsRequestZstd)(target.linkId)) {
+  // A shared allowance bounds the bodies held at once; without room now, the body streams unchanged.
+  const lease = compression?.enabled !== false && target.linkId && declaredLength !== null && Number(declaredLength) <= bodyLimit
+    && linkRequestCompressible(url, req, declaredLength) && (compression?.homeAccepts ?? linkHomeAcceptsRequestZstd)(target.linkId)
+    ? await (compression?.budget ?? linkRequestPrepareBudget).acquire(2 * Number(declaredLength), relayAbort.signal, 0).catch(() => null)
+    : null;
+  releasePrepared = () => { lease?.release(); };
+  if (lease) {
     let raw: Uint8Array;
     try {
       raw = await readDeclaredBody(req.body!, Number(declaredLength), relayAbort.signal);
@@ -536,6 +545,8 @@ export async function relayLinkDataRequest(
       if (!tunnel || !resendable || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable("transport_error");
     }
   }
+  // The body has been handed to the Home's socket; the preparation allowance is free again.
+  releasePrepared();
   if (relayAbort.signal.aborted) {
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return await tunnelUnavailable();

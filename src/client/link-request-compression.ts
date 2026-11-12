@@ -1,6 +1,16 @@
+import { compressedBodyDecodeLimit } from "../server/request-decompress";
+import { createInboundBodyBudget, type InboundBodyBudget } from "../server/inbound-body-budget";
 import {
   LINK_REQUEST_COMPRESSIBLE_PATHS, LINK_REQUEST_COMPRESSION_MAX_BYTES, LINK_REQUEST_COMPRESSION_MIN_BYTES, LINK_REQUEST_ZSTD_FEATURE,
 } from "../link/request-compression";
+
+/**
+ * What all bodies being prepared at once may hold: each reserves twice its declared length (its
+ * bytes and their zstd form) until its send started, and a body that does not fit now streams
+ * unchanged instead of waiting. Four bodies at the 16 MiB bound fill it.
+ */
+export const LINK_REQUEST_PREPARE_BUDGET_BYTES = 128 * 1024 * 1024;
+export const linkRequestPrepareBudget: InboundBodyBudget = createInboundBodyBudget(LINK_REQUEST_PREPARE_BUDGET_BYTES, 0);
 
 /** One body ready for the link: the caller's bytes and, when it paid off, their zstd form. */
 export interface PreparedLinkBody { raw: Uint8Array; zstd: Uint8Array | null }
@@ -46,11 +56,16 @@ export async function readDeclaredBody(body: ReadableStream<Uint8Array>, declare
   return filled === declared ? out : out.slice(0, filled);
 }
 
-/** The zstd form when compression succeeds and saves bytes; otherwise null and the raw body goes. */
+/**
+ * The zstd form when compression succeeds, saves bytes, and stays within the ratio the Home's
+ * decoder admits (`compressedBodyDecodeLimit`, the policy `link-request-zstd/1` names); otherwise
+ * null and the raw body goes, which the Home admits under its ordinary limit as before.
+ */
 export async function compressLinkBody(raw: Uint8Array, compress: LinkBodyCompressor = defaultLinkBodyCompressor): Promise<Uint8Array | null> {
   try {
     const out = await compress(raw);
-    return out instanceof Uint8Array && out.byteLength > 0 && out.byteLength < raw.byteLength ? out : null;
+    return out instanceof Uint8Array && out.byteLength > 0 && out.byteLength < raw.byteLength
+      && raw.byteLength <= compressedBodyDecodeLimit(out.byteLength, Number.POSITIVE_INFINITY) ? out : null;
   } catch {
     return null;
   }
