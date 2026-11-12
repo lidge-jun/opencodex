@@ -325,13 +325,14 @@ export function buildRouteProbeArgv(options: RouteProbeArgvOptions): string[] {
 export const WINDOWS_OS_PROBE = "cmd /c echo %OS%";
 
 /** Run WINDOWS_OS_PROBE against an already trusted (pinned or just-probed) host key only. */
-export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string }): string[] {
+export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string; destination?: string }): string[] {
   const alias = assertSshAlias(options.alias);
+  const destination = assertSshAlias(options.destination ?? alias);
   return [
     "ssh", "-T",
     ...commonOptions(alias, options.knownHostsFile, "yes"),
     "-o", "ClearAllForwardings=yes",
-    "--", alias,
+    "--", destination,
     WINDOWS_OS_PROBE,
   ];
 }
