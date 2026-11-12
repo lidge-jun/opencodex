@@ -142,6 +142,11 @@ export function rowOperable(direction: "hub-initiated" | "client-initiated", row
 }
 /** "Restart held: a turn was running" is the server's only withheld outcome, so it owns the one warning tone. */
 export function restartWithheld(outcome: string): boolean { return outcome === "skipped"; }
+/** A job this page tracked holds its links from acceptance, before the next status poll reports `activeJob`. */
+export function jobHoldsLink(jobs: readonly ChildJobView[], linkId: string): boolean {
+  return jobs.some(job => job.state !== "done"
+    && job.items.some(item => item.linkId === linkId && (item.state === "queued" || item.state === "running")));
+}
 export const CHILD_JOB_POLL_MS = 2_000;
 
 /** The keys the operator changed, so a save never rewrites a mode they left alone (Revision 6: full PUT over damage). */

@@ -14,7 +14,7 @@ import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../com
 import { RemoteLinkDisconnectDialog } from "./RemoteLinkDialogs";
 import { RemoteLinkDiagnostics } from "./RemoteLinkDiagnostics";
 import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView } from "./RemoteLinkSheet";
-import { getChildJob, type ChildJobView, type ChildOp } from "../remote-link-child-ops-api";
+import { getChildJob, jobHoldsLink, type ChildJobView, type ChildOp } from "../remote-link-child-ops-api";
 import { ChildBulkBar, ChildJobProgress, ChildPolicyPanel, ChildRowActions, ChildRowBadges } from "./RemoteLinkChildActions";
 import "../styles-remote-link.css";
 
@@ -448,6 +448,9 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
   };
 
   const statusRows = status?.links ?? [];
+  // A job accepted by this page disables its links' actions and Disconnect at once. The status row's
+  // activeJob only appears on the next poll, so the tracked childJobs are the earlier signal.
+  const heldLinks = new Set(statusRows.filter(row => jobHoldsLink(childJobs, row.id)).map(row => row.id));
   // A job the page did not start itself: running before a reload, in another tab, or started by the scheduler.
   const trackJob = useCallback((job: ChildJobView) => {
     if (childJobIds.current.has(job.jobId)) return;
@@ -583,11 +586,11 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
                         </div>
                       </div>
                       {row.child && row.direction === "hub-initiated" && (
-                        <ChildRowActions apiBase={apiBase} link={row} disabled={childOpBusy !== null}
+                        <ChildRowActions apiBase={apiBase} link={row} disabled={childOpBusy !== null || heldLinks.has(row.id)}
                           onJob={trackJob} onError={setActionError} onDialog={open => setChildOpBusy(open ? { linkId: row.id, op: "observe" } : null)}
                           onRun={setChildOpBusy} />
                       )}
-                      <Button variant="ghost" size="sm" className="hover:bg-danger-soft hover:text-danger" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setPurgeOnDisconnect(false); setConfirming({ row, force: false }); }} disabled={busy !== null || row.child?.activeJob != null} title={row.child?.activeJob ? t("remoteLink.child.disconnectBlocked") : undefined}>
+                      <Button variant="ghost" size="sm" className="hover:bg-danger-soft hover:text-danger" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setPurgeOnDisconnect(false); setConfirming({ row, force: false }); }} disabled={busy !== null || row.child?.activeJob != null || heldLinks.has(row.id)} title={row.child?.activeJob || heldLinks.has(row.id) ? t("remoteLink.child.disconnectBlocked") : undefined}>
                         <IconTrash />{t("link.disconnect")}
                       </Button>
                     </li>

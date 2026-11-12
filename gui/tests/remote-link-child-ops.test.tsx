@@ -354,6 +354,36 @@ test("an active job holds the row and its progress is adopted on load", async ()
   expect(([...firstRow.querySelectorAll("button")].find(item => item.textContent === "Disconnect") as HTMLButtonElement).disabled).toBe(true);
 });
 
+test("an accepted job holds the row before the next status poll reports it", async () => {
+  let polls = 0;
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) {
+      polls += 1;
+      // The first read has no activeJob; the server only reports it on a later poll.
+      return response(status([row("l1", "box-one", childBlock()), row("l2", "box-two", childBlock())]));
+    }
+    if (call.path === "/api/link/children/operations") return response({ job: job() }, 202);
+    if (call.path.startsWith("/api/link/children/jobs/")) return response({ job: job() });
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  const firstRow = host.querySelectorAll(".remote-link-row")[0]!;
+  await click([...firstRow.querySelectorAll("button")].find(item => item.textContent === "Update")!);
+  await click([...firstRow.querySelectorAll("dialog button")].find(item => item.textContent === "Update")!);
+  // The POST is accepted and the job is tracked: childOpBusy is clear, and no status poll has reported activeJob.
+  const rowButtons = () => [...firstRow.querySelectorAll("button")];
+  for (const label of ["Check", "Sync now", "Restart Codex", "Update"]) {
+    expect(rowButtons().find(item => item.textContent === label)!.disabled).toBe(true);
+  }
+  expect(rowButtons().find(item => item.textContent === "Disconnect")!.disabled).toBe(true);
+  // The tracked job names l1 only; l2 keeps its controls.
+  const secondRow = host.querySelectorAll(".remote-link-row")[1]!;
+  expect(([...secondRow.querySelectorAll("button")].find(item => item.textContent === "Check") as HTMLButtonElement).disabled).toBe(false);
+  expect(([...secondRow.querySelectorAll("button")].find(item => item.textContent === "Disconnect") as HTMLButtonElement).disabled).toBe(false);
+  expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
+  expect(polls).toBeGreaterThan(0);
+});
+
 test("a client-initiated row shows badges but no actions", async () => {
   installFetch(() => response(status([row("l1", "box-one", childBlock(), "client-initiated")])));
   const host = await mount();
