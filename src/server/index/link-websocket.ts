@@ -559,11 +559,17 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
             activity.restoreRefusedResults = true;
             const stopChange = activity.onChange(() => observe(ws, state));
             // An admitted turn may return results a closed socket of this link and own thread waited for.
+            // Each turn settles only holds that existed when it began (another socket may reuse an id later).
+            const beganAt = new WeakMap<object, number>();
+            const stopBegin = deps.holds ? activity.onBegin(input => {
+              if (input && typeof input === "object") beganAt.set(input, deps.holds!.sequence());
+            }) : () => {};
             const stopAccepted = deps.holds ? activity.onAccepted(input => {
               const holds = deps.holds!;
-              if (holds.releasable(link.linkId)) holds.observe(link.linkId, state.threadHash ?? null, resultKeysOf(input));
+              const began = input && typeof input === "object" ? beganAt.get(input) : undefined;
+              if (began !== undefined && holds.releasable(link.linkId)) holds.observe(link.linkId, state.threadHash ?? null, resultKeysOf(input), began);
             }) : () => {};
-            state.unsubscribe = () => { stopChange(); stopAccepted(); };
+            state.unsubscribe = () => { stopChange(); stopBegin(); stopAccepted(); };
             observe(ws, state);
           }
           // A revoke or last-link close() that ran between the upgrade and now still applies.

@@ -208,15 +208,17 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
           });
           try { req.headers.set(LINK_TURN_HEADER, token); } catch { releaseLinkTurnToken(token); token = null; }
         }
-        // Pending result keys: only a link with a releasable hold pays for reading a copy of the body.
+        // Pending result keys: only a link with a releasable hold pays for reading a copy of the body. The
+        // request settles only holds that exist now, as it begins (a later hold may reuse an id).
         let decide: ((accepted: boolean) => void) | undefined;
+        const beganAt = holds.sequence();
         if (holds.releasable(linkId)) {
           const decision = new Promise<boolean>(resolve => { decide = resolve; });
           // The copy is read alongside the request, but released only if the handler accepted it.
           const parsed = req.clone().json().catch(() => null);
           const observation = Promise.all([parsed, decision]).then(([body, accepted]) => {
             if (!accepted || !body || typeof body !== "object") return;
-            holds.observe(linkId, threadHashOf(body), resultKeysOf((body as Record<string, unknown>).input));
+            holds.observe(linkId, threadHashOf(body), resultKeysOf((body as Record<string, unknown>).input), beganAt);
           }).catch(() => {}).finally(() => { holdObservations.delete(observation); });
           holdObservations.add(observation);
         }

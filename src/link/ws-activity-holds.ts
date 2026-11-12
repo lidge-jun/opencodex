@@ -56,6 +56,8 @@ interface Hold {
   marks: StoredMark[];
   untracked: boolean;
   createdAt: number;
+  /** In memory only: creation order in this process, so a request settles only holds older than itself. */
+  seq: number;
 }
 
 /** Canonical JSON: object keys sorted, no whitespace; throws for anything JSON cannot represent. */
@@ -134,6 +136,7 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
   // Set when crash evidence could not be tied to the links (links.json unreadable): every link,
   // known or not, then counts as unknown, and the fence is left running for the next start.
   let allUnknown: UnknownReason | null = null;
+  let holdSeq = 0;
   const hooks = deps.writeHooks ?? {};
 
   /**
@@ -209,7 +212,9 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
     let id: string | null = null;
     try { id = key ? keyId() : null; } catch { return false; }
     const out: HoldsFile = { version: 1, keyId: id, links: {} };
-    for (const [linkId, value] of links) if (linkId !== without && (value.holds.length || value.unknown)) out.links[linkId] = value;
+    for (const [linkId, value] of links) {
+      if (linkId !== without && (value.holds.length || value.unknown)) out.links[linkId] = { ...value, holds: value.holds.map(({ seq: _seq, ...hold }) => hold as Hold) };
+    }
     return write(HOLDS, out);
   };
 
@@ -245,7 +250,7 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
       if (file && keyUnavailable) {
         // Hashes cannot be checked or made: keyed holds and every link stay unknown, nothing is cleaned.
         for (const [linkId, value] of Object.entries(file.links)) {
-          links.set(linkId, { holds: value.holds.filter(hold => hold.threadHash === null), unknown: value.unknown ?? "key-unavailable" });
+          links.set(linkId, { holds: value.holds.filter(hold => hold.threadHash === null).map(hold => ({ ...hold, seq: ++holdSeq })), unknown: value.unknown ?? "key-unavailable" });
         }
         markAll("key-unavailable");
         if (state !== "clean") markAll("crash");
@@ -255,7 +260,7 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
         const rotated = file.keyId !== null && file.keyId !== keyId();
         for (const [linkId, value] of Object.entries(file.links)) {
           const kept = rotated ? value.holds.filter(hold => hold.threadHash === null) : value.holds;
-          links.set(linkId, { holds: kept.map(hold => ({ ...hold, pendingKeys: [...hold.pendingKeys], marks: [...(hold.marks ?? [])] })),
+          links.set(linkId, { holds: kept.map(hold => ({ ...hold, pendingKeys: [...hold.pendingKeys], marks: [...(hold.marks ?? [])], seq: ++holdSeq })),
             unknown: value.unknown ?? (rotated && kept.length < value.holds.length ? "key-rotated" : null) });
         }
       }
@@ -287,19 +292,28 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
         // Fingerprints need the thread to be matched by; without it they are operator-only, like unknown marks.
         const marks = input.threadHash === null ? [] : (input.marks ?? []).map(mark => ({ n: mark.n, inputHmac: mark.inputHmac, turnRef: mark.turnRef, id: randomBytes(12).toString("hex") }));
         const unknown = input.runningMarks + (input.threadHash === null ? input.marks?.length ?? 0 : 0);
-        value.holds.push({ threadHash: input.threadHash, pendingKeys: [...input.pendingKeys], runningMarks: unknown, marks, untracked: input.untracked, createdAt: now() });
+        value.holds.push({ threadHash: input.threadHash, pendingKeys: [...input.pendingKeys], runningMarks: unknown, marks, untracked: input.untracked, createdAt: now(), seq: ++holdSeq });
       }
       persistOrMark(linkId);
     },
 
-    /** A later request from the same link and own thread returned these results. */
-    observe(linkId: string, threadHash: string | null, resultKeys: readonly string[]): void {
+    /** The current hold sequence: a request records it when it begins and passes it to observe. */
+    sequence(): number {
+      return holdSeq;
+    },
+
+    /**
+     * A later request from the same link and own thread returned these results. Only holds that existed
+     * when the request began (seq at most beganAt) are settled: a hold created later, by another socket,
+     * may wait for a new call that reuses the same id, and keeps it.
+     */
+    observe(linkId: string, threadHash: string | null, resultKeys: readonly string[], beganAt: number): void {
       const value = links.get(linkId);
       if (!value || threadHash === null || resultKeys.length === 0) return;
       const returned = new Set(resultKeys);
       let changed = false;
       for (const hold of value.holds) {
-        if (hold.threadHash !== threadHash) continue;
+        if (hold.threadHash !== threadHash || hold.seq > beganAt) continue;
         const left = hold.pendingKeys.filter(keyHash => !returned.has(keyHash));
         if (left.length !== hold.pendingKeys.length) { hold.pendingKeys = left; changed = true; }
       }

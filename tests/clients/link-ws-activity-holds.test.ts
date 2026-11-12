@@ -99,13 +99,13 @@ describe("holds", () => {
     const holds = store();
     holds.arm();
     holds.add(A, hold(holds));
-    holds.observe(A, holds.threadHash("thread-b"), ["k1", "k2"]);
+    holds.observe(A, holds.threadHash("thread-b"), ["k1", "k2"], holds.sequence());
     expect(holds.count(A)).toBe(1);
-    holds.observe(B, holds.threadHash("thread-a"), ["k1", "k2"]);
+    holds.observe(B, holds.threadHash("thread-a"), ["k1", "k2"], holds.sequence());
     expect(holds.count(A)).toBe(1);
-    holds.observe(A, holds.threadHash("thread-a"), ["k1"]);
+    holds.observe(A, holds.threadHash("thread-a"), ["k1"], holds.sequence());
     expect(holds.count(A)).toBe(1);
-    holds.observe(A, holds.threadHash("thread-a"), ["k2"]);
+    holds.observe(A, holds.threadHash("thread-a"), ["k2"], holds.sequence());
     expect(holds.count(A)).toBe(0);
   });
 
@@ -115,7 +115,7 @@ describe("holds", () => {
     holds.add(A, hold(holds, "thread-a", ["k1"], { untracked: true }));
     holds.add(A, hold(holds, "thread-a", ["k1"], { threadHash: null }));
     holds.add(A, hold(holds, "thread-a", ["k1"], { runningMarks: 1 }));
-    holds.observe(A, holds.threadHash("thread-a"), ["k1"]);
+    holds.observe(A, holds.threadHash("thread-a"), ["k1"], holds.sequence());
     expect(holds.count(A)).toBe(3);
     expect(holds.clear(A).ok).toBe(true);
     expect(holds.count(A)).toBe(0);
@@ -237,5 +237,20 @@ describe("review round 2 (T5d1-R2-01)", () => {
     expect(holds.stop()).toBe(true);
     expect(JSON.parse(readFileSync(join(dir, "ws-run-state.json"), "utf8"))).toMatchObject({ state: "clean" });
     expect(store().describe(A).unknown).toBe("crash");
+  });
+});
+describe("T5g: a request settles only holds that existed when it began (final review area b, finding 1)", () => {
+  test("a newer hold with a reused result key survives the late acceptance of an older request", () => {
+    const holds = store();
+    holds.arm();
+    holds.add(A, hold(holds, "thread-a", ["k-reused"]));
+    const began = holds.sequence();
+    // Another socket of the same thread is cut later, waiting for a new call that reuses the id.
+    holds.add(A, hold(holds, "thread-a", ["k-reused"]));
+    holds.observe(A, holds.threadHash("thread-a"), ["k-reused"], began);
+    expect(holds.count(A)).toBe(1);
+    // A request that began after both may settle the newer one.
+    holds.observe(A, holds.threadHash("thread-a"), ["k-reused"], holds.sequence());
+    expect(holds.count(A)).toBe(0);
   });
 });

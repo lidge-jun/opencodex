@@ -51,6 +51,7 @@ export class CodexWebSocketActivity {
   // Remote Link sockets observe their own activity; local sockets register nothing.
   private listeners: Array<() => void> = [];
   private acceptedListeners: Array<(input: unknown) => void> = [];
+  private beginListeners: Array<(input: unknown) => void> = [];
   /**
    * Remote Link sockets only: a turn the shared handler never reports as accepted (notifyAccepted)
    * puts the results it settled back to pending when it finishes, so a refused or failed turn cannot
@@ -101,6 +102,12 @@ export class CodexWebSocketActivity {
   onChange(listener: () => void): () => void {
     this.listeners.push(listener);
     return () => { this.listeners = this.listeners.filter(candidate => candidate !== listener); };
+  }
+
+  /** Called with a turn's input when it begins (Remote Link: the hold sequence a later acceptance may settle up to). */
+  onBegin(listener: (input: unknown) => void): () => void {
+    this.beginListeners.push(listener);
+    return () => { this.beginListeners = this.beginListeners.filter(candidate => candidate !== listener); };
   }
 
   /**
@@ -160,6 +167,9 @@ export class CodexWebSocketActivity {
     this.touch();
     const record = { seq: ++this.turnSeq, settled: this.settleResults(input), accepted: false };
     if (this.restoreRefusedResults) this.turnRecords.set(input, record);
+    for (const listener of [...this.beginListeners]) {
+      try { listener(input); } catch { /* an observer never breaks the socket's own bookkeeping */ }
+    }
     // Ordinary creates start a new response even when its upstream omits response.created.
     // Prior results settle old waits, but cannot suppress new calls reusing their IDs.
     this.returnedResults.clear();

@@ -7,7 +7,7 @@ import type { OcxConfig } from "../../src/types";
 import { createLinkWebsocketGate } from "../../src/server/index/link-websocket";
 import { LINK_WS_LIMITS, setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 import { requestPolicyView } from "../../src/server/auth-cors";
-import { CodexWebSocketActivity } from "../../src/codex/websocket-activity";
+import { CodexWebSocketActivity, resultKeysOf } from "../../src/codex/websocket-activity";
 import { createActivityHolds } from "../../src/link/ws-activity-holds";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { linkStorePath } from "../../src/link/paths";
@@ -32,7 +32,7 @@ function policy() {
   return requestPolicyView(config, "opencodex-link.invalid", { allowedKeyIds: new Set([KEY.id]) });
 }
 
-interface Turn { finish: () => void; observer: LinkTurnObserver | undefined; turnId: number }
+interface Turn { finish: () => void; observer: LinkTurnObserver | undefined; turnId: number; input: unknown }
 
 /** Stands in for the shared handler: a create begins a turn and enters the pipeline with an observer. */
 function pipelineHandler() {
@@ -47,7 +47,7 @@ function pipelineHandler() {
       const finishActivity = ws.data.responsesActivity!.beginTurn(frame.input);
       // The shared handler's turn cleanup: activity first, then the link turn's own end.
       const finish = () => { finishActivity(); ws.data.linkTurnEnded?.(turnId); };
-      turns.push({ finish, observer: ws.data.linkTurnObserver?.(turnId), turnId });
+      turns.push({ finish, observer: ws.data.linkTurnObserver?.(turnId), turnId, input: frame.input });
     },
     close(ws) { ws.data.admissionLease?.release(); },
   };
@@ -331,4 +331,15 @@ describe("through a real Home: a cut WebSocket turn and its HTTP resend", () => 
     expect(turnHeaders).toEqual([null, null]);
   });
 });
-
+describe("T5g: a socket's accepted turn settles only holds older than the turn (final review area b, finding 1)", () => {
+  test("a hold created by another socket while this turn runs keeps its reused key", () => {
+    const h = harness();
+    const s = h.open();
+    const input = [{ type: "function_call_output", call_id: "call-reused", output: "done" }];
+    const turn = s.create({ model: "m", input });
+    // While the turn runs, another socket of the same thread closes waiting for a new call with the same id.
+    h.holds.add(KEY.linkId, { threadHash: h.holds.threadHash("thread-a"), pendingKeys: resultKeysOf(input), runningMarks: 0, untracked: false });
+    s.ws.data.responsesActivity!.notifyAccepted(turn.input);
+    expect(h.count()).toBe(1);
+  });
+});
