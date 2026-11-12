@@ -154,10 +154,32 @@ function ChildConfirmDialog(props: { open: boolean; title: string; body: string;
   );
 }
 
-export function RestartCodexDialog(props: { alias: string; open: boolean; onCancel(): void;
+function RestartCodexBody(props: { alias: string; onCancel(): void;
   onConfirm(scope: "app-server" | "codex"): void }): ReactElement {
   const t = useT();
+  // The body unmounts with the dialog, so every open starts from the per-click default scope.
   const [scope, setScope] = useState<"app-server" | "codex">("app-server");
+  return <>
+    <div className="flex flex-col gap-2 rounded-[10px] bg-bg px-5 py-4 ring-1 ring-line">
+      <h3 id="remote-link-restart-title" className="m-0 text-[16px] leading-6 font-semibold tracking-[-0.015em]">{t("remoteLink.child.restartCodex")}</h3>
+      <label className="flex items-start gap-2 text-[13px] leading-5">
+        <input type="radio" name="ocx-restart-scope" checked={scope === "app-server"} onChange={() => setScope("app-server")} className="mt-1" />
+        <span><strong>{t("remoteLink.restart.scope.appServer")}</strong><span className="mt-0.5 block text-fg-muted">{t("remoteLink.restart.scope.appServerBody")}</span></span>
+      </label>
+      <label className="flex items-start gap-2 text-[13px] leading-5">
+        <input type="radio" name="ocx-restart-scope" checked={scope === "codex"} onChange={() => setScope("codex")} className="mt-1" />
+        <span><strong>{t("remoteLink.restart.scope.codex")}</strong><span className="mt-0.5 block text-fg-muted">{t("remoteLink.restart.scope.codexBody", { alias: props.alias })}</span></span>
+      </label>
+    </div>
+    <div className="flex justify-end gap-2 px-2 py-2">
+      <Button variant="ghost" onClick={props.onCancel}>{t("link.cancel")}</Button>
+      <Button variant="danger" onClick={() => props.onConfirm(scope)}>{t("remoteLink.restart.confirm")}</Button>
+    </div>
+  </>;
+}
+
+export function RestartCodexDialog(props: { alias: string; open: boolean; onCancel(): void;
+  onConfirm(scope: "app-server" | "codex"): void }): ReactElement {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
@@ -168,23 +190,7 @@ export function RestartCodexDialog(props: { alias: string; open: boolean; onCanc
   return (
     <dialog ref={ref} aria-labelledby="remote-link-restart-title" onCancel={event => { event.preventDefault(); props.onCancel(); }}
       className="remote-link-confirm-dialog m-auto w-[min(440px,calc(100vw-24px))] rounded-[14px] border-0 bg-surface p-1 text-fg shadow-lg ring-1 ring-line backdrop:bg-black/40">
-      {props.open && <>
-        <div className="flex flex-col gap-2 rounded-[10px] bg-bg px-5 py-4 ring-1 ring-line">
-          <h3 id="remote-link-restart-title" className="m-0 text-[16px] leading-6 font-semibold tracking-[-0.015em]">{t("remoteLink.child.restartCodex")}</h3>
-          <label className="flex items-start gap-2 text-[13px] leading-5">
-            <input type="radio" name="ocx-restart-scope" checked={scope === "app-server"} onChange={() => setScope("app-server")} className="mt-1" />
-            <span><strong>{t("remoteLink.restart.scope.appServer")}</strong><span className="mt-0.5 block text-fg-muted">{t("remoteLink.restart.scope.appServerBody")}</span></span>
-          </label>
-          <label className="flex items-start gap-2 text-[13px] leading-5">
-            <input type="radio" name="ocx-restart-scope" checked={scope === "codex"} onChange={() => setScope("codex")} className="mt-1" />
-            <span><strong>{t("remoteLink.restart.scope.codex")}</strong><span className="mt-0.5 block text-fg-muted">{t("remoteLink.restart.scope.codexBody", { alias: props.alias })}</span></span>
-          </label>
-        </div>
-        <div className="flex justify-end gap-2 px-2 py-2">
-          <Button variant="ghost" onClick={props.onCancel}>{t("link.cancel")}</Button>
-          <Button variant="danger" onClick={() => props.onConfirm(scope)}>{t("remoteLink.restart.confirm")}</Button>
-        </div>
-      </>}
+      {props.open && <RestartCodexBody alias={props.alias} onCancel={props.onCancel} onConfirm={props.onConfirm} />}
     </dialog>
   );
 }

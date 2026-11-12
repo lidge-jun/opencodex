@@ -200,6 +200,23 @@ test("Restart Codex picks a scope and states the app-server caveat", async () =>
   expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "restart-codex", linkIds: ["l1"], restart: "codex" });
 });
 
+test("a cancelled restart dialog reopens at the app-server default", async () => {
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path === "/api/link/children/operations") return response({ job: job({ op: "restart-codex", state: "done", items: [] }) }, 202);
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await click(button(host, "Restart Codex"));
+  await click(openDialog(host).querySelectorAll<HTMLInputElement>("input[type=radio]")[1]!);
+  await click([...openDialog(host).querySelectorAll("button")].find(item => item.textContent === "Cancel")!);
+  expect(calls.filter(call => call.method === "POST")).toHaveLength(0);
+  await click(button(host, "Restart Codex"));
+  const reopened = openDialog(host);
+  expect(reopened.querySelectorAll<HTMLInputElement>("input[type=radio]")[0]?.checked).toBe(true);
+  expect(reopened.querySelectorAll<HTMLInputElement>("input[type=radio]")[1]?.checked).toBe(false);
+});
+
 test("Update and Update all confirm the disruption and post their bodies", async () => {
   const calls = installFetch(call => {
     if (call.path.startsWith("/api/link/status")) return response(status([
