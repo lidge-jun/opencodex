@@ -141,6 +141,8 @@ interface SocketState {
   threadHash: string | null | undefined;
   /** Closed by revocation: such a close leaves no hold (design 5). */
   revoked: boolean;
+  /** Turns that entered the pipeline on this socket; the first one is logged as continuation full, reason first. */
+  turnsSeen: number;
   /**
    * One entry per turn that entered the pipeline, keyed by the handler's turn id and written and
    * cleared only by that turn's own observer and cleanup: "pending" until expansion, then its
@@ -196,6 +198,23 @@ export function marksResent(holds: ActivityHolds, linkId: string, threadHash: st
 /** Rule (d): only a terminal the upstream itself reported as completed releases a running mark; no provenance is not enough. */
 export function upstreamCompleted(status: string | undefined, source: string | undefined): boolean {
   return status === "completed" && source === "upstream";
+}
+
+/** Design 9.1: the hashed thread and turn refs of a link request; a ref that cannot be made is left out. */
+export function linkLogRefs(holds: ActivityHolds, threadId: string, body: unknown): { threadRef?: string; turnRef?: string } {
+  const turnId = turnIdOf(bodyRecord(body));
+  const ref = (kind: "thread" | "turn", id: string | null): string | null => {
+    if (!id) return null;
+    try { return holds.logRef(kind, id); } catch { return null; }
+  };
+  const threadRef = ref("thread", threadId || threadIdOf(bodyRecord(body)));
+  const turnRef = ref("turn", turnId);
+  return { ...(threadRef ? { threadRef } : {}), ...(turnRef ? { turnRef } : {}) };
+}
+
+function threadIdOf(body: Record<string, unknown>): string | null {
+  const metadata = bodyRecord(body.client_metadata);
+  return typeof metadata.thread_id === "string" && metadata.thread_id ? metadata.thread_id : null;
 }
 
 const defaultTimers: LinkWebsocketTimers = {
@@ -479,7 +498,7 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           const state: SocketState = {
             openedAt: now(), idleSince: null, drainingSince: null, closeAfterTurn: false,
             book: deps.activity?.beginSocket(link.linkId) ?? null, unsubscribe: () => {},
-            threadHash: undefined, revoked: false, captures: new Map(),
+            threadHash: undefined, revoked: false, captures: new Map(), turnsSeen: 0,
           };
           if (deps.holds) {
             const holds = deps.holds;
@@ -487,6 +506,7 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
             // One observer per turn, created when the turn enters the pipeline (websocket-handler.ts).
             ws.data.linkTurnObserver = (turnId: number): LinkTurnObserver => {
               state.captures.set(turnId, "pending");
+              const ordinal = ++state.turnsSeen;
               let resent: StoredMark[] = [];
               const own = (value: FingerprintMark | "unknown" | "done"): void => { if (state.captures.has(turnId)) state.captures.set(turnId, value); };
               return {
@@ -495,6 +515,8 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
                   resent = marksResent(holds, linkId, state.threadHash ?? null, body);
                 },
                 expansionFailed() { own("unknown"); },
+                logFields: body => ({ transport: "websocket", first: ordinal === 1,
+                  ...linkLogRefs(holds, ws.data.headers?.get("thread-id")?.trim() ?? "", body) }),
                 terminal(status, source) {
                   // The turn's own entry ends with its own terminal, superseded or not.
                   own("done");

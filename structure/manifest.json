@@ -1396,6 +1396,7 @@
         "src/server/index/link-websocket.ts",
         "src/server/index/link-websocket-limits.ts",
         "src/server/link-turn.ts",
+        "src/usage/link-log-fields.ts",
         "src/server/management/link-routes.ts",
         "src/server/management/link-child-ops-routes.ts",
         "src/cli/link-child-ops.ts",

@@ -568,6 +568,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/usage/client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/cost.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/error-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/usage/link-log-fields.ts` | [`remote-link.md`](remote-link.md) |
 | `src/usage/source-filter.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/summary.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/timeline.ts` | [`gui-and-management-api.md`](gui-and-management-api.md) |

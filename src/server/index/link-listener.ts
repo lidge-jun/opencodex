@@ -4,7 +4,7 @@ import { createLinkActivity, type LinkActivitySnapshot } from "../../link/child-
 import type { Server, WebSocketHandler } from "bun";
 import type { RequestPolicyView } from "../auth-cors";
 import type { WsData } from "../ws-bridge";
-import { createLinkWebsocketGate, marksResent, upstreamCompleted, type LinkWebsocketGateDeps } from "./link-websocket";
+import { createLinkWebsocketGate, linkLogRefs, marksResent, upstreamCompleted, type LinkWebsocketGateDeps } from "./link-websocket";
 import type { StoredMark } from "../../link/ws-activity-holds";
 import { LINK_TURN_HEADER, registerLinkTurnToken, releaseLinkTurnToken } from "../link-turn";
 import { LINK_WS_LIMITS, linkWebsocketTransportReady } from "./link-websocket-limits";
@@ -189,16 +189,19 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
           const threadId = header || (metadata && typeof metadata.thread_id === "string" ? metadata.thread_id : "");
           try { return threadId ? holds.threadHash(threadId) : null; } catch { return null; }
         };
-        // Running marks: the pipeline reports this request's expanded input and its terminal
-        // (src/server/link-turn.ts), through a token header it removes before anything is forwarded.
+        // Running marks, and while the feature is on the request-log fields of design 9.1: the pipeline reports this
+        // request's expanded input and its terminal (src/server/link-turn.ts), through a token header it removes before
+        // anything is forwarded. With the feature off and no marks, no token is set and the request is unchanged.
         let token: string | null = null;
-        if (holds.hasMarks(linkId)) {
+        const logging = websocketEnabled();
+        if (logging || holds.hasMarks(linkId)) {
           let resent: StoredMark[] = [];
           let threadHash: string | null = null;
           token = registerLinkTurnToken({
             expanded(body) { threadHash = threadHashOf(body); resent = marksResent(holds, linkId, threadHash, body); },
             expansionFailed() { resent = []; },
             terminal(status, source) { if (resent.length && threadHash && upstreamCompleted(status, source)) holds.releaseMarks(linkId, threadHash, resent); },
+            ...(logging ? { logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, header?.trim() ?? "", body) }) } : {}),
           });
           try { req.headers.set(LINK_TURN_HEADER, token); } catch { releaseLinkTurnToken(token); token = null; }
         }
