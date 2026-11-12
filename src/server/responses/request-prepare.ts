@@ -1,4 +1,5 @@
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
@@ -71,6 +72,7 @@ import {
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
+  previousResponseRestoredPrefixLength,
   previousResponseReplayFailure,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -185,6 +187,7 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
+import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -446,6 +449,7 @@ export async function prepareResponsesRequest(
     }
     // Local replay failures require full client replay.
     if (replayFailure) {
+      failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -456,8 +460,20 @@ export async function prepareResponsesRequest(
   const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
     ?? (body !== originalBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
+  // Remote Link holds and request-log fields (design T4 sections 5, 9.1): the expanded input, before any upstream I/O.
+  if (!options.comboReplaySnapshot) observeLinkTurnExpansion(options.linkTurn, req, logCtx, body, previousResponseInputExpanded ? "chained"
+    : body && typeof body === "object" && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string" ? "unexpanded" : "none");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
   options.responsesFileImage ||= responsesHasFileImage(body);
+  // Counted after replay expansion so the catalog this request pays for is the one measured:
+  // input restored from stored continuation state is history, and the prefix removes it.
+  if (inboundWire === "responses" && !concreteSelection) {
+    warnEagerCodexToolCatalog(body, req.headers, {
+      surface: eagerCodexToolCatalogSurface(body, options.compactionRecoveryKind),
+      replayPrefixLength: previousResponseRestoredPrefixLength(body),
+      logicalRequest: logCtx,
+    });
+  }
 
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
@@ -1414,6 +1430,7 @@ export async function prepareResponsesRequest(
     hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
+    markLinkTurnMissing(logCtx);
     return markProxyError(formatErrorResponse(
       400,
       "previous_response_not_found",
@@ -1440,6 +1457,7 @@ export async function prepareResponsesRequest(
       // An unknown adapter is left to the resolution error it already raises below.
       : continuationWire === undefined || PROVIDER_OWNED_CONTINUATION_WIRES.has(continuationWire);
     if (!upstreamOwnsOmittedHistory) {
+      markLinkTurnMissing(logCtx);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",

@@ -45,7 +45,7 @@ export interface ServeOptionsContext {
   loopbackRouteAllowed: (url: URL, req: Request) => boolean;
   managementIngressRouteAllowed: (url: URL, req: Request) => boolean;
   linkRouteAllowed: (url: URL, req: Request) => boolean;
-  onAuthenticatedCatalog: (apiKeyId: string) => void;
+  onAuthenticatedCatalog: (apiKeyId: string, routeProofId?: string) => void;
   linkPolicy: () => RequestPolicyView;
   packageTreeChangedResponse: (
     req: Request,
