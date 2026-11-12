@@ -694,6 +694,55 @@ describe("OAuth code-display login", () => {
     expect(printed).toContain("confirm the code ABCD");
   });
 
+  // The refusal used to name only a code-display login, so it read as if xAI's device grant were
+  // unsupported — the same mistake the docs made. The message names both modes and the list still
+  // comes from the roster.
+  test("a --headless refusal names device login as well as code-display", async () => {
+    const { handleLogin, listCodeLoginProviders } = await import("../../src/oauth/login-cli");
+    let stderr = "";
+    const errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => { stderr += args.join(" "); });
+    const exitSpy = spyOn(process, "exit").mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
+    try {
+      await expect(handleLogin("not-a-provider", {}, { codeMode: true })).rejects.toThrow("exit 1");
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+    expect(stderr).toContain("code-display or device login");
+    expect(stderr).not.toMatch(/needs a provider with a code-display login:/);
+    expect(stderr).toContain(listCodeLoginProviders().join(", "));
+    expect(listCodeLoginProviders()).toContain("xai");
+  });
+
+  // The headless device path prints provider-supplied instructions quoting the user code. A bidi
+  // override or a zero-width character in that text can reorder or hide the line the operator is
+  // reading, and C0/C1 escaping alone never covered it (#8436 review).
+  test("ocx login xai --headless escapes bidi and zero-width characters in provider instructions", async () => {
+    const { handleLogin } = await import("../../src/oauth/login-cli");
+    let printed = "";
+    const hostileUrl = "https://accounts.x.ai/oauth2/device?user_code=ABCD\u202e";
+    const hostileInstructions = "Confirm\u202ccode\u200bABCD\u2066-\u2069EFGH\ufeff";
+    const logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => { printed += `${args.join(" ")}\n`; });
+    try {
+      await handleLogin("xai", {
+        openUrl: async () => { throw new Error("must not launch"); },
+        ask: async () => "",
+        runLogin: async (_provider, ctrl) => {
+          ctrl.onAuth?.({ url: hostileUrl, instructions: hostileInstructions, deviceCode: "ABCD" });
+          return { refresh: "r", access: "a", expires: Date.now() + 3600_000 };
+        },
+      }, { codeMode: true });
+    } finally {
+      logSpy.mockRestore();
+    }
+    for (const code of [0x202e, 0x202c, 0x200b, 0x2066, 0x2069, 0xfeff]) {
+      expect(printed).not.toContain(String.fromCodePoint(code));
+    }
+    // Escaped, not dropped: the bytes survive in a readable form so a pasted report reproduces it.
+    expect(printed).toContain("https://accounts.x.ai/oauth2/device?user_code=ABCD\\u202e");
+    expect(printed).toContain("Confirm\\u202ccode\\u200bABCD\\u2066-\\u2069EFGH\\ufeff");
+  });
+
   test("an unknown mode is rejected before any flow starts", async () => {
     const server = startServer(0);
     try {

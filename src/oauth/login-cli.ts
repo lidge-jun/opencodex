@@ -149,7 +149,7 @@ export async function handleLogin(provider?: string, deps: LoginCliDeps = {}, op
   }
   if (isPublicOAuthProvider(name)) return handleOAuthLogin(name, deps, opts);
   if (opts.codeMode) {
-    console.error(`--headless needs a provider with a code-display login: ${listCodeLoginProviders().join(", ")}`);
+    console.error(`--headless needs a provider with a code-display or device login: ${listCodeLoginProviders().join(", ")}`);
     process.exit(1);
   }
   if (isKeyLoginProvider(name)) return handleKeyLogin(name, deps);
@@ -163,8 +163,10 @@ export function listCodeLoginProviders(): string[] {
 }
 
 /**
- * `--headless`: the provider displays the authorization code instead of redirecting anywhere, so
- * nothing is launched and nothing listens. Used where the browser is on another machine.
+ * `--headless`: nothing is launched and nothing listens, because the browser is on another machine.
+ * A code-display provider shows the authorization code to paste back here; a provider with only a
+ * device grant (xAI) shows a short code to confirm in that browser and settles on its own, so the
+ * same branch serves both and only the paste step differs (see `device` below).
  */
 async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> {
   const login = deps.runLogin ?? runLogin;
@@ -172,7 +174,7 @@ async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> 
   // way: the browser is elsewhere and nothing listens here. It shows a code instead of asking for one.
   const device = !supportsCodeLoginMode(name) && supportsDeviceLoginMode(name);
   if (!device && !supportsCodeLoginMode(name)) {
-    console.error(`${name} has no code-display login. Providers that do: ${listCodeLoginProviders().join(", ")}`);
+    console.error(`${name} has no headless login (code-display or device). Providers that have one: ${listCodeLoginProviders().join(", ")}`);
     process.exit(1);
   }
   try {

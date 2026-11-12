@@ -1809,6 +1809,7 @@
     "terminal-continuation-owner-rotation.test.ts": "adapters",
     "terminal-guard-server.test.ts": "server",
     "terminal-guard.test.ts": "server",
+    "terminal-safe-text.test.ts": "lib",
     "test-home-guard.test.ts": "ci-workflows", "codex-home-sandbox.test.ts": "ci-workflows", "test-home-guard-unpreloaded.test.ts": "ci-workflows",
     "test-run-lock-generation.test.ts": "ci-workflows", "test-runner.test.ts": "ci-workflows", "test-runner-bun.test.ts": "ci-workflows", "test-runner-spawnsync-finalizer.test.ts": "ci-workflows", "test-sandbox-cleanup.test.ts": "ci-workflows", "test-temp-quarantine.test.ts": "ci-workflows",
     "thought-signature-credential-scope.test.ts": "responses",
