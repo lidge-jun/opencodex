@@ -62,7 +62,7 @@ import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
 import {
   expandPreviousResponseInput,
-  previousResponseReplayPrefixLength,
+  previousResponseRestoredPrefixLength,
   previousResponseReplayFailure,
   previousResponseProviderState,
 } from "../../responses/state";
@@ -477,7 +477,7 @@ export async function executeComboResponses(
   if ((options.inboundWire ?? "responses") === "responses") {
     warnEagerCodexToolCatalog(body, req.headers, {
       surface: eagerCodexToolCatalogSurface(body, options.compactionRecoveryKind),
-      replayPrefixLength: previousResponseReplayPrefixLength(body),
+      replayPrefixLength: previousResponseRestoredPrefixLength(body),
       logicalRequest: logCtx,
     });
   }

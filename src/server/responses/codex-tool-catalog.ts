@@ -146,7 +146,8 @@ export function warnEagerCodexToolCatalog(
   console.warn(
     `[codex-catalog] Codex sent ${count} eager MCP tool definitions (warning threshold ${EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD}) `
     + "instead of deferred tool discovery; its model metadata may be missing or stale. The request was forwarded unchanged. "
-    + "Run 'ocx sync --restart-codex' to reload the catalog. Shown once per session, or once per request "
+    + "Restart Codex to reload the catalog ('ocx system codex-restart --yes'; it interrupts running turns). "
+    + "Shown once per session, or once per request "
     + "when the client sends no session identity.",
   );
 }

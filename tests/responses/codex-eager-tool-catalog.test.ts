@@ -204,9 +204,28 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
     expect(catalogWarnings()).toHaveLength(1);
   });
 
-  test("a previous_response_id continuation that replays stored history is not re-counted", async () => {
-    // Codex carries its own history on every turn. This entry's request held the eager catalog,
-    // so the continuation's replayed prefix holds it too; only genuinely new declarations count.
+  test("history the proxy restores from previous_response_id is not re-counted", async () => {
+    // The client sends only its new input; the proxy prepends the stored entry, whose request held
+    // the eager catalog. That restored prefix is history this request did not send.
+    const storedInput = liteFirstTurn(mcpTools());
+    rememberResponseState(
+      { model: "fixture/model", input: storedInput },
+      { id: "resp_catalog_restored", status: "completed",
+        output: [{ type: "message", id: "msg_catalog_restored", role: "assistant", content: "Earlier response" }] },
+    );
+    const result = await send("/v1/responses", [], codexHeaders(), {
+      previous_response_id: "resp_catalog_restored",
+      input: [message("user", "Current request")],
+    });
+    expect(result.status, result.text).toBe(200);
+    expect(upstreamCalls).toBe(1);
+    expect(catalogWarnings()).toHaveLength(0);
+  });
+
+  test("a client that resends its stored window under previous_response_id is counted", async () => {
+    // Codex carries its own history on every turn. When it resends the stored window verbatim the
+    // proxy prepends nothing (overlap skip), so every additional_tools item on the wire came from
+    // the client this turn and the eager catalog it carries is this request's cost.
     const storedInput = liteFirstTurn(mcpTools());
     rememberResponseState(
       { model: "fixture/model", input: storedInput },
@@ -220,7 +239,7 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
         message("user", "Current request")],
     });
     expect(result.status, result.text).toBe(200);
-    expect(catalogWarnings()).toHaveLength(0);
+    expect(catalogWarnings()).toHaveLength(1);
   });
 
   test.each(["/v1/responses/compact", "/v1/responses"])("%s compaction history is not diagnosed", async path => {

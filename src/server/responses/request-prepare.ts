@@ -69,7 +69,7 @@ import {
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
-  previousResponseReplayPrefixLength,
+  previousResponseRestoredPrefixLength,
   previousResponseReplayFailure,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -463,7 +463,7 @@ export async function prepareResponsesRequest(
   if (inboundWire === "responses" && !concreteSelection) {
     warnEagerCodexToolCatalog(body, req.headers, {
       surface: eagerCodexToolCatalogSurface(body, options.compactionRecoveryKind),
-      replayPrefixLength: previousResponseReplayPrefixLength(body),
+      replayPrefixLength: previousResponseRestoredPrefixLength(body),
       logicalRequest: logCtx,
     });
   }

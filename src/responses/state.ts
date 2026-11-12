@@ -609,6 +609,9 @@ bindSpillQueueStore({
 // once. It records the boundary whether the proxy prepended the history or the client already
 // carried it — the boundary is the same either way, and only its provenance differs.
 const replayedInputPrefixLengths = new WeakMap<object, number>();
+// Bodies whose replay boundary the CLIENT carried (the overlap-skip path): nothing was prepended,
+// so a consumer that must exclude only proxy-restored history reads a zero-length restored prefix.
+const clientCarriedReplays = new WeakSet<object>();
 const replayFailures = new WeakMap<object, PreviousResponseReplayFailure>();
 let loaded = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1150,6 +1153,7 @@ export function expandPreviousResponseInput(body: unknown, clientThreadId?: stri
       // not re-acknowledge historical compaction markers (parser.ts) and stays visible to
       // guidance de-duplication (collaboration.ts).
       replayedInputPrefixLengths.set(unchanged, carried);
+      clientCarriedReplays.add(unchanged);
       return unchanged;
     }
   }
@@ -1172,6 +1176,17 @@ export function previousResponseReplayPrefixLength(body: unknown): number {
   return replayedInputPrefixLengths.get(body) ?? 0;
 }
 
+/**
+ * Number of leading input items the PROXY prepended from previous_response_id state. Unlike
+ * `previousResponseReplayPrefixLength`, this is zero when the client already resent the stored
+ * window verbatim (overlap skip): those items arrived on the wire from the client this turn.
+ */
+export function previousResponseRestoredPrefixLength(body: unknown): number {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return 0;
+  if (clientCarriedReplays.has(body)) return 0;
+  return replayedInputPrefixLengths.get(body) ?? 0;
+}
+
 /** Copy proxy-private replay provenance to an internal clone with the same materialized input. */
 export function copyPreviousResponseReplayProvenance(source: unknown, target: unknown): void {
   if (!source || typeof source !== "object" || Array.isArray(source)) return;
@@ -1181,6 +1196,7 @@ export function copyPreviousResponseReplayProvenance(source: unknown, target: un
   const input = (target as { input?: unknown }).input;
   if (!Array.isArray(input) || prefixLength > input.length) return;
   replayedInputPrefixLengths.set(target, prefixLength);
+  if (clientCarriedReplays.has(source)) clientCarriedReplays.add(target);
 }
 
 /** True when this exact request could not replay because its task scope did not match. */
