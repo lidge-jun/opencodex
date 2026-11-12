@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import type { OcxConfig } from "../../src/types";
 import { createLinkWebsocketGate } from "../../src/server/index/link-websocket";
-import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
+import { LINK_WS_LIMITS, setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
 import { requestPolicyView } from "../../src/server/auth-cors";
 import { CodexWebSocketActivity } from "../../src/codex/websocket-activity";
@@ -68,7 +68,7 @@ function turnHandler() {
 }
 
 function harness(options: { armFails?: boolean } = {}) {
-  const holds = createActivityHolds({ dir, linkIds: () => [KEY.linkId], ...(options.armFails ? { writeHooks: { beforeRename() { throw new Error("EROFS"); } } } : {}) });
+  const holds = createActivityHolds({ dir, linkIds: () => [KEY.linkId], limits: LINK_WS_LIMITS, ...(options.armFails ? { writeHooks: { beforeRename() { throw new Error("EROFS"); } } } : {}) });
   holds.start();
   const book = createLinkActivity({ held: linkId => holds.count(linkId) });
   const gate = createLinkWebsocketGate({

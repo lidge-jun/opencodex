@@ -3,7 +3,6 @@ import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, ren
 import { join } from "node:path";
 import { isMissingPathError } from "../config/atomic-write";
 import { linkDir } from "./paths";
-import { LINK_WS_LIMITS } from "../server/index/link-websocket-limits";
 
 /**
  * Durable activity holds for Remote Link WebSockets (design T4 section 5).
@@ -50,6 +49,11 @@ export interface ActivityHoldsDeps {
   /** Link ids in links.json, read when crash evidence must become unknown holds; null when unreadable. */
   linkIds: () => readonly string[] | null;
   now?: () => number;
+  /**
+   * Holds per link and in total before a link becomes unknown. Required: the owner of every link
+   * WebSocket cap is src/server/index/link-websocket-limits.ts, and src/link may not import it.
+   */
+  limits: { holdsPerLink: number; holdsTotal: number };
   /** Test seam: inject a failure or a crash at each durability point of a write. */
   writeHooks?: HoldWriteHooks;
 }
@@ -231,7 +235,7 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
 
     add(linkId: string, input: HoldInput): void {
       const value = entry(linkId);
-      if (value.holds.length >= LINK_WS_LIMITS.holdsPerLink || total() >= LINK_WS_LIMITS.holdsTotal) {
+      if (value.holds.length >= deps.limits.holdsPerLink || total() >= deps.limits.holdsTotal) {
         value.unknown ??= "overflow";
       } else {
         value.holds.push({ threadHash: input.threadHash, pendingKeys: [...input.pendingKeys], runningMarks: input.runningMarks, untracked: input.untracked, createdAt: now() });

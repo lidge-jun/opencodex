@@ -16,7 +16,7 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "ocx-link-holds-")); });
 afterEach(() => { if (dir) removeTreeWithRetry(dir); dir = ""; });
 
 function store(overrides: Partial<Parameters<typeof createActivityHolds>[0]> = {}) {
-  const holds = createActivityHolds({ dir, linkIds: () => LINKS, ...overrides });
+  const holds = createActivityHolds({ dir, linkIds: () => LINKS, limits: LINK_WS_LIMITS, ...overrides });
   holds.start();
   return holds;
 }
@@ -196,7 +196,7 @@ describe("review round 1 (T5d1-R1-01, -02, -04)", () => {
 
   test("crash recovery that cannot list the links keeps every link unknown and the fence running", () => {
     writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"running"}');
-    const blind = createActivityHolds({ dir, linkIds: () => null });
+    const blind = createActivityHolds({ dir, linkIds: () => null, limits: LINK_WS_LIMITS });
     blind.start();
     expect(blind.count(A)).toBe(1);
     expect(blind.count("lnk_cccccccccccccccc")).toBe(1);
@@ -207,7 +207,7 @@ describe("review round 1 (T5d1-R1-01, -02, -04)", () => {
   test("a reference key that cannot be loaded or replaced does not fail startup; the links stay unknown and the fence running", () => {
     writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"clean"}');
     writeFileSync(join(dir, "activity-holds.json"), JSON.stringify({ version: 1, keyId: "0123456789abcdef", links: { [A]: { holds: [{ threadHash: "aa", pendingKeys: ["k"], runningMarks: 0, untracked: false, createdAt: 1 }], unknown: null } } }));
-    const holds = createActivityHolds({ dir, linkIds: () => LINKS, writeHooks: { beforeRename(_t, target) { if (target.endsWith("activity-ref-key")) throw new Error("EROFS"); } } });
+    const holds = createActivityHolds({ dir, linkIds: () => LINKS, limits: LINK_WS_LIMITS, writeHooks: { beforeRename(_t, target) { if (target.endsWith("activity-ref-key")) throw new Error("EROFS"); } } });
     expect(() => holds.start()).not.toThrow();
     expect(holds.describe(A).unknown).toBe("key-unavailable");
     expect(holds.count(B)).toBe(1);
@@ -218,7 +218,7 @@ describe("review round 2 (T5d1-R2-01)", () => {
   test("an all-links unknown state survives arm and a graceful stop; a readable restart still sees every link unknown", () => {
     writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"running"}');
     let readable = false;
-    const holds = createActivityHolds({ dir, linkIds: () => (readable ? LINKS : null) });
+    const holds = createActivityHolds({ dir, linkIds: () => (readable ? LINKS : null), limits: LINK_WS_LIMITS });
     holds.start();
     expect(holds.arm()).toBe(true);
     holds.stop();
@@ -230,7 +230,7 @@ describe("review round 2 (T5d1-R2-01)", () => {
   test("a graceful stop that can list the links again writes them unknown and then cleans", () => {
     writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"running"}');
     let readable = false;
-    const holds = createActivityHolds({ dir, linkIds: () => (readable ? LINKS : null) });
+    const holds = createActivityHolds({ dir, linkIds: () => (readable ? LINKS : null), limits: LINK_WS_LIMITS });
     holds.start();
     holds.arm();
     readable = true;

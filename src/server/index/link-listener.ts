@@ -5,7 +5,7 @@ import type { Server, WebSocketHandler } from "bun";
 import type { RequestPolicyView } from "../auth-cors";
 import type { WsData } from "../ws-bridge";
 import { createLinkWebsocketGate, type LinkWebsocketGateDeps } from "./link-websocket";
-import { linkWebsocketTransportReady } from "./link-websocket-limits";
+import { LINK_WS_LIMITS, linkWebsocketTransportReady } from "./link-websocket-limits";
 import { createActivityHolds } from "../../link/ws-activity-holds";
 import { resultKeysOf } from "../../codex/websocket-activity";
 import { dirname } from "node:path";
@@ -115,6 +115,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   // written unless a crash fence exists or a link upgrade arms one.
   const holds = createActivityHolds({
     dir: dirname(storePath),
+    limits: LINK_WS_LIMITS,
     // null, not []: an unreadable store must not let crash evidence be cleaned without its links.
     linkIds: () => { try { return readStore(storePath).links.map(link => link.id); } catch { return null; } },
   });

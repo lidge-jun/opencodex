@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { createActivityHolds } from "../../src/link/ws-activity-holds";
+import { LINK_WS_LIMITS } from "../../src/server/index/link-websocket-limits";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as { dir: string; point: string; links: string[] };
 const kill = (): never => { process.kill(process.pid, "SIGKILL"); throw new Error("unreachable"); };
@@ -11,6 +12,7 @@ let holdWrites = 0;
 const holds = createActivityHolds({
   dir: options.dir,
   linkIds: () => options.links,
+  limits: LINK_WS_LIMITS,
   writeHooks: {
     beforeRename(_temp, target) {
       if (options.point === "during-fence-write" && target.endsWith("ws-run-state.json")) kill();
