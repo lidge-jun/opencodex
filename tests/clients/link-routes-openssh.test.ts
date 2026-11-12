@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { buildRouteProbeArgv, buildTunnelArgv } from "../../src/link/ssh-argv";
 import { createSshRunner, type SshChild } from "../../src/link/ssh-runner";
 import { composeGrantTap, routeOutcomeOfStderr } from "../../src/link/route-select";
+import { checkRouteTrust, keyFingerprint } from "../../src/link/route-trust";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -98,7 +99,8 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
       "Host " + name, "  ProxyCommand " + SSHD + " -i -f " + join(dir, sshdConfig), "  User " + userInfo().username,
       "  IdentityFile " + join(dir, "client"), "  IdentitiesOnly yes",
     ].join("\n");
-    writeFileSync(config, [host("route-a", "sshd-a.conf"), host("route-b", "sshd-b.conf"), host("route-c", "sshd-c.conf"), ""].join("\n"));
+    // route-d reaches the pinned machine but names another port: HostKeyAlias lookups ignore the port.
+    writeFileSync(config, [host("route-a", "sshd-a.conf"), host("route-b", "sshd-b.conf"), host("route-c", "sshd-c.conf"), host("route-d", "sshd-a.conf") + "\n  Port 2222", ""].join("\n"));
     knownHosts = join(dir, "known_hosts");
     const [type, key] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
     writeFileSync(knownHosts, "pin-alias " + type + " " + key + "\n");
@@ -151,5 +153,22 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
       target.stop(true);
     }
   }, 60_000);
-});
 
+  test("a route on another port is still checked under the bare alias", async () => {
+    const runner = createSshRunner();
+    const probe = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-d", knownHostsFile: knownHosts })), { timeoutMs: 20_000 });
+    expect({ code: probe.code, stdout: probe.stdout.trim() }).toEqual({ code: 0, stdout: "ocx-link-probe" });
+  }, 60_000);
+
+  test("OpenSSH accepts a second key stored under a case variant of the alias; the route trust check refuses that file", async () => {
+    const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
+    const [otherType, otherKey] = readFileSync(join(dir, "hk-other.pub"), "utf8").split(" ");
+    const mixed = join(dir, "known_hosts-mixed-case");
+    const text = "pin-alias " + type + " " + pinnedKey + "\nPIN-ALIAS " + otherType + " " + otherKey + "\n";
+    writeFileSync(mixed, text);
+    const runner = createSshRunner();
+    const other = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-b", knownHostsFile: mixed })), { timeoutMs: 20_000 });
+    expect({ code: other.code, stdout: other.stdout.trim() }).toEqual({ code: 0, stdout: "ocx-link-probe" });
+    expect(checkRouteTrust(text, "pin-alias", keyFingerprint(pinnedKey!))).toEqual({ ok: false, code: "pin_mismatch" });
+  }, 60_000);
+});
