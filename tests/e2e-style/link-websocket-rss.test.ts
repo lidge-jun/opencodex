@@ -14,9 +14,11 @@ import { repoPath } from "../helpers/repo-root";
 // own Home process: every link socket (24, the overall cap) sends a near-maximum message whose reader then stalls,
 // upstream chunks run from 1 byte to 16 MiB around near-4 MiB events, each upstream stream is held after 16 MiB,
 // and the sockets are then cut in a seeded random order. The second run sends the same load through the HTTP link
-// relay under the same synchronization. Accepted when the WebSocket run's peak-over-idle RSS minus the HTTP run's
-// stays within n reservations (768 MiB at n = 24). What both transports share (fetch read-ahead and request
-// copies under a stalled reader) is a separate, pre-existing cost of the pipeline and is not part of this bound.
+// relay. Accepted when both Homes reported their own stall and the WebSocket run's peak-over-idle RSS minus the HTTP
+// run's stays within n reservations (768 MiB at n = 24). The HTTP link relay has no stall signal yet (only the
+// upstream's hold is observed), so today the pair is a measurement and the acceptance cannot pass. What both share
+// (fetch read-ahead and request copies under a stalled reader) is a separate, pre-existing cost of the pipeline and
+// is not part of this bound.
 // The definition, the measured numbers (R1 to R5) and how they were taken are in structure/remote-link.md.
 // The peak is the kernel's high-water mark (VmHWM, reset after the idle reading) on Linux 4.0 or later;
 // elsewhere the Home samples RSS on its own event loop, may miss a short peak, reports "sampled", and cannot pass.
@@ -55,7 +57,13 @@ function eventsText(count: number): string {
     + 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}\n\n';
 }
 
-interface LoadResult { method: string; idle: number; peak: number; delta: number }
+/**
+ * How a run knew its load had stalled. "home-pumps-waiting": the Home reported every link pump waiting for a drain.
+ * "upstream-held": only the fake upstream reached its hold point; the HTTP link relay exposes no stall signal of its
+ * own (Bun stops pulling its body without saying so), so the Home's own stage at that moment is not established.
+ */
+type StallSync = "home-pumps-waiting" | "upstream-held";
+interface LoadResult { method: string; idle: number; peak: number; delta: number; sync: StallSync }
 
 /** One stalled load against a Home in its own process; prints its numbers and returns the peak reading. */
 async function runLoad(options: { transport: "websocket" | "http"; hold: boolean }): Promise<LoadResult> {
@@ -191,7 +199,7 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
       const delta = peak - idle;
       const budget = SOCKETS * LINK_WS_LIMITS.socketReservationBytes;
       console.log(JSON.stringify({ method, transport: options.transport, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
-      return { method, idle, peak, delta };
+      return { method, idle, peak, delta, sync: options.transport === "websocket" ? "home-pumps-waiting" : "upstream-held" };
     } finally {
       for (const client of clients) client.destroy();
       try { child.stdin.write("stop\n"); child.stdin.flush(); child.stdin.end(); } catch { /* already gone */ }
@@ -215,7 +223,10 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance"
       expect(result.method).toBe("kernel-vmhwm");
       expect(Number.isFinite(result.peak) && result.peak >= result.idle).toBe(true);
     }
-    console.log(JSON.stringify({ acceptance: true, sockets: SOCKETS, websocketMinusHttpMiB: (websocket.delta - http.delta) / MiB, budgetMiB: SOCKETS * LINK_WS_LIMITS.socketReservationBytes / MiB }));
+    console.log(JSON.stringify({ acceptance: true, sockets: SOCKETS, websocketSync: websocket.sync, httpSync: http.sync, websocketMinusHttpMiB: (websocket.delta - http.delta) / MiB, budgetMiB: SOCKETS * LINK_WS_LIMITS.socketReservationBytes / MiB }));
+    // The subtraction compares like with like only when both Homes reported their own stall. Until the HTTP relay can
+    // (follow-up), the pair is a measurement and this acceptance cannot pass, whatever the difference.
+    expect({ websocket: websocket.sync, http: http.sync }).toEqual({ websocket: "home-pumps-waiting", http: "home-pumps-waiting" });
     expect(websocket.delta - http.delta).toBeLessThanOrEqual(SOCKETS * LINK_WS_LIMITS.socketReservationBytes);
   });
 
