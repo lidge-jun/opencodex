@@ -273,6 +273,13 @@ export interface ServiceInstallPreparationDeps extends RuntimePreflightDeps {
   windowsPartA?: (request: WindowsPartARequest) => Promise<WindowsCheckedStopResult>;
   /** Windows: Part B after the tracked-proxy stop; the port must be free and stay free. */
   windowsPartB?: (request: { port: number; remainingMs: number }) => Promise<WindowsStopConfirmResult>;
+  /**
+   * Windows: the port the stopped proxy was serving, resolved ONCE before Part A (#7771).
+   *
+   * Resolving it after the tracked cleanup reads a runtime record the cleanup just deleted,
+   * so Part B confirmed the wrapper's port while the proxy's own port was never checked.
+   */
+  windowsStopPort?: () => number;
   stopTrackedProxy?: () => Promise<unknown>;
   platform?: NodeJS.Platform;
 }
@@ -290,6 +297,9 @@ export async function prepareServiceInstall(
   assertNoDesktopSupervision(deps.inspectSupervision, latch);
   const platform = deps.platform ?? process.platform;
   if (platform === "win32") {
+    // Resolve the stopped proxy's port BEFORE anything removes its runtime record: Part B
+    // has to confirm that port, and the wrapper's port is only a fallback (#7771).
+    const stopPort = (deps.windowsStopPort ?? windowsServiceStopPort)();
     // Part A stops whichever managers are registered (both on a conflicting install) and
     // ends the bound wrappers, or refuses with nothing deleted or replaced (#7771). It
     // also covers a registration deleted mid-uninstall that left a detached wrapper
@@ -308,7 +318,7 @@ export async function prepareServiceInstall(
     })))();
     if (partA.outcome === "stopped") {
       const partB = await (deps.windowsPartB ?? confirmWindowsServiceStop)({
-        port: windowsServiceStopPort(),
+        port: stopPort,
         remainingMs: windowsStopRemainingMs(),
       });
       if (partB.outcome !== "freed") {

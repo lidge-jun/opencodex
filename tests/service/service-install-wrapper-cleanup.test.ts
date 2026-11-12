@@ -68,6 +68,29 @@ describe("service install preparation wrapper cleanup", () => {
     })).rejects.toThrow("nothing was published or started");
   });
 
+  test("Part B checks the stopped proxy's runtime port, resolved before the tracked cleanup", async () => {
+    // The defect: `windowsServiceStopPort()` was resolved AFTER the tracked cleanup removed
+    // the runtime record, so it fell through to the wrapper's port (10100) and Part B
+    // confirmed the wrong port while the proxy's own 12000 was never checked.
+    const calls: string[] = [];
+    let runtimePort: number | null = 12000;
+    const ports: number[] = [];
+    await prepareServiceInstall("scheduler", {
+      platform: "win32",
+      windowsStopPort: () => {
+        calls.push("port");
+        // The runtime record is what makes this the stopped proxy's port; the wrapper's
+        // 10100 is only a fallback once that record is gone.
+        return runtimePort ?? 10100;
+      },
+      windowsPartA: async () => { calls.push("partA"); return partAResult("stopped"); },
+      stopTrackedProxy: async () => { calls.push("stop:standalone"); runtimePort = null; },
+      windowsPartB: async request => { calls.push("partB"); ports.push(request.port); return partBResult("freed"); },
+    });
+    expect(calls).toEqual(["port", "partA", "stop:standalone", "partB"]);
+    expect(ports).toEqual([12000]);
+  });
+
   test("nothing registered: no Part B and no hold", async () => {
     const calls: string[] = [];
     await prepareServiceInstall("scheduler", {
