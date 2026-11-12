@@ -80,6 +80,15 @@ export interface GracefulStopIo {
    * process. Production callers omit it and get {@link killProxy}.
    */
   forceKill?: (pid: number) => void;
+  /**
+   * The post-stop port wait, injectable so a test can present a verified listener without
+   * starting one. Production callers omit it and get `reclaimListenPort`.
+   */
+  reclaimPort?: (
+    port: number,
+    hostname: string,
+    opts: { timeoutMs?: number; intervalMs?: number; scanIntervalMs?: number; killOcxHolders?: boolean; onlyKillPids?: number[] },
+  ) => Promise<boolean>;
 }
 
 /**
@@ -353,42 +362,53 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<b
   if (graceful === "teardown-unconfirmed") {
     // Exit was observed, so do not enter the forced-stop fallback. Returning false keeps
     // shared restoration with `ocx stop` instead of claiming that the proxy completed it.
-    await waitForStoppedPort(runtime, pid);
+    await waitForStoppedPort(runtime, pid, io);
     return false;
   }
   if (graceful) {
-    await waitForStoppedPort(runtime, pid);
+    await waitForStoppedPort(runtime, pid, io);
     return true;
   }
   if (io.allowForcedFallback === false) {
     // The caller forbade the forced ladder (a manager that would not stop may respawn the
     // proxy). Report the unconfirmed stop; the caller keeps its failure recorded.
-    await waitForStoppedPort(runtime, pid);
+    await waitForStoppedPort(runtime, pid, io);
     return false;
   }
   // Written as a literal killProxy(pid) call so the refusal-before-kill ordering stays
   // checkable in source (tests/providers/xai/grok-lifecycle.test.ts); the seam only swaps it.
   if (io.forceKill) io.forceKill(pid);
   else killProxy(pid);
-  await waitForStoppedPort(runtime, pid);
+  await waitForStoppedPort(runtime, pid, io);
   return false;
 }
 
-/** After stop/kill, wait for the former listen port to become bindable (Windows drain). */
+/**
+ * After stop/kill, wait for the former listen port to become bindable (Windows drain).
+ *
+ * The wait is OBSERVATIONAL whenever the caller forbade the forced ladder
+ * (`allowForcedFallback === false`). Reclaiming with `killOcxHolders` would terminate a
+ * verified listener through `killProxy`, which is the forced stop that refusal exists to
+ * prevent: a manager that would not stop may respawn the proxy, so a survivor must be
+ * reported rather than killed. The wait still runs and still returns; it only stops being
+ * allowed to change anything.
+ */
 async function waitForStoppedPort(
   runtime: { port: number; hostname?: string } | null | undefined,
   stoppedPid?: number,
+  io: GracefulStopIo = {},
 ): Promise<void> {
   if (!runtime?.port) return;
+  const mayKill = io.allowForcedFallback !== false;
   try {
-    const { reclaimListenPort } = await import("../server/port-reclaim");
-    await reclaimListenPort(runtime.port, runtime.hostname ?? "127.0.0.1", {
+    const reclaim = io.reclaimPort ?? (await import("../server/port-reclaim")).reclaimListenPort;
+    await reclaim(runtime.port, runtime.hostname ?? "127.0.0.1", {
       timeoutMs: 15_000,
       intervalMs: 100,
       scanIntervalMs: 500,
       // Only the process we just stopped — never kill a newly started twin proxy.
-      killOcxHolders: !!(stoppedPid && stoppedPid > 0),
-      onlyKillPids: stoppedPid && stoppedPid > 0 ? [stoppedPid] : [],
+      killOcxHolders: mayKill && !!(stoppedPid && stoppedPid > 0),
+      onlyKillPids: mayKill && stoppedPid && stoppedPid > 0 ? [stoppedPid] : [],
     });
   } catch {
     /* best-effort — callers that need a hard guarantee reclaim again before bind */
