@@ -6,7 +6,7 @@ import {
 
 /**
  * What all bodies being prepared at once may hold: each reserves twice its declared length (its
- * bytes and their zstd form) until the transport flushed it or tore its request down, and a body that does not fit now streams
+ * bytes and their zstd form) until the Home answered and the transport flushed it or tore its request down, and a body that does not fit now streams
  * unchanged instead of waiting. Four bodies at the 16 MiB bound fill it.
  */
 export const LINK_REQUEST_PREPARE_BUDGET_BYTES = 128 * 1024 * 1024;

@@ -441,6 +441,15 @@ export async function relayLinkDataRequest(
     ? await (compression?.budget ?? linkRequestPrepareBudget).acquire(2 * Number(declaredLength), relayAbort.signal, 0).catch(() => null)
     : null;
   releasePrepared = () => { lease?.release(); };
+  // The allowance covers the prepared bytes for as long as anything here can still send them: until
+  // the Home answered (a refused or timed-out preflight sends them again) and the transport settled
+  // the upload. Then the references go with the charge.
+  let uploadSettled = false, answered = false;
+  const releaseWhenSent = () => {
+    if (!uploadSettled || !answered) return;
+    prepared = null;
+    releasePrepared();
+  };
   if (lease) {
     let raw: Uint8Array<ArrayBuffer>;
     try {
@@ -524,7 +533,7 @@ export async function relayLinkDataRequest(
       upstream = await (deps.fetchImpl
         ? deps.fetchImpl(destination, seamInit(init, selectBody, target.linkId))
         : fetchBoundLinkRelay(target, destination, init, {
-          traffic: deps.traffic, ...(selectBody ? { selectBody, onBodySettled: () => releasePrepared() } : {}),
+          traffic: deps.traffic, ...(selectBody ? { selectBody, onBodySettled: () => { uploadSettled = true; releaseWhenSent(); } } : {}),
         }));
     } catch (error) {
       if (error instanceof LinkRelayAuthenticationError) {
@@ -547,9 +556,10 @@ export async function relayLinkDataRequest(
       if (!tunnel || !resendable || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable("transport_error");
     }
   }
-  // The transport frees the preparation allowance once the body was flushed or its request torn
-  // down (a Home may answer before it reads the upload); the fetch seam has no socket to wait for.
-  if (deps.fetchImpl) releasePrepared();
+  // The fetch seam has no socket to wait for; the transport settles the upload itself.
+  answered = true;
+  if (deps.fetchImpl) uploadSettled = true;
+  releaseWhenSent();
   if (relayAbort.signal.aborted) {
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return await tunnelUnavailable();

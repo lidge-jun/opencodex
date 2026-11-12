@@ -70,6 +70,10 @@ function requestOnConnection(
   url: URL, init: RequestInit, agent: SingleConnectionAgent, authenticatedSocket?: Socket, onSent?: (bytes: number) => void,
   onUploadSettled?: (finished: boolean) => void, onBodySettled?: () => void,
 ): Promise<IncomingMessage> {
+  // Nothing below keeps `init`: listeners on the request live until its connection closes, and a
+  // prepared body must not stay reachable through them after its write completed.
+  const method = init.method ?? "GET", signal = init.signal ?? undefined, initHeaders = init.headers;
+  let pendingBody = init.body;
   return new Promise((resolve, reject) => {
     // Once: true when every body write completed, false when the request or its socket closed first.
     // Response headers alone prove neither, since a Home may answer before it reads the upload, so
@@ -81,11 +85,11 @@ function requestOnConnection(
       onUploadSettled?.(finished);
       onBodySettled?.();
     };
-    const headers = Object.fromEntries(new Headers(init.headers));
+    const headers = Object.fromEntries(new Headers(initHeaders));
     // No implicit decompression negotiation; handle an explicitly encoded response below anyway.
     headers["accept-encoding"] = "identity";
     const outgoing = request(url, {
-      method: init.method ?? "GET", headers, agent, signal: init.signal ?? undefined,
+      method, headers, agent, signal,
       maxHeaderSize: 64 * 1024,
     }, resolve);
     outgoing.on("error", reject);
@@ -97,15 +101,16 @@ function requestOnConnection(
       socket.once("close", () => settleUpload(false));
     });
     void (async () => {
-      const body = init.body;
+      const body = pendingBody;
+      pendingBody = null;
       if (body instanceof ReadableStream) {
         const reader = body.getReader();
-        const abort = () => { void reader.cancel(init.signal?.reason).catch(() => {}); };
-        init.signal?.addEventListener("abort", abort, { once: true });
+        const abort = () => { void reader.cancel(signal?.reason).catch(() => {}); };
+        signal?.addEventListener("abort", abort, { once: true });
         outgoing.once("close", abort);
         try {
           for (;;) {
-            init.signal?.throwIfAborted();
+            signal?.throwIfAborted();
             const next = await reader.read();
             if (next.done) break;
             // Await the write callback: upstream backpressure never buffers the whole upload.
@@ -115,7 +120,7 @@ function requestOnConnection(
           }
           settleUpload(true);
         } finally {
-          init.signal?.removeEventListener("abort", abort);
+          signal?.removeEventListener("abort", abort);
           outgoing.removeListener("close", abort);
           try { await reader.cancel(); } catch { /* preserve the upload outcome */ }
           reader.releaseLock();

@@ -47,6 +47,12 @@ function post(path: string, body: string | Uint8Array, headers: Record<string, s
 const big = JSON.stringify({ input: "an agent re-sends its whole conversation ".repeat(200) });
 const relay = (req: Request, port: number, deps: LinkRelayDeps = {}) => relayLinkDataRequest(req, target(port), { tunnel: HOME_INITIATED_LINK_TUNNEL, ...deps });
 
+function gate<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
 describe("per-body zstd from Child to Home (#3023)", () => {
   test("the production Home names link-request-zstd/1", () => {
     expect(buildPeerFeatures()).toContain(LINK_REQUEST_ZSTD_FEATURE);
@@ -159,5 +165,50 @@ describe("per-body zstd from Child to Home (#3023)", () => {
     const h = home(() => [LINK_REQUEST_ZSTD_FEATURE]);
     for (let i = 0; i < 2; i++) expect((await relay(post("/v1/responses", big), h.port, { requestCompression: { enabled: false } })).status).toBe(200);
     expect(h.seen.map(seen => [seen.encoding, seen.decoded])).toEqual(Array(2).fill([null, JSON.parse(big)]));
+  });
+
+  test("bodies whose uploads finished keep their allowance while the Home holds its response headers", async () => {
+    let received = 0;
+    const allRead = gate(), answer = gate();
+    const sessions = createLinkRelaySessions({ fingerprints: () => [fp], homeFeatures: () => [LINK_REQUEST_ZSTD_FEATURE] });
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (req, s) => sessions.dispatch(req, s, async req => {
+      if (req.method !== "POST" || req.headers.get("content-encoding") !== "zstd") return Response.json({ ok: true });
+      await req.arrayBuffer();
+      if (++received === 3) allRead.resolve();
+      await answer.promise;
+      return Response.json({ ok: true });
+    }) });
+    servers.push(server);
+    await relay(post("/v1/responses", big), server.port!);
+    const budget = createInboundBodyBudget(64 * 1024 * 1024, 0);
+    const pending = [0, 1, 2].map(() => relay(post("/v1/responses", big), server.port!, { requestCompression: { budget } }));
+    await allRead.promise;
+    // Every upload is in the Home's hands, but each request still holds its prepared bytes until it has an answer.
+    expect(budget.snapshot()).toMatchObject({ reservedBytes: 3 * 2 * encoder.encode(big).byteLength, activeLeases: 3 });
+    answer.resolve();
+    for (const response of await Promise.all(pending)) {
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    expect(budget.snapshot()).toEqual({ reservedBytes: 0, activeLeases: 0, queuedRequests: 0 });
+  });
+
+  test("a request cancelled while its body is being compressed leaves no allowance behind", async () => {
+    const h = home(() => [LINK_REQUEST_ZSTD_FEATURE]);
+    await relay(post("/v1/responses", big), h.port);
+    const budget = createInboundBodyBudget(64 * 1024 * 1024, 0);
+    const started = gate(), finish = gate<Uint8Array>();
+    const caller = new AbortController();
+    const bytes = encoder.encode(big);
+    const req = new Request("http://127.0.0.1/v1/responses", { method: "POST", body: bytes, signal: caller.signal,
+      headers: { "content-type": "application/json", "content-length": String(bytes.byteLength) } });
+    const pending = relay(req, h.port, { requestCompression: { budget, compress: async () => { started.resolve(); return await finish.promise; } } });
+    await started.promise;
+    expect(budget.snapshot().reservedBytes).toBe(2 * bytes.byteLength);
+    caller.abort();
+    finish.resolve(new Uint8Array(16));
+    expect((await pending).status).toBe(503);
+    expect(budget.snapshot()).toEqual({ reservedBytes: 0, activeLeases: 0, queuedRequests: 0 });
+    expect(h.seen).toHaveLength(1);
   });
 });
