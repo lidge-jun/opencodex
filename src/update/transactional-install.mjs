@@ -79,9 +79,35 @@ function inside(path, root) {
   return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
 }
 
+/**
+ * Follow one link's own text component by component, as the operating system does. Collapsing ".."
+ * first would hide a relay such as `../outside/relay/../../store/...`. A step down must land inside
+ * an allowed root or on an ancestor of one (pnpm's relative links climb through those ancestors); a
+ * step through another link before the last component is refused, because ".." after it would be
+ * resolved from that link's target rather than from the spelling checked here.
+ */
+function followLinkText(linkPath, text, spellings) {
+  const raw = String(text);
+  const root = isAbsolute(raw) ? parse(raw).root : "";
+  const parts = raw.slice(root.length).split(sep === "\\" ? /[\\/]+/ : /\/+/).filter(part => part && part !== ".");
+  let current = root ? resolve(root) : dirname(linkPath);
+  for (let index = 0; index < parts.length; index += 1) {
+    if (parts[index] === "..") { current = dirname(current); continue; }
+    current = join(current, parts[index]);
+    if (!spellings.some(root => inside(current, root) || inside(root, current))) throw new Error("link is outside the selected store");
+    if (index < parts.length - 1) {
+      let stat;
+      try { stat = lstatSync(current); } catch { throw new Error("link is outside the selected store"); }
+      if (stat.isSymbolicLink()) throw new Error("link is outside the selected store");
+    }
+  }
+  return current;
+}
+
 /** Resolve every link after entering a store; an external hop cannot vouch for a later return. */
 function resolveStoreLinkChain(path, store, alias, alternateRoot, alternateAlias) {
   const roots = alternateRoot ? [store, alternateRoot] : [store];
+  const spellings = [store, alias, alternateRoot, alternateAlias].filter(Boolean);
   const normalize = value => {
     const target = resolve(value);
     if (alias && inside(target, alias)) return resolve(store, relative(alias, target));
@@ -98,7 +124,7 @@ function resolveStoreLinkChain(path, store, alias, alternateRoot, alternateAlias
       prefix = join(prefix, parts[index]);
       if (!lstatSync(prefix).isSymbolicLink()) continue;
       if (++hops > 64) throw new Error("too many store link hops");
-      const target = normalize(resolve(dirname(prefix), readlinkSync(prefix)));
+      const target = normalize(followLinkText(prefix, readlinkSync(prefix), spellings));
       if (!roots.some(candidate => inside(target, candidate))) throw new Error("link is outside the selected store");
       pending = resolve(target, ...parts.slice(index + 1));
       changed = true;

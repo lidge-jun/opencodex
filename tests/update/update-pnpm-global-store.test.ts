@@ -214,6 +214,29 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global links are outside the selected store" });
   });
 
+  test("a single package link whose text leaves both roots and returns through .. is refused", () => {
+    const layout = globalStoreLayout(root);
+    const relay = join(root, "outside", "relay");
+    mkdirSync(relay, { recursive: true });
+    // One symlink: ../outside/relay/../../<store package>. path.resolve would collapse the detour.
+    const fromDir = dirname(layout.exposed);
+    const detour = relative(fromDir, relay) + "/../../" + relative(root, layout.real);
+    unlinkSync(layout.exposed);
+    symlinkSync(detour, layout.exposed);
+    expect(realpathSync(layout.exposed)).toBe(realpathSync(layout.real));
+    expect(inside(relay, layout.globalRoot) || inside(relay, layout.store)).toBe(false);
+    expect(verifyPnpmInstallTree(layout.exposed, "1.0.0", layout.store, layout.globalRoot))
+      .toEqual({ ok: false, failures: ["pnpm global links are outside the selected store"] });
+    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global links are outside the selected store" });
+  });
+
+  test("a pnpm home containing a control character refuses before pnpm runs a store query", () => {
+    const layout = globalStoreLayout(root);
+    layout.env = { PNPM_HOME: layout.home + "\nrm" };
+    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm home could not be determined" });
+    expect(storeCalls(layout)).toEqual([]);
+  });
+
   test("a symlink in the pnpm home anchor refuses before the store is queried", () => {
     const layout = globalStoreLayout(root);
     const alias = join(root, "alias-home");
