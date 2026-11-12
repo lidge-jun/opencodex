@@ -392,7 +392,10 @@ function inspectGlobalLookupRoots(store, escaped, storeAlias = store) {
       continue;
     }
     try {
-      if (!inside(realpathSync(root), store)) continue;
+      let real;
+      // A dangling entry supplies nothing, like a missing one.
+      try { real = realpathSync(root); } catch (error) { if (error?.code === "ENOENT" || error?.code === "ENOTDIR") continue; throw error; }
+      if (!inside(real, store)) continue;
       resolveStoreLinkChain(root, store, storeAlias);
     } catch { escaped.add("pnpm global dependency lookup root could not be resolved"); continue; }
     inspectPnpmMetadata(root, store, escaped, "global dependency lookup", storeAlias);

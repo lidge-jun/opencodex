@@ -164,6 +164,41 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(resolveOwner(layout)).toMatchObject({ ok: true, owner: { globalStore: true, storePath: layout.store } });
   });
 
+  test("a dangling NODE_PATH entry does not refuse a default-store install", () => {
+    const layout = globalStoreLayout(root);
+    const dangling = join(root, "dangling-node-path");
+    symlinkSync(join(root, "missing-target"), dangling);
+    const original = process.env.NODE_PATH;
+    try {
+      process.env.NODE_PATH = dangling;
+      expect(resolveOwner(layout)).toMatchObject({ ok: true, owner: { globalStore: true } });
+    } finally {
+      if (original === undefined) delete process.env.NODE_PATH; else process.env.NODE_PATH = original;
+    }
+  });
+
+  test("on Windows a pnpm home or store path with cmd.exe metacharacters is refused before it reaches pnpm", () => {
+    for (const name of ["a&calc", "p%USERPROFILE%", "b^c", "q!x"]) {
+      const layout = globalStoreLayout(join(root, name));
+      expect(resolvePnpmGlobalOwner({
+        packageName: PKG, packagePath: layout.exposed, commandPaths: [join(layout.root, "pnpm")],
+        runPnpm: (_command, args) => layout.run(args), env: layout.env, platform: "win32",
+      })).toEqual({ ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" });
+      expect(storeCalls(layout)).toEqual([]);
+    }
+    // The printed store path is checked too, before it can become --store-dir.
+    const layout = globalStoreLayout(join(root, "plain"));
+    const cmdStore = join(layout.home, "store&calc", "v11");
+    mkdirSync(cmdStore, { recursive: true });
+    layout.storeOutput = () => cmdStore;
+    const result = resolvePnpmGlobalOwner({
+      packageName: PKG, packagePath: layout.exposed, commandPaths: [join(layout.root, "pnpm")],
+      runPnpm: (_command, args) => layout.run(args), env: layout.env, platform: "win32",
+    });
+    expect(result).toEqual({ ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" });
+    expect(storeCalls(layout)).toHaveLength(1);
+  });
+
   test("pnpm 11 uses the same proof", () => {
     const layout = globalStoreLayout(root, { pnpmVersion: "11.20.0" });
     expect(resolveOwner(layout)).toMatchObject({ ok: true, owner: { globalStore: true } });

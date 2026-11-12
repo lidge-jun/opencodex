@@ -11,6 +11,9 @@ export const PNPM_BUILD_APPROVAL = "--allow-build=bun";
  */
 const VERIFIED_GLOBAL_STORE_MAJORS = new Set([11, 12]);
 
+/** Characters cmd.exe re-parses after quoting (same set as the npm cache preflight). */
+const WINDOWS_CMD_METACHARACTERS = /["%!^&|<>]/;
+
 function outputText(value) {
   if (typeof value === "string") return value;
   if (value instanceof Uint8Array) return new TextDecoder().decode(value);
@@ -387,6 +390,11 @@ function readPnpmStore(runPnpm, owner, platform, env = process.env) {
 
   const homeAnchor = owner?.homeAnchor ?? pnpmHomeAnchor(env, platform);
   if (!homeAnchor) return { ok: false, reason: "pnpm home could not be determined" };
+  // On Windows pnpm.cmd re-parses its arguments in cmd.exe after quoting; these characters cannot be
+  // neutralized there (the npm cache preflight refuses the same set), so such paths are refused.
+  if (platform === "win32" && [homeAnchor, owner?.globalDir, owner?.globalBinDir].some(path => WINDOWS_CMD_METACHARACTERS.test(String(path ?? "")))) {
+    return { ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" };
+  }
   try {
     const refusal = spellingRefusal(homeAnchor, "pnpm home");
     if (refusal) return { ok: false, reason: refusal };
@@ -402,6 +410,9 @@ function readPnpmStore(runPnpm, owner, platform, env = process.env) {
       && /^v\d+$/.test(pathBasename(lines[0], platform))) storePath = lines[0];
   } catch { /* refused below */ }
   if (!storePath) return { ok: false, reason: "pnpm store path is not one absolute versioned path" };
+  if (platform === "win32" && WINDOWS_CMD_METACHARACTERS.test(storePath)) {
+    return { ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" };
+  }
   // A link inside the store spelling would widen the root every later hop is confined to.
   try {
     const refusal = spellingRefusal(storePath, "pnpm store path");
