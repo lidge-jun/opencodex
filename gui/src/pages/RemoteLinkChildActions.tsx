@@ -26,6 +26,13 @@ function linkActionError(error: unknown): LinkActionErrorView {
   return { key, hint: error instanceof LinkApiError ? error.hint : null };
 }
 
+const OP_NOUN_KEY: Record<ChildOp, TKey> = {
+  observe: "remoteLink.job.op.observe",
+  sync: "remoteLink.job.op.sync",
+  "restart-codex": "remoteLink.job.op.restartCodex",
+  update: "remoteLink.job.op.update",
+};
+
 const ACTIVE_KEY: Record<ChildOp, TKey> = {
   observe: "remoteLink.job.active.observe",
   sync: "remoteLink.job.active.sync",
@@ -110,7 +117,7 @@ export function ChildRowBadges({ row }: { row: ChildOpsRowView }): ReactElement 
       {row.activeJob && <StateBadge tone="neutral">{t(ACTIVE_KEY[row.activeJob.op])}</StateBadge>}
       {row.lastOperation && (
         <span className="text-[12px] leading-5 text-fg-muted">
-          {t("remoteLink.job.last", { op: t(ACTIVE_KEY[row.lastOperation.op]).replace("…", ""),
+          {t("remoteLink.job.last", { op: t(OP_NOUN_KEY[row.lastOperation.op]),
             state: lastStateKey ? t(lastStateKey) : row.lastOperation.state })}
           {!lastStateKey && <> <CodeToken>{row.lastOperation.state}</CodeToken></>}
           {row.lastOperation.reason && <> <CodeToken>{row.lastOperation.reason}</CodeToken></>}

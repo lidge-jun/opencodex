@@ -403,8 +403,8 @@ test("an unknown last-operation state renders as code", async () => {
   const host = await mount();
   const badges = host.querySelector(".remote-link-child-badges")!;
   expect([...badges.querySelectorAll("code")].map(item => item.textContent)).toContain("melted");
-  // The plan's `remoteLink.job.last` reuses the active label with the ellipsis trimmed.
-  expect(badges.textContent).toContain("Last Updating: melted");
+  // `remoteLink.job.last` names the operation with a noun key (OP_NOUN_KEY), not the in-progress label.
+  expect(badges.textContent).toContain("Last operation: Update — melted");
 });
 
 test("an unknown restart outcome renders as code instead of a guessed sentence", async () => {
