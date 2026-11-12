@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -8,6 +10,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -131,6 +134,8 @@ export const fr: Record<TKey, string> = {
   "workflowBudget.saved": "Limites de workflow enregistrées.",
   ...desktopCompatibilityCopy("fr"),
   ...shellV2Copy("fr"),
+  ...codexCliUpdateCopy("fr"),
+  ...remoteLinkDiagnosticsCopy("fr"),
   ...modelsV2Copy("fr"),
   ...accountsV2Copy("fr"),
   ...subagentsV2Copy("fr"),
@@ -139,6 +144,7 @@ export const fr: Record<TKey, string> = {
   ...connectV2Copy("fr"),
   ...startupV2Copy("fr"),
   ...proxyV2Copy("fr"),
+  ...telemetryProfileCopy("fr"),
   "claude.tierDefaults.unset": "Non défini (conserver le réglage Claude)",
   "claude.tierDefaults.recovery": "Application arrêtée et restauration automatique échouée. Vérifiez la sauvegarde ci-dessous avant de réessayer.",
   "claude.tierDefaults.title": "Modèles par défaut du CLI",
@@ -281,6 +287,8 @@ export const fr: Record<TKey, string> = {
   "advisor.modelsEmpty": "Aucun modèle disponible. Activez un fournisseur et un modèle, puis réessayez.",
   "advisor.effort": "Intensité de raisonnement",
   "advisor.policy": "Politique",
+  "advisor.questionOnly": "Envoyer uniquement la question du worker",
+  "advisor.questionOnlyNote": "Seules la question du worker (jusqu’à 2000 caractères conservés, avec un avis en cas de troncature) et une instruction fixe sont envoyées. Aucun historique, résultat d’outil ou contexte de tâche n’est joint. Le worker doit inclure les informations essentielles. Les consultations automatiques sont suspendues ; les limites existantes restent actives.",
   "advisor.policy.manual": "Manuel — uniquement à la demande du worker",
   "advisor.policy.preflight": "Preflight — tentative automatique dès qu'une preuve d'orientation existe",
   "advisor.policy.adaptive": "Adaptatif — orientation et réparation en échec",
@@ -817,6 +825,8 @@ export const fr: Record<TKey, string> = {
   "prov.port": "Port",
   "prov.default": "Par défaut",
   "prov.loadingConfig": "Chargement…",
+  "prov.targetChanged": "La cible du tableau de bord a changé. Rouvrez ce formulaire sur le serveur actuel.",
+  "prov.legacyTargetPreflight": "Ce proxy vérifie la cible d’enregistrement avant l’envoi, mais ne peut pas la vérifier de façon atomique. Mettez à jour le proxy pour des enregistrements liés à la cible.",
   "prov.saved": "Enregistré ! Redémarrez le proxy pour appliquer les modifications.",
   "prov.loadConfigFail": "Échec du chargement de la configuration",
   "prov.invalidJson": "JSON non valide",
@@ -1855,6 +1865,9 @@ export const fr: Record<TKey, string> = {
   "quota.creditsBalance": "Solde de crédits",
   "quota.creditsPeriodEnds": "La période de facturation se termine le {date}",
   "quota.usedPercent": "{pct} % utilisés",
+  "quota.weeklyShare": "Jusqu’à {pct} % de votre limite hebdomadaire",
+  "quota.notInEffect": "Pas en vigueur actuellement",
+  "quota.notInEffectHint": "Claude indique que cette limite ne restreint pas l’utilisation pour le moment. Elle est affichée à titre indicatif ; le routage des comptes n’utilise que les limites en vigueur.",
   "quota.limitReached": "Limite atteinte",
   "quota.resetsToday": "Réinitialisation aujourd’hui à {time}",
   "quota.resetsTomorrow": "Réinitialisation demain à {time}",
@@ -1940,6 +1953,7 @@ export const fr: Record<TKey, string> = {
   "pws.currentAccountUsage": "Utilisation du compte actuel",
   "pws.quotaUnsupported": "La consultation du quota n’est pas prise en charge pour ce compte.",
   "pws.quotaUnobserved": "Aucune utilisation observée pour le moment.",
+  "pws.quotaLastRead": "Dernière lecture",
   "pws.quotaCheckCompleted": "Vérification du quota terminée",
   "pws.modelBreakdown": "Répartition par modèle",
   "pws.col.model": "Modèle",
@@ -1999,6 +2013,7 @@ export const fr: Record<TKey, string> = {
   "pws.accountSwitching": "Changement…",
   "pws.accountCurrent": "Compte actuel",
   "pws.accountPausedHint": "Exclu du choix automatique, des nouvelles tentatives, de la récupération après délai, de la sélection manuelle et du renouvellement proactif du jeton jusqu’à sa réactivation.",
+  "pws.resumeAndActivateKey": "Reprendre et utiliser",
   "pws.defaultModelNone": "Aucun (utiliser la valeur par défaut du fournisseur)",
   "pws.discardSettings": "Abandonner les modifications",
   "pws.jsonEditorDesc": "Modifiez la configuration JSON brute du fournisseur. Les modifications sont enregistrées immédiatement.",
@@ -2052,6 +2067,7 @@ export const fr: Record<TKey, string> = {
   "pws.pacingRemoveModel": "Supprimer le remplacement du cadencement des requêtes pour {model}",
   "pws.pacingRuleRequired": "Activez le cadencement des requêtes seulement après avoir défini une limite de fournisseur ou un remplacement par modèle.",
   "pws.pacingCapInvalid": "Le nombre maximal de requêtes simultanées doit être un nombre entier supérieur ou égal à 1.",
+  "pws.pacingValueInvalid": "Saisissez une valeur de cadencement valide : RPM 1/60–60 000, délai 1–3 600 000 ms, concurrence 1 ou plus.",
   "pws.providerId": "ID du fournisseur",
   "pws.reauth": "Réauthentification requise",
   "pws.reauthenticate": "Réauthentifier",
@@ -2084,6 +2100,12 @@ export const fr: Record<TKey, string> = {
   "pws.accountModeFailed": "Impossible de changer de mode de compte.",
   "pws.accountModeConfirm": "Changer le mode de compte OpenAI ? Les conversations en cours seront réaffectées à l’ensemble de comptes de l’autre mode, et l’utilisation du quota sera suivie selon le nouveau mode.",
   "pws.settingsUnsavedBar": "Vous avez des modifications non enregistrées.",
+  "pws.draftTarget": "Modification : {target}",
+  "pws.draftConflict": "Les paramètres enregistrés sur ce serveur ont changé pendant votre modification. Votre brouillon est conservé ; choisissez les valeurs à garder.",
+  "pws.draftConflictFields": "Ces champs ont changé des deux côtés. Modifiez le brouillon ou utilisez les valeurs enregistrées :",
+  "pws.draftConflictUseSaved": "Utiliser les valeurs enregistrées",
+  "pws.draftConflictKeepDraft": "Garder mon brouillon",
+  "pws.draftConflictResolveFirst": "Choisissez les valeurs à garder avant d'enregistrer.",
   "pws.unsavedLeaveBody": "Vous avez des modifications non enregistrées. Les enregistrer avant de quitter ?",
   "pws.unsavedLeaveTitle": "Modifications non enregistrées",
   "pws.attentionRequired": "Intervention requise",
@@ -2701,6 +2723,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Échec du chargement du préréglage du fournisseur OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Le préréglage du fournisseur OpenAI est indisponible.",
   "codexAuth.openProviders": "Ouvrir Fournisseurs",
+  "codexAuth.changeAccountMode": "Changer le mode de compte",
   "codexAuth.add": "Ajouter",
   "codexAuth.credits": "Crédits",
   "codexAuth.creditsRemaining": "restants",
@@ -3712,6 +3735,11 @@ export const fr: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "Utiliser par défaut pour {family}",
   "claudeDesktop.moveTo": "Déplacer vers",
   "claudeDesktop.move": "Déplacer",
+  "claudeDesktop.removeUnavailable": "Retirer",
+  "claudeDesktop.removeAllUnavailable": "Retirer les indisponibles ({n})",
+  "claudeDesktop.removeUnavailableHint": "Retire cette affectation et son alias. Enregistrer conserve la modification ; Enregistrer et appliquer met aussi à jour Claude Desktop.",
+  "claudeDesktop.removeUnavailableTierHint": "Retire aussi {n} autre(s) modèle(s) indisponible(s) de ce niveau, car le modèle par défaut d'un niveau doit être disponible. Enregistrer conserve la modification ; Enregistrer et appliquer met aussi à jour Claude Desktop.",
+  "claudeDesktop.removedUnavailable": "{n} modèle(s) indisponible(s) retiré(s). Enregistrez pour conserver la modification, ou Enregistrer et appliquer pour mettre à jour Claude Desktop.",
   "claudeDesktop.status.applied": "Appliqué à Desktop",
   "claudeDesktop.status.stale": "La configuration de Desktop n’est pas à jour — appliquer de nouveau",
   "claudeDesktop.status.notApplied": "Non appliqué",
@@ -3843,7 +3871,7 @@ export const fr: Record<TKey, string> = {
   "lab.layer.task_effectiveness": "Efficacité des tâches",
   "models.newPolicyGlobal": "Désactiver les nouveaux modèles par défaut", "models.newPolicyProvider": "Politique des nouveaux modèles",
   "models.fastProvider": "Mode Fast", "models.fastProviderHint": "Consomme des crédits d'utilisation au double du prix", "models.fastEnabled": "Mode Fast activé", "models.fastDisabled": "Mode Fast désactivé", "models.fastSaveFailed": "Impossible d'enregistrer le mode Fast",
-  "models.newPolicy_inherit": "Hériter", "models.newPolicy_off": "Désactivé", "models.newPolicy_on": "Activé", "models.newBadge": "NOUVEAU", "models.newCount": "{count} nouveaux, désactivés",
+  "models.newPolicy_inherit": "Hériter", "models.newPolicy_off": "Désactivé", "models.newPolicy_on": "Activé", "models.newPolicy_admit": "Admettre", "models.newBadge": "NOUVEAU", "models.newCount": "{count} nouveaux, désactivés",
   "models.aliases": "Alias",
   "models.aliasesTable": "Table des alias",
   "models.aliasPrompt": "Alias du fournisseur (laisser vide pour effacer)",

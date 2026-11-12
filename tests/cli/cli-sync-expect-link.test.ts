@@ -5,6 +5,9 @@
  * providers. Every case is in-process and deterministic: config fixtures are written directly, the
  * Home catalog is a stubbed fetch, and both client locks live in the per-test directory.
  */
+// First: CODEX_HOME must be a temp directory before src/codex/paths resolves DEFAULT_CATALOG_PATH,
+// which the shared setup below writes with raw fs calls (tests/helpers/codex-home-sandbox.ts).
+import { assertCodexHomeOwned } from "../helpers/codex-home-sandbox";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,6 +39,8 @@ const TUNNEL = 23461;
 const SENTINEL_CATALOG = JSON.stringify({ models: [{ slug: "sentinel-local-model" }] });
 const HOME_CATALOG = JSON.stringify({ models: [] });
 const realSyncConnectedClient = connectApi.syncConnectedClient;
+// Refuse to load unless the catalog resolves into a Codex home this process owns (proven by path).
+assertCodexHomeOwned(dirname(DEFAULT_CATALOG_PATH));
 
 let root = "";
 let previousHome: string | undefined;
@@ -227,6 +232,60 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
       restart.mockRestore(); connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
     }
   });
+  // Review round 2: a sync whose Codex journal handover failed must not report a clean success,
+  // because a later supervised restart would restore native routing again.
+  test("a sync whose journal handover failed exits 1 and says to sync again", async () => {
+    writeClient({ transport: "hub" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, journalHandoverFailed: true });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync"];
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, { args } as unknown as CliDispatchDeps);
+      expect(code).toBe(1);
+      expect(errors.join("\n")).toContain("Codex journal could not be handed to this connection");
+      expect(errors.join("\n")).toContain("Run 'ocx sync' again");
+    } finally {
+      process.exitCode = 0;
+      connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
+
+  // Final review: a failed handover must not be followed by the automatic post-apply restart,
+  // which on a Child with an earlier connection's journal would undo the routing just applied.
+  test("a failed journal handover skips the post-apply runtime restart", async () => {
+    writeClient({ transport: "link" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const appliedAt = "2026-10-21T01:00:00.000Z";
+    const record = { linkId: LINK_ID, fetchedAt: appliedAt, appliedAt, document: {
+      version: 1 as const, home: { name: "fixture", version: "2.97.0" },
+      settings: { fastMode: true, multiAgentMode: "v1" as const, webSearchSidecarEnabled: false, subagentDefaults: null },
+    } };
+    const restart = spyOn(applyRestart, "restartRuntimeAfterApply").mockResolvedValue({ kind: "restarted" });
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, appliedRecord: record, journalHandoverFailed: true });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync"];
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, { args } as unknown as CliDispatchDeps);
+      expect(code).toBe(1);
+      expect(restart).not.toHaveBeenCalled();
+      expect(errors.join("\n")).toContain("the client runtime was not restarted");
+    } finally {
+      process.exitCode = 0;
+      restart.mockRestore(); connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
+
   async function runSync(args: string[]) {
     let discoveries = 0;
     const errors: string[] = [];
@@ -501,4 +560,21 @@ test("the machine sync route does not return the saved connection", async () => 
     },
   );
   expect(await response?.json()).toEqual({ success: true, catalogWritten: true, cacheSynced: true, injected: false, stale: false });
+});
+
+// Review round 3: the machine API must not call a sync complete when its journal handover failed.
+test("the machine sync route reports a failed journal handover as not complete", async () => {
+  const connection = clientBlock({ transport: "hub" }) as unknown as OcxClientConnectionConfig;
+  const response = await handleMachineApi(
+    new Request("http://127.0.0.1/api/machine/sync", { method: "POST", body: "{}", headers: { "content-type": "application/json" } }),
+    new URL("http://127.0.0.1/api/machine/sync"),
+    connection,
+    {
+      sync: async () => ({ catalogWritten: true, cacheSynced: true, injected: true, stale: false, connection, journalHandoverFailed: true }),
+      disconnect: async () => { throw new Error("unused"); },
+      scheduleStandaloneRecycle: () => {},
+    },
+  );
+  expect(response?.status).toBe(409);
+  expect(await response?.json()).toMatchObject({ success: false, journalHandoverFailed: true });
 });

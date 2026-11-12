@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -8,6 +10,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -133,6 +136,8 @@ export const en = {
   "workflowBudget.saved": "Workflow limits saved.",
   ...desktopCompatibilityCopy("en"),
   ...shellV2Copy("en"),
+  ...codexCliUpdateCopy("en"),
+  ...remoteLinkDiagnosticsCopy("en"),
   ...modelsV2Copy("en"),
   ...accountsV2Copy("en"),
   ...subagentsV2Copy("en"),
@@ -141,6 +146,7 @@ export const en = {
   ...connectV2Copy("en"),
   ...startupV2Copy("en"),
   ...proxyV2Copy("en"),
+  ...telemetryProfileCopy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
   "claude.tierDefaults.title": "CLI tier defaults",
@@ -284,6 +290,8 @@ export const en = {
   "advisor.modelsEmpty": "No selectable models. Enable a provider and model, then retry.",
   "advisor.effort": "Reasoning",
   "advisor.policy": "Policy",
+  "advisor.questionOnly": "Send only the worker's question",
+  "advisor.questionOnlyNote": "Only the worker's question (up to 2000 retained characters, plus a truncation notice when longer) is sent, with a fixed advisor instruction. History, tool results and task context are not attached. The worker must include essential background. Automatic consultations are paused; existing consultation limits still apply.",
   "advisor.policy.manual": "Manual — only when the worker asks",
   "advisor.policy.preflight": "Preflight — automatic consultation attempt once orientation evidence exists",
   "advisor.policy.adaptive": "Adaptive — orientation and failed-repair consultations",
@@ -830,6 +838,8 @@ export const en = {
   "prov.port": "Port",
   "prov.default": "Default",
   "prov.loadingConfig": "Loading…",
+  "prov.targetChanged": "The dashboard target changed. Reopen this form on the current server.",
+  "prov.legacyTargetPreflight": "This proxy checks the save target before sending, but cannot verify it atomically. Update the proxy for target-bound saves.",
   "prov.saved": "Saved! Restart proxy to apply.",
   "prov.loadConfigFail": "Failed to load config",
   "prov.invalidJson": "Invalid JSON",
@@ -1882,6 +1892,9 @@ export const en = {
   "quota.creditsBalance": "Credits balance",
   "quota.creditsPeriodEnds": "Billing period ends {date}",
   "quota.usedPercent": "{pct}% used",
+  "quota.weeklyShare": "Up to {pct}% of your weekly limit",
+  "quota.notInEffect": "Not in effect now",
+  "quota.notInEffectHint": "Claude reports that this limit is not the one constraining usage right now. It is shown for reference; account routing uses only the limits in effect.",
   "quota.limitReached": "Limit reached",
   "quota.resetsToday": "Resets today at {time}",
   "quota.resetsTomorrow": "Resets tomorrow at {time}",
@@ -1967,6 +1980,7 @@ export const en = {
   "pws.currentAccountUsage": "Current account usage",
   "pws.quotaUnsupported": "Quota lookup is not supported for this account.",
   "pws.quotaUnobserved": "No usage observation yet.",
+  "pws.quotaLastRead": "Last read",
   "pws.quotaCheckCompleted": "Quota check completed",
   "pws.modelBreakdown": "Model breakdown",
   "pws.col.model": "Model",
@@ -2026,6 +2040,7 @@ export const en = {
   "pws.accountSwitching": "Switching…",
   "pws.accountCurrent": "Current account",
   "pws.accountPausedHint": "Excluded from automatic selection, retries, cooldown recovery, manual selection, and proactive token refresh until resumed.",
+  "pws.resumeAndActivateKey": "Resume and use",
   "pws.defaultModelNone": "None (use provider default)",
   "pws.discardSettings": "Discard",
   "pws.jsonEditorDesc": "Edit the raw provider JSON config. Changes are saved immediately.",
@@ -2105,12 +2120,19 @@ export const en = {
   "pws.pacingRemoveModel": "Remove request pacing override for {model}",
   "pws.pacingRuleRequired": "Enable request pacing only after setting a provider limit or a model override.",
   "pws.pacingCapInvalid": "Max concurrent requests must be a whole number of 1 or more.",
+  "pws.pacingValueInvalid": "Enter a valid pacing value: RPM 1/60–60,000, delay 1–3,600,000 ms, concurrency 1 or more.",
   "pws.saving": "Saving…",
   "pws.settingsSaved": "Settings saved.",
   "pws.accountModeSaved": "Account mode saved.",
   "pws.accountModeFailed": "Could not switch the account mode.",
   "pws.accountModeConfirm": "Switch the OpenAI account mode? Running conversations will be reassigned to the other mode's account set, and quota usage will be tracked against the new mode.",
   "pws.settingsUnsavedBar": "You have unsaved changes.",
+  "pws.draftTarget": "Editing {target}",
+  "pws.draftConflict": "The saved settings changed on this server while you were editing. Your draft is kept; choose which values to keep.",
+  "pws.draftConflictFields": "These fields changed on both sides. Edit the draft or use the saved values:",
+  "pws.draftConflictUseSaved": "Use saved values",
+  "pws.draftConflictKeepDraft": "Keep my draft",
+  "pws.draftConflictResolveFirst": "Choose which values to keep before saving.",
   "pws.unsavedLeaveBody": "You have unsaved changes. Save them before leaving?",
   "pws.unsavedLeaveTitle": "Unsaved changes",
   "pws.attentionRequired": "Attention required",
@@ -2774,6 +2796,7 @@ export const en = {
   "codexAuth.openaiPresetLoadFailed": "Failed to load the OpenAI provider preset.",
   "codexAuth.openaiPresetUnavailable": "OpenAI provider preset is unavailable.",
   "codexAuth.openProviders": "Open Providers",
+  "codexAuth.changeAccountMode": "Change account mode",
   "codexAuth.add": "Add",
   "codexAuth.credits": "Credits",
   "codexAuth.creditsRemaining": "remaining",
@@ -3799,6 +3822,11 @@ export const en = {
   "claudeDesktop.useAsDefault": "Use as {family} default",
   "claudeDesktop.moveTo": "Move to",
   "claudeDesktop.move": "Move",
+  "claudeDesktop.removeUnavailable": "Remove",
+  "claudeDesktop.removeAllUnavailable": "Remove unavailable ({n})",
+  "claudeDesktop.removeUnavailableHint": "Removes this assignment and its alias. Save keeps the change; Save & apply also updates Claude Desktop.",
+  "claudeDesktop.removeUnavailableTierHint": "Also removes {n} other unavailable model(s) in this tier, because a tier's default must be available. Save keeps the change; Save & apply also updates Claude Desktop.",
+  "claudeDesktop.removedUnavailable": "Removed {n} unavailable model(s). Save to keep the change, or Save & apply to update Claude Desktop.",
   "claudeDesktop.status.applied": "Applied to Desktop",
   "claudeDesktop.status.stale": "Desktop configuration is out of date — re-apply",
   "claudeDesktop.status.notApplied": "Not applied",
@@ -3933,7 +3961,7 @@ export const en = {
 
   "models.newPolicyGlobal": "New models start disabled", "models.newPolicyProvider": "New model policy",
   "models.fastProvider": "Fast mode", "models.fastProviderHint": "Uses usage credits at 2x price", "models.fastEnabled": "Fast mode on", "models.fastDisabled": "Fast mode off", "models.fastSaveFailed": "Could not save Fast mode",
-  "models.newPolicy_inherit": "Inherit", "models.newPolicy_off": "Off", "models.newPolicy_on": "On",
+  "models.newPolicy_inherit": "Inherit", "models.newPolicy_off": "Off", "models.newPolicy_on": "On", "models.newPolicy_admit": "Admit",
   "models.newBadge": "NEW", "models.newCount": "{count} new, off",
   "models.aliases": "Aliases",
   "models.aliasesTable": "Alias table",

@@ -287,10 +287,12 @@ describe("cold partial writers hydrate only the surviving legacy cache", () => {
     for (const expired of [false, true]) {
       test(`${writerKind} credits-only write ${expired ? "does not revive expired" : "retains fresh"} ordinary windows`, () => {
         const writer = writerFor();
+        // The ticket count stays 0 -> 0: a drop would be a redeemed reset ticket, which retires the
+        // display weekly tuple on purpose (codex-quota-weekly-rollover). This case is about hydration.
         const quota = {
           shortPercent: 99, shortResetAt: 2_000_000_000, shortWindowSeconds: 18_000, shortObservedAt: 1_700_000_000_000,
           weeklyPercent: 50, weeklyResetAt: 2_100_000_000,
-          monthlyPercent: 25, monthlyResetAt: 2_200_000_000, resetCredits: 4,
+          monthlyPercent: 25, monthlyResetAt: 2_200_000_000, resetCredits: 0,
           updatedAt: Date.now() - (expired ? 7 : 1) * 60 * 60_000,
         };
         writeFileSync(join(home, "codex-quota-cache.json"), JSON.stringify({

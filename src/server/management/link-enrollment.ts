@@ -14,7 +14,7 @@ import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putKnownHost, issueKey, compensateNewLink, type LinkRouteState } from "./link-route-state";
-import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason } from "./link-child-preflight";
+import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
 const PROBE_TTL_MS = 5 * 60_000;
 const MIN_REMOTE_OCX = [2, 66, 0] as const;
@@ -293,7 +293,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
         const hint = await childConfigFailureReason(configured, () => run(ocx(["config", "validate", "--json"]), budget, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES));
         return await failed(fail("child_preflight_failed", "The Child effective configuration could not be read.", 502, hint));
       }
-      if ((childConfig.runtimeRole ?? "standalone") !== "standalone") return await failed(fail("child_restart_unsupported", "The Child must run standalone OpenCodex; an existing Hub or Child cannot be converted by Add Child.", 409));
+      if ((childConfig.runtimeRole ?? "standalone") !== "standalone") return await failed(fail("child_restart_unsupported", "The Child must run standalone OpenCodex; an existing Hub or Child cannot be converted by Add Child.", 409, childRoleRefusalHint(childConfig.runtimeRole)));
       const childPort = childConfig.port;
       if (remotePlatform === "posix" && (await run(REMOTE_CURL_PREFLIGHT)).code !== 0) return await failed(fail("child_curl_missing", "Install curl on the Child before connecting a Remote Link.", 409));
       const before = await run(remoteChildHttpArgv(childPort, "healthz", LINK_RELAY_VERIFY_MS, remotePlatform));
@@ -302,8 +302,9 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
         if (before.code === 255) return await failed(fail("child_preflight_failed", "The Child loopback port could not be inspected.", 502, sshFailureHint(before.stderr)));
         if (before.code === 0) return await failed(fail("child_port_busy", "The Child's target port is already in use; no Child files were modified.", 409));
       } else {
-        const beforeHealth = before.code === 0 ? parseChildHttp(before.stdout) : null;
-        if (!isChildHealth(beforeHealth, "standalone", childPort)) return await failed(fail("child_restart_unsupported", "The Child must run a standalone OpenCodex with bound restart support; update or disconnect it before linking.", 409));
+        let beforeHealth: unknown = null;
+        try { if (before.code === 0) beforeHealth = parseChildHttp(before.stdout); } catch { /* reported as nothing answering */ }
+        if (!isChildHealth(beforeHealth, "standalone", childPort)) return await failed(fail("child_restart_unsupported", "The Child must run a standalone OpenCodex with bound restart support; update or disconnect it before linking.", 409, childHealthRefusalHint(beforeHealth, childPort)));
       }
       state.confirmedHosts?.delete(alias);
       phase = "home_setup";

@@ -52,6 +52,9 @@ function recordedGenerations(io: StoreIO, owner: DesktopRemoteOwner): string[] {
 
 export function inspectRemoteDesktopStore(owner: DesktopRemoteOwner): {
   kind: "absent" | "active" | "pending" | "restored" | "legacy_current_connection" | "conflict" | "unsafe";
+  /** Set for the one refusal a person can clear: the store folder exists with nothing in it OpenCodex reads. */
+  reason?: "root_without_state";
+  path?: string;
 } {
   try {
     parseOwner(owner);
@@ -71,7 +74,7 @@ export function inspectRemoteDesktopStore(owner: DesktopRemoteOwner): {
       if (projectionHash(file?.value ?? null) !== bundle.state.lastProjectionHash) return { kind: "conflict" };
       return { kind: bundle.state.phase === "restored" ? "restored" : "active" };
     }
-    if (existsSync(bundle.paths.root) && !receipt(io)) throw new DesktopStoreError("unsafe");
+    if (existsSync(bundle.paths.root) && !receipt(io)) return { kind: "unsafe", reason: "root_without_state", path: bundle.paths.root };
     const legacy = locateLegacy(io, owner, serviceGenerations());
     if (legacy) currentConnection(owner);
     return { kind: legacy ? "legacy_current_connection" : "absent" };

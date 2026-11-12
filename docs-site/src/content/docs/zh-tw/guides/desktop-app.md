@@ -15,6 +15,19 @@ OpenCodex 桌面應用程式結合原生系統匣與網頁儀表板。內附的 
 
 正式版 `OpenCodex.app` 使用 Developer ID 簽署並經 Apple 公證，因此第一次啟動時，macOS 通常只會要求確認開啟從網路下載的應用程式。如果 macOS 仍封鎖它，請使用 **System Settings → Privacy & Security → Open Anyway**。
 
+#### Homebrew（桌面應用程式）
+
+也可以透過 Homebrew Cask 安裝桌面應用程式：
+
+```bash
+brew install --cask opencodex
+```
+
+- **內建更新（`auto_updates`）**：桌面應用程式有內建更新機制，Cask 宣告了 `auto_updates true`。但指定 Cask 的 `brew upgrade --cask opencodex` 或 greedy 升級仍可能取代已透過應用程式內更新升至較新版本的應用程式。使用 Homebrew 升級前，請檢查已安裝應用程式和 Cask 的版本。
+- **CLI 與背景服務**：此 Cask 只安裝包含 CLI 和 proxy 執行環境的 `OpenCodex.app`。若需要獨立 CLI 或無介面服務，可透過 npm 或版本發布封包另行安裝 `ocx`；兩者共用 `~/.opencodex` 設定。要將服務交給另行安裝的 CLI，請退出 OpenCodex，明確選擇該 CLI（若已啟用 [Desktop 的套件啟動器交接](/getting-started/installation/)，也須繞過該交接），然後執行 `ocx service install`。請參閱[終端機命令選擇](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app)及[執行環境擁有權](/reference/cli/lifecycle/#runtime-ownership)。
+- **Cask 升級後的服務**：Cask 的解除安裝步驟可能移除屬於獨立 CLI 的 `com.opencodex.proxy` launchd 工作及 plist，導致背景服務停止。升級後請退出 OpenCodex，在 macOS GUI 登入工作階段中使用上述明確選定的獨立 CLI 執行 `ocx service status`。若服務不存在，執行 `ocx service install`；若已安裝但未載入，執行 `ocx service repair`。然後再次執行 `ocx service status` 檢查。 `ocx service install` 會從 `OCX_BAKE_PORT` 或 `config.port` 讀取連接埠，而不是從已移除的工作讀取；如果服務註冊後其中任一值有所變更，請更新仍指向舊連接埠的用戶端。同一解除安裝步驟也會移除 Desktop 本身的 Start at Login 項目（launchd 工作 `OpenCodex`）；如果你有使用，請在 OpenCodex 中重新開啟 **Start at Login**。
+- **使用 `--zap` 刪除資料**：`brew uninstall --zap --cask opencodex` 會刪除 `~/.opencodex` 和 `~/.opencodex-desktop`，包括這些目錄中 CLI 和 Desktop 共用的設定及狀態資料。使用 `--zap` 前，請備份要保留的資料。 2.97.0 之前的 Cask 定義沒有列出這兩個目錄，而 Homebrew 可能以安裝時記錄的定義執行解除安裝；請在 `--zap` 後檢查它們是否仍然存在，若要刪除請自行手動刪除。
+
 ### Windows
 
 下載 `OpenCodex-<version>-windows-x64.msi` 並執行安裝程式。由於安裝程式尚未經過程式碼簽署，Windows SmartScreen 可能顯示警告；確認檔案來自版本發布頁面後，選擇 **More info → Run anyway**。

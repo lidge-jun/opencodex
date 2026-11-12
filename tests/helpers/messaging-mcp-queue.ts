@@ -21,6 +21,16 @@ const fs = require("node:fs");
 const rl = require("node:readline").createInterface({input:process.stdin});
 const mode = ${JSON.stringify(mode)};
 const emit = value => process.stdout.write(JSON.stringify(value)+"\\n");
+const emitAtDeadlineOffsetAndDelayClose = (value, offsetMs) => {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
+  const deadline = Number(fs.readFileSync(${JSON.stringify(join(root, "deadline"))}, "utf8"));
+  setTimeout(() => {
+    emit(value);
+    fs.writeFileSync(${JSON.stringify(join(root, "outcome-sent"))}, "sent");
+  }, Math.max(0, deadline - Date.now() + offsetMs));
+};
+const emitBeforeDeadlineAndDelayClose = value => emitAtDeadlineOffsetAndDelayClose(value, -450);
 rl.on("line", line => {
   const f = JSON.parse(line);
   fs.appendFileSync(${JSON.stringify(capture)}, JSON.stringify({frame:f,argv:process.argv.slice(2),sender:process.env.CODEX_THREAD_ID,home:process.env.CODEX_HOME,pid:process.pid})+"\\n");
@@ -35,6 +45,9 @@ rl.on("line", line => {
   if(mode === "missing-error-message") return emit({id:2,error:{code:-32602}});
   if(mode === "mixed-error-result") return emit({id:2,error:{code:-32602,message:"private"},result:{}});
   if(mode === "reject") return emit({id:2,error:{code:-32602,message:"PRIVATE_NATIVE_ERROR"}});
+  if(mode === "reply-reject-delayed-close") {
+    return emitBeforeDeadlineAndDelayClose({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
+  }
   if(mode.startsWith("reply-") && ["thread/items/list","thread/items/read","thread/turns/list"].includes(f.method)) {
     const turnId = ${JSON.stringify(REPLY_MCP_TURN)};
     const user = {turnId,item:{type:"userMessage",id:"user-1",clientId:${JSON.stringify(REPLY_MCP_CLIENT)},content:[{type:"text",text:"PRIVATE_USER"}]}};
@@ -43,10 +56,20 @@ rl.on("line", line => {
     const commentary = {turnId,item:{type:"agentMessage",id:"commentary",phase:"commentary",text:"PRIVATE_COMMENTARY"}};
     const tool = {turnId,item:{type:"commandExecution",id:"tool-1",aggregatedOutput:"PRIVATE_TOOL"}};
     if(f.method === "thread/items/read") {
+      if(mode === "reply-wait-malformed-delayed") return emitBeforeDeadlineAndDelayClose({id:2,result:{data:[null]}});
       if(mode === "reply-stale") user.item.clientId="another-client";
       return emit({id:2,result:{data:[user]}});
     }
-    if(f.method === "thread/turns/list") return emit({id:2,result:{data:mode === "reply-old-turn" ? [] : [{id:turnId,status:mode === "reply-bad-turns" ? "done" : mode === "reply-running" ? "inProgress" : mode === "reply-failed" ? "failed" : mode === "reply-interrupted" ? "interrupted" : "completed",items:[]}],nextCursor:null}});
+    if(f.method === "thread/turns/list") {
+      const turnsCalls = fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x)).filter(x=>x.frame.method === "thread/turns/list").length;
+      const response = {id:2,result:{data:mode === "reply-old-turn" ? [] : [{id:turnId,status:mode === "reply-bad-turns" ? "done" : mode === "reply-running" ? "inProgress" : mode === "reply-failed" ? "failed" : ["reply-interrupted","reply-wait-terminal"].includes(mode) ? "interrupted" : "completed",items:[]}],nextCursor:null}};
+      if(mode === "reply-wait-timely-close") return emitBeforeDeadlineAndDelayClose(response);
+      if(mode === "reply-wait-timely-close-later" && turnsCalls >= 2) return emitBeforeDeadlineAndDelayClose(response);
+      if(mode === "reply-wait-late-frame") return emitAtDeadlineOffsetAndDelayClose(response, 150);
+      if(mode === "reply-wait-late-frame-later" && turnsCalls >= 2) return emitAtDeadlineOffsetAndDelayClose(response, 150);
+      if(mode === "reply-slow-metadata") return setTimeout(() => emit(response), 1200);
+      return emit(response);
+    }
     if(mode === "reply-reject") return emit({id:2,error:{code:-32601,message:"PRIVATE_SERVER"}});
     const searching = !f.params.turnId;
     let data = searching ? [final,user] : [user,commentary,tool,later,final], nextCursor=null;
@@ -72,9 +95,20 @@ rl.on("line", line => {
     if(!searching && mode === "reply-long") data.push({...final,item:{...final.item,id:"answer-2",text:"second"}});
     if(!searching && mode === "reply-earlier-final") data.unshift({...final,item:{...final.item,id:"earlier-answer",text:"earlier fixture answer"}});
     if(!searching && mode === "reply-refresh") {
+      if(f.params.cursor != null) return emit({id:2,result:{data:[],nextCursor:null}});
       const calls=fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x));
       const reads=calls.filter(x=>x.frame.method === "thread/items/list" && x.frame.params.turnId).length;
       if(reads<2) {final.item.phase="partial_answer";final.item.text="PRIVATE_PARTIAL";}
+    }
+    if(mode.startsWith("reply-wait-")) {
+      const calls=fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x));
+      const reads=calls.filter(x=>x.frame.method === "thread/items/list" && x.frame.params.turnId).length;
+      if(!searching && mode === "reply-wait-timely-close-later" && reads<2) {final.item.phase="partial_answer";final.item.text="PRIVATE_PARTIAL";}
+      if(searching && mode === "reply-wait-late-input" && calls.filter(x=>x.frame.method === "thread/items/list").length===1) data=[];
+      const earlyComplete = ["reply-wait-late-input","reply-wait-timely-close","reply-wait-late-frame"].includes(mode);
+      if(!searching && (mode === "reply-wait-empty" || (!earlyComplete && reads<2))) data=[user,commentary];
+      if(!searching && mode === "reply-wait-failure" && reads>=2) return emit({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
+      if(!searching && mode === "reply-wait-hang-second" && reads>=2) return;
     }
     if(!searching && mode === "reply-deadline-barrier") return;
     return emit({id:2,result:{data,nextCursor}});

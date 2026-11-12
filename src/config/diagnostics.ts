@@ -1,3 +1,5 @@
+import { aliasTemplateError } from "../providers/alias-template";
+import { parseDashboardTrustedProxy } from "./dashboard-trusted-proxy";
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { validRemainingQuotaAccountIds } from "../codex/account-use-remaining";
@@ -626,6 +628,30 @@ export function loopbackCompanionBindError(
     + "loopback bind already admits local callers without a credential.";
 }
 
+/** #8338: the persisted schema drops a malformed trusted-proxy block; a live write gets the reason. */
+function dashboardTrustedProxyConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "dashboardTrustedProxy") || raw.dashboardTrustedProxy === undefined) return null;
+  const parsed = parseDashboardTrustedProxy(raw.dashboardTrustedProxy);
+  return typeof parsed === "string" ? `schema_invalid: dashboardTrustedProxy: ${parsed}` : null;
+}
+
+/**
+ * #7705: load drops a hand-edited template that does not validate; a live write that carries one
+ * (a provider-wide save, `ocx config set`) gets the same reason the alias-template route gives.
+ */
+function providerAliasTemplateConfigError(value: unknown): string | null {
+  const providers = rawConfigRecord(rawConfigRecord(value)?.providers);
+  if (!providers) return null;
+  for (const [name, provider] of Object.entries(providers)) {
+    const template = rawConfigRecord(provider)?.aliasTemplate;
+    if (template === undefined) continue;
+    const problem = typeof template === "string" ? aliasTemplateError(template) : "template must be a string";
+    if (problem) return `schema_invalid: providers.${name}.aliasTemplate: ${problem}`;
+  }
+  return null;
+}
+
 /**
  * Validate the hub management ingress at the live-write boundary.
  *
@@ -785,6 +811,8 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? clientRolePairError(value)
     ?? loopbackListenerPortError(value)
     ?? managementIngressConfigError(value)
+    ?? providerAliasTemplateConfigError(value)
+    ?? dashboardTrustedProxyConfigError(value)
     ?? metricsExportConfigError(value)
     ?? serviceHealthRecoveryConfigError(value)
     ?? telemetryConfigError(value)

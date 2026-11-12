@@ -1,0 +1,1521 @@
+---
+import {
+  getTelemetryDashboardCopy,
+  resolveTelemetryDashboardLocale,
+  TELEMETRY_DASHBOARD_STRINGS,
+  type TelemetryDashboardLocale,
+} from "../data/telemetry-dashboard-i18n";
+import {
+  DEFAULT_TELEMETRY_RANGE,
+  GITHUB_RELEASES_URL,
+  GITHUB_REPO_SLUG,
+  NPM_DOWNLOADS_MONTHLY_URL,
+  NPM_DOWNLOADS_WEEKLY_URL,
+  NPM_DOWNLOADS_YEARLY_URL,
+  NPM_PACKAGE_NAME,
+  OUTCOME_COLORS,
+  TELEMETRY_GUIDE_PATH,
+  TELEMETRY_RANGES,
+  TELEMETRY_STATS_ENDPOINT,
+  TOKEN_MIX_COLORS,
+  TOKSCALE_REPO_URL,
+  getLocalizedWeekdayLabels,
+} from "./telemetry-dashboard/index";
+
+interface Props {
+  locale?: TelemetryDashboardLocale;
+}
+
+const routeLocale = Astro.locals?.starlightRoute?.locale;
+const locale = resolveTelemetryDashboardLocale(Astro.props.locale ?? routeLocale);
+const copy = getTelemetryDashboardCopy(locale);
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+const prefix = locale === "en" ? base : `${base}${locale}/`;
+
+const showGuideLink =
+  Object.keys(import.meta.glob("../content/docs/guides/telemetry.{md,mdx}")).length > 0;
+const guideHref = `${prefix}${TELEMETRY_GUIDE_PATH}`;
+const weekdayLabels = getLocalizedWeekdayLabels(locale);
+
+const rangeLabels: Record<(typeof TELEMETRY_RANGES)[number], string> = {
+  "7d": copy.range7d,
+  "30d": copy.range30d,
+  "90d": copy.range90d,
+  "365d": copy.range365d,
+};
+
+const kpiCards = [
+  { id: "activeInstalls", label: copy.kpiActiveInstalls, initial: "0", title: "0 (0 install-days)" },
+  { id: "newInstalls", label: copy.kpiNewInstalls, initial: "0", title: "0" },
+  { id: "requests", label: copy.kpiRequests, initial: "0", title: "0" },
+  { id: "tokens", label: copy.kpiTokens, initial: "0", title: "0" },
+  { id: "activeHours", label: copy.kpiActiveHours, initial: "0h", title: "0h (0 min)" },
+] as const;
+
+const tokenBuckets = [
+  { id: "input", label: copy.tokenInput, color: TOKEN_MIX_COLORS.input },
+  { id: "cacheRead", label: copy.tokenCacheRead, color: TOKEN_MIX_COLORS.cacheRead },
+  { id: "cacheWrite", label: copy.tokenCacheWrite, color: TOKEN_MIX_COLORS.cacheWrite },
+  { id: "output", label: copy.tokenOutput, color: TOKEN_MIX_COLORS.output },
+  { id: "reasoning", label: copy.tokenReasoning, color: TOKEN_MIX_COLORS.reasoning },
+] as const;
+
+const outcomeItems = [
+  { id: "completed", label: copy.outcomeCompleted, color: OUTCOME_COLORS.completed },
+  { id: "incomplete", label: copy.outcomeIncomplete, color: OUTCOME_COLORS.incomplete },
+  { id: "aborted", label: copy.outcomeAborted, color: OUTCOME_COLORS.aborted },
+  { id: "failed", label: copy.outcomeFailed, color: OUTCOME_COLORS.failed },
+] as const;
+
+const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
+---
+
+<div
+  class="td-root"
+  data-telemetry-dashboard
+  data-dashboard-state="loading"
+  data-locale={locale}
+  data-stats-endpoint={TELEMETRY_STATS_ENDPOINT}
+  data-default-range={DEFAULT_TELEMETRY_RANGE}
+  data-npm-weekly-url={NPM_DOWNLOADS_WEEKLY_URL}
+  data-npm-monthly-url={NPM_DOWNLOADS_MONTHLY_URL}
+  data-npm-yearly-url={NPM_DOWNLOADS_YEARLY_URL}
+  data-github-releases-url={GITHUB_RELEASES_URL}
+  data-copy={JSON.stringify(TELEMETRY_DASHBOARD_STRINGS[locale])}
+>
+  <!-- 1. Overview Header + Range Pills + Privacy Callout + KPI Strip -->
+  <section class="td-panel td-overview" aria-labelledby="_top">
+    <div class="td-overview-header">
+      <div class="td-overview-title-group">
+        <div class="td-title-row">
+          <h1 id="_top" class="td-title">{copy.title}</h1>
+          <span class="td-badge">{copy.privacyBadge}</span>
+          <span class="td-badge" data-self-reported-label>{copy.selfReportedLabel}</span>
+        </div>
+        <p class="td-subtitle">{copy.subtitle}</p>
+        <div class="td-meta-row">
+          <span class="td-meta-item" data-updated-label>
+            {copy.updatedPrefix}: {copy.updatedPending}
+          </span>
+          <span class="td-meta-sep" aria-hidden="true">·</span>
+          <span class="td-meta-item td-mono">GET /v1/stats</span>
+          <span
+            class="td-loading-inline"
+            data-state-panel="loading"
+            role="status"
+            aria-live="polite"
+          >
+            <span class="td-spinner" aria-hidden="true"></span>
+            <strong data-loading-title>{copy.stateLoadingTitle}</strong>
+            <span class="td-sr-only" data-loading-body>{copy.stateLoadingBody}</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="td-controls">
+        <div class="td-range-pills" role="group" aria-label={copy.rangeAria}>
+          {TELEMETRY_RANGES.map((range) => (
+            <button
+              type="button"
+              class="td-pill"
+              data-range-pill={range}
+              aria-pressed={range === DEFAULT_TELEMETRY_RANGE ? "true" : "false"}
+            >
+              {rangeLabels[range]}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    <div class="td-privacy-callout">
+      <p class="td-privacy-text">
+        {copy.privacyBody}{" "}
+        <span class="td-privacy-optout">{copy.privacyOptOutHint}</span>
+        {showGuideLink && (
+          <>
+            {" "}
+            <a class="td-inline-link" href={guideHref}>
+              {copy.privacyGuideLink} →
+            </a>
+          </>
+        )}
+      </p>
+    </div>
+
+    <!-- Explicit state banners: empty ("Collector not deployed yet"), error -->
+    <div class="td-state-region" data-state-region>
+      <div
+        class="td-state-banner td-state-empty"
+        data-state-panel="empty"
+        role="status"
+        aria-live="polite"
+        hidden
+      >
+        <div class="td-state-copy">
+          <strong data-empty-title>{copy.stateEmptyTitle}</strong>
+          <span data-empty-body>{copy.stateEmptyBody}</span>
+        </div>
+      </div>
+
+      <div
+        class="td-state-banner td-state-error"
+        data-state-panel="error"
+        role="alert"
+        hidden
+      >
+        <div class="td-state-copy">
+          <strong data-error-title>{copy.stateErrorTitle}</strong>
+          <span data-error-body>{copy.stateErrorBody}</span>
+        </div>
+        <button type="button" class="td-retry-btn" data-retry-btn>
+          {copy.retryButton}
+        </button>
+      </div>
+    </div>
+
+    <!-- 2. KPI Strip (adapted from tokscale ProfileOverview) -->
+    <dl class="td-kpi-strip" aria-label={copy.kpiSectionAria}>
+      {kpiCards.map((card) => (
+        <div class="td-kpi-cell" data-kpi-card={card.id}>
+          <dt class="td-kpi-label">{card.label}</dt>
+          <dd
+            class="td-kpi-value"
+            data-kpi-value={card.id}
+            title={card.title}
+          >
+            {card.initial}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  </section>
+
+  <!-- 3. Disjoint Token Mix Bar (adapted from tokscale TokenBreakdown) -->
+  <section class="td-panel" aria-labelledby="td-token-mix-heading">
+    <header class="td-panel-header">
+      <div>
+        <h2 id="td-token-mix-heading" class="td-panel-title">
+          {copy.tokenMixTitle}
+        </h2>
+        <p class="td-panel-subtitle">{copy.tokenMixSubtitle}</p>
+      </div>
+      <div class="td-panel-total">
+        <span class="td-panel-total-label">{copy.kpiTokens}</span>
+        <strong
+          class="td-panel-total-value"
+          data-token-mix-total
+          title="0"
+        >
+          0
+        </strong>
+      </div>
+    </header>
+    <div class="td-panel-body">
+      <div
+        class="td-token-bar"
+        data-token-mix-bar
+        role="img"
+        aria-label={copy.tokenMixTitle}
+      >
+        {tokenBuckets.map((bucket) => (
+          <span
+            class="td-token-segment"
+            data-token-segment={bucket.id}
+            style={`background-color: ${bucket.color}; flex: 1 1 0;`}
+            title={`${bucket.label}: 0 (0.0%)`}
+          />
+        ))}
+      </div>
+
+      <dl class="td-token-list">
+        {tokenBuckets.map((bucket) => (
+          <div
+            class="td-token-item"
+            data-token-bucket={bucket.id}
+            style={`--segment-color: ${bucket.color};`}
+          >
+            <div class="td-token-label-row">
+              <span
+                class="td-color-swatch"
+                style={`background-color: ${bucket.color};`}
+                aria-hidden="true"
+              />
+              <dt class="td-token-label">{bucket.label}</dt>
+            </div>
+            <dd class="td-token-value-row">
+              <span data-token-value={bucket.id} title="0">0</span>
+              <span class="td-token-pct" data-token-pct={bucket.id}>0.0%</span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  </section>
+
+  <!-- 4. Activity: 52-week Heatmap + ECharts Stacked Daily Chart -->
+  <div class="td-activity-stack">
+    <!-- 52-week Contribution Heatmap (adapted from tokscale ProfileContributionGraph) -->
+    <section class="td-panel" aria-labelledby="td-heatmap-heading">
+      <header class="td-panel-header">
+        <div>
+          <h2 id="td-heatmap-heading" class="td-panel-title">
+            {copy.heatmapTitle}
+          </h2>
+          <p class="td-panel-subtitle">{copy.heatmapSubtitle}</p>
+        </div>
+        <div class="td-heatmap-summary" aria-live="polite">
+          <span class="td-summary-pill" data-heatmap-active-days>
+            {copy.heatmapActiveDays.replace("{count}", "0")}
+          </span>
+          <span class="td-summary-sub" data-heatmap-peak hidden></span>
+        </div>
+      </header>
+
+      <div class="td-panel-body td-heatmap-body">
+        <div class="td-heatmap-scroll" data-heatmap-scroll>
+          <div
+            class="td-heatmap-months"
+            data-heatmap-months
+            style="--heatmap-weeks: 53;"
+            aria-hidden="true"
+          ></div>
+          <div class="td-heatmap-calendar-row">
+            <div class="td-heatmap-day-labels" aria-hidden="true">
+              <span style="grid-row: 2;">{weekdayLabels.mon}</span>
+              <span style="grid-row: 4;">{weekdayLabels.wed}</span>
+              <span style="grid-row: 6;">{weekdayLabels.fri}</span>
+            </div>
+            <div
+              class="td-heatmap-grid"
+              data-heatmap-grid
+              style="--heatmap-weeks: 53;"
+              role="group"
+              aria-label={copy.heatmapTitle}
+              aria-describedby="td-heatmap-kbd-hint"
+            >
+              {skeletonCells.map(() => (
+                <button
+                  type="button"
+                  class="td-heatmap-cell"
+                  data-grade="0"
+                  tabindex="-1"
+                  disabled
+                  aria-hidden="true"
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div
+          id="td-heatmap-tooltip"
+          class="td-heatmap-tooltip"
+          data-heatmap-tooltip
+          data-active="false"
+          role="tooltip"
+          aria-hidden="true"
+        >
+          &nbsp;
+        </div>
+
+        <footer class="td-heatmap-footer">
+          <span class="td-heatmap-range-text" data-heatmap-range-label>
+            365d UTC
+          </span>
+          <div class="td-heatmap-legend" aria-label={`${copy.heatmapLess} – ${copy.heatmapMore}`}>
+            <span>{copy.heatmapLess}</span>
+            <div class="td-heatmap-swatches">
+              {([0, 1, 2, 3, 4] as const).map((grade) => (
+                <span
+                  class="td-heatmap-swatch"
+                  data-grade={grade}
+                  aria-hidden="true"
+                />
+              ))}
+            </div>
+            <span>{copy.heatmapMore}</span>
+          </div>
+        </footer>
+        <p id="td-heatmap-kbd-hint" class="td-sr-only">
+          {copy.heatmapKeyboardHint}
+        </p>
+      </div>
+    </section>
+
+    <!-- ECharts Stacked Daily Usage Chart (from dailyByProvider) -->
+    <section class="td-panel" aria-labelledby="td-daily-chart-heading">
+      <header class="td-panel-header">
+        <div>
+          <h2 id="td-daily-chart-heading" class="td-panel-title">
+            {copy.dailyChartTitle}
+          </h2>
+          <p class="td-panel-subtitle">{copy.dailyChartSubtitle}</p>
+        </div>
+        <div class="td-metric-toggle" role="group" aria-label={copy.dailyChartTitle}>
+          <button
+            type="button"
+            class="td-pill td-pill-sm"
+            data-chart-metric="tokens"
+            aria-pressed="true"
+          >
+            {copy.metricTokens}
+          </button>
+          <button
+            type="button"
+            class="td-pill td-pill-sm"
+            data-chart-metric="requests"
+            aria-pressed="false"
+          >
+            {copy.metricRequests}
+          </button>
+        </div>
+      </header>
+      <div class="td-panel-body">
+        <div
+          class="td-daily-chart"
+          data-daily-chart
+          role="img"
+          aria-label={copy.dailyChartTitle}
+        ></div>
+        <table class="td-sr-only" data-daily-chart-table>
+          <caption>{copy.dailyChartTitle}</caption>
+          <thead>
+            <tr>
+              <th scope="col">UTC</th>
+              <th scope="col">{copy.colProvider}</th>
+              <th scope="col" data-daily-chart-metric-col>{copy.metricTokens}</th>
+            </tr>
+          </thead>
+          <tbody data-daily-chart-tbody>
+            <tr>
+              <td colspan="3">{copy.noDataInTable}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- 5. Provider-Kind and Model-Family Share Tables (adapted from tokscale ProfileModels) -->
+  <div class="td-two-col">
+    <section class="td-panel" aria-labelledby="td-providers-heading">
+      <header class="td-panel-header">
+        <div>
+          <h2 id="td-providers-heading" class="td-panel-title">
+            {copy.providersTitle}
+          </h2>
+          <p class="td-panel-subtitle">{copy.providersSubtitle}</p>
+        </div>
+      </header>
+      <div class="td-table-wrap">
+        <table class="td-table" data-table="providers">
+          <thead>
+            <tr>
+              <th scope="col">{copy.colProvider}</th>
+              <th scope="col" class="td-num">{copy.colRequests}</th>
+              <th scope="col" class="td-num">{copy.colTokens}</th>
+              <th scope="col" class="td-num">{copy.colShare}</th>
+            </tr>
+          </thead>
+          <tbody data-tbody="providers">
+            <tr class="td-empty-row">
+              <td colspan="4">{copy.noDataInTable}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="td-panel" aria-labelledby="td-models-heading">
+      <header class="td-panel-header">
+        <div>
+          <h2 id="td-models-heading" class="td-panel-title">
+            {copy.modelsTitle}
+          </h2>
+          <p class="td-panel-subtitle">{copy.modelsSubtitle}</p>
+        </div>
+      </header>
+      <div class="td-table-wrap">
+        <table class="td-table" data-table="models">
+          <thead>
+            <tr>
+              <th scope="col">{copy.colModel}</th>
+              <th scope="col" class="td-num">{copy.colRequests}</th>
+              <th scope="col" class="td-num">{copy.colTokens}</th>
+              <th scope="col" class="td-num">{copy.colShare}</th>
+            </tr>
+          </thead>
+          <tbody data-tbody="models">
+            <tr class="td-empty-row">
+              <td colspan="4">{copy.noDataInTable}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- 6. Versions, Platforms, and Install Channels -->
+  <div class="td-three-col">
+    <section class="td-panel" aria-labelledby="td-versions-heading">
+      <header class="td-panel-header">
+        <div>
+          <h2 id="td-versions-heading" class="td-panel-title">
+            {copy.versionsTitle}
+          </h2>
+          <p class="td-panel-subtitle">{copy.versionsSubtitle}</p>
+        </div>
+      </header>
+      <div class="td-table-wrap">
+        <table class="td-table" data-table="versions">
+          <thead>
+            <tr>
+              <th scope="col">{copy.colVersion}</th>
+              <th scope="col" class="td-num">{copy.colInstalls}</th>
+              <th scope="col" class="td-num">{copy.colNewInstalls}</th>
+              <th scope="col" class="td-num">{copy.colInstallShare}</th>
+            </tr>
+          </thead>
+          <tbody data-tbody="versions">
+            <tr class="td-empty-row">
+              <td colspan="4">{copy.noDataInTable}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="td-panel" aria-labelledby="td-platforms-heading">
+      <header class="td-panel-header">
+        <div>
+          <h2 id="td-platforms-heading" class="td-panel-title">
+            {copy.platformsTitle}
+          </h2>
+          <p class="td-panel-subtitle">{copy.platformsSubtitle}</p>
+        </div>
+      </header>
+      <div class="td-table-wrap">
+        <table class="td-table" data-table="platforms">
+          <thead>
+            <tr>
+              <th scope="col">{copy.colPlatform}</th>
+              <th scope="col" class="td-num">{copy.colInstalls}</th>
+              <th scope="col" class="td-num">{copy.colInstallShare}</th>
+            </tr>
+          </thead>
+          <tbody data-tbody="platforms">
+            <tr class="td-empty-row">
+              <td colspan="3">{copy.noDataInTable}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="td-panel" aria-labelledby="td-channels-heading">
+      <header class="td-panel-header">
+        <div>
+          <h2 id="td-channels-heading" class="td-panel-title">
+            {copy.channelsTitle}
+          </h2>
+          <p class="td-panel-subtitle">{copy.channelsSubtitle}</p>
+        </div>
+      </header>
+      <div class="td-table-wrap">
+        <table class="td-table" data-table="channels">
+          <thead>
+            <tr>
+              <th scope="col">{copy.colChannel}</th>
+              <th scope="col" class="td-num">{copy.colInstalls}</th>
+              <th scope="col" class="td-num">{copy.colNewInstalls}</th>
+              <th scope="col" class="td-num">{copy.colInstallShare}</th>
+            </tr>
+          </thead>
+          <tbody data-tbody="channels">
+            <tr class="td-empty-row">
+              <td colspan="4">{copy.noDataInTable}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- 7. Reliability (Outcome Ratio & Top Failure Causes) + Downloads (npm & GitHub Releases) -->
+  <div class="td-two-col">
+    <section
+      class="td-panel"
+      data-panel="reliability"
+      aria-labelledby="td-reliability-heading"
+    >
+      <header class="td-panel-header">
+        <div>
+          <h2 id="td-reliability-heading" class="td-panel-title">
+            {copy.reliabilityTitle}
+          </h2>
+          <p class="td-panel-subtitle">{copy.reliabilitySubtitle}</p>
+        </div>
+        <div class="td-panel-total">
+          <span class="td-panel-total-label">{copy.completionRateLabel}</span>
+          <strong class="td-panel-total-value" data-completion-rate>
+            0.0%
+          </strong>
+        </div>
+      </header>
+
+      <div class="td-panel-body">
+        <div
+          class="td-token-bar td-outcome-bar"
+          data-outcome-bar
+          role="img"
+          aria-label={copy.reliabilityTitle}
+        >
+          {outcomeItems.map((item) => (
+            <span
+              class="td-token-segment"
+              data-outcome-segment={item.id}
+              style={`background-color: ${item.color}; flex: 1 1 0;`}
+              title={`${item.label}: 0 (0.0%)`}
+            />
+          ))}
+        </div>
+
+        <dl class="td-token-list td-outcome-list">
+          {outcomeItems.map((item) => (
+            <div
+              class="td-token-item"
+              data-outcome-item={item.id}
+              style={`--segment-color: ${item.color};`}
+            >
+              <div class="td-token-label-row">
+                <span
+                  class="td-color-swatch"
+                  style={`background-color: ${item.color};`}
+                  aria-hidden="true"
+                />
+                <dt class="td-token-label">{item.label}</dt>
+              </div>
+              <dd class="td-token-value-row">
+                <span data-outcome-count={item.id} title="0">0</span>
+                <span class="td-token-pct" data-outcome-pct={item.id}>0.0%</span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+
+        <h3 class="td-subheading">{copy.topErrorsTitle}</h3>
+        <div class="td-table-wrap td-table-nested">
+          <table class="td-table" data-table="errors">
+            <thead>
+              <tr>
+                <th scope="col">{copy.colErrorCause}</th>
+                <th scope="col" class="td-num">{copy.colErrorCount}</th>
+                <th scope="col" class="td-num">{copy.colInstallShare}</th>
+              </tr>
+            </thead>
+            <tbody data-tbody="errors">
+              <tr class="td-empty-row">
+                <td colspan="3">{copy.noErrorsRecorded}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section
+      class="td-panel"
+      data-panel="downloads"
+      aria-labelledby="td-downloads-heading"
+    >
+      <header class="td-panel-header">
+        <div>
+          <h2 id="td-downloads-heading" class="td-panel-title">
+            {copy.downloadsTitle}
+          </h2>
+          <p class="td-panel-subtitle">{copy.downloadsSubtitle}</p>
+        </div>
+      </header>
+
+      <div class="td-panel-body">
+        <dl class="td-downloads-grid">
+          <div class="td-download-card">
+            <dt class="td-kpi-label">{copy.npmWeeklyLabel}</dt>
+            <dd class="td-kpi-value" data-dl-npm-weekly title={copy.downloadsUnavailable}>
+              —
+            </dd>
+            <span class="td-download-source td-mono">{NPM_PACKAGE_NAME}</span>
+          </div>
+          <div class="td-download-card">
+            <dt class="td-kpi-label">{copy.npmMonthlyLabel}</dt>
+            <dd class="td-kpi-value" data-dl-npm-monthly title={copy.downloadsUnavailable}>
+              —
+            </dd>
+            <span class="td-download-source td-mono">{NPM_PACKAGE_NAME}</span>
+          </div>
+          <div class="td-download-card">
+            <dt class="td-kpi-label">{copy.npmYearlyLabel}</dt>
+            <dd class="td-kpi-value" data-dl-npm-yearly title={copy.downloadsUnavailable}>
+              —
+            </dd>
+            <span class="td-download-source td-mono">{NPM_PACKAGE_NAME}</span>
+          </div>
+          <div class="td-download-card">
+            <dt class="td-kpi-label">{copy.githubTotalLabel}</dt>
+            <dd class="td-kpi-value" data-dl-gh-total title={copy.downloadsUnavailable}>
+              —
+            </dd>
+            <span class="td-download-source td-mono">{GITHUB_REPO_SLUG}</span>
+          </div>
+          <div class="td-download-card td-download-card-wide">
+            <dt class="td-kpi-label">
+              {copy.githubLatestLabel}{" "}
+              <span class="td-mono" data-dl-gh-latest-tag></span>
+            </dt>
+            <dd class="td-kpi-value" data-dl-gh-latest title={copy.downloadsUnavailable}>
+              —
+            </dd>
+            <div class="td-download-links">
+              <a
+                href={`https://www.npmjs.com/package/${NPM_PACKAGE_NAME}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="td-inline-link"
+              >
+                npm registry ↗
+              </a>
+              <a
+                href={`https://github.com/${GITHUB_REPO_SLUG}/releases`}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="td-inline-link"
+              >
+                GitHub Releases ↗
+              </a>
+            </div>
+          </div>
+        </dl>
+      </div>
+    </section>
+  </div>
+
+  <!-- Footer credit (junhoyeo/tokscale MIT) -->
+  <footer class="td-footer">
+    <p>
+      {copy.creditPrefix}{" "}
+      <a
+        href={TOKSCALE_REPO_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="td-inline-link"
+      >
+        junhoyeo/tokscale
+      </a>{" "}
+      {copy.creditSuffix}
+    </p>
+  </footer>
+</div>
+
+<style>
+  :global(.sl-markdown-content:has(> .td-root)) {
+    max-width: none;
+  }
+  :global(main:has(.td-root) .content-panel) {
+    border: 0;
+  }
+  :global(main:has(.td-root) .content-panel:first-child) {
+    padding-block: 0;
+  }
+  :global(main:has(.td-root) footer.sl-flex) {
+    display: none;
+  }
+
+  .td-root {
+    --td-grade-0: #191f2b;
+    --td-grade-1: #1d4ed8;
+    --td-grade-2: #2563eb;
+    --td-grade-3: #4b91ff;
+    --td-grade-4: #8cc0ff;
+    max-width: 74rem;
+    margin-inline: auto;
+    padding-inline: clamp(0.5rem, 2vw, 1.5rem);
+    padding-block: clamp(1rem, 2.5vh, 2rem) clamp(2.5rem, 5vh, 4rem);
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    color: var(--sl-color-gray-1);
+  }
+
+  :global(:root[data-theme="light"]) .td-root {
+    --td-grade-0: #eff2f5;
+    --td-grade-1: #79b8ff;
+    --td-grade-2: #388bfd;
+    --td-grade-3: #1f6feb;
+    --td-grade-4: #0d419d;
+  }
+
+  .td-root section {
+    margin-top: 0 !important;
+  }
+
+  /* Neutralize Starlight prose sibling margins inside the dashboard app layout */
+  :global(.sl-markdown-content) .td-root :where(div, section, header, footer, dl, dt, dd, table, thead, tbody, tr, th, td, p, h1, h2, h3, button, span) {
+    margin-top: 0;
+  }
+
+  .td-panel {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: var(--ocx-radius, 12px);
+    background-color: var(--ocx-surface, #262626);
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  .td-overview-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem 1.5rem;
+    padding: 1.25rem 1.375rem 1rem;
+  }
+
+  .td-overview-title-group {
+    min-width: 0;
+    flex: 1 1 22rem;
+  }
+
+  .td-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.625rem;
+  }
+
+  .td-title {
+    margin: 0;
+    font-size: clamp(1.375rem, 3vw, 1.75rem);
+    font-weight: 650;
+    line-height: 1.2;
+    color: var(--sl-color-white);
+  }
+
+  .td-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.625rem;
+    border-radius: var(--ocx-radius-pill, 999px);
+    border: 1px solid color-mix(in srgb, #388bfd 45%, var(--sl-color-gray-5));
+    background-color: color-mix(in srgb, #388bfd 12%, transparent);
+    color: var(--sl-color-white);
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+
+  .td-subtitle {
+    margin: 0.375rem 0 0 !important;
+    color: var(--sl-color-gray-3);
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+
+  .td-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 1.5rem;
+    margin-top: 0.5rem !important;
+    font-size: 0.78rem;
+    color: var(--sl-color-gray-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .td-loading-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-inline-start: 0.25rem;
+    color: var(--sl-color-gray-2);
+  }
+
+  .td-loading-inline[hidden] {
+    display: none !important;
+  }
+
+  .td-loading-inline strong {
+    font-weight: 500;
+  }
+
+  :global(.td-mono) {
+    font-family: var(--sl-font-mono);
+    font-size: 0.75rem;
+  }
+
+  .td-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .td-range-pills,
+  .td-metric-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.2rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: var(--ocx-radius-pill, 999px);
+    background-color: var(--ocx-raised, #303030);
+  }
+
+  .td-pill {
+    min-height: 32px;
+    padding: 0.25rem 0.75rem;
+    border: 0;
+    border-radius: var(--ocx-radius-pill, 999px);
+    background: transparent;
+    color: var(--sl-color-gray-3);
+    font: inherit;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: background-color 0.14s ease, color 0.14s ease;
+  }
+
+  .td-pill-sm {
+    min-height: 28px;
+    padding: 0.2rem 0.625rem;
+    font-size: 0.75rem;
+  }
+
+  .td-pill[aria-pressed="true"] {
+    background-color: var(--sl-color-text-accent);
+    color: var(--sl-color-text-invert);
+  }
+
+  .td-pill:hover:not([aria-pressed="true"]) {
+    color: var(--sl-color-white);
+  }
+
+  .td-pill:focus-visible,
+  .td-retry-btn:focus-visible,
+  .td-heatmap-cell:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  .td-privacy-callout {
+    margin: 0 1.375rem 1rem;
+    padding: 0.65rem 0.875rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-inline-start: 3px solid #388bfd;
+    border-radius: var(--ocx-radius-sm, 8px);
+    background-color: var(--ocx-raised, #303030);
+  }
+
+  .td-privacy-text {
+    margin: 0;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: var(--sl-color-gray-2);
+  }
+
+  .td-privacy-optout {
+    color: var(--sl-color-gray-3);
+  }
+
+  .td-inline-link {
+    color: light-dark(#2f6fe4, #8ab0f5);
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .td-inline-link:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .td-state-region {
+    padding: 0 1.375rem;
+  }
+
+  .td-state-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: var(--ocx-radius-sm, 8px);
+    border: 1px solid var(--sl-color-gray-5);
+    background-color: var(--ocx-raised, #303030);
+    font-size: 0.8125rem;
+  }
+
+  .td-state-banner[hidden] {
+    display: none !important;
+  }
+
+  .td-state-empty {
+    border-inline-start: 3px solid #f59e0b;
+  }
+
+  .td-state-error {
+    border-inline-start: 3px solid #ef4444;
+  }
+
+  .td-state-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+    flex: 1 1 18rem;
+  }
+
+  .td-state-copy strong {
+    color: var(--sl-color-white);
+    font-weight: 600;
+  }
+
+  .td-state-copy span {
+    color: var(--sl-color-gray-3);
+  }
+
+  .td-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--sl-color-gray-4);
+    border-top-color: var(--sl-color-white);
+    border-radius: 50%;
+    animation: td-spin 0.8s linear infinite;
+    flex: none;
+  }
+
+  @keyframes td-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .td-retry-btn {
+    min-height: 32px;
+    padding: 0.35rem 0.85rem;
+    border-radius: var(--ocx-radius-pill, 999px);
+    border: 1px solid var(--sl-color-gray-4);
+    background-color: var(--ocx-surface);
+    color: var(--sl-color-white);
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  /* KPI strip (adapted from tokscale ProfileOverview Metrics) */
+  .td-kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    margin: 0;
+    border-top: 1px solid var(--sl-color-gray-5);
+  }
+
+  .td-kpi-cell {
+    display: flex;
+    flex-direction: column;
+    padding: 0.875rem 1.25rem;
+    min-width: 0;
+  }
+
+  .td-kpi-cell + .td-kpi-cell {
+    border-inline-start: 1px solid var(--sl-color-gray-5);
+  }
+
+  .td-kpi-label {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--sl-color-gray-3);
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .td-kpi-value {
+    margin: 0.35rem 0 0 !important;
+    font-size: clamp(1.15rem, 2.5vw, 1.45rem);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.15;
+    color: var(--sl-color-white);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  @media (max-width: 56rem) {
+    .td-kpi-strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .td-kpi-cell + .td-kpi-cell {
+      border-inline-start: 0;
+    }
+    .td-kpi-cell:nth-child(even) {
+      border-inline-start: 1px solid var(--sl-color-gray-5);
+    }
+    .td-kpi-cell:nth-child(n + 3) {
+      border-top: 1px solid var(--sl-color-gray-5);
+    }
+  }
+
+  /* Panel Headers & Bodies */
+  .td-panel-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem 1rem;
+    padding: 0.95rem 1.25rem;
+    border-bottom: 1px solid var(--sl-color-gray-5);
+  }
+
+  .td-panel-title {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 650;
+    color: var(--sl-color-white);
+    line-height: 1.3;
+  }
+
+  .td-panel-subtitle {
+    margin: 0.2rem 0 0 !important;
+    font-size: 0.8rem;
+    color: var(--sl-color-gray-3);
+    line-height: 1.4;
+  }
+
+  .td-panel-total {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .td-panel-total-label {
+    font-size: 0.7rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .td-panel-total-value {
+    font-size: 1.05rem;
+    font-weight: 650;
+    color: var(--sl-color-white);
+  }
+
+  .td-panel-body {
+    padding: 1rem 1.25rem 1.15rem;
+  }
+
+  /* Token Mix & Outcome Bar (adapted from tokscale TokenBreakdown) */
+  .td-token-bar {
+    display: flex;
+    width: 100%;
+    height: 11px;
+    overflow: hidden;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 5px;
+    background-color: var(--ocx-raised, #303030);
+  }
+
+  .td-token-segment {
+    min-width: 0;
+    transition: flex-grow 0.2s ease;
+  }
+
+  .td-token-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    gap: 0.75rem;
+    margin: 0.875rem 0 0 !important;
+  }
+
+  .td-token-item {
+    min-width: 0;
+    border-inline-start: 2px solid var(--segment-color, #6b7280);
+    padding-inline-start: 0.55rem;
+  }
+
+  .td-token-label-row {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-width: 0;
+  }
+
+  .td-color-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex: none;
+  }
+
+  .td-token-label {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--sl-color-gray-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .td-token-value-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    margin: 0.25rem 0 0 !important;
+    font-size: 0.95rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--sl-color-white);
+  }
+
+  .td-token-pct {
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--sl-color-gray-3);
+  }
+
+  /* Grid Layouts */
+  .td-activity-stack {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .td-two-col {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .td-three-col {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  @media (max-width: 64rem) {
+    .td-two-col,
+    .td-three-col {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* 52-week Contribution Heatmap (adapted from tokscale ProfileContributionGraph) */
+  .td-heatmap-summary {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.2rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .td-summary-pill {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .td-summary-sub {
+    font-size: 0.72rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .td-heatmap-body {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 185px;
+  }
+
+  .td-heatmap-scroll {
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+
+  .td-heatmap-months {
+    display: grid;
+    grid-template-columns: repeat(var(--heatmap-weeks, 53), minmax(11px, 1fr));
+    column-gap: 3px;
+    margin-inline-start: 30px;
+    margin-bottom: 0.35rem;
+    min-height: 1rem;
+    font-size: 0.68rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .td-heatmap-calendar-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .td-heatmap-day-labels {
+    display: grid;
+    grid-template-rows: repeat(7, 12px);
+    row-gap: 3px;
+    width: 24px;
+    font-size: 0.65rem;
+    line-height: 12px;
+    color: var(--sl-color-gray-3);
+    flex: none;
+  }
+
+  .td-heatmap-grid {
+    display: grid;
+    flex: 1;
+    grid-template-rows: repeat(7, 12px);
+    grid-template-columns: repeat(var(--heatmap-weeks, 53), minmax(11px, 1fr));
+    grid-auto-flow: column;
+    gap: 3px;
+  }
+
+  :global(.td-heatmap-cell) {
+    width: 100%;
+    height: 12px;
+    min-width: 11px;
+    padding: 0;
+    margin: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    border: 1px solid rgba(128, 128, 128, 0.14);
+    border-radius: 2.5px;
+    background-color: var(--td-grade-0);
+    cursor: pointer;
+  }
+
+  :global(.td-heatmap-cell[disabled]) {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  :global(.td-heatmap-cell[data-grade="0"]),
+  .td-heatmap-swatch[data-grade="0"] {
+    background-color: var(--td-grade-0);
+  }
+  :global(.td-heatmap-cell[data-grade="1"]),
+  .td-heatmap-swatch[data-grade="1"] {
+    background-color: var(--td-grade-1);
+  }
+  :global(.td-heatmap-cell[data-grade="2"]),
+  .td-heatmap-swatch[data-grade="2"] {
+    background-color: var(--td-grade-2);
+  }
+  :global(.td-heatmap-cell[data-grade="3"]),
+  .td-heatmap-swatch[data-grade="3"] {
+    background-color: var(--td-grade-3);
+  }
+  :global(.td-heatmap-cell[data-grade="4"]),
+  .td-heatmap-swatch[data-grade="4"] {
+    background-color: var(--td-grade-4);
+  }
+
+  .td-heatmap-tooltip {
+    display: flex;
+    align-items: center;
+    min-height: 1.85rem;
+    margin-top: 0.5rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--ocx-radius-sm, 8px);
+    border: 1px solid var(--sl-color-gray-5);
+    background-color: var(--ocx-raised, #303030);
+    color: var(--sl-color-white);
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .td-heatmap-tooltip[data-active="true"] {
+    visibility: visible;
+    opacity: 1;
+  }
+
+  .td-heatmap-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-top: 0.75rem !important;
+    font-size: 0.72rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .td-heatmap-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .td-heatmap-swatches {
+    display: inline-flex;
+    gap: 3px;
+  }
+
+  .td-heatmap-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1px solid rgba(128, 128, 128, 0.14);
+  }
+
+  /* ECharts Daily Chart */
+  .td-daily-chart {
+    width: 100%;
+    height: 240px;
+  }
+
+  /* Breakdown Tables (adapted from tokscale ProfileModels) */
+  .td-table-wrap {
+    overflow-x: auto;
+    width: 100%;
+  }
+
+  .td-table-nested {
+    margin-top: 0.5rem !important;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: var(--ocx-radius-sm, 8px);
+  }
+
+  :global(.sl-markdown-content table.td-table),
+  :global(.td-table) {
+    display: table !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  :global(.td-table th),
+  :global(.td-table td) {
+    padding: 0.55rem 1rem;
+    text-align: start;
+    border-bottom: 1px solid var(--sl-color-hairline, #2e2e2e);
+  }
+
+  :global(.td-table th) {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--sl-color-gray-3);
+    background-color: var(--ocx-raised, #303030);
+    white-space: nowrap;
+  }
+
+  :global(.td-table tbody tr:last-child td) {
+    border-bottom: 0;
+  }
+
+  :global(.td-num) {
+    text-align: end !important;
+    white-space: nowrap;
+  }
+
+  :global(.td-empty-row td) {
+    text-align: center;
+    color: var(--sl-color-gray-3);
+    padding: 1.25rem 1rem;
+  }
+
+  :global(.td-row-identity) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    font-weight: 500;
+    color: var(--sl-color-white);
+  }
+
+  :global(.td-row-dot) {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .td-subheading {
+    margin: 1.15rem 0 0.35rem !important;
+    font-size: 0.82rem;
+    font-weight: 650;
+    color: var(--sl-color-white);
+  }
+
+  /* Downloads Grid */
+  .td-downloads-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin: 0;
+  }
+
+  .td-download-card {
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: var(--ocx-radius-sm, 8px);
+    background-color: var(--ocx-raised, #303030);
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .td-download-card-wide {
+    grid-column: 1 / -1;
+  }
+
+  .td-download-source {
+    color: var(--sl-color-gray-3);
+  }
+
+  .td-download-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 0.35rem;
+    font-size: 0.8rem;
+  }
+
+  .td-footer {
+    text-align: center;
+    padding-top: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .td-footer p {
+    margin: 0;
+  }
+
+  .td-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+</style>
+
+<script>
+  import { mountTelemetryDashboard } from "./telemetry-dashboard/client";
+  mountTelemetryDashboard();
+</script>

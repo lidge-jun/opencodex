@@ -121,8 +121,8 @@ const SUBTITLE_TKEY: Record<ModelsTab, [lede: TKey, about?: TKey]> = {
 };
 
 interface ModelDiscoveryView {
-  policy: "on" | "off";
-  providers: Record<string, "on" | "off" | "inherit">;
+  policy: "on" | "off" | "admit";
+  providers: Record<string, "on" | "off" | "admit" | "inherit">;
   recentArrivals: Record<string, Array<{ id: string; at: string; state: string }>>;
 }
 
@@ -1148,7 +1148,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     } catch { setModelDiscovery(null); }
   };
 
-  const saveModelDiscovery = async (policy: "on" | "off", provider?: string) => {
+  const saveModelDiscovery = async (policy: "on" | "off" | "admit", provider?: string) => {
     const r = await fetch(`${apiBase}/api/model-discovery`, {
       method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ policy, provider: provider ?? null }),
@@ -1674,7 +1674,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                 <div className="row models-provider-hint">
                   <span className="muted text-label">{t("models.newPolicyProvider")}</span>
                   <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.newPolicyProvider")}>
-                    {(["off", "on"] as const).map(mode => (
+                    {(["off", "on", "admit"] as const).map(mode => (
                       <button key={mode} type="button" role="radio"
                         aria-checked={(modelDiscovery.providers[provider] ?? "inherit") === mode}
                         className={`btn btn-sm${(modelDiscovery.providers[provider] ?? "inherit") === mode ? " btn-primary" : " btn-ghost"}`}

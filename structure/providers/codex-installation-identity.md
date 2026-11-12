@@ -50,6 +50,19 @@ apply the same identity to HTTP headers and a cloned client-metadata map. The se
 The inbound `buildResponsesWsData` contract in `src/server/ws-bridge.ts` keeps the observational usage client separate from the admitted replay principal. `src/server/index/serve-options.ts` passes both; client classification never grants replay authority.
 `src/server/responses/codex-ws-pool.ts` includes immutable outgoing headers and account in its reuse
 identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as well.
+Its inbound handshake snapshot also retains caller-supplied `user-agent` and
+`x-codex-app-version`, so reconstructed turns do not lose the original client identity.
+Provider egress applies its own metadata policy without synthesizing absent caller metadata.
+Bun's HTTP transport can still add its default User-Agent when none is supplied.
+`src/server/responses/core-auth.ts` restores User-Agent and provider-selected metadata after
+credential materialization for Responses turns and compact handoffs. The copier fills only
+missing fields, so a selected Pool installation identity is never replaced with the caller's.
+The same restoration runs on every later physical send of one turn: the 401 refresh replay in
+`refreshPoolForwardAuth`/`refreshNativeMainForwardAuth` and the alternate-account rebuild in
+`src/server/responses/core-codex-account.ts` reapply the permit after their credential
+materialization, so a rebuilt header set cannot silently drop the caller fingerprint or derive
+the wrong account's installation identity. `tests/responses/pool-retry-client-metadata.test.ts`
+pins both physical sends for quota failover and 401 replay.
 Native compact in `src/server/responses/compact.ts` projects the body per physical send, so a quota
 failover uses the newly selected account ID. Alternate construction reports identity failures as
 503 instead of treating them as absence of an eligible account, while recording the first

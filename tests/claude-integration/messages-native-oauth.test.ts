@@ -391,6 +391,55 @@ describe("managed native Messages over Anthropic OAuth", () => {
     expect(JSON.parse(text).content[0]).toMatchObject({ type: "tool_use", name: "lookup" });
   });
 
+  test("Claude Code auto mode: an observed client keeps its tool names, safeguards and review verdicts", async () => {
+    await seed(1);
+    const REVIEW = "dangerous-tool-use-2026-09-03";
+    const safeguards = [{ type: "dangerous_tool_use", classifier_context: { v: 1, permission_mode: "auto" } }];
+    const verdicts = [{ type: "dangerous_tool_use", status: { type: "available", tool_uses: {
+      toolu_fixture: { type: "evaluated", outcome: "not_flagged" },
+    } } }];
+    const frames = [
+      { type: "message_start", message: { ...MESSAGE, content: [], stop_reason: null } },
+      { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_fixture", name: "lookup", input: {} } },
+      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{}" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null, safeguard_results: verdicts }, usage: { output_tokens: 4 } },
+      { type: "message_stop" },
+    ];
+    const cfg = fixtureConfig();
+    cfg.providers.anthropic = { ...cfg.providers.anthropic!, fetch: (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+      return new Response(frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(""),
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch } as OcxProviderConfig;
+    const identity = {
+      "User-Agent": "claude-cli/2.1.322 (external, cli)", "X-App": "cli",
+      "X-Claude-Code-Session-Id": "44444444-4444-4444-8444-444444444444",
+      "X-Stainless-Lang": "js", "X-Stainless-Runtime": "node",
+      "anthropic-beta": `${ALLOWED_BETA},${REVIEW}`,
+    };
+    const { response, text } = await send(cfg, { ...BODY, stream: true, safeguards }, identity);
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    const wire = sent[0]!;
+    expect(wire.headers.get("anthropic-beta")?.split(",")).toEqual(expect.arrayContaining([ALLOWED_BETA, REVIEW]));
+    expect(wire.body.safeguards).toEqual(safeguards);
+    expect((wire.body.tools as { name: string }[])[0]!.name).toBe("lookup");
+    expect(JSON.stringify(wire.body.messages)).not.toContain("custom_lookup");
+    // The verdicts reach the client unchanged, keyed by the tool_use id the client knows.
+    const delta = text.split("\n").find(line => line.startsWith("data:") && line.includes("message_delta"));
+    expect(JSON.parse(delta!.slice(5)).delta.safeguard_results).toEqual(verdicts);
+    expect(text).toContain("\"name\":\"lookup\"");
+
+    // Without the observed identity the same request keeps the OAuth prefix and loses the review.
+    sent = [];
+    const generic = await send(cfg, { ...BODY, stream: true, safeguards }, { "anthropic-beta": `${ALLOWED_BETA},${REVIEW}` });
+    expect(generic.response.status).toBe(200);
+    expect((sent[0]!.body.tools as { name: string }[])[0]!.name).toBe("custom_lookup");
+    expect(sent[0]!.body).not.toHaveProperty("safeguards");
+    expect(sent[0]!.headers.get("anthropic-beta")).not.toContain(REVIEW);
+  });
+
   test("the account is the one the selection holds, not merely the first stored", async () => {
     const ids = await seed(2);
     // One usable account remains, so no rotation quorum: the lane serves the selected one.

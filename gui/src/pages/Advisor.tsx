@@ -21,6 +21,7 @@ export interface AdvisorSettings {
   model: string;
   effort: string;
   policy: "manual" | "preflight" | "adaptive";
+  contextMode?: "context" | "question-only";
   maxConsultationsPerTask?: number;
   timeoutMs: number;
   contextSharingConsent: "v1" | null;
@@ -77,6 +78,7 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
           model: submitted.model,
           effort: submitted.effort,
           policy: submitted.policy,
+          contextMode: submitted.contextMode ?? "context",
           ...(submitted.maxConsultationsPerTask !== undefined ? { maxConsultationsPerTask: submitted.maxConsultationsPerTask } : {}),
           timeoutMs: submitted.timeoutMs,
           contextSharingConsent: submitted.contextSharingConsent,
@@ -168,6 +170,25 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
           )}
         />
         <SettingsRow
+          label={t("advisor.questionOnly")}
+          labelFor="advisor-question-only"
+          inline
+          hint={draft.contextMode === "question-only" ? t("advisor.questionOnlyNote") : undefined}
+          control={(
+            <label className="toggle">
+              <input
+                id="advisor-question-only"
+                type="checkbox"
+                checked={draft.contextMode === "question-only"}
+                disabled={saving}
+                aria-label={t("advisor.questionOnly")}
+                onChange={event => edit({ contextMode: event.target.checked ? "question-only" : "context" })}
+              />
+              <span className="slider" aria-hidden="true" />
+            </label>
+          )}
+        />
+        <SettingsRow
           label={t("advisor.policy")}
           labelFor="advisor-policy"
           hint={t("proxyV2.policyHint")}
@@ -175,7 +196,7 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
             <Select
               id="advisor-policy"
               value={draft.policy}
-              disabled={saving}
+              disabled={saving || draft.contextMode === "question-only"}
               fullWidth
               className={ADVISOR_FIELD_WIDTH}
               options={[
@@ -192,7 +213,7 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
             label={t("advisor.taskLimit")}
             labelFor="advisor-task-limit"
             hint={t("proxyV2.taskLimitHint")}
-            details={t("advisor.adaptiveNote")}
+            details={draft.contextMode === "question-only" ? undefined : t("advisor.adaptiveNote")}
             control={(
               <Select id="advisor-task-limit" value={String(draft.maxConsultationsPerTask ?? 3)} disabled={saving}
                 fullWidth

@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -8,6 +10,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -131,6 +134,8 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
   ...shellV2Copy("ru"),
+  ...codexCliUpdateCopy("ru"),
+  ...remoteLinkDiagnosticsCopy("ru"),
   ...modelsV2Copy("ru"),
   ...accountsV2Copy("ru"),
   ...subagentsV2Copy("ru"),
@@ -139,6 +144,7 @@ export const ru: Record<TKey, string> = {
   ...connectV2Copy("ru"),
   ...startupV2Copy("ru"),
   ...proxyV2Copy("ru"),
+  ...telemetryProfileCopy("ru"),
   "claude.tierDefaults.unset": "Не задано (сохранить настройку Claude)",
   "claude.tierDefaults.recovery": "Применение остановлено, автоматическое восстановление не удалось. Проверьте резервную копию ниже перед повтором.",
   "claude.tierDefaults.title": "Модели CLI по умолчанию",
@@ -283,6 +289,8 @@ export const ru: Record<TKey, string> = {
   "advisor.modelsEmpty": "Нет доступных моделей. Включите провайдера и модель и повторите попытку.",
   "advisor.effort": "Интенсивность рассуждений",
   "advisor.policy": "Политика",
+  "advisor.questionOnly": "Отправлять только вопрос исполнителя",
+  "advisor.questionOnlyNote": "Отправляются только вопрос исполнителя (до 2000 сохранённых символов с уведомлением при усечении) и фиксированная инструкция советнику. История, результаты инструментов и контекст задачи не добавляются. Исполнитель должен включить необходимые сведения. Автоматические консультации приостановлены; прежние ограничения числа вызовов сохраняются.",
   "advisor.policy.manual": "Вручную — только по запросу воркера",
   "advisor.policy.preflight": "Preflight — автоматическая попытка при появлении ориентационного свидетельства",
   "advisor.policy.adaptive": "Адаптивно — начальная проверка и неудачное исправление",
@@ -818,6 +826,8 @@ export const ru: Record<TKey, string> = {
   "prov.port": "Порт",
   "prov.default": "По умолчанию",
   "prov.loadingConfig": "Загрузка…",
+  "prov.targetChanged": "Цель панели изменилась. Откройте эту форму заново на текущем сервере.",
+  "prov.legacyTargetPreflight": "Этот прокси проверяет цель сохранения перед отправкой, но не может проверить её атомарно. Обновите прокси для сохранений, привязанных к цели.",
   "prov.saved": "Сохранено! Перезапустите прокси, чтобы применить изменения.",
   "prov.loadConfigFail": "Не удалось загрузить конфигурацию",
   "prov.invalidJson": "Некорректный JSON",
@@ -1841,6 +1851,9 @@ export const ru: Record<TKey, string> = {
   "quota.creditsBalance": "Остаток кредитов",
   "quota.creditsPeriodEnds": "Расчётный период заканчивается {date}",
   "quota.usedPercent": "Использовано {pct}%",
+  "quota.weeklyShare": "До {pct}% недельного лимита",
+  "quota.notInEffect": "Сейчас не действует",
+  "quota.notInEffectHint": "Claude сообщает, что этот лимит сейчас не ограничивает использование. Он показан для справки; маршрутизация аккаунтов учитывает только действующие лимиты.",
   "quota.limitReached": "Лимит исчерпан",
   "quota.resetsToday": "Сброс сегодня в {time}",
   "quota.resetsTomorrow": "Сброс завтра в {time}",
@@ -1926,6 +1939,7 @@ export const ru: Record<TKey, string> = {
   "pws.currentAccountUsage": "Использование текущего аккаунта",
   "pws.quotaUnsupported": "Запрос квоты для этого аккаунта не поддерживается.",
   "pws.quotaUnobserved": "Данных о наблюдаемом использовании пока нет.",
+  "pws.quotaLastRead": "Последнее чтение",
   "pws.quotaCheckCompleted": "Проверка квоты завершена",
   "pws.modelBreakdown": "Разбивка по моделям",
   "pws.col.model": "Модель",
@@ -1985,6 +1999,7 @@ export const ru: Record<TKey, string> = {
   "pws.accountSwitching": "Переключение…",
   "pws.accountCurrent": "Текущий аккаунт",
   "pws.accountPausedHint": "До возобновления исключён из автоматического выбора, повторов, восстановления после задержки, ручного выбора и проактивного обновления токена.",
+  "pws.resumeAndActivateKey": "Возобновить и использовать",
   "pws.defaultModelNone": "Нет (использовать значение провайдера)",
   "pws.discardSettings": "Не сохранять",
   "pws.jsonEditorDesc": "Редактируйте исходную JSON-конфигурацию провайдера. Изменения сохраняются сразу.",
@@ -2064,12 +2079,19 @@ export const ru: Record<TKey, string> = {
   "pws.pacingRemoveModel": "Удалить интервал запросов для {model}",
   "pws.pacingRuleRequired": "Сначала задайте лимит провайдера или правило модели.",
   "pws.pacingCapInvalid": "Максимальное количество одновременных запросов должно быть целым числом не меньше 1.",
+  "pws.pacingValueInvalid": "Введите допустимое значение ограничения: RPM 1/60–60 000, задержка 1–3 600 000 мс, параллелизм 1 или больше.",
   "pws.saving": "Сохранение…",
   "pws.settingsSaved": "Настройки сохранены.",
   "pws.accountModeSaved": "Режим аккаунта сохранён.",
   "pws.accountModeFailed": "Не удалось переключить режим аккаунта.",
   "pws.accountModeConfirm": "Переключить режим аккаунта OpenAI? Текущие беседы будут перенаправлены на другой набор аккаунтов, а использование квоты будет учитываться в новом режиме.",
   "pws.settingsUnsavedBar": "Есть несохранённые изменения.",
+  "pws.draftTarget": "Редактирование: {target}",
+  "pws.draftConflict": "Сохранённые настройки на этом сервере изменились во время редактирования. Черновик сохранён; выберите, какие значения оставить.",
+  "pws.draftConflictFields": "Эти поля изменены с обеих сторон. Отредактируйте черновик или используйте сохранённые значения:",
+  "pws.draftConflictUseSaved": "Использовать сохранённые значения",
+  "pws.draftConflictKeepDraft": "Оставить мой черновик",
+  "pws.draftConflictResolveFirst": "Перед сохранением выберите, какие значения оставить.",
   "pws.unsavedLeaveBody": "Есть несохранённые изменения. Сохранить их перед переходом?",
   "pws.unsavedLeaveTitle": "Несохранённые изменения",
   "pws.attentionRequired": "Требуется внимание",
@@ -2687,6 +2709,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Не удалось загрузить пресет провайдера OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Пресет провайдера OpenAI недоступен.",
   "codexAuth.openProviders": "Открыть провайдеров",
+  "codexAuth.changeAccountMode": "Изменить режим аккаунта",
   "codexAuth.add": "Добавить",
   "codexAuth.credits": "Кредиты",
   "codexAuth.creditsRemaining": "осталось",
@@ -3484,6 +3507,11 @@ export const ru: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "Сделать по умолчанию для {family}",
   "claudeDesktop.moveTo": "Переместить в",
   "claudeDesktop.move": "Переместить",
+  "claudeDesktop.removeUnavailable": "Удалить",
+  "claudeDesktop.removeAllUnavailable": "Удалить недоступные ({n})",
+  "claudeDesktop.removeUnavailableHint": "Удаляет это назначение и его псевдоним. «Сохранить» сохраняет изменение; «Сохранить и применить» также обновляет Claude Desktop.",
+  "claudeDesktop.removeUnavailableTierHint": "Также удаляет другие недоступные модели этого уровня ({n}), потому что модель уровня по умолчанию должна быть доступна. «Сохранить» сохраняет изменение; «Сохранить и применить» также обновляет Claude Desktop.",
+  "claudeDesktop.removedUnavailable": "Удалено недоступных моделей: {n}. «Сохранить» сохраняет изменение, «Сохранить и применить» обновляет Claude Desktop.",
   "claudeDesktop.status.applied": "Применено к Desktop",
   "claudeDesktop.status.stale": "Конфигурация Desktop устарела — примените заново",
   "claudeDesktop.status.notApplied": "Не применено",
@@ -3877,7 +3905,7 @@ export const ru: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "Таблица провайдеров может скрыть существующие диалоги с меткой openai в некоторых мобильных удалённых списках. История не удаляется. Удалённый клиент должен запрашивать все провайдеры; этот переключатель не исправляет его фильтр.",
   "models.newPolicyGlobal": "Добавлять новые модели выключенными", "models.newPolicyProvider": "Политика новых моделей",
   "models.fastProvider": "Режим Fast", "models.fastProviderHint": "Расходует кредиты использования по двойной цене", "models.fastEnabled": "Режим Fast включён", "models.fastDisabled": "Режим Fast выключен", "models.fastSaveFailed": "Не удалось сохранить режим Fast",
-  "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
+  "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newPolicy_admit": "Добавлять", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
   "models.aliases": "Псевдонимы",
   "models.aliasesTable": "Таблица псевдонимов",
   "models.aliasPrompt": "Псевдоним провайдера (оставьте пустым, чтобы очистить)",

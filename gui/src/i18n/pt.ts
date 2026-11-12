@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -8,6 +10,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // Brazilian Portuguese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -133,6 +136,8 @@ export const pt: Record<TKey, string> = {
   "workflowBudget.saved": "Limites de fluxo de trabalho salvos.",
   ...desktopCompatibilityCopy("pt"),
   ...shellV2Copy("pt"),
+  ...codexCliUpdateCopy("pt"),
+  ...remoteLinkDiagnosticsCopy("pt"),
   ...modelsV2Copy("pt"),
   ...accountsV2Copy("pt"),
   ...subagentsV2Copy("pt"),
@@ -141,6 +146,7 @@ export const pt: Record<TKey, string> = {
   ...connectV2Copy("pt"),
   ...startupV2Copy("pt"),
   ...proxyV2Copy("pt"),
+  ...telemetryProfileCopy("pt"),
   "claude.tierDefaults.unset": "Não definido (manter configuração Claude)",
   "claude.tierDefaults.recovery": "Aplicação interrompida; restauração automática falhou. Verifique o backup abaixo antes de tentar novamente.",
   "claude.tierDefaults.title": "Modelos padrão da CLI",
@@ -165,6 +171,8 @@ export const pt: Record<TKey, string> = {
   "advisor.modelsEmpty": "Nenhum modelo selecionável. Ative um provedor e um modelo e tente novamente.",
   "advisor.effort": "Raciocínio",
   "advisor.policy": "Política",
+  "advisor.questionOnly": "Enviar apenas a pergunta do worker",
+  "advisor.questionOnlyNote": "Apenas a pergunta do worker (até 2000 caracteres mantidos, com aviso em caso de truncamento) e uma instrução fixa são enviadas. Histórico, resultados de ferramentas e contexto da tarefa não são anexados. O worker deve incluir as informações essenciais. As consultas automáticas ficam pausadas; os limites existentes continuam válidos.",
   "advisor.policy.manual": "Manual — somente quando o worker solicitar",
   "advisor.policy.preflight": "Preflight — tentativa automática após evidência de orientação",
   "advisor.policy.adaptive": "Adaptativo — orientação e falha após correção",
@@ -831,6 +839,8 @@ export const pt: Record<TKey, string> = {
   "prov.port": "Porta",
   "prov.default": "Padrão",
   "prov.loadingConfig": "Carregando…",
+  "prov.targetChanged": "O destino do painel mudou. Reabra este formulário no servidor atual.",
+  "prov.legacyTargetPreflight": "Este proxy verifica o destino de salvamento antes de enviar, mas não consegue verificá-lo atomicamente. Atualize o proxy para salvamentos vinculados ao destino.",
   "prov.saved": "Salvo! Reinicie o proxy para aplicar.",
   "prov.loadConfigFail": "Falha ao carregar a configuração",
   "prov.invalidJson": "JSON inválido",
@@ -1866,6 +1876,9 @@ export const pt: Record<TKey, string> = {
   "quota.creditsBalance": "Saldo de créditos",
   "quota.creditsPeriodEnds": "O período de cobrança termina em {date}",
   "quota.usedPercent": "{pct}% usado",
+  "quota.weeklyShare": "Até {pct}% do seu limite semanal",
+  "quota.notInEffect": "Não vigente agora",
+  "quota.notInEffectHint": "O Claude informa que este limite não está restringindo o uso no momento. Ele aparece apenas para referência; o roteamento de contas usa somente os limites vigentes.",
   "quota.limitReached": "Limite atingido",
   "quota.resetsToday": "Redefine hoje às {time}",
   "quota.resetsTomorrow": "Redefine amanhã às {time}",
@@ -1951,6 +1964,7 @@ export const pt: Record<TKey, string> = {
   "pws.currentAccountUsage": "Uso da conta atual",
   "pws.quotaUnsupported": "A consulta de cota não é compatível com esta conta.",
   "pws.quotaUnobserved": "Nenhuma observação de uso ainda.",
+  "pws.quotaLastRead": "Última leitura",
   "pws.quotaCheckCompleted": "Verificação de cota concluída",
   "pws.modelBreakdown": "Detalhamento por modelo",
   "pws.col.model": "Modelo",
@@ -2010,6 +2024,7 @@ export const pt: Record<TKey, string> = {
   "pws.accountSwitching": "Alternando…",
   "pws.accountCurrent": "Conta atual",
   "pws.accountPausedHint": "Excluída da seleção automática, das novas tentativas, da recuperação de cooldown, da seleção manual e da renovação proativa de token até ser retomada.",
+  "pws.resumeAndActivateKey": "Retomar e usar",
   "pws.defaultModelNone": "Nenhum (usar o padrão do provedor)",
   "pws.discardSettings": "Descartar",
   "pws.jsonEditorDesc": "Edite a configuração JSON bruta do provedor. As alterações são salvas imediatamente.",
@@ -2089,12 +2104,19 @@ export const pt: Record<TKey, string> = {
   "pws.pacingRemoveModel": "Remover a substituição de ritmo de requisições de {model}",
   "pws.pacingRuleRequired": "Ative o ritmo de requisições somente após definir um limite do provedor ou uma substituição por modelo.",
   "pws.pacingCapInvalid": "O máximo de requisições simultâneas deve ser um número inteiro igual ou maior que 1.",
+  "pws.pacingValueInvalid": "Informe um valor de ritmo válido: RPM 1/60–60.000, atraso 1–3.600.000 ms, concorrência 1 ou mais.",
   "pws.saving": "Salvando…",
   "pws.settingsSaved": "Configurações salvas.",
   "pws.accountModeSaved": "Modo de conta salvo.",
   "pws.accountModeFailed": "Não foi possível alternar o modo de conta.",
   "pws.accountModeConfirm": "Alternar o modo de conta da OpenAI? As conversas em andamento serão reatribuídas ao conjunto de contas do outro modo, e o uso de cota passará a ser contabilizado no novo modo.",
   "pws.settingsUnsavedBar": "Você tem alterações não salvas.",
+  "pws.draftTarget": "Editando: {target}",
+  "pws.draftConflict": "As configurações salvas neste servidor mudaram enquanto você editava. O rascunho foi mantido; escolha quais valores manter.",
+  "pws.draftConflictFields": "Estes campos mudaram dos dois lados. Edite o rascunho ou use os valores salvos:",
+  "pws.draftConflictUseSaved": "Usar valores salvos",
+  "pws.draftConflictKeepDraft": "Manter meu rascunho",
+  "pws.draftConflictResolveFirst": "Escolha quais valores manter antes de salvar.",
   "pws.unsavedLeaveBody": "Você tem alterações não salvas. Salvar antes de sair?",
   "pws.unsavedLeaveTitle": "Alterações não salvas",
   "pws.attentionRequired": "Requer atenção",
@@ -2746,6 +2768,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Falha ao carregar o preset do provedor OpenAI.",
   "codexAuth.openaiPresetUnavailable": "O preset do provedor OpenAI não está disponível.",
   "codexAuth.openProviders": "Abrir Provedores",
+  "codexAuth.changeAccountMode": "Alterar modo de conta",
   "codexAuth.add": "Adicionar",
   "codexAuth.credits": "Créditos",
   "codexAuth.creditsRemaining": "restantes",
@@ -3755,6 +3778,11 @@ export const pt: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "Usar como padrão de {family}",
   "claudeDesktop.moveTo": "Mover para",
   "claudeDesktop.move": "Mover",
+  "claudeDesktop.removeUnavailable": "Remover",
+  "claudeDesktop.removeAllUnavailable": "Remover indisponíveis ({n})",
+  "claudeDesktop.removeUnavailableHint": "Remove esta atribuição e o alias. Salvar mantém a alteração; Salvar e aplicar também atualiza o Claude Desktop.",
+  "claudeDesktop.removeUnavailableTierHint": "Também remove {n} outro(s) modelo(s) indisponível(is) deste nível, porque o padrão de um nível precisa estar disponível. Salvar mantém a alteração; Salvar e aplicar também atualiza o Claude Desktop.",
+  "claudeDesktop.removedUnavailable": "{n} modelo(s) indisponível(is) removido(s). Salve para manter a alteração ou use Salvar e aplicar para atualizar o Claude Desktop.",
   "claudeDesktop.status.applied": "Aplicado ao Desktop",
   "claudeDesktop.status.stale": "A configuração do Desktop está desatualizada — aplique novamente",
   "claudeDesktop.status.notApplied": "Não aplicado",
@@ -3893,7 +3921,7 @@ export const pt: Record<TKey, string> = {
   "models.fastSaveFailed": "Não foi possível salvar o modo Fast",
   "models.newPolicy_inherit": "Herdar",
   "models.newPolicy_off": "Desativado",
-  "models.newPolicy_on": "Ativado",
+  "models.newPolicy_on": "Ativado", "models.newPolicy_admit": "Admitir",
   "models.newBadge": "NOVO",
   "models.newCount": "{count} novos, desativados",
   "models.aliases": "Aliases",
