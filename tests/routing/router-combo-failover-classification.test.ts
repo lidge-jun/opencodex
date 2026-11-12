@@ -1355,4 +1355,29 @@ describe("unoffered tool-call refusal", () => {
       code: failure.upstreamCode,
     })).toBe("stop");
   });
+
+  test("AI-SDK gateway carrier with object param hops", () => {
+    const verdict = "The model returned an unexpected parser control marker; no output was published.";
+    const body = JSON.stringify({
+      error: {
+        message: verdict,
+        type: "AI_APICallError",
+        param: {
+          error: verdict, statusCode: 400, name: "AI_APICallError",
+          message: verdict, isRetryable: false, type: "AI_APICallError",
+        },
+      },
+      providerMetadata: { gateway: { routing: { originalModelId: "humansand/ampersand-v0.1" } } },
+    });
+    expect(comboFailureDecision(400, body)).toBe("hop");
+    expect(comboFailureCooldownScope(400, body)).toBe("none");
+    // A param object carrying a different claim stays terminal.
+    const contradicted = JSON.stringify({
+      error: {
+        message: verdict, type: "AI_APICallError",
+        param: { error: "different failure", statusCode: 400, type: "AI_APICallError" },
+      },
+    });
+    expect(comboFailureDecision(400, contradicted)).toBe("stop");
+  });
 });

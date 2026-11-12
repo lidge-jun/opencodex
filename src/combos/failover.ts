@@ -995,7 +995,7 @@ function isResponseFormatCapabilityRefusal(
  * they emit. Anything outside these closed sets fails closed.
  */
 const UNOFFERED_TOOL_CALL_CODES = new Set(["", "invalid_request_error", "invalid_argument", "upstream_error"]);
-const UNOFFERED_TOOL_CALL_TYPES = new Set(["", "invalid_request_error", "upstream_error"]);
+const UNOFFERED_TOOL_CALL_TYPES = new Set(["", "invalid_request_error", "upstream_error", "ai_apicallerror"]);
 const UNOFFERED_TOOL_CALL_PARAMS = new Set(["tools", "tool_choice"]);
 /**
  * The provider's own verdict sentences for target-local model failures, each anchored so a
@@ -1045,8 +1045,18 @@ function unofferedToolCallRecordShape(record: Record<string, unknown>): boolean 
   if (record.code !== undefined && record.code !== null && typeof record.code !== "string" && typeof record.code !== "number") return false;
   if (record.type !== undefined && record.type !== null && typeof record.type !== "string") return false;
   if (record.param !== undefined && record.param !== null) {
-    if (typeof record.param !== "string") return false;
-    if (!UNOFFERED_TOOL_CALL_PARAMS.has(record.param.trim().toLowerCase())) return false;
+    if (typeof record.param === "string") {
+      if (!UNOFFERED_TOOL_CALL_PARAMS.has(record.param.trim().toLowerCase())) return false;
+    } else if (typeof record.param === "object" && !Array.isArray(record.param)) {
+      // An AI-SDK gateway wraps the verdict in an error object under `param`; accept it only
+      // when a nested string field independently carries the same anchored verdict, so the
+      // object cannot smuggle a different claim.
+      const nested = record.param as Record<string, unknown>;
+      const carrier = [nested.error, nested.message].find((v): v is string => typeof v === "string");
+      if (carrier === undefined || !isUnofferedToolCallVerdict(carrier)) return false;
+    } else {
+      return false;
+    }
   }
   if (!UNOFFERED_TOOL_CALL_CODES.has(normalizedFailureCode(record.code as string | number | undefined))) return false;
   if (!UNOFFERED_TOOL_CALL_TYPES.has(normalizedFailureCode(record.type as string | undefined))) return false;
