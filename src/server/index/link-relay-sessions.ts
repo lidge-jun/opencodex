@@ -8,6 +8,7 @@ import {
 import { parseLinkPeerReport, type LinkPeerObservations } from "../../link/peer-report";
 import { linkActivityCounts, type LinkActivity } from "../../link/child-activity";
 import type { LinkTrafficBook } from "../../link/traffic";
+import { LINK_HOME_FEATURES_HEADER } from "../../link/request-compression";
 
 /** A 200 `GET /v1/catalog` whose body the Child read to the end (wp2 catalog freshness). */
 export interface LinkCatalogServed { linkId: string | null; keyId: string | null; etag: string }
@@ -44,6 +45,11 @@ export interface LinkRelaySessionOptions {
    * because wrapping the native request would lose the identity Bun's requestIP/timeout need.
    */
   traffic?: LinkTrafficBook;
+  /**
+   * This Home's served peer features, named on every relay-auth answer (#3023) so a Child learns on
+   * the very connection that will carry its body whether it may send it zstd. Absent = not named.
+   */
+  homeFeatures?: () => readonly string[];
 }
 
 /** One book per bound listener. A pending proof reserves the bind before the data request arrives. */
@@ -107,9 +113,11 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         let generation: string | undefined;
         try { generation = options.connectionGeneration?.(linkId); } catch { generation = undefined; }
         const connectionProof = generation === undefined ? null : linkConnectionProof(fingerprint, keyId, linkId, nonce, generation);
+        const features = options.homeFeatures?.() ?? [];
         const answer = () => new Response(null, { status: 204, headers: {
           "x-opencodex-link-proof": linkRelayProof(fingerprint, "listener", keyId, linkId, nonce)!,
           "cache-control": "no-store",
+          ...(features.length > 0 ? { [LINK_HOME_FEATURES_HEADER]: features.join(",") } : {}),
           ...(connectionProof ? { [LINK_RELAY_CONNECTION_HEADER]: generation!, [LINK_RELAY_CONNECTION_PROOF_HEADER]: connectionProof } : {}),
         } });
         // A readiness probe closes after this answer and sends no data request, so it reserves

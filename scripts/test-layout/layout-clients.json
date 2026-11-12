@@ -169,6 +169,7 @@
   "link-status-projection.test.ts": "clients",
   "link-traffic.test.ts": "clients",
   "link-traffic-child-status.test.ts": "clients",
+  "link-request-zstd.test.ts": "clients",
   "link-admission-wait.test.ts": "clients",
   "link-fingerprint.test.ts": "clients",
   "link-compensation.test.ts": "clients",

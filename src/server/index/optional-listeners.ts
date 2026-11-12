@@ -27,6 +27,7 @@ import type { CatalogRevisionMonitor } from "../../link/child-catalog-freshness"
 import type { ChildOpsHostBinding } from "../../link/child-ops-host";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
+import { linkHomeFeatures } from "../../remote/features";
 
 export interface OptionalListenerStartContext<T> {
   startProxy?: typeof import("../../claude/intercept/connect-proxy").startConnectProxy;
@@ -175,6 +176,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
       localControl.start({ config: ctx.config, publicPort: ctx.publicPort, dispatch: ctx.dispatch });
       linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize,
         connectionGeneration: linkId => supervisor.connectionGeneration?.(linkId),
+        homeFeatures: () => linkHomeFeatures(activeConfig),
         keyFingerprints: apiKeyId => {
           const entry = activeConfig?.apiKeys?.find(candidate => candidate.id === apiKeyId);
           if (!entry?.key) return [];
