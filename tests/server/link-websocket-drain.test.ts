@@ -354,7 +354,8 @@ describe("restore of refused results across overlapping turns (T5d1-R5-01)", () 
     activity.notifyAccepted(inputA);
     finishA();
     finishB();
-    expect(activity.pendingKeys()).toHaveLength(1);
+    // Still owed: pending, or untracked when the id was reused while an older turn could restore it.
+    expect(activity.idle).toBe(false);
   });
 
   test("an older turn's late acceptance does not cancel a newer refused turn's restore (T5d1-R6-01)", () => {
@@ -371,7 +372,8 @@ describe("restore of refused results across overlapping turns (T5d1-R5-01)", () 
     activity.beginTurn(toolResult("call_n"))();
     activity.notifyAccepted(inputA);
     finishA();
-    expect(activity.pendingKeys()).toHaveLength(1);
+    // Still owed: pending, or untracked when the id was reused while an older turn could restore it.
+    expect(activity.idle).toBe(false);
   });
 
   test("an older turn's late acceptance does not prune a newer turn still in flight, which restores when refused (T5d1-R6-01)", () => {
@@ -387,7 +389,8 @@ describe("restore of refused results across overlapping turns (T5d1-R5-01)", () 
     activity.notifyAccepted(inputA);
     finishA();
     finishC();
-    expect(activity.pendingKeys()).toHaveLength(1);
+    // Still owed: pending, or untracked when the id was reused while an older turn could restore it.
+    expect(activity.idle).toBe(false);
   });
 
   test("an older turn restoring late never tags newer pending work, so a later acceptance keeps it (T5d1-R7-01)", () => {
@@ -403,7 +406,8 @@ describe("restore of refused results across overlapping turns (T5d1-R5-01)", () 
     finishA();
     activity.notifyAccepted(inputB);
     finishB();
-    expect(activity.pendingKeys()).toHaveLength(1);
+    // Still owed: pending, or untracked when the id was reused while an older turn could restore it.
+    expect(activity.idle).toBe(false);
   });
 
   test("a key settled again on acceptance never suppresses a new call reusing it, even without response.created (T5d1-R8-01)", () => {
@@ -421,6 +425,23 @@ describe("restore of refused results across overlapping turns (T5d1-R5-01)", () 
     activity.observePayload(toolCall("call_h"));
     finishB();
     expect(activity.pendingKeys()).toHaveLength(1);
+  });
+
+  test("a new call reusing an id an in-flight turn may still restore makes the socket untracked, so its close holds (T5d1-R9-01)", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.restoreRefusedResults = true;
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_i"));
+    const finishA = activity.beginTurn(toolResult("call_i"));
+    activity.beginTurn("next")();
+    activity.observePayload(toolCall("call_i"));
+    const inputB = toolResult("call_i");
+    const finishB = activity.beginTurn(inputB);
+    activity.notifyAccepted(inputB);
+    finishA();
+    finishB();
+    expect(activity.untracked).toBe(true);
+    expect(activity.idle).toBe(false);
   });
 
   test("an older turn that was refused, with no newer acceptance, still restores", () => {

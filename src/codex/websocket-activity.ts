@@ -281,6 +281,14 @@ export class CodexWebSocketActivity {
   private observeResultKey(key: string): void {
     // A call observed now is new work, whatever an older turn restored under the same key.
     this.restoredKeys.delete(key);
+    // An in-flight turn may still restore an earlier call under this id. The key cannot tell the two
+    // generations apart, so the socket's results become untracked: its close leaves an operator-only
+    // hold rather than possibly forgetting either piece of owed work (Remote Link sockets only).
+    if (this.restoreRefusedResults) {
+      for (const record of this.turnRecords.values()) {
+        if (record.settled.includes(key)) { this.protectUntracked(); return; }
+      }
+    }
     if (this.pendingResults.has(key) || this.returnedResults.has(key)) return;
     if (this.pendingResults.size >= MAX_PENDING_RESULTS) this.protectUntracked();
     else { this.pendingResults.add(key); this.changed(); }
