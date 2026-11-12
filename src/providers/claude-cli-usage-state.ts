@@ -48,6 +48,7 @@ export function loadClaudeUsageSnapshot(path: string): ClaudeUsageSnapshot | und
     if (saved.quota !== undefined) {
       const q = saved.quota;
       if (!q || typeof q !== "object" || !finite(q.updatedAt)) return;
+      if (q.claudeExtraUsage !== undefined && !["enabled", "disabled", "exhausted"].includes(q.claudeExtraUsage)) return;
       for (const field of ["fiveHourPercent", "fiveHourResetAt", "weeklyPercent", "weeklyResetAt"])
         if (q[field] !== undefined && !finite(q[field])) return;
       // Display-only rows (an inactive model limit) reach the dashboard too, so they pass the same check.
