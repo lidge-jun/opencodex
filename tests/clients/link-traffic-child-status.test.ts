@@ -112,3 +112,17 @@ test("no sidecar and no marker is a Home-initiated link that reads idle since it
   expect(counted.links[0]!.alias).toBe("unknown");
   expect(JSON.stringify(counted.links[0])).not.toContain(connection.serverUrl);
 });
+
+test("a traffic status read reads the sidecar once, so a sidecar that appears mid-read cannot name a Home-initiated row", async () => {
+  writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole: "client", client: connection }));
+  let reads = 0;
+  const late = { linkId: LINK_ID, alias: "late-alias", hubHostKeyFingerprint: `SHA256:${"a".repeat(43)}`, peerListenerPort: 45678, tunnelPort: TUNNEL_PORT };
+  const server = startMachineListener(0, { state: connection, managementAuthState: authState(), readSidecar: () => (reads++ === 0 ? null : late) });
+  servers.push(server);
+  const html = await (await fetch(new URL("/opencodex-session", server.url))).text();
+  const headers = { "X-OpenCodex-API-Key": meta(html, "opencodex-session-token"), "X-OpenCodex-GUI-Origin": meta(html, "opencodex-session-origin") };
+  reads = 0;
+  const counted = await (await fetch(new URL("/api/link/status?traffic=1", server.url), { headers })).json() as { links: Array<Record<string, unknown>> };
+  expect(reads).toBe(1);
+  expect(counted.links[0]).toMatchObject({ direction: "hub-initiated", state: "idle", alias: "unknown" });
+});

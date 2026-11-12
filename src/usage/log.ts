@@ -10,6 +10,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { linkLogField, type LinkRequestLogCarrier } from "./link-log-fields";
 import { normalizeRecordedClient, type UsageClient } from "./client";
 import {
   normalizePersistedJevDecision,
@@ -310,7 +311,7 @@ export function normalizeRequestSpend(value: unknown): PersistedRequestSpend | u
   };
 }
 
-export interface PersistedUsageEntry {
+export interface PersistedUsageEntry extends LinkRequestLogCarrier {
   requestedAlias?: string;
   requestId: string;
   /** Best-effort classified client; absent only for records predating attribution. */
@@ -1088,6 +1089,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
       : {}),
     ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
     ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}),
+    ...linkLogField(entry.link),
     ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
       ? { accountLogLabel: entry.accountLogLabel }
       : {}),

@@ -10,7 +10,7 @@ import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
 export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
-import { captureUpstreamTerminalDiagnostics, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
+import { captureUpstreamTerminalDiagnostics, linkLogField, notifyLinkTurnFinal, upstreamDiagnosticLogFields, type LinkRequestLogCarrier, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
@@ -125,7 +125,7 @@ export function cacheDiagnosticsObserving(): boolean {
   return cacheDiagnosticHooks()?.enabled() === true;
 }
 
-export interface RequestLogContext extends UpstreamErrorDiagnostics, RequestBodyLogContext {
+export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext {
   model: string;
   provider: string;
   client?: UsageClient;
@@ -329,7 +329,7 @@ export function rebindCacheDiagnosticBody(
   cacheDiagnosticHooks()?.rebind(body, draft);
 }
 
-export interface RequestLogEntry extends UpstreamErrorDiagnostics, RequestBodyEntryField {
+export interface RequestLogEntry extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyEntryField {
   requestId: string;
   client?: UsageClient;
   /** The logical request this row belongs to (#4546); absent on rows written without a budget. */
@@ -530,7 +530,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
     ...(entry.genStartMs !== undefined ? { genStartMs: entry.genStartMs } : {}),
     ...(entry.lastOutputMs !== undefined ? { lastOutputMs: entry.lastOutputMs } : {}),
-    ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}), ...requestBodyField(entry.requestBody),
+    ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}), ...linkLogField(entry.link), ...requestBodyField(entry.requestBody),
     ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
     ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
       ? { accountLogLabel: entry.accountLogLabel }
@@ -741,7 +741,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       // reaches usage.jsonl — which is where the per-key rollup reads from.
       ...(entry.apiKeyId ? { apiKeyId: entry.apiKeyId } : {}),
       ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
-      ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}), ...requestBodyField(entry.requestBody),
+      ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}), ...linkLogField(entry.link), ...requestBodyField(entry.requestBody),
       ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
         ? { accountLogLabel: entry.accountLogLabel }
         : {}),
@@ -1471,7 +1471,7 @@ export function addFinalRequestLog(
 ): void {
   const intercept = finalRequestLogInterceptors.get(logCtx);
   if (intercept) { intercept(status, meta); return; }
-  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog);
+  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog); notifyLinkTurnFinal(logCtx, meta?.terminalStatus);
 }
 
 function writeFinalRequestLog(
@@ -1628,7 +1628,7 @@ function writeFinalRequestLog(
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     ...(logCtx.apiKeyId ? { apiKeyId: logCtx.apiKeyId } : {}),
     ...(logCtx.admissionKind ? { admissionKind: logCtx.admissionKind } : {}),
-    ...(logCtx.inboundProtocol ? { inboundProtocol: logCtx.inboundProtocol } : {}), ...requestBodyLogField(logCtx),
+    ...(logCtx.inboundProtocol ? { inboundProtocol: logCtx.inboundProtocol } : {}), ...linkLogField(logCtx.link), ...requestBodyLogField(logCtx),
     ...(logCtx.localTerminalReason
       ? { localTerminalReason: sanitizeLogMetadataString(logCtx.localTerminalReason) }
       : {}),
