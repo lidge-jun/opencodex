@@ -288,3 +288,44 @@ describe("traffic book eviction and buffered bodies (#3023 final review)", () =>
     expect(counted.toHomeBytes).toBeLessThanOrEqual(body.length);
   });
 });
+
+describe("traffic identity across restarts and cut uploads (#3023 review round 8)", () => {
+  test("two books (two process lifetimes) never share a comparison identity, even for the same link under a repeating clock", () => {
+    const at = Date.parse("2026-11-12T00:00:00.000Z");
+    const reads = [0, 1].map(() => {
+      const book = createLinkTrafficBook("relayed", { now: () => at });
+      const flow = book.begin(linkId); flow.toHome(3); flow.end(true);
+      return book.snapshot(linkId);
+    });
+    expect(reads[0]!.since).toBe(reads[1]!.since);
+    expect(`${reads[0]!.epoch}/${reads[0]!.generation}`).not.toBe(`${reads[1]!.epoch}/${reads[1]!.generation}`);
+    expect(reads[0]!.epoch).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  test("a Home that reads a prefix and then answers in full: the response completes, the cut upload still marks the request incomplete", async () => {
+    const prefix = 1024 * 1024;
+    const h = home(async req => {
+      const reader = req.body!.getReader();
+      let got = 0;
+      while (got < prefix) { const next = await reader.read(); if (next.done) break; got += next.value.byteLength; }
+      return new Response("data: done\n\n", { headers: { "content-type": "text/event-stream" } });
+    });
+    const child = createLinkTrafficBook("relayed");
+    const body = "x".repeat(48 * 1024 * 1024);
+    const response = await fetchBoundLinkRelay(target(h.port), `http://127.0.0.1:${h.port}/v1/responses`,
+      { method: "POST", body, headers: { "content-type": "application/json" } }, { traffic: child });
+    expect(await response.text()).toBe("data: done\n\n");
+    const counted = child.snapshot(linkId);
+    expect(counted).toMatchObject({ requests: 1, incomplete: 1 });
+    expect(counted.toHomeBytes).toBeLessThan(body.length);
+  });
+
+  test("an ordinary request whose upload and response both finish stays complete", async () => {
+    const h = home(async req => new Response(`got ${(await req.arrayBuffer()).byteLength}`));
+    const child = createLinkTrafficBook("relayed");
+    const response = await fetchBoundLinkRelay(target(h.port), `http://127.0.0.1:${h.port}/v1/responses`,
+      { method: "POST", body: "y".repeat(200_000), headers: { "content-type": "application/json" } }, { traffic: child });
+    expect(await response.text()).toBe("got 200000");
+    expect(child.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 0, toHomeBytes: 200_000 });
+  });
+});

@@ -9,16 +9,19 @@
  *
  * Every time a link's counters start from zero (its first request, or its first after the book forgot
  * it) it gets a new `generation` from one monotonic counter per book; a link the book does not hold
- * reads zeros under the generation of the last forgetting. A consumer subtracts two reads only when
- * their generation matches. `since` is the wall-clock time of that start, for people; it can repeat
- * or go backward with the clock, so it is never the comparison key. A process restart starts a new
- * book.
+ * reads zeros under the generation of the last forgetting. A process restart starts a new book, whose
+ * `epoch` is a fresh random value, so the generations of two process lifetimes never compare equal
+ * under it. A consumer subtracts two reads only when both their epoch and their generation match.
+ * `since` is the wall-clock time of that start, for people; it can repeat or go backward with the
+ * clock, so it is never the comparison key.
  *
  * Two books exist. A Child's link transport (`src/client/link-relay-transport.ts`) counts each
  * request-body chunk or buffered body once its socket write completed and each response-body chunk
- * as it is read off the socket. A write still pending when a request ends is not counted, even if
- * part of it reached the Home, so while `incomplete` > 0 `toHomeBytes` is a lower bound of what
- * crossed. A Home's hub-link listener (`src/server/index/link-relay-sessions.ts`) counts the
+ * as it is read off the socket, and ends a request only once both its response and its upload have
+ * settled; it is complete only when both finished. A write still pending when a request ends is not
+ * counted, even if part of it reached the Home, and that request counts as incomplete, so while
+ * `incomplete` > 0 `toHomeBytes` is a lower bound of what crossed and otherwise every request
+ * body was counted in full. A Home's hub-link listener (`src/server/index/link-relay-sessions.ts`) counts the
  * response-body bytes it streams back and, for requests, each declared Content-Length (it cannot
  * wrap Bun's native request without losing its identity); a request body without one is counted in
  * `toHomeUncounted` instead. Neither counts HTTP headers, the relay-auth challenge, SSH or TCP
@@ -29,11 +32,16 @@ export const MAX_LINKS = 256;
 export interface LinkTrafficCounters {
   /** When this link's counters last started from zero (ISO). For people; compare on `generation`. */
   since: string;
-  /** Changes every time this link's counters start from zero; compare two reads only when it matches. */
+  /** Random per book: a new value after every process restart. Compare two reads only when it matches. */
+  epoch: string;
+  /** Changes every time this link's counters start from zero within one epoch; compare two reads only when epoch and generation match. */
   generation: number;
   /** Relayed requests on this link. */
   requests: number;
-  /** Of those, requests that ended before their response body did (abort, cancel, error, refusal). */
+  /**
+   * Of those, requests that ended before their response body did (abort, cancel, error, refusal),
+   * and on a Child also requests whose request-body upload did not finish.
+   */
   incomplete: number;
   /**
    * Request-body bytes toward the Home. Child: bytes whose socket write completed, a lower bound
@@ -81,11 +89,17 @@ function addable(bytes: number): number {
 
 const UNMEASURED: LinkTrafficFlow = { toHome() {}, fromHome() {}, uncounted() {}, end() {} };
 
+function randomEpoch(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export function createLinkTrafficBook(
   toHomeSource: LinkTrafficCounters["toHomeSource"],
   deps: { now?: () => number } = {},
 ): LinkTrafficBook {
   const now = deps.now ?? Date.now;
+  const epoch = randomEpoch();
   const started = new Date(now()).toISOString();
   let sequence = 0;
   let forgotten = { since: started, generation: 0 };
@@ -134,6 +148,7 @@ export function createLinkTrafficBook(
       const entry = entries.get(linkId);
       return {
         since: entry?.since ?? forgotten.since,
+        epoch,
         generation: entry?.generation ?? forgotten.generation,
         requests: entry?.requests ?? 0,
         incomplete: entry?.incomplete ?? 0,
