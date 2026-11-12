@@ -15,7 +15,7 @@ on:
   # docs-only PR receives explicit positive evidence instead of no check at all.
   pull_request: {}
     # No base-branch filter on purpose. GitHub matches `branches:` against the
-    # BASE ref, so `[main, dev]` silently excluded stacked child PRs — whose
+    # BASE ref, so even `[dev]` would silently exclude stacked child PRs — whose
     # base is another open PR's head branch, an intentional review workflow per
     # AGENTS.md that `enforce-target` already exempts from the wrong-base gate.
     # The #951-#955 stack merged with `enforce-target`, `label`, and
@@ -34,10 +34,10 @@ on:
   workflow_dispatch:
     inputs:
       lane:
-        description: "all (default), release-gates, or macos-control"
+        description: "all (default), release-gates, macos-control, or windows-native-claim"
         type: choice
         default: all
-        options: [all, release-gates, macos-control]
+        options: [all, release-gates, macos-control, windows-native-claim]
 
 permissions:
   contents: read
@@ -103,6 +103,17 @@ jobs:
       runner: ${{ steps.pick.outputs.runner }}
       label: ${{ steps.pick.outputs.label }}
     steps:
+      # This job also runs when the diagnostic lane skips changes.
+      - name: Validate dispatch source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$REF" != refs/heads/dev ]; then
+            echo '::error::manual cross-platform CI must run from dev'
+            exit 1
+          fi
       - name: Pick runner
         id: pick
         env:
@@ -142,6 +153,7 @@ jobs:
   # in the `on:` block above.
   changes:
     name: changes
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # The workflow grants only `contents: read`, and specifying any permission
@@ -213,14 +225,15 @@ jobs:
         uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         with:
           # Without this the action compares against the repository's DEFAULT
-          # branch, which is `main`. A push to `dev` would then be diffed against
-          # `main`, so every area touched since the last promotion keeps reading
-          # as "changed" — the scoped jobs would run on nearly every dev push and
-          # the saving would silently not happen while CI stayed green.
+          # branch, which is `dev`. For a non-PR event that diff starts at
+          # `dev` itself, so every area touched since the branch point keeps
+          # reading as "changed" — the scoped jobs would run on nearly every
+          # such event and the saving would silently not happen while CI stayed
+          # green.
           #
           # On `pull_request` the action ignores this and uses the PR's own file
-          # list. On a branch push it means "compare against the previous commit
-          # on this branch", which is the intent.
+          # list. Otherwise `github.ref` keeps the diff scoped to this ref, which
+          # is the intent.
           base: ${{ github.ref }}
           filters: |
             # Pull requests always
@@ -293,11 +306,11 @@ jobs:
               - '.github/workflows/ci.yml'
             # The docs site is built by nothing else on a pull request. `ci` above
             # deliberately omits `docs-site/**` -- a prose edit has no business
-            # starting the cross-platform suite -- and `deploy-docs.yml` triggers
-            # only on `push` to `main`. That left the Astro toolchain with no
-            # pull-request build gate at all, so a dependency bump under
-            # `docs-site/` could only be proven by an author's local run and would
-            # otherwise surface at promotion.
+            # starting the cross-platform suite -- and `deploy-docs.yml` is
+            # dispatch-only. That left the Astro toolchain with no pull-request
+            # build gate at all, so a dependency bump under `docs-site/` could
+            # only be proven by an author's local run and would otherwise surface
+            # at release time.
             #
             # `.github/workflows/ci.yml` is here so an edit to the job below
             # verifies itself. Without it this filter's own pull request would
@@ -553,9 +566,10 @@ jobs:
           PATH_SELECTED: ${{ steps.filter.outputs.windows }}
         run: bash scripts/ci/windows-sensitive-diff.sh
 
-      # A scheduled run starts from main's head. Resolve dev ONCE so the nine
-      # Windows shards, the macOS control and every other job test one commit,
-      # however long the queue between them. contents: read already covers it.
+      # A scheduled run starts from the default branch's head, which is `dev`.
+      # Resolve dev ONCE so the nine Windows shards, the macOS control and every
+      # other job test one commit, however long the queue between them.
+      # contents: read already covers it.
       - name: Resolve the commit a scheduled run tests
         id: nightly
         shell: bash
@@ -599,11 +613,17 @@ jobs:
   # Only the suite lives here. Typecheck, lint, build, and the scans run once in
   # `gates` rather than five times — they are fixed cost, and paying it per shard
   # would eat what the sharding saves.
+  # The heavy Linux jobs (test shards, test-changed, gates) take the lidge self-hosted pool on
+  # trusted runs while the repository variable LIDGE_RUNNERS is on: pushes, manual runs, branches of
+  # this repository, and pull requests by owners, members or collaborators. Everything else, and every
+  # run while the variable is off, stays on ubuntu-latest, so the hosted runners keep carrying the light
+  # jobs. As with the Windows box above, this routing is operational; the fork-PR approval policy and
+  # the box's scaler, which only creates runners for trusted runs, are the security boundary.
   test:
     name: test ${{ matrix.shard }}/5
     needs: changes
     if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.fast != 'true')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     # A fifth of the suite. A shard that needs longer than this is wedged, not
     # slow — the old 30-minute ceiling was margin for the Windows leg, which no
     # longer runs here (see platform-windows).
@@ -667,7 +687,7 @@ jobs:
     name: test changed
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.fast == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -761,7 +781,7 @@ jobs:
     name: gates
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -851,10 +871,10 @@ jobs:
     # (123090589363) batch 93/93 before this cap cancelled them, with no failing
     # tests. The cap stays 20: the suite needs another shard, not a longer wait,
     # and a wedged shard (#4956) is still cut off as early as before. Four suite
-    # shards + control + widget/bundle request six macOS jobs for five runner
-    # slots: one queues, and each run pays one extra shard's setup overhead.
-    # The full-membership control runs the same bounded batches without sharding
-    # on explicit dispatch.
+    # shards + widget/bundle request five macOS jobs for five runner slots; each
+    # run pays one extra shard's setup overhead. The full-membership control runs
+    # the same bounded batches without sharding, only on a lane=macos-control
+    # dispatch.
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -920,10 +940,13 @@ jobs:
   macos-control:
     name: macos control
     needs: changes
-    # Diagnostic-only lanes stay off the ordinary release gates: list every lane
-    # that should run this job, so a new lane defaults to skipping the diagnostic.
+    # Diagnostic-only: it runs on an explicit lane=macos-control dispatch and nowhere
+    # else, so a new lane defaults to skipping it. It used to ride lane=all as well,
+    # where it reran the whole suite that the four macOS shards had already passed
+    # on the same commit, on one worker, for 50-60 minutes, and every release waited
+    # for it. Dispatch it on its own when a sharding-sensitive defect is suspected.
     if: >-
-      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'macos-control'
     runs-on: macos-latest
     # Unsharded full-membership control, one worker in sequential fresh batches.
     # Long-lived Bun isolate pools repeatedly wedged while synchronously reaping
@@ -986,6 +1009,39 @@ jobs:
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
+
+  # A diagnostic run deliberately bypasses changes and the full CI graph. Its
+  # title identifies it as a partial run, never release evidence.
+  windows-native-claim:
+    name: windows native-main claim diagnostic
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' && github.event.inputs.lane == 'windows-native-claim'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout workflow commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Isolate homes
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "ocx-claim-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $ocxHome = Join-Path $root 'opencodex'
+          $codexHome = Join-Path $root 'codex'
+          New-Item -ItemType Directory -Path $ocxHome, $codexHome -ErrorAction Stop | Out-Null
+          "OPENCODEX_HOME=$ocxHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CODEX_HOME=$codexHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run native-main claim diagnostics
+        env:
+          OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC: '1'
+        run: bun test tests/codex-integration/main-quota-provenance.test.ts --timeout 60000
 
   # Windows shards run only on a full manual dispatch. Pull requests retain
   # fast Ubuntu checks, including when the Windows-sensitive filter is set.
@@ -1208,7 +1264,7 @@ jobs:
         run: bun scripts/ci/docker-smoke.ts
 
   # Proves the Astro toolchain still builds the site, on the only event that can
-  # prove it before promotion.
+  # prove it before release.
   #
   # Linux only, and one leg. The site is static output from a Node/Bun toolchain
   # with no OS-specific behaviour to promise, so a Windows or macOS leg would buy
@@ -1683,7 +1739,7 @@ jobs:
 
   ci:
     name: ci
-    if: always()
+    if: always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim')
     # Every producer, including the ones that only feed other jobs. `needs` holds
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
@@ -1799,8 +1855,9 @@ jobs:
             dispatch=requested
             windows=requested
           elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            # Mirror the diagnostic job allowlist; release-gates requests neither suite.
-            if [ -z "$LANE" ] || [ "$LANE" = "all" ] || [ "$LANE" = "macos-control" ]; then
+            # Mirror the diagnostic job allowlist: only lane=macos-control requests the
+            # unsharded control; release-gates requests neither suite.
+            if [ "$LANE" = "macos-control" ]; then
               dispatch=requested
             fi
             # Only the default/all lane requests the Windows suite shards.

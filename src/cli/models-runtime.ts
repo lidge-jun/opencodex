@@ -44,7 +44,7 @@ const USAGE = `Usage:
   ocx models selected <provider> [--set <id,id...>|--clear] [--json]
   ocx models preset show [--provider <name>] [--json]
   ocx models preset apply <provider> [--all] [--json]
-  ocx models new-policy [on|off] [--provider <name>] [--json]
+  ocx models new-policy [on|off|admit] [--provider <name>] [--json]
   ocx models new-arrivals [--json]
 ${MODELS_CONTEXT_USAGE}
   ocx models shadow <status|set> [model|-] [--enabled <on|off>] [--json]
@@ -355,7 +355,7 @@ async function setModelSettings(argv: string[], deps: RuntimeApiDeps): Promise<v
     if (Object.keys(patch).length > 0) {
       throw new CliUsageError("--reset clears every override and cannot be combined with other options", USAGE);
     }
-    for (const key of ["contextWindow", "inputModalities", "reasoningEfforts", "defaultReasoningEffort"]) patch[key] = null;
+    for (const key of ["contextWindow", "inputModalities", "responsesCustomTools", "reasoningEfforts", "defaultReasoningEffort"]) patch[key] = null;
   }
   if (Object.keys(patch).length === 0) throw new CliUsageError("at least one setting or --reset is required", USAGE);
   const result = await runtimeRequest<{ changed?: boolean; hasOverrides?: boolean; saved?: boolean; catalogRefresh?: { status?: string; retryable?: boolean } }>("/api/model-settings", {
@@ -507,7 +507,7 @@ async function newPolicy(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const state = args[0] && !args[0].startsWith("--") ? args.shift()!.toLowerCase() : undefined;
   const provider = takeOption(args, "--provider")?.trim();
   const wantsJson = takeFlag(args, "--json");
-  if (state !== undefined && state !== "on" && state !== "off") throw new CliUsageError("new policy must be on or off", USAGE);
+  if (state !== undefined && state !== "on" && state !== "off" && state !== "admit") throw new CliUsageError("new policy must be on, off or admit", USAGE);
   rejectArgs(args, USAGE);
   if (!state) {
     const result = await runtimeRequest<{ policy: string; providers: Record<string, string> }>("/api/model-discovery", {}, deps);

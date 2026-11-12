@@ -128,6 +128,30 @@ describe("release pipeline contract", () => {
     expect(steps.find(step => step.name === "Bind verified asset digests")?.run).toContain("sha256");
   });
 
+  test("release documentation names every dispatch input and the current recovery rules (#8329)", () => {
+    const doc = readFileSync(repoPath("structure", "ops", "docs-and-release.md"), "utf8");
+    const start = doc.indexOf("\n## Release workflow");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = doc.indexOf("\n## ", start + 1);
+    const section = doc.slice(start, end < 0 ? undefined : end);
+    const dispatch = (release.on as { workflow_dispatch?: { inputs?: Record<string, unknown> } } | undefined)?.workflow_dispatch;
+    const inputs = Object.keys(dispatch?.inputs ?? {});
+    expect(inputs).toContain("resume-after-npm-publish");
+    for (const input of inputs) expect(section, input).toContain(`\`${input}\``);
+    for (const gate of [".github/scripts/release-history.cjs", ".github/scripts/release-resume.cjs", "scripts/verify-release-resume.ts"]) {
+      expect(section, gate).toContain(gate);
+    }
+    // The pre-#8328 text said resume was refused, npm history failed the run, and reconciliation was outstanding.
+    const ci = readFileSync(repoPath("structure", "ops", "cross-platform-ci.md"), "utf8");
+    const contributing = readFileSync(repoPath("docs-site", "src", "content", "docs", "contributing.md"), "utf8");
+    for (const [name, text] of [["docs-and-release.md", doc], ["cross-platform-ci.md", ci], ["contributing.md", contributing]] as const) {
+      for (const stale of ["refuses resume", "Resume is also refused", "Resume is refused", "fails closed on existing npm",
+        "fails closed for existing npm", "history reconciliation, independent"]) {
+        expect(text, `${name}: ${stale}`).not.toContain(stale);
+      }
+    }
+  });
+
   test("attachment checks the entire receipt digest set and never clobbers assets", () => {
     const steps = release.jobs?.["attach-release"]?.steps ?? [];
     const receipt = steps.find(step => step.name === "Require the verification receipt for this commit");
@@ -397,6 +421,23 @@ describe("release pipeline contract", () => {
     expect(run(JSON.stringify("b".repeat(40))).exitCode).not.toBe(0);
     expect(run("null").exitCode).not.toBe(0);
     expect(run("").exitCode).not.toBe(0);
+    // A version npm is still processing reads as missing for minutes (2.100.1: ~15 min). The gate keeps
+    // reading for the whole bounded window and accepts the right head once it appears.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-npm-lag-"));
+    try {
+      const lag = String.raw`
+        npm() { n=$(cat "$COUNTER" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$COUNTER"; [ "$n" -ge 35 ] || return 1; printf '%s\n' "$REGISTRY_HEAD"; }
+        timeout() { shift 2; "$@"; }
+        sleep() { echo "$1" >> "$SLEEPS"; }
+      `;
+      const late = Bun.spawnSync(["bash", "-e", "-c", lag + gate!.run!], {
+        cwd: repoPath(), env: { PATH: process.env.PATH ?? "/usr/bin:/bin", SOURCE_SHA: source, RELEASE_VERSION: "9.8.7",
+          REGISTRY_HEAD: JSON.stringify(source), COUNTER: join(dir, "n"), SLEEPS: join(dir, "s") }, stdout: "pipe", stderr: "pipe",
+      });
+      expect(late.exitCode, late.stderr.toString()).toBe(0);
+      expect(readFileSync(join(dir, "s"), "utf8").trim().split("\n")).toEqual(Array(34).fill("30"));
+    } finally { removeTreeWithRetry(dir); }
+    expect(release.jobs?.publish?.["timeout-minutes"]).toBeGreaterThanOrEqual(70);
   });
 
   test("OIDC publication uses only trusted workflow code and the verified tarball", () => {
@@ -410,6 +451,9 @@ describe("release pipeline contract", () => {
     expect(steps.some(step => /^\s*(?:bun install|npm (?:install|run|pack))\b/m.test(step.run ?? ""))).toBe(false);
     expect(steps.find(step => step.name === "Verify immutable npm receipt")?.run).toContain("sha256");
     expect(steps.find(step => step.id === "publication")?.run).toContain('npm publish "$NPM_TARBALL" --ignore-scripts');
+    // npm treats "npm-artifact/package.tgz" as the GitHub repo npm-artifact/package.tgz; only an
+    // explicitly local spec (./ or an absolute path) publishes the verified file.
+    expect(String(publish?.env?.NPM_TARBALL)).toMatch(/^(?:\.\/|\/)/);
     expect(publish?.if).toContain("inputs.dry-run != true");
   });
 
@@ -473,6 +517,18 @@ describe("release pipeline contract", () => {
     const publish = release.jobs?.publish?.steps?.find(step => step.name === "Recheck source CI and service evidence")?.run;
     expect(verify).toBeDefined();
     expect(publish).toBe(verify);
+    // validate-dispatch answers the same gate before any runner packages (run 42951296881 packaged
+    // and then failed in verify-npm on missing service evidence), with the identical script.
+    const early = release.jobs?.["validate-dispatch"]?.steps?.find(step => step.name === "Require source CI and service evidence before packaging") as
+      { run?: string; env?: Record<string, string> } | undefined;
+    expect(early?.run).toBe(verify);
+    expect(early?.env).toMatchObject({
+      SOURCE_SHA: "${{ steps.source.outputs.source_sha }}",
+      RELEASE_VERSION: "${{ steps.version.outputs.version }}",
+    });
+    const earlySteps = release.jobs?.["validate-dispatch"]?.steps?.map(step => step.name) ?? [];
+    expect(earlySteps.indexOf("Require source CI and service evidence before packaging"))
+      .toBeGreaterThan(earlySteps.indexOf("Resolve release version"));
     const root = mkdtempSync(join(tmpdir(), "ocx-release-evidence-"));
     try {
       const calls = join(root, "calls"), source = "a".repeat(40), baseline = "b".repeat(40);
@@ -493,13 +549,16 @@ describe("release pipeline contract", () => {
           PATH: process.env.PATH ?? "/usr/bin:/bin", SOURCE_SHA: source, BASE_SHA: baseline, RELEASE_VERSION: "2.1.0",
           BASELINE: "yes", DRAFT: "false", REQUIRED: "true", CI_STATUS: "0", SERVICE_STATUS: "0", CALLS: calls, ...extra,
         }, stdout: "pipe", stderr: "pipe" });
-        return { code: result.exitCode, calls: readFileSync(calls, "utf8"), stderr: result.stderr.toString() };
+        return { code: result.exitCode, calls: readFileSync(calls, "utf8"), stderr: result.stderr.toString(), stdout: result.stdout.toString() };
       };
       const required = execute();
       expect(required.code, required.stderr).toBe(0);
       expect(required.calls).toContain(`check ${source}`);
       expect(required.calls).toContain(`service-range ${source} ${baseline}`);
       expect(required.calls).toContain(`service ${source}`);
+      const missing = execute({ SERVICE_STATUS: "1" });
+      expect(missing.code).not.toBe(0);
+      expect(missing.stdout).toContain(`gh workflow run service-lifecycle.yml --ref dev -f source_sha=${source}`);
       const unchanged = execute({ REQUIRED: "false" });
       expect(unchanged.code, unchanged.stderr).toBe(0);
       expect(unchanged.calls).not.toContain(`service ${source}`);
@@ -678,8 +737,12 @@ describe("release pipeline contract", () => {
     test("Git Bash receives native Windows PATH entries separated by semicolons", () => {
       const nodeDir = "C:\\Program Files\\nodejs";
       const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
+      // Literal expectations: rebuilding them with win32.dirname/win32.join would mirror the
+      // implementation and pass even if those operations produced the wrong entries (#8336).
       expect(releaseShellPath(nodeDir, gitBash, true).split(";")).toEqual([
-        nodeDir, win32.dirname(gitBash), win32.join(win32.dirname(gitBash), "..", "usr", "bin"),
+        "C:\\Program Files\\nodejs",
+        "C:\\Program Files\\Git\\bin",
+        "C:\\Program Files\\Git\\usr\\bin",
       ]);
     });
 
@@ -696,7 +759,12 @@ describe("release pipeline contract", () => {
       } finally { removeTreeWithRetry(cwd); }
     });
 
-    /** Run the actual YAML block with an allowlisted gh mock. */
+    /**
+     * Run the actual YAML block with an allowlisted gh mock. Actions runs a step as
+     * `bash ... {0}` on a script file, so this does too. Passed as a `-c` argument, the
+     * block crossed the Windows command line into Git Bash with the checker's `\\` folded to
+     * one backslash; its name regex then rejected every asset as an invalid receipt.
+     */
     function attach(env: Record<string, string> = {}) {
       const run = release.jobs?.["attach-release"]?.steps
         ?.find(step => step.run?.includes("gh release upload"))?.run;
@@ -707,7 +775,7 @@ describe("release pipeline contract", () => {
         writeFileSync(join(cwd, "dist/release/app.zip"), "archive");
         const digest = createHash("sha256").update("archive").digest("hex");
         writeFileSync(join(cwd, "verification/receipt.json"), JSON.stringify({ assets: { "app.zip": digest } }));
-        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `
+        writeFileSync(join(cwd, "attach-step.sh"), `
           gh() {
             printf 'gh:%s\\n' "$*" >&2
             case "$1:$2" in
@@ -726,7 +794,9 @@ describe("release pipeline contract", () => {
           }
           ${run}
           printf 'attach-completed\\n'
-        `], { cwd, env: releaseTestEnv({ PATH: releaseShellPath(dirname(Bun.which("node")!), bash!, process.platform === "win32"), RUNNER_TEMP: ".", RELEASE_VERSION: "2.65.0", DRAFT_STATE: "true",
+        `);
+        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "-o", "pipefail", "attach-step.sh"], {
+          cwd, env: releaseTestEnv({ PATH: releaseShellPath(dirname(Bun.which("node")!), bash!, process.platform === "win32"), RUNNER_TEMP: ".", RELEASE_VERSION: "2.65.0", DRAFT_STATE: "true",
           RELEASE_INFO: '{"isDraft":true,"assets":[]}', INITIAL_STATUS: "0",
           FINAL_INFO: JSON.stringify({ isDraft: true, assets: [{ name: "app.zip", state: "uploaded", digest: `sha256:${digest}` }] }),
           UPLOAD_STATUS: "0", VIEW_STATUS: "0", EDIT_STATUS: "0", ...env }),

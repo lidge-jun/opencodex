@@ -11,6 +11,7 @@ import {
   type ManagementAuthState,
 } from "../server/management-auth";
 import { resolveInboundBodyLimitBytes } from "../server/request-decompress";
+import { LINK_DIAGNOSTICS_ROUTE, linkDiagnosticsResponse } from "../server/management/link-diagnostics-route";
 import type { OcxClientConnectionConfig, OcxConfig } from "../types";
 import { disconnectClient, syncConnectedClient } from "./connect";
 import { isLinkConnection, readClientConnectionState } from "./state";
@@ -20,7 +21,9 @@ import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, relayHubManagementRequest } from "./h
 import { createLinkKeySource, handleLinkIngress, type LinkIngress, type LinkKeySourceDeps } from "./link-ingress";
 import type { LinkTunnelGate } from "./link-relay";
 import { readClientLinkState, type ClientLinkState } from "./link-state";
-import { projectClientLinkChild, type ClientLinkSidecarRead } from "./link-status";
+import { projectClientLinkChild, projectClientLinkRow, type ClientLinkSidecarRead } from "./link-status";
+import { attachLinkTraffic } from "../link/status-projection";
+import { childLinkTraffic } from "../link/traffic";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 import type { LinkReadiness } from "./link-readiness";
 import { packageVersion } from "../lib/package-version";
@@ -107,8 +110,8 @@ export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolea
   // The bound restart. Only a capability signed for this exact process admits it (see the handler).
   if (req.method === SYSTEM_RESTART_METHOD && path === SYSTEM_RESTART_PATH) return true;
   if ((req.method === "GET" || req.method === "HEAD") && (path === "/api/machine/status" || path === "/api/machine/clients" || path === "/api/machine/shim")) return true;
-  // The one link route a connected Child serves: its own read-only link status.
-  if (linkMode && (req.method === "GET" || req.method === "HEAD") && path === "/api/link/status") return true;
+  // The link routes a connected Child serves: its own read-only link status and diagnostics.
+  if (linkMode && (req.method === "GET" || req.method === "HEAD") && (path === "/api/link/status" || path === LINK_DIAGNOSTICS_ROUTE)) return true;
   if (req.method === "POST" && (path === "/api/machine/sync" || path === "/api/machine/shim" || path === "/api/machine/disconnect")) return true;
   if (relayEnabled && path.startsWith("/api/machine/hub-relay/")) return true;
   // Known machine endpoints are admitted for every method so an unsupported
@@ -251,7 +254,7 @@ export function startMachineListener(
         else hubReachability = "online";
         return response;
       }
-      if (url.pathname.startsWith("/api/machine/") || (linkMode && url.pathname === "/api/link/status")) {
+      if (url.pathname.startsWith("/api/machine/") || (linkMode && (url.pathname === "/api/link/status" || url.pathname === LINK_DIAGNOSTICS_ROUTE))) {
         const authError = requireManagementAuth(req, managementAuth, config);
         if (authError) return authError;
         if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
@@ -268,9 +271,18 @@ export function startMachineListener(
         if (req.method !== "GET" && req.method !== "HEAD") {
           return Response.json({ error: "opencodex machine changes require the local CLI" }, { status: 403 });
         }
+        // This Child's own bounded tunnel evidence, read from its file; never relayed to the Home.
+        if (url.pathname === LINK_DIAGNOSTICS_ROUTE) return linkDiagnosticsResponse(url);
         if (url.pathname === "/api/link/status") {
           // A Child never joins again from here, so the dashboard reads `joinAvailable: false`.
-          const status = projectClientLinkChild(readSidecarSafely(readSidecar), deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
+          const sidecar = readSidecarSafely(readSidecar);
+          const status = projectClientLinkChild(sidecar, deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
+          // Opt-in (#3023): this Child's link as a row, with the bytes its link transport carried.
+          if (url.searchParams.get("traffic") === "1" && connection.link) {
+            status.links = [projectClientLinkRow({ ...connection, link: connection.link }, sidecar, status.child, Date.now(),
+              undefined, linkHomeName(connection, sidecarOrNull))];
+            attachLinkTraffic(status, id => childLinkTraffic.snapshot(id));
+          }
           return Response.json({ ...status, joinAvailable: false }, { headers: { "Cache-Control": "no-store" } });
         }
         return await handleMachineApi(req, url, connection, machineApiDeps) ?? json404(req);

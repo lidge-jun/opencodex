@@ -227,14 +227,19 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["platform-windows"]?.name).toBe(`windows \${{ matrix.shard }}/${windowsShards.length}`);
     expect(workflow).toContain(`shards=${windowsShards.length}`);
 
-    // The aggregate gate is the check a human trusts. Three ways to break it
-    // silently: drop `if: always()` so it skips (and a skipped job reports
-    // success), shrink `needs:` so it stops covering a job, or add a job and
-    // forget to gate it. Deriving the expected list from the workflow's own job
-    // keys closes all three — a hardcoded list rots on the next job added.
+    // The aggregate must always run for ordinary events and cover every job
+    // except the standalone diagnostic, whose condition is independently pinned.
     const gate = ci.jobs?.ci as { if?: unknown; needs?: string[] } | undefined;
-    expect(gate?.if).toBe("always()");
-    const ungated = new Set(["ci"]);
+    expect(gate?.if).toBe("always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim')");
+    expect(ci.jobs?.["windows-native-claim"]?.if).toBe("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' && github.event.inputs.lane == 'windows-native-claim'");
+    const diagnosticSteps = (ci.jobs?.["windows-native-claim"] as { steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }> })?.steps ?? [];
+    const diagnosticStep = diagnosticSteps.find(step => step.name === "Run native-main claim diagnostics");
+    expect(diagnosticStep?.env?.OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC).toBe("1");
+    expect(diagnosticStep?.run).toBe("bun test tests/codex-integration/main-quota-provenance.test.ts --timeout 60000");
+    expect(windowsTest?.env?.OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC).toBeUndefined();
+    expect(diagnosticSteps.filter(step => step.env?.OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC !== undefined)).toEqual([diagnosticStep]);
+    expect((ci.jobs?.["windows-native-claim"] as { env?: Record<string, string> }).env?.OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC).toBeUndefined();
+    const ungated = new Set(["ci", "windows-native-claim"]);
     expect([...(gate?.needs ?? [])].sort())
       .toEqual(Object.keys(ci.jobs ?? {}).filter(name => !ungated.has(name)).sort());
 
@@ -288,8 +293,8 @@ describe("GitHub Actions hardening", () => {
     expect(macosTestStep?.run).not.toContain("for attempt in");
     expect(macosTestStep?.run).not.toContain("while true");
     expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
-    // Pull requests never run macOS shards; they run after merge, on push to
-    // dev/main/preview. ci-scope-reduction.test.ts evaluates this condition
+    // Pull requests never run macOS shards; they run only on a manual full
+    // dispatch from `dev`. ci-scope-reduction.test.ts evaluates this condition
     // against the events that select the job.
     expect((ci.jobs?.["platform-macos"] as { if?: string })?.if).toBe("github.event_name != 'pull_request'");
 
@@ -307,7 +312,7 @@ describe("GitHub Actions hardening", () => {
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'macos-control'");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
@@ -336,10 +341,10 @@ describe("GitHub Actions hardening", () => {
     // cannot fail the unsharded macOS control run. A plain dispatch still runs
     // everything, including Windows, which is what empty-or-all encodes.
     expect(ci.on?.workflow_dispatch?.inputs?.lane).toEqual({
-      description: "all (default), release-gates, or macos-control",
+      description: "all (default), release-gates, macos-control, or windows-native-claim",
       type: "choice",
       default: "all",
-      options: ["all", "release-gates", "macos-control"],
+      options: ["all", "release-gates", "macos-control", "windows-native-claim"],
     });
 
     // Windows runs the same suite, sharded like the Linux legs, and keeps the
@@ -460,10 +465,10 @@ describe("GitHub Actions hardening", () => {
       steps?: { with?: Record<string, string> }[];
     })?.steps?.find(step => step.with?.filters);
 
-    // `base` is not cosmetic. Unset, paths-filter diffs a `dev` push against the
-    // repository default branch (`main`), so everything changed since the last
-    // promotion still reads as changed and the scoped jobs run anyway — the
-    // filter would look correct, stay green, and save nothing.
+    // `base` is not cosmetic. Unset, paths-filter diffs against the repository
+    // default branch (`dev`), so everything changed since the branch point still
+    // reads as changed and the scoped jobs run anyway — the filter would look
+    // correct, stay green, and save nothing.
     expect(filterStep?.with?.base).toBe("${{ github.ref }}");
 
     // paths-filter cannot read a PR's file list without this, and a filter that
@@ -720,7 +725,8 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("cancel-in-progress: false");
-    expect(workflow).toContain("timeout-minutes: 15");
+    // The publish job bounds its two post-publish registry waits (about 20 minutes each, ~55 worst case).
+    expect(workflow).toContain("timeout-minutes: 75");
 
     // The exact-SHA CI gate already includes the three hosted keyring legs. The
     // release workflow must not duplicate the Linux bootstrap and drift from CI.
@@ -731,9 +737,9 @@ describe("GitHub Actions hardening", () => {
     const packageJson = JSON.parse(await readText("package.json")) as { scripts?: Record<string, string> };
     expect(packageJson.scripts?.prepublishOnly).toContain("bun run audit:high");
     expect(workflow).toContain("npm run prepublishOnly");
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"')).toBe(2);
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline"')).toBe(2);
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service "$SOURCE_SHA"')).toBe(2);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"')).toBe(3);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline"')).toBe(3);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service "$SOURCE_SHA"')).toBe(3);
 
     // Dry-run first by default; tokenless trusted publishing only.
     expect(workflow).toMatch(/dry-run:[\s\S]*?default: true/);
@@ -901,6 +907,7 @@ describe("GitHub Actions hardening", () => {
 
   async function readEnforcePrTarget(): Promise<{
     workflow: WorkflowShape;
+    triggers: WorkflowShape["on"];
     jobs: [string, WorkflowJob][];
     steps: WorkflowStep[];
     allSteps: WorkflowStep[];
@@ -908,6 +915,11 @@ describe("GitHub Actions hardening", () => {
   }> {
     const text = await readText(".github/workflows/enforce-pr-target.yml");
     const workflow = Bun.YAML.parse(text) as WorkflowShape;
+    // Since #7654 the gate runs as a local reusable workflow of pr-gates.yml, which
+    // owns its pull_request_target and status triggers; the gate itself is
+    // workflow_call-only. pr-gates-workflow.test.ts pins the caller's shape.
+    expect(Object.keys(workflow.on ?? {})).toEqual(["workflow_call"]);
+    const caller = Bun.YAML.parse(await readText(".github/workflows/pr-gates.yml")) as WorkflowShape;
     const jobs = Object.entries(workflow.jobs ?? {});
     const steps = workflow.jobs?.["enforce-target"]?.steps;
     expect(Array.isArray(steps)).toBe(true);
@@ -918,7 +930,7 @@ describe("GitHub Actions hardening", () => {
     const scriptStep = steps!.find(step => typeof step.with?.script === "string");
     expect(scriptStep).toBeDefined();
     const script = stripComments(String(scriptStep!.with!.script));
-    return { workflow, jobs, steps: steps!, allSteps, script };
+    return { workflow, triggers: caller.on, jobs, steps: steps!, allSteps, script };
   }
 
   const SCRIPT_LOAD = [
@@ -941,7 +953,6 @@ describe("GitHub Actions hardening", () => {
       "issues.listComments",
       "repos.getCollaboratorPermissionLevel",
       "repos.compareCommitsWithBasehead",
-      "repos.compareCommitsWithBasehead",
       "pulls.get",
       "pulls.listFiles",
       "pulls.get",
@@ -952,7 +963,7 @@ describe("GitHub Actions hardening", () => {
     ];
   }
 
-  /** Reads for a PR whose base is outside the allow-list (no ancestry compares). */
+  /** Reads for a PR whose base is outside the allow-list (no base compare). */
   function readsWrongBase(tail: string[] = []): string[] {
     return [
       ...SCRIPT_LOAD,
@@ -976,7 +987,6 @@ describe("GitHub Actions hardening", () => {
       "issues.listComments",
       "issues.listComments",
       "repos.getCollaboratorPermissionLevel",
-      "repos.compareCommitsWithBasehead",
       "repos.compareCommitsWithBasehead",
       // The harness walks every paginate call across the same page count, so
       // listFiles appears once per comment page even when the file list is empty.
@@ -1056,7 +1066,7 @@ describe("GitHub Actions hardening", () => {
    * characterisation test on a privileged workflow actually needs.
    */
   test("PR target enforcement's structure is an exact allowlist, not a deny-list", async () => {
-    const { workflow, jobs, steps } = await readEnforcePrTarget();
+    const { workflow, triggers, jobs, steps } = await readEnforcePrTarget();
 
     // Top level: concurrency lives on the write job after read-only PR resolution.
     expect(Object.keys(workflow).sort()).toEqual([
@@ -1076,7 +1086,7 @@ describe("GitHub Actions hardening", () => {
     // `status` is the only extra trigger. CodeRabbit publishes a legacy
     // commit status; this privileged workflow is loaded from the default branch
     // and re-reads live review evidence before any mutation.
-    expect(Object.keys(workflow.on ?? {}).sort()).toEqual([
+    expect(Object.keys(triggers ?? {}).sort()).toEqual([
       "pull_request_target",
       "status",
     ]);
@@ -1084,14 +1094,14 @@ describe("GitHub Actions hardening", () => {
     // And the trigger is exactly a `types:` list — nothing else.
     //
     // Every other level here is pinned by exact key-set equality; this one was
-    // not, and a review round walked straight through the hole. `branches: [main]`
-    // narrows the gate to PRs against `main`, so one opened against `preview`
-    // sails past unenforced. `paths:` is worse: the gate then fires only when
+    // not, and a review round walked straight through the hole. A `branches:`
+    // filter narrows the gate to PRs against the listed bases, so one opened
+    // against any other base sails past unenforced. `paths:` is worse: the gate then fires only when
     // particular files change, which on a docs-only PR means never. Both are
     // additive, both look like ordinary scoping in a diff, and neither failed a
     // single assertion.
-    expect(Object.keys(workflow.on?.pull_request_target ?? {})).toEqual(["types"]);
-    expect(Object.prototype.hasOwnProperty.call(workflow.on ?? {}, "status")).toBe(true);
+    expect(Object.keys(triggers?.pull_request_target ?? {})).toEqual(["types"]);
+    expect(Object.prototype.hasOwnProperty.call(triggers ?? {}, "status")).toBe(true);
 
     // Exactly the scopes this gate needs. `pull-requests: write` covers title and
     // comment updates. `contents: write` is required for the draft GraphQL
@@ -1135,13 +1145,16 @@ describe("GitHub Actions hardening", () => {
     expect(new Set(wakeLabels).size).toBe(wakeLabels.length);
     expect([...wakeLabels].sort()).toEqual([...HYGIENE_GATE_LABELS, "gui-screenshot-waived"].sort());
 
+    // The shared comment lock sits on the hygiene job (#7654): it exists only when
+    // pr-gates.yml runs hygiene, so a skipped event never enters the group.
     const hygieneWorkflow = Bun.YAML.parse(
       await readText(".github/workflows/pr-hygiene.yml"),
-    ) as { concurrency?: { group?: string; "cancel-in-progress"?: boolean } };
-    expect(hygieneWorkflow.concurrency?.group).toBe(
+    ) as { concurrency?: unknown; jobs?: { hygiene?: { concurrency?: { group?: string; "cancel-in-progress"?: boolean } } } };
+    expect(hygieneWorkflow.concurrency).toBeUndefined();
+    expect(hygieneWorkflow.jobs?.hygiene?.concurrency?.group).toBe(
       "pr-gate-comment-${{ github.event.pull_request.number }}",
     );
-    expect(hygieneWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
+    expect(hygieneWorkflow.jobs?.hygiene?.concurrency?.["cancel-in-progress"]).toBe(false);
 
     expect(jobs.map(([name]) => name)).toEqual(["resolve-pr", "enforce-target"]);
 
@@ -1181,16 +1194,14 @@ describe("GitHub Actions hardening", () => {
       "sparse-checkout",
     ]);
     expect(checkout.with).toEqual({
-      // The trusted ref comes from a fixed set of integration branches, never
-      // from the pull request: a stacked child's base is another open PR's
-      // head, so an unpromoted commit must not select the code that runs with
-      // this workflow's write-capable token. A `status` event has no
-      // pull_request payload and loads scripts from the default-branch trust
-      // boundary that owns the event; a `main`-targeting PR loads from `main`
-      // so the scripts match the workflow definition `pull_request_target`
-      // itself loaded; everything else resolves to `dev`.
-      ref:
-        "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}",
+      // The trusted ref is never the pull request: a stacked child's base is
+      // another open PR's head, so an unpromoted commit must not select the
+      // code that runs with this workflow's write-capable token. `dev` is the
+      // only integration line now, so a `pull_request_target` run always reads
+      // scripts from `dev`. A `status` event has no pull_request payload and
+      // loads scripts from the default-branch trust boundary that owns the
+      // event, spelled as the repository default rather than a literal.
+      ref: "${{ github.event_name == 'status' && github.event.repository.default_branch || 'dev' }}",
       "persist-credentials": false,
       // MAINTAINERS.md rides along so the completion ping reads the canonical
       // maintainer list from the same trusted base revision as the scripts.
@@ -1231,7 +1242,8 @@ describe("GitHub Actions hardening", () => {
   });
 
   test("PR target enforcement reacts to the events that can change the verdict", async () => {
-    const { workflow, script } = await readEnforcePrTarget();
+    const { triggers: on, script } = await readEnforcePrTarget();
+    const workflow = { on };
 
     // `edited` is what catches a retarget; `ready_for_review` is what re-applies
     // the draft when someone undoes it by hand. Dropping either silently makes
@@ -1258,7 +1270,7 @@ describe("GitHub Actions hardening", () => {
     expect(workflow.on?.pull_request_review).toBeUndefined();
     expect(workflow.on?.pull_request_review_comment).toBeUndefined();
 
-    // The verdict is a live PR read plus ancestry/description checks.
+    // The verdict is a live PR read plus base-compare/description checks.
     expect(script).toContain("github.rest.pulls.get");
     expect(script).toContain("collectPrQualityFailures");
     expect(script).toContain("collectDeterministicHygieneFailures");
@@ -2774,44 +2786,28 @@ describe("GitHub Actions hardening", () => {
       ).toBe(true);
     });
 
-    const HEAD_SHA = "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b";
-    const ANCESTRY_FAIL_COMPARES = {
-      [`main...${HEAD_SHA}`]: { ahead_by: 1, behind_by: 0 },
-      [`dev...${HEAD_SHA}`]: { ahead_by: 0, behind_by: 44 },
-    } as const;
-
-    test("wrong ancestry on dev fails without title prefix (#644)", async () => {
+    test("a contributor head far behind dev is reported through readiness, not wrong ancestry", async () => {
+      // The deleted `main` tip used to back a second `main...head` comparison
+      // and a `wrong_ancestry` failure. `dev` is the only integration branch
+      // now, so a stale head is a readiness-claim concern, not a wrong-target
+      // one: exactly one compare runs and no ancestry failure is raised.
       const result = await run({
         pr: { base: { ref: "dev" } },
         authorPermission: "read",
-        compareByBasehead: ANCESTRY_FAIL_COMPARES,
+        compareByBasehead: {
+          "dev...3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b": { ahead_by: 0, behind_by: 44 },
+        },
       });
 
-      // No wrong base, so no title write — the checklist injection is the only
-      // `pulls.update`, and the contributor flow writes the ownership
-      // checkpoint comment before the draft conversion.
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "pulls.update",
         "issues.createComment",
         "graphql",
       ]));
       const commentBody = lastEnforcerCommentBody(result);
-      expect(commentBody).toContain("wrong branch ancestry");
+      expect(commentBody).not.toContain("wrong branch ancestry");
       expect(commentBody).not.toContain("wrong target branch");
-      expect(commentBody).toContain("## Review readiness checklist");
-      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
-      expect(result.warnings.some((w) => w.includes("wrong ancestry"))).toBe(true);
-    });
-
-    test("maintainers skip ancestry enforcement with the same compares", async () => {
-      const result = await run({
-        pr: { base: { ref: "dev" } },
-        authorPermission: "write",
-        compareByBasehead: ANCESTRY_FAIL_COMPARES,
-      });
-
-      expect(methodsOf(result)).toEqual(readsAllowedBase());
-      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+      expect(result.warnings.some((w) => w.includes("wrong ancestry"))).toBe(false);
     });
 
     test("empty PR description fails and drafts", async () => {
@@ -5172,15 +5168,17 @@ describe("GitHub Actions hardening", () => {
 
   test("React Doctor workflow is SHA-pinned, engine-pinned, gating, and read-only", async () => {
     const workflow = await readText(".github/workflows/react-doctor.yml");
-    // Pull requests scan only when gui/ (the scanned directory) or this workflow changes;
-    // the main push trend scan stays unfiltered.
+    // Pull requests scan only when gui/ (the scanned directory) or this workflow changes.
     const triggers = (Bun.YAML.parse(workflow) as {
       on?: { pull_request?: { types?: string[]; paths?: string[] }; push?: { branches?: string[]; paths?: string[] } };
     }).on;
     expect(triggers?.pull_request?.types).toEqual(["opened", "synchronize", "reopened", "ready_for_review"]);
     expect(triggers?.pull_request?.paths).toEqual(["gui/**", ".github/workflows/react-doctor.yml"]);
     expect(workflow).toContain("directory: gui");
-    expect(triggers?.push).toEqual({ branches: ["main"] });
+    // The health-score push trend ran only on the deleted `main` branch. A
+    // `dev` push trigger is forbidden by the CI policy, so only PR coverage
+    // remains.
+    expect(triggers?.push).toBeUndefined();
 
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
     expect(workflow).toContain("millionco/react-doctor@01820bb4fd4d0a4aebcd8df2b2a143a098649cb2");
@@ -5395,8 +5393,9 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
   const scenarios = [
     { mode: "match", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
     { mode: "delayed", dry: false, status: 0, receipt: true, verification: "verified", reads: 3 },
-    { mode: "unavailable", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
-    { mode: "timeout", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
+    // npm took ~15 minutes to serve 2.100.1, so the smoke waits 40 x 30 s before reporting pending.
+    { mode: "unavailable", dry: false, status: 0, receipt: true, verification: "pending", reads: 40 },
+    { mode: "timeout", dry: false, status: 0, receipt: true, verification: "pending", reads: 40 },
     { mode: "wrong", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
     { mode: "empty", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
     { mode: "dist-failure", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
@@ -5466,7 +5465,7 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
       if (scenario.verification === "pending") {
         expect(stdout).toContain("::warning::npm publish succeeded");
         expect(readFileSync(summary, "utf8")).toContain("registry verification pending");
-        expect(log.filter(line => line === "sleep 5")).toHaveLength(5);
+        expect(log.filter(line => line === "sleep 30")).toHaveLength(39);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }

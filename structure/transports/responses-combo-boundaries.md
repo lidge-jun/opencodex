@@ -10,11 +10,13 @@ options. Service diagnostics follow the [producer bounds](../ops/service-logging
 
 ## Context-window refusals
 
-`isDefiniteContextOverflow` in `src/combos/failover.ts` reads bounded innermost provider messages.
+`isDefiniteContextOverflow` in `src/lib/context-overflow-verdict.ts` (re-exported by
+`src/combos/failover.ts`) reads bounded innermost provider messages.
 OpenAI context-length wording keeps its substring match; Anthropic `prompt is too long: N tokens > M maximum`,
-Bedrock `input is too long for requested model` and `Please reduce the length of the messages or completion`
-count only at the start of the leaf message, so a validation error or SDK wrapper that echoes them is not
-evidence. Parameter validation (`invalid_value`/`invalid_type`, a `param` outside the conversation and token
+Bedrock `input is too long for requested model`, provider messages confirming the conversation/input has reached or passed its model context limit, a prompt that is too long for the model's context window, a window/length/limit that is full, exhausted, at its limit or has been exceeded, and `Please reduce the length of the messages or completion`
+count only in the innermost provider message (the anchored verdicts need the provider message to start with them, while the explicit too-long/context-window wording may appear inside it), so a validation error or SDK wrapper that echoes them is not
+evidence. A negator that governs the overflow wording denies it, and capacity prose about the service keeps its
+cooldown instead of authorizing a hop. Structured error messages and bounded string-valued JSON `error` fields can carry the leaf message. Parameter validation (`invalid_value`/`invalid_type`, a `param` outside the conversation and token
 budget fields, `Invalid '<x>'`, Pydantic `input_value=`) never counts. This shared detector grants a
 target-local hop before the generic HTTP 400 stop, without recording a cooldown. Code-only evidence
 beside unrelated prose, malformed envelopes and arbitrary shorten-parameter requests stay terminal.
@@ -93,6 +95,8 @@ array, including empty, so removing a preference cannot retain an earlier build'
 replaced image function only when that send still declares the hosted capability. A filtered tool or
 lowered `none` selector never erases caller intent: missing calls retain the usual pre-commit fallback
 or post-commit typed failure. Caller hosted non-function selectors retain their terminal owner.
+The outbound request parser shared with passthrough lives in `src/server/responses/outbound-request-body.ts`,
+so required-tool checks do not import the stream recovery owner.
 Completed item events and terminal snapshots can satisfy it; a call start alone cannot.
 Missing calls turn `response.completed` into `response.failed` with
 `required_tool_contract_unsatisfied`, retaining response identity, output and usage.
@@ -129,25 +133,101 @@ reader and buffers only until one of these boundaries:
 
 SSE selection uses the [exact internal media-type match](inventory.md#internal-response-media-types).
 Explicit non-SSE types pass through unread, including parameters or longer subtypes containing the
-event-stream token. A caller can still opt into inspecting a response without a content type.
+event-stream token. A caller can still opt into inspecting a response without a content type. Non-streaming
+JSON from a native (non-runTurn) child is therefore never inspected here: an empty `max_output_tokens`
+limit in such a body is returned to the client unchanged, and only SSE and runTurn children fail over on it.
 
 Native post-header reset recovery shares that boundary, because it is asking the same question
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
 `headers-only` before any parsed event, `protocol-prelude` after `response.created`,
 `semantic-output` once anything else arrives, including a payload it could not parse — and the
-resend gate decides. A `response.created` whose snapshot already carries output items is not a
-prelude.
+resend gate decides. Control frames (`response.in_progress`, `response.queued`,
+`response.heartbeat`, the Codex metadata frames below, a held mandatory-tool reasoning prelude) do
+not advance the stage. Once output commits the stream or a terminal ends inspection, a later read
+error belongs to the relay and never reaches the resend gate. A lifecycle event with output, an error, incomplete details, a contradictory
+status, a replay-unsafe mark, unknown event or snapshot fields, or unsafe nested metadata commits the original stream.
+An SSE event name that conflicts with its JSON type, an opaque frame,
+or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
+read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
+owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
+Native passthrough starts this preflight at dispatch, before it returns a head
+(`selectProtocolSafeResetResponse` in `src/server/responses/combo-stream-preflight.ts`), and only
+for a request the resend gate could replace: a request that is not self-contained is relayed without
+preflight, so nothing holds its head or prelude. Dispatch
+waits for whichever comes first: the selection, an abort, or a deadline of one 15-second heartbeat
+interval capped by the stall timeout. Returning the response is the last point at which dispatch can
+choose a head, so a direct stream also commits the original head once the original's own inspection
+has run for `DIRECT_RESET_INSPECTION_WINDOW_MS` (200 ms, `src/server/responses/passthrough-completion.ts`):
+a quiet source may be a healthy slow turn. A failure observed inside that window ends the window, and
+only the replacement's head is then awaited, still bounded by the deadline, as after a pre-header reset.
+Canonical buffered JSON and combo children keep the deadline alone, because their consumer publishes
+no client head before its own inspection ends. A selection that finishes first publishes the selected
+response, including a replacement with its own status and headers. If the deadline or the window wins, the
+original head is returned and the same preflight continues behind it. From then on acceptance
+depends on how the stream ended, because a deferred body can never change the head the client
+already holds. A read error keeps the reset lane's long-standing behaviour: the replacement body is
+published behind the original head, with no metadata comparison at all, since a real origin varies
+`date`, request ids and quota headers on every attempt and requiring equality made that
+recovery unreachable. A clean pre-output EOF is a different attempt answering the same turn, so it
+must agree with the committed head under `sameDeferredResponseIdentity`: status, status text,
+content-type media type, `openai-model` and `x-codex-turn-state`
+(`src/server/responses/combo-stream-preflight.ts`). Those two headers are the identity a
+mismatched body would corrupt -- the model the origin actually served, and this proxy's own turn
+handle, bound at issuance and redeemed against the upstream turn token at the physical send --
+while volatile and hop-by-hop headers (`date`, `x-request-id`, `request-id`,
+`cf-ray`, `server-timing`, `x-ratelimit-*`, `openai-processing-ms`,
+`content-length`, `transfer-encoding`, `connection`, `keep-alive`) are
+ignored because the client already holds the original's values. A mismatch is cancelled and the
+original bytes and error are preserved; the check runs when the recovery accepts the replacement
+and again when it lands.
+`src/server/responses/passthrough-completion.ts` binds the published head to the main quota proof
+of the attempt that produced it ([OpenAI tiers](../providers/openai-tiers.md)). Direct streaming
+clients get an SSE comment on their first read after a deadline commit and then once per heartbeat
+interval while the hold lasts. A window commit owes the same first comment at once: Bun's server
+writes a response head only with its first body bytes, so a returned head with a silent body never
+reaches the client. Combo streaming
+children omit those timer-generated comments while their parent holds the headers, so those comments
+cannot consume the retained-chunk cap. In all selection modes, the stall budget runs on upstream
+reads: `src/server/responses/passthrough-completion.ts` guards the original body and any accepted
+replacement before preflight, so each physical attempt is bounded from its own head and only its
+non-empty reads restart the clock. A prelude read during selection and replayed later, or a generated
+comment, cannot extend it, and the reset gate never resends a guard timeout. For canonical buffered
+JSON, the collector reports the guard's failure as a stall timeout. The hold emits a comment only when
+it reads non-empty upstream bytes or a replacement head lands behind a committed head, so the collector's own clock, which starts after
+selection and sees only delivered bytes, never ends a turn before the guard would. The byte and chunk
+caps and the collector's whole-turn ceiling remain in force. That ceiling runs from the moment selection began holding the head (`bufferedResetSelectionStartedAt` in `src/server/responses/passthrough-completion.ts`), so the selection wait counts against it while sends before selection do not (#8343).
+Downstream cancellation or the request's abort signal ends the selection or hold at once, aborts an
+in-flight replacement, and never awaits upstream cleanup.
 
-- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above) begins client-visible output or a tool/action item, after which the
+- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above and the
+  Codex metadata frames) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
-- a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`, or
-  `upstream_stall_timeout` follows the same failure path; explicit semantic or unknown reasons stay terminal;
+- a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`,
+  `upstream_stall_timeout`, or an empty-output `max_output_tokens` limit follows the same failure path.
+  The `max_output_tokens` arm needs the evidence `classifyZeroOutputTokenLimit` requires in
+  `src/adapters/run-turn-queue.ts`: `end_turn` must not be `false` and
+  `incomplete_details.retryable` must not be `false`. A translated Anthropic `pause_turn` also
+  reaches the wire as `incomplete/max_output_tokens`, so `src/bridge/sse.ts` records it on the
+  request context (`src/lib/client-error-body.ts`) and this preflight keeps it on its target while
+  the client keeps the same reason and usage. Other explicit semantic or unknown reasons stay
+  terminal;
 - a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
+  a bare error with no status field of its own but an integral numeric `code` in 400..599 takes
+  that code as its HTTP status (`bareErrorStatus`), so it gets the same decision and cooldown scope
+  as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
+
+The Codex WebSocket metadata channel writes `codex.rate_limits` and `codex.response.metadata` into
+the same body, usually before `response.created`. These frames are rebuilt from quota and header
+metadata, so the preflight treats them like the lifecycle preamble: they neither commit the child
+nor end inspection. Any other unknown event type still commits. A zero-output
+`server_is_overloaded` refusal that follows a rate-limit frame while the preflight is still
+inspecting (below its byte and chunk caps) therefore advances to the next target;
+`tests/responses/combo-codex-ws-overload-failover.test.ts` covers that hop (#8107).
 
 The buffered bytes are replayed unchanged before the reader continues. Native passthrough and eager
 relay identity markers are restored on the wrapped response so Windows/Bun stream paths and deferred

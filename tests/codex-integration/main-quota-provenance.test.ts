@@ -5,7 +5,6 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { isCodexAccountHeldForCredits } from "../../src/codex/account-credit-use";
 import { hasSpendableCodexCredits } from "../../src/codex/quota-types";
@@ -40,7 +39,7 @@ import {
   type WhamUsageResponse,
 } from "../../src/codex/quota";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
-import { observeNativeMainClaim } from "../helpers/native-main-claim-diagnostics";
+import { formatClaimDiagnostics, observeNativeMainClaim, skipInvalidQuotaTag } from "../helpers/native-main-claim-diagnostics";
 import * as nativeMainLockFile from "../../src/codex/native-main-lock-file";
 import { withNativeMainExclusiveClaim, withNativeMainSharedClaim } from "../../src/codex/native-main-claim";
 import type { NativeProfileContext } from "../../src/codex/native-profile-store";
@@ -185,7 +184,9 @@ describe("main quota credential provenance", () => {
 describe("main policy quota writes", () => {
   test("legacy data remains public but cannot be blessed by a tagged credits-only write", () => {
     const writer = writerFor();
-    setAccountQuotaFromParsed(MAIN, { weeklyPercent: 99, shortPercent: 100, resetCredits: 8 });
+    // Unchanged ticket count: a drop would be a redeemed reset ticket, which retires the display
+    // weekly tuple on purpose (codex-quota-weekly-rollover). This case is about policy provenance.
+    setAccountQuotaFromParsed(MAIN, { weeklyPercent: 99, shortPercent: 100, resetCredits: 2 });
     expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
     expect(getMainPolicyQuota()).toBeNull();
     setAccountQuotaFromParsed(MAIN, { resetCredits: 2 }, undefined, writer);
@@ -370,7 +371,7 @@ describe("main policy quota durability and lifecycle", () => {
     { name: "startup file replacement", account: "fixture-main-b", tag: "known", selected: true, source: "file" },
     { name: "startup same-account file", account: "fixture-main-a", tag: "known", selected: false, source: "file", refusal: "CodexMainAccountHardLockError" },
   ]) {
-    test.skipIf(hostedWindowsQuarantine && scenario.name === "invalid quota tag")(`cold keyring Pool preserves quota unless replacement is proven: ${scenario.name}`, async () => {
+    test.skipIf(skipInvalidQuotaTag(process.platform, process.env.GITHUB_ACTIONS, process.env.OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC) && scenario.name === "invalid quota tag")(`cold keyring Pool preserves quota unless replacement is proven: ${scenario.name}`, async () => {
       const writer = writerFor("fixture-main-a");
       setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: Date.now() / 1000 + 3600 }, undefined, writer);
       setAccountQuotaFromParsed("fixture-stored", { weeklyPercent: 33 });
@@ -378,6 +379,8 @@ describe("main policy quota durability and lifecycle", () => {
       if (scenario.tag === "missing") delete snapshot.mainPolicyQuota;
       if (scenario.tag === "invalid") snapshot.mainPolicyQuota.identityKey = "invalid-fixture-identity";
       writeSnapshot(snapshot);
+      const diagnosticsPath = join(testDir, "claim-diagnostics.jsonl");
+      writeFileSync(diagnosticsPath, "");
       const script = `
         ${KEYRING_QUOTA_RESTART_IMPORTS}
         globalThis.fetch = async () => { throw new Error("unexpected fixture network request"); };
@@ -399,7 +402,7 @@ describe("main policy quota durability and lifecycle", () => {
           providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } } };
         let selected = false;
         let failure, failureDetail;
-        const claimObserver = observeNativeMainClaim(${JSON.stringify(scenario.injection)});
+        const claimObserver = observeNativeMainClaim(${JSON.stringify(scenario.injection)} ?? (${JSON.stringify(scenario.name === "verified replacement")} && process.env.OCX_TEST_CLAIM_REGRESSION === "timeout" ? "stall" : ${JSON.stringify(scenario.name === "verified replacement")} && ["selection", "exit"].includes(process.env.OCX_TEST_CLAIM_REGRESSION) ? "open" : undefined), undefined, ${JSON.stringify(diagnosticsPath)});
         try {
           const result = await resolveCodexAuthContext(new Headers(), config, "pool", {
             nativeMainRefreshDependencies: { codexAuthStatus: async () => { reads++; return { authMethod: "chatgpt", authToken: token, requiresOpenaiAuth: true }; } },
@@ -415,19 +418,22 @@ describe("main policy quota durability and lifecycle", () => {
         }
         const claimDiagnostics = claimObserver.snapshot();
         claimObserver.restore();
+        if (process.env.OCX_TEST_CLAIM_REGRESSION === "exit" && ${JSON.stringify(scenario.name === "verified replacement")}) throw new Error("private-marker-child-stderr");
         console.log(JSON.stringify({ fixture: "cold-keyring-quota", before, selected, failure, failureDetail, reads, initialized,
           claimDiagnostics,
           legacy: getAccountQuota("__main__"), policy: getMainPolicyQuota(), stored: getAccountQuota("fixture-stored"),
           paused: config.pausedCodexAccountIds }));
       `;
       const child = Bun.spawnSync({ cmd: [process.execPath, "--eval", script], cwd: repoRoot(), env: process.env,
-        timeout: process.platform === "win32" ? SPAWN_BUDGET_MS - INTERNAL_DEADLINE_MS : 10_000 });
-      expect(child.exitCode).toBe(0);
+        timeout: process.env.OCX_TEST_CLAIM_REGRESSION === "timeout" ? 15_000 : process.platform === "win32" ? SPAWN_BUDGET_MS - INTERNAL_DEADLINE_MS : 10_000 });
+      const diagnostics = formatClaimDiagnostics(readFileSync(diagnosticsPath, "utf8"));
+      if (process.env.OCX_TEST_CLAIM_REGRESSION === "timeout") expect(child.exitedDueToTimeout).toBe(true);
+      expect(child.exitCode, `claim diagnostics: ${diagnostics}`).toBe(0);
       const line = child.stdout.toString().split("\n").find(row => row.startsWith('{"fixture":"cold-keyring-quota"'));
       expect(line).toBeDefined();
       const result = JSON.parse(line!);
       expect(result.before.weeklyPercent).toBe(100);
-      expect(result.selected).toBe(scenario.selected);
+      expect(result.selected, `claim diagnostics: ${diagnostics}`).toBe(scenario.selected);
       expect(result.stored.weeklyPercent).toBe(33);
       expect(result.paused).toEqual(scenario.paused ? [MAIN] : []);
       if (scenario.source === "file") expect(result.initialized).toBe(true);
@@ -459,6 +465,47 @@ describe("main policy quota durability and lifecycle", () => {
       }
     }, SPAWN_BUDGET_MS);
   }
+
+  test("invalid quota quarantine is bypassed only by the diagnostic opt-in", () => {
+    expect(skipInvalidQuotaTag("win32", "true", undefined)).toBe(true);
+    expect(skipInvalidQuotaTag("win32", "true", "1")).toBe(false);
+    expect(skipInvalidQuotaTag("win32", "true", "other")).toBe(true);
+    expect(skipInvalidQuotaTag("linux", "true", undefined)).toBe(false);
+    expect(skipInvalidQuotaTag("win32", undefined, undefined)).toBe(false);
+  });
+
+  test("child diagnostic rendering rejects unrecognized fields and missing records", () => {
+    const line = JSON.stringify({ fixture: "claim-diagnostics", diagnostics: { phase: "open", private: "private-marker",
+      failure: { phase: "open", code: "EICACLS", step: "private-marker", stage: "private-marker", timedOut: false,
+        message: "private-marker" } } });
+    expect(formatClaimDiagnostics(line)).toBe('{"phase":"open","failure":{"phase":"open","code":"EICACLS","timedOut":false}}');
+    expect(formatClaimDiagnostics("private-marker stderr")).toBe("claim diagnostics unavailable");
+    expect(formatClaimDiagnostics('{"fixture":"claim-diagnostics",broken')).toBe("claim diagnostics unavailable");
+    expect(formatClaimDiagnostics(`${line}\n${JSON.stringify({ fixture: "claim-diagnostics", diagnostics: { phase: "hardening" } })}\n{"fixture":"claim-diagnostics",broken`)).toBe('{"phase":"hardening"}');
+  });
+
+  for (const mode of ["selection", "exit"] as const) {
+    test(`positive selection ${mode} failure reports sanitized claim diagnostics`, () => {
+      const child = Bun.spawnSync({ cmd: [process.execPath, "test", "tests/codex-integration/main-quota-provenance.test.ts", "-t", "cold keyring Pool preserves quota unless replacement is proven: verified replacement", "--timeout", "60000"],
+        cwd: repoRoot(), env: { ...process.env, OCX_TEST_CLAIM_REGRESSION: mode }, timeout: SPAWN_BUDGET_MS });
+      const output = child.stdout.toString() + child.stderr.toString();
+      expect(child.exitCode).not.toBe(0);
+      expect(output).toContain('"phase":"open"');
+      expect(output).toContain('"code":"EICACLS"');
+      expect(output).not.toContain("private-marker");
+    }, SPAWN_BUDGET_MS + 10_000);
+  }
+
+  test("forced claim setup timeout reports the latest sanitized phase", () => {
+    const child = Bun.spawnSync({ cmd: [process.execPath, "test", "tests/codex-integration/main-quota-provenance.test.ts", "-t", "cold keyring Pool preserves quota unless replacement is proven: verified replacement", "--timeout", "60000"],
+      cwd: repoRoot(), env: { ...process.env, OCX_TEST_CLAIM_REGRESSION: "timeout" }, timeout: SPAWN_BUDGET_MS });
+    const output = child.stdout.toString() + child.stderr.toString();
+    expect(child.exitCode).not.toBe(0);
+    expect(output).toContain('claim diagnostics: {"phase":"hardening"}');
+    expect(output).not.toContain("private-marker");
+    expect(output).not.toContain("/private-claim-path");
+    expect(output).not.toContain("fixture-secret-token");
+  }, SPAWN_BUDGET_MS + 10_000);
 
   test("claim diagnostic wrappers rethrow the original error", async () => {
     const observer = observeNativeMainClaim("hardening");

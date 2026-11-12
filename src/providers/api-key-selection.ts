@@ -74,8 +74,9 @@ function currentKeyProvider(config: OcxConfig, name: string, selection?: Provide
       row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
     } else return null;
   }
-  if (row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
-    || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
+  const hasPausedActiveReference = row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
+    && !row.apiKeyPool?.some(entry => !entry.disabled && entry.key === row.apiKey);
+  if (hasPausedActiveReference || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
   const current = routedProviderConfig(name, { ...row, _apiKeyAttempt: row === configured ? undefined : selection });
   if (current.authMode === "oauth" || current.authMode === "forward") return null;
   if (current.authMode === "key" && !current.keyOptional && !current.apiKey?.trim()

@@ -21,12 +21,56 @@ Release builds of `OpenCodex.app` are signed with a Developer ID and notarized b
 first launch macOS normally asks only for the standard confirmation for a downloaded app. If macOS
 still blocks it, use **System Settings → Privacy & Security → Open Anyway**.
 
+#### Homebrew (desktop app)
+
+Alternatively, install the desktop app using Homebrew Cask:
+
+```bash
+brew install --cask opencodex
+```
+
+- **In-app updates (`auto_updates`)**: The desktop app has a built-in updater, and the Cask declares `auto_updates true`. A named `brew upgrade --cask opencodex` or a greedy upgrade can still replace an app updated to a newer version in-app. Check the installed app and Cask versions before upgrading with Homebrew.
+- **CLI and background service**: The Cask installs only `OpenCodex.app`, which bundles its own CLI and proxy runtime. You can install a separate `ocx` via npm or release archives for a standalone CLI or headless service; both share `~/.opencodex`. To give that CLI the service, quit OpenCodex, select the separate CLI explicitly (including bypassing [Desktop’s package-launcher handoff](/getting-started/installation/) if enabled), and run `ocx service install`. See [terminal command selection](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) and [runtime ownership](/reference/cli/lifecycle/#runtime-ownership).
+- **Service after a Cask upgrade**: The Cask's uninstall step can remove the `com.opencodex.proxy` launchd job and plist, even when they belong to the separate CLI, stopping its background service. After upgrading, quit OpenCodex and, in a macOS GUI login session, use that explicitly selected separate CLI to run `ocx service status`. If the service is absent, run `ocx service install`; if it is installed but not loaded, run `ocx service repair`. Check `ocx service status` again. `ocx service install` takes the port from `OCX_BAKE_PORT` or `config.port`, not from the removed job, so if either changed since the service was registered, update clients that still point at the old port. The same uninstall step removes Desktop's own Start at Login item (the `OpenCodex` launchd job); turn **Start at Login** back on in OpenCodex if you use it.
+- **Data removal with `--zap`**: `brew uninstall --zap --cask opencodex` removes `~/.opencodex` and `~/.opencodex-desktop`. This deletes shared CLI and Desktop configuration and state in those directories. Back up any data you want to keep before using `--zap`. Cask definitions before 2.97.0 did not list these two directories, and Homebrew may uninstall with the definition recorded at install time, so check whether they remain after `--zap` and remove them yourself if you want them gone.
+
 ### Windows
 
 Download `OpenCodex-<version>-windows-x64.msi` and run the installer. Code signing through
 SignPath Foundation is rolling out ([Windows Code Signing](/reference/code-signing/)). Until a
 release carries the signature, Windows SmartScreen may warn about an unsigned installer; choose
 **More info → Run anyway** after confirming that you downloaded it from the release page.
+
+One installer page describes the anonymous daily usage summary OpenCodex sends, links the
+[privacy statement](/reference/code-signing/#privacy), and has a **Send anonymous usage
+statistics** checkbox, checked by default. Clear it and the app saves the opt-out to your
+opencodex config the first time it starts, before any proxy runs. The choice applies to every
+account on the computer, once for each account, so it also works for a silent install run by an
+administrator or a deployment tool (Intune, SCCM). For a silent install, pass
+`OCX_TELEMETRY_CHOICE=optout`:
+
+```powershell
+msiexec /i OpenCodex-<version>-windows-x64.msi /qn OCX_TELEMETRY_CHOICE=optout
+```
+
+The installer needs administrator rights and records the choice for the whole computer.
+Only `send` keeps telemetry on; `optout`, in any letter case, and any other value (`off`, `0`) turn it off.
+Each install that passes `OCX_TELEMETRY_CHOICE` records a new decision, so a deployment that reuses
+the same command for every version applies the opt-out again after each upgrade, over any dashboard
+choice made since.
+
+Leaving the box checked does not start sending by itself: the dashboard still shows its one-time
+notice first, and a checked box never turns telemetry back on for an account that turned it off.
+In-app updates, reduced-UI installs (`/qr`) and maintenance runs of the installed version skip this
+page and keep the recorded choice. Running a newer installer by hand shows the page again, unchecked
+if you opted out before. Continuing without changing the box keeps that earlier decision as it was,
+so it is not applied again over a choice you made in the dashboard since; changing the box records a
+new decision.
+
+If you installed the background service with `ocx service install`, it can start a proxy at logon
+without the app. An opt-out recorded by a later installer reaches that service's config the next
+time the app starts; until then the service may still send its daily summary. To stop it at once,
+run `ocx telemetry disable`.
 
 ### Linux
 
@@ -105,6 +149,13 @@ when they verify that the app runs its bundled proxy, even without recorded owne
 CLI service repairs for that runtime. On macOS and Linux, turn on **Start at Login**
 in the OpenCodex menu instead of installing a background service. Startup safety credits the app only when its login registration is verified;
 if it cannot be verified, follow the Desktop guidance in status.
+In the dashboard's Getting started checklist, the last step under the app is
+**Turn on Start at Login** and opens the Desktop card on the Startup page. It is marked
+done only when Startup safety verifies the registration and the app runs the proxy. It
+shows as to do when Start at Login is verified off, or on macOS when the app is confirmed
+not to be running the proxy. Otherwise the step stays unmarked, which is the usual case on
+Windows (the registration is not verified) and on Linux without a verified autostart
+entry; check the item in the OpenCodex menu yourself.
 The Startup page shows a quiet **Start at Login not verified** note when the app's
 registration cannot be checked. A verified disabled registration is shown as action required.
 On macOS the menu's **Start at Login** item is checked only when Startup safety would

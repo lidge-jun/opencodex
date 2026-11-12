@@ -22,6 +22,7 @@ import {
   resetUpstreamHostHealth,
 } from "../../codex/upstream-host-health";
 import { safeOriginLabel, fetchWithHeaderTimeout, providerFetch } from "./fetch-helpers";
+import type { AdapterRequest } from "../../adapters/base";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
@@ -75,7 +76,7 @@ import {
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import { createBoundedSameTargetRecovery, hasWorkflowSendObserver, isRequestExecutionBudget } from "../../lib/request-execution-budget";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
-import { codexRouteCredentialOwnership, type CodexCredentialOwnershipOptions } from "./core-auth";
+import { codexRouteCredentialOwnership, restoreResponsesClientMetadata, type CodexCredentialOwnershipOptions } from "./core-auth";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   conversationStateBindingFromAuth,
@@ -221,14 +222,25 @@ export class PoolPreOutputRefusals {
 }
 
 
+// A recovery that can publish either of two physical attempts binds the proof to the published head.
+const publishedMainQuotaDispatches = new WeakMap<Response, MainQuotaDispatch | null>();
+
+/** Bind the quota proof of the attempt whose head `published` carries; none means no proof. */
+export function bindPublishedMainQuotaDispatch(published: Response, dispatch: MainQuotaDispatch | undefined): void {
+  publishedMainQuotaDispatches.set(published, dispatch ?? null);
+}
+
 /** Live proof that this plain-main response used the observed main credential. */
 export function liveMainQuotaDispatch(
-  authCtx: CodexAuthContext, provider: OcxProviderConfig,
+  authCtx: CodexAuthContext, provider: OcxProviderConfig, published?: Response,
 ): MainQuotaDispatch | undefined {
-  if (authCtx.kind !== "main" || !authCtx.mainQuotaDispatch) return undefined;
+  if (authCtx.kind !== "main") return undefined;
+  const dispatch = published && publishedMainQuotaDispatches.has(published)
+    ? publishedMainQuotaDispatches.get(published) : authCtx.mainQuotaDispatch;
+  if (!dispatch) return undefined;
   if (!isCanonicalOpenAiForwardProvider(provider)
     || provider.authMode !== "forward" || provider.adapter !== "openai-responses") return undefined;
-  return isMainQuotaDispatchLive(authCtx.mainQuotaDispatch) ? authCtx.mainQuotaDispatch : undefined;
+  return isMainQuotaDispatchLive(dispatch) ? dispatch : undefined;
 }
 
 export function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxProviderConfig, modelId?: string): CodexWsQuotaObserver | undefined {
@@ -506,6 +518,8 @@ export interface CodexPoolAccountRetryArgs {
     sendBudget?: TransientSendBudget;
     /** Root workflow this turn belongs to, so the move is charged there as well. */
     workflowRootId?: string;
+    /** Compact recovery keeps client metadata even on adapters that do not forward by default. */
+    compactionRecoveryKind?: "compaction-v1" | "compaction-v2";
   };
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
@@ -527,6 +541,7 @@ export interface CodexPoolAccountRetryArgs {
   httpOnly?: boolean;
   /** Pre-output refusal hold for the alternate's WebSocket send (#6969); the caller restores. */
   preOutputRefusalHold?: CodexWsPreOutputRefusalHold;
+  onPhysicalSend?: (request: AdapterRequest, body: BodyInit | null | undefined) => void;
   onResponse?: (
     response: Response,
     authCtx: CodexAuthContext,
@@ -893,6 +908,11 @@ export async function retryCodexPoolOnAlternateAccount(
   try {
     retryHeaders = headersForCodexAuthContext(callerAuthHeaders, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
     retryProvider = applyCodexAuthContextToProvider(stripCodexRuntimeProviderFields(route.provider), retryAuthCtx, "pool");
+    // The alternate send is a second physical send of the same turn. Its credential-listed
+    // headers were rebuilt from the caller's sanitized set, so restore the provider's permitted
+    // client metadata the same way the first send did; the copier never overwrites a header the
+    // rebuild or the provider already selected.
+    restoreResponsesClientMetadata(retryHeaders, callerAuthHeaders, retryProvider, options.compactionRecoveryKind);
   } catch (error) {
     if (!(error instanceof CodexPoolAccountCreditsOffError) && !(error instanceof CodexInstallationIdUnavailableError)) throw error;
     // Body/entitlement reads above can outlive credit consent. No alternate will send:
@@ -1065,6 +1085,7 @@ export async function retryCodexPoolOnAlternateAccount(
                 httpOnly,
                 providerName: route.providerName,
                 modelId: route.modelId,
+                onPhysicalDispatch: body => args.onPhysicalSend?.(request, body),
                 preOutputRefusalHold: args.preOutputRefusalHold,
                 accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: retryAuthCtx }, headers),
                 onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider, route.modelId),

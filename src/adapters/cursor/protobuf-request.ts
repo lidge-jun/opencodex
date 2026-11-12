@@ -6,7 +6,7 @@ import { namespacedToolName } from "../../types";
 import type { CursorRunRequest } from "./types";
 import { cursorStructuredOutputInstructions } from "./structured-output";
 import { decodeCursorCallId } from "./call-id";
-import { cursorCheckpointModelAffinityId, cursorNeedsExternalToolContinuation, isCursorExternalWireModel } from "./discovery";
+import { cursorCheckpointModelAffinityId, cursorNeedsExternalToolContinuation, cursorReplaysToolResultInRoot, isCursorExternalWireModel } from "./discovery";
 import { stripAssistantEchoedToolEnvelope } from "./envelope-echo";
 import { normalizeCursorToolResultText } from "./tool-result-normalize";
 import { debugProviderDiagnostic } from "../../lib/debug";
@@ -247,9 +247,9 @@ function assistantRootText(
 // so prior history must be replayed here or a ResumeAction has nothing model-visible to continue from.
 // The active user message is excluded because it travels in the action. When the continuation cannot
 // rely on native MCP turn state, tool results stay assistant-role text with a [Tool Result] /
-// [Tool Error] marker so Cursor does not wrap them as `<user_query>` (#1992). Native resume models
-// already carry the paired MCP result on turns[], so that marker is omitted from root replay — Auto
-// few-shot-mimics it as chat text otherwise. Each entry is a SHA-256 blob ID.
+// [Tool Error] marker so Cursor does not wrap them as `<user_query>` (#1992). Other native resume
+// models carry the paired MCP result on turns[] only; Auto gets the root text too (#8538) with the
+// echo strip armed (cursorReplaysToolResultInRoot). Each entry is a SHA-256 blob ID.
 function rootPromptMessages(
   request: CursorRunRequest,
   requestScope: CursorBlobRequestScopeToken,
@@ -321,7 +321,7 @@ function rootPromptMessages(
   }
 
   const externalModel = isCursorExternalWireModel(request.modelId);
-  const echoToolResultInRoot = cursorNeedsExternalToolContinuation(request.modelId);
+  const echoToolResultInRoot = cursorReplaysToolResultInRoot(request.modelId);
   // Replayed results name the invocation that produced them; without it the result is orphaned
   // (devlog 260829 000_rca). Indexed once per request rather than rescanned per result.
   const replayedCalls = echoToolResultInRoot ? (knownCalls ?? toolCallsByCallId(messages)) : undefined;
@@ -423,9 +423,9 @@ function rootPromptMessages(
       // "[Tool Result]" envelope below, which carries the same information without a mimickable
       // call template (devlog 260829 002_audit_round2).
     } else if (message.role === "toolResult") {
-      // Native resume models already receive the paired MCP result through turns[]. Replaying
-      // the same payload as assistant-role "[Tool Result]" / "[tool_result]" text teaches Auto
-      // to echo that envelope as chat instead of continuing from the structured result.
+      // Other native resume models receive the paired MCP result through turns[] only; Auto needs
+      // the text as well (#8538), and its envelope echo (#2317) is stripped and reminted in
+      // src/adapters/cursor.ts under the same predicate.
       if (!echoToolResultInRoot) continue;
       // #1920: the prefix must reflect the NORMALIZED error state (an empty
       // node_repl result is an error even when the runtime said isError=false).

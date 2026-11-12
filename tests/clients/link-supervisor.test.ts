@@ -312,7 +312,7 @@ test("auth failures retry every five minutes, a changed host key never does, and
   await supervisor.stop();
 });
 
-test("the Home's -R supervisor retries a failed forward with a doubling delay and promotes a retry that stays up", async () => {
+test("the Home's -R supervisor retries a failed forward every minute (#8470) and promotes a retry that stays up", async () => {
   const fake = fakeRunner();
   const timers: Array<() => void> = [];
   let current = 0;
@@ -350,21 +350,21 @@ test("the Home's -R supervisor retries a failed forward with a doubling delay an
   await Promise.resolve();
   await Promise.resolve();
   expect(supervisor.status()[0]!.state).toEqual({
-    kind: "failed", since: 5_000, reason: "forward", retryAt: 185_000, inFlight: false, retries: 1, detail: "remote_forward_conflict",
+    kind: "failed", since: 5_000, reason: "forward", retryAt: 125_000, inFlight: false, retries: 1, detail: "remote_forward_conflict",
   });
-  current = 184_999;
+  current = 124_999;
   timers[0]!();
   expect(fake.children).toHaveLength(2);
-  current = 185_000;
+  current = 125_000;
   timers[0]!();
   expect(fake.children).toHaveLength(3);
   // A retry in flight is not killed for reading failed, and staying up past the retry grace proves it.
-  current = 199_999;
+  current = 139_999;
   timers[0]!();
   expect(supervisor.status()[0]!.state).toMatchObject({ kind: "failed", inFlight: true });
-  current = 200_000;
+  current = 140_000;
   timers[0]!();
-  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 200_000 });
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 140_000 });
   expect(supervisor.status()[0]!.pid).toBe(fake.children[2]!.child.pid);
   await supervisor.stop();
 });
@@ -752,13 +752,13 @@ test("the Home's -R supervisor keeps the retry cadence when ssh cannot be starte
   spawnError = new Error("spawn ssh ENOENT");
   current = 65_000;
   timers[0]!();
-  // A retry that cannot even start counts as a failed retry, so the delay doubles, and it keeps
-  // the peer's last answer because it learned nothing new about the link.
+  // A retry that cannot even start counts as a failed retry and keeps the peer's last answer,
+  // because it learned nothing new about the link; the Home's forward retry stays one minute.
   expect(supervisor.status()[0]!.state).toEqual({
-    kind: "failed", since: 5_000, reason: "forward", retryAt: 185_000, inFlight: false, retries: 1, detail: "remote_forward_conflict",
+    kind: "failed", since: 5_000, reason: "forward", retryAt: 125_000, inFlight: false, retries: 1, detail: "remote_forward_conflict",
   });
   spawnError = null;
-  current = 185_000;
+  current = 125_000;
   timers[0]!();
   expect(fake.children).toHaveLength(2);
   await supervisor.stop();

@@ -53,7 +53,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（サブスクリプション起動で未設定の場合はネイティブの `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex がルーティングエイリアスを設定した Tier スロットの `/model` ラベル（例: `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd のシステム環境とシェルフックにも同じ組で書き込みます。モデル ID はエイリアスのままです。自分で設定したスロットやラベルは変更しません |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定はオフ) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定では注入せず Claude Code 自身の既定値に従う) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
 直接 export した変数が常に優先します。追加引数はそのまま渡されます: `ocx claude -p "hello"`。
 
@@ -574,9 +574,9 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 分岐点と最上位自動 `cache_control` を管理します。安定した会話では通常キャッシュヒット率が約
 99.9% です。
 
-**ネイティブ OpenAI/ChatGPT ルーティング:** セッションスコープ `prompt_cache_key`(`metadata.user_id` があれば
-使用、なければシステム内容ハッシュ使用)とキャッシュ選好のための `session_id` ヘッダーを作ります。
-キャッシュキーにはモデルと全体ツールスキーマが含まれます。
+**ネイティブ OpenAI/ChatGPT ルーティング:** `prompt_cache_key`(`metadata.user_id` が文字列であれば
+使用、なければシステム内容ハッシュ使用)と、セッション識別子がある場合のみキャッシュ選好のための `session_id` ヘッダーを作ります(共有フォールバックキーからは作りません)。
+システム内容ハッシュから作るフォールバックキー(システム内容がある場合のみ)には、モデルと全体ツールスキーマも含まれます。
 
 **トークン計算:** Anthropic 出力は `input_tokens` から `cached_tokens` と `cache_write_tokens` を引き、
 それぞれ `cache_read_input_tokens` と `cache_creation_input_tokens` として公開します。リクエストログはこれを再び

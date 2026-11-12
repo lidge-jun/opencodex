@@ -4,7 +4,7 @@ const ADMIN_TOKEN_DIALOG_ID = "opencodex-admin-token-dialog";
 const ADMIN_TOKEN_USERNAME = "OpenCodex";
 const ADMIN_TOKEN_DOCS_URL = "https://opencodex.me/guides/web-dashboard/#finding-the-admin-token";
 
-export type AdminTokenValidation = "accepted" | "rejected" | "unavailable";
+export type AdminTokenValidation = "accepted" | "rejected" | "unavailable" | "remember-unsupported";
 export type AdminTokenVerifier = (token: string, rememberDevice?: boolean) => Promise<AdminTokenValidation>;
 
 /**
@@ -19,6 +19,7 @@ export function promptForAdminToken(
 ): Promise<string | null> {
   const messages = DICTS[locale];
   const titleText = messages["auth.adminTokenTitle"];
+  let canRemember = rememberAllowed;
 
   return new Promise((resolve) => {
     const previouslyFocused = document.activeElement instanceof HTMLElement
@@ -97,7 +98,7 @@ export function promptForAdminToken(
     const remember = document.createElement("input");
     remember.type = "checkbox";
     remember.name = "remember-device";
-    remember.disabled = !rememberAllowed;
+    remember.disabled = !canRemember;
     rememberLabel.append(remember, " ", messages["auth.rememberDevice"]);
     const rememberHint = document.createElement("p");
     rememberHint.className = "hint";
@@ -158,26 +159,36 @@ export function promptForAdminToken(
       remember.disabled = true;
       setValidationError(null);
 
-      void verifyToken(token, rememberAllowed && remember.checked).then((result) => {
+      void verifyToken(token, canRemember && remember.checked).then((result) => {
         if (settled) return;
         if (result === "accepted") {
           finish(token);
           return;
         }
-        password.value = "";
+        const rememberRefused = result === "remember-unsupported";
+        if (rememberRefused) {
+          // The server refused Remember for this address; keep the typed token so signing in
+          // without it is one more submit.
+          canRemember = false;
+          remember.checked = false;
+        } else {
+          password.value = "";
+        }
         password.disabled = false;
         submit.disabled = false;
-        remember.disabled = !rememberAllowed;
+        remember.disabled = !canRemember;
         setValidationError(result === "rejected"
           ? messages["auth.adminTokenRejected"]
-          : messages["auth.adminTokenUnavailable"]);
-        password.focus();
+          : rememberRefused
+            ? messages["auth.rememberUnsupported"]
+            : messages["auth.adminTokenUnavailable"]);
+        (rememberRefused ? submit : password).focus();
       }).catch(() => {
         if (settled) return;
         password.value = "";
         password.disabled = false;
         submit.disabled = false;
-        remember.disabled = !rememberAllowed;
+        remember.disabled = !canRemember;
         setValidationError(messages["auth.adminTokenUnavailable"]);
         password.focus();
       });

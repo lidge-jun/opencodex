@@ -5,10 +5,12 @@ import {
   type KiroFinalOutcome, type KiroStatusRead,
 } from "../kiro-device-login-finalizer";
 import { parseKiroDeviceView, type KiroDeviceMethod, type KiroDeviceView, type KiroIamOptions } from "../kiro-device-login-helpers";
+import { targetFetch, type ApiTargetCapture } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 
 type Phase = "idle" | "starting" | "pending" | "select-profile" | "selecting" | "done" | "expired" | "failed" | "cancelled" | "ended";
 export type KiroLoginState = { phase: Phase; view?: KiroDeviceView; error?: "start" | "network" | "invalid" | "profile" };
-type Session = { closed: boolean; closedController: AbortController; view?: KiroDeviceView;
+type Session = { closed: boolean; closedController: AbortController; capture: ApiTargetCapture; view?: KiroDeviceView;
   inFlight?: KiroStatusRead; waitController?: AbortController; terminal?: KiroFinalOutcome; selecting?: boolean };
 const wait = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => {
   if (signal.aborted) { resolve(); return; }
@@ -34,16 +36,18 @@ const unlessClosed = <T,>(session: Session, value: Promise<T>): Promise<T | type
   });
 
 export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: string, outcome: KiroFinalOutcome) => void,
-  pollDelay: (ms: number, signal: AbortSignal) => Promise<void> = wait) {
+  pollDelay: (ms: number, signal: AbortSignal) => Promise<void> = wait, targetKey?: string) {
   const [state, setState] = useState<KiroLoginState>({ phase: "idle" });
+  // The hook's render owns the target for a login started from this dialog.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const sessionRef = useRef<Session | null>(null);
   const mountedRef = useRef(true);
   const settledRef = useRef(onSettled);
   useEffect(() => { settledRef.current = onSettled; }, [onSettled]);
 
-  const cancelServer = useCallback(async (view: KiroDeviceView): Promise<Response | null> => {
+  const cancelServer = useCallback(async (view: KiroDeviceView, capture: ApiTargetCapture): Promise<Response | null> => {
     try {
-      return await fetch(`${apiBase}/api/oauth/login/cancel`, {
+      return await targetFetch(capture, `${apiBase}/api/oauth/login/cancel`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: "kiro", flowId: view.flowId }), keepalive: true,
       });
@@ -52,7 +56,9 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
 
   const handoff = useCallback((session: Session) => {
     const view = session.view;
-    if (view && !session.terminal) void finalizeKiroDeviceFlow(apiBase, view.flowId, view.expiresAt, session.inFlight);
+    if (view && !session.terminal) {
+      void finalizeKiroDeviceFlow(apiBase, view.flowId, view.expiresAt, session.inFlight, session.capture);
+    }
   }, [apiBase]);
 
   const close = useCallback(async () => {
@@ -66,7 +72,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
     if (!session.view || session.terminal) return;
     // cancelServer dispatches fetch before its first await. Status reconciliation
     // must start only after that POST has been sent, without waiting for its reply.
-    const cancellation = cancelServer(session.view);
+    const cancellation = cancelServer(session.view, session.capture);
     handoff(session);
     const response = await cancellation;
     const reply = response?.ok ? parseKiroDeviceView(await response.json().catch(() => null)) : null;
@@ -80,12 +86,13 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
 
   const start = useCallback(async (method: KiroDeviceMethod, iam?: KiroIamOptions) => {
     if (sessionRef.current) return;
-    const session: Session = { closed: false, closedController: new AbortController() };
+    const capture = renderCapture;
+    const session: Session = { closed: false, closedController: new AbortController(), capture };
     sessionRef.current = session;
     setState({ phase: "starting" });
     let response: Response | undefined;
     try {
-      response = await afterOAuthCancellation(apiBase, "kiro", () => fetch(`${apiBase}/api/oauth/login`, {
+      response = await afterOAuthCancellation(capture, "kiro", () => targetFetch(capture, `${apiBase}/api/oauth/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: "kiro", method, ...(method === "iam-identity-center" ? iam : {}) }),
       }));
@@ -102,7 +109,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
     }
     session.view = view;
     if (session.closed) {
-      const cancellation = cancelServer(view);
+      const cancellation = cancelServer(view, session.capture);
       handoff(session);
       const cancelled = await cancellation;
       const reply = cancelled?.ok ? parseKiroDeviceView(await cancelled.json().catch(() => null)) : null;
@@ -130,7 +137,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
         break;
       }
       const flowId = view.flowId;
-      const request = readKiroDeviceStatus(apiBase, flowId);
+      const request = readKiroDeviceStatus(apiBase, flowId, undefined, session.capture);
       session.inFlight = request;
       const status = await unlessClosed(session, request.result);
       if (status === CLOSED || session.terminal) break;
@@ -154,7 +161,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
       break;
     }
     if (sessionRef.current === session) sessionRef.current = null;
-  }, [apiBase, cancelServer, handoff, pollDelay]);
+  }, [apiBase, cancelServer, handoff, pollDelay, renderCapture]);
 
   const selectProfile = useCallback(async (profileArn: string) => {
     const session = sessionRef.current;
@@ -164,7 +171,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
     setState({ phase: "selecting", view });
     let next: KiroDeviceView | null = null;
     try {
-      const response = await fetch(`${apiBase}/api/oauth/login`, {
+      const response = await targetFetch(session.capture, `${apiBase}/api/oauth/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: "kiro", flowId: view.flowId, profileArn }),
       });

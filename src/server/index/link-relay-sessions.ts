@@ -1,10 +1,16 @@
 import type { Server } from "bun";
+import { createHash } from "node:crypto";
 import {
   LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION, LINK_RELAY_CONNECTION_HEADER,
   LINK_RELAY_CONNECTION_PROOF_HEADER, LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkConnectionProof,
   linkRelayProof, linkRelayProofMatches,
 } from "../../link/relay-auth";
 import { parseLinkPeerReport, type LinkPeerObservations } from "../../link/peer-report";
+import { linkActivityCounts, type LinkActivity } from "../../link/child-activity";
+import type { LinkTrafficBook } from "../../link/traffic";
+
+/** A 200 `GET /v1/catalog` whose body the Child read to the end (wp2 catalog freshness). */
+export interface LinkCatalogServed { linkId: string | null; keyId: string | null; etag: string }
 
 interface Session {
   peer: string;
@@ -24,6 +30,20 @@ export interface LinkRelaySessionOptions {
   peers?: LinkPeerObservations;
   /** The current tunnel connection of a Home-initiated link, announced with each proof. */
   connectionGeneration?: (linkId: string) => string | undefined;
+  /** Per-link model-traffic book owned by the listener lifecycle (D5); survives rebinds. */
+  activity?: LinkActivity;
+  /**
+   * Called after a 200 `GET /v1/catalog` body was read to the end and the stream closed. linkId comes from the relay
+   * session; a legacy key admission gives null and the response's `x-opencodex-key-id`. The etag is the sha256 of the
+   * bytes served, the same value as `catalogEtag(body)`. Cancel, abort, a read error and HEAD report nothing.
+   */
+  catalogServed?: (served: LinkCatalogServed) => void;
+  /**
+   * Per-link body bytes of verified relay-session requests (#3023), owned by the listener lifecycle.
+   * The response side is counted as it streams; the request side is its declared Content-Length,
+   * because wrapping the native request would lose the identity Bun's requestIP/timeout need.
+   */
+  traffic?: LinkTrafficBook;
 }
 
 /** One book per bound listener. A pending proof reserves the bind before the data request arrives. */
@@ -102,11 +122,13 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
       }
       const nonce = req.headers.get(LINK_RELAY_SESSION_HEADER);
       let release: () => void;
+      let sessionLink: string | null = null;
       if (nonce !== null) {
         // A proof received on one HTTP socket never authorizes another socket, even on the same port.
         const session = consume(nonce);
         if (!session) return refuse();
         release = session.release;
+        sessionLink = session.linkId;
         if (session.peer !== peerOf(req, server as Server<unknown>) || Date.now() >= session.expiresAt
           || !options.fingerprints(session.keyId, session.linkId).includes(session.fingerprint)) {
           release(); return refuse();
@@ -118,17 +140,48 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         // Older peers may still use the ordinary key admission. Its response also owns a drain lease.
         release = acquire();
       }
+      // Activity wraps the release every path below calls (body end, cancel, abort, HEAD, dispatch throw); both halves
+      // are idempotent. A relay-session request counts from session validation, so a refused proof never counts. A
+      // legacy key admission counts only once its response status is known and below 400: until then the key has not
+      // been accepted, so an unauthenticated or refused request never touches inFlight or lastDataEndAt.
+      const countsActivity = options.activity !== undefined && linkActivityCounts(url, req);
+      const beginActivity = (): void => {
+        const lease = release;
+        const end = options.activity!.begin(sessionLink);
+        release = () => { end(); lease(); };
+      };
+      if (countsActivity && sessionLink !== null) beginActivity();
+      const flow = sessionLink !== null ? options.traffic?.begin(sessionLink) : undefined;
+      if (flow) {
+        const declared = req.headers.get("content-length");
+        if (declared !== null && /^\d+$/.test(declared.trim())) flow.toHome(Number(declared.trim()));
+        else if (req.body !== null) flow.uncounted();
+      }
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
-      const beforeHeadersAbort = () => release();
+      const beforeHeadersAbort = () => { flow?.end(false); release(); };
       req.signal.addEventListener("abort", beforeHeadersAbort, { once: true });
       if (req.signal.aborted) beforeHeadersAbort();
       try {
         const response = await dispatch(req, server);
         req.signal.removeEventListener("abort", beforeHeadersAbort);
-        if (!response.body || req.method === "HEAD") { release(); return response; }
+        if (countsActivity && sessionLink === null && response.status < 400 && !req.signal.aborted) beginActivity();
+        if (!response.body || req.method === "HEAD") { flow?.end(true); release(); return response; }
         const reader = response.body.getReader();
+        const catalogHash = options.catalogServed && req.method === "GET" && url.pathname === "/v1/catalog" && url.search === ""
+          && response.status === 200 ? createHash("sha256") : null;
+        const catalogKeyId = sessionLink === null ? response.headers.get("x-opencodex-key-id") : null;
+        const reportCatalog = (): void => {
+          if (!catalogHash) return;
+          try {
+            options.catalogServed!({ linkId: sessionLink, keyId: catalogKeyId, etag: `"${catalogHash.digest("hex")}"` });
+          } catch (error) {
+            console.warn(`[link] catalog pull record failed: ${error instanceof Error ? error.name : "unknown"}`);
+          }
+        };
         let ended = false;
+        // A cancel resolves a pending read as done; that end is not a completed body.
+        let cancelled = false;
         const finish = () => {
           if (ended) return;
           ended = true;
@@ -136,6 +189,8 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           release();
         };
         const cancel = async (reason?: unknown) => {
+          cancelled = true;
+          flow?.end(false);
           try { await reader.cancel(reason); } finally { finish(); }
         };
         const aborted = () => { void cancel(req.signal.reason).catch(() => {}); };
@@ -145,14 +200,14 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           async pull(controller) {
             try {
               const next = await reader.read();
-              if (next.done) { finish(); controller.close(); }
-              else controller.enqueue(next.value);
-            } catch (error) { finish(); controller.error(error); }
+              if (next.done) { flow?.end(!cancelled); finish(); controller.close(); if (!cancelled) reportCatalog(); }
+              else { catalogHash?.update(next.value); flow?.fromHome(next.value.byteLength); controller.enqueue(next.value); }
+            } catch (error) { flow?.end(false); finish(); controller.error(error); }
           },
           cancel,
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-      } catch (error) { req.signal.removeEventListener("abort", beforeHeadersAbort); release(); throw error; }
+      } catch (error) { req.signal.removeEventListener("abort", beforeHeadersAbort); flow?.end(false); release(); throw error; }
     },
   };
 }

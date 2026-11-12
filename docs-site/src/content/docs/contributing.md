@@ -115,9 +115,10 @@ GitHub Actions intentionally stay small:
   `lane=all`. A PR green is not full-platform release evidence. After a batch of merges,
   maintainers run one full dispatch on `dev` rather than one per PR.
 - **Release** (`.github/workflows/release.yml`) is a manual `dev` workflow that selects an exact
-  source with qualifying full-lane evidence and stamps the version in build checkouts. The new
-  release path is pre-cutover: publication is held and history reconciliation, independent
-  security review, and release validation remain outstanding. See
+  source with qualifying full-lane evidence, stamps the version in build checkouts, and checks
+  npm and GitHub release history before it publishes. Publication stays off until the maintainer
+  completes the cutover checks and enables it; an interrupted run is recovered by an
+  operator-attested resume that never republishes an npm version. See
   [`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md) for the current procedure.
 - **Stale needs-info** (`.github/workflows/stale-needs-info.yml`) runs daily on the default branch.
   Open issues labeled `needs-info` with no activity for 14 days get a warning; after 7 more idle
@@ -138,10 +139,10 @@ as a substitute while the new publication gates remain unresolved.
 
 ## Branches
 
-- `dev` — the only integration target. Open your pull request here.
-- `main` and `preview` — protected historical branches retained for migration and recovery;
-  neither is a release promotion target. Changing the repository default branch to `dev` is a
-  separate maintainer-controlled cutover and has not been assumed here.
+- `dev` — the only integration target and the repository default branch. Open your pull
+  request here.
+- `main` and `preview` were deleted once the single-branch model was in place. Their released
+  history remains reachable through tags; neither is an integration or promotion target.
 
 The `dev2-go` line that carried the Go native port has been retired, and the
 dual-track carry policy with it. Its history is published read-only at
@@ -154,8 +155,10 @@ description.
 
 ## Pull requests
 
-- Target **`dev`**. Do not open feature or fix pull requests against **`main`**.
-- Branch from the current **`dev`** tip, not from **`main`**. The required **`enforce-target`** check rejects heads whose merge base sits on the **`main`** tip while the branch is far behind the pull request base (the failure mode seen in #644).
+- Target **`dev`**. The required **`enforce-target`** check rejects any other base
+  except a stacked child targeting another open pull request's head.
+- Branch from the current **`dev`** tip. A head that drifts too far behind `dev`
+  has its review-readiness latest-dev claim unticked rather than being rejected.
 - Write a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance). Empty bodies, placeholder-only text, and descriptions that use escaped `\n` instead of real line breaks fail the check.
 - If the pull request changes files under `gui/`, include a screenshot of the UI change in the description; the `enforce-target` check re-runs on description edits until the screenshot is present. Drag the image into the description editor rather than committing it: an image on your branch rides the squash merge into `dev`. Maintainers uploading from the command line use the `pr-assets` branch and link by commit SHA.
 - Workflow changes in this repository use **`pull_request_target`**. Updated enforcement logic applies only after the workflow reaches the repository default branch — the same operational caveat documented in #631.
@@ -163,14 +166,14 @@ description.
 ## Project maintainers
 
 The current maintainers, their responsibilities, and the review and merge policy are documented in
-[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md). GitHub review
+[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md). GitHub review
 ownership for the repository and security-sensitive paths is declared in `.github/CODEOWNERS`.
 
 Contributor pull requests normally need a maintainer's approval. A current maintainer with
 GitHub `maintain` or `admin` access may explicitly integrate a PR into `dev`, including their
 own, without a second maintainer approval. The decision and exact-head verification must be
 recorded; CI, security review and outstanding maintainer objections still apply. This exception
-does not change `main`/`preview` review rules or allow direct pushes, force-pushes or deletion.
+does not allow direct pushes, force-pushes or deletion.
 
 ## Conventions
 

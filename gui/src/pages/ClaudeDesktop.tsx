@@ -21,6 +21,10 @@ import {
   assignFamily,
   effectiveFamilyDefaults,
   familySize,
+  listedDesktopModels,
+  removableUnavailableRoutes,
+  removalRoutes,
+  removeAssignments,
   roleListOrder,
   roleOptions,
   roleValue,
@@ -359,18 +363,22 @@ export default function ClaudeDesktop({
     [profile, savedProfile, visibility, savedVisibility],
   );
 
+  // #8165: an unavailable route the draft no longer assigns is gone from every list at once,
+  // before the save reloads the server's model list without it.
+  const models = useMemo(() => (data && profile ? listedDesktopModels(data.models, profile) : []), [data, profile]);
+
   const modelsByFamily = useMemo(() => {
     const grouped = Object.fromEntries(FAMILIES.map(family => [family, [] as DesktopModel[]])) as Record<Family, DesktopModel[]>;
-    if (!data || !profile) return grouped;
-    for (const model of data.models) grouped[profile.assignments[model.route]?.family ?? "opus"].push(model);
+    if (!profile) return grouped;
+    for (const model of models) grouped[profile.assignments[model.route]?.family ?? "opus"].push(model);
     return grouped;
-  }, [data, profile]);
+  }, [models, profile]);
 
   const effectiveDefaults = useMemo(
-    () => data && profile
-      ? effectiveFamilyDefaults(data.models, profile)
+    () => profile
+      ? effectiveFamilyDefaults(models, profile)
       : { opus: null, fable: null, sonnet: null, haiku: null } as Record<Family, string | null>,
-    [data, profile],
+    [models, profile],
   );
 
   // The status poll is a separate resource: visibility pauses it without unmounting the
@@ -426,6 +434,14 @@ export default function ClaudeDesktop({
    * Models card makes it the family's default (makeDefault=true). Both update the lane's move
    * target and announce, so Advanced never shows a stale destination after a role change.
    */
+  /** Drop unavailable assignments from the draft; Save writes it through the existing profile PUT. */
+  const removeUnavailable = (routes: string[]) => {
+    if (!profile || routes.length === 0) return;
+    const removed = removalRoutes(profile, routes, data?.models ?? []);
+    setProfile(current => current && removeAssignments(current, routes, data?.models ?? []));
+    setAnnouncement(t("claudeDesktop.removedUnavailable", { n: removed.length }));
+  };
+
   const moveModel = (route: string, family: Family, makeDefault = false) => {
     if (!profile) return;
     if (!makeDefault && profile.assignments[route]?.family === family) return;
@@ -546,10 +562,10 @@ export default function ClaudeDesktop({
 
   const defaultRoute = roleValue(profile, effectiveDefaults, "opus");
   const quickRoute = roleValue(profile, effectiveDefaults, "haiku");
-  const modelByRoute = new Map(data.models.map(model => [model.route, model]));
+  const modelByRoute = new Map(models.map(model => [model.route, model]));
   /** Options for one role: available models minus the other role's route, plus a stored choice that went unavailable. */
   const roleSelectOptions = (value: string, exclude: string, allowUnset: boolean) => {
-    const options: { value: string; label: ReactNode }[] = roleOptions(data.models, exclude || null)
+    const options: { value: string; label: ReactNode }[] = roleOptions(models, exclude || null)
       .map(model => ({ value: model.route, label: model.label }));
     if (value && !options.some(option => option.value === value)) {
       const stale = modelByRoute.get(value);
@@ -568,9 +584,10 @@ export default function ClaudeDesktop({
     const model = modelByRoute.get(value);
     return model?.available ? model.label : t("claudeDesktop.roles.unavailableOption", { route: value });
   };
-  const listed = roleListOrder(data.models, defaultRoute || null, quickRoute || null);
-  const haikuEmpty = familySize(data.models, profile, "haiku") === 0;
-  const noneVisible = visibilityCounts(data.models, visibility).selected === 0 && data.models.some(model => model.available);
+  const listed = roleListOrder(models, defaultRoute || null, quickRoute || null);
+  const removable = removableUnavailableRoutes(models, profile);
+  const haikuEmpty = familySize(models, profile, "haiku") === 0;
+  const noneVisible = visibilityCounts(models, visibility).selected === 0 && models.some(model => model.available);
   // Saved but not yet written: Desktop's list differs from what the saved selection produces.
   const savedPreview = Array.isArray(data.rendered) ? applyPreview(desiredDesktopList(data.rendered, savedVisibility), status?.appliedModels ?? null) : null;
   const pendingApply = effectiveMode === "gateway" && !!savedPreview && (savedPreview.added.length > 0 || savedPreview.removed.length > 0);
@@ -704,7 +721,7 @@ export default function ClaudeDesktop({
           apiBase={apiBase}
           bindings={firstPartyBindings}
           suggestions={pickerSuggestions}
-          models={data.models}
+          models={models}
           onSaved={next => {
             setBindingsOverride(next);
             void statusResource.refresh();
@@ -712,11 +729,11 @@ export default function ClaudeDesktop({
         />
       )}
 
-      {data.models.length === 0 && (
+      {models.length === 0 && (
         <EmptyState title={t("claudeDesktop.emptyTitle")}>{t("claudeDesktop.emptyHint")}</EmptyState>
       )}
 
-      {data.models.length > 0 && (
+      {models.length > 0 && (
         <section className="card claude-desktop-roles" aria-labelledby="claude-desktop-roles-title">
           <h3 className="claude-desktop-section-title" id="claude-desktop-roles-title">{t("claudeDesktop.roles.title")}</h3>
           {effectiveMode === "first-party" && <p className="claude-desktop-roles-scope">{t("claudeDesktop.roles.gatewayScope")}</p>}
@@ -766,16 +783,26 @@ export default function ClaudeDesktop({
           <div className="claude-desktop-list-head">
             <h3 className="claude-desktop-section-title" id="claude-desktop-list-title">
               {t("claudeDesktop.roles.listTitle")}
-              <span className="count">{data.models.length}</span>
+              <span className="count">{models.length}</span>
             </h3>
             <div className="claude-profile-tools">
               <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={event => void importProfile(event)} />
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => importRef.current?.click()}>{t("claudeDesktop.importJson")}</button>
               <button type="button" className="btn btn-ghost btn-sm" onClick={exportProfile}>{t("claudeDesktop.exportJson")}</button>
+              {removable.length > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={pending !== null}
+                  onClick={() => removeUnavailable(removable)}
+                >
+                  {t("claudeDesktop.removeAllUnavailable", { n: removable.length })}
+                </button>
+              )}
             </div>
           </div>
-          {data.models.length > 0 && <p className="claude-desktop-list-hint">{t("claudeDesktop.roles.listHint")}</p>}
-          {data.models.length > 0 && (
+          {models.length > 0 && <p className="claude-desktop-list-hint">{t("claudeDesktop.roles.listHint")}</p>}
+          {models.length > 0 && (
             <ClaudeDesktopVisibility
               models={listed}
               visibility={visibility}
@@ -976,6 +1003,29 @@ export default function ClaudeDesktop({
                       />
                       {t("claudeDesktop.useAsDefault", { family: t(FAMILY_KEYS[family]) })}
                     </label>
+
+                    {!model.available && assignment && (
+                      <div className="claude-remove-row">
+                        <span className="claude-remove-hint">
+                          {(() => {
+                            // A tier's default must be available, so removing the default of a tier
+                            // with no available member also clears the tier's other stale routes.
+                            const others = removalRoutes(profile, [model.route], models).length - 1;
+                            return others > 0
+                              ? t("claudeDesktop.removeUnavailableTierHint", { n: others })
+                              : t("claudeDesktop.removeUnavailableHint");
+                          })()}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={pending !== null}
+                          onClick={() => removeUnavailable([model.route])}
+                        >
+                          {t("claudeDesktop.removeUnavailable")}
+                        </button>
+                      </div>
+                    )}
 
                     <div className="claude-move-row">
                       <label htmlFor={`move-${model.route}`}>{t("claudeDesktop.moveTo")}</label>

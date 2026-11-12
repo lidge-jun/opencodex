@@ -81,7 +81,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 在 **Providers > xAI Grok > Accounts** 中，每個帳號的票券徽章可查看剩餘優惠券及有效期間。對話框送出客戶端產生的 `operationId`。請求送達或結果不確定時，儀表板會在瀏覽器分頁工作階段期間保留同一次嘗試，關閉並重新開啟對話框、切換頁面或重新載入後也會保留。該記錄在送出請求之前寫入，只有收到同一 `operationId` 的確定回應時才會清除。重新整理只送出 GET，不允許額外的兌換 POST。對應的終端指令是 `ocx account grok-reset-coupons`。
 
-Claude 用量重設也可從 **Providers > Anthropic > Accounts** 以相同方式操作。每個已登入帳號列都有票券徽章，顯示剩餘重設次數；對話框會在第二次確認後使用一次重設機會。重設會補滿 5 小時與每週額度，但不會改變每週重設日。如果使用請求未收到回應，對話框會保留其 `operationId`，並在十分鐘內提供使用相同 ID 重試的選項；Claude Code 用戶端也以此方式復原。在此期間，系統會拒絕對同一重設機會發起新操作。重設機會只能透過儀表板使用：僅持有管理員權杖會收到 `403 session_required`。
+Claude 用量重設也可從 **Providers > Anthropic > Accounts** 以相同方式操作。每個已登入帳號列都有票券徽章，顯示剩餘重設次數；對話框會在第二次確認後使用一次重設機會。每個重設機會的過期時間與可重設的額度各不相同，因此對話框可選擇要使用的重設機會：預設選取目前可用且最先過期的一個，目前無法使用的會顯示為停用並註明原因；確認步驟會顯示所選重設機會的名稱、過期時間與可重設的額度，再送出對應的 `grantId`。伺服器會再次檢查所選重設機會，無法使用時以 `409 grant_not_usable` 拒絕。重設會補滿該重設機會可重設的額度（通常是 5 小時與每週額度），但不會改變每週重設日。如果使用請求未收到回應，對話框會保留其 `operationId`，並在十分鐘內提供使用相同 ID 重試的選項；Claude Code 用戶端也以此方式復原。在此期間，系統會拒絕對該帳號發起任何新操作（無論哪個重設機會）。重設機會只能透過儀表板使用：僅持有管理員權杖會收到 `403 session_required`。
 
 關於模型名冊與加密 worker-task 行為背後的概念，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。
 
@@ -249,6 +249,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 | `GET, POST, DELETE /api/providers/keys` | 列出遮罩供應商金鑰、新增／啟用一個或移除一個 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `PUT /api/providers/keys/active` | 選擇供應商的現用金鑰 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `PUT /api/providers/keys/alias` | 設定或清除供應商金鑰別名 | 400 無效輸入；404 供應商／金鑰缺失 |
+| `PUT /api/providers/keys/pause` | 暫停或恢復單一供應商 API 金鑰。內容為 `{ name, id, paused }`；若暫停現用金鑰，將依環狀順序選取下一個可用金鑰。成功回應包含結果 `activeAccountId`（若無則為 `null`）及 `activeAccountChanged`。 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `GET, POST, PATCH, DELETE /api/keys` | 列出、建立、編輯或刪除 data-plane 許可金鑰 | 400 無效 body/id；404 金鑰缺失 |
 | `PUT /api/oauth/accounts/affinity-reset` | 無需帳戶即可確認 provider 全部對話繫結的重設已儲存。Body `{ provider }`；成功回傳 `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 
