@@ -124,6 +124,23 @@ export function wrappedServerErrorStatus(payload: unknown): number | undefined {
 export interface BareUpstreamEvidence {
   typed: boolean;
   verdict: BareUpstreamError;
+  /** The winning frame was itself a policy terminal; the client stream ended on it. */
+  terminal?: boolean;
+}
+
+/**
+ * A bare frame the relay treats as an immediate policy terminal, by the same rule as its
+ * client rewrite: a typed `error` with a `cyber_policy` code or policy copy in any error
+ * record, or an untyped envelope whose structured code is `cyber_policy`.
+ */
+function isBarePolicyTerminal(payload: unknown, verdict: BareUpstreamError): boolean {
+  if (isUntypedBareUpstreamError(payload)) return verdict.errorCode === CYBER_POLICY_ERROR_CODE;
+  const root = record(payload);
+  const response = record(root?.response);
+  const candidates = [record(root?.error), record(root?.last_error), record(response?.error),
+    record(response?.incomplete_details), root, response];
+  return candidates.some(candidate => field(candidate, "code") === CYBER_POLICY_ERROR_CODE)
+    || candidates.some(candidate => { const message = field(candidate, "message"); return !!message && isCyberPolicyMessage(message); });
 }
 
 /**
@@ -133,7 +150,8 @@ export interface BareUpstreamEvidence {
  * frame wins. An untyped envelope is weaker evidence: it may replace an earlier
  * untyped frame, but it never replaces a typed verdict. A genuine terminal is not
  * bare evidence and supersedes both, which is why the reducer only ever sees
- * bare frames.
+ * bare frames. A winning policy terminal ends the client stream on that frame, so
+ * nothing after it can replace it.
  */
 export function reduceBareUpstreamEvidence(
   previous: BareUpstreamEvidence | undefined,
@@ -141,10 +159,15 @@ export function reduceBareUpstreamEvidence(
 ): BareUpstreamEvidence | undefined {
   const verdict = bareUpstreamError(payload);
   if (verdict === undefined) return previous;
+  if (previous?.terminal === true) return previous;
   const typed = !isUntypedBareUpstreamError(payload);
   // The stored verdict decides: an untyped frame may replace untyped evidence, never typed.
   if (!typed && previous?.typed === true) return previous;
-  return { typed, verdict };
+  if (!isBarePolicyTerminal(payload, verdict)) return { typed, verdict };
+  // The client receives this frame rewritten as the policy terminal, so every reader records
+  // that refusal, even when the frame also names an unrelated class beside the policy copy.
+  return { typed, terminal: true, verdict: { ...verdict, refusalCode: CYBER_POLICY_ERROR_CODE,
+    terminalType: "invalid_request_error", terminalCode: CYBER_POLICY_ERROR_CODE, terminalStatus: 400, httpStatus: 400 } };
 }
 
 /**

@@ -1287,7 +1287,9 @@ describe("one bare-error precedence rule across client, account and row", () => 
   async function relayMixed(mode: "tee" | "eager", frames: readonly string[], log: RequestLogContext,
     opts: { failAfter?: boolean } = {}) {
     const outcomes: number[] = [];
-    const onTerminal = () => outcomes.push(log.terminalHttpStatus ?? 502);
+    const reasons: (string | undefined)[] = [];
+    // As the production recorder does: a status the relay states wins over the row's context.
+    const onTerminal = (_kind: unknown, status?: number) => outcomes.push(status ?? log.terminalHttpStatus ?? 502);
     const src = sourceStream(frames, { failAfter: opts.failAfter });
     let relayed: ReadableStream<Uint8Array>;
     let inspectionDone: Promise<void> = Promise.resolve();
@@ -1300,7 +1302,7 @@ describe("one bare-error precedence rule across client, account and row", () => 
       inspector = createSseInspector({ logCtx: log, onTerminal });
       relayed = relaySseEagerBounded(src, new AbortController(), { ...parityHooks,
         // Eager mode reports its synthetic reset through the hook, not the inspector.
-        onSynthetic: () => outcomes.push(log.terminalHttpStatus ?? 502),
+        onSynthetic: (_kind, reason) => { reasons.push(reason); outcomes.push(log.terminalHttpStatus ?? 502); },
         inspectChunk: chunk => inspector.feed(chunk), finishInspection: () => inspector.finish(),
         sawTerminal: () => inspector.reported(),
       });
@@ -1308,8 +1310,44 @@ describe("one bare-error precedence rule across client, account and row", () => 
     const text = await drain(relayed);
     if (mode === "eager") inspector?.finish();
     await inspectionDone;
-    return { text, outcomes };
+    return { text, outcomes, reasons };
   }
+
+  const failedCode = (text: string): string | undefined => text.split("\n")
+    .filter(line => line.startsWith("data: {"))
+    .map(line => JSON.parse(line.slice(6)) as { type?: string; response?: { error?: { code?: string } } })
+    .find(event => event.type === "response.failed")?.response?.error?.code;
+  const policyTyped = { code: "cyber_policy", message: "blocked by upstream policy" };
+
+  test.each([
+    ["typed quota → untyped policy", [frame(typed("quota"), "typed"), frame(policyTyped, "untyped")], "rate_limit_exceeded", 429],
+    ["typed unknown → untyped policy", [frame(typed("unknown"), "typed"), frame(policyTyped, "untyped")], "upstream_server_error", 502],
+    ["untyped policy → typed quota", [frame(policyTyped, "untyped"), frame(typed("quota"), "typed")], "cyber_policy", 400],
+    ["typed policy → typed quota", [frame(policyTyped, "typed"), frame(typed("quota"), "typed")], "cyber_policy", 400],
+    ["typed quota code with policy copy", [frame({ code: "rate_limit_exceeded", message: "flagged for possible cybersecurity risk" }, "typed")], "cyber_policy", 400],
+  ] as const)("a policy frame decides client, account and row together: %s", async (_name, frames, code, status) => {
+    for (const mode of ["tee", "eager"] as const) {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const { text, outcomes } = await relayMixed(mode, frames, log);
+      expect([mode, failedCode(text)]).toEqual([mode, code]);
+      expect([mode, outcomes]).toEqual([mode, [status]]);
+      expect([mode, httpStatusForRequestLogTerminal("failed", log)]).toEqual([mode, status]);
+    }
+  });
+
+  test.each([
+    ["an unrecognized untyped error", frame(untyped("unknown"), "untyped"), true],
+    ["an unrecognized typed error", frame(typed("unknown"), "typed"), true],
+    ["a recognized quota class", frame(typed("quota"), "typed"), false],
+  ] as const)("a reset after %s keeps tee and eager attribution aligned", async (_name, bare, transport) => {
+    const tee: RequestLogContext = { model: "fixture-model", provider: "openai",
+      activeAttempt: {} as NonNullable<RequestLogContext["activeAttempt"]> };
+    await relayMixed("tee", [bare], tee, { failAfter: true });
+    expect(tee.activeAttempt?.streamAborted === true).toBe(transport);
+    // Eager leaves the transport attribution to passthrough delivery when no reason is stated.
+    const { reasons } = await relayMixed("eager", [bare], { model: "fixture-model", provider: "openai" }, { failAfter: true });
+    expect(reasons).toEqual([transport ? undefined : "upstream_error"]);
+  });
 
   for (const mode of ["tee", "eager"] as const) {
     for (const order of ["typed→untyped", "untyped→typed"] as const) {

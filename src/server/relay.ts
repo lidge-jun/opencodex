@@ -370,7 +370,9 @@ export function createSseTerminalOutputBoundary(
       const safetyBuffering = dropSafetyBuffering && parsed !== undefined
         ? codexSafetyBufferingBlockAction(parsed) : "keep";
       if (safetyBuffering === "drop") continue;
-      const policyError = parsed !== undefined && isPolicyRewriteType(parsed)
+      // An untyped policy envelope that loses to earlier typed evidence is not the turn's verdict.
+      const typedBareSeen = bareEvidence?.typed === true;
+      const policyError = parsed !== undefined && isPolicyRewriteType(parsed, typedBareSeen)
         ? cyberPolicyTerminalError(parsed)
         : undefined;
       const policyPayload = policyError ? policyFailurePayload(policyError, parsed) : undefined;
@@ -398,7 +400,7 @@ export function createSseTerminalOutputBoundary(
       // Preserve every frame through the first Responses terminal. Every
       // later non-DONE frame is dropped.
       if (!responsesTerminal) appendOutput(outboundBlock, frame.delimiter);
-      if (!responsesTerminal && payload && terminalStatusFromParsed(parsed)) {
+      if (!responsesTerminal && payload && terminalStatusFromParsed(parsed, typedBareSeen)) {
         responsesTerminal = true;
         if (pendingDone) {
           appendOutput(pendingDone.block, pendingDone.delimiter);
@@ -648,10 +650,10 @@ function parseSsePayload(payload: string): unknown | undefined {
   }
 }
 
-function isPolicyRewriteType(parsed: unknown): boolean {
+function isPolicyRewriteType(parsed: unknown, typedBareSeen = false): boolean {
   const type = asJsonRecord(parsed)?.type;
   return type === "response.failed" || type === "response.incomplete" || type === "error"
-    || (isUntypedBareUpstreamError(parsed) && isCyberPolicyCode(bareUpstreamError(parsed)?.errorCode));
+    || (!typedBareSeen && isUntypedBareUpstreamError(parsed) && isCyberPolicyCode(bareUpstreamError(parsed)?.errorCode));
 }
 
 /**
@@ -781,9 +783,14 @@ function createFirstOutputReporter(onFirstOutput?: () => void): {
   };
 }
 
-export function terminalStatusFromParsed(parsed: unknown): ResponsesTerminalStatus | null {
+/**
+ * `typedBareSeen`: an earlier typed bare `error` frame already owns the turn's verdict
+ * (`reduceBareUpstreamEvidence`), so a later untyped policy envelope loses and is no terminal.
+ * A stream reader uses {@link createTerminalStatusTracker} rather than passing this itself.
+ */
+export function terminalStatusFromParsed(parsed: unknown, typedBareSeen = false): ResponsesTerminalStatus | null {
   const type = asJsonRecord(parsed)?.type;
-  if (isUntypedBareUpstreamError(parsed) && isCyberPolicyCode(bareUpstreamError(parsed)?.errorCode)) return "failed";
+  if (!typedBareSeen && isUntypedBareUpstreamError(parsed) && isCyberPolicyCode(bareUpstreamError(parsed)?.errorCode)) return "failed";
   switch (type) {
     case "response.completed":
       return "completed";
@@ -796,6 +803,19 @@ export function terminalStatusFromParsed(parsed: unknown): ResponsesTerminalStat
     default:
       return null;
   }
+}
+
+/**
+ * One stream's terminal classifier. It reduces bare evidence in order, so an untyped policy
+ * envelope ends the turn only when it is the winning verdict, exactly as the client boundary,
+ * the request row and the account inspector decide it.
+ */
+export function createTerminalStatusTracker(): (parsed: unknown) => ResponsesTerminalStatus | null {
+  let evidence: BareUpstreamEvidence | undefined;
+  return parsed => {
+    evidence = reduceBareUpstreamEvidence(evidence, parsed);
+    return terminalStatusFromParsed(parsed, evidence?.typed === true);
+  };
 }
 
 /** Extract the response object from a `response.completed` SSE payload, or null. */
@@ -1164,6 +1184,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let decoder: TextDecoder | null = new TextDecoder();
   let reported = false;
   let sawTerminal = false;
+  const classifyTerminal = createTerminalStatusTracker();
   let disposed = false;
   let delimiterTail: Uint8Array = EMPTY_BYTES;
   let pendingLineFeed = false;
@@ -1326,7 +1347,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       try { handlers.onOpaquePayload(payload); } catch { /* inspection must never throw into the pump */ }
     }
     reportFirstOutput.parsed(parsed);
-    const status = terminalStatusFromParsed(parsed);
+    const status = classifyTerminal(parsed);
     type ParsedSseEvent = { type?: unknown; output_index?: unknown; item?: unknown; response?: unknown };
     const parsedEvent = parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? parsed as ParsedSseEvent

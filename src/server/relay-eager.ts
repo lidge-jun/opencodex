@@ -481,7 +481,13 @@ export function relaySseEagerBounded(
           // to the client. Only accounting remains tied to the inspected result.
           if (!hooks.sawTerminal()) {
             syntheticKind = "failed";
-            if (terminalBoundary.upstreamVerdict() !== undefined) syntheticReason = "upstream_error";
+            // Same predicate as encodeTerminalTail: only a refusal or a provider-stated class
+            // outranks the read failure. An unrecognized verdict keeps the transport-failure
+            // attribution (streamAborted, mid_stream) the tee path also records.
+            const verdict = terminalBoundary.upstreamVerdict();
+            if (verdict !== undefined && (verdict.refusalCode !== undefined || terminalBoundary.recognizedBareError())) {
+              syntheticReason = "upstream_error";
+            }
           }
           deliveryFallbackSent = true;
           queuedBytes += tail.byteLength;
