@@ -199,7 +199,7 @@ export async function compensateNewLink(ctx: ManagementContext, state: LinkRoute
   const revoked = revokeKeyIdempotent(ctx, record.apiKeyId);
   if (!revoked) {
     try { await state.supervisor.stopLink(record.id); } catch { /* retain the record and failure marker */ }
-    let rejected = false;
+    let rejected = false, uncertain = false;
     try {
       withConfigMutationLockSync(() => {
         const current = readStoreFor(ctx);
@@ -209,11 +209,17 @@ export async function compensateNewLink(ctx: ManagementContext, state: LinkRoute
         }
       });
     } catch {
-      // The in-memory marker still makes the residual visible when persistence is unavailable.
+      // Whether the link is stored is now unknown. The in-memory marker shows it if it is; the
+      // response says the key may be left over either way.
+      uncertain = true;
     }
     if (rejected) {
       console.warn("[link] new link no longer valid after a failed store write; its issued key could not be revoked");
       return keyCleanupFailed();
+    }
+    if (uncertain) {
+      compensationFailure(ctx, state, record, "revoke");
+      return fail("link_cleanup_uncertain", "The link could not be undone: whether it is stored is unknown and its issued key could not be revoked. Check the link status, remove the link if it is listed, and revoke the leftover link key under API keys if it remains.", 500);
     }
     return compensationFailure(ctx, state, record, "revoke");
   }

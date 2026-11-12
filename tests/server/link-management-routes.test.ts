@@ -1260,25 +1260,31 @@ test("a link whose first store write failed is stored again by cleanup only if i
   temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-write-failed-"));
   const knownHosts = join(temp, "known_hosts");
   const conflict = { id: "lnk_00000000000000bb", alias: "HOME", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2201, apiKeyId: "key-other", createdAt: "2026-09-25T00:00:00.000Z" };
-  const cases: Array<[string, (h: ReturnType<typeof harness>) => void, string, string[]]> = [
+  const cases: Array<[string, (h: ReturnType<typeof harness>, breakStore: () => void) => void, string, string[]]> = [
     // Nothing changed while cleanup waited: the validated record is kept so its key stays visible.
     ["unchanged", () => {}, "compensation_failed", ["home"]],
     ["pin changed", () => writeFileSync(knownHosts, "home ssh-ed25519 KEYother\n"), "key_cleanup_failed", []],
     ["alias taken", h => h.deps.writeLinkStore!({ ...h.store, links: [conflict] }), "key_cleanup_failed", ["HOME"]],
+    // The cleanup transaction fails too: nobody knows whether the link is stored, so the answer says so.
+    ["store unavailable", (_h, breakStore) => breakStore(), "link_cleanup_uncertain", []],
   ];
   for (const [label, duringStop, code, aliases] of cases) {
     const h = harness();
     const base = applyRunner(h);
-    let failWrite = false;
+    let failWrite = false, failRead = false;
     const deps = {
       ...h.deps,
       revokeApiKey: () => false,
+      readLinkStore: () => {
+        if (failRead) { failRead = false; throw new Error("store read failed"); }
+        return h.deps.readLinkStore!();
+      },
       // The write throws before it stores anything, so its outcome is unknown to apply.
       writeLinkStore: (next: LinkStore) => {
         if (failWrite) { failWrite = false; throw new Error("store write failed"); }
         h.deps.writeLinkStore!(next);
       },
-      linkSupervisor: () => ({ ...h.deps.linkSupervisor!(), stopLink: async () => { duringStop(h); } }),
+      linkSupervisor: () => ({ ...h.deps.linkSupervisor!(), stopLink: async () => { duringStop(h, () => { failRead = true; }); } }),
       sshRunner: {
         ...base,
         async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
