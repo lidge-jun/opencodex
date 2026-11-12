@@ -22,7 +22,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { readPid, verifyPidIdentity } from "../config/process-state";
+import { inspectOcxStartProcessIdentity, readPid, verifyPidIdentity, type OcxStartIdentityObservation } from "../config/process-state";
 import { isProcessAlive } from "../lib/process-control";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSchtasksExe, resolveTrustedWindowsSystemDirectory, toWindowsSchtasksError } from "../lib/windows-elevation";
@@ -296,15 +296,28 @@ export function sampleWindowsStopPort(
   return { state: "listening", ownerPid: live[0] ?? pids[0] ?? null };
 }
 
-/** ours = an opencodex process (the respawned proxy); exited = its owner is gone. */
+/**
+ * ours = an opencodex process (the respawned proxy); exited = its owner is gone.
+ *
+ * Tri-state (#7771): only a positive "mismatch" is foreign. `verifyPidIdentity` collapses
+ * "not an ocx process" and "the probe could not answer" into the same null, and a probe that
+ * cannot read another account's or an elevated process's command line is not evidence that
+ * another program holds the port — Part B would then report portHeldByForeign and let the
+ * caller restore shared config with the proxy possibly still alive. Unreadable stays unknown.
+ */
 export function identifyWindowsStopListener(
   ownerPid: number | null,
-  io: { alive?: (pid: number) => boolean; verify?: (pid: number) => number | null } = {},
+  io: {
+    alive?: (pid: number) => boolean;
+    identity?: (pid: number) => OcxStartIdentityObservation;
+  } = {},
 ): WindowsListenerIdentity {
   if (ownerPid === null) return "unknown";
   if (!(io.alive ?? isProcessAlive)(ownerPid)) return "exited";
   try {
-    return (io.verify ?? verifyPidIdentity)(ownerPid) === ownerPid ? "ours" : "foreign";
+    const observed = (io.identity ?? inspectOcxStartProcessIdentity)(ownerPid);
+    if (observed === "match") return "ours";
+    return observed === "mismatch" ? "foreign" : "unknown";
   } catch {
     return "unknown";
   }

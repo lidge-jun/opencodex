@@ -111,10 +111,18 @@ describe("Part B port sampler and listener identity", () => {
   });
 
   test("ours, foreign, exited, unknown", () => {
-    expect(identifyWindowsStopListener(42, { alive: () => true, verify: pid => pid })).toBe("ours");
-    expect(identifyWindowsStopListener(42, { alive: () => true, verify: () => null })).toBe("foreign");
-    expect(identifyWindowsStopListener(42, { alive: () => false })).toBe("exited");
+    expect(identifyWindowsStopListener(42, { alive: () => true, identity: () => "match" })).toBe("ours");
+    expect(identifyWindowsStopListener(42, { alive: () => true, identity: () => "mismatch" })).toBe("foreign");
+    // Unreadable is not foreign (#7771): a probe that cannot answer must not let the caller
+    // conclude that another program holds the port.
+    expect(identifyWindowsStopListener(42, { alive: () => true, identity: () => "unverifiable" })).toBe("unknown");
+    expect(identifyWindowsStopListener(42, { alive: () => false, identity: () => "match" })).toBe("exited");
     expect(identifyWindowsStopListener(null)).toBe("unknown");
+    // A throwing probe is unreadable too, never foreign.
+    expect(identifyWindowsStopListener(42, {
+      alive: () => true,
+      identity: () => { throw new Error("denied"); },
+    })).toBe("unknown");
   });
 });
 
