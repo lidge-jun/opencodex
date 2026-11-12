@@ -354,6 +354,16 @@ describe("provider evidence and status-less response.failed frames beside a code
 describe("every prose field beside a coded verdict must describe the moderation refusal", () => {
   const coded = (message: string, extra: Record<string, unknown> = {}) =>
     JSON.stringify({ error: { type: "invalid_request_error", code: "content_filter", message, ...extra } });
+  const azureResults = {
+    hate: { filtered: true, severity: "high" }, self_harm: { filtered: false, severity: "safe" },
+    jailbreak: { filtered: false, detected: false },
+    custom_blocklists: { filtered: false, details: [{ filtered: false, id: "list1" }] },
+  };
+  const azureWith = (extra: Record<string, unknown>) => JSON.stringify({ error: {
+    code: "content_filter",
+    message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry.",
+    innererror: { code: "ResponsibleAIPolicyViolation", content_filter_result: { ...azureResults, ...extra } },
+  } });
 
   test("parameter, model and account prose beside a moderation code keeps dev's decision", async () => {
     for (const body of [
@@ -396,6 +406,7 @@ describe("every prose field beside a coded verdict must describe the moderation 
       coded("The input was refused by moderation. Categories: sexual and hate."),
       coded("filtered"),
       coded("Content filtered by moderation."),
+      azureWith({}),
       JSON.stringify({ error: { code: "content_filter", message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry. To learn more about our content filtering policies please read our documentation: https://go.microsoft.com/fwlink/?linkid=2198766" } }),
     ]) {
       expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: true });
@@ -422,6 +433,13 @@ describe("every prose field beside a coded verdict must describe the moderation 
       coded("The input was refused by moderation.", { metadata: { account: "suspended" } }),
       coded("The input was refused by moderation.", { state: "past_due" }),
       coded("The input was refused by moderation.", { account_status: "disabled" }),
+      // Azure's filter results carry only their own shape.
+      azureWith({ note: "Your account is past due" }),
+      azureWith({ hate: { filtered: true, severity: "high", note: "account past due" } }),
+      azureWith({ account: "suspended" }),
+      azureWith({ hate: { filtered: true, severity: "past_due" } }),
+      azureWith({ error: { code: "content_filter_error", message: "The contents are not filtered" } }),
+      azureWith({ hate: { filtered: true, severity: "high", status: 429 } }),
     ]) {
       expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: false });
       const failure = await consumeComboFailure(new Response(body, { status: 400 }));

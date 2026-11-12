@@ -1024,8 +1024,14 @@ const MODERATION_ID_KEYS = new Set(["id", "requestid", "object", "model", "name"
  */
 const ROUTING_METADATA_EVIDENCE_KEY = /safety|violation|block|polic|account|suspend|disabl|deactivat|ban|status|state|error|code|reason|quota|billing|limit|credit|payment/i;
 
-/** Azure's per-category filter results: the moderation verdict's own detail, read only for codes. */
+/**
+ * Azure's per-category filter results: the moderation verdict's own detail. Only its own shape
+ * passes: category objects of flags and numbers, a `severity` of safe/low/medium/high, bare
+ * `id`/`url`/`license` tokens, and compatible codes. Any other text, or a key that names a
+ * state, status, error or message, is evidence of its own.
+ */
 const MODERATION_RESULT_KEY = /^(?:contentfilterresults?|promptfilterresults)$/;
+const FILTER_RESULT_EVIDENCE_KEY = /account|status|state|quota|billing|payment|credit|limit|error|message|reason|note|description|detail(?!s$)/i;
 
 /**
  * Response-object fields of a Responses terminal event (`response.failed`) that echo the caller's
@@ -1159,13 +1165,21 @@ function moderationVerdictFields(payload: unknown): boolean | null {
     if (MODERATION_REFUSAL_CODES.has(normalized)) seen = true;
     return true;
   };
-  // Inside Azure's filter results only codes are read; the per-category flags are the verdict itself.
   const visitFilterResult = (value: unknown, depth: number): boolean => {
     if (++nodes > 512 || depth > 8) return false;
+    if (value === null || typeof value === "boolean" || typeof value === "number") return true;
     if (Array.isArray(value)) return value.every(item => visitFilterResult(item, depth + 1));
-    if (!value || typeof value !== "object") return true;
-    return Object.entries(value as Record<string, unknown>).every(([key, field]) =>
-      MODERATION_VERDICT_KEYS.has(foldKey(key)) ? verdict(field, key, depth) : visitFilterResult(field, depth + 1));
+    if (typeof value !== "object") return false;
+    return Object.entries(value as Record<string, unknown>).every(([key, field]) => {
+      const folded = foldKey(key);
+      if (MODERATION_VERDICT_KEYS.has(folded)) return verdict(field, key, depth);
+      if (!/^[a-z][a-z0-9_]*$/i.test(key) || FILTER_RESULT_EVIDENCE_KEY.test(key)) return false;
+      if (typeof field === "string") {
+        return folded === "severity" ? /^(?:safe|low|medium|high)$/i.test(field)
+          : (folded === "id" || folded === "url" || folded === "license") && !/\s/.test(field);
+      }
+      return visitFilterResult(field, depth + 1);
+    });
   };
   // A gateway's routing metadata: plain tokens, numbers and flags only, under keys that name no state.
   const visitRoutingMetadata = (value: unknown, depth: number): boolean => {
