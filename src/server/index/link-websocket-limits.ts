@@ -98,3 +98,12 @@ export function setLinkPumpTimerForTests(timer: LinkPumpTimer | null): void {
   pumpTimer = timer ?? realPumpTimer;
 }
 
+/** Test-only: told when a link pump starts (true) and stops (false) waiting for a drain. */
+let pumpWaitObserver: ((waiting: boolean) => void) | null = null;
+
+export function linkPumpWaitObserver(): ((waiting: boolean) => void) | null { return pumpWaitObserver; }
+
+export function setLinkPumpWaitObserverForTests(observer: ((waiting: boolean) => void) | null): void {
+  pumpWaitObserver = observer;
+}
+

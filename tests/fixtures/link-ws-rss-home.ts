@@ -1,7 +1,9 @@
 /**
  * The Home side of the link WebSocket transport-only RSS acceptance (design T4 6.3). Runs in its own
  * process so the test's clients and fake upstream do not count against the Home's RSS. Setup comes on
- * stdin as one JSON line; commands follow, one per line: "rss" (no collection), "gc-rss", "stop".
+ * stdin as one JSON line; commands follow, one per line: "gc-rss" (collect, then reset the high-water
+ * mark to the current RSS), "peak" (the high-water mark since then), "stop". When "stalls" link pumps
+ * are waiting for a drain at the same time, the fixture prints {"stalled":true} once.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,6 +13,7 @@ const first = await lines.next();
 const setup = JSON.parse(String(first.value)) as {
   upstreamPort: number;
   keys: Array<{ id: string; key: string; linkId: string }>;
+  stalls: number;
 };
 const home = process.env.OPENCODEX_HOME!;
 const codexHome = process.env.CODEX_HOME!;
@@ -21,7 +24,19 @@ writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({ models
 const { writeLinkStore } = await import("../../src/link/store");
 const { linkStorePath } = await import("../../src/link/paths");
 const { saveConfig } = await import("../../src/config");
-const { setLinkWebsocketTransportReadyForTests } = await import("../../src/server/index/link-websocket-limits");
+const { setLinkWebsocketTransportReadyForTests, setLinkPumpWaitObserverForTests } = await import("../../src/server/index/link-websocket-limits");
+
+// High-water RSS, sampled continuously in this process (measurement only; nothing waits on it).
+let highWater = process.memoryUsage().rss;
+const sample = (): void => { highWater = Math.max(highWater, process.memoryUsage().rss); };
+setInterval(sample, 2).unref();
+let waiting = 0;
+let announced = false;
+setLinkPumpWaitObserverForTests(isWaiting => {
+  waiting += isWaiting ? 1 : -1;
+  sample();
+  if (!announced && waiting >= setup.stalls) { announced = true; console.log(JSON.stringify({ stalled: true })); }
+});
 
 writeLinkStore(linkStorePath(), {
   version: 1,
@@ -51,8 +66,8 @@ for (;;) {
   const next = await lines.next();
   if (next.done) break;
   const command = String(next.value).trim();
-  if (command === "rss") console.log(JSON.stringify({ rss: process.memoryUsage().rss }));
-  else if (command === "gc-rss") { Bun.gc(true); console.log(JSON.stringify({ rss: process.memoryUsage().rss })); }
+  if (command === "peak") { sample(); console.log(JSON.stringify({ rss: highWater })); }
+  else if (command === "gc-rss") { Bun.gc(true); highWater = process.memoryUsage().rss; console.log(JSON.stringify({ rss: highWater })); }
   else if (command === "stop") break;
 }
 await server.stop(true);

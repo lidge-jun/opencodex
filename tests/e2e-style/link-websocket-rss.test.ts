@@ -55,7 +55,8 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
     let requests = 0;
     let largestChunk = 0;
     // Upstream bytes each stream had handed to the Home when the peak was read: how far Bun's fetch
-    // read ahead of the stalled pump.
+    // read ahead of the stalled pump. These are bytes the fake upstream enqueued, which bounds from above
+    // what the Home's fetch has read; they are reported, never asserted.
     const delivered: number[] = [];
     const upstream = Bun.serve({
       hostname: "127.0.0.1", port: 0,
@@ -107,7 +108,7 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
     const ask = async (command: string): Promise<number> => { child.stdin.write(command + "\n"); child.stdin.flush(); return Number((await nextLine()).rss); };
     const clients: LinkWireClient[] = [];
     try {
-      child.stdin.write(JSON.stringify({ upstreamPort: upstream.port, keys }) + "\n");
+      child.stdin.write(JSON.stringify({ upstreamPort: upstream.port, keys, stalls: TRANSPORT === "websocket" ? SOCKETS : Number.MAX_SAFE_INTEGER }) + "\n");
       child.stdin.flush();
       const ready = await nextLine();
       const linkPort = Number(ready.linkPort);
@@ -137,18 +138,23 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
         }
         wire.pause();
       }
-      await Promise.all(signals.slice(1).map(signal => signal.reachedStall));
-      const peak = Math.max(await ask("rss"), await ask("rss"));
-      const deliveredAtPeakMiB = delivered.slice(1).map(bytes => Math.round(bytes / MiB));
+      // The Home itself announces when every link pump is waiting on a drain at once. The HTTP
+      // diagnostic has no pump to observe and settles for the upstream having enqueued its third chunk.
+      if (TRANSPORT === "websocket") {
+        for (;;) if ((await nextLine()).stalled === true) break;
+      } else await Promise.all(signals.slice(1).map(signal => signal.reachedStall));
+      const enqueuedAtStallMiB = delivered.slice(1).map(bytes => Math.round(bytes / MiB));
       // Cut every socket in a seeded random order, at different points of its stalled stream.
       let seed = 7;
       const order = clients.map((client, index) => ({ client, key: (seed = (seed * 48271) % 2147483647) + index }));
       for (const { client } of order.sort((a, b) => a.key - b.key)) client.destroy();
       await Promise.all(signals.map(signal => signal.cancelled));
+      // High-water mark over setup, load and cancellation, sampled inside the Home.
+      const peak = await ask("peak");
       const after = await ask("gc-rss");
       const delta = peak - idle;
       const budget = SOCKETS * LINK_WS_LIMITS.socketReservationBytes;
-      console.log(JSON.stringify({ transport: TRANSPORT, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), deliveredAtPeakMiB }));
+      console.log(JSON.stringify({ transport: TRANSPORT, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
       expect(delta).toBeLessThanOrEqual(budget);
     } finally {
       for (const client of clients) client.destroy();

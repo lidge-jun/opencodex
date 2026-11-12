@@ -18,7 +18,7 @@ import { isProxyError } from "../lib/client-error-body";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
 import { NativeContinuationRefusalError } from "./responses/native-continuation-refusal";
 import type { UsageClient } from "../usage/client";
-import { LINK_WS_LIMITS, linkPumpTimer } from "./index/link-websocket-limits";
+import { LINK_WS_LIMITS, linkPumpTimer, linkPumpWaitObserver } from "./index/link-websocket-limits";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -314,6 +314,8 @@ export async function pumpResponsesSseToWebSocket(
   const waitForLinkDrain = async (): Promise<void> => {
     if (!link || ws.getBufferedAmount() <= LINK_WS_LIMITS.sendThresholdBytes) return;
     let stalled = false;
+    const observer = linkPumpWaitObserver();
+    observer?.(true);
     await new Promise<void>(resolve => {
       const clock = linkPumpTimer();
       // One deadline for the whole wait, however many drain callbacks arrive before it ends.
@@ -332,6 +334,7 @@ export async function pumpResponsesSseToWebSocket(
       link.drained = drained;
       wakeLinkWait = done;
     });
+    observer?.(false);
     if (stalled && !clientCancelled) {
       try { ws.close(1011, "link websocket send stalled"); } catch { /* already closing */ }
       throw new WsSendDroppedError();
