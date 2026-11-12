@@ -1851,3 +1851,18 @@ describe("provider moderation refusal: diagnostics dev keeps terminal and verdic
     }
   });
 });
+
+describe("provider moderation refusal: safety-system wording and framed native status", () => {
+  test("safety-system wording beside a moderation code stops", () => {
+    for (const text of [
+      "Your request was rejected as a result of our safety system. If you believe this is an error, you can check the status of your account.",
+      "Your request was rejected by the safety system.",
+      "The request was rejected because it was considered high risk",
+    ]) {
+      const message = JSON.stringify({ type: "error", error: { code: "content_filter", message: text } });
+      expect({ text, hop: isProviderModerationRefusal(400, message, "content_filter") }).toEqual({ text, hop: false });
+      expect(comboFailureDecision(400, message, { code: "content_filter" })).toBe("stop");
+      expect(comboFailureCooldownScope(400, message, { code: "content_filter" })).not.toBe("none");
+    }
+  });
+});

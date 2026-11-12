@@ -104,7 +104,12 @@ export async function preflightNativeMessagesResponse(
         const mapped = httpStatusFromTerminalError({ type: typeof error.type === "string" ? error.type : undefined,
           code: typeof error.code === "string" ? error.code : undefined,
           message: typeof error.message === "string" ? error.message : undefined }) ?? 502;
-        const status = moderation && mapped !== 400 && mapped !== 422 ? 400 : mapped;
+        // Only an event that states no status of its own (or states 400/422) is read as that 400:
+        // a frame that says 429 or 503 keeps the record mapping, as dev did.
+        const framed = typeof payload.status === "number" ? payload.status
+          : typeof error.status === "number" ? error.status : undefined;
+        const status = moderation && mapped !== 400 && mapped !== 422
+          && (framed === undefined || framed === 400 || framed === 422) ? 400 : mapped;
         if (logCtx.terminalSource !== "synthetic" && logCtx.errorCode !== UNDECLARED_TOOL_CALL_ERROR_CODE
           && comboFailureDecision(status, typeof error.message === "string" ? error.message : "", {
           code: typeof error.code === "string" ? error.code : undefined,
@@ -112,7 +117,10 @@ export async function preflightNativeMessagesResponse(
           // The whole event, as the HTTP and stream readers judge it, so transports cannot disagree.
           providerModerationRefusal: status === 400 || status === 422
             ? isProviderModerationRefusal(status, wholeEvent, undefined, true) : undefined,
-        }) === "hop") { failure = error; failureStatus = status; failureEvidence = moderation ? wholeEvent : undefined; }
+        }) === "hop") {
+          failure = error; failureStatus = status;
+          failureEvidence = moderation && (status === 400 || status === 422) ? wholeEvent : undefined;
+        }
         else committed = true;
       } else if (payload.type === "message_stop") terminal = true;
       else committed = true;

@@ -1007,6 +1007,13 @@ const MODERATION_COMPATIBLE_VALUES = new Set([
 /** Keys whose values are structured verdicts rather than prose. */
 const MODERATION_VERDICT_KEYS = new Set(["code", "type"]);
 
+/**
+ * Safety-system wording in any of its upstream phrasings ("rejected as a result of our safety
+ * system", "for safety reasons", "considered high risk"). A safety refusal is the upstream's own
+ * terminal verdict, broader than the exact copies safetyRefusalCodeFromMessage names.
+ */
+const SAFETY_SYSTEM_WORDING = /\bsafety[\s_-]+(?:systems?|reasons?)\b|\bhigh[\s_-]+risk\b/i;
+
 /** A refusal names the prompt or input it refused; any other `param` is a validation error. */
 function isAllowedModerationParam(param: string): boolean {
   const p = param.trim().toLowerCase();
@@ -1134,7 +1141,8 @@ export function isProviderModerationRefusal(
   if (message.length > 32_768) return false;
   const lower = message.toLowerCase();
   if (namesHardStopToken(message) || isHardPolicyOrOriginRefusal(message)
-    || safetyRefusalCodeFromMessage(message) !== undefined || isCyberPolicyMessage(message)
+    || safetyRefusalCodeFromMessage(message) !== undefined || SAFETY_SYSTEM_WORDING.test(message)
+    || isCyberPolicyMessage(message)
     || lower.includes(CYBER_POLICY_FALLBACK_MESSAGE.toLowerCase())
     || lower.includes(TERMINAL_REFUSAL_FALLBACK_MESSAGE.toLowerCase())
     || isMalformedResponseFormatRequest(status, message)

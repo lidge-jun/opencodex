@@ -190,3 +190,17 @@ describe("a moderation verdict survives the rebuilt preflight envelope", () => {
     expect(await loop(result.response)).toEqual({ decision: "hop", scope: "none" });
   });
 });
+
+test("a native refusal frame that states its own non-400 status keeps the record mapping and its cooldown", async () => {
+  const prelude = 'event: message_start\ndata: {"type":"message_start","message":{"content":[],"usage":{"input_tokens":5,"output_tokens":0}}}\n\n';
+  for (const status of [429, 503]) {
+    const event = { type: "error", status, error: { code: "content_filter", message: "The input was refused by moderation." } };
+    const result = await preflightNativeMessagesResponse(new Response(
+      prelude + "event: error\ndata: " + JSON.stringify(event) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+    ), { model: "fixture", provider: "anth" }, createTestTranslatorBudget());
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).not.toBe(400);
+    const failure = await consumeComboFailure(result.response);
+    expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).not.toBe("none");
+  }
+});
