@@ -19,6 +19,9 @@ function transport(email = "first@example.test", profiles = [profile]) {
     if (url.endsWith("/client/register")) return response({ clientId: "id", clientSecret: "private-client-secret" });
     if (url.endsWith("/device_authorization")) return response(authorization);
     if (url.endsWith("/token")) return response({ accessToken: "private-access", refreshToken: `private-refresh-${email}`, expiresIn: 3600 });
+    // AWS answers maxResults above 10 with 400 ValidationException, and other Kiro clients report a
+    // 400 for any maxResults; a permissive mock let maxResults: 50 ship, so this one rejects it.
+    if (headers?.["x-amz-target"]?.endsWith("ListAvailableProfiles") && Object.hasOwn(body, "maxResults")) return response({ __type: "ValidationException" }, 400);
     if (headers?.["x-amz-target"]?.endsWith("ListAvailableProfiles")) return response({ profiles: url.includes("us-east-1") ? profiles : [] });
     if (headers?.["x-amz-target"]?.endsWith("GetUsageLimits")) return response({ userInfo: { email, userId: "user-id" } });
     throw new Error("Unexpected upstream request");
@@ -176,6 +179,19 @@ test("profile pagination rejects cycles instead of presenting a partial list", a
     calls++; return { status: 200, errorType: "", data: { profiles: [profile], nextToken: "repeated" } };
   }, "private-access")).rejects.toThrow("Incomplete");
   expect(calls).toBeLessThanOrEqual(4);
+});
+
+test("profile pagination continues with only nextToken and merges every page", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const discovered = await listKiroIamProfiles(async (url, body) => {
+    if (!url.includes("us-east-1")) return { status: 200, errorType: "", data: { profiles: [] } };
+    bodies.push(body);
+    return body.nextToken === "page-2"
+      ? { status: 200, errorType: "", data: { profiles: [second] } }
+      : { status: 200, errorType: "", data: { profiles: [profile], nextToken: "page-2" } };
+  }, "private-access");
+  expect(bodies).toEqual([{}, { nextToken: "page-2" }]);
+  expect(discovered.map(item => item.arn)).toEqual([profileArn, second.arn]);
 });
 
 test("a region without permission is skipped, but transient discovery failure is not hidden", async () => {

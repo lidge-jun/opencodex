@@ -26,12 +26,12 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | Chapter | Declared capabilities |
 |---|---|
 | [lifecycle](01_surface_lifecycle.md) | 14 |
-| [providers-models](01_surface_providers-models.md) | 50 |
+| [providers-models](01_surface_providers-models.md) | 53 |
 | [accounts](01_surface_accounts.md) | 43 |
 | [agents-routing](01_surface_agents-routing.md) | 68 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 105 |
-| [access-remote](01_surface_access-remote.md) | 34 |
+| [access-remote](01_surface_access-remote.md) | 43 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -74,6 +74,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx link status`
 
 [Read-oriented task](01_surface_access-remote.md#ocx-link-status)
+
+### `ocx link diagnostics`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-link-diagnostics)
 
 ### `ocx link revoke`
 
@@ -526,6 +530,18 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx alias defaults`
 
 [State-changing task](01_surface_providers-models.md#ocx-alias-defaults)
+
+### `ocx alias template set`
+
+[State-changing task](01_surface_providers-models.md#ocx-alias-template-set)
+
+### `ocx alias template rm`
+
+[State-changing task](01_surface_providers-models.md#ocx-alias-template-rm)
+
+### `ocx alias template show`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-alias-template-show)
 
 ### `ocx provider pacing`
 
@@ -1467,6 +1483,38 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_access-remote.md#ocx-access-audio-live-check)
 
+### `ocx link check`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-check)
+
+### `ocx link update`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-update)
+
+### `ocx link sync`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-sync)
+
+### `ocx link restart-codex`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-restart-codex)
+
+### `ocx link capture start`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-capture-start)
+
+### `ocx link capture stop`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-capture-stop)
+
+### `ocx link capture status`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-capture-status)
+
+### `ocx link policy`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-policy)
+
 ### `ocx lab status`
 
 [Read-oriented task](01_surface_lab.md#ocx-lab-status)
@@ -1553,6 +1601,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 376
-- of those, state-changing: 232
+- declared capabilities: 388
+- of those, state-changing: 242
 - head-resolved invocations: 2

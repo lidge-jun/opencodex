@@ -259,10 +259,20 @@ describe("pr-labeler workflow", () => {
   const workflowPath = path.join(__dirname, "../workflows/pr-labeler.yml");
   const workflow = fs.readFileSync(workflowPath, "utf8");
 
+  // Since #7654 the trigger lives in pr-gates.yml, whose `label` job starts this
+  // reusable workflow only for the actions listed in its fromJSON(...) filter.
+  const caller = fs.readFileSync(path.join(__dirname, "../workflows/pr-gates.yml"), "utf8");
+
   function pullRequestTargetTypes() {
-    const match = workflow.match(/pull_request_target:\s*\n(?:[ \t].*\n)*?[ \t]+types:\s*\[([^\]]+)\]/);
-    assert.ok(match, "expected pull_request_target types array in pr-labeler.yml");
-    return match[1].split(",").map((type) => type.trim());
+    const triggerMatch = caller.match(/pull_request_target:\s*\n(?:[ \t].*\n)*?[ \t]+types:\s*\[([^\]]+)\]/);
+    assert.ok(triggerMatch, "expected pull_request_target types array in pr-gates.yml");
+    const subscribed = triggerMatch[1].split(",").map((type) => type.trim());
+    const labelJob = caller.match(/^  label:\n((?:    .*\n|\n)+?)(?=^  \S)/m);
+    assert.ok(labelJob, "expected a label job in pr-gates.yml");
+    const filter = labelJob[1].match(/fromJSON\('(\[[^']*\])'\)/);
+    assert.ok(filter, "expected the label job to filter github.event.action");
+    assert.match(labelJob[1], /uses: \.\/\.github\/workflows\/pr-labeler\.yml/);
+    return JSON.parse(filter[1]).filter((type) => subscribed.includes(type));
   }
 
   it("listens for labeled and unlabeled so human overrides cancel stale sync runs", () => {

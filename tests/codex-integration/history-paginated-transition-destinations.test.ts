@@ -21,6 +21,7 @@ import { Database } from "bun:sqlite";
 
 import {
   HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE,
+  HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED,
   HISTORY_RELABEL_STANDS_DOWN,
 } from "../../src/codex/history-provider";
 import { OCX_ROUTING_MARKER_LINE } from "../../src/codex/injected-marker";
@@ -210,6 +211,69 @@ describe("paginated transition destinations (#5321)", () => {
     // paginated rollout belong to Codex's own writer.
     for (const [path, bytes] of rollouts) expect(readFileSync(path, "utf8")).toBe(bytes);
     expect(readThreads(codexHome)).toEqual(before);
+  });
+
+  test("#8191: on Codex 0.166 or later the same home is refused and nothing changes", () => {
+    const catalogPath = join(codexHome, "opencodex-catalog.json");
+    writeFileSync(catalogPath, JSON.stringify({ models: [{ slug: "vendor/routed-model" }] }));
+    const rollouts = seedHome(codexHome, 'model = "gpt-5.5"\n', [
+      { id: "already-openai", provider: "openai" },
+      { id: "already-routed", provider: "opencodex" },
+    ]);
+    const beforeThreads = readThreads(codexHome);
+    const beforeConfig = readFileSync(join(codexHome, "config.toml"), "utf8");
+    // The persisted runtime selection is the passive version source a fresh process reads.
+    writeFileSync(join(ocxHome, "codex-runtime.json"), JSON.stringify({
+      version: 1, command: "codex", source: "installed", selectedVersion: "0.166.0-alpha.6",
+      updatedAt: "2026-11-10T00:00:00.000Z",
+    }));
+
+    const applied = runJson(codexHome, ocxHome, INJECT_SCRIPT, {
+      TEST_OCX_CONFIG: JSON.stringify({ codexDesktopAuthless: true }),
+    });
+    expect(applied).toMatchObject({
+      success: false,
+      historyPreflightFailureReason: HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED,
+    });
+    expect(String(applied.message)).toContain("syncResumeHistory");
+    // Refused before any write: the config, every row and every rollout byte are as they were.
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(beforeConfig);
+    expect(readThreads(codexHome)).toEqual(beforeThreads);
+    for (const [path, bytes] of rollouts) expect(readFileSync(path, "utf8")).toBe(bytes);
+  });
+
+  test("#8191: the client-compaction form is refused on Codex 0.166 too, unless syncResumeHistory is off", () => {
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({ models: [{ slug: "vendor/routed-model" }] }));
+    const rollouts = seedHome(codexHome, 'model = "gpt-5.5"\n', [
+      { id: "already-openai", provider: "openai" },
+      { id: "already-routed", provider: "opencodex" },
+    ]);
+    const beforeThreads = readThreads(codexHome);
+    const beforeConfig = readFileSync(join(codexHome, "config.toml"), "utf8");
+    writeFileSync(join(ocxHome, "codex-runtime.json"), JSON.stringify({
+      version: 1, command: "codex", source: "installed", selectedVersion: "0.166.0-alpha.6",
+      updatedAt: "2026-11-10T00:00:00.000Z",
+    }));
+
+    // This form never relabels history, so its preflight scans no rows; the lock must still see them.
+    const refused = runJson(codexHome, ocxHome, INJECT_SCRIPT, {
+      TEST_OCX_CONFIG: JSON.stringify({ codexClientCompaction: true }),
+    });
+    expect(refused).toMatchObject({
+      success: false,
+      historyPreflightFailureReason: HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED,
+    });
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(beforeConfig);
+    expect(readThreads(codexHome)).toEqual(beforeThreads);
+    for (const [path, bytes] of rollouts) expect(readFileSync(path, "utf8")).toBe(bytes);
+
+    // The documented opt-out still switches, and still touches no conversation.
+    const applied = runJson(codexHome, ocxHome, INJECT_SCRIPT, {
+      TEST_OCX_CONFIG: JSON.stringify({ codexClientCompaction: true, syncResumeHistory: false }),
+    });
+    expect(applied).toMatchObject({ success: true });
+    expect(readThreads(codexHome)).toEqual(beforeThreads);
+    for (const [path, bytes] of rollouts) expect(readFileSync(path, "utf8")).toBe(bytes);
   });
 
   test("a root override the operator owns is neither taken over nor removed by the restore", () => {

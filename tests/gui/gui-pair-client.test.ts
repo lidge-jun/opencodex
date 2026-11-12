@@ -228,6 +228,26 @@ describe("GUI pairing client", () => {
     });
     expect(rejected).toEqual({ kind: "unavailable", reason: "rejected" });
     expect(JSON.stringify(rejected)).not.toContain("secret-must-not-surface");
+
+    // #8495 review: the hub's two config-independent refusals must not read as an origin problem.
+    const respond = (response: () => Response) => requestBoundGuiPairingGrant(target, browserOrigin, {
+      readRuntime: () => ({ ...target, attestationSecret: secret }),
+      createChallenge: () => nonce,
+      fetchImpl: async (_input, init) => init?.method ? response() : proofResponse(init),
+    });
+    expect(await respond(() => Response.json({ error: "GUI pairing grant refused" }, { status: 429, headers: { "Retry-After": "60" } })))
+      .toEqual({ kind: "unavailable", reason: "rate-limited" });
+    // The grant route's own refusal (its loaded config does not admit this origin) is the one case
+    // a corsAllowOrigins edit or a restart can cure.
+    expect(await respond(() => Response.json({ error: "GUI pairing grant refused" }, { status: 403 })))
+      .toEqual({ kind: "unavailable", reason: "origin-refused" });
+    // A coded refusal, a capability refusal, and a server error stay generic.
+    expect(await respond(() => Response.json({ error: "GUI pairing grant refused", code: "local_pairing_intent_required" }, { status: 403 })))
+      .toEqual({ kind: "unavailable", reason: "rejected" });
+    expect(await respond(() => Response.json({ error: "GUI pairing capability required" }, { status: 403 })))
+      .toEqual({ kind: "unavailable", reason: "rejected" });
+    expect(await respond(() => new Response("boom", { status: 500 })))
+      .toEqual({ kind: "unavailable", reason: "rejected" });
   });
 });
 

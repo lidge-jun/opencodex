@@ -30,6 +30,37 @@ export function childConfigFailureHint(result: { code: number; stderr: string })
   return "ocx config show --json on the Child did not print a configuration with a valid port";
 }
 
+
+/**
+ * Why a full Child cannot be enrolled as it stands, and the Child command that fixes it. Each of
+ * these used to share one phase name ("Child restart preflight"), which left the Home operator to
+ * reproduce the probe over SSH. Kept under the 160 code point hint cap.
+ */
+export function childRoleRefusalHint(runtimeRole: unknown): string {
+  return runtimeRole === "client"
+    ? "The Child is still linked to a Home (config runtimeRole client). On the Child run: ocx disconnect, then ocx restart."
+    : `The Child is a Hub (config runtimeRole ${runtimeRole === "hub" ? "hub" : "unknown"}). On the Child run: ocx hub disable, then retry.`;
+}
+
+export function childHealthRefusalHint(health: unknown, port: number): string {
+  const body = health && typeof health === "object" && !Array.isArray(health) ? health as Record<string, unknown> : null;
+  if (!body || body.service !== "opencodex") {
+    return `No OpenCodex answered /healthz on the Child's port ${port}. On the Child run: ocx start (or ocx service start).`;
+  }
+  if (body.port !== port) {
+    const seen = typeof body.port === "number" ? String(body.port) : "another port";
+    return `The Child's runtime answers as port ${seen} but its config port is ${port}. On the Child run: ocx restart.`;
+  }
+  if (body.role === "client") {
+    return `The Child still serves a client runtime (/healthz role client on port ${port}). On the Child run: ocx restart.`;
+  }
+  if (body.role !== undefined && body.role !== "standalone") {
+    return `The Child serves a Hub runtime (/healthz role hub on port ${port}). On the Child run: ocx hub disable, then ocx restart.`;
+  }
+  return `The Child's runtime advertises no restart capability v1 on port ${port}. Update OpenCodex on the Child, then run: ocx restart.`;
+}
+
+
 /** `ocx config validate --json` prints one small object; this bounds a misbehaving Child. */
 export const CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES = 16 * 1024;
 

@@ -1,14 +1,21 @@
-// Cancellation is provider-scoped on the server. Keep outstanding deliveries
-// outside React instances so reopening either login surface cannot overtake one.
+import { targetFetch, type ApiTargetCapture } from "./api";
+
+// Cancellation is provider-scoped on the server and target-scoped on the client.
+// The capture comes from the original login attempt, never from the current target
+// at unmount time, so A's cleanup cannot cancel B's login.
 const cancellations = new Map<string, Promise<void>>();
 
-export function cancelOAuthLogin(apiBase: string, provider: string): Promise<void> {
-  const key = JSON.stringify([apiBase, provider]);
+function barrierKey(capture: ApiTargetCapture, provider: string): string {
+  return JSON.stringify([capture.targetKey, capture.apiBase, provider]);
+}
+
+export function cancelOAuthLogin(capture: ApiTargetCapture, provider: string): Promise<void> {
+  const key = barrierKey(capture, provider);
   const pending = cancellations.get(key);
   if (pending) return pending;
 
   const delivery = (async () => {
-    await fetch(`${apiBase}/api/oauth/login/cancel`, {
+    await targetFetch(capture, `${capture.apiBase}/api/oauth/login/cancel`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider }),
@@ -25,15 +32,15 @@ export function cancelOAuthLogin(apiBase: string, provider: string): Promise<voi
 }
 
 export async function afterOAuthCancellation<T>(
-  apiBase: string,
+  capture: ApiTargetCapture,
   provider: string,
   start: () => T | Promise<T>,
 ): Promise<T> {
-  const key = JSON.stringify([apiBase, provider]);
+  const key = barrierKey(capture, provider);
   const pending = cancellations.get(key);
   if (pending) {
     await pending;
-    return afterOAuthCancellation(apiBase, provider, start);
+    return afterOAuthCancellation(capture, provider, start);
   }
   // Check the hook's generation and dispatch in the same turn as the barrier
   // check, so another cancellation cannot slip into an extra await boundary.

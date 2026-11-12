@@ -63,6 +63,237 @@ export interface CitationMarkerFilter {
 }
 
 /**
+ * The memory-citation tags the Codex client parses as hidden markup (openai/codex
+ * `codex-rs/utils/stream-parser/src/citation.rs`): matching is literal and non-nested, the text
+ * from an opening tag to the FIRST closing tag is hidden, and an opening tag that never closes is
+ * auto-closed at the end of the stream, hiding everything after it. A model that quotes the tag
+ * ("output the `...` block at the end") therefore appears to truncate at the quote. Backticks do
+ * not protect it, because the client parses before any markdown rendering.
+ */
+const MEMORY_CITATION_OPEN = "<oai-mem-citation>";
+const MEMORY_CITATION_CLOSE = "</oai-mem-citation>";
+const MEMORY_CITATION_MENTION = /<(\/?oai-mem-citation>)/g;
+
+/**
+ * Body shape of a REAL memory-citation block: it opens with a complete `<citation_entries>` list, or
+ * with a complete ids list (`<rollout_ids>` or `<thread_ids>`) when the entries are absent. That matches
+ * the client's `parse_memory_citation` (`codex-rs/memories/read/src/citations.rs`), which accepts a block
+ * carrying either list and rejects one carrying neither.
+ *
+ * This is what separates a block the client should render from a mention of the tag name inside
+ * ordinary prose. Escaping both would break the real feature: the client would print the tags
+ * instead of the citation list, and the turn's memory references would silently disappear.
+ */
+const MEMORY_CITATION_BODY_ELEMENTS: ReadonlyArray<readonly [open: string, close: string]> = [
+  ["<citation_entries>", "</citation_entries>"],
+  ["<rollout_ids>", "</rollout_ids>"],
+  ["<thread_ids>", "</thread_ids>"],
+];
+
+/** First index at or after `from` (below `limit`) that is not whitespace. */
+function skipWhitespace(text: string, from: number, limit: number): number {
+  let at = from;
+  while (at < limit && /\s/.test(text[at]!)) at++;
+  return at;
+}
+
+/**
+ * Longest candidate block, in UTF-16 code units (JavaScript string length), that the streaming
+ * escaper holds while waiting for its closing tag; the whole-string form applies the same limit.
+ * Callers charge the held bytes to their translator budget (`live_transient`) as the hold grows.
+ */
+const MAX_MEMORY_CITATION_HOLD = 16_384;
+
+/**
+ * Whether the text right after an opening tag still could begin a real block.
+ *
+ * A real block puts `<citation_entries>` (usually on the next line) immediately after the open
+ * tag. Ordinary prose that quotes the tag puts a backtick, punctuation, or words there instead,
+ * so one short lookahead separates the two without buffering the whole block.
+ */
+function bodyCouldBeReal(afterOpen: string): boolean {
+  const trimmed = afterOpen.replace(/^\s+/, "");
+  return MEMORY_CITATION_BODY_ELEMENTS.some(([open]) => open.startsWith(trimmed) || trimmed.startsWith(open));
+}
+
+function isMemoryCitationBlock(body: string): boolean {
+  const trimmed = body.replace(/^\s+/, "");
+  return MEMORY_CITATION_BODY_ELEMENTS.some(([open, close]) => trimmed.startsWith(open) && trimmed.includes(close, open.length));
+}
+
+/**
+ * Whether an opening tag begins a real block: the entries list has to follow it directly.
+ *
+ * `isMemoryCitationBlock` over a whole body cannot answer this, because prose before a real block
+ * also spans a `<citation_entries>…</citation_entries>…<rollout_ids>` stretch when the search is
+ * anchored at the mention rather than at the block. The adjacency check is what makes the mention
+ * provably a mention.
+ */
+function opensRealBlock(text: string, openAt: number, closeCache?: { at: number }): number | undefined {
+  const afterOpen = openAt + MEMORY_CITATION_OPEN.length;
+  const bodyStart = skipWhitespace(text, afterOpen, Math.min(text.length, openAt + MAX_MEMORY_CITATION_HOLD));
+  if (!MEMORY_CITATION_BODY_ELEMENTS.some(([open]) => text.startsWith(open, bodyStart))) return undefined;
+  // Callers scanning one string for several opening tags share the next closing tag, so prose with
+  // many unclosed candidates costs one forward search instead of one per tag (-2: not searched yet).
+  let close: number;
+  if (closeCache) {
+    if (closeCache.at === -2 || (closeCache.at !== -1 && closeCache.at < bodyStart)) {
+      closeCache.at = text.indexOf(MEMORY_CITATION_CLOSE, bodyStart);
+    }
+    close = closeCache.at;
+  } else {
+    close = text.indexOf(MEMORY_CITATION_CLOSE, bodyStart);
+  }
+  if (close === -1) return undefined;
+  // The streaming escaper holds at most MAX_MEMORY_CITATION_HOLD of a candidate, so a block larger
+  // than that is a mention in BOTH forms; one size rule keeps deltas and `output_text.done` equal.
+  if (close + MEMORY_CITATION_CLOSE.length - openAt > MAX_MEMORY_CITATION_HOLD) return undefined;
+  return isMemoryCitationBlock(text.slice(afterOpen, close)) ? close + MEMORY_CITATION_CLOSE.length : undefined;
+}
+
+/**
+ * Neutralize a literal memory-citation tag so the client renders it as text.
+ *
+ * The client parses the tag as markup before markdown, so wrapping it in backticks does not
+ * protect it. The leading `<` becomes `&lt;`. In ordinary markdown text that renders as `<` again;
+ * inside an inline code span or a fenced block CommonMark does not decode entities, so the reader
+ * sees `&lt;oai-mem-citation>` literally. That visible difference is the trade-off for keeping the
+ * rest of the answer: the alternative is the client hiding everything after the quote.
+ *
+ * Only the Responses wire needs this: Chat Completions and Messages clients never parse the tag,
+ * so the bridges apply it behind `escapeMemoryCitationTags`.
+ */
+export function escapeMemoryCitationMentions(text: string): string {
+  if (!text.includes("oai-mem-citation")) return text;
+  // Claim real blocks FIRST, so a mention earlier in the prose cannot pair with a real block's
+  // closing tag and leave the block half-escaped. Everything outside a claimed block is a
+  // mention and gets escaped, tags included. Matching runs over the ORIGINAL string as one pass
+  // (appendReplacement), because `String.replace` would re-scan the text we just escaped.
+  const blocks: Array<{ start: number; end: number }> = [];
+  const closeCache = { at: -2 };
+  let searchFrom = 0;
+  for (;;) {
+    const open = text.indexOf(MEMORY_CITATION_OPEN, searchFrom);
+    if (open === -1) break;
+    const end = opensRealBlock(text, open, closeCache);
+    if (end !== undefined) {
+      blocks.push({ start: open, end });
+      searchFrom = end;
+    } else {
+      searchFrom = open + MEMORY_CITATION_OPEN.length;
+    }
+  }
+  // Outside claimed blocks every tag is a mention; one linear regex pass escapes them all.
+  const escapedMentions = (segment: string): string => segment.replace(MEMORY_CITATION_MENTION, "&lt;$1");
+  if (blocks.length === 0) return escapedMentions(text);
+  let out = "";
+  let cursor = 0;
+  for (const block of blocks) {
+    out += escapedMentions(text.slice(cursor, block.start));
+    out += text.slice(block.start, block.end);
+    cursor = block.end;
+  }
+  out += escapedMentions(text.slice(cursor));
+  return out;
+}
+
+export interface MemoryCitationEscaper {
+  /** Feed one streaming delta; returns the portion safe to emit now. */
+  push(delta: string): string;
+  /** Text still withheld at the end of the stream; resolve it with `escapeMemoryCitationMentions`. */
+  pending(): string;
+}
+
+/** Escaper for deliveries that must not rewrite text (Chat Completions, Messages). */
+export const passthroughMemoryCitationEscaper: MemoryCitationEscaper = {
+  push: (delta: string) => delta,
+  pending: () => "",
+};
+
+/**
+ * Streaming form of `escapeMemoryCitationMentions`.
+ *
+ * A tag can straddle delta boundaries, so a per-delta regex would miss the mention that matters
+ * most: the model writing the tag name one token at a time. The escaper buffers until it can tell
+ * a mention from a real block. A real block is emitted verbatim, tags included, as soon as its
+ * `<citation_entries>` body starts — the client keeps it, which is the whole point of the block.
+ * Everything else is a mention and gets `&lt;`.
+ */
+export function createMemoryCitationEscaper(): MemoryCitationEscaper {
+  /**
+   * Unresolved tail. It starts at a `<` and is either a partial tag, or an opening tag whose block
+   * has not closed yet. A candidate block is held WHOLE until its closing tag arrives, because only
+   * the complete body (entries, then rollout ids) proves it is a real block rather than a mention.
+   */
+  let held = "";
+  const escapeOpen = "&lt;" + MEMORY_CITATION_OPEN.slice(1);
+  const escapeClose = "&lt;" + MEMORY_CITATION_CLOSE.slice(1);
+  return {
+    push(delta: string): string {
+      if (!held && !delta.includes("<")) return delta;
+      const input = held + delta;
+      held = "";
+      let out = "";
+      let i = 0;
+      while (i < input.length) {
+        const next = input.indexOf("<", i);
+        if (next === -1) {
+          out += input.slice(i);
+          break;
+        }
+        out += input.slice(i, next);
+        // Look no further than one hold limit ahead: a real block never exceeds it, and slicing the
+        // whole remainder for every tag would make one large delta of many tags quadratic.
+        const tail = input.slice(next, next + MAX_MEMORY_CITATION_HOLD + 1);
+        const remaining = input.length - next;
+        if (tail.startsWith(MEMORY_CITATION_CLOSE)) {
+          // A close tag outside a claimed block is prose.
+          out += escapeClose;
+          i = next + MEMORY_CITATION_CLOSE.length;
+          continue;
+        }
+        if (!tail.startsWith(MEMORY_CITATION_OPEN)) {
+          if (MEMORY_CITATION_OPEN.startsWith(tail) || MEMORY_CITATION_CLOSE.startsWith(tail)) {
+            // A tag is still arriving.
+            held = tail;
+            return out;
+          }
+          out += "<";
+          i = next + 1;
+          continue;
+        }
+        const afterOpen = tail.slice(MEMORY_CITATION_OPEN.length);
+        if (!bodyCouldBeReal(afterOpen)) {
+          out += escapeOpen;
+          i = next + MEMORY_CITATION_OPEN.length;
+          continue;
+        }
+        const end = opensRealBlock(tail, 0);
+        if (end !== undefined) {
+          // A complete real block is released verbatim, both tags included, so the delta stream
+          // equals what `escapeMemoryCitationMentions` keeps in the final text.
+          out += tail.slice(0, end);
+          i = next + end;
+          continue;
+        }
+        if (!tail.includes(MEMORY_CITATION_CLOSE, MEMORY_CITATION_OPEN.length) && remaining <= MAX_MEMORY_CITATION_HOLD) {
+          // The block may still close; hold it whole.
+          held = tail;
+          return out;
+        }
+        // Closed without a valid body, or too large to keep holding: a mention.
+        out += escapeOpen;
+        i = next + MEMORY_CITATION_OPEN.length;
+      }
+      return out;
+    },
+    pending(): string {
+      return held;
+    },
+  };
+}
+
+/**
  * Remove every complete citation span from a whole string.
  *
  * This runs the streaming filter over the whole text, so the bridge's re-stripped

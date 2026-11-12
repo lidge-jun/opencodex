@@ -19,7 +19,7 @@ export function duplicateRuntimeMessage(
   if (pid != null && latch.observe(evidence)) {
     const supervisor = evidence.kind === "desktop" ? `, ${evidence.app}` : "";
     return `OpenCodex Desktop supervises the running proxy (pid ${pid}${supervisor}, port ${port}). `
-      + "Use the running proxy, or quit OpenCodex before starting it from this CLI.";
+      + "Use the running proxy (restart it with 'ocx restart', re-point Codex with 'ocx sync'), or quit OpenCodex before starting it from this CLI.";
   }
   return `⚠️  Proxy already running (PID ${pid ?? "unknown"}, port ${port}). Use 'ocx stop' first.`;
 }

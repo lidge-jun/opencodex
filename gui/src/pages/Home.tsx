@@ -5,9 +5,10 @@ import { IconRefresh } from "../icons";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
 import { recentFailures, type HomeLogRow } from "./home-failures";
-import { startupChecklistDone } from "../startup-health-ui";
+import { startupChecklistStep } from "../startup-health-ui";
 import { useStartupChecklist } from "../hooks/useStartupChecklist";
 import { TelemetryProfileCard } from "../components/telemetry-profile-card";
+import { readManagementHealth } from "../lib/proxy-health";
 
 /*
  * Design system v2 landing page. It answers the two questions people open the dashboard
@@ -23,7 +24,6 @@ interface HomeProps {
   reloadingCodex: boolean;
 }
 
-interface Health { version?: string; uptime?: number }
 interface UsageDay { requests?: number; totalTokens?: number }
 interface UsageBody { summary?: { requests?: number; totalTokens?: number }; days?: UsageDay[] }
 interface ConfigBody { providers?: Record<string, unknown> }
@@ -43,8 +43,9 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const number = new Intl.NumberFormat(locale);
   const compact = new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 });
 
+  // The authenticated management health route: a hub's management ingress denies /healthz (#8506).
   const health = useKeyedClientResource(`home-health:${apiBase}`, [apiBase],
-    signal => getJson<Health>(`${apiBase}/healthz`, signal), { pollMs: 30_000 });
+    signal => readManagementHealth(apiBase, "/api/system/health", signal), { pollMs: 30_000 });
   const usage = useKeyedClientResource(`home-usage:${apiBase}`, [apiBase],
     signal => getJson<UsageBody>(`${apiBase}/api/usage?range=7d`, signal), { pollMs: 60_000 });
   const config = useKeyedClientResource(`home-config:${apiBase}`, [apiBase],
@@ -67,15 +68,19 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const providerCount = Object.keys(config.data?.providers ?? {}).length;
   const requests7d = usage.data?.summary?.requests ?? 0;
   const tokens7d = usage.data?.summary?.totalTokens ?? 0;
-  const uptime = health.data?.uptime ?? 0;
+  const uptime = health.data?.uptime ?? null;
+  const autostart = startupChecklistStep(startup.data);
 
   const steps = [
-    { key: "provider", done: providerCount > 0, title: t("shellV2.stepProvider"), hint: t("shellV2.stepProviderHint"), go: () => navigate("providers") },
-    { key: "request", done: requests7d > 0, title: t("shellV2.stepFirstRequest"), hint: t("shellV2.stepFirstRequestHint"), go: () => navigate("integrations") },
+    { key: "provider", done: providerCount > 0, title: t("shellV2.stepProvider"), hint: t("shellV2.stepProviderHint"), showHint: false, go: () => navigate("providers") },
+    { key: "request", done: requests7d > 0, title: t("shellV2.stepFirstRequest"), hint: t("shellV2.stepFirstRequestHint"), showHint: false, go: () => navigate("integrations") },
     {
       key: "autostart",
-      done: startup.data ? startupChecklistDone(startup.data) : undefined,
-      title: t("shellV2.stepAutostart"), hint: t("shellV2.stepAutostartHint"), go: () => navigate("startup"),
+      done: autostart.done,
+      title: t(autostart.titleKey), hint: t(autostart.hintKey),
+      // An unverified Desktop login still says where to check it.
+      showHint: Boolean(startup.data) && autostart.desktop && autostart.done === undefined,
+      go: () => autostart.subPath ? navigate("startup", autostart.subPath) : navigate("startup"),
     },
   ];
   const doneCount = steps.filter(step => step.done).length;
@@ -106,7 +111,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
 
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label={t("shellV2.tileVersion")} value={health.data?.version ? `v${health.data.version}` : "—"} />
-        <Stat label={t("shellV2.tileUptime")} value={online ? t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) }) : "—"} />
+        <Stat label={t("shellV2.tileUptime")} value={online && uptime !== null ? t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) }) : "—"} />
         <Stat label={t("shellV2.tileRequests")} value={number.format(requests7d)} />
         <Stat label={t("shellV2.tileTokens")} value={compact.format(tokens7d)} />
       </section>
@@ -130,7 +135,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
               {steps.map((step, index) => {
                 const current = step.done === false && steps.findIndex(s => s.done === false) === index;
                 return (
-                  <li key={step.key}>
+                  <li key={step.key} data-step={step.key}>
                     <button type="button" onClick={step.go}
                       className={cn(
                         "group flex w-full cursor-pointer items-center gap-3 rounded-control p-2.5 text-left transition-colors hover:bg-raised",
@@ -142,7 +147,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
                       )} aria-hidden>{step.done ? "✓" : index + 1}</span>
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className={cn("text-[14px] font-medium", step.done && "text-fg-subtle line-through")}>{step.title}</span>
-                        {step.done === false && <span className="text-[13px] text-fg-muted">{step.hint}</span>}
+                        {(step.done === false || step.showHint) && <span className="text-[13px] text-fg-muted">{step.hint}</span>}
                       </span>
                       {step.done === false && <span className="text-[13px] font-medium text-highlight opacity-0 transition-opacity group-hover:opacity-100">{t("shellV2.stepOpen")} →</span>}
                     </button>
