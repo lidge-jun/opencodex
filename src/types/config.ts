@@ -5,6 +5,7 @@ import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
 import type { OcxTelemetryConfig } from "./telemetry";
 import type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
+import type { OcxLinkHomeConfig, OcxLinkTransportConfig } from "./link";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 export type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
@@ -483,11 +484,6 @@ export interface OcxPrivacyConfig {
   maskEmails?: boolean;
 }
 
-export interface OcxLinkTransportConfig {
-  tunnelPort: number;
-  linkId: string;
-}
-
 export interface OcxClientConnectionConfig {
   serverUrl: string;
   managementUrl: string;
@@ -527,7 +523,7 @@ export interface OcxClientConnectionConfig {
   };
 }
 
-export interface OcxConfig {
+export interface OcxConfig extends OcxLinkHomeConfig {
   /** Experimental macOS app-server stdout shim; absent or false disables it. */
   chatgptDesktop?: { appServerShim?: boolean };
   port: number;

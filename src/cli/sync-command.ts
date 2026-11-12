@@ -187,10 +187,13 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]));
+          }, ["mcode", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }
+        // Pi's raw nested selectors are proven by the serving proxy, so its refresh runs there.
+        const { refreshPiThroughServer } = await import("./pi-sync");
+        results.push(...await refreshPiThroughServer({ findLiveProxy: async () => live }));
       }
       // Even without a live proxy, report why Aside could not sync. Its server
       // owner is never bypassed, and another client's failure cannot hide it.
