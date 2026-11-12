@@ -214,3 +214,28 @@ describe("review round 1 (T5d1-R1-01, -02, -04)", () => {
   });
 });
 
+describe("review round 2 (T5d1-R2-01)", () => {
+  test("an all-links unknown state survives arm and a graceful stop; a readable restart still sees every link unknown", () => {
+    writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"running"}');
+    let readable = false;
+    const holds = createActivityHolds({ dir, linkIds: () => (readable ? LINKS : null) });
+    holds.start();
+    expect(holds.arm()).toBe(true);
+    holds.stop();
+    readable = true;
+    const again = store();
+    expect(LINKS.map(link => again.describe(link).unknown)).toEqual(["crash", "crash"]);
+  });
+
+  test("a graceful stop that can list the links again writes them unknown and then cleans", () => {
+    writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"running"}');
+    let readable = false;
+    const holds = createActivityHolds({ dir, linkIds: () => (readable ? LINKS : null) });
+    holds.start();
+    holds.arm();
+    readable = true;
+    expect(holds.stop()).toBe(true);
+    expect(JSON.parse(readFileSync(join(dir, "ws-run-state.json"), "utf8"))).toMatchObject({ state: "clean" });
+    expect(store().describe(A).unknown).toBe("crash");
+  });
+});

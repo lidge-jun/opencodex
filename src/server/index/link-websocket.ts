@@ -258,12 +258,13 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
   };
 
   /**
-   * A create on a link socket may return results a closed socket of the same link and own thread was
-   * waiting for. Parses only while the thread is still unknown or the link has releasable holds.
+   * Learns the socket's own thread from its first create when the handshake carried none. Release
+   * itself happens only when the shared handler admits a turn (onAccepted, below), so a warmup or a
+   * refused create never releases a hold.
    */
-  const observeForHolds = (ws: ServerWebSocket<WsData>, linkId: string, state: SocketState, raw: string | Buffer): void => {
+  const learnThread = (state: SocketState, raw: string | Buffer): void => {
     const holds = deps.holds!;
-    if (state.threadHash !== undefined && !holds.releasable(linkId)) return;
+    if (state.threadHash !== undefined) return;
     let frame: Record<string, unknown>;
     try { frame = JSON.parse(typeof raw === "string" ? raw : raw.toString()) as Record<string, unknown>; } catch { return; }
     if (frame.type !== "response.create") return;
@@ -272,7 +273,6 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
       const threadId = metadata && typeof metadata.thread_id === "string" && metadata.thread_id ? metadata.thread_id : null;
       try { state.threadHash = threadId ? holds.threadHash(threadId) : null; } catch { state.threadHash = null; }
     }
-    if (holds.releasable(linkId)) holds.observe(linkId, state.threadHash, resultKeysOf(frame.input));
   };
 
   /** Design 5: a socket that closes while busy, for any reason except revocation, leaves a hold. */
@@ -427,7 +427,13 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           states.set(ws, state);
           const activity = ws.data.responsesActivity;
           if (activity) {
-            state.unsubscribe = activity.onChange(() => observe(ws, state));
+            const stopChange = activity.onChange(() => observe(ws, state));
+            // An admitted turn may return results a closed socket of this link and own thread waited for.
+            const stopAccepted = deps.holds ? activity.onAccepted(input => {
+              const holds = deps.holds!;
+              if (holds.releasable(link.linkId)) holds.observe(link.linkId, state.threadHash ?? null, resultKeysOf(input));
+            }) : () => {};
+            state.unsubscribe = () => { stopChange(); stopAccepted(); };
             observe(ws, state);
           }
           // A revoke or last-link close() that ran between the upgrade and now still applies.
@@ -448,7 +454,7 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           if (state) {
             if (!enabledNow()) startDrain(state);
             if (state.drainingSince !== null && !admitWhileDraining(ws, state, raw)) return;
-            if (deps.holds) observeForHolds(ws, link.linkId, state, raw);
+            if (deps.holds) learnThread(state, raw);
           }
           return base.message?.(ws, raw);
         },

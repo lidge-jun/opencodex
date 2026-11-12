@@ -284,7 +284,10 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
     /** Graceful stop, after the link sockets closed: holds first, then clean. */
     stop(): boolean {
       if (!armed) return true;
-      if (!persist()) return false;
+      // Unknown state that exists only in memory (links unreadable at start) is written per link once
+      // the links can be listed; until then the fence is never cleaned.
+      if (allUnknown && markAll(allUnknown)) allUnknown = null;
+      if (!persist() || allUnknown) return false;
       return write(FENCE, { version: 1, state: "clean" });
     },
   };

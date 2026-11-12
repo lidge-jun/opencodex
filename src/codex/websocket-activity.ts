@@ -50,6 +50,7 @@ export class CodexWebSocketActivity {
   private untrackedResults = false;
   // Remote Link sockets observe their own activity; local sockets register nothing.
   private listeners: Array<() => void> = [];
+  private acceptedListeners: Array<(input: unknown) => void> = [];
 
   get closing(): boolean { return this.closingFlag; }
 
@@ -91,6 +92,12 @@ export class CodexWebSocketActivity {
     return () => { this.listeners = this.listeners.filter(candidate => candidate !== listener); };
   }
 
+  /** Called with a create's input once the shared handler admitted it as a turn (never for a warmup or refusal). */
+  onAccepted(listener: (input: unknown) => void): () => void {
+    this.acceptedListeners.push(listener);
+    return () => { this.acceptedListeners = this.acceptedListeners.filter(candidate => candidate !== listener); };
+  }
+
   private changed(): void {
     for (const listener of [...this.listeners]) {
       try { listener(); } catch { /* an observer never breaks the socket's own bookkeeping */ }
@@ -108,6 +115,9 @@ export class CodexWebSocketActivity {
     this.turns += 1;
     this.touch();
     this.settleResults(input);
+    for (const listener of [...this.acceptedListeners]) {
+      try { listener(input); } catch { /* an observer never breaks the socket's own bookkeeping */ }
+    }
     // Ordinary creates start a new response even when its upstream omits response.created.
     // Prior results settle old waits, but cannot suppress new calls reusing their IDs.
     this.returnedResults.clear();

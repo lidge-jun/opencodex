@@ -48,13 +48,17 @@ function upgradeRequest(thread: string | null): Request {
   } });
 }
 
+const refuseAdmission = { value: false };
+
 function turnHandler() {
   const finishes: Array<() => void> = [];
   const handler: WebSocketHandler<WsData> = {
     open(ws) { ws.data.admissionLease?.bind(ws); },
     message(ws, raw) {
       const frame = JSON.parse(String(raw)) as Record<string, unknown>;
-      if (frame.type === "response.create") finishes.push(ws.data.responsesActivity!.beginTurn(frame.input));
+      // Like the shared handler: a warmup or a refused admission never begins a turn.
+      if (frame.type !== "response.create" || frame.generate === false || refuseAdmission.value) return;
+      finishes.push(ws.data.responsesActivity!.beginTurn(frame.input));
     },
     close(ws) { ws.data.admissionLease?.release(); },
   };
@@ -136,6 +140,23 @@ describe("holds from link socket closes (11.1-8)", () => {
     const other = h.open(null)!;
     other.send!(create(result("call_1")));
     expect(h.holds.count(KEY.linkId)).toBe(1);
+  });
+
+  test("a warmup or a create refused admission releases nothing; an admitted create on the same thread does (T5d1-R2-02)", () => {
+    const h = harness();
+    const first = h.open("thread-w")!;
+    first.send!(create());
+    first.ws!.data.responsesActivity!.observePayload(toolCall("call_w"));
+    h.base.finishes[0]!();
+    first.close!();
+    const next = h.open("thread-w")!;
+    next.send!({ ...create(result("call_w")), generate: false });
+    expect(h.holds.count(KEY.linkId)).toBe(1);
+    refuseAdmission.value = true;
+    try { next.send!(create(result("call_w"))); } finally { refuseAdmission.value = false; }
+    expect(h.holds.count(KEY.linkId)).toBe(1);
+    next.send!(create(result("call_w")));
+    expect(h.holds.count(KEY.linkId)).toBe(0);
   });
 
   test("a fence that cannot be written refuses link upgrades", () => {
