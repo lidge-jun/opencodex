@@ -5,7 +5,7 @@ import type { Server, WebSocketHandler } from "bun";
 import type { RequestPolicyView } from "../auth-cors";
 import type { WsData } from "../ws-bridge";
 import { createLinkWebsocketGate, marksResent, upstreamCompleted, type LinkWebsocketGateDeps } from "./link-websocket";
-import type { FingerprintMark } from "../../link/ws-activity-holds";
+import type { StoredMark } from "../../link/ws-activity-holds";
 import { LINK_TURN_HEADER, registerLinkTurnToken, releaseLinkTurnToken } from "../link-turn";
 import { LINK_WS_LIMITS, linkWebsocketTransportReady } from "./link-websocket-limits";
 import { createActivityHolds } from "../../link/ws-activity-holds";
@@ -189,7 +189,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
         // (src/server/link-turn.ts), through a token header it removes before anything is forwarded.
         let token: string | null = null;
         if (holds.hasMarks(linkId)) {
-          let resent: FingerprintMark[] = [];
+          let resent: StoredMark[] = [];
           let threadHash: string | null = null;
           token = registerLinkTurnToken({
             expanded(body) { threadHash = threadHashOf(body); resent = marksResent(holds, linkId, threadHash, body); },

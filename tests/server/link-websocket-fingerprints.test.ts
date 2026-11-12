@@ -12,8 +12,9 @@ import { createActivityHolds } from "../../src/link/ws-activity-holds";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore, type LinkStore } from "../../src/link/store";
-import type { LinkTurnObserver } from "../../src/server/link-turn";
+import { pendingLinkTurnTokens, registerLinkTurnToken, releaseLinkTurnToken, type LinkTurnObserver } from "../../src/server/link-turn";
 import type { WsData } from "../../src/server/ws-bridge";
+import { relayHarness } from "../helpers/link-relay-harness";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient, frameType } from "../helpers/link-ws-client";
@@ -215,6 +216,43 @@ describe("release rules (a)-(d)", () => {
     turn.observer!.expanded(body("u-1"));
     turn.observer!.terminal("completed", "upstream");
     expect(h.marks().fingerprinted).toBe(1);
+  });
+
+  test("a resend releases only the marks it saw at expansion, never an identical mark cut after it", () => {
+    const h = cut(harness());
+    const resend = h.open().create(body("u-1"));
+    resend.observer!.expanded(body("u-1"));
+    // Another socket runs the same request of the same turn and is cut before the resend completes.
+    const other = h.open();
+    other.create(body("u-1")).observer!.expanded(body("u-1"));
+    other.close();
+    expect(h.marks().fingerprinted).toBe(2);
+    resend.observer!.terminal("completed", "upstream");
+    expect(h.marks().fingerprinted).toBe(1);
+  });
+});
+
+describe("relayed HTTP: the turn token of an aborted request", () => {
+  test("an abort while dispatch is still pending decides the observation and drops the unclaimed token", async () => {
+    const decisions: boolean[] = [];
+    const relay = relayHarness({ observeResponsesRequest: () => {
+      const token = registerLinkTurnToken({ expanded() {}, expansionFailed() {}, terminal() {} });
+      return accepted => { releaseLinkTurnToken(token); decisions.push(accepted); };
+    } });
+    const nonce = await relay.session("lnk_abababababababab");
+    const before = pendingLinkTurnTokens();
+    const abort = new AbortController();
+    let reached!: () => void;
+    const inside = new Promise<void>(resolve => { reached = resolve; });
+    void relay.dispatch(relay.request("/v1/responses", { method: "POST", body: "{}", nonce, signal: abort.signal }), () => {
+      reached();
+      return new Promise<Response>(() => {}); // never settles
+    }).catch(() => {});
+    await inside;
+    expect(pendingLinkTurnTokens()).toBe(before + 1);
+    abort.abort();
+    expect(decisions).toEqual([false]);
+    expect(pendingLinkTurnTokens()).toBe(before);
   });
 });
 

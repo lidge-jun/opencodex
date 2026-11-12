@@ -36,11 +36,14 @@ export interface HoldInput {
 /** The cut request of a running turn: its expanded-input prefix length, HMAC, and turn reference. */
 export interface FingerprintMark { n: number; inputHmac: string; turnRef: string }
 
+/** A stored mark: its own random id, so a release removes exactly the marks a request saw, never an identical later one. */
+export interface StoredMark extends FingerprintMark { id: string }
+
 interface Hold {
   threadHash: string | null;
   pendingKeys: string[];
   runningMarks: number;
-  marks: FingerprintMark[];
+  marks: StoredMark[];
   untracked: boolean;
   createdAt: number;
 }
@@ -64,9 +67,10 @@ function canonical(value: unknown): string {
   return JSON.stringify(sort(value));
 }
 
-const isMark = (value: unknown): value is FingerprintMark => {
+const isMark = (value: unknown): value is StoredMark => {
   const mark = value as Record<string, unknown> | null;
-  return !!mark && Number.isSafeInteger(mark.n) && (mark.n as number) > 0 && typeof mark.inputHmac === "string" && typeof mark.turnRef === "string";
+  return !!mark && Number.isSafeInteger(mark.n) && (mark.n as number) > 0 && typeof mark.inputHmac === "string" && typeof mark.turnRef === "string"
+    && typeof mark.id === "string" && mark.id.length > 0;
 };
 
 interface LinkHolds { holds: Hold[]; unknown: UnknownReason | null }
@@ -270,7 +274,7 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
         value.unknown ??= "overflow";
       } else {
         // Fingerprints need the thread to be matched by; without it they are operator-only, like unknown marks.
-        const marks = input.threadHash === null ? [] : [...(input.marks ?? [])];
+        const marks = input.threadHash === null ? [] : (input.marks ?? []).map(mark => ({ n: mark.n, inputHmac: mark.inputHmac, turnRef: mark.turnRef, id: randomBytes(12).toString("hex") }));
         const unknown = input.runningMarks + (input.threadHash === null ? input.marks?.length ?? 0 : 0);
         value.holds.push({ threadHash: input.threadHash, pendingKeys: [...input.pendingKeys], runningMarks: unknown, marks, untracked: input.untracked, createdAt: now() });
       }
@@ -309,19 +313,20 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
     },
 
     /** Fingerprinted marks a request of this own thread and turn could release. */
-    markCandidates(linkId: string, threadHash: string, turnRef: string): FingerprintMark[] {
+    markCandidates(linkId: string, threadHash: string, turnRef: string): StoredMark[] {
       return (links.get(linkId)?.holds ?? []).filter(hold => hold.threadHash === threadHash)
         .flatMap(hold => hold.marks.filter(mark => mark.turnRef === turnRef));
     },
 
-    /** Rule (d): an upstream-completed inference request of the same thread and turn re-sent these. */
-    releaseMarks(linkId: string, threadHash: string, released: readonly FingerprintMark[]): void {
+    /** Rule (d): an upstream-completed inference request of the same thread and turn re-sent these, by id. */
+    releaseMarks(linkId: string, threadHash: string, released: readonly StoredMark[]): void {
       const value = links.get(linkId);
       if (!value || released.length === 0) return;
+      const ids = new Set(released.map(mark => mark.id));
       let changed = false;
       for (const hold of value.holds) {
         if (hold.threadHash !== threadHash) continue;
-        const left = hold.marks.filter(mark => !released.some(other => other.n === mark.n && other.inputHmac === mark.inputHmac && other.turnRef === mark.turnRef));
+        const left = hold.marks.filter(mark => !ids.has(mark.id));
         if (left.length !== hold.marks.length) { hold.marks = left; changed = true; }
       }
       if (!changed) return;

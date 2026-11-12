@@ -8,7 +8,7 @@ import type { AdmissionReservation } from "../../lib/admission";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { classifyUsageClient } from "../../usage/client";
 import type { LinkActivity, LinkSocketActivity } from "../../link/child-activity";
-import type { ActivityHolds, FingerprintMark } from "../../link/ws-activity-holds";
+import type { ActivityHolds, FingerprintMark, StoredMark } from "../../link/ws-activity-holds";
 import type { LinkTurnObserver } from "../link-turn";
 import { resultKeysOf } from "../../codex/websocket-activity";
 import {
@@ -181,7 +181,7 @@ export function fingerprintCapture(holds: ActivityHolds, body: unknown): Fingerp
  * (generate is not false) of the same own thread and turn whose expanded input starts with the cut
  * request's input. Rule (d), an upstream-completed terminal, is checked by the caller at the end.
  */
-export function marksResent(holds: ActivityHolds, linkId: string, threadHash: string | null, body: unknown): FingerprintMark[] {
+export function marksResent(holds: ActivityHolds, linkId: string, threadHash: string | null, body: unknown): StoredMark[] {
   const record = bodyRecord(body);
   if (!threadHash || record.generate === false || !holds.hasMarks(linkId)) return [];
   const turnId = turnIdOf(record);
@@ -487,7 +487,7 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
             // One observer per turn, created when the turn enters the pipeline (websocket-handler.ts).
             ws.data.linkTurnObserver = (turnId: number): LinkTurnObserver => {
               state.captures.set(turnId, "pending");
-              let resent: FingerprintMark[] = [];
+              let resent: StoredMark[] = [];
               const own = (value: FingerprintMark | "unknown" | "done"): void => { if (state.captures.has(turnId)) state.captures.set(turnId, value); };
               return {
                 expanded(body) {

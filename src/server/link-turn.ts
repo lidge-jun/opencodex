@@ -37,6 +37,11 @@ export function releaseLinkTurnToken(token: string): void {
   byToken.delete(token);
 }
 
+/** Registered tokens no pipeline has claimed or the relay released yet (bounded by requests in flight). */
+export function pendingLinkTurnTokens(): number {
+  return byToken.size;
+}
+
 function claim(explicit: LinkTurnObserver | undefined, req: Request): LinkTurnObserver | undefined {
   const token = req.headers.get(LINK_TURN_HEADER);
   if (token !== null) {
