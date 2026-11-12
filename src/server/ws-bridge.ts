@@ -316,14 +316,20 @@ export async function pumpResponsesSseToWebSocket(
     let stalled = false;
     await new Promise<void>(resolve => {
       const clock = linkPumpTimer();
+      // One deadline for the whole wait, however many drain callbacks arrive before it ends.
       const timer = clock.start(() => { stalled = true; done(); }, LINK_WS_LIMITS.sendStallMs);
       function done(): void {
         clock.stop(timer);
-        if (link!.drained === done) link!.drained = undefined;
+        if (link!.drained === drained) link!.drained = undefined;
         if (wakeLinkWait === done) wakeLinkWait = undefined;
         resolve();
       }
-      link.drained = done;
+      // Bun's drain means "ready for more", not "below the threshold": re-check on every callback.
+      function drained(): void {
+        if (!clientCancelled && ws.readyState === OPEN && ws.getBufferedAmount() > LINK_WS_LIMITS.sendThresholdBytes) return;
+        done();
+      }
+      link.drained = drained;
       wakeLinkWait = done;
     });
     if (stalled && !clientCancelled) {

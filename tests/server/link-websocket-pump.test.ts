@@ -61,6 +61,7 @@ function stalledSocket(link: boolean) {
     buffered: () => buffered,
     nextSend: () => new Promise<void>(resolve => { onSend = resolve; }),
     drain() { buffered = 0; data.link?.drained?.(); },
+    setBuffered(bytes: number) { buffered = bytes; },
   };
 }
 
@@ -156,5 +157,29 @@ describe("link pump stall bound", () => {
     await expect(pump).rejects.toThrow();
     expect(closes).toEqual([1011]);
     expect(socket.sent).toHaveLength(1);
+  });
+});
+
+describe("drain callbacks above the threshold (T5c-R1-01)", () => {
+  test("a drain that leaves more than the threshold buffered does not release the next event", async () => {
+    const text = Array.from({ length: 2 }, (_, index) => event(index, Math.floor(3.5 * MiB))).join("") + COMPLETED;
+    const socket = stalledSocket(true);
+    const pump = pumpResponsesSseToWebSocket(socket.ws, oneChunk(text));
+    await socket.nextSend();
+    expect(socket.sent).toHaveLength(1);
+    // Bun says "ready for more" while 2 MiB is still queued: the pump must keep waiting.
+    socket.setBuffered(2 * MiB);
+    socket.ws.data.link!.drained!();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(socket.sent).toHaveLength(1);
+    expect(socket.ws.data.link!.drained).toBeDefined();
+    const next = socket.nextSend();
+    socket.drain();
+    await next;
+    expect(socket.sent).toHaveLength(2);
+    socket.drain();
+    await pump;
+    expect(socket.peak()).toBeLessThanOrEqual(5 * MiB);
   });
 });
