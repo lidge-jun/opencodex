@@ -21,6 +21,7 @@ import { baseProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { activeAccountPricingProviders, activeConfiguredProviders, activeCreditPrices, activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
+import { costTokensWithinBound, isValidCreditPriceBound, isRepresentableCreditCount, type CreditBilling } from "./credit-billing";
 import {
   EXPECTED_PRICE_OVERLAYS,
   findExpectedPriceOverlay,
@@ -105,6 +106,11 @@ export interface AttemptCostEstimate {
   customThresholdApplied?: true;
   /** The numeric estimate is a known floor because the exact Priority price is unavailable. */
   priorityLowerBound?: boolean;
+  /**
+   * How this attempt was billed. Present only when provider credits priced it: `cost` is then
+   * `providerCredits x creditPriceUsd` and its four token fields carry no allocation.
+   */
+  billing?: CreditBilling;
 }
 
 export interface CostEstimate {
@@ -121,6 +127,12 @@ export interface CostEstimate {
   customThresholdApplied?: true;
   /** The aggregate is a known floor because every priced attempt is a lower bound. */
   priorityLowerBound?: boolean;
+  /**
+   * Billing basis for the aggregate. `provider-credits` means every priced attempt shared one
+   * credit price and the credits are summed; `mixed` means the attempts were not all billed the
+   * same way, so the total is real but the split is only available per attempt.
+   */
+  billing?: CreditBilling;
 }
 
 function finiteNonNegative(value: number): boolean {
@@ -622,18 +634,93 @@ function creditPriceFor(provider: string, creditPrices: ReadonlyMap<string, numb
   return creditPrices.get(provider) ?? creditPrices.get(namespace);
 }
 
-/** Billed cost from provider credits, when the provider has a configured credit price. */
-function creditCost(provider: string, usage: OcxUsage, creditPrices: ReadonlyMap<string, number>): CostBreakdown | null {
+/**
+ * Billed cost from provider credits, when the provider has a configured credit price.
+ *
+ * Three outcomes, because "not credit-priced" and "credit-priced but unrepresentable" are not the
+ * same answer:
+ * - `absent`: this row is not credit-priced, so the caller keeps its token estimate;
+ * - `billed`: the charge, with the credits and price that produced it;
+ * - `unrepresentable`: the row IS credit-priced but the numbers cannot be multiplied and
+ *   serialized honestly. The caller must fail closed rather than fall back to a token estimate,
+ *   which would report a different, invented amount for a row the operator asked to bill from
+ *   credits.
+ */
+type CreditCostResult =
+  | { kind: "absent" }
+  | { kind: "billed"; cost: CostBreakdown; billing: CreditBilling }
+  | { kind: "unrepresentable" };
+
+function creditCost(provider: string, usage: OcxUsage, creditPrices: ReadonlyMap<string, number>): CreditCostResult {
   const price = creditPriceFor(provider, creditPrices);
-  if (price === undefined) return null;
+  if (price === undefined) return { kind: "absent" };
   const credits = usage.providerCredits;
-  if (typeof credits === "number" && Number.isFinite(credits) && credits >= 0) {
-    return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: credits * price };
+  if (typeof credits !== "number") {
+    // A credit-billed provider reports credits on every metered response; no reading and no output
+    // means the request was refused or cancelled before generation, which the provider does not bill.
+    // With output present the reading is genuinely missing, so the token estimate still applies —
+    // that is the documented shape of an older or partial row, not an invented amount.
+    if (usage.outputTokens === 0) {
+      return {
+        kind: "billed",
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        // A zero charge still names its basis, so its four zeroes are never read as a token split.
+        billing: { source: "provider-credits", providerCredits: 0, creditPriceUsd: price },
+      };
+    }
+    return { kind: "absent" };
   }
-  // A credit-billed provider reports credits on every metered response; no credits and no output
-  // means the request was refused or cancelled before generation, which the provider does not bill.
-  if (usage.outputTokens === 0) return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-  return null;
+  // A reading that exists but is corrupt (NaN, Infinity, negative) is not a missing reading: it is
+  // evidence this row was supposed to be billed in credits and cannot be priced honestly. Falling
+  // back to tokens here would report a different amount for the reason the operator configured.
+  if (!isRepresentableCreditCount(credits)) return { kind: "unrepresentable" };
+  // Both inputs are bounded independently AND the product is re-checked: a finite price and a
+  // finite credit count can still multiply to Infinity, which JSON serializes as null.
+  if (!isValidCreditPriceBound(price)) return { kind: "unrepresentable" };
+  const total = credits * price;
+  if (!Number.isFinite(total)) return { kind: "unrepresentable" };
+  return {
+    kind: "billed",
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total },
+    billing: { source: "provider-credits", providerCredits: credits, creditPriceUsd: price },
+  };
+}
+
+/**
+ * True when this row WOULD have a credit price but its credits or price cannot produce a
+ * representable charge. Exported so the management DTO can name that failure instead of reporting
+ * the generic unmatched-price reason, which would imply a token estimate exists.
+ */
+export function creditChargeUnrepresentable(
+  provider: string,
+  usage: OcxUsage,
+  creditPrices: ReadonlyMap<string, number> = activeCreditPrices(),
+): boolean {
+  return creditCost(provider, usage, creditPrices).kind === "unrepresentable";
+}
+
+/**
+ * One attempt's cost and the basis it used. Null means fail closed: either the credit charge is
+ * unrepresentable, or the caller already decided the row is unpriced.
+ */
+function resolveAttemptCost(
+  provider: string,
+  usage: OcxUsage,
+  creditPrices: ReadonlyMap<string, number>,
+  tokens: CostTokens,
+  cost4: Cost4,
+): { cost: CostBreakdown; billing?: CreditBilling } | null {
+  // The token bound is applied only on the token path. A credit charge is `credits x price`, so a
+  // row whose token count is merely too large to price from tokens still has an honest credit
+  // charge; refusing it would discard a number that never depended on those tokens.
+  const credit = creditCost(provider, usage, creditPrices);
+  if (credit.kind === "unrepresentable") return null;
+  if (credit.kind === "billed") return { cost: credit.cost, billing: credit.billing };
+  // A token estimate is `rate x tokens / 1e6`, and the rate bound alone leaves a corrupt token
+  // count free to produce `Infinity`, which JSON serializes as `null`. Fail closed instead of
+  // returning an invented number.
+  if (!costTokensWithinBound(tokens)) return null;
+  return { cost: calculateCost(tokens, cost4) };
 }
 
 export function estimateAttemptCost(
@@ -659,19 +746,55 @@ export function estimateAttemptCost(
   );
   const priorityLowerBound = contextPriorityLowerBound
     || isOpenRouterPriorityLowerBound(price.provider, attempt.tierOutcome);
+  const billed = resolveAttemptCost(attempt.provider, attempt.usage, creditPrices, tokens, effectiveCost4);
+  if (!billed) return null;
   return {
     ordinal: attempt.ordinal,
     provider: attempt.provider,
     model: attempt.model,
     tokens,
     price,
-    cost: creditCost(attempt.provider, attempt.usage, creditPrices) ?? calculateCost(tokens, effectiveCost4),
+    cost: billed.cost,
     estimated: isEstimated(attempt.usage, attempt.usageStatus, price.status),
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),
     ...(customThresholdApplied ? { customThresholdApplied } : {}),
     ...(priorityLowerBound ? { priorityLowerBound: true } : {}),
+    ...(billed.billing ? { billing: billed.billing } : {}),
   };
+}
+
+/**
+ * Aggregate billing basis for a combo.
+ *
+ * `provider-credits` is claimed only when EVERY attempt was credit-billed at the same price, so
+ * summing their credits is a real total and the credit count is meaningful. One attempt at another
+ * price, or one token-priced attempt, makes the aggregate honest only as a sum: the components are
+ * visible per attempt, and the parent says `mixed` instead of presenting either split as the whole.
+ */
+function comboBilling(estimates: readonly AttemptCostEstimate[], total: number): CreditBilling | undefined {
+  const creditAttempts = estimates.filter(est => est.billing?.source === "provider-credits");
+  if (creditAttempts.length === 0) return undefined;
+  const creditBilling = (est: AttemptCostEstimate) => est.billing as Extract<CreditBilling, { source: "provider-credits" }>;
+  // `mixed` is a claim about HOW the attempts were billed, so it is only ever set for an actual
+  // difference in basis. A same-price combo whose summed credit count happens to be large is not
+  // mixed — the per-attempt charges were each bounded before they were computed, and the summed
+  // total is re-checked here, so summing their credits is a real number too.
+  if (creditAttempts.length !== estimates.length) return { source: "mixed" };
+  const price = creditBilling(creditAttempts[0]!).creditPriceUsd;
+  if (!creditAttempts.every(est => creditBilling(est).creditPriceUsd === price)) return { source: "mixed" };
+  const providerCredits = creditAttempts.reduce((sum, est) => sum + creditBilling(est).providerCredits, 0);
+  if (!Number.isFinite(providerCredits) || !Number.isFinite(providerCredits * price)) {
+    // Unreachable while each attempt is bounded (and an overflowing sum would have failed the
+    // combo total above), but the honest answer is still "no single split": claiming a credit
+    // count would be an amount, and dropping the marker would let the four zero components be
+    // read as a token allocation.
+    return { source: "mixed" };
+  }
+  // The displayed split has to agree with the total it sits beside. Summed floats can differ in
+  // the last bits; anything larger means the aggregate is not `sum(credits) x price`.
+  if (Math.abs(providerCredits * price - total) > Math.max(1e-9, Math.abs(total) * 1e-9)) return { source: "mixed" };
+  return { source: "provider-credits", providerCredits, creditPriceUsd: price };
 }
 
 /**
@@ -705,11 +828,16 @@ export function estimateComboCost(
     cost.cacheWrite += est.cost.cacheWrite;
     cost.total += est.cost.total;
   }
+  // A sum of individually representable charges can still leave the representable range. Fail
+  // closed rather than serve a total that serializes as null.
+  if (!Number.isFinite(cost.total)) return null;
+  const billing = comboBilling(estimates, cost.total);
   return {
     tokens,
     cost,
     estimated: estimates.some(est => est.estimated),
     attempts: estimates,
+    ...(billing ? { billing } : {}),
     ...(estimates.some(est => est.priorityMultiplier && est.priorityMultiplier !== 1)
       ? { priorityMultiplier: estimates.find(est => est.priorityMultiplier)?.priorityMultiplier }
       : {}),
@@ -750,15 +878,18 @@ export function estimateRequestCost(
     price.provider,
     typeof input.serviceTier === "object" ? input.serviceTier.tierOutcome : undefined,
   );
+  const billed = resolveAttemptCost(input.provider, input.usage, creditPrices, tokens, effectiveCost4);
+  if (!billed) return null;
   return {
     tokens,
     price,
-    cost: creditCost(input.provider, input.usage, creditPrices) ?? calculateCost(tokens, effectiveCost4),
+    cost: billed.cost,
     estimated: isEstimated(input.usage, input.usageStatus, price.status),
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),
     ...(customThresholdApplied ? { customThresholdApplied } : {}),
     ...(priorityLowerBound ? { priorityLowerBound: true } : {}),
+    ...(billed.billing ? { billing: billed.billing } : {}),
   };
 }
 

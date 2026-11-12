@@ -1,5 +1,9 @@
 import type { TFn } from "../i18n/shared";
 
+export type CostBilling =
+  | { source: "provider-credits"; providerCredits: number; creditPriceUsd: number }
+  | { source: "mixed" };
+
 type EstimatedCostResult = {
   kind: "value";
   estimate: { cost: { total: number }; priorityLowerBound?: boolean };
@@ -18,6 +22,43 @@ const USD_FORMAT = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 4,
   maximumFractionDigits: 4,
 });
+
+/**
+ * A credit count is not a token count: `formatTokens` would round 1.95 to "1.95" but a count
+ * like 1,250 becomes "1.3K", and a credit charge is the number the operator reconciles against
+ * a provider invoice. Keep the digits, group them for the locale, and cap fractions rather
+ * than dropping them.
+ */
+const CREDIT_FORMATS = new Map<string, Intl.NumberFormat>();
+
+export function formatCredits(value: number, localeCode?: string): string {
+  if (!Number.isFinite(value) || value < 0) return "\u2014";
+  const key = localeCode ?? "";
+  let formatter = CREDIT_FORMATS.get(key);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(key || undefined, { maximumFractionDigits: 6 });
+    CREDIT_FORMATS.set(key, formatter);
+  }
+  return formatter.format(value);
+}
+
+/**
+ * A unit price, not a charge. `formatEstimatedUsdValue` fixes four decimals, which renders a
+ * legitimate sub-cent credit price as `$0.0000` — the same "zero that is not a zero" the credit
+ * basis exists to remove. Significant digits keep a small price visible without inventing
+ * precision the operator did not configure.
+ */
+const USD_PRECISE = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  currencyDisplay: "narrowSymbol",
+  maximumSignificantDigits: 6,
+});
+
+export function formatUsdPrecise(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "\u2014";
+  return USD_PRECISE.format(value);
+}
 
 export function formatEstimatedUsdValue(
   value: number,

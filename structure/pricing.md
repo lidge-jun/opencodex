@@ -58,6 +58,29 @@ rates, compatibility, Combo and Fast/Priority behavior.
 It also verifies Automatic Haiku overrides at 99,999/100,000/100,001 inclusive prompt tokens,
 including cache reads/writes and the inherited catalog band for both Anthropic OAuth pools.
 
+## Credit-billed providers
+
+A provider that bills credits reports a measured count instead of a token allocation, so
+`src/usage/credit-billing.ts` owns the bounds and the billing basis that `src/usage/cost.ts`
+attaches to an estimate. `providers.<name>.creditPriceUsd` is bounded to `0..1_000_000` by the
+same predicate the config schema and load degradation use; a single attempt may report at most
+`1_000_000_000` credits, and one token bucket of a priced row at most `1_000_000_000_000` tokens.
+Bounding only one factor is not enough: `1e308 x 1e308` is `Infinity`, which `JSON.stringify`
+writes as `null`.
+
+A cost estimate therefore carries an optional `billing` field. `{ source: "provider-credits",
+providerCredits, creditPriceUsd }` means the total is `providerCredits x creditPriceUsd` and the
+four token component fields carry no allocation; a Combo reports it only when every attempt shared
+one credit price, and reports `{ source: "mixed" }` when the attempts were billed differently, so
+the parent total is real but its split exists only per attempt. Absent `billing` means a token
+price, which is what every older row reports. A credit-priced row whose count or price cannot
+produce a representable amount is unavailable with `credit_cost_unrepresentable` rather than
+falling back to a token estimate, and a token-priced row whose normalized token count exceeds the
+bound is `invalid_usage`. `tests/usage/usage-provider-credit-price.test.ts`,
+`tests/server/management-api-logs-metrics.test.ts` and
+`gui/tests/logs-cost-credit-billing.test.tsx` cover the bounds, the mixed aggregation and the
+rendered detail.
+
 `src/usage/user-cost-overlays.ts` copies the complete policy into its versioned registry:
 policy-only edits invalidate price memoization and usage caches; identical reloads remain stable.
 `tests/server/model-costs-pricing-cache.test.ts` exercises warmed cache invalidation and reset.
