@@ -68,6 +68,12 @@ export interface InputAdmissionResult {
   contextWindow?: number | null;
   /** Output space reserved by the combo preflight; absent on the loose direct gate. */
   requiredOutputHeadroom?: number;
+  /**
+   * The margin-adjusted estimate the combo gate actually decided on. Present only when the
+   * strict gate ran, so refusal reporting can name the limit that bound without re-deriving
+   * the margin. `estimatedTokens` stays the raw figure.
+   */
+  admissionEstimateTokens?: number;
 }
 
 function positive(value: unknown): number | null {
@@ -334,6 +340,7 @@ export function checkComboTargetInputAdmission(
   return {
     admitted: admissionEstimate <= ceiling && admissionEstimate + requiredOutputHeadroom <= window,
     estimatedTokens,
+    admissionEstimateTokens: admissionEstimate,
     ceiling,
     requiredOutputHeadroom,
     ...(window !== ceiling ? { contextWindow: window } : {}),
@@ -362,9 +369,10 @@ export function checkInputAdmission(
 export function inputAdmissionRefusalMessage(input: InputAdmissionResult, model: ClientFacingModelLabel): string {
   const count = (value: number | null) => value !== null && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
   const label = clientFacingModelText(model);
-  const estimate = count(input.estimatedTokens);
+  const decisionEstimate = input.admissionEstimateTokens ?? input.estimatedTokens;
+  const estimate = count(decisionEstimate);
   const ceiling = count(input.ceiling);
-  if (input.contextWindow !== undefined && input.estimatedTokens > ceiling) {
+  if (input.contextWindow !== undefined && decisionEstimate > ceiling) {
     const window = input.contextWindow === null ? "" : `; context window: ${count(input.contextWindow)} tokens`;
     return `Estimated input (~${estimate} tokens) exceeds the input limit of ${label} (${ceiling} tokens${window}). `
       + "Start a new session or choose a model with a larger input limit.";
