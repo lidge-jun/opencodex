@@ -12,10 +12,10 @@ const CHILD_PORT = 4100;
 const GRANT = "debug1: remote forward success for: listen 127.0.0.1:" + TUNNEL_PORT + ", connect 127.0.0.1:" + LISTENER_PORT;
 const REFUSED = "debug1: remote forward failure for: listen 127.0.0.1:" + TUNNEL_PORT + ", connect 127.0.0.1:" + LISTENER_PORT;
 
-function record(routes?: string[]): LinkRecord {
+function record(routes?: string[], id = LINK, tunnelPort = TUNNEL_PORT): LinkRecord {
   return {
-    id: LINK, alias: "pen-alpha", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop",
-    tunnelPort: TUNNEL_PORT, apiKeyId: "link-key", createdAt: "2026-11-01T00:00:00.000Z", remotePlatform: "posix",
+    id, alias: "pen-alpha", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop",
+    tunnelPort, apiKeyId: "link-key", createdAt: "2026-11-01T00:00:00.000Z", remotePlatform: "posix",
     ...(routes ? { routes } : {}),
   };
 }
@@ -24,7 +24,7 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 60; i += 1) await Promise.resolve();
 }
 
-type Answer = SshRunResult | "hang";
+type Answer = SshRunResult | "hang" | Promise<SshRunResult>;
 const ok = (stdout = ""): SshRunResult => ({ code: 0, stdout, stderr: "" });
 const refused = (stderr: string): SshRunResult => ({ code: 255, stdout: "", stderr });
 
@@ -44,12 +44,17 @@ function harness(options: {
   store?: () => LinkStore;
   /** Tunnels ignore signals (an exit that never arrives). */
   stubborn?: boolean;
+  processAlive?: (pid: number) => boolean | null;
+  writePidfile?: () => void;
+  /** Hold every tunnel's stderr until released (an exit still being classified). */
+  holdStderr?: { release?: () => void };
 } = {}) {
   let now = 0;
   let tick: () => void = () => {};
   const runs: Run[] = [];
   const tunnels: Tunnel[] = [];
   const kills: Array<{ pid: number; signal: string }> = [];
+  const removed: string[] = [];
   const probes = new Map<string, number>();
   let supervisor!: LinkSupervisor;
   const proofs: RouteProofRegistry = createRouteProofRegistry({ now: () => now, generationOf: id => supervisor.connectionGeneration?.(id) });
@@ -91,7 +96,11 @@ function harness(options: {
       };
       tunnel.child = {
         pid: 500 + tunnels.length, argv: [...argv], exited,
-        get stderr() { return exited.then(() => stderr); },
+        get stderr() {
+          if (!options.holdStderr) return exited.then(() => stderr);
+          const held = options.holdStderr;
+          return exited.then(() => new Promise<string>(resolve => { held.release = () => resolve(stderr); }));
+        },
         kill: signal => { signals.push(signal ?? "SIGTERM"); if (!options.stubborn) tunnel.exit(143); },
       };
       tunnels.push(tunnel);
@@ -105,9 +114,10 @@ function harness(options: {
     now: () => now,
     random: () => 0.5,
     platform: "linux",
-    readPidfile: () => options.pidfile ?? null, writePidfile: () => {}, removePidfile: () => {},
+    readPidfile: () => options.pidfile ?? null, writePidfile: options.writePidfile ?? (() => {}), removePidfile: path => { removed.push(path); },
     readProcessArgv: options.processArgv ?? (() => null),
     readProcessStartTime: options.processStart ?? (() => null),
+    processAlive: options.processAlive ?? (pid => (options.processArgv?.(pid) ?? null) !== null),
     killProcess: (pid, signal) => { kills.push({ pid, signal: signal ?? "SIGTERM" }); },
     setTimer: callback => { tick = callback; return 1 as unknown as ReturnType<typeof setInterval>; },
     clearTimer: () => {},
@@ -115,7 +125,7 @@ function harness(options: {
     routeProof: proofs,
   });
   return {
-    supervisor, runs, tunnels, kills, proofs,
+    supervisor, runs, tunnels, kills, proofs, removed,
     advance: async (ms: number) => { now += ms; tick(); await flush(); },
     tick: async () => { tick(); await flush(); },
     now: () => now,
@@ -352,6 +362,12 @@ test("an earlier tunnel identified by pid, argv and start time is stopped before
   alive = false;
   await h.advance(1_000);
   expect(h.state().orphan).toBeUndefined();
+  // The link was waiting for the old tunnel: its first round starts now and proves a route.
+  await h.tick();
+  expect(h.tunnels).toHaveLength(1);
+  await h.grant();
+  await h.tick();
+  expect(h.state().state.kind).toBe("connected");
 });
 
 test("a reused pid is never signalled: start time differs before discovery, or changes before SIGKILL", async () => {
@@ -439,4 +455,87 @@ test("a failed ssh client re-check leaves a proven tunnel connected and applies 
   await h.tick();
   expect(h.state().routes?.blocked).toBe("ssh_client_unsupported");
   expect(h.tunnels).toHaveLength(1);
+});
+
+test("an unreadable identity of a live pid is never treated as gone: no signal, the pidfile stays, the link stays blocked", async () => {
+  const atDiscovery = await started({
+    pidfile: { version: 1, linkId: LINK, pid: 4242, argv: ["ssh"], startTime: 777 },
+    processArgv: () => ["ssh"], processStart: () => null, processAlive: () => true,
+  });
+  expect(atDiscovery.kills).toEqual([]);
+  expect(atDiscovery.removed).toEqual([]);
+  expect(atDiscovery.state().orphan).toBe("orphan-unverified");
+  let readable = true;
+  const duringReap = await started({
+    pidfile: { version: 1, linkId: LINK, pid: 4242, argv: ["ssh"], startTime: 777 },
+    processArgv: () => readable ? ["ssh"] : null, processStart: () => 777, processAlive: () => true,
+  });
+  expect(duringReap.kills).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  readable = false;
+  await duringReap.advance(2_000);
+  await duringReap.advance(2_000);
+  expect(duringReap.kills).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  expect(duringReap.removed).toEqual([]);
+  expect(duringReap.state().orphan).toBe("orphan-unverified");
+  expect(duringReap.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+});
+
+test("a tunnel whose pidfile cannot be written is stopped and awaited before the next route starts", async () => {
+  const h = await started({ stubborn: true, writePidfile: () => { throw new Error("disk full"); } });
+  expect(h.tunnels).toHaveLength(1);
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM"]);
+  await h.advance(10_000);
+  expect(h.tunnels).toHaveLength(1);
+  expect(h.state().routes?.blocked).toBe("stop_unconfirmed");
+  h.tunnels[0]!.exit(137);
+  await flush();
+  expect(h.tunnels).toHaveLength(2);
+  h.tunnels[1]!.exit(0);
+  await flush();
+  await h.supervisor.stop();
+});
+
+test("while a reload is stuck stopping one link, another link's probe result starts no tunnel until the reload ends", async () => {
+  const other = "lnk_fedcba9876543210";
+  let resolveProbe!: (result: SshRunResult) => void;
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"]), record(["beta-lan", "pen-alpha"], other, 19004)] };
+  const opts: Parameters<typeof harness>[0] = {
+    stubborn: true,
+    store: () => current,
+    probe: route => route === "beta-lan" ? new Promise<SshRunResult>(resolve => { resolveProbe = resolve; }) : ok("ocx-link-probe\n"),
+  };
+  const h = await started(opts);
+  expect(h.tunnels.map(tunnel => tunnel.argv.at(-1))).toEqual(["alpha-lan"]);
+  // The first link's record changes; its stubborn candidate keeps the reload waiting.
+  current = { ...current, links: [record(["alpha-lan", "pen-alpha"], LINK, 19005), current.links[1]!] };
+  const reload = h.supervisor.reload();
+  await flush();
+  resolveProbe(ok("ocx-link-probe\n"));
+  await flush();
+  await h.tick();
+  expect(h.tunnels.map(tunnel => tunnel.argv.at(-1))).toEqual(["alpha-lan"]);
+  h.tunnels[0]!.exit(143);
+  await reload;
+  await h.tick();
+  expect(h.tunnels.map(tunnel => tunnel.argv.at(-1))).toContain("beta-lan");
+  opts.stubborn = false;
+});
+
+test("a proof that settles after the candidate's exit was observed does not promote it", async () => {
+  const held: { release?: () => void } = {};
+  let finishCatalog!: (result: SshRunResult) => void;
+  const h = await started({
+    holdStderr: held,
+    catalog: (_route, _id, admit) => { admit(); return new Promise<SshRunResult>(resolve => { finishCatalog = resolve; }); },
+  });
+  await h.grant();
+  await h.tick();
+  h.tunnels[0]!.exit(255, "Connection reset by peer");
+  await flush();
+  finishCatalog(ok(JSON.stringify({ models: [] }) + "\n200"));
+  await flush();
+  expect(h.state().state.kind).not.toBe("connected");
+  held.release?.();
+  await flush();
+  expect(h.state().routes?.route).toBeNull();
 });

@@ -58,8 +58,12 @@ export interface RouteRoundHost {
   record(linkId: string): LinkRecord | undefined;
   /** stopping, held, or an earlier tunnel that may still live (orphan-unverified). */
   blocked(linkId: string): boolean;
+  /** Lifecycle work (reload, stop, reconnect) is running: deadlines advance, no new probe or tunnel starts. */
+  busy(): boolean;
+  /** Is this child still the link's registered tunnel? */
+  ownsChild(linkId: string, child: SshChild): boolean;
   /** Start the -R tunnel on a route, register it as the link's child, and name its generation. */
-  spawnTunnel(record: LinkRecord, destination: string, stderrLine: (line: string) => boolean): { child: SshChild; generation: string };
+  spawnTunnel(record: LinkRecord, destination: string, stderrLine: (line: string) => boolean): { child: SshChild; generation: string; setupFailed?: boolean };
   /** The operator's capture tap for this spawn, if a capture window is open. */
   captureTap(linkId: string): ((line: string) => boolean) | undefined;
   setEvent(linkId: string, event: TunnelEvent, cause?: TunnelCause | null): TunnelState;
@@ -92,7 +96,13 @@ type Phase =
   }
   | { kind: "halted"; route: string; child: SshChild; failure: RouteOutcomeClass };
 
-interface Round { token: number; queue: string[]; phase: Phase }
+interface Round {
+  token: number;
+  queue: string[];
+  phase: Phase;
+  /** New work held back while lifecycle work runs; the next free tick starts it. */
+  resume?: () => void;
+}
 
 interface LinkRoutes {
   books: Map<string, RouteBook>;
@@ -171,6 +181,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
 
   const next = (linkId: string, link: LinkRoutes, round: Round): void => {
     if (!current(linkId, round)) return;
+    if (host.busy()) { round.resume = () => next(linkId, link, round); return; }
     const record = host.record(linkId);
     if (!record) { link.round = undefined; return; }
     const route = round.queue.shift();
@@ -196,7 +207,8 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
       if (result.code === 0 && result.stdout.trim() === "ocx-link-probe") {
         const book = link.books.get(route);
         if (book) book.probeFailures = 0;
-        candidate(linkId, link, round, route);
+        if (host.busy()) round.resume = () => { if (current(linkId, round) && round.phase === phase) candidate(linkId, link, round, route); };
+        else candidate(linkId, link, round, route);
         return;
       }
       fail(link, route, result.code === 0 ? "transient" : routeOutcomeOfStderr(result.stderr), "probe");
@@ -219,8 +231,11 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
       if (phase.grantedAt === undefined) { phase.grantedAt = host.now(); phase.proof.nextAt = host.now(); }
     }, host.captureTap(linkId));
     let spawned: { child: SshChild; generation: string };
+    let setupFailed = false;
     try {
-      spawned = host.spawnTunnel(record, route, tap);
+      const result = host.spawnTunnel(record, route, tap);
+      spawned = result;
+      setupFailed = result.setupFailed === true;
     } catch {
       fail(link, route, "transient", "tunnel");
       next(linkId, link, round);
@@ -228,6 +243,8 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     }
     phase = { kind: "candidate", route, child: spawned.child, generation: spawned.generation, spawnedAt: host.now(), abort: new AbortController(), proof: { inFlight: false, nextAt: Number.POSITIVE_INFINITY } };
     round.phase = phase;
+    // The tunnel started but could not be recorded: stop it and wait for its exit before moving on.
+    if (setupFailed) stopCandidate(linkId, phase, "transient");
   };
 
   /** Stop a candidate that failed as a route (today's reconnect contract for anything on it). */
@@ -242,6 +259,8 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
   };
 
   const proven = (linkId: string, link: LinkRoutes, round: Round, phase: Extract<Phase, { kind: "candidate" }>): void => {
+    // A child whose exit was already observed is never promoted, however late its proof settles.
+    if (!host.ownsChild(linkId, phase.child)) return;
     phase.proof.handle?.dispose();
     host.routeProof?.forget(linkId);
     link.round = undefined;
@@ -263,7 +282,8 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
   const attempt = async (linkId: string, link: LinkRoutes, round: Round, phase: Extract<Phase, { kind: "candidate" }>): Promise<void> => {
     const record = host.record(linkId);
     if (!record) return;
-    const live = (): boolean => current(linkId, round) && round.phase === phase && phase.stopAt === undefined;
+    const live = (): boolean => current(linkId, round) && round.phase === phase && phase.stopAt === undefined
+      && host.ownsChild(linkId, phase.child);
     const candidateDeadline = phase.spawnedAt + READY_PROOF_MS;
     const { proof, abort } = phase;
     try {
@@ -360,6 +380,12 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
       if (!link || !round || stopped) return;
       const now = host.now();
       const phase = round.phase;
+      if (round.resume && !host.busy()) {
+        const resume = round.resume;
+        round.resume = undefined;
+        resume();
+        return;
+      }
       if (phase.kind === "client") { if (client.kind !== "checking") proceed(linkId, link, round); return; }
       if (phase.kind === "probe") {
         if (now - phase.startedAt >= ROUTE_PROBE_MS) {

@@ -80,6 +80,8 @@ export interface LinkSupervisorDeps {
   /** Start time of a live process (Linux /proc/<pid>/stat field 22), null when unreadable or gone. */
   readProcessStartTime?: (pid: number) => number | null;
   killProcess?: (pid: number, signal?: NodeJS.Signals) => void;
+  /** false when the pid does not exist, true when it does, null when that cannot be told. */
+  processAlive?: (pid: number) => boolean | null;
   pidfileDir?: string;
   readPidfile?: (path: string) => Pidfile | null;
   writePidfile?: (path: string, pidfile: Pidfile) => void;
@@ -160,6 +162,16 @@ function linuxProcessStartTime(pid: number): number | null {
   }
 }
 
+function defaultProcessAlive(pid: number): boolean | null {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ESRCH" ? false : code === "EPERM" ? true : null;
+  }
+}
+
 function defaultKillProcess(pid: number, signal: NodeJS.Signals = "SIGTERM"): void {
   try { process.kill(pid, signal); } catch { /* the process may already have exited */ }
 }
@@ -176,6 +188,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const readProcessArgv = deps.readProcessArgv ?? (platform === "linux" ? linuxProcessArgv : () => null);
   const readProcessStartTime = deps.readProcessStartTime ?? (platform === "linux" ? linuxProcessStartTime : () => null);
   const killProcess = deps.killProcess ?? defaultKillProcess;
+  const processAlive = deps.processAlive ?? defaultProcessAlive;
   const readPidfile = deps.readPidfile ?? ((path: string) => {
     try { return parsePidfile(readFileSync(path, "utf8")); } catch { return null; }
   });
@@ -275,10 +288,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     }
   };
 
-  /** The pidfile's own process, identified by pid, exact argv and start time; null when gone or changed. */
-  const sameProcess = (pid: number, argv: readonly string[], startTime: number): boolean => {
+  /**
+   * The pidfile's own process, identified by pid, exact argv and start time. "gone" and "different"
+   * both mean the recorded process has exited (a different one may reuse the pid); "unreadable" means
+   * a live pid whose identity could not be read, which never counts as gone.
+   */
+  const processIdentity = (pid: number, argv: readonly string[], startTime: number): "same" | "gone" | "different" | "unreadable" => {
     const actualArgv = readProcessArgv(pid);
-    return actualArgv !== null && sameArgv(actualArgv, argv) && readProcessStartTime(pid) === startTime;
+    const actualStart = readProcessStartTime(pid);
+    if (actualArgv === null || actualStart === null) return processAlive(pid) === false ? "gone" : "unreadable";
+    return sameArgv(actualArgv, argv) && actualStart === startTime ? "same" : "different";
   };
 
   /**
@@ -289,21 +308,33 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const reapMultiRouteOrphan = (record: LinkRecord, pidfile: Pidfile): void => {
     const path = pidfilePath(record.id);
     if (platform !== "linux") { orphanUnverified.add(record.id); return; }
-    if (readProcessArgv(pidfile.pid) === null) { removePidfile(path); return; }
-    if (pidfile.startTime === undefined) { orphanUnverified.add(record.id); return; }
-    if (!sameProcess(pidfile.pid, pidfile.argv, pidfile.startTime)) { removePidfile(path); return; }
+    if (pidfile.startTime === undefined) {
+      if (processAlive(pidfile.pid) === false) removePidfile(path);
+      else orphanUnverified.add(record.id);
+      return;
+    }
+    const identity = processIdentity(pidfile.pid, pidfile.argv, pidfile.startTime);
+    if (identity === "gone" || identity === "different") { removePidfile(path); return; }
     orphanUnverified.add(record.id);
+    if (identity === "unreadable") return;
     killProcess(pidfile.pid, "SIGTERM");
     orphanReaps.set(record.id, { pid: pidfile.pid, argv: pidfile.argv, startTime: pidfile.startTime, at: now(), killed: false });
   };
 
   const tickOrphanReaps = (current: number): void => {
     for (const [linkId, reap] of [...orphanReaps]) {
-      if (!sameProcess(reap.pid, reap.argv, reap.startTime)) {
+      const identity = processIdentity(reap.pid, reap.argv, reap.startTime);
+      if (identity === "gone" || identity === "different") {
         orphanReaps.delete(linkId);
         orphanUnverified.delete(linkId);
         const path = pidfilePath(linkId);
         if (readPidfile(path)?.pid === reap.pid) removePidfile(path);
+        // The link was waiting for this: start its first round now.
+        const record = store.links.find(link => link.id === linkId);
+        if (record && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
+      } else if (identity === "unreadable") {
+        // Cannot tell it is ours any more: no further signal, the link stays blocked.
+        orphanReaps.delete(linkId);
       } else if (!reap.killed && current - reap.at >= 2_000) {
         reap.killed = true;
         killProcess(reap.pid, "SIGKILL");
@@ -368,6 +399,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     listenerPort: () => store.listenerPort,
     record: linkId => store.links.find(link => link.id === linkId),
     blocked: linkId => stopping || holds.has(linkId) || orphanUnverified.has(linkId),
+    busy: () => lifecycleFlight !== undefined,
+    ownsChild: (linkId, child) => children.get(linkId)?.child === child,
     spawnTunnel(record, destination, stderrLine) {
       if (store.listenerPort === null) throw new Error("link listener unavailable");
       const argv = buildTunnelArgv({
@@ -387,9 +420,14 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       connectionNames.set(record.id, connection);
       exiting.delete(record.id);
       children.set(record.id, { child, argv, spawnedAt: now() });
-      const startTime = readProcessStartTime(child.pid);
-      writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv, ...(startTime === null ? {} : { startTime }) });
+      // Owned and watched before anything else can fail, so a failed pidfile write never leaves an untracked tunnel.
       watchExit(record.id, child, generation);
+      try {
+        const startTime = readProcessStartTime(child.pid);
+        writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv, ...(startTime === null ? {} : { startTime }) });
+      } catch {
+        return { child, generation: connection, setupFailed: true };
+      }
       return { child, generation: connection };
     },
     captureTap(linkId) {
@@ -611,6 +649,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           }
           routesEdited.push(record);
         }
+        // Nothing of a changed or removed link's old round may advance while the stops below await.
+        for (const linkId of changed) rounds.cancel(linkId);
+        for (const linkId of recordInstances.keys()) if (!nextInstances.has(linkId)) rounds.cancel(linkId);
         store = nextStore;
         if (routesEdited.some(record => rounds.isMultiRoute(record))) rounds.recheckClient();
         for (const record of routesEdited) if (rounds.isMultiRoute(record)) rounds.routesChanged(record);

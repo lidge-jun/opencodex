@@ -40,10 +40,19 @@ afterEach(async () => {
   testHome = "";
 });
 
-test("the hub-link catalog admission reports the route proof id it carried, on the same line as the admission", () => {
+test("the hub-link catalog admission takes the route proof header off the request before dispatch and reports it", () => {
   const source = readFileSync(repoPath("src/server/index/serve-options.ts"), "utf8");
-  const line = source.split("\n").find(text => text.includes("onAuthenticatedCatalog(admission.keyId"));
-  expect(line).toContain('&& admission.kind === "configured") onAuthenticatedCatalog(admission.keyId, req.headers.get("' + LINK_ROUTE_PROOF_HEADER + '") ?? undefined);');
+  const line = source.split("\n").find(text => text.includes("onAuthenticatedCatalog(admission.keyId")) ?? "";
+  const read = line.indexOf('req.headers.get("' + LINK_ROUTE_PROOF_HEADER + '")');
+  const removed = line.indexOf('req.headers.delete("' + LINK_ROUTE_PROOF_HEADER + '")');
+  const reported = line.indexOf("onAuthenticatedCatalog(admission.keyId, taken ? routeProof : undefined)");
+  expect(read).toBeGreaterThan(-1);
+  expect(removed).toBeGreaterThan(read);
+  // A proof is reported only when the header was taken off; nothing downstream of this line sees it.
+  expect(reported).toBeGreaterThan(removed);
+  expect(line).toContain("catch { taken = false; }");
+  const dispatchIndex = source.indexOf("isLinkManagementPath(requestUrl.pathname)");
+  expect(source.indexOf(line)).toBeLessThan(dispatchIndex);
 });
 
 test("the link listener passes a proof id to every subscriber and leaves it out when absent", () => {
@@ -84,4 +93,3 @@ test("a key-admitted catalog request carrying a proof id is still served normall
   // Without the key, the header admits nothing.
   expect((await fetch("http://127.0.0.1:" + linkPort + "/v1/catalog", { headers: { [LINK_ROUTE_PROOF_HEADER]: PROOF } })).status).toBe(401);
 });
-

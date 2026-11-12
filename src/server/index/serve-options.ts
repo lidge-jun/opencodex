@@ -391,7 +391,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
         if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === ""
           && (req.method === "GET" || req.method === "HEAD")
-          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId, req.headers.get("x-opencodex-link-route-proof") ?? undefined);
+          && admission.kind === "configured") { const routeProof = req.headers.get("x-opencodex-link-route-proof") ?? undefined; let taken = routeProof !== undefined; if (taken) { try { req.headers.delete("x-opencodex-link-route-proof"); } catch { taken = false; } } onAuthenticatedCatalog(admission.keyId, taken ? routeProof : undefined); }
         // #6957: the Child's read-only view of this Home. Admitted by the link key above and by
         // the shared table in src/link/management-routes.ts; never reachable on another ingress.
         if (isLinkManagementPath(requestUrl.pathname)) {
