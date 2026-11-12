@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { LinkApiError, type LinkRowWire } from "../remote-link-api";
 import {
-  CHILD_JOB_POLL_MS, changedPolicyKeys, codexRestartNeeded, getChildJob, getChildPolicy, postChildOperation, putChildPolicy,
-  restartWithheld, rowOperable, updateAvailable,
+  CHILD_JOB_POLL_MS, CHILD_JOB_POLL_TIMEOUT_MS, changedPolicyKeys, codexRestartNeeded, getChildJob, getChildPolicy, postChildOperation, putChildPolicy,
+  restartWithheld, rowOperable, settleOrAbort, updateAvailable,
   type ChildJobView, type ChildOp, type ChildOperationBody, type ChildOpsRowView, type ChildPolicyReadView, type ChildPolicyView,
 } from "../remote-link-child-ops-api";
 import { type TKey, useT } from "../i18n/shared";
@@ -300,8 +300,14 @@ function useChildJob(apiBase: string, job: ChildJobView, onSnapshot?: (job: Chil
       if (document.visibilityState === "hidden" || (inFlight && !fromListener)) return;
       inFlight = true;
       const mine = ++sequence;
+      // Each poll gets its own deadline: a GET that never settles would keep inFlight set, every interval tick
+      // would then skip, and the row would stay held until the page reloads.
+      const request = new AbortController();
+      const stop = () => request.abort();
+      controller.signal.addEventListener("abort", stop, { once: true });
+      const deadline = window.setTimeout(stop, CHILD_JOB_POLL_TIMEOUT_MS);
       try {
-        const next = await getChildJob(apiBase, job.jobId, controller.signal);
+        const next = await settleOrAbort(getChildJob(apiBase, job.jobId, request.signal), request.signal);
         if (!stopped && mine > applied) {
           applied = mine;
           setPolled({ jobId: job.jobId, value: next }); notify.current?.(next);
@@ -312,7 +318,11 @@ function useChildJob(apiBase: string, job: ChildJobView, onSnapshot?: (job: Chil
           controller.abort();
           setMissingFor(job.jobId);
         }
-      } finally { inFlight = false; }
+      } finally {
+        window.clearTimeout(deadline);
+        controller.signal.removeEventListener("abort", stop);
+        inFlight = false;
+      }
     };
     const timer = window.setInterval(() => void tick(), CHILD_JOB_POLL_MS);
     const onVisibility = () => { if (document.visibilityState !== "hidden") void tick(true); };

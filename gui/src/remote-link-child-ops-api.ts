@@ -148,6 +148,18 @@ export function jobHoldsLink(jobs: readonly ChildJobView[], linkId: string): boo
     && job.items.some(item => item.linkId === linkId && (item.state === "queued" || item.state === "running")));
 }
 export const CHILD_JOB_POLL_MS = 2_000;
+/** One job poll may take this long; a GET that never settles would otherwise stop every later poll. */
+export const CHILD_JOB_POLL_TIMEOUT_MS = 15_000;
+
+/** Rejects as soon as `signal` aborts, even when the request underneath ignores it and never settles. */
+export function settleOrAbort<T>(request: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+    if (signal.aborted) { onAbort(); return; }
+    signal.addEventListener("abort", onAbort, { once: true });
+    request.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
 
 /** The keys the operator changed, so a save never rewrites a mode they left alone (Revision 6: full PUT over damage). */
 export function changedPolicyKeys(current: ChildPolicyView, draft: ChildPolicyView): Partial<ChildPolicyView> {

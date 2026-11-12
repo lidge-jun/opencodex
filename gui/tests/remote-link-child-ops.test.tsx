@@ -5,7 +5,7 @@ import { act, type ReactElement } from "react";
 import RemoteLink from "../src/pages/RemoteLink";
 import { ChildJobProgress } from "../src/pages/RemoteLinkChildActions";
 import { LanguageProvider } from "../src/i18n/provider";
-import { parseChildJob, parseChildOps } from "../src/remote-link-child-ops-api";
+import { CHILD_JOB_POLL_MS, CHILD_JOB_POLL_TIMEOUT_MS, parseChildJob, parseChildOps } from "../src/remote-link-child-ops-api";
 
 const HOME = "http://fixture";
 let win: Window;
@@ -661,6 +661,47 @@ test("an edit made during a policy reload survives it", async () => {
   expect(openSelect(host, 0).textContent).toContain("Manual");
   await click(button(host, "Save"));
   expect(calls.filter(call => call.method === "PUT").at(-1)?.body).toEqual({ catalogFanout: "manual" });
+});
+
+test("a job poll that never settles times out, so the interval polls again and releases the row", async () => {
+  // Capture the poll interval and the per-request deadline so the test drives them instead of waiting them out.
+  const ticks: Array<() => void> = [];
+  const deadlines: Array<() => void> = [];
+  const setIntervalReal = win.setInterval.bind(win);
+  const setTimeoutReal = win.setTimeout.bind(win);
+  Object.assign(win, {
+    setInterval: (callback: () => void, ms?: number) => { if (ms === CHILD_JOB_POLL_MS) ticks.push(callback); return setIntervalReal(() => undefined, 3_600_000); },
+    setTimeout: (callback: () => void, ms?: number) => { if (ms === CHILD_JOB_POLL_TIMEOUT_MS) deadlines.push(callback); return setTimeoutReal(callback, ms === CHILD_JOB_POLL_TIMEOUT_MS ? 3_600_000 : ms); },
+  });
+  const items = (state: string) => job({ jobId: "ljob_hung000000000000", state: "running", items: [
+    { linkId: "l1", alias: "box-one", state, reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+  ] });
+  let reads = 0;
+  installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path === "/api/link/children/operations") return response({ job: items("running") }, 202);
+    if (call.path === "/api/link/children/jobs/ljob_hung000000000000") {
+      reads += 1;
+      // The first poll hangs forever and ignores its abort signal, like a stalled connection.
+      return reads === 1 ? new Promise<Response>(() => undefined) : response({ job: items("succeeded") });
+    }
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await click(button(host, "Check"));
+  expect(ticks.length).toBe(1);
+  await act(async () => { ticks[0]!(); await flush(); });
+  expect(reads).toBe(1);
+  expect(button(host, "Check").disabled).toBe(true);
+  // While the hung request is pending, an interval tick sends nothing.
+  await act(async () => { ticks[0]!(); await flush(); });
+  expect(reads).toBe(1);
+  expect(deadlines.length).toBe(1);
+  await act(async () => { deadlines[0]!(); await flush(); });
+  await act(async () => { ticks[0]!(); await flush(); });
+  expect(reads).toBe(2);
+  expect(button(host, "Check").disabled).toBe(false);
+  expect(host.querySelector(".remote-link-job")!.textContent).toContain("Succeeded");
 });
 
 test("an older poll landing after a newer one never restores a released hold", async () => {
