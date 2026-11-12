@@ -32,6 +32,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` |使用可能な場合はオン | Web 検索サイドカー オプション。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` |使用可能な場合はオン |画像説明サイドカー オプション。 |
 | `images?` | `OcxImagesConfig` | OpenAI の自動選択 | Codex `image_gen` のスタンドアロン イメージ リレー オプション。 |
+| `telemetry?` | `OcxTelemetryConfig` | 人間への通知後に既定でオン | 匿名の1日ごとの利用統計テレメトリの同意状態（`decision`、`decidedAt`、`noticeShownAt`）。人が通知を見るか同意するまで何も送信されません。`OCX_TELEMETRY=0` または `DO_NOT_TRACK=1` で上書きされます。[テレメトリ (`telemetry`)](#テレメトリ-telemetry) と [テレメトリとプライバシー](/ja/guides/telemetry/) を参照してください。 |
 
 バックアップ サポートが存在する前に古い開発ビルドで再開履歴メタデータが変更された場合は、`ocx recover-history --legacy-openai --yes` を実行してネイティブ プロバイダーの回復を強制します。
 このコマンドは、正当な専用プロバイダー履歴を含む、ユーザーメッセージを持つすべての `opencodex` 行を再ラベル付けします。実行前にライフサイクル リファレンスの全範囲に関する警告を確認してください。
@@ -93,6 +94,35 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 :::caution[転送されたループバックは認証されていません]
 プレーン `ssh -L` はローカル ループバックでリッスンし、デフォルトの非認証バインドに対して安全です。 `ssh -g -L`、ブロードコンテナパブリッシング、または `0.0.0.0` でクライアント側を公開する転送モードを使用しないでください。不明な場合は、`ssh -L 127.0.0.1:20100:localhost:10100` と明示的にバインドします。
 :::
+
+## テレメトリ (`telemetry`)
+
+匿名の1日ごとの利用統計テレメトリは、人が通知（GUI ポップアップまたは対話型ターミナルのプロンプト）を見た後にのみ既定でオンになります。`config.json` の `telemetry` ブロックはこの同意状態を記録します。
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| フィールド | 型 | 既定値 | 説明 |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | 未設定（未決定） | 明示的なユーザーの選択。`"declined"` はテレメトリを無効化し `<OPENCODEX_HOME>/telemetry-id.json` を削除します。`"accepted"` は日次レポートを有効化します。 |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | 未設定 | `decision` が記録された UTC タイムスタンプ。`decidedAt ?? noticeShownAt` の UTC 日より後の完了済み UTC 暦日（`day > formatUtcDay(decidedAt ?? noticeShownAt)`）のみが送信され、同意当日およびそれ以前の日は送信されません。 |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | 未設定 | ウェブダッシュボードまたは対話型ターミナルで人間が開示通知を見た UTC タイムスタンプ。`decision` が未設定の場合、`noticeShownAt` が設定されているときのみ送信され（`default-on`）、未設定なら `awaiting-notice` のまま待機します。 |
+
+コレクターのエンドポイント（`https://telemetry.opencodex.me/v1/events`）はコード定数であり、`config.json` では変更できません。
+
+2 つの環境変数が `config.json` より優先され、保存済み `config.json` を変更せずにテレメトリを即座に無効化します（起動時またはスケジューラのティックで検出されると `<OPENCODEX_HOME>/telemetry-state.json` に当日の UTC 日を `ineligibleThroughDay` として記録し `<OPENCODEX_HOME>/telemetry-id.json` を削除するため、後から変数を解除してもその期間の日次データは送信されず新しい ID が発行されます）。
+
+- `OCX_TELEMETRY=0`（大文字・小文字を問わず `false`、`off`、`no` も可）
+- `DO_NOT_TRACK=1`（大文字・小文字を問わず `true`、`yes` も可）
+
+`ocx config set telemetry` と `ocx config unset telemetry` は拒否され、`ocx config import` もすべての呼び出し元でインポートされた `telemetry` ブロックを無視して既存の状態を保持します。代わりに `ocx telemetry enable`（対話型ターミナルが必須で開示と確認を表示し、それ以外は `agent_consent_required` / `tty_required` で終了）、`ocx telemetry disable`、`ocx telemetry status [--json]`、またはダッシュボードの **プロキシ詳細** トグルを使用してください。ペイロードスキーマと保持ポリシーの詳細は [テレメトリとプライバシー](/ja/guides/telemetry/) を参照してください。
 
 ## ストレージのクリーンアップ
 

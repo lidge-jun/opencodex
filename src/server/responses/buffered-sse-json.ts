@@ -1,4 +1,5 @@
 import type { ResponsesTerminalStatus } from "../../bridge";
+import { ResponseBodyInactivityError } from "../../lib/response-body-inactivity";
 import {
   createSseInspector,
   createSseTerminalOutputBoundary,
@@ -328,7 +329,8 @@ export async function collectBufferedResponsesSse(
       ok: false,
       kind: options.signal?.aborted
         ? "aborted"
-        : error instanceof BufferedSseTimeoutError
+        // A source guarded at its upstream reads reports its stall through the body it feeds us.
+        : error instanceof BufferedSseTimeoutError || error instanceof ResponseBodyInactivityError
           ? "timeout"
           : error instanceof SseAggregateLimitError
             || error instanceof SseFrameTooLargeError

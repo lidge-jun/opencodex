@@ -15,6 +15,8 @@ export interface MachineStatusV1 {
   sharedBase: string;
   sharedServerOrigin: string;
   managementTransport: "direct" | "relay";
+  /** Present when this listener's relay can check an expected target before forwarding. */
+  relayTargetCheck?: "expected-target-v1";
   apiKeyId: string;
   protocolVersion: 1;
   connectedAt: string;
@@ -69,6 +71,7 @@ function statusPayload(req: Request, state: OcxClientConnectionConfig, deps: Mac
     sharedBase: relay ? `${machineBase}/api/machine/hub-relay` : state.managementUrl,
     sharedServerOrigin: linkMode ? machineBase : state.managementUrl,
     managementTransport: relay ? "relay" : state.managementTransport,
+    ...(relay && !linkMode ? { relayTargetCheck: "expected-target-v1" as const } : {}),
     apiKeyId: state.apiKeyId,
     protocolVersion: state.protocolVersion,
     connectedAt: state.connectedAt,
@@ -112,6 +115,10 @@ export async function handleMachineApi(
         input.restartCodex === undefined ? {} : { restartCodex: input.restartCodex },
       );
       deps.setHubReachability?.("online");
+      // A sync whose journal handover failed is not complete: a supervised restart could undo it.
+      if (result.journalHandoverFailed) {
+        return Response.json({ success: false, ...result, error: "Codex routing was applied, but the Codex journal could not be handed to this connection; sync again, and if it repeats, sync once more after the next OpenCodex restart." }, { status: 409 });
+      }
       return Response.json({ success: true, ...result });
     } catch (error) {
       const message = error instanceof Error ? error.message : "client sync failed";

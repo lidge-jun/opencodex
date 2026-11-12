@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCodexAccountCredential } from "./account-store";
 import { loadConfig } from "../config";
@@ -7,7 +6,7 @@ import { extractAccountId } from "../oauth/chatgpt";
 import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { codexPlanKey } from "./plan";
 import { getObservedMainCodexCollisionIdentity, sameCodexCollisionIdentity, type CodexCollisionIdentity } from "./collision-identity";
-import { MAX_AUTH_BYTES, readBounded } from "./native-profile-store";
+import { readNativeMainAuthBytes } from "./native-main-auth-file";
 
 export interface CodexTokens {
   access_token: string;
@@ -24,6 +23,25 @@ export interface CodexTokens {
 export type CodexTokenReadResult =
   | { status: "ok"; tokens: CodexTokens }
   | { status: "missing" | "invalid" | "unreadable" };
+
+function parseCodexTokens(raw: string): CodexTokenReadResult {
+  try {
+    const j = JSON.parse(raw) as {
+      tokens?: { access_token?: string; account_id?: string; id_token?: string };
+    };
+    if (!j?.tokens?.access_token) return { status: "invalid" };
+    return {
+      status: "ok",
+      tokens: {
+        access_token: j.tokens.access_token,
+        account_id: j.tokens.account_id ?? "",
+        id_token: j.tokens.id_token,
+      },
+    };
+  } catch {
+    return { status: "invalid" };
+  }
+}
 
 function hasErrnoCode(error: unknown, code: string): boolean {
   return typeof error === "object" && error !== null && "code" in error
@@ -45,28 +63,11 @@ export function readCodexTokensResult(
 ): CodexTokenReadResult {
   let raw: string;
   try {
-    raw = options?.bounded === true
-      ? readBounded(authPath, MAX_AUTH_BYTES).toString("utf-8")
-      : readFileSync(authPath, "utf-8");
+    raw = readNativeMainAuthBytes(authPath, options?.bounded === true ? "bounded" : "plain").toString("utf-8");
   } catch (error) {
     return { status: hasErrnoCode(error, "ENOENT") ? "missing" : "unreadable" };
   }
-  try {
-    const j = JSON.parse(raw) as {
-      tokens?: { access_token?: string; account_id?: string; id_token?: string };
-    };
-    if (!j?.tokens?.access_token) return { status: "invalid" };
-    return {
-      status: "ok",
-      tokens: {
-        access_token: j.tokens.access_token,
-        account_id: j.tokens.account_id ?? "",
-        id_token: j.tokens.id_token,
-      },
-    };
-  } catch {
-    return { status: "invalid" };
-  }
+  return parseCodexTokens(raw);
 }
 
 /**
@@ -132,7 +133,7 @@ export function readMainAuth(authPath = join(resolveCodexHomeDir(), "auth.json")
   const main = readCodexTokensResult(authPath, { bounded: true });
   if (main.status !== "invalid") return main;
   try {
-    const j: unknown = JSON.parse(readBounded(authPath, MAX_AUTH_BYTES).toString("utf-8"));
+    const j: unknown = JSON.parse(readNativeMainAuthBytes(authPath, "bounded").toString("utf-8"));
     if (j === null || typeof j !== "object" || Array.isArray(j)) return main;
     const envelope = j as { auth_mode?: unknown; OPENAI_API_KEY?: unknown; tokens?: unknown };
     const apiKeyOnly = envelope.tokens == null

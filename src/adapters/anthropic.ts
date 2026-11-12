@@ -41,6 +41,7 @@ import { resolveReasoningCapabilities } from "../providers/reasoning-capabilitie
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
+import { advisorServerExchange, advisorServerToolDestination, planAnthropicServerTools } from "./anthropic/advisor-tool";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
@@ -958,13 +959,14 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
 }
 
 /**
- * Appends the Claude client's typed web tools (`parsed._anthropicServerTools`) so Anthropic runs
- * them server-side. A same-named function tool wins: the web-search sidecar's `web_search` keeps
- * priority, and Anthropic rejects duplicate tool names.
+ * Appends the Claude client's typed server tools this destination receives
+ * (`planAnthropicServerTools`) so Anthropic runs them server-side. A same-named function tool
+ * wins: the web-search sidecar's `web_search` and the proxy Advisor's `advisor` keep priority,
+ * and Anthropic rejects duplicate tool names.
  */
-function withAnthropicServerTools(tools: unknown[] | undefined, parsed: OcxParsedRequest): unknown[] | undefined {
-  const serverTools = parsed._anthropicServerTools?.filter(t => !parsed.context.tools?.some(f => f.name === t.name));
-  if (!serverTools?.length) return tools;
+function withAnthropicServerTools(tools: unknown[] | undefined, parsed: OcxParsedRequest, declared: readonly Record<string, unknown>[]): unknown[] | undefined {
+  const serverTools = declared.filter(t => !parsed.context.tools?.some(f => f.name === t.name));
+  if (!serverTools.length) return tools;
   // The caller's breakpoints are dropped on this lane; applyPromptCaching places its own.
   return [...(tools ?? []), ...serverTools.map(t => ({ ...t, cache_control: undefined }))];
 }
@@ -1048,9 +1050,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         throw new Error("anthropic provider requires a non-empty apiKey (authMode: key)");
       }
 
-      // Only api.anthropic.com runs Anthropic's server tools, so only it gets their history back.
+      // Only api.anthropic.com runs Anthropic's web tools, so only it gets their history back; the
+      // Advisor also reaches a gateway that opted in with forwardAdvisorTool (advisor-tool.ts).
+      const serverToolPlan = planAnthropicServerTools(provider, parsed._anthropicServerTools, parsed._anthropicServerReplay,
+        new Set(parsed.context.tools?.map(tool => tool.name)), usesNativeAnthropicEndpoint(provider));
       const { system, messages } = messagesToAnthropicFormat(parsed, toolNames,
-        usesNativeAnthropicEndpoint(provider) ? parsed._anthropicServerReplay : undefined);
+        serverToolPlan.replay);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
@@ -1065,7 +1070,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       enforceAnthropicImageLimits(messages);
       const converted = toolsToAnthropicFormat(parsed, toolNames);
       // A third-party Anthropic-compatible endpoint may not implement Anthropic's server tools.
-      const tools = usesNativeAnthropicEndpoint(provider) ? withAnthropicServerTools(converted, parsed) : converted;
+      const tools = withAnthropicServerTools(converted, parsed, serverToolPlan.declared);
 
       // Codex never sends `max_output_tokens`, so the omitted-limit default decides how
       // long a Claude answer may run. Honor the provider's configured output budget
@@ -1109,6 +1114,18 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning?.summary;
       // Codex sends "auto" by default, so only an explicit concise/detailed request opts out of updates (#7728).
       const summaryRequested = summary === "concise" || summary === "detailed";
+      // Operator policy for the adaptive `thinking.display` field (#8363). Unset and "auto" keep
+      // the built-in selection. Any model entry wins over the provider-wide value, including an
+      // explicit "auto" that opts one model back out. "updates" is only sendable where this
+      // adapter already sent it (native Opus 5.5), so anywhere else it is treated as auto rather
+      // than inventing a display value the model never received.
+      const modelThinkingDisplay = modelRecordValue(provider.modelThinkingDisplay, parsed.modelId);
+      const configuredThinkingDisplay = modelThinkingDisplay !== undefined
+        ? modelThinkingDisplay
+        : provider.thinkingDisplay;
+      const thinkingDisplayPolicy = configuredThinkingDisplay === "updates" && !nativeOpus55
+        ? "auto"
+        : configuredThinkingDisplay ?? "auto";
       const thinkingToggleWire = declaresThinkingToggleWire(provider, parsed.modelId);
       const reasoningControlsUnsupported = reasoningControlsAreUnsupported(provider, parsed.modelId);
       const capabilities = resolveReasoningCapabilities(provider, parsed.modelId);
@@ -1145,7 +1162,16 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
           // during a long think (#5824). Native Opus 5.5 selects its display below;
           // other models request summarized thinking unless the caller hides it.
-          body.thinking = parsed.options.hideThinkingSummary
+          // Under the default policy this stays the pre-existing selection, including its local
+          // hideThinkingSummary behavior; a configured "summarized" overrides that hiding.
+          // An explicit request summary forces summarized on every adaptive model (#7881), so it
+          // also outranks a configured "omitted". "updates" already degraded to auto above
+          // because only native Opus 5.5 can send it.
+          // Local hideThinkingSummary only speaks for the built-in policy, where it keeps its
+          // pre-existing meaning; an operator choice replaces that local preference.
+          const hiddenThinkingDisplay = (thinkingDisplayPolicy === "omitted" && !summaryRequested)
+            || (thinkingDisplayPolicy === "auto" && parsed.options.hideThinkingSummary);
+          body.thinking = hiddenThinkingDisplay
             ? { type: "adaptive" }
             : { type: "adaptive", display: "summarized" };
           const effort = adaptiveEffort(effectiveReasoning);
@@ -1193,7 +1219,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
 
       if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false) {
-        body.thinking = { type: "adaptive", display: summaryRequested ? "summarized" : "updates" };
+        // An explicit per-request summary (concise/detailed) still forces summarized (#7881).
+        body.thinking = summaryRequested || thinkingDisplayPolicy === "summarized"
+          ? { type: "adaptive", display: "summarized" }
+          : thinkingDisplayPolicy === "omitted"
+            ? { type: "adaptive" }
+            : { type: "adaptive", display: "updates" };
       }
       // One discriminator governs the display beta and response classification, including reuse.
       progressUpdates = (body.thinking as { display?: string } | undefined)?.display === "updates";
@@ -1274,7 +1305,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolveTranslatedAnthropicSessionKey(parsed, incoming));
       else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
-      mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : [])]);
+      mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : []), ...serverToolPlan.betas]);
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which
       // follows the moving final block across turns. Keep one breakpoint slot free for it.
@@ -1328,8 +1359,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let pendingStopReason: string | undefined;
       let emittedDone = false;
       let sawVisibleText = false;
-      /** The open server-side web_search / web_fetch call, until its result block. */
-      let serverSearch: { id: string; json: string; streaming: boolean } | undefined;
+      /** The open server-side web_search / web_fetch / advisor call, until its result block. */
+      let serverSearch: { id: string; name: string; json: string; streaming: boolean } | undefined;
 
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
@@ -1421,11 +1452,23 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   budget.openCall(currentToolCallId);
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
-                if (block.type === "server_tool_use" && (block.name === "web_search" || block.name === "web_fetch") && typeof block.id === "string") {
+                if (block.type === "server_tool_use" && (block.name === "web_search" || block.name === "web_fetch" || block.name === "advisor") && typeof block.id === "string") {
                   // Only the input (query / url) is collected here (input_json_delta below). The cell
                   // opens at its result: a call Anthropic defers beside a client tool_use has
                   // no result in this response and must not surface as a completed search.
-                  serverSearch = { id: block.id, json: "", streaming: true };
+                  serverSearch = { id: block.id, name: block.name, json: "", streaming: true };
+                }
+                if (block.type === "advisor_tool_result") {
+                  // The Advisor rides the same lane: both blocks verbatim, keyed by the upstream srvtoolu_ id.
+                  // Only a destination that receives the Advisor may surface one, so a gateway never sent
+                  // it cannot plant an exchange that a later first-party turn would replay.
+                  const exchange = advisorServerToolDestination(provider)
+                    ? advisorServerExchange(serverSearch, block as Record<string, unknown>) : undefined;
+                  if (!exchange) break;
+                  yield { type: "web_search_call_begin", id: exchange.blocks.use.id as string };
+                  yield { type: "web_search_call_end", id: exchange.blocks.use.id as string, queries: [],
+                    status: exchange.completed ? "completed" : "failed", anthropic: exchange.blocks };
+                  serverSearch = undefined;
                 }
                 if ((block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result") && typeof block.tool_use_id === "string") {
                   // The begin/end pair the sidecar emits, plus both blocks verbatim so the Claude client holds a

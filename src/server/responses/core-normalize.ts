@@ -147,6 +147,7 @@ export async function applyFinalRouteRequestNormalization(args: {
   droidDefaultEffort?: HandleResponsesOptions["droidDefaultEffort"];
 }): Promise<void> {
   const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
+  parsed._chatCompletionsInput = inboundWire === "chat";
   const effortSelector = prepareEffortNormalization(parsed, route);
   if (applyDroidResponsesReasoningDefault(
     parsed._rawBody,

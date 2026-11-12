@@ -61,6 +61,7 @@ route-specific results rather than repeating this table.
 | --- | --- | --- |
 | 401 | `opencodex admin token required` | The admin token or GUI session is missing, invalid, expired, origin-mismatched, or missing CSRF evidence |
 | 403 | `cross-origin request blocked` | The request origin is outside the management allowlist |
+| 403 | `code: "remember_requires_direct_origin"` | `POST /api/session/remember` only: this dashboard address cannot hold a remembered device (for example a standalone dashboard behind a TLS-terminating proxy without `dashboardTrustedProxy`, or a proxied request that did not come from one of its `proxyAddresses` or whose host, scheme or `Origin` does not match its `origin`); sign in without Remember. The `error` text is `cross-origin request blocked` when the origin check refuses the request, and `Remember requires a direct HTTPS dashboard (or loopback) and matching Origin` when the origin check allows the request but the route still refuses it, for example because the address is not a direct HTTPS, loopback or configured-proxy dashboard or no matching `Origin` header was sent; match on `code` |
 | 404 | `not_found` | No management route matched the method and path |
 | 413 | `request body too large` | A POST, PUT, or PATCH body exceeds the 2 MiB management limit |
 | 503 | `management API unavailable` | Admin credential initialization or hardening is unavailable |
@@ -419,6 +420,13 @@ A consumer can derive the same label from its local configuration without resolv
 Changing a literal key or reference changes the label; replacing the secret behind an unchanged
 reference keeps the same logical account. Older unlabeled records cannot be attributed reliably.
 
+Anthropic OAuth pool attempts and rows also record `accountTag`, the `p` plus six lowercase hex
+digits already shown in the logged provider (`anthropic-p2e22d0` has the tag `p2e22d0`). It names
+the pool account that served each attempt, so a failover attempt carries the replacement account's
+tag. It contains no email, account ID, or credential, and it does not change `accountLogLabel` or
+the per-account usage summaries. A provider without that suffix, such as a pool-off translated
+request, has no tag. Older rows and malformed values omit the field.
+
 Key selection is recorded after queued requests have been rebuilt for the current selection.
 When a retry changes keys, `attempts` retains a separate record for the preceding key, including
 reported usage from failed responses. Missing usage remains unreported. Routed adapter terminals
@@ -472,6 +480,9 @@ an earlier file prefix from 7-day, 30-day, or all-history totals. `managementUsa
 accepted for compatibility with bounded legacy readers, but changing it no longer expands or reduces
 the history summarized by this endpoint.
 
+Cold ledger scans yield between records so health checks and other local requests can continue
+while a large usage report is calculated. A single record is processed atomically.
+
 Pass both `since` and `until` to select an inclusive custom interval. Each accepts integer Unix
 epoch **milliseconds**, or a full ISO datetime with an explicit timezone. Invalid dates, negative
 or out-of-range values, reversed bounds, and a single bound are rejected. Custom bounds override
@@ -483,6 +494,25 @@ and last days. They preserve `surface`, `provider`, `model`, and `apiKeyId` filt
 or overwrite unfiltered preset summaries. The daily chart remains capped at 366 local calendar days;
 totals cover the full requested interval. Snapshot-window fields describe the scanned ledger before
 the time filter, so they can extend beyond the requested bounds.
+
+Provider, model, `apiKeyId`, source and custom-window queries are answered from a derived candidate
+index (`~/.opencodex/usage-filter-index.sqlite`) instead of a whole-ledger scan. The index records each
+complete row's byte offset with the fields those filters select on, so a new filter combination reads
+and normalizes only its matching rows. The first filtered query after the index is missing or invalid
+performs one full ingest; later queries ingest only newly appended bytes. The totals are unchanged by
+the index: a filtered response reports what a full scan would report. The index is disposable and
+rebuildable — delete the file and the next filtered query rebuilds it from `usage.jsonl`, which stays
+the only authority and is never truncated or rewritten. A replaced, truncated or rewritten ledger
+rebuilds the index rather than extending stale rows.
+
+The index is created private to your user, and a file at that path that is not this index is left
+alone. If the index cannot be used — an unwritable home, a full disk, another process holding it, or
+a damaged file — filtered usage falls back to reading `usage.jsonl` directly, which is slower but
+returns the same totals. A passive management read from a Remote Link Child only uses an index that
+is already current and never creates or modifies one. A query that selects most of the ledger (for
+example `client=all&device=all` with no provider, model or key) still has to read every row in its
+window; the index removes the repeated whole-ledger work for selective filters, not the cost of a
+report whose result is the whole ledger.
 
 The Usage page accepts local date/time inputs. Its selected ending minute includes the entire
 minute through `:59.999`. Choosing a preset or clearing the custom window restores preset behavior.
@@ -578,15 +608,19 @@ can still fail when a recorded session has no surviving rollout file.
 | `PUT /api/model-settings` | Edit one routed model's capability axes in place | 400 missing provider/modelId, unknown or native/combo provider, malformed field, unknown field, non-exact model id, or an invalid default effort for the resulting ladder; 500 when the config could not be saved (live config left unchanged) |
 
 `PUT /api/model-settings` takes `{ provider, modelId }` plus any of `contextWindow`,
-`inputModalities`, `reasoningEfforts`, and `defaultReasoningEffort`. It writes the
+`inputModalities`, `responsesCustomTools`, `reasoningEfforts`, and `defaultReasoningEffort`. It writes the
 provider-level per-model maps the runtime already reads (`modelContextWindows`,
-`modelCapabilities.<modelId>.inputModalities`, `modelReasoningEfforts`,
+`modelCapabilities.<modelId>.inputModalities`, `modelCapabilities.<modelId>.responsesCustomTools`, `modelReasoningEfforts`,
 `modelDefaultReasoningEfforts`), so an edited row keeps its discovery provenance instead of
 being replaced by a custom model. `inputModalities` accepts `text`, `image`, and `audio`;
-`reasoningEfforts` must be a subset of the efforts the runtime knows. Unknown request fields
+`responsesCustomTools` accepts a boolean or `null` to inherit the provider setting. The dashboard has no control for it: its model settings Restore clears the context window, modalities and reasoning settings but leaves `responsesCustomTools`, so clear it with `responsesCustomTools: null` or `ocx models set <provider/model> --reset`, which clears every axis including this one. `reasoningEfforts` must be a subset of the efforts the runtime knows. Unknown request fields
 are rejected by name. `modelId` must be exact, without surrounding whitespace, control
 characters, excessive length, or a reserved object-property name. `contextWindow` must be
 `null` or a positive safe integer.
+
+When `responsesCustomTools` is `false`, native Responses compaction also lowers custom-tool
+history. History that cannot be lowered safely returns HTTP 400 with `invalid_request_error`
+before sending anything upstream.
 
 Every field is optional, and `null` **clears** the declaration rather than writing a default,
 which hands the fact back to the registry, the catalog, and the provider. An empty
@@ -596,7 +630,7 @@ Clearing `inputModalities` also removes the exact legacy `modelInputModalities` 
 model, so a restore cannot leave an older declaration in force; family keys shared with other
 models stay. An emptied per-model map is removed instead of left as `{}`. A request that changes nothing
 answers `changed: false` with the stored state. The receipt also reports `saved` (whether this
-request published config), `hasOverrides` (whether any of the four axes remains stored), and
+request published config), `hasOverrides` (whether any editable axis remains stored), and
 `catalogRefresh` (`committed`, `skipped`, or `failed`). These fields distinguish a no-op with
 stored declarations from a model with nothing to restore. A changed request persists atomically;
 an unpublished save failure leaves the live config unchanged. After publication the server
@@ -663,6 +697,7 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/active` | Select a provider's active key | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/alias` | Set or clear a provider-key alias | 400 invalid input; 404 provider/key missing |
+| `PUT /api/providers/keys/pause` | Pause or resume one provider API key. Body `{ name, id, paused }`; pausing the active key selects the next usable key in ring order. Success includes the resulting `activeAccountId` (or `null`) and `activeAccountChanged`. | 400 invalid input; 404 provider/key missing |
 | `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys | 400 invalid body/id; 404 key missing |
 | `PUT /api/oauth/accounts/affinity-reset` | Confirm a provider-wide session-affinity reset without requiring an account. Body `{ provider }`; success includes `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 
@@ -700,6 +735,12 @@ API page. The CLI drives these routes with `ocx api protocols`, `ocx api explain
 ([Protocol paths](/guides/protocol-paths/#rollout-switches)); see
 [API surfaces](/reference/configuration/server/#api-surfaces-apisurfaces) for how the Messages
 setting interacts with `claudeCode.enabled` across upgrades and downgrades.
+
+### Health during local credential updates
+
+When an asynchronous native-profile update waits for another local process to release the
+credential-publication lock, `/healthz` can still answer. The update keeps its existing 10-second
+lock-acquisition deadline and starts writing only after it owns the lock.
 
 ### Home identity and the served-by header
 
@@ -744,6 +785,21 @@ for its default-off, custom-provider-only behavior.
 When Antigravity's quota-summary endpoint has no usable response, quota reports may also include
 per-model Cloud Code Assist usage windows when the model-discovery response provides them. These
 measurements are diagnostic; an absent model window does not establish that the model is unavailable.
+
+For a row using the `claude-cli` adapter, the report is the last recorded Claude subscription
+observation (`observed: true`) rather than an active probe, and only for the account Claude Code is
+signed in to. `refresh=1` re-reads the local sign-in and that snapshot. Fetching this Claude CLI
+report never spawns the CLI or calls Anthropic; other configured providers can still run their
+normal quota probes. The row is absent until a usage check records quota windows for the signed-in
+account. A sign-out or account switch clears it at once with `refresh=1` and within a minute (the
+sign-in cache) on a normal cached read. A newer recorded observation, including one without windows,
+replaces it on the next read. Passive reads use the last recorded sign-in and snapshot without
+resolving credentials or probing providers, so an external sign-in change appears after another
+operation records it. `GET /api/quota-pool` reads no
+sign-in of its own: it lists the Claude CLI account only for the sign-in this proxy last read, and
+only when that account has a recorded snapshot. After an external sign-out or account switch it keeps
+the previous account until the dashboard or a Claude turn reads the sign-in again; after a restart
+the row is absent until such a read.
 
 With `quota=1`, an Anthropic or Antigravity account row whose probe returned no quota carries
 `quotaUnavailable: true` and, when the cause is known, a closed `quotaFailure` code:

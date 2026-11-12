@@ -28,11 +28,12 @@ import { clientInitiatedLinkReadiness, createHomeInitiatedLinkReadiness } from "
 import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tunnel";
 import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } from "./link-state";
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
-import { isLinkConnection, readClientConnectionState } from "./state";
+import { isLinkConnection, readClientConnectionState, readClientConnectionStateWithEvidence } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
-import { clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
+import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, restartOwnerEvidence, type ClientRestartController, type RestartOwner } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
+import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 
 let activeServer: Server<unknown> | null = null;
@@ -83,6 +84,8 @@ export interface StandaloneRecycleIo {
   exitProcess?: (code: number) => void;
   configuredPort?: () => number | undefined;
   isDesktopSupervised?: () => boolean;
+  /** A service that will really relaunch this process; defaults to the OCX_SERVICE marker. */
+  serviceSupervised?: () => boolean;
 }
 
 function cleanup(): void {
@@ -99,19 +102,30 @@ export function clientRuntimeRecord(
   pid: number,
   port: number,
   attestationSecret: string = createLocalAttestationSecret(),
+  owner: RestartOwner | null = classifiedOwner(),
 ): RuntimePortState {
   let command: string[] | undefined;
   try { command = currentServingCommand(); } catch { /* no reliable relaunch identity; update admission fails closed */ }
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}) };
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}), ...(owner ? { restartOwner: owner } : {}) };
 }
+
+/** Evaluated once: the launch environment and parent of this process do not change. */
+let ownerMemo: { value: RestartOwner | null } | undefined;
+function classifiedOwner(): RestartOwner | null {
+  ownerMemo ??= { value: restartOwnerEvidence({ desktop: isDesktopSupervised(), env: process.env }) };
+  return ownerMemo.value;
+}
+const ownerProven = (): boolean => classifiedOwner() !== null;
 
 export function standaloneRecycleEnv(
   env: NodeJS.ProcessEnv,
   disconnectedTokenFingerprint: string,
 ): NodeJS.ProcessEnv {
   const childEnv = { ...env };
-  // A detached replacement is not the desktop app's child.
-  delete childEnv[DESKTOP_SUPERVISED_ENV];
+  // A detached replacement is nobody's child: not the desktop app's, not a service's, not a Windows
+  // wrapper's. It must carry no supervisor marker it would otherwise misread as its own.
+  for (const name of SUPERVISOR_MARKER_ENVS) delete childEnv[name];
+  delete childEnv.OCX_SERVICE;
   const admissionToken = childEnv.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (admissionToken && serviceApiTokenFingerprint(admissionToken) !== disconnectedTokenFingerprint) {
     // A surviving env token shadows OCX_API_TOKEN_FILE entirely, so nothing below can
@@ -164,7 +178,8 @@ export async function recycleStandalone(
   const port = activePort ?? (io.configuredPort ?? configuredTcpPort)();
   const exit = io.exitProcess ?? ((code: number) => { process.exit(code); });
   // Capture the one-use sibling handoff before this process removes its runtime record.
-  const replacementEnv = port && process.env.OCX_SERVICE !== "1"
+  const serviceSupervised = (io.serviceSupervised ?? (() => process.env.OCX_SERVICE === "1"))();
+  const replacementEnv = port && !serviceSupervised
     ? withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)
     : null;
   try {
@@ -201,7 +216,7 @@ export async function recycleStandalone(
   //
   // launchd's KeepAlive is failure-only too (`SuccessfulExit` false), so exit 1 is what
   // relaunches it as well; an exit 0 would leave the job stopped.
-  if (process.env.OCX_SERVICE === "1") {
+  if (serviceSupervised) {
     exit(1);
     return;
   }
@@ -433,6 +448,12 @@ export async function startClientRuntime(
   const restartController: ClientRestartController = createClientRestartController({
     stopping: () => shuttingDown,
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
+    connectionChanged: () => clientConnectionEnded(state.value, readClientConnectionStateWithEvidence()),
+    ownerProven,
+    recycle: supervisor => recycleStandalone(state.value.tokenFingerprint, {
+      isDesktopSupervised: () => supervisor === "desktop",
+      serviceSupervised: () => supervisor === "service",
+    }),
     stop: stopServing,
     spawnReplacement: async deadlineAt => {
       const { replacementStartEnvironment } = await import("../server/management/system-restart");

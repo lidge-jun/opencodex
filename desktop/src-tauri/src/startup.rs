@@ -809,6 +809,9 @@ async fn run(app: &AppHandle, started: Instant) {
     );
 
     report(app, started, Phase::Resolving, None);
+    // SignPath's installation-option condition: an opt-out chosen in the Windows installer is
+    // saved into the user's config before any proxy is resolved, attached to or started.
+    crate::installer_telemetry::apply(app, deadline).await;
     // D5: the shell no longer resolves the home, the port or liveness. It asks the bundled CLI,
     // which owns the tuned probe budgets that exist because a shell-side reimplementation answered
     // "nobody is listening" twice and started duplicate proxies. The call is inside the sequence, so

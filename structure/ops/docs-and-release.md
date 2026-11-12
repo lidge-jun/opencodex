@@ -86,7 +86,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 106 total: 85 key-based, 17 OAuth, three local, and one default
+documented split is 107 total: 86 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 
@@ -137,17 +137,17 @@ commit SHA before checkout. The build has read-only contents access; only the de
 Pages and OIDC write permissions. There are no push triggers. The scoped `docs-site-build` PR
 job validates the site before merge, including the internal-link integration.
 
-Before cutover, a maintainer must configure Pages to use GitHub Actions and restrict the
-`github-pages` environment to the protected `dev` branch, with required reviewers according to
-repository policy. Do not allow arbitrary branches or tags in that environment: a branch-selected
-workflow can replace its own guards. Protect `dev` and release tags, and verify these settings
-before deploying. Changing the repository default branch from `main` to `dev` is a separate
-maintainer-controlled operation; until then default-branch automation still loads from `main`.
-The legacy `main` and `preview` branches are retained for recovery and migration. No repository
-setting change or production deploy is implied by this documentation.
+A maintainer configures Pages to use GitHub Actions and restricts the `github-pages`
+environment to the protected `dev` branch, with required reviewers according to repository
+policy. Do not allow arbitrary branches or tags in that environment: a branch-selected workflow
+can replace its own guards. Protect `dev` and release tags, and verify these settings before
+deploying. The repository default branch is `dev`, so default-branch automation loads from it.
+The legacy `main` and `preview` branches were deleted once the single-branch model was in place;
+released history remains reachable through tags. No repository setting change or production
+deploy is implied by this documentation.
 
 Service lifecycle evidence includes the legacy CLI entrypoint `src/cli.ts` as well as the
-service implementation and desktop packaging paths.
+service implementation and desktop packaging paths. `validate-dispatch` in `release.yml` checks it with the CI evidence before any packaging job starts, and `verify-npm` and `publish` recheck it; a missing run fails with the `gh workflow run service-lifecycle.yml --ref dev -f source_sha=<sha>` command.
 
 > Decision record: [ADR-0080](../decisions/ADR-0080-github-pages.md)
 
@@ -221,19 +221,20 @@ cannot supply a write-job PR number. If no unique local current-head candidate r
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | Pull requests and manual dispatch | Scoped Ubuntu checks on PRs; full Linux, macOS and Windows evidence via manual `lane=all` on `dev`. The aggregate validates the requested job graph. |
 | `.github/workflows/dev-version-bump.yml` | Manual dispatch | Legacy pre-move and repair tool; it is not part of the new release path. |
-| `.github/workflows/release.yml` | Manual dispatch from `dev` | Resolves qualifying source evidence and stamps build checkouts; publication is held pending history reconciliation and remaining cutover gates. |
+| `.github/workflows/release.yml` | Manual dispatch from `dev` | Resolves qualifying source evidence, stamps build checkouts and reconciles publication history; publication is held pending the remaining cutover gates, and an attested resume recovers a run that already published npm. |
 | `.github/workflows/deploy-docs.yml` | Manual dispatch from `dev` | Builds a published stable release at its resolved commit and deploys to Pages; the PR build gate is `docs-site-build`. |
 | `.github/workflows/service-lifecycle.yml` | Filtered pull requests and manual dispatch | Linux, macOS and Windows service checks; manual dispatch validates an exact `dev` ancestor source SHA. |
 | `.github/workflows/catalog-async-contracts.yml` | Filtered pull requests and manual dispatch | Read-only catalog contracts; PRs run Ubuntu and manual dispatch from `dev` runs all three platforms. |
-| `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize) plus default-branch `status` events filtered to successful `CodeRabbit` statuses | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, rejects empty or malformed descriptions, requires a GUI screenshot when the title/body mentions `gui` (immediately waivable with the maintainer-controlled `gui-screenshot-waived` label; legacy maintainer comments remain compatibility evidence on later PR events), keeps contributor PRs in draft until a four-box readiness checklist is complete, verifies the CI / latest-dev / Codex+CodeRabbit-findings claims (review threads plus current-head CodeRabbit review-body findings outside the diff range), and adds a `review-ready` status label at the ready moment. CodeRabbit status SHAs must resolve to exactly one open current-head PR before writes. Stacked child PRs targeting another open PR's head skip the wrong-base gate. `labeled`/`unlabeled` wake the gate only for `gui-screenshot-waived` and the `HYGIENE_GATE_LABELS` exported by `.github/scripts/pr-hygiene.cjs`; `tests/ci-workflows/ci-workflows.test.ts` pins the two lists together. Head-specific exception labels (`test-exception-approved`, `suppression-approved`, `generated-change-approved`, `dependency-change-approved`, `attribution-approved`) count only while the head and head-rewrite count that `pr-hygiene.yml` last recorded in its comment section are unchanged; both gates read that record and only the hygiene workflow writes it or removes the labels. |
+| `.github/workflows/pr-gates.yml` | `pull_request_target` (opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize) plus default-branch `status` events | One run per PR event for the three PR gates (#7654): jobs `label`, `hygiene` and `enforce` call `pr-labeler.yml`, `pr-hygiene.yml` and `enforce-pr-target.yml` as local `./` reusable workflows, which load from the same default-branch commit as the caller. `label` and `hygiene` start only for the actions those gates handle; `enforce` always starts and its `resolve-pr` job filters. `permissions: {}` at the top and per-job ceilings equal to each callee's requests; each gate keeps its concurrency group on its own job, so a skipped job never enters one. `tests/ci-workflows/pr-gates-workflow.test.ts` pins the shape. |
+| `.github/workflows/enforce-pr-target.yml` | `workflow_call` from `pr-gates.yml` (every subscribed `pull_request_target` action and every `status` event; `resolve-pr` keeps only successful `CodeRabbit` statuses) | The `enforce-target` gate: rejects pull requests whose base is not `dev` (stacked children excepted), rejects empty or malformed descriptions, requires a GUI screenshot when the title/body mentions `gui` (immediately waivable with the maintainer-controlled `gui-screenshot-waived` label; legacy maintainer comments remain compatibility evidence on later PR events), keeps contributor PRs in draft until a four-box readiness checklist is complete, verifies the CI / latest-dev / Codex+CodeRabbit-findings claims (review threads plus current-head CodeRabbit review-body findings outside the diff range), and adds a `review-ready` status label at the ready moment. CodeRabbit status SHAs must resolve to exactly one open current-head PR before writes. Stacked child PRs targeting another open PR's head skip the wrong-base gate. `labeled`/`unlabeled` wake the gate only for `gui-screenshot-waived` and the `HYGIENE_GATE_LABELS` exported by `.github/scripts/pr-hygiene.cjs`; `tests/ci-workflows/ci-workflows.test.ts` pins the two lists together. Head-specific exception labels (`test-exception-approved`, `suppression-approved`, `generated-change-approved`, `dependency-change-approved`, `attribution-approved`) count only while the head and head-rewrite count that `pr-hygiene.yml` last recorded in its comment section are unchanged; both gates read that record and only the hygiene gate writes it or removes the labels. |
 | `.github/workflows/enforce-issue-quality.yml` | `issues` (opened, edited, reopened), `issue_comment` (created, edited), or manual dispatch with an issue number | Issue-template compliance gate. |
-| `.github/workflows/issue-quality-tests.yml` | `pull_request` and `push` to `main`/`preview` filtered on the issue/PR automation scripts, templates, and their workflows | Tests the issue and PR automation scripts themselves, so the gates cannot rot silently. |
+| `.github/workflows/issue-quality-tests.yml` | `pull_request` filtered on the issue/PR automation scripts, templates, and their workflows | Tests the issue and PR automation scripts themselves, so the gates cannot rot silently. |
 | `.github/workflows/issue-triage.yml` | `issues` (opened) | Duplicate detection and triage labeling for new issues. |
-| `.github/workflows/pr-labeler.yml` | `pull_request_target` (opened, edited, synchronize, labeled, unlabeled) | Type and path labeling plus title sync; `labeled`/`unlabeled` let a human override enqueue a fresher run in the per-PR concurrency group. |
-| `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) touching `gui/**` or the workflow, and every `push` to `main` | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows/ci-workflows.test.ts`. |
+| `.github/workflows/pr-labeler.yml` | `workflow_call` from `pr-gates.yml` (opened, edited, synchronize, labeled, unlabeled) | Type and path labeling plus title sync; `labeled`/`unlabeled` let a human override enqueue a fresher run in the per-PR concurrency group on the `label` job. |
+| `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) touching `gui/**` or the workflow | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows/ci-workflows.test.ts`. |
 | `.github/workflows/stale-needs-info.yml` | `schedule` only (daily 06:15 UTC); deliberately no manual dispatch | Closes issues left in needs-info past the grace period. Manual dispatch is omitted so a branch-selected run cannot execute that branch's body with issue write scope. |
 
-`pull_request_target`, `issues`, and `schedule` workflows load from the repository default branch. Until a maintainer changes the default to `dev`, landing a change on `dev` alone does not change their live behavior.
+`pull_request_target`, `issues`, and `schedule` workflows load from the repository default branch, which is `dev`.
 
 CI setup uses the [Bun runtime and test-runner pins](../runtime.md#bun-runtime-and-test-runner): test jobs (including development-version validation) choose `test-runner`, while release packaging, desktop/widget compilation and runtime smokes keep the default `runtime` role. Local layout verification resolves that test pin, and `gui/package.json` runs `scripts/test-with-pinned-bun.ts` to preserve its working directory, configuration and arguments on the same pin. The wrapper forwards SIGINT, SIGTERM and SIGHUP, waits for child exit and preserves interruption status (130, 143 or 129).
 
@@ -242,7 +243,7 @@ full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` exec
 alone with fresh process homes, including launchd repair and standalone home/lease cases. Hosted batches assign shard membership by the per-file durations
 in `scripts/ci/test-durations.tsv` (Windows: `scripts/ci/test-durations.windows.tsv`; sorted round-robin when nothing is recorded), run each shard's
 files in sorted order and split only process boundaries; every selected file still runs once.
-Ordinary macOS shards select 1/4, 2/4, 3/4 and 4/4 from the full file list; macOS control selects 1/1. Both
+Ordinary macOS shards select 1/4, 2/4, 3/4 and 4/4 from the full file list; macOS control (dispatched only as `lane=macos-control`) selects 1/1. Both
 execute sequential batches of at most 12 files with one worker.
 Storage-policy and API-usage families run as singletons, as do manifest-declared files.
 This preserves full test membership but does not claim cross-batch shared-process coverage.
@@ -298,10 +299,11 @@ changed source area even when no text edit is needed.
 [`AGENTS.md`](../../AGENTS.md) and [`MAINTAINERS.md`](../../MAINTAINERS.md) are authoritative; this section
 exists so the repository-shape source of truth does not omit the shape of its own history.
 
-- `dev` is the single integration and release-source branch. `main` and `preview` remain protected
-  historical branches for migration and recovery. One documented
-  exception: a stacked child PR may target another **open** PR's head branch as a review workflow, and
-  is retargeted to `dev` once the parent lands or closes.
+- `dev` is the single integration and release-source branch and the repository default branch.
+  `main` and `preview` were deleted after the single-branch model was in place; released history
+  remains reachable through tags. One documented exception: a stacked child PR may target another
+  **open** PR's head branch as a review workflow, and is retargeted to `dev` once the parent lands
+  or closes.
 - Bun-native TypeScript on `dev` is the only runtime line. The former Go native-runtime experiment is
   retired and archived, and no `go/` tree is tracked in this repository; a local `go/` directory is
   untracked leftovers. If native code returns, the expectation is an incremental module landing on
@@ -329,7 +331,7 @@ enforcement. For `dev`, a current maintainer with live `maintain` or `admin` acc
 explicitly integrate a PR without a second maintainer approval. The optional merge-review
 helper validates this actor/base exception separately from its default contributor-approval
 path; it does not certify CI or security review. The PR-only bypass leaves direct pushes,
-force-pushes and deletion blocked. `main` and `preview` retain their existing review rules.
+force-pushes and deletion blocked.
 
 A new dashboard management operation ships with its `ocx` command in the same change, declared in
 `src/cli/capabilities.ts`, or with an explicit note that it is visual-only (theme, language,
@@ -407,10 +409,12 @@ Package release is npm-focused. `.github/workflows/release.yml` resolves a quali
 sources in temporary build checkouts using `scripts/release-version-sources.ts`. The sources are
 `package.json`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, and the
 `opencodex-desktop` entry in `desktop/src-tauri/Cargo.lock`. The new path remains pre-cutover:
-publication is held by `OCX_DEV_RELEASE_PUBLISH_ENABLED`, and current history reconciliation
-fails closed on existing npm publications. Resume is also refused pending a durable receipt.
-History, security review, real dry-run evidence and settings must be resolved before cutover;
-this text does not attest those gates. Docs publishing is separate.
+a real publication or resume requires the repository variable `OCX_DEV_RELEASE_PUBLISH_ENABLED`
+to equal `true`. Independent review of the legacy history mapping, security review, real dry-run
+evidence and settings must be resolved before cutover; this text does not attest those gates.
+Docs publishing is separate. Dispatch inputs are `tag` (`latest` or `preview`), `dry-run`
+(default `true`), `expected-sha`, `version` and `resume-after-npm-publish`; `scripts/release.ts`
+dispatches ordinary runs only, so a resume is dispatched by hand.
 
 The `package-standalone` job in `.github/workflows/release.yml` also builds Bun compiled
 `ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
@@ -422,6 +426,53 @@ copies those same pinned assets into Tauri resources. The loader and packaged-ap
 
 The old `dev-version-bump.yml` pre-move is a legacy manual tool and is not required by the new
 source-selection path. The release workflow remains subject to the unresolved cutover gates above.
+
+### History reconciliation
+
+Every run that is not a resume, dry runs included, runs `.github/scripts/release-history.cjs` from
+the trusted workflow revision in `verify-npm`, and `publish` repeats it immediately before
+`npm publish`. It requires complete Git history, reads npm history from the npm registry, reads
+`dev`, tags and releases with authenticated GitHub requests, and refuses if a second read differs.
+Existing npm history does not block a release. The gate reconciles it against the channel floors,
+the newest stable and the newest preview npm publications, and refuses when any of these fails:
+
+- Every npm publication from the older floor onward has a `gitHead`, a `v<version>` tag at that
+  commit and a published GitHub release whose prerelease flag matches its channel. Every published
+  GitHub release in that window has an npm version. An npm-only or partial publication stops for
+  manual reconciliation.
+- The candidate version exceeds every published npm version.
+- The candidate is reachable from `dev` and contains each floor's source. For the two fixed legacy
+  `2.99.0` floors, containment is replaced, not added to. Their registry `gitHead` and `v<version>`
+  tag must equal the fixed legacy SHA, the legacy baseline `0627a2c2` (2.100.0) must be an ancestor
+  of both the candidate and `dev`, and the legacy-to-baseline diff must be exactly the four version
+  sources with only the version string changed (`verifyLegacyTreeEvidence`).
+- The candidate reuses the newest floor's source only for a stable release after that preview.
+
+Publications older than the floor window take part in the identity, version and ordering checks
+only.
+
+### Resuming after npm publication
+
+A run that published npm and then failed before its GitHub release was complete is recovered by
+dispatching again with `resume-after-npm-publish: true`, the original `version`, the original
+source as `expected-sha` and `dry-run: false`. A resume missing any of these is refused. The resume
+is an operator attestation that this version was published from that source; registry and GitHub
+state are consistency checks, not provenance. The source still needs qualifying `dev` evidence.
+The run skips version derivation and history reconciliation, and refuses unless:
+
+- the exact version is on npm and its `gitHead` equals the supplied source
+  (`scripts/verify-release-resume.ts`);
+- `.github/scripts/release-resume.cjs` finds that version is the newest npm publication, with no
+  higher npm version or `v` tag and no dist-tag naming an unknown version, and two reads of the
+  registry, tags and release agree;
+- if a `v<version>` tag or GitHub release already exists, the tag points at the source and the
+  release matches the channel; the run creates a missing tag and a missing release as a draft;
+- assets already on the release carry the digests in this run's verification receipt. A published
+  release missing a verified asset is refused; otherwise missing assets are uploaded.
+
+A resume never runs `npm publish`, and only the resume path reuses an existing tag or GitHub
+release. If the version or source cannot be verified, the maintainer reconciles the partial
+publication by hand.
 
 ### Release notes
 
@@ -456,10 +507,11 @@ deterministic body whenever the maintainer skips it.
 ## Release metadata invariants
 
 A release version must agree across the four stamped version sources, npm package, tag and
-GitHub Release; tags are intended to point to the selected source SHA. Do not infer that historical
-npm publications or legacy tag ancestry have been reconciled. The current workflow refuses resume
-and fails closed when existing npm history is found. Maintainers must reconcile these gates and
-verify recovery before enabling publication; do not force-move public version tags as a workaround.
+GitHub Release; tags are intended to point to the selected source SHA. Reconciliation covers the
+floor window in [History reconciliation](#history-reconciliation); do not infer that older npm
+publications or legacy tag ancestry have been reconciled. An npm version is published once.
+Recovery goes through the [attested resume](#resuming-after-npm-publication), never a republish,
+and public version tags are never force-moved.
 
 Cross-platform CI test lanes and release proof live in [Cross-platform CI](cross-platform-ci.md).
 

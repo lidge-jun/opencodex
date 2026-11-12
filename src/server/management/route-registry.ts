@@ -429,6 +429,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
   // server/management/link-routes
   { method: "GET", path: "/api/link/status", module: "server/management/link-routes", mutates: false },
+  { method: "GET", path: "/api/link/diagnostics", module: "server/management/link-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx link diagnostics reads the same bounded diagnostics file directly through src/link/diagnostics-read.ts and needs no running proxy; the route serves the dashboard's read-only view of it." } },
   { method: "GET", path: "/api/link/candidates", module: "server/management/link-routes", mutates: false, exempt: { reason: "session-only", why: "SSH candidates are a dashboard surface: a paired session, or on a standalone runtime the current loopback dashboard session on trusted loopback ingress; admin-token and Tailscale identity sessions are refused." } },
   { method: "POST", path: "/api/link/probe", module: "server/management/link-routes", mutates: true },
   { method: "POST", path: "/api/link/confirm-host", module: "server/management/link-routes", mutates: true },
@@ -437,6 +438,11 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "DELETE", path: "/api/link/{id}", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/link/{id}/reconnect", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/link/issue", module: "server/management/link-routes", mutates: true },
+  // server/management/link-child-ops-routes (reached through link-routes)
+  { method: "POST", path: "/api/link/children/operations", module: "server/management/link-child-ops-routes", mutates: true },
+  { method: "GET", path: "/api/link/children/jobs/{jobId}", module: "server/management/link-child-ops-routes", mutates: false, mechanism: "regex" },
+  { method: "GET", path: "/api/link/children/policy", module: "server/management/link-child-ops-routes", mutates: false },
+  { method: "PUT", path: "/api/link/children/policy", module: "server/management/link-child-ops-routes", mutates: true },
   // server/management/remote-workspace-routes
   { method: "GET", path: "/api/remote-workspace", module: "server/management/remote-workspace-routes", mutates: false },
   { method: "GET", path: "/api/remote-workspace/runtimes", module: "server/management/remote-workspace-routes", mutates: false },
@@ -451,6 +457,13 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
+  // server/management/telemetry-routes
+  { method: "GET", path: "/api/telemetry", module: "server/management/telemetry-routes", mutates: false },
+  { method: "PUT", path: "/api/telemetry", module: "server/management/telemetry-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: changing telemetry consent over HTTP requires a human dashboard session; CLI callers use ocx telemetry enable/disable." } },
+  { method: "GET", path: "/api/telemetry/profile", module: "server/management/telemetry-routes", mutates: false },
+  { method: "POST", path: "/api/telemetry/profile", module: "server/management/telemetry-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: connecting a public profile over HTTP requires a human dashboard session; CLI callers use ocx telemetry profile connect in an interactive terminal." } },
+  { method: "DELETE", path: "/api/telemetry/profile", module: "server/management/telemetry-routes", mutates: true },
+  { method: "GET", path: "/api/telemetry/profile/rank", module: "server/management/telemetry-routes", mutates: false },
   // --- Further routes an equality scan of their own file cannot see. ---
   // Each carries `mechanism`; the reconciliation test counts these separately.
   { method: "GET", path: "/api/storage", module: "server/management/storage-log-guard-routes", mutates: false, mechanism: "negated-guard" },
@@ -465,6 +478,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/request-history/{id}/route-decision", module: "server/management/request-history-routes", mutates: false, mechanism: "ends-with" },
   { method: "PUT", path: "/api/providers/{provider}/alias", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "PUT", path: "/api/providers/{provider}/model-aliases", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
+  { method: "PUT", path: "/api/providers/{provider}/alias-template", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "GET", path: "/api/providers/{provider}/model-costs", module: "server/management/model-routes", mutates: false, mechanism: "regex" },
   { method: "PUT", path: "/api/providers/{provider}/model-costs", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "PUT", path: "/api/providers/{provider}/model-display-names", module: "server/management/model-routes", mutates: true, mechanism: "regex" },

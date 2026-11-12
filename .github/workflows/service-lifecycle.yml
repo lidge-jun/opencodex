@@ -2,7 +2,7 @@ name: Service lifecycle
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [dev]
     paths:
       - "src/service.ts"
       # The service implementation is the src/service/ directory; src/service.ts is only

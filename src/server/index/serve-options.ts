@@ -99,6 +99,7 @@ import {
   isAllowedManagementOrigin,
   isApiAuthRequired,
   isLoopbackHostname,
+  markDashboardProxyPeer,
   markTrustedHubManagementRequest,
   jsonResponse,
   admissionFields,
@@ -220,10 +221,10 @@ import { withCallerSessionIdentity } from "../caller-session-identity";
 import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
 import { runTurnStateCallerScope } from "../turn-state-handles";
 
-export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
+export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link" | "local-control";
 
 export function trustedLoopbackForIngress(ingress: ServerIngress, hostname: string): boolean {
-  return ingress === "unauthenticated-loopback"
+  return ingress === "unauthenticated-loopback" || ingress === "local-control"
     || (ingress === "public" && isLoopbackHostname(hostname));
 }
 
@@ -330,9 +331,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       const ingress = ingressForServer(requestServer);
       // Bind management-origin trust to the actual Bun listener object resolved above.
       // Neither Host nor any X-Forwarded-* header can manufacture this process-local mark.
-      if (ingress === "hub-management" && config.runtimeRole === "hub") {
-        markTrustedHubManagementRequest(req);
-      }
+      if (ingress === "hub-management" && config.runtimeRole === "hub") markTrustedHubManagementRequest(req);
+      // #8338: the kernel-observed peer, so the configured standalone dashboard proxy can be verified.
+      else if (ingress === "public" && config.dashboardTrustedProxy !== undefined) markDashboardProxyPeer(req, requestServer.requestIP(req)?.address);
       const requestUrl = codexCompatibleUrl(req.url);
       const linkPolicyView = ingress === "hub-link" ? linkPolicy() : undefined;
       // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing
@@ -378,7 +379,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // Anthropic credentials, not opencodex admission tokens — so it takes the loopback view too.
       const policy: RequestPolicyView = ingress === "hub-link"
         ? linkPolicyView!
-        : ingress === "unauthenticated-loopback" || ingress === "claude-intercept"
+        : ingress === "unauthenticated-loopback" || ingress === "claude-intercept" || ingress === "local-control"
           ? loopbackPolicy()
           : config;
       // Codex runtime agent assertion_only (Authorization: AgentAssertion) is refused before
@@ -878,13 +879,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         // Role gate AFTER admission, deliberately: answering an unauthenticated caller would
         // turn this into a free "is that machine a hub?" probe. A standalone or client install
-        // gains no surface at all — the route simply does not exist there.
+        // gains no public surface — only a hub or an active `hub-link` listener serves it.
         //
         // Built, not formatErrorResponse'd, for the same reason /v1/catalog builds its 404: the
         // code has to distinguish "this route exists and this host is not a hub" from "this
         // build has no such route", which is the difference between admission proof and a
         // vacuous pass in tests/server/api-key-attribution.test.ts.
-        if (config.runtimeRole !== "hub") {
+        if (config.runtimeRole !== "hub" && ingress !== "hub-link") {
           return withCors(
             new Response(JSON.stringify({
               error: {
@@ -1270,6 +1271,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 config,
                 provider,
                 knownModelIdsForProvider(m.provider, provider, config),
+                m.provider,
               ).get(m.id)
             : undefined;
           const effectiveId = !isCombo && !fastModelId && effective
@@ -1866,6 +1868,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               liveUpstreamProtocols: audio?.protocols,
               liveValidateFrame: audio?.validateFrame,
               liveMaxSessionMs: audio?.maxSessionMs,
+              liveFinalizationMs: audio?.finalizationMs,
               liveFinish: finish,
               liveAbortSignal: audioController?.signal,
               livePending: [],

@@ -62,6 +62,22 @@ export class AnthropicTokenError extends Error {
   }
 }
 
+/**
+ * The TCP connect that would have carried the token request was refused, so no byte of it was
+ * sent (#8577). Two transports can report that, and only in these exact shapes:
+ * - Bun's native fetch (direct, or through an HTTP(S) proxy): `code: "ECONNREFUSED"` with `path`
+ *   naming this request's URL. A reachable proxy that cannot open the upstream tunnel reports
+ *   `ERR_PROXY_TUNNEL` instead, and a response that is lost later is a reset or timeout.
+ * - The SOCKS5 transport (src/lib/socks5-fetch.ts), which only ever connects to the configured
+ *   proxy: node:net's `code: "ECONNREFUSED"` with `syscall: "connect"`.
+ * Message text, another URL, or a refusal outside connect proves nothing and keeps the replay guard.
+ */
+function connectionRefusedBeforeSend(error: unknown, url: string): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ECONNREFUSED") return false;
+  if ("path" in error) return error.path === url;
+  return "syscall" in error && error.syscall === "connect";
+}
+
 async function postJson(url: string, body: Record<string, string | number>): Promise<string> {
   const direct = !startupOutboundProxyConfigured && !outboundProxyConfigured();
   const init: RequestInit & { protocol: "http1.1" } = {
@@ -84,6 +100,9 @@ async function postJson(url: string, body: Record<string, string | number>): Pro
       && "syscall" in error && error.syscall === "getaddrinfo"
       && "hostname" in error && error.hostname === new URL(url).hostname) {
       throw new AnthropicTokenError("Anthropic OAuth DNS lookup failed before connection", undefined, undefined, true);
+    }
+    if (connectionRefusedBeforeSend(error, url)) {
+      throw new AnthropicTokenError("Anthropic OAuth connection refused before the request was sent", undefined, undefined, true);
     }
     throw error;
   }
@@ -227,8 +246,9 @@ export async function loginAnthropic(
   const importLocal = opts?.codeMode ? "off" : opts?.importLocal ?? "off";
   if (opts?.instance === "anthropic2" && importLocal !== "off") throw new AnthropicLocalCliImportError();
   if (importLocal !== "off") {
-    const { detectClaudeCodeToken } = await import("./local-token-detect");
-    const local = detectClaudeCodeToken();
+    const { detectClaudeCodeTokenAsync } = await import("./local-token-detect");
+    const local = await detectClaudeCodeTokenAsync();
+    ctrl.signal?.throwIfAborted();
     if (local) {
       ctrl.onProgress?.("Found Claude Code token, importing automatically");
       if (local.expires >= Date.now() + 60_000) {

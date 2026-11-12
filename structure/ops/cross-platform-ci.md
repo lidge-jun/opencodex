@@ -30,8 +30,12 @@ so every pull request scans exactly once and the coverage does not depend on an 
 list. The aggregate derives the same expectation from its `scoped` result.
 
 The macOS suite has four duration-weighted shards (`macos N/4`, `TEST_SHARD=N/4`), each capped
-at 20 minutes. With the control and widget/bundle job, `lane=all` requests at least six macOS jobs
-for five runner slots; a `ci.yml` change also selects the setup-action macOS leg.
+at 20 minutes. With the widget/bundle job, `lane=all` requests at least five macOS jobs for five
+runner slots; a `ci.yml` change also selects the setup-action macOS leg. The unsharded `macos
+control` runs only on a `lane=macos-control` dispatch: on `lane=all` it repeated the suite the
+four shards had already passed on the same commit, on one worker, for 50 to 60 minutes, and
+every release waited for it. Release evidence (`.github/scripts/release-evidence.cjs`) therefore
+does not require it.
 Widget/bundle waits for `gates`, so the requests need not overlap and a queue is possible rather
 than guaranteed. The fourth shard adds setup overhead while dividing the same suite.
 
@@ -130,9 +134,9 @@ The scoped docs job builds the site. CI does not run coverage or perform remote 
 Those stay outside the default gate until a concrete regression justifies the extra runtime.
 
 The manual Release workflow selects a source with qualifying full `dev` dispatch evidence and
-uses a separately identified trusted workflow revision. Publication remains held, and its current
-history reconciliation fails closed for existing npm publications. Resume is refused pending a
-verified durable receipt. History reconciliation, security review, actual dry-run evidence and
-cutover settings remain open; a CI run alone does not authorize publication.
+uses a separately identified trusted workflow revision. Publication remains held. History
+reconciliation and the attested resume follow the [release workflow](docs-and-release.md#release-workflow).
+Review of the legacy history mapping, security review, actual dry-run evidence and cutover settings
+remain open; a CI run alone does not authorize publication.
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.

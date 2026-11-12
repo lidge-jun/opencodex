@@ -57,6 +57,7 @@ import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
+import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal";
 import {
   resolvePassthroughWebSearchBridgeAuth,
   planPassthroughWebSearchBridge,
@@ -173,11 +174,13 @@ import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-
 import { responsesJsonToSseStream } from "../responses-json-events";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import {
+  BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS,
   bufferedResponsesReadOptions,
   collectBufferedResponsesSse,
   type BufferedResponsesSseFailure,
   type BufferedResponsesSseResult,
 } from "./buffered-sse-json";
+import { bufferedResetSelectionStartedAt } from "./passthrough-completion";
 
 const PLAINTEXT_V2_SSE_PREFIX_LIMIT = 4096;
 
@@ -438,7 +441,7 @@ export async function deliverPassthroughResponse(
 ): Promise<Response> {
   const { route } = requestState;
   // The proof must belong to the response whose headers are published.
-  const arrivalMainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider);
+  const arrivalMainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider, nativeExchange.upstreamResponse);
   const { logCtx, config, options, req } = requestContext;
   const {
     codexSafetyBufferingOptions,
@@ -642,7 +645,11 @@ export async function deliverPassthroughResponse(
         // "captures passthrough failed usage from its original bounded body exactly once").
         // Attaching a guard would be a second `.body` access and break that contract for no
         // gain, since the bounded reader owns settlement on this path.
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
+        // Only the plan-refusal cause is carried to this leg's row (#8352); a throwaway holder
+        // keeps the other diagnostics this path has never recorded off it.
+        const comboCause: Pick<typeof logCtx, "causeHint"> = {};
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause);
+        if (comboCause.causeHint) logCtx.causeHint = comboCause.causeHint;
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
@@ -665,6 +672,8 @@ export async function deliverPassthroughResponse(
         turnAdmissionLease: options.turnAdmissionLease,
       });
       if (policyRefusal) return policyRefusal;
+      // Meta's Muse Code refusal is a plan restriction, not a rejected credential (#8352).
+      stampMetaMusePlanRefusal(logCtx, upstreamResponse.status, errorText);
       return carryPolicyCandidateRefusal(upstreamResponse, carryProxyError(upstreamResponse, formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
@@ -970,10 +979,11 @@ export async function deliverPassthroughResponse(
 
       if (canonicalBufferedJson) {
         const signal = options.abortSignal ?? req.signal;
+        // A turn whose head waited on reset selection keeps the deadline that wait already spent.
         const bufferedRead = bufferedResponsesReadOptions(resolveStallTimeoutMs(
           config.stallTimeoutSec,
           { localUpstream: nativeExchange.localUpstream },
-        ));
+        ), BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS, bufferedResetSelectionStartedAt(nativeExchange.upstreamResponse) ?? Date.now());
         const failBufferedTurn = (
           message: string,
           failure?: BufferedResponsesSseFailure,

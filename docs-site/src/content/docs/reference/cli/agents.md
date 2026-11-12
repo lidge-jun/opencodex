@@ -335,6 +335,8 @@ explicit `lastResort: false`. `--image-input auto|disabled` and
 `--reasoning-effort-mode strict|adaptive` preserve omission, while explicit `auto`
 and `strict` override saved disabled/adaptive values. Reasoning-effort mode is
 separate from `--effort-mode fallback|force`, which governs the default effort.
+`--jev-effort-mode decide|client` also preserves omission; `client` keeps JEV's target
+choice and leaves effort to ordinary Combo policy, and explicit `decide` clears a saved `client`.
 `--allow-metered-targets on|off` grants or clears operator consent for marked combo targets on a loopback-only proxy; public and linked callers still need configured-key consent.
 `--native-alias on|off` preserves explicit false; the legacy bare flag means true.
 Turning it off may require the intended alias clear, `--native-alias off --alias -`,
@@ -1101,7 +1103,7 @@ client applies its own defaults for those).
 | `raycast` | `~/.config/raycast/ai/providers.yaml` on macOS and Windows alike (Raycast does not honor `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | none — loopback only, no `api_keys` entry is written |
 | `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, then `SENPI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR` win in that order when set; a relative value is refused) | `omo-models.json` | none — loopback placeholder |
 | `kilo` | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` (`XDG_CONFIG_HOME` relocates that directory); uses `kilo.jsonc` when none exists | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
-| `commandcode` | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | `providers.json` | loopback only; `apiKey: false`; no environment variable |
+| `commandcode` | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | `providers.json` | loopback only; `apiKey: false`; no environment variable; never writes `~/.commandcode/auth.json` — the desktop app requires its own sign-in |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | loopback only; no environment variable |
 
 The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only

@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 const DEFAULT_OUTPUT_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const TUNNEL_OUTPUT_EXIT_GRACE_MS = 250;
+/** A tapped stderr line longer than this is handed to the tap in pieces, so memory stays bounded. */
+const TAP_LINE_MAX_CHARS = 16 * 1024;
 const HINT_MAX_CHARS = 160;
 // Written as escapes on purpose: invisible and bidi controls must never sit literally in source.
 const ANSI_SEQUENCE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b\[[0-?]*[ -/]*[@-~]|\u001b[@-_]/g;
@@ -85,7 +87,16 @@ export interface SshRunner {
     timeoutMs?: number;
     maxOutputBytes?: number;
   }): Promise<SshRunResult>;
-  spawnTunnel(argv: readonly string[]): SshChild;
+  spawnTunnel(argv: readonly string[], options?: SshTunnelOptions): SshChild;
+}
+
+export interface SshTunnelOptions {
+  /**
+   * Opt-in SSH capture (src/link/ssh-capture.ts): called with every stderr line as it arrives.
+   * Returns whether the line belongs in the stderr text the exit classifier reads; the 64 KiB cap
+   * applies to that text only, so verbose ssh output cannot end a healthy tunnel.
+   */
+  stderrLine?: (line: string) => boolean;
 }
 
 export class SshRunnerError extends Error {
@@ -95,11 +106,53 @@ export class SshRunnerError extends Error {
   }
 }
 
-async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, kill?: () => void, fatalUtf8 = true, exited?: Promise<number>, signal?: AbortSignal): Promise<string> {
+/** Splits decoded stderr into lines for a tap and keeps the lines it accepts. */
+function createLineTap(tap: (line: string) => boolean) {
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let pending = "";
+  let kept = "";
+  let keptBytes = 0;
+  // When a line is longer than TAP_LINE_MAX_CHARS it is offered in pieces; every later piece takes the
+  // first piece's decision, so the rest of a debug1: line can never reach the classifier.
+  let inherited: boolean | undefined;
+  const decide = (text: string): boolean => {
+    let keep = true;
+    try { keep = tap(text); } catch { /* A failing tap keeps the line, as an untapped stream would. */ }
+    return keep;
+  };
+  const offer = (line: string, complete: boolean): void => {
+    const text = line.endsWith("\r") ? line.slice(0, -1) : line;
+    const keep = inherited ?? decide(text);
+    inherited = complete ? undefined : keep;
+    if (!keep) return;
+    kept += `${text}\n`;
+    keptBytes += Buffer.byteLength(text) + 1;
+  };
+  const split = (): void => {
+    for (let index = pending.indexOf("\n"); index !== -1; index = pending.indexOf("\n")) {
+      offer(pending.slice(0, index), true);
+      pending = pending.slice(index + 1);
+    }
+    while (pending.length > TAP_LINE_MAX_CHARS) {
+      offer(pending.slice(0, TAP_LINE_MAX_CHARS), false);
+      pending = pending.slice(TAP_LINE_MAX_CHARS);
+    }
+  };
+  return {
+    push(bytes: Uint8Array): number { pending += decoder.decode(bytes, { stream: true }); split(); return keptBytes; },
+    end(): { text: string; bytes: number } {
+      pending += decoder.decode(); split(); if (pending) offer(pending, true); pending = "";
+      return { text: kept, bytes: keptBytes };
+    },
+  };
+}
+
+async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, kill?: () => void, fatalUtf8 = true, exited?: Promise<number>, signal?: AbortSignal, tap?: (line: string) => boolean): Promise<string> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   let finished = false;
+  const lines = tap ? createLineTap(tap) : undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cancel = (): void => { void reader.cancel().catch(() => {}); };
   const onExit = (): void => {
@@ -114,19 +167,28 @@ async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, 
     for (;;) {
       const next = await reader.read();
       if (next.done) break;
-      total += next.value.byteLength;
+      total = lines ? lines.push(next.value) : total + next.value.byteLength;
       if (total > maxBytes) {
         kill?.();
         cancel();
         throw new SshRunnerError("output_limit", `ssh output exceeded ${maxBytes} bytes`);
       }
-      chunks.push(next.value);
+      if (!lines) chunks.push(next.value);
     }
   } finally {
     finished = true;
     if (timer !== undefined) clearTimeout(timer);
     signal?.removeEventListener("abort", cancel);
     reader.releaseLock();
+  }
+  if (lines) {
+    // The last line may arrive without a newline; it counts against the cap like any other.
+    const { text, bytes } = lines.end();
+    if (bytes > maxBytes) {
+      kill?.();
+      throw new SshRunnerError("output_limit", `ssh output exceeded ${maxBytes} bytes`);
+    }
+    return text;
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
@@ -159,7 +221,7 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
     return env ? { env } : {};
   };
 
-  const spawnChild = (argv: readonly string[]): SshChild => {
+  const spawnChild = (argv: readonly string[], options: SshTunnelOptions = {}): SshChild => {
     let child: Bun.Subprocess;
     try {
       child = spawn([...argv], { stdin: "ignore", stdout: "pipe", stderr: "pipe", ...spawnEnv() });
@@ -167,7 +229,7 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
       throw new SshRunnerError("spawn", `could not spawn ${argv[0] ?? "ssh"}`, { cause: error });
     }
     const stdout = readOutput(outputStream(child.stdout), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), true, child.exited);
-    const stderr = readOutput(outputStream(child.stderr), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), false, child.exited);
+    const stderr = readOutput(outputStream(child.stderr), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), false, child.exited, undefined, options.stderrLine);
     void stdout.catch(() => {});
     void stderr.catch(() => {});
     return {
@@ -251,8 +313,8 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
     spawnTunnel,
   };
 
-  function spawnTunnel(argv: readonly string[]): SshChild {
-    return spawnChild(argv);
+  function spawnTunnel(argv: readonly string[], options?: SshTunnelOptions): SshChild {
+    return spawnChild(argv, options);
   }
 }
 

@@ -39,7 +39,7 @@ const MINT_STDERR_TAIL_BYTES = 4096;
 const GUI_PAIR_FAILURE_CLASSES = [
   "usage", "origin-scope", "runtime-discovery", "standalone-target", "local-intent",
   "unattested-target", "runtime-mismatch", "attestation", "capability", "transport",
-  "rejected", "unknown",
+  "rejected", "origin-refused", "rate-limited", "unknown",
 ] as const;
 type GuiPairFailureClass = (typeof GUI_PAIR_FAILURE_CLASSES)[number];
 
@@ -61,7 +61,7 @@ function classifyGuiPairFailure(observed: GuiPairStderrObservation): GuiPairFail
   if (stderr.includes("No running attested OpenCodex proxy")) return "runtime-discovery";
   if (stderr.includes("configured loopback address and port")) return "standalone-target";
   if (stderr.includes("write access to the private OpenCodex home")) return "local-intent";
-  const refused = stderr.match(/GUI pairing failed \((unattested-target|runtime-mismatch|attestation|capability|transport|rejected)\)/);
+  const refused = stderr.match(/GUI pairing failed \((unattested-target|runtime-mismatch|attestation|capability|transport|rejected|origin-refused|rate-limited)\)/);
   if (refused) return refused[1] as GuiPairFailureClass;
   return "unknown";
 }

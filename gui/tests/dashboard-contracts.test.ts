@@ -47,13 +47,13 @@ test("Dashboard usage polling cannot delay core health and settings", async () =
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/sidecar-settings");
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/shadow-call-settings");
   expect(core.slice(sidecarsFnStart)).toContain("/api/sidecar-settings");
-  expect(hook).toContain("usageSummary30dResourceKey(apiBase)");
+  expect(hook).toContain('usageSummary30dResourceKey(apiBase, "all", targetKey)');
   expect(hook).toContain("dashboard-sidecars:${apiBase}");
   expect(hook).toContain("dashboard-overview:${apiBase}");
   expect(hook).toContain("fetchDashboardUsage(apiBase, signal)");
   expect(hook).toContain("fetchDashboardSidecars");
   expect(hook).toContain("fetchDashboardOverview");
-  expect(hook).toMatch(/usageSummary30dResourceKey\(apiBase\)[\s\S]*pollMs: 60_000/);
+  expect(hook).toMatch(/usageSummary30dResourceKey\(apiBase, "all", targetKey\)[\s\S]*pollMs: 60_000/);
 });
 
 test("Dashboard interactive controls load independently of health/providers", async () => {
@@ -211,4 +211,20 @@ test("fetchStartupHealth reports whether the server answer is still being resolv
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("dashboard health probes do not read /healthz on the management plane (#8506)", async () => {
+  const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
+  const app = await read("../src/App.tsx");
+  const home = await read("../src/pages/Home.tsx");
+  const hook = await read("../src/pages/use-dashboard-data.ts");
+  const code = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  // The sidebar picks its path by plane: /healthz only on a connected Child's machine listener.
+  expect(code(app)).toContain("machineHealthPath(");
+  expect(code(app)).toContain("readManagementHealth(");
+  expect(code(app)).not.toContain("/healthz");
+  expect(code(home)).toContain("/api/system/health");
+  expect(code(home)).not.toContain("/healthz");
+  expect(code(hook)).toContain("/api/system/health");
+  expect(code(hook)).not.toContain("/healthz");
 });
