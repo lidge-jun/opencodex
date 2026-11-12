@@ -12,6 +12,10 @@
  * relaunch it. The caller discharges the receipt only after Part B and its own restore
  * succeeded; otherwise it stays on disk for recovery.
  *
+ * A Part A that did not end stopped/absent still gets the graceful POST — the proxy may be
+ * running and a graceful stop is always preferable — but never the forced fallback: a
+ * `taskkill /T /F` under a manager that would not stop is the one outcome the checked stop
+ * exists to prevent.
  */
 import { loadConfig } from "../config";
 import { claimPendingTeardown, type PendingTeardownPartA } from "../config/pending-teardown";
@@ -66,6 +70,9 @@ function defaultReceiptEndpoint(): { endpoint: { hostname: string; port: number 
 
 export async function stopUninstallProxy(io: UninstallProxyStopIo): Promise<UninstallProxyStopResult> {
   const windows = io.platform === "win32";
+  // Part A not stopped/absent means a manager may still be running and could respawn the
+  // proxy. The graceful POST is still worth sending; the forced fallback is not.
+  const partAProven = io.serviceStop === "stopped" || io.serviceStop === "stopped-respawnable" || io.serviceStop === "absent";
   let nonce: string | undefined;
   if (windows) {
     const { endpoint, source } = (io.receiptEndpoint ?? defaultReceiptEndpoint)();
@@ -81,10 +88,16 @@ export async function stopUninstallProxy(io: UninstallProxyStopIo): Promise<Unin
       );
     }
   }
+  const forbidForcedFallback = windows && !partAProven;
   const stopIo: GracefulStopIo = {
     skipPortWait: io.portWaitOwned(),
     ...(nonce ? { deferSharedTeardownNonce: nonce } : {}),
+    ...(forbidForcedFallback ? { allowForcedFallback: false } : {}),
   };
+  // An unconfirmed stop normally still leaves this step's proof to the respawn window that
+  // follows. With the forced ladder forbidden it must not: the process may be alive, and the
+  // Part A failure the caller already recorded is what keeps shared config up.
+  const confirmed = (stopped: boolean): boolean => stopped || !forbidForcedFallback;
   const pid = io.readPid();
   if (!pid) {
     // A missing pid file is not proof that nothing is serving: a proxy can outlive its
@@ -105,10 +118,9 @@ export async function stopUninstallProxy(io: UninstallProxyStopIo): Promise<Unin
     if (!live.pid) {
       throw new Error(`a proxy is answering on port ${live.port} but no process id could be resolved for it; stop it from the home that started it, then rerun`);
     }
-    await io.stop(live.pid, stopIo);
-    return { changed: true, provenDown: true, ...(nonce ? { nonce } : {}) };
+    return { changed: true, provenDown: confirmed(await io.stop(live.pid, stopIo)), ...(nonce ? { nonce } : {}) };
   }
-  await io.stop(pid, stopIo);
+  const provenDown = confirmed(await io.stop(pid, stopIo));
   io.removeTracked(pid);
-  return { changed: true, provenDown: true, ...(nonce ? { nonce } : {}) };
+  return { changed: true, provenDown, ...(nonce ? { nonce } : {}) };
 }

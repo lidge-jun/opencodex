@@ -893,6 +893,33 @@ describe("uninstall proxy stop defers the shared teardown through a receipt (#77
     expect(result.nonce).toBe(NONCE);
   });
 
+  test("Part A not stopped: the graceful POST still goes out, but the forced fallback is forbidden", async () => {
+    for (const serviceStop of ["failed", "state-unknown", null] as const) {
+      const seen: unknown[] = [];
+      await stopUninstallProxy(io({ serviceStop, stop: async (_pid, stopIo) => { seen.push(stopIo); return false; } }));
+      expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, allowForcedFallback: false }]);
+    }
+    // A Part A that ended stopped (or found nothing) keeps today's fallback available.
+    const allowed: unknown[] = [];
+    for (const serviceStop of ["stopped", "absent"] as const) {
+      await stopUninstallProxy(io({ serviceStop, stop: async (_pid, stopIo) => { allowed.push(stopIo); return false; } }));
+    }
+    expect(allowed).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE }, { skipPortWait: true, deferSharedTeardownNonce: NONCE }]);
+  });
+
+  test("a forbidden fallback that does not confirm withholds the proof of a stopped proxy", async () => {
+    // The graceful POST may stop the proxy, but when it does not and the ladder was
+    // forbidden there is no proof left: the caller's recorded Part A failure is what keeps
+    // shared config up. Off Windows an unconfirmed stop keeps today's proof (the respawn
+    // window follows).
+    const windows = await stopUninstallProxy(io({ serviceStop: "failed", stop: async () => false }));
+    expect(windows.provenDown).toBe(false);
+    const stopped = await stopUninstallProxy(io({ serviceStop: "failed", stop: async () => true }));
+    expect(stopped.provenDown).toBe(true);
+    const elsewhere = await stopUninstallProxy(io({ platform: "linux", serviceStop: "failed", stop: async () => false }));
+    expect(elsewhere.provenDown).toBe(true);
+  });
+
   test("a receipt that cannot be recorded refuses the stop instead of sending an undeferred POST", async () => {
     let stopped = 0;
     await expect(stopUninstallProxy(io({

@@ -353,6 +353,53 @@ describe("409 refusal reporting", () => {
     expect((thrown as ProxyOwnershipRefusedError).message).toBe("wrapper owns it");
   });
 
+  test("a caller that forbids the forced fallback never reaches the kill ladder", async () => {
+    // #7771 round 7 (B): uninstall's proxy step runs after a Part A that did not prove the
+    // manager stopped. The graceful POST is still worth sending; taskkill /T /F under a
+    // wrapper that could respawn the proxy is exactly what the checked stop prevents.
+    //
+    // The pid is a real live process this test owns, and the ladder is injected: the rule
+    // is "was the ladder entered", which a mock of the whole stop could not show.
+    const { spawn } = await import("node:child_process");
+    const child = spawn("sleep", ["60"], { stdio: "ignore" });
+    await new Promise<void>(resolve => child.once("spawn", () => resolve()));
+    const failing = (async () => new Response("nope", { status: 500 })) as typeof fetch;
+    try {
+      const forbidden: number[] = [];
+      const unconfirmed = await stopProxy(child.pid!, {
+        readRuntime: () => null, fetchFn: failing, waitExit: () => true, env: {},
+        allowForcedFallback: false, forceKill: pid => { forbidden.push(pid); },
+      });
+      expect(unconfirmed).toBe(false);
+      expect(forbidden).toEqual([]);
+
+      // Default behaviour is unchanged: an unconfirmed graceful stop still falls back.
+      const fallback: number[] = [];
+      await stopProxy(child.pid!, {
+        readRuntime: () => null, fetchFn: failing, waitExit: () => true, env: {},
+        forceKill: pid => { fallback.push(pid); },
+      });
+      expect(fallback).toEqual([child.pid!]);
+
+      // A 409 refusal is never forced, with or without the option.
+      for (const allowForcedFallback of [true, false]) {
+        const refused: number[] = [];
+        await expect(stopProxy(child.pid!, {
+          readRuntime: () => ({ port: 10100 }),
+          fetchFn: (async () => new Response(
+            JSON.stringify({ success: false, code: "respawnable_service", message: "wrapper owns it" }),
+            { status: 409, headers: { "content-type": "application/json" } },
+          )) as typeof fetch,
+          waitExit: () => true, env: {}, allowForcedFallback,
+          forceKill: pid => { refused.push(pid); },
+        })).rejects.toBeInstanceOf(ProxyOwnershipRefusedError);
+        expect(refused).toEqual([]);
+      }
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
   test("no next step sends the operator back to the command that just refused", () => {
     // #4169's loop: POST /api/stop answers "the stop must be run by `ocx stop`", and
     // `ocx stop` reprints it. Whatever the cause, the next step has to be something else,

@@ -66,6 +66,20 @@ export interface GracefulStopIo {
    * owns the wait, so the 15 s waitForStoppedPort here is skipped (030 "Time budget").
    */
   skipPortWait?: boolean;
+  /**
+   * Whether a graceful stop that did not confirm may fall back to the platform kill ladder.
+   *
+   * `ocx uninstall` sets this false when its Part A did not end stopped/absent: a manager
+   * that would not stop can respawn the proxy, and `taskkill /T /F` under it is exactly the
+   * forced stop the checked Windows stop exists to prevent. A 409 refusal never reaches the
+   * fallback either way. Defaults to true, which is every other caller's behaviour.
+   */
+  allowForcedFallback?: boolean;
+  /**
+   * The forced ladder, injectable so the rule above can be proven without signalling a
+   * process. Production callers omit it and get {@link killProxy}.
+   */
+  forceKill?: (pid: number) => void;
 }
 
 /**
@@ -346,7 +360,13 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<b
     await waitForStoppedPort(runtime, pid);
     return true;
   }
-  killProxy(pid);
+  if (io.allowForcedFallback === false) {
+    // The caller forbade the forced ladder (a manager that would not stop may respawn the
+    // proxy). Report the unconfirmed stop; the caller keeps its failure recorded.
+    await waitForStoppedPort(runtime, pid);
+    return false;
+  }
+  (io.forceKill ?? killProxy)(pid);
   await waitForStoppedPort(runtime, pid);
   return false;
 }
