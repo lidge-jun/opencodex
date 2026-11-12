@@ -1,5 +1,5 @@
 import { parseResetCooldownMs } from "../codex/routing";
-import { CYBER_POLICY_FALLBACK_MESSAGE, TERMINAL_REFUSAL_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isSubscriptionGateMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
+import { CYBER_POLICY_FALLBACK_MESSAGE, TERMINAL_REFUSAL_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isRateLimitOrQuotaFailureMessage, isSubscriptionGateMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
@@ -1025,6 +1025,10 @@ const MODERATION_RESULT_KEY = /^content_filter_results?$|^prompt_filter_results?
  */
 const SAFETY_SYSTEM_WORDING = /\bsafety[\s_-]+(?:systems?|reasons?)\b|\bhigh[\s_-]+risk\b/i;
 
+/** Billing, quota and account-state wording: evidence about the provider, not about the prompt. */
+const PROVIDER_STATE_WORDING =
+  /\bcredit[\s_-]+balance\b|\bquota\b|\bbilling\b|\bpayment[\s_-]+required\b|\binsufficient[\s_-]+(?:quota|balance|funds|credits?)\b|\baccount[\s_-]+(?:suspended|disabled|deactivated|banned)\b|\brate[\s_-]+limit/i;
+
 /** A refusal names the prompt or input it refused; any other `param` is a validation error. */
 function isAllowedModerationParam(param: string): boolean {
   const p = param.trim().toLowerCase();
@@ -1169,6 +1173,10 @@ export function isProviderModerationRefusal(
     || lower.includes(TERMINAL_REFUSAL_FALLBACK_MESSAGE.toLowerCase())
     || isMalformedResponseFormatRequest(status, message)
     || isSubscriptionGateMessage(lower)
+    // Quota, billing and account-state wording is provider evidence with its own cooldown, even
+    // where the classifier files a 400 carrying it as a generic invalid request.
+    || isRateLimitOrQuotaFailureMessage(message) || isAnthropicBillingFailure(400, message, undefined)
+    || PROVIDER_STATE_WORDING.test(message)
     // Classified as a 400: classifyError maps an untyped 422 to upstream_error.
     || classifyError(400, "upstream_error", message).code !== "invalid_request_error") {
     return false;

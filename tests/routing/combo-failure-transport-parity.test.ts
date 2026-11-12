@@ -320,3 +320,33 @@ describe("stated statuses and structured flags beside a coded moderation verdict
     expect(await loopOf(result.response)).toEqual({ decision: "hop", scope: "none" });
   });
 });
+
+describe("provider evidence and status-less response.failed frames beside a coded moderation verdict", () => {
+  test("billing, quota and account-state wording beside a moderation code keeps the provider decision", async () => {
+    for (const text of [
+      "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+      "quota exceeded",
+      "insufficient quota for this request",
+      "Payment required to continue",
+      "Account suspended",
+    ]) {
+      const body = JSON.stringify({ error: { code: "content_filter", message: text } });
+      expect({ text, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ text, verdict: false });
+      const failure = await consumeComboFailure(new Response(body, { status: 400 }));
+      expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).not.toBe("none");
+    }
+  });
+
+  test("a status-less response.failed moderation frame is the same 400 no-cool hop as over HTTP", async () => {
+    const frame = { type: "response.failed", response: { status: "failed", error: { code: "content_filter", message: "The input was refused by moderation." } } };
+    const result = await preflightComboStreamResponse(new Response(
+      "data: " + JSON.stringify(frame) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+    ), logCtx());
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+    const failure = await consumeComboFailure(result.response);
+    const options = { code: failure.upstreamCode, rootCode: failure.upstreamRootCode, providerModerationRefusal: failure.providerModerationRefusal };
+    expect(comboFailureDecision(400, failure.classificationText, options)).toBe("hop");
+    expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("none");
+  });
+});

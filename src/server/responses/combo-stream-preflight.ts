@@ -409,7 +409,14 @@ function failedTerminalResponse(
       ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
     },
   }), {
-    status: logCtx.terminalHttpStatus ?? bareErrorStatus(terminalPayload) ?? 502,
+    // A structured moderation verdict on any carrier (`error` or `response.failed`) is the
+    // request-level 400 the HTTP and native readers judge it as. The verdict already vetoes any
+    // stated status other than 400/422, so this only replaces a status the log tap inferred (the
+    // synthetic 502 for an unrecognized code).
+    status: (logCtx.terminalHttpStatus !== 400 && logCtx.terminalHttpStatus !== 422
+      && isProviderModerationRefusal(400, JSON.stringify(terminalPayload), undefined, true))
+      ? 400
+      : logCtx.terminalHttpStatus ?? bareErrorStatus(terminalPayload) ?? 502,
     headers,
   });
 }
