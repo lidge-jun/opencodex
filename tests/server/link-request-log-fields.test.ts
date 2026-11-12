@@ -7,6 +7,8 @@ import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/l
 import { observeRequestLogsForTests, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { createTempHome } from "../helpers/temp-home";
+import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { linkLogField } from "../../src/usage/link-log-fields";
 import { normalizeUsageEntryForTest, type PersistedUsageEntry } from "../../src/usage/log";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -204,5 +206,34 @@ describe("non-link requests are untouched (T5e1-R1-01)", () => {
       expect(response.status).toBe(400);
       expect(logCtx).not.toHaveProperty("link");
     } finally { release(); }
+  });
+});
+describe("T5g: a combo-routed link turn is observed once at the combo's own expansion (final review b3, c1)", () => {
+  test("the parent observer sees the expanded input and the row carries its link fields", async () => {
+    const temp = createTempHome("ocx-link-combo-");
+    const release = acquireOwnedSpendHome();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n',
+      { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+    try {
+      const config = { port: 0, defaultProvider: "fixture", providers: { fixture: { adapter: "openai-responses", upstreamWebsocket: false,
+        baseUrl: "https://combo-fixture.invalid/v1", authMode: "key", apiKey: "synthetic-fixture" } },
+        combos: { linked: { alias: "chain/linked", strategy: "failover", waitForCooldownMs: 0, targets: [{ provider: "fixture", model: "gpt-5.5" }] } } } as unknown as OcxConfig;
+      const seen: Array<{ chain: string | undefined }> = [];
+      const observer = { expanded(_body: unknown, chain?: string) { seen.push({ chain }); }, expansionFailed() {}, terminal() {},
+        logFields: () => ({ transport: "websocket" as const, first: true, threadRef: "c".repeat(64), turnRef: "d".repeat(64) }) };
+      const logCtx = { model: "unknown", provider: "unknown" } as RequestLogContext;
+      const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "chain/linked", input: "hi", stream: true, store: false }) }), config, logCtx, { linkTurn: observer });
+      await response.text();
+      expect(seen).toEqual([{ chain: "none" }]);
+      expect(logCtx.link).toEqual({ transport: "websocket", continuation: "full", continuationReason: "first", threadRef: "c".repeat(64), turnRef: "d".repeat(64) });
+    } finally {
+      globalThis.fetch = originalFetch;
+      runOptionalShutdownHooks();
+      release();
+      temp.remove();
+    }
   });
 });
