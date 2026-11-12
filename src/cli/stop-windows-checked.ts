@@ -157,6 +157,18 @@ export function windowsPartBDue(): boolean {
 }
 
 /**
+ * Part B owns the port wait after a stopped Part A on BOTH Windows paths (#7771).
+ *
+ * `windowsPartBDue` stays snapshotless-only because it also gates the legacy respawn
+ * re-poll (`schedulerCanRespawn`). This predicate is only about the port wait: on the
+ * guarded path Part B runs after `settle`, so `stopProxy`'s legacy 15 s
+ * `waitForStoppedPort` must not run on top of it.
+ */
+export function windowsPartBOwnsPortWait(): boolean {
+  return windows() && state.result?.outcome === "stopped";
+}
+
+/**
  * A Part A result other than stopped/absent holds the child stop (030 "Two parts"): no
  * POST, the shared teardown skipped, proxy unknown. Records the additive reason.
  */

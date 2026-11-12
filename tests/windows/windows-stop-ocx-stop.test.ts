@@ -35,6 +35,8 @@ function runStop(windowsPartA: string | undefined, windowsPartB?: string, extra:
   expect(existsSync(reportPath), child.stderr).toBe(true);
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     calls: { native: number; grok: number; service: number; partB: number };
+    /** The timeout each reclaimListenPort call asked for; #7771 makes a skipped legacy wait visible. */
+    reclaimTimeouts: number[];
     urls: string[]; unexpectedIo: string[]; nonce?: string; receiptExists: boolean; postPartA: unknown[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
@@ -87,6 +89,8 @@ describe("plain ocx stop on Windows: Part B after a stopped Part A", () => {
 
   test("freed: the POST's receipt records Part A, then the restore runs and the receipt clears", () => {
     const run = runStop("stopped", "freed");
+    // Part B owns the port wait: stopProxy's legacy 15 s wait must not run on top of it.
+    expect(run.reclaimTimeouts, run.stderr).toEqual([]);
     expect(run.urls, run.stderr).toHaveLength(1);
     expect(run.postPartA).toEqual([{ partA: "stopped", manager: { scheduler: true, winsw: false }, wrappers: [{ pid: 30, startTime: 5_100 }] }]);
     expect(run.calls.partB).toBe(1);
@@ -117,6 +121,27 @@ describe("plain ocx stop on Windows: Part B after a stopped Part A", () => {
     expect(run.calls.native).toBe(0);
     expect(run.exitCode).toBe(1);
     expect(run.summary).toMatchObject({ outcome: "failed", proxy: "unknown", serviceStopReason: "evidence-unreadable" });
+  });
+
+  test("guarded: Part B owns the port wait, so the legacy 15 s wait never runs", () => {
+    // The guarded path's Part B runs after settle; keying the skip to the snapshotless
+    // flag alone left the approved endpoint's 15 s waitForStoppedPort on top of it.
+    const run = runStop("stopped", "freed", { guarded: true, windowsGuarded: true });
+    expect(run.reclaimTimeouts, run.stderr).toEqual([]);
+    expect(run.calls.partB).toBe(1);
+    expect(run.urls).toHaveLength(1);
+    expect(run.exitCode, run.stderr).toBe(0);
+  });
+
+  test("guarded: our identity back on the port still holds the shared teardown", () => {
+    // A surviving listener never reaches the forced-kill fallback either: the guarded step
+    // reports manager-still-active and nothing is restored.
+    const run = runStop("stopped", "survived", { guarded: true, windowsGuarded: true });
+    expect(run.reclaimTimeouts, run.stderr).toEqual([]);
+    expect(run.calls.native).toBe(0);
+    expect(run.calls.killed).toBe(0);
+    expect(run.exitCode).toBe(1);
+    expect(run.summary).toMatchObject({ outcome: "manager-still-active", proxy: "unknown", sharedTeardown: "skipped" });
   });
 
   test("absent: today's stop, the POST without Part B and without the 6 s hold", () => {

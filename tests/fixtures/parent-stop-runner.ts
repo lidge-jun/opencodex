@@ -21,6 +21,8 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
   managerCascades?: boolean;
   guarded?: boolean;
+  /** #7771: the guarded path on a simulated win32, with a bound scheduler manager (separate child stop). */
+  windowsGuarded?: boolean;
   orphan?: boolean;
   exitCleanup?: boolean;
   nativeSignal?: boolean;
@@ -182,7 +184,9 @@ mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDeta
 } }));
 if (options.guarded) {
   const approval = { pid: fakePid, ...endpoint, configHome: home, cliVersion: "2.93.0", compatibilityToken: "fixture" };
-  const manager = { kind: "bound", pid: fakePid, managerPid: fakePid + 1, backend: "launchd" };
+  const manager = options.windowsGuarded
+    ? { kind: "bound", pid: fakePid, managerPid: fakePid + 1, backend: "scheduler", childNeedsSeparateStop: true }
+    : { kind: "bound", pid: fakePid, managerPid: fakePid + 1, backend: "launchd" };
   const stopApproval = await import("../../src/cli/stop-approval");
   mock.module("../../src/cli/stop-approval", () => ({ ...stopApproval,
     parseStopApproval: () => ({ ok: true, json: true, approval }),
@@ -191,7 +195,8 @@ if (options.guarded) {
   }));
   const guarded = await import("../../src/service/guarded-manager-target");
   mock.module("../../src/service/guarded-manager-target", () => ({ ...guarded,
-    inspectGuardedManagerTarget: () => manager, observeGuardedManagerStopped: () => "stopped",
+    inspectGuardedManagerTarget: () => manager,
+    observeGuardedManagerStopped: () => (options.windowsGuarded ? "inactive" : "stopped"),
   }));
 }
 if (options.orphan || options.alreadyStopped) {
@@ -315,6 +320,9 @@ if (options.windowsPartA) {
   (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
     partA: async () => { calls.service++; return partAResult(options.windowsPartA!); },
     partB: async () => { calls.partB++; return partBResult(options.windowsPartB ?? "freed"); },
+    // The guarded inspection reads evidence before it asks the mocked manager; nothing may
+    // reach the host's process table.
+    ...(options.guarded ? { snapshot: async () => [], schedulePid: async () => null } : {}),
   });
 }
 if (options.windowsPartAUnderOwnWrapper) {

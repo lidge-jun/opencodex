@@ -125,7 +125,7 @@ import {
   type StopApproval,
 } from "./stop-approval";
 import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
-import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue } from "./stop-windows-checked";
+import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue, windowsPartBOwnsPortWait } from "./stop-windows-checked";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
@@ -1173,7 +1173,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       // Only an exact endpoint may direct the request; the configured fallback is a guess
       // good enough to record an obligation against, not to POST a stop to.
       runtimeEndpoint: exact ?? undefined,
-      skipPortWait: windowsPartBDue(), // #7771: Part B owns the Windows port wait after a checked stop.
+      skipPortWait: windowsPartBOwnsPortWait(), // #7771: Part B owns the Windows port wait on both paths.
     });
     // A valid receipt means the proxy deferred shared teardown to this process. If the
     // receipt could not be written, the proxy restores it itself and the caller must not
@@ -1596,11 +1596,13 @@ async function handleUninstall() {
       if (!live.pid) {
         throw new Error(`a proxy is answering on port ${live.port} but no process id could be resolved for it; stop it from the home that started it, then rerun`);
       }
-      await stopProxy(live.pid);
+      // #7771: on Windows the respawn-window step below is Part B, which owns the port
+      // wait; the legacy 15 s waitForStoppedPort must not run on top of it.
+      await stopProxy(live.pid, { skipPortWait: windowsPartBDue() });
       observed.proxyProvenDown = true;
       return true;
     }
-    await stopProxy(pid);
+    await stopProxy(pid, { skipPortWait: windowsPartBDue() });
     removePid(pid);
     removeRuntimePort(pid);
     observed.proxyProvenDown = true;

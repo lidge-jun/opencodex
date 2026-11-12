@@ -124,11 +124,27 @@ describe("full uninstall command", () => {
     expect(uninstallBody).toContain('runStep("service stopped"');
     expect(uninstallBody).toContain('runStep("proxy stopped"');
     expect(uninstallBody).toContain('runStep("service removed"');
-    expect(uninstallBody).toContain("await stopProxy(pid);");
+    expect(uninstallBody).toContain("await stopProxy(pid, { skipPortWait: windowsPartBDue() });");
     expect(uninstallBody).toContain("uninstallServiceDetailed()");
     expect(uninstallBody.indexOf('runStep("service stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("proxy stopped"'));
     expect(uninstallBody.indexOf('runStep("proxy stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("service removed"'));
-    expect(uninstallBody.indexOf("await stopProxy(pid);")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
+    expect(uninstallBody.indexOf("await stopProxy(pid, { skipPortWait: windowsPartBDue() });")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
+  });
+
+  test("Windows uninstall leaves the port wait to Part B instead of stopProxy's legacy 15 s", async () => {
+    const cli = await readText("src/cli/index.ts");
+    const uninstallBody = cli.slice(cli.indexOf("async function handleUninstall()"), cli.indexOf("type HealthCheck"));
+    // #7771: after a stopped Part A on Windows the respawn-window step IS Part B, which
+    // owns the port wait; running stopProxy's 15 s waitForStoppedPort on top of it spends
+    // the stop budget twice. Both tracked and orphan stops pass the same predicate.
+    expect(uninstallBody).toContain("await stopProxy(pid, { skipPortWait: windowsPartBDue() });");
+    expect(uninstallBody).toContain("await stopProxy(live.pid, { skipPortWait: windowsPartBDue() });");
+    const checked = await readText("src/cli/stop-windows-checked.ts");
+    // The predicate is about the port wait only; the legacy re-poll key stays snapshotless.
+    const portWait = checked.slice(checked.indexOf("export function windowsPartBOwnsPortWait"));
+    expect(portWait).toContain('return windows() && state.result?.outcome === "stopped";');
+    const partBDue = checked.slice(checked.indexOf("export function windowsPartBDue"), checked.indexOf("export function windowsPartBOwnsPortWait"));
+    expect(partBDue).toContain("state.snapshotless");
   });
 
   test("restore forwards the explicit provider-table removal flag and warns before mutation", async () => {
