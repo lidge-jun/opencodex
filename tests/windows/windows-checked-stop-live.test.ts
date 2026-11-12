@@ -19,9 +19,11 @@ import {
   windowsStopSnapshot,
   windowsStopTerminate,
   winswStatusFromScState,
+  windowsCheckedStopLiveDeps,
   WINDOWS_ARM64_BOUNDED_TERMINATE_ENABLED,
 } from "../../src/service/windows-checked-stop-live";
 import type { WindowsProcessNativeApi } from "../../src/service/windows-process-native";
+import { winswExePath } from "../../src/lib/winsw";
 import { PATHS, entry, launcher, loop, proxy, supervisedTree } from "../helpers/windows-checked-stop-fixtures";
 
 const result = (status: number | null, stdout = "", stderr = "", timedOut = false) => ({ status, stdout, stderr, timedOut });
@@ -167,5 +169,51 @@ describe("who may run Part A: the stopper's ancestry", () => {
     // ocx launched from a terminal.
     const shell = [launcher(), loop(), proxy(), entry(60, 1, "pwsh.exe", "pwsh", 100), entry(61, 60, "ocx.exe", "ocx stop", 6_000)];
     expect(stopperUnderHomeWrapper(shell, PATHS, 61)).toBe(false);
+  });
+});
+
+describe("WinSW ownership before Part A stops it (#7771 follow-up)", () => {
+  // `sc stop opencodex-proxy-native` names a fixed ID. A registration that runs another
+  // installation's WinSW executable must never be stopped by this home's Part A.
+  const qc = (binaryPathName: string) => result(0, [
+    "SERVICE_NAME: opencodex-proxy-native",
+    "        TYPE               : 10  WIN32_OWN_PROCESS",
+    "        BINARY_PATH_NAME   : " + binaryPathName,
+  ].join("\r\n"));
+
+  const probe = (answers: { query: ReturnType<typeof result>; qc?: ReturnType<typeof result> }) =>
+    windowsCheckedStopLiveDeps({
+      run: async program => {
+        if (program !== "sc") throw new Error("unexpected program " + program);
+        return answers.query;
+      },
+      scQcRun: async () => answers.qc ?? result(1),
+    }).probeWinsw(2_000);
+
+  test("a service registered against another installation is not this home's manager", async () => {
+    const foreign = "C:\\Users\\other\\.opencodex\\winsw\\opencodex-proxy-native.exe";
+    expect(await probe({ query: result(0, "        STATE              : 4  RUNNING"), qc: qc(foreign) }))
+      .toBe("nonexistent");
+  });
+
+  test("this home's registered executable is the manager Part A may stop", async () => {
+    expect(await probe({ query: result(0, "        STATE              : 4  RUNNING"), qc: qc(`"${winswExePath()}"`) }))
+      .toBe("started");
+  });
+
+  test("an unreadable registration fails closed instead of claiming or stopping it", async () => {
+    expect(await probe({ query: result(0, "        STATE              : 4  RUNNING"), qc: result(5, "", "Access is denied.") }))
+      .toBe("unknown");
+    expect(await probe({ query: result(0, "        STATE              : 4  RUNNING") })).toBe("unknown");
+  });
+
+  test("a service that does not exist needs no ownership read", async () => {
+    let qcCalls = 0;
+    const status = await windowsCheckedStopLiveDeps({
+      run: async () => result(1060, "[SC] EnumQueryServicesStatus:OpenService FAILED 1060:"),
+      scQcRun: async () => { qcCalls++; return result(0); },
+    }).probeWinsw(2_000);
+    expect(status).toBe("nonexistent");
+    expect(qcCalls).toBe(0);
   });
 });

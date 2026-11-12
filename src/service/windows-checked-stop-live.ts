@@ -26,8 +26,9 @@ import { inspectOcxStartProcessIdentity, readPid, verifyPidIdentity, type OcxSta
 import { isProcessAlive } from "../lib/process-control";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSchtasksExe, resolveTrustedWindowsSystemDirectory, toWindowsSchtasksError } from "../lib/windows-elevation";
-import { WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
+import { WINSW_SERVICE_ID, winswExePath, type WinswStatus } from "../lib/winsw";
 import { decodeWindowsTextBytes } from "../lib/windows-text";
+import { parseScQcBinaryPathName, scBinaryPathNamesExecutable } from "../service-manager-probe";
 import { parseListenPidsFromNetstat, type ListenPidScan } from "../server/port-reclaim";
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
@@ -81,7 +82,10 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
     return;
   }
   // Task Scheduler and the SCM are machine-global: an armed test process may only observe.
-  const mutating = program === "schtasks" ? args[0]?.toLowerCase() !== "/query" : program === "sc" && args[0] !== "query";
+  // `sc query` and `sc qc` only read the SCM row and its registration.
+  const mutating = program === "schtasks"
+    ? args[0]?.toLowerCase() !== "/query"
+    : program === "sc" && !["query", "qc"].includes((args[0] ?? "").toLowerCase());
   if (isTestHomeGuardArmed() && mutating) {
     resolve({ status: null, stdout: "", stderr: "refusing a machine-global service mutation from an armed test process", timedOut: false });
     return;
@@ -209,9 +213,34 @@ export function stopperUnderHomeWrapper(
 
 export interface WindowsCheckedStopLiveOptions {
   run?: WindowsStopCommandRunner;
+  /**
+   * The `sc.exe qc` query that proves the registered WinSW service runs THIS installation's
+   * executable. Defaults to the capped runner; tests inject it.
+   */
+  scQcRun?: (timeoutMs: number) => Promise<WindowsStopCommandResult>;
   /** Checked before every manager command (the route's cap, the updater's authorizer). */
   gate?: () => boolean;
   snapshot?: (timeoutMs: number) => Promise<readonly WindowsStopProcessEntry[] | null>;
+}
+
+/**
+ * Is the registered WinSW service this installation's?
+ *
+ * `sc stop opencodex-proxy-native` names a fixed ID, so a successful `sc query` is evidence
+ * that SOMETHING is registered, not that it is ours: another installation's WinSW service
+ * under the same ID would be stopped by this home's Part A. The registered
+ * `BINARY_PATH_NAME` must name this home's WinSW executable, the same proof the guarded
+ * manager path uses (`windowsWinswServiceInfo` + `commandLineHasPathToken`). Unreadable is
+ * unknown; a foreign executable is `nonexistent`, which keeps Part A from stopping it.
+ */
+export function classifyWinswOwnership(
+  qc: WindowsStopCommandResult | null,
+  winswExe: string = winswExePath(),
+): WinswStatus | "foreign" {
+  if (qc === null || qc.timedOut || qc.status !== 0) return "unknown";
+  const binaryPathName = parseScQcBinaryPathName(qc.stdout);
+  if (binaryPathName === null) return "unknown";
+  return scBinaryPathNamesExecutable(binaryPathName, winswExe) ? "started" : "foreign";
 }
 
 /** The identity-checked proxy child, or null. */
@@ -228,6 +257,7 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
   const run = options.run ?? liveWindowsStopCommandRunner;
   const gate = options.gate ?? (() => true);
   const scQuery = async (timeoutMs: number) => parseScQueryState(await run("sc", ["query", WINSW_SERVICE_ID], timeoutMs));
+  const scQcRun = options.scQcRun ?? (async (timeoutMs: number) => run("sc", ["qc", WINSW_SERVICE_ID], timeoutMs));
   return {
     canonicalPaths: windowsStopCanonicalPaths(),
     childPid: windowsStopChildPid(),
@@ -239,7 +269,18 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       if (listing.status !== 0 || listing.timedOut) return { status: "unknown", detail: "the Task Scheduler query did not answer" };
       return windowsSchedulerCsvIncludesTask(listing.stdout, TASK) ? { status: "present" } : { status: "absent" };
     },
-    probeWinsw: async timeoutMs => winswStatusFromScState(await scQuery(timeoutMs)),
+    async probeWinsw(timeoutMs) {
+      const state = await scQuery(timeoutMs);
+      const status = winswStatusFromScState(state);
+      // Absence, and anything already unreadable, needs no ownership read.
+      if (status !== "started") return status;
+      const started = Date.now();
+      const qc = await scQcRun(Math.max(1, timeoutMs - (Date.now() - started)));
+      const ownership = classifyWinswOwnership(qc);
+      // Foreign is `nonexistent` for Part A: a manager this home must not stop.
+      if (ownership === "foreign") return "nonexistent";
+      return ownership === "unknown" ? "unknown" : status;
+    },
     enumerate: timeoutMs => (options.snapshot ?? windowsStopSnapshot)(timeoutMs),
     scheduleServicePid: timeoutMs => {
       const whole = wholeTimeoutMs(timeoutMs);
