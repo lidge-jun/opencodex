@@ -60,8 +60,8 @@ rabattent jamais les unes sur les autres.
    | `claude-`, `claude-sonnet-`, `claude-opus-`, `claude-haiku-` | `anthropic` |
    | `llama-`, `mixtral-`, `gemma-` | `groq` |
 
-   Cette correspondance repose sur le nom et, contrairement aux recherches dans `defaultModel` et `models[]`,
-   ne filtre actuellement pas un fournisseur correspondant dont l'indicateur `disabled` vaut true.
+   Cette correspondance repose sur le nom et, comme les recherches dans `defaultModel` et `models[]`,
+   ignore un fournisseur correspondant dont l'indicateur `disabled` vaut true.
 
 7. **`models[]` d'un fournisseur** — si aucune règle de préfixe ne s'est appliquée et qu'un fournisseur actif
    répertorie l'identifiant dans son tableau `models[]`, ce fournisseur est utilisé. La règle 4 a déjà acheminé
