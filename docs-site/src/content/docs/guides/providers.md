@@ -694,9 +694,24 @@ When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Clau
 
 When Kiro emits credit metering, request logs preserve the reported spend as
 `usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
-token counts may still be estimated, and the credit value does not replace USD cost estimates.
-Completion fallback requests add their reported credits. An absent value means Kiro did not
-report credit usage; an explicit zero means it reported no spend.
+token counts may still be estimated. Completion fallback requests add their reported credits.
+An absent value means Kiro did not report credit usage; an explicit zero means it reported no spend.
+
+Set `providers.kiro.creditPriceUsd` to the USD price of one credit for your plan to cost those
+rows from what Kiro billed instead of from their estimated tokens:
+
+```json
+{ "providers": { "kiro": { "creditPriceUsd": 0.02 } } }
+```
+
+The price is opt-in and has no default, because it depends on the plan: on
+[kiro.dev/pricing](https://kiro.dev/pricing/), Pro is $20 for 1,000 credits ($0.02) and add-on
+credits are $0.04. With a price set, a row that reports credits costs `providerCredits x price`
+and its token estimate is ignored, which follows Kiro's own caching; a row with no credits and no
+output (refused or cancelled before generation) costs nothing, and a row with output but no
+reported credits keeps the token estimate. Account-suffixed rows such as `kiro-<account>` use the
+provider's price. Without the key, every cost stays the token estimate. This is display-time
+estimation only: it never affects routing, account selection, quotas, or billing.
 
 ### Kiro refresh attention
 
