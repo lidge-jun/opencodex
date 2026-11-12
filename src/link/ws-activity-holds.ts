@@ -340,9 +340,12 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
       return createHmac("sha256", refKey()).update("opencodex-link-turn-v1\0" + turnId).digest("hex");
     },
 
-    /** Request-log refs (design 9.1): a domain of their own per kind, so they never join with hold hashes or marks. */
-    logRef(kind: "thread" | "turn", id: string): string {
-      return createHmac("sha256", refKey()).update("opencodex-link-log-" + kind + "-v1\0" + id).digest("hex");
+    /**
+     * Request-log refs (design 9.1): a domain of their own per kind, so they never join with hold hashes or marks,
+     * and the link id inside, so one id gives unrelated refs on two links (the metrics join rows of one link only).
+     */
+    logRef(kind: "thread" | "turn", linkId: string, id: string): string {
+      return createHmac("sha256", refKey()).update("opencodex-link-log-" + kind + "-v2\0" + linkId + "\0" + id).digest("hex");
     },
 
     /** Whether any hold on this link has a fingerprinted running mark: callers skip hashing otherwise. */

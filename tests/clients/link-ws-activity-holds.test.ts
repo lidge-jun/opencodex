@@ -261,3 +261,14 @@ describe("T5g: a write that fails before the rename leaves no temporary file (fi
     expect(readdirSync(dir).filter(name => name.endsWith(".tmp"))).toEqual([]);
   });
 });
+describe("T5g: request-log refs are not comparable across links (final review area c, note)", () => {
+  test("the same thread id gives different refs on two links, and the same ref on one link", () => {
+    const holds = store();
+    expect(holds.logRef("thread", A, "thread-x")).not.toBe(holds.logRef("thread", B, "thread-x"));
+    expect(holds.logRef("thread", A, "thread-x")).toBe(holds.logRef("thread", A, "thread-x"));
+    expect(holds.logRef("thread", A, "thread-x")).not.toBe(holds.logRef("thread", A, "thread-y"));
+    expect(holds.logRef("turn", A, "turn-1")).not.toBe(holds.logRef("turn", B, "turn-1"));
+    // The link id and the id are separate fields, so no pair of them can collide by concatenation.
+    expect(holds.logRef("thread", A, "x")).not.toBe(holds.logRef("thread", A + "x", ""));
+  });
+});

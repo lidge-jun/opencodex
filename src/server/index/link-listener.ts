@@ -204,7 +204,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
             expanded(body, chain) { threadHash = threadHashOf(body); resent = chain === "unexpanded" ? [] : marksResent(holds, linkId, threadHash, body); },
             expansionFailed() { resent = []; },
             terminal(status, source) { if (resent.length && threadHash && upstreamCompleted(status, source)) holds.releaseMarks(linkId, threadHash, resent); },
-            ...(logging ? { logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, header?.trim() ?? "", body) }) } : {}),
+            ...(logging ? { logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, linkId, header?.trim() ?? "", body) }) } : {}),
           });
           try { req.headers.set(LINK_TURN_HEADER, token); } catch { releaseLinkTurnToken(token); token = null; }
         }

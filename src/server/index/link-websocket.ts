@@ -202,11 +202,11 @@ export function upstreamCompleted(status: string | undefined, source: string | u
 }
 
 /** Design 9.1: the hashed thread and turn refs of a link request; a ref that cannot be made is left out. */
-export function linkLogRefs(holds: ActivityHolds, threadId: string, body: unknown): { threadRef?: string; turnRef?: string } {
+export function linkLogRefs(holds: ActivityHolds, linkId: string, threadId: string, body: unknown): { threadRef?: string; turnRef?: string } {
   const turnId = turnIdOf(bodyRecord(body));
   const ref = (kind: "thread" | "turn", id: string | null): string | null => {
     if (!id) return null;
-    try { return holds.logRef(kind, id); } catch { return null; }
+    try { return holds.logRef(kind, linkId, id); } catch { return null; }
   };
   const threadRef = ref("thread", threadId || threadIdOf(bodyRecord(body)));
   const turnRef = ref("turn", turnId);
@@ -536,7 +536,7 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
                 },
                 expansionFailed() { own("unknown"); },
                 logFields: body => ({ transport: "websocket", first: ordinal === 1,
-                  ...linkLogRefs(holds, ws.data.headers?.get("thread-id")?.trim() ?? "", body) }),
+                  ...linkLogRefs(holds, linkId, ws.data.headers?.get("thread-id")?.trim() ?? "", body) }),
                 terminal(status, source) {
                   // The turn's own entry ends with its own terminal, superseded or not.
                   own("done");
