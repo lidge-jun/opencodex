@@ -293,6 +293,28 @@ test("bulk actions split more than 64 Children into requests the server accepts"
   expect(host.textContent).not.toContain("could not be completed");
 });
 
+test("a refused bulk group shows its error while the accepted group is still tracked", async () => {
+  const ids = Array.from({ length: 65 }, (_, index) => `l${index}`);
+  installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status(ids.map(id => row(id, `box-${id}`, childBlock()))));
+    if (call.path === "/api/link/children/operations") {
+      const linkIds = call.body?.linkIds as string[];
+      if (linkIds.length === 1) return response({ error: { code: "link_operation_in_progress" } }, 409);
+      return response({ job: job({ jobId: "ljob_bulkgroup0000000", op: "observe", items: [
+        { linkId: "l0", alias: "box-l0", state: "running", reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+      ] }) }, 202);
+    }
+    if (call.path.startsWith("/api/link/children/jobs/")) return new Promise<Response>(() => undefined);
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await click(button(host, "Check all"));
+  await settleUntil(() => host.textContent?.includes("Another operation is running on this Child.") === true);
+  expect(host.textContent).toContain("Another operation is running on this Child.");
+  // The 64-id group was accepted, so its job panel shows and its row stays held.
+  expect(host.querySelector(".remote-link-job")).not.toBeNull();
+});
+
 test("a running job shows per-item progress and refreshes status once when done", async () => {
   let jobPolls = 0;
   const calls = installFetch(call => {

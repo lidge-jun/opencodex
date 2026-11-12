@@ -252,15 +252,17 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
   // The server expands "all" to every stored link and runs a pinned sync before it decides currency, so a
   // link outside the confirmation could still be reached. Both bulk actions name exactly the rows they cover:
   // update the updatable ones the dialog counts, observe the operable ones in the bar's own list.
-  // The route takes at most 64 ids per body, so a larger list goes out as one job per group, in order; a refused
-  // group stops the rest and its error shows, while groups already accepted keep running as their own jobs.
+  // The route takes at most 64 ids per body, so a larger list goes out as one job per group. The groups are
+  // independent: each accepted group is tracked as its own job, and the first refusal's error shows.
   const run = async (op: ChildOp, ids: readonly string[]) => {
     props.onError(null);
     props.onRun({ linkId: "all", op });
     try {
-      for (const group of chunkLinkIds(ids)) props.onJob(await postChildOperation(props.apiBase, { op, linkIds: group }));
+      const results = await Promise.allSettled(chunkLinkIds(ids).map(group => postChildOperation(props.apiBase, { op, linkIds: group })));
+      for (const result of results) if (result.status === "fulfilled") props.onJob(result.value);
+      const refused = results.find(result => result.status === "rejected");
+      if (refused) props.onError(linkActionError(refused.reason));
     }
-    catch (error) { props.onError(linkActionError(error)); }
     finally { props.onRun(null); }
   };
   return (

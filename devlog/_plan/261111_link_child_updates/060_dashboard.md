@@ -474,7 +474,7 @@ Both bulk actions post explicit link ids, never `"all"` (Revision 7, #8581 revie
 every stored link and runs a pinned sync before it decides currency, so a link outside the confirmation could be
 reached. Check all names the operable rows; Update all names exactly the updatable rows its confirmation counts, and
 is offered only when at least one row is updatable. The route accepts at most 64 ids per body (`MAX_LINK_IDS`), so
-`run` posts one job per group of 64 in order (`chunkLinkIds`); a refused group stops the rest and shows its error.
+`run` posts one job per group of 64 at once (`chunkLinkIds`, `Promise.allSettled`); each accepted group is tracked as its own job and the first refusal shows its error.
 
 ```tsx
 export function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJobView; missing: boolean } {
@@ -910,7 +910,7 @@ Audit verdict GO-WITH-FIXES (blockers 3). All findings accepted; binding on the 
 
 Bulk actions post explicit ids, never `"all"`; the code sample, test 6 and acceptance item 5 above now say so. The
 operations route caps a body at 64 ids (`MAX_LINK_IDS`) while a Home's link count is unbounded, so Check all and Update
-all split their list with `chunkLinkIds` and post one job per group of 64, in order; a refused group stops the rest and
-shows its error. Test: "bulk actions split more than 64 Children into requests the server accepts" (65 rows, two
+all split their list with `chunkLinkIds` and post one job per group of 64 at once; each accepted group is tracked as its own job and the first
+refusal shows its error (react-doctor async-await-in-loop rules out a sequential loop). Test: "bulk actions split more than 64 Children into requests the server accepts" (65 rows, two
 requests of 64 and 1 for each action). Job polls carry a 15 s deadline each (`CHILD_JOB_POLL_TIMEOUT_MS`, CodeRabbit
 4547457599).
