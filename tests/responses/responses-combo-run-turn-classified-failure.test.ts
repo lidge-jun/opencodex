@@ -790,6 +790,33 @@ for (const stream of [false, true]) {
     } finally { open.mockRestore(); }
   });
 
+  test(`an unavailable TRAE model may fail over before any prompt is dispatched (stream=${stream})`, async () => {
+    const cfg = config([{ provider: "trae-cn", model: "test-model" }, { provider: "fallback", model: MODEL }]);
+    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true, authMode: "key", models: ["test-model"], liveModels: false };
+    let promptCalls = 0;
+    let promptSends = 0;
+    const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({
+      models: ["other-model"],
+      async prompt(modelId, _text, _emit, _signal, dispatch) {
+        promptCalls++;
+        if (modelId !== "other-model") {
+          throw new traeClient.TraeAcpError(`TRAE CN model is not available to this account: ${modelId}`, "trae_model_unavailable");
+        }
+        dispatch?.beforeSend(); dispatch?.onSend(); promptSends++;
+      },
+      async close() {},
+    });
+    try {
+      const response = await respond(cfg, stream);
+      expect(response.status).toBe(200);
+      expect(response.text).toContain("fallback answered");
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(promptCalls).toBe(1);
+      expect(promptSends).toBe(0);
+      expect(fallbackCalls).toBe(1);
+    } finally { open.mockRestore(); }
+  });
+
   for (const status of [400, 422]) {
     for (const code of [undefined, "invalid_argument"]) {
       test(`reflected quota prose stays terminal through runTurn (stream=${stream}, status=${status}, code=${code})`, async () => {

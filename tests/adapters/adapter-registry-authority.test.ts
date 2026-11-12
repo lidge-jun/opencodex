@@ -598,7 +598,7 @@ describe("TRAE CN ACP regression contract", () => {
     const events: AdapterEvent[] = [];
     await createTraeCnAdapter(config(), fixture.deps).runTurn!({ ...traeRequest(), modelId: "unavailable" },
       traeMeta({ sendBudget: budget.budget, onPhysicalSend: () => { sends++; } }), event => events.push(event));
-    expect(events[0]).toMatchObject({ type: "error", code: "trae_model_unavailable", status: 400 });
+    expect(events[0]).toMatchObject({ type: "error", code: "model_unavailable", status: 400 });
     expect(sends).toBe(0);
     expect(budget.state).toEqual({ used: 0, refunded: 1, closed: 1 });
   });

@@ -33,6 +33,7 @@ export const RESPONSES_CORE_MODULES = [
   "core-normalize.ts",
   "core-combo.ts",
   "deferred-send-reporter.ts",
+  "chat-policy-media.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",
   // Reached from core-combo.ts: tool-loop continuations stay on the lane's previous target (#7298).
