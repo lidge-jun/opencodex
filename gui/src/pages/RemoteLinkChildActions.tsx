@@ -328,6 +328,7 @@ export function ChildJobProgress(props: { apiBase: string; job: ChildJobView; on
               <span>{stateKey ? t(stateKey) : <CodeToken>{state}</CodeToken>}</span>
               {(item.fromVersion || item.toVersion) && <CodeToken>{`${item.fromVersion ?? "?"} → ${item.toVersion ?? "?"}`}</CodeToken>}
               {item.reason && <span className="text-fg-muted"><CodeToken>{item.reason}</CodeToken></span>}
+              {item.hint && <span className="basis-full text-fg-muted remote-link-job-hint">{item.hint}</span>}
               {item.sync && <span className="text-fg-muted">{syncKey ? t(syncKey) : <CodeToken>{item.sync.state}</CodeToken>}</span>}
               {item.restart && <span className={restartWithheld(item.restart.outcome) ? "text-warning" : "text-fg-muted"}>
                 {restartKey ? t(restartKey) : <CodeToken>{item.restart.outcome}</CodeToken>}

@@ -486,6 +486,17 @@ test("an unknown restart outcome renders as code instead of a guessed sentence",
   expect(host.querySelector(".remote-link-job")!.textContent).not.toContain("Restart requested");
 });
 
+test("a job item renders the hint the server attached to it", async () => {
+  const hinted = job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "owner-action", reason: "launcher-node-missing",
+    hint: "Install Node.js where the npm or pnpm that installed OpenCodex on this Child can find it, or update there with ocx update.",
+    fromVersion: null, toVersion: null, startedAt: null, finishedAt: null }] });
+  installFetch(() => response({ job: hinted }));
+  const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(hinted)} onDone={() => {}} />);
+  const panel = host.querySelector(".remote-link-job")!;
+  expect(panel.textContent).toContain("launcher-node-missing");
+  expect(panel.textContent).toContain("Install Node.js where the npm or pnpm that installed OpenCodex on this Child can find it, or update there with ocx update.");
+});
+
 test("parsers reject a malformed child block and keep an unknown job state", () => {
   expect(parseChildOps(null)).toBeNull();
   expect(parseChildOps({ homeVersion: "1.0.0" })).toBeNull();
