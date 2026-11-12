@@ -264,9 +264,15 @@ function encodeChatMessagePrompt(
   // reasoning model restarted its chain on every turn of a tool loop. Two
   // independent clients of the same service write it here: #11 thinking,
   // #12 signature, #18 signature_type on the assistant prompt.
-  if (opts?.thinking) parts.push(encodeString(11, data(opts.thinking)));
-  if (opts?.signature) parts.push(encodeString(12, opts.signature));
-  if (opts?.signatureType) parts.push(encodeString(18, opts.signatureType));
+  const thinking = opts?.thinking === undefined ? undefined : data(opts.thinking);
+  if (thinking) parts.push(encodeString(11, thinking));
+  // A signature can only attest the original thinking. Rewritten text uses
+  // unsigned replay; unchanged text (including signature-only turns) keeps
+  // the original signature and type without altering the stored history.
+  if (thinking === opts?.thinking) {
+    if (opts?.signature) parts.push(encodeString(12, opts.signature));
+    if (opts?.signatureType) parts.push(encodeString(18, opts.signatureType));
+  }
   return Buffer.concat(parts);
 }
 
