@@ -28,7 +28,6 @@ export function createTerminalErrorRedactionBlockRewrite(
   maskCredential = createOutboundCredentialMask(outboundHeaders),
 ): SseBlockRewrite {
   const redactDiagnostic = (value: unknown): unknown => {
-    const safe = redactSecrets(value);
     const maskKnown = (entry: unknown): unknown => {
       if (typeof entry === "string") return maskCredential(entry);
       if (Array.isArray(entry)) return entry.map(maskKnown);
@@ -38,7 +37,9 @@ export function createTerminalErrorRedactionBlockRewrite(
       }
       return entry;
     };
-    return maskKnown(safe);
+    // The exact selected credential first: a pattern rule that matches a token inside it (sk-...,
+    // Bearer ...) would otherwise split it and leave a prefix the exact mask can no longer find.
+    return redactSecrets(maskKnown(value));
   };
   return (block) => {
     const terminalFrame = /^event:[ \t]*response\.(?:failed|incomplete)[ \t]*\r?$/m.test(block);

@@ -131,10 +131,11 @@ export function relayWithAbort(
 
 export function buildFailedTailPayload(err: unknown, maskCredential?: (text: string) => string): string {
   const translatorOverflow = isTranslatorBudgetExceededError(err);
-  const diagnostic = redactSecretString((translatorOverflow
+  const raw = translatorOverflow
     ? "upstream translation buffer exceeded the safe limit"
-    : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`));
-  const message = (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
+    : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`;
+  // Exact mask before pattern redaction, which could split a credential and hide it from the mask.
+  const message = redactSecretString(maskCredential?.(raw) ?? raw).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
   const failure = {
     type: "upstream_error",
     code: translatorOverflow ? "translation_buffer_limit" : "upstream_reset",
@@ -214,11 +215,10 @@ function upstreamErrorFailedPayload(
   identity: { type: string; code: string; retryable: boolean },
   maskCredential?: (text: string) => string,
 ): string {
-  const diagnostic = redactSecretString(message);
   const error = {
     type: maskCredential?.(identity.type) ?? identity.type,
     code: maskCredential?.(identity.code) ?? identity.code,
-    message: (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
+    message: redactSecretString(maskCredential?.(message) ?? message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   return JSON.stringify({
     type: "response.failed",

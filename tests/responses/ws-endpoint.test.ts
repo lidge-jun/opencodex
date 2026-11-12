@@ -67,6 +67,26 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(messages[0].response.error.message).toContain("[REDACTED]");
     expect(messages[0].response.error.message).not.toContain(secret);
   });
+  test.each(["tee", "eager"] as const)("%s keeps no prefix of a selected credential that contains a pattern token", async mode => {
+    // A pattern rule (sk-..., Bearer ...) matching inside the credential must not split it
+    // before the exact mask runs, or the unpatterned prefix survives everywhere downstream.
+    const secret = `${"W".repeat(80)}-sk-abcdefgHIJK`;
+    const prefix = "W".repeat(40);
+    const headers = { authorization: `Bearer ${secret}` };
+    const maskCredential = createOutboundCredentialMask(headers);
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+    const source = sseStream([`data: ${JSON.stringify({ error: { message: `echo ${secret} tail` } })}\n\n`]);
+    const body = mode === "tee"
+      ? relaySseWithFailedTail(relaySseWithBlockRewrite(source, rewrite, createTranslatorBudget()), new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(source, new AbortController(), {
+        inspectChunk() {}, finishInspection() {}, sawTerminal: () => false, onSynthetic() {}, onClientCancel() {}, onDone() {}, rewriteBlocks: rewrite,
+      }, { maskCredential });
+    const { ws, sent } = mockWs();
+    const observed: string[] = [];
+    await pumpResponsesSseToWebSocket(ws, body, { untilEof: true, onSsePayload: payload => observed.push(payload) });
+    expect(sent.map(frame => (JSON.parse(frame) as { type?: string }).type)).toContain("response.failed");
+    expect([sent.join("\n").includes(prefix), observed.join("\n").includes(prefix)]).toEqual([false, false]);
+  });
   test.each(["tee", "eager"] as const)("%s never returns a quoted selected credential through an object key", async mode => {
     const secret = 'fixture"keyed\\credential';
     const headers = { authorization: `Bearer ${secret}` };
