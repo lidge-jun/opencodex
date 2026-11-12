@@ -34,7 +34,7 @@ interface Run { argv: readonly string[]; signal?: AbortSignal; kind: string; des
 /** Answers every ssh call the route rounds make; tests script the answers per call kind and route. */
 function harness(options: {
   routes?: string[];
-  client?: Answer;
+  client?: Answer | (() => Answer);
   probe?: (route: string, attempt: number) => Answer;
   catalog?: (route: string, proofId: string, admit: () => void) => Answer;
   health?: Answer;
@@ -64,7 +64,7 @@ function harness(options: {
       const entry: Run = { argv, kind, destination: destinationOf(argv), ...(runOptions?.signal ? { signal: runOptions.signal } : {}), ...(proofId ? { proofId } : {}) };
       runs.push(entry);
       let answer: Answer;
-      if (kind === "client") answer = options.client ?? { code: 0, stdout: "", stderr: "OpenSSH_9.6p1 Ubuntu-3ubuntu13, OpenSSL 3.0.13" };
+      if (kind === "client") answer = (typeof options.client === "function" ? options.client() : options.client) ?? { code: 0, stdout: "", stderr: "OpenSSH_9.6p1 Ubuntu-3ubuntu13, OpenSSL 3.0.13" };
       else if (kind === "probe") {
         const route = entry.destination!;
         const attempt = (probes.get(route) ?? 0) + 1;
@@ -75,7 +75,7 @@ function harness(options: {
       else if (kind === "catalog") {
         const admit = () => proofs.admit("link-key", proofId!);
         answer = options.catalog ? options.catalog(entry.destination!, proofId!, admit) : (admit(), ok(JSON.stringify({ models: [] }) + "\n200"));
-      } else answer = ok();
+      } else answer = remote.includes("uname") ? ok("Linux\n") : ok();
       if (answer === "hang") return new Promise<SshRunResult>(() => {});
       return Promise.resolve(answer);
     },
@@ -382,5 +382,61 @@ test("a multi-route pidfile without a start time is never signalled while its pi
   expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
 });
 
+test("a proven tunnel that exits on a host-key error is not terminal while another route's latest outcome is transient", async () => {
+  const h = await started({ probe: route => route === "alpha-lan" ? refused("Connection timed out") : ok("ocx-link-probe\n") });
+  await h.grant();
+  await h.tick();
+  expect(h.state().routes?.route?.name).toBe("pen-alpha");
+  h.tunnels[0]!.exit(255, "Host key verification failed.");
+  await flush();
+  expect(h.state().state.kind).toBe("reconnecting");
+  expect(h.state().routes?.routes[1]?.lastOutcome?.class).toBe("hostkey");
+});
 
+test("a route edit during a probe restarts the round on the new list without starting a tunnel for the old one", async () => {
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+  const h = await started({ probe: route => route === "alpha-lan" ? "hang" : ok("ocx-link-probe\n"), store: () => current });
+  const hung = h.runs.find(run => run.kind === "probe")!;
+  current = { ...current, links: [record(["alpha-tailnet", "pen-alpha"])] };
+  await h.supervisor.reload();
+  await flush();
+  await h.tick();
+  expect(hung.signal?.aborted).toBe(true);
+  expect(h.runs.filter(run => run.kind === "probe").map(run => run.destination)).toEqual(["alpha-lan", "alpha-tailnet"]);
+  expect(h.tunnels.map(tunnel => tunnel.argv.at(-1))).toEqual(["alpha-tailnet"]);
+});
 
+test("a record without a recorded platform discovers it over the candidate's own route before the proof", async () => {
+  const withoutPlatform = { ...record(["alpha-lan", "pen-alpha"]) } as LinkRecord;
+  delete (withoutPlatform as { remotePlatform?: string }).remotePlatform;
+  const h = await started({ store: () => ({ version: 1, listenerPort: LISTENER_PORT, links: [withoutPlatform] }) });
+  await h.grant();
+  await h.tick();
+  const discovery = h.runs.filter(run => run.kind === "other");
+  expect(discovery.length).toBeGreaterThan(0);
+  expect(discovery.every(run => run.destination === "alpha-lan")).toBe(true);
+  expect(h.state().state.kind).toBe("connected");
+});
+
+test("a failed ssh client re-check leaves a proven tunnel connected and applies to the next round", async () => {
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+  let client: SshRunResult = { code: 0, stdout: "", stderr: "OpenSSH_9.6p1" };
+  const h = await started({ store: () => current, client: () => client });
+  await h.grant();
+  await h.tick();
+  expect(h.state().state.kind).toBe("connected");
+  // A route edit re-reads the client; the binary was replaced meanwhile.
+  client = { code: 0, stdout: "", stderr: "Dropbear v2024.85" };
+  current = { ...current, links: [record(["alpha-lan", "alpha-tailnet", "pen-alpha"])] };
+  await h.supervisor.reload();
+  await h.tick();
+  expect(h.state().state.kind).toBe("connected");
+  expect(h.tunnels[0]!.signals).toEqual([]);
+  // The next round, after this tunnel ends, reports the unsupported client.
+  h.tunnels[0]!.exit(255, "Connection reset by peer");
+  await flush();
+  await h.advance(2_000);
+  await h.tick();
+  expect(h.state().routes?.blocked).toBe("ssh_client_unsupported");
+  expect(h.tunnels).toHaveLength(1);
+});
