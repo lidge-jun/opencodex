@@ -58,6 +58,7 @@ function validateInput(parsed: OcxParsedRequest): { message: string; code: strin
 function errorEvent(error: unknown): Extract<AdapterEvent, { type: "error" }> {
   const acp = error instanceof TraeAcpError;
   const code = acp ? error.code : "trae_acp_protocol_error";
+  const clientCode = code === "trae_model_unavailable" ? "model_unavailable" : code;
   const auth = acp && /invalid token|unauthorized|not logged in|authentication/i.test(error.message);
   const message = acp ? error.message : "TRAE CN ACP ended with an invalid protocol response.";
   const invalid = code === "trae_model_unavailable" || code === "trae_replay_too_large" || code === "trae_proxy_unsupported";
@@ -67,7 +68,7 @@ function errorEvent(error: unknown): Extract<AdapterEvent, { type: "error" }> {
     message: auth ? `${message} Sign in through TRAE CN and retry.` : message.slice(0, 512),
     status: invalid ? 400 : auth ? 401 : startup ? 500 : 502,
     errorType: invalid ? "invalid_request_error" : auth ? "authentication_error" : startup ? "server_error" : "upstream_error",
-    code: auth ? "trae_cn_not_logged_in" : code,
+    code: auth ? "trae_cn_not_logged_in" : clientCode,
     retryable: false,
   };
 }

@@ -63,7 +63,9 @@ Received usage is preserved even when cleanup fails. A failed workspace allocati
 already-created owned HOME. Prompt dispatch alone consumes and reports the reserved send. The adapter
 also emits a replay-unsafe heartbeat at that write, so combo preflight cannot resend the turn
 after an empty result or another post-dispatch failure. Startup failures and unavailable models
-return unused reservations and keep their existing routing policy.
+return unused reservations without a physical send. An unavailable model keeps the internal
+`trae_model_unavailable` ACP code, while the adapter emits the shared `model_unavailable` routing
+code so a combo can try its next healthy target.
 Local spend-ledger file refusals propagate to the shared local-storage 503 mapping, with producer cleanup, before ACP error classification.
 Developer replay blocks retain their chronological positions, including trailing instructions after
 the current request, while the system prompt preserves their instruction priority.
