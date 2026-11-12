@@ -346,16 +346,24 @@ describe("combo target input admission", () => {
   test("reserves no more than the target can actually emit", () => {
     // The caller asked for 64k, but this model tops out at 32k, so reserving the caller's
     // number would skip a target that fits.
-    const result = checkComboTargetInputAdmission(withMaxOutput(90_000), capped, "custom", "m");
+    const result = checkComboTargetInputAdmission(withMaxOutput(80_000), capped, "custom", "m");
     expect(result.admitted).toBe(true);
     expect(result.requiredOutputHeadroom).toBe(32_000);
+  });
+
+  test("the estimate margin refuses input that only fits on the raw figure", () => {
+    // 110k estimates to 121k with the combo margin; +8k declared output overruns the 128k
+    // window even though the raw sum (118k) would have fit.
+    const result = checkComboTargetInputAdmission(withMaxOutput(110_000, 8_000), capped, "custom", "m");
+    expect(result.admitted).toBe(false);
+    expect(result.requiredOutputHeadroom).toBe(8_000);
   });
 
   test("an input-only cap is not charged the output reserve twice", () => {
     // modelMaxInputTokens tightens the admissible INPUT; the output reserve belongs against
     // the window. Charging both against the tightened number would refuse a turn that fits.
     const inputCapped: OcxProviderConfig = { ...capped, modelMaxInputTokens: { m: 90_000 } };
-    const fits = checkComboTargetInputAdmission(withMaxOutput(85_000), inputCapped, "custom", "m");
+    const fits = checkComboTargetInputAdmission(withMaxOutput(80_000), inputCapped, "custom", "m");
     expect(fits.admitted).toBe(true);
     expect(fits.ceiling).toBe(90_000);
     // The input cap itself still refuses on its own terms.
@@ -369,10 +377,15 @@ describe("combo target input admission", () => {
     expect(result.ceiling).toBeNull();
   });
 
-  test("no declared output allowance keeps the loose direct contract", () => {
-    const result = checkComboTargetInputAdmission(withoutMaxOutput(150_000), capped, "custom", "m");
-    expect(result.admitted).toBe(true); // still inside the existing 2.5x pathological gate
-    expect(result.requiredOutputHeadroom).toBeUndefined();
+  test("an undeclared output allowance still reserves default headroom", () => {
+    // 10% of the 128k window = 12.8k, capped by the target's 32k output ceiling to 12.8k.
+    // 150k input cannot leave that room; 100k can.
+    const refused = checkComboTargetInputAdmission(withoutMaxOutput(150_000), capped, "custom", "m");
+    expect(refused.admitted).toBe(false);
+    expect(refused.requiredOutputHeadroom).toBe(12_800);
+    const fits = checkComboTargetInputAdmission(withoutMaxOutput(100_000), capped, "custom", "m");
+    expect(fits.admitted).toBe(true);
+    expect(fits.requiredOutputHeadroom).toBe(12_800);
   });
 
   test("a canonical native slug missing from the override table resolves from generated metadata", () => {
