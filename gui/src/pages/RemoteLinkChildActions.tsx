@@ -91,6 +91,9 @@ function CodeToken({ children }: { children: string }): ReactElement {
   return <code className="font-mono">{children}</code>;
 }
 
+/** The exact link ids a bulk action names; the server expands "all" past the confirmed rows. */
+const linkIds = (rows: readonly LinkRowWire[]): string[] => rows.map(row => row.id);
+
 export function ChildRowBadges({ row }: { row: ChildOpsRowView }): ReactElement {
   const t = useT();
   const version = row.installedVersion ?? row.runningVersion;
@@ -249,7 +252,6 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
   // The server expands "all" to every stored link and runs a pinned sync before it decides currency, so a
   // link outside the confirmation could still be reached. Both bulk actions name exactly the rows they cover:
   // update the updatable ones the dialog counts, observe the operable ones in the bar's own list.
-  const ids = (rows: readonly LinkRowWire[]) => rows.map(row => row.id);
   const run = async (body: ChildOperationBody) => {
     props.onError(null);
     props.onRun({ linkId: "all", op: body.op });
@@ -259,13 +261,13 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
   };
   return (
     <div className="remote-link-child-bulk flex flex-wrap items-center gap-2 px-1 py-2">
-      <Button variant="ghost" size="sm" onClick={() => void run({ op: "observe", linkIds: ids(operable) })}>{t("remoteLink.child.checkAll")}</Button>
+      <Button variant="ghost" size="sm" onClick={() => void run({ op: "observe", linkIds: linkIds(operable) })}>{t("remoteLink.child.checkAll")}</Button>
       <Button variant="outline" size="sm" disabled={updatable.length === 0}
         onClick={() => setConfirming("all")}>{t("remoteLink.child.updateAll")}</Button>
       <ChildConfirmDialog open={confirming === "all"} title={t("remoteLink.child.updateAll")}
         body={t("remoteLink.child.updateAllConfirm", { count: updatable.length, version: homeVersion })}
         confirm={t("remoteLink.child.updateAll")} onCancel={() => setConfirming(null)}
-        onConfirm={() => { setConfirming(null); void run({ op: "update", linkIds: ids(updatable) }); }} />
+        onConfirm={() => { setConfirming(null); void run({ op: "update", linkIds: linkIds(updatable) }); }} />
     </div>
   );
 }
@@ -339,6 +341,13 @@ export function ChildJobProgress(props: { apiBase: string; job: ChildJobView; on
       </ul>
     </section>
   );
+}
+
+/** Validates the digits before converting, so an empty, partial or exponent input never enters the draft. */
+function parseIdleMinutes(raw: string): number | undefined {
+  if (!/^\d+$/.test(raw.trim())) return undefined;
+  const value = Number(raw.trim());
+  return Number.isSafeInteger(value) && value >= 1 && value <= 60 ? value : undefined;
 }
 
 export function ChildPolicyPanel(props: { apiBase: string; busy: boolean; reloadSignal: number; onBusy(on: boolean): void;
@@ -416,7 +425,7 @@ export function ChildPolicyPanel(props: { apiBase: string; busy: boolean; reload
       <label className="flex items-center justify-between gap-3 text-[13px]">
         <span>{t("remoteLink.policy.idleMinutes")}</span>
         <input type="number" className="input w-[88px]" min={1} max={60} value={minutes} disabled={props.busy} aria-label={t("remoteLink.policy.idleMinutes")}
-          onChange={event => { const next = Number(event.target.value); if (Number.isSafeInteger(next) && next >= 1 && next <= 60) set("idleAfterMs", next * 60_000); }} />
+          onChange={event => { const next = parseIdleMinutes(event.target.value); if (next !== undefined) set("idleAfterMs", next * 60_000); }} />
       </label>
       <div className="flex items-center justify-end gap-2">
         {saved && <span className="text-[12px] text-success" role="status">{t("remoteLink.policy.saved")}</span>}

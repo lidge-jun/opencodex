@@ -498,6 +498,32 @@ test("the page Refresh also reloads the policy", async () => {
   expect(calls.filter(call => call.path === "/api/link/children/policy" && call.method === "GET").length).toBe(2);
 });
 
+test("the idle-minutes input only accepts digits in range", async () => {
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path === "/api/link/children/policy" && call.method === "GET") return response({ policy: POLICY, warning: null });
+    if (call.path === "/api/link/children/policy" && call.method === "PUT") return response({ policy: POLICY, warning: null });
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await settleUntil(() => host.querySelector(".remote-link-policy") !== null);
+  const input = host.querySelector<HTMLInputElement>(".remote-link-policy input[type=number]")!;
+  const type = async (value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new win.Event("input", { bubbles: true }));
+      input.dispatchEvent(new win.Event("change", { bubbles: true }));
+      await flush();
+    });
+  };
+  // Empty, partial and out-of-range text never reaches the draft: the input keeps the last valid value.
+  for (const bad of ["", "0", "61", "1e3", "-5", "7.5"]) { await type(bad); expect(input.value).toBe("10"); }
+  await type("15");
+  expect(input.value).toBe("15");
+  await click(button(host, "Save"));
+  expect(calls.filter(call => call.method === "PUT").at(-1)?.body).toEqual({ idleAfterMs: 900_000 });
+});
+
 test("a withheld restart says a request was in flight", async () => {
   installFetch(() => response({ job: job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "skipped" }, startedAt: null, finishedAt: null }] }) }));
   const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(job({ op: "restart-codex" }))} onDone={() => {}} />);
