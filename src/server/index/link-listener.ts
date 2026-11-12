@@ -2,6 +2,7 @@ import { createLinkRelaySessions, type LinkCatalogServed } from "./link-relay-se
 import { createLinkPeerObservations, type LinkPeerEntry } from "../../link/peer-report";
 import { createLinkActivity, type LinkActivitySnapshot } from "../../link/child-activity";
 import { createLinkTrafficBook, type LinkTrafficCounters } from "../../link/traffic";
+import { buildPeerFeatures } from "../../remote/features";
 import type { Server } from "bun";
 import {
   emptyLinkStore,
@@ -126,7 +127,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       return;
     }
     const requestedPort = store.listenerPort ?? 0;
-    const sessions = createLinkRelaySessions({ peers, activity, traffic, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
+    const sessions = createLinkRelaySessions({ peers, activity, traffic, homeFeatures: buildPeerFeatures, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: (keyId, linkId) => {
       if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
       return startContext?.keyFingerprints?.(keyId) ?? [];
