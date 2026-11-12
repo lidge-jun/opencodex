@@ -972,16 +972,16 @@ Proveedores con una consulta activa: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 
 **Créditos de Abliteration.** Un proveedor de cualquier nombre cuyo `baseUrl` sea `https://api.abliteration.ai` o `https://api.abliteration.ai/v1` consulta `GET https://api.abliteration.ai/v1/credits` con la clave activa como token bearer, sin seguir redirecciones. El saldo restante en USD es `total_credits` menos `total_usage`; la barra muestra el gasto consumido. Una cuenta sin créditos no muestra barra. Una clave rechazada elimina la fila; `503 credit_balance_unavailable`, 408 y 429 conservan la última lectura.
 
-**Cuota de OpenCode Go.** El preajuste canónico `opencode-go` lee `GET https://opencode.ai/zen/go/v1/usage` con la clave configurada como token de portador y no sigue redirecciones. Los valores de la respuesta rodando, semanal y mensual `percent` ya están consumidos: rodando mapas a la barra de 5 horas, mientras que semanal y mensualmente mantienen sus barras coincidentes. OpenCodex no reconstruye los límites de dólares de los registros de uso local, y a un proveedor que usa un `baseUrl` no canónico nunca se le envía la clave para esta sonda.
+**Cuota de OpenCode Go.** El preajuste canónico `opencode-go` lee `GET https://opencode.ai/zen/go/v1/usage` con la clave configurada como token de portador y no sigue redirecciones. Los valores `percent` móvil, semanal y mensual de la respuesta ya representan utilización consumida: el móvil se asigna a la barra de 5 horas, mientras que el semanal y el mensual conservan sus barras correspondientes. OpenCodex no reconstruye los límites de dólares de los registros de uso local, y a un proveedor que usa un `baseUrl` no canónico nunca se le envía la clave para esta sonda.
 
 **Cuota del plan de codificación Z.AI GLM.** Los preajustes `zai`, `glm`, `glm-cn` y `zhipu-bigmodel-coding` leen `GET /api/monitor/usage/quota/limit` y no siguen redireccionamientos. La sonda corre contra la región que el proveedor señala en: `api.z.ai` (desnudo o `/api/coding/paas/v4`) o `open.bigmodel.cn` (desnudo, `/api/coding/paas/v4` o el punto final OpenAI Responses `/api/v1`).
 
-La autenticación difiere según la región: `api.z.ai` toma la clave como Bearer token, mientras
-`open.bigmodel.cn` espera la clave directamente en `Authorization` Sin prefijos y rechaza un encabezado Bearer. La respuesta es `limits` Rellene las filas de la barra de utilización:
-`TOKENS_LIMIT` / `CREDIT_LIMIT` filas con `unit` 3 / `number` 5 Llene la barra de 5 horas y
-`unit` 6 / `number` 1 El bar semanal.
+La autenticación difiere según la región: `api.z.ai` toma la clave como token Bearer, mientras
+`open.bigmodel.cn` espera la clave directamente en `Authorization`, sin prefijo de esquema, y rechaza un encabezado Bearer. Las filas `limits` de la respuesta rellenan las barras de utilización:
+las filas `TOKENS_LIMIT` / `CREDIT_LIMIT` con `unit` 3 / `number` 5 rellenan la barra de 5 horas y
+las de `unit` 6 / `number` 1 la barra semanal.
 
-`TIME_LIMIT` filas son **no** cuota de modelo y se ignoran. Son la asignación de llamada mensual compartida MCP para Web Search, Web Reader y Zread, por lo que tratarlos como una ventana de modelo permitiría que un presupuesto de búsqueda web gastado se lea como capacidad de modelo agotada en la clasificación de la cuenta consciente de cuotas. Por lo tanto, un plan que reporta solo `TIME_LIMIT` filas no muestra barras de cuotas en lugar de una fabricada, y las ventanas del plan no informan que permanezca ausente en lugar de mostrarse como 0%.
+Las filas `TIME_LIMIT` **no** son cuota de modelo y se ignoran. Son la asignación mensual compartida de llamadas MCP para Web Search, Web Reader y Zread, así que tratarlas como una ventana de modelo haría que un presupuesto de búsqueda web ya gastado se leyera como capacidad de modelo agotada en la clasificación de cuentas consciente de cuotas. Por eso, un plan que solo informa filas `TIME_LIMIT` no muestra barras de cuota en lugar de una inventada, y las ventanas que el plan no informa permanecen ausentes en vez de mostrarse como 0%.
 
 Nunca se envía la clave para esta sonda a un proveedor que utilice un `baseUrl` no canónico.
 

@@ -471,7 +471,7 @@ Configure `pinnedReasoningEffort` en un proveedor existente para anular las opci
 }
 ```
 
-Combina estos campos en la fila de proveedores existente. Los valores aceptados son `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` y `ultra`. **`none` elimina el campo de esfuerzo explícito**; utiliza el comportamiento predeterminado del proveedor y no garantiza que el razonamiento esté deshabilitado. Las tapas de esfuerzo aplicables aún se ejecutan después del pin, y la asignación/normalización de cables del proveedor puede reducir u omitir un valor no compatible. `ultra` se normaliza antes de que alcance un cable aguas arriba. Las solicitudes de mantenimiento de compactación están exentas de pines.
+Combina estos campos en la fila de proveedores existente. Los valores aceptados son `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` y `ultra`. **`none` elimina el campo de esfuerzo explícito**; utiliza el comportamiento predeterminado del proveedor y no garantiza que el razonamiento esté deshabilitado. Los límites de esfuerzo aplicables aún se ejecutan después del pin, y la asignación/normalización de cables del proveedor puede reducir u omitir un valor no compatible. `ultra` se normaliza antes de que alcance un cable aguas arriba. Las solicitudes de mantenimiento de compactación están exentas de pines.
 
 `PATCH /api/providers?name=<provider>` acepta estos campos. Omita un campo para conservarlo; use `null` para borrar un escalar o todo el mapa. Una entrada de mapa establecida en `null` o `""` elimina esa entrada mientras conserva otras entradas. Las escrituras mal formadas son rechazadas antes de guardarlas. Un pin opcional mal formado en un archivo editado a mano se ignora bajo carga sin descartar el resto de la configuración.
 

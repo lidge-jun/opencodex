@@ -1146,8 +1146,9 @@ failover budget; failures record fresh cooldowns. Account quota checks, disabled
 providers, request compatibility, metered-spend permissions and cancellation remain
 enforced. Explicit provider Retry-After values may therefore be retried early only
 when the operator enables this option. Preview/list operations never clear cooldowns.
-The interval is tracked per combo in memory and resets on proxy restart or combo
-selection-state reset. Existing cooldown-wait behavior is unchanged when disabled.
+Each recovery pass's interval reservation is tracked per combo in memory and resets on proxy
+restart or combo selection-state reset; the cooldowns themselves stay persisted. Existing
+cooldown-wait behavior is unchanged when disabled.
 
 A recovery pass belongs only to the request that reserved it; other requests still
 observe the saved cooldowns. That reservation follows the request through cooldown

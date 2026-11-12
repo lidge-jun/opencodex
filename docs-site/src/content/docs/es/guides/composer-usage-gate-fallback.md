@@ -49,7 +49,7 @@ Hay **sin interruptor de activación/desactivación persistente**: la ejecución
 | `-DryRun` / `--dry-run` | Selecciona un destino y comprueba la ayuda del CLI, pero nunca envía texto ni comprueba la cuota de la cuenta, el estado del demonio o la disponibilidad del proveedor. |
 | El bloqueo por uso se levanta más tarde | Vuelve a usar el cuadro de mensajes normal. No hay ajustes específicos de los scripts auxiliares que debas revertir. |
 
-Para dejar de usar la reserva, deja de invocarla. Ejecute **no** `ocx restore` o deshabilite la integración Codex solo para desactivar este ayudante; eso también cambia el enrutamiento OpenCodex normal. Si ha programado el comando de forma independiente, desactive esa programación externa. Los elementos de cola ya aceptados pertenecen a Codex y aún pueden ejecutarse: eliminar el script, salir de su proceso o recuperar la cuota no los cancela. Inspeccione/elimine elementos no deseados a través de los controles de cola normales en la misma conversación. No envíe el mismo mensaje tanto en el ayudante como en el compositor.
+Para dejar de usar la reserva, deja de invocarla. No ejecutes `ocx restore` ni desactives la integración de Codex solo para dejar de usar este script auxiliar; ambas acciones también cambian el enrutamiento normal de OpenCodex. Si ha programado el comando de forma independiente, desactive esa programación externa. Los elementos de cola ya aceptados pertenecen a Codex y aún pueden ejecutarse: eliminar el script, salir de su proceso o recuperar la cuota no los cancela. Inspeccione/elimine elementos no deseados a través de los controles de cola normales en la misma conversación. No envíe el mismo mensaje tanto en el ayudante como en el compositor.
 
 <a id="check-compatibility-before-sending"></a>
 

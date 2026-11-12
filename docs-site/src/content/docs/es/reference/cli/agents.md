@@ -99,7 +99,7 @@ ocx effort set --main high --subagent low
 ocx effort set --subagent -
 ```
 
-Status conserva los valores de límite de entorno de ejecución/almacenados existentes e informa de los valores no admitidos en `warnings` (una matriz vacía cuando no se admite ninguna). Las mismas advertencias aparecen en la salida humana y nombran el campo que se ignora con un comando de corrección. El estado nunca repara o reescribe esos valores. Un campo de subagente ignorado no elimina un límite principal válido. `ocx effort clear` limpia ambas tapas mientras retiene la configuración de esfuerzo de inyección separada. Véase [Superficies de los subagentes](/es/guides/sub-agent-surface/) para las superficies de solicitud donde se aplican tapas.
+Status conserva los valores de límite de entorno de ejecución/almacenados existentes e informa de los valores no admitidos en `warnings` (una matriz vacía cuando no se admite ninguna). Las mismas advertencias aparecen en la salida humana y nombran el campo que se ignora con un comando de corrección. El estado nunca repara o reescribe esos valores. Un campo de subagente ignorado no elimina un límite principal válido. `ocx effort clear` limpia ambos límites mientras retiene la configuración de esfuerzo de inyección separada. Véase [Superficies de los subagentes](/es/guides/sub-agent-surface/) para las superficies de solicitud donde se aplican los límites.
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 

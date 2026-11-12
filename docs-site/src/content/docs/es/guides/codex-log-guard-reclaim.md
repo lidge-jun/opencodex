@@ -18,7 +18,7 @@ OpenCodex realiza una secuencia de mantenimiento sin conexión limitada:
 3. Verificar que la enumeración del proceso se haya realizado correctamente y que no se esté ejecutando ningún proceso de escritura Codex compatible;
 4. adquirir la cerradura dedicada de proceso cruzado Log Guard;
 5. Repita la comprobación del proceso Codex mientras se mantiene ese bloqueo.
-6. abrir la base de datos existente leer/escribir sin crear semántica y probar que se puede adquirir un escritor inmediato SQLite;
+6. abrir la base de datos existente para lectura y escritura, sin crearla, y comprobar que se puede adquirir inmediatamente el bloqueo de escritura de SQLite;
 7. requieren que `PRAGMA auto_vacuum` ya sea `INCREMENTAL`;
 8. ejecutar `PRAGMA quick_check` antes del mantenimiento;
 9. ejecutar un punto de control WAL completo y rechazar un punto de control ocupado / incompleto;

@@ -161,6 +161,17 @@ a page you visit can make your browser connect to `127.0.0.1`. The listener ther
 same `Host` and `Origin` checks as an ordinary loopback bind.
 :::
 
+:::caution[Create the `hub` and `remoteGui` objects only when they are absent]
+`ocx config set hub '{…}'` and `ocx config set remoteGui '{…}'` replace the whole object, so on an
+existing installation they silently drop the settings already there. Check first: `ocx config get hub`
+and `ocx config get remoteGui` answer `config path not found` when the object is absent, and print it
+when it exists. Only then is the `'{}'` seed line below safe to run; when the object exists, skip it
+and use the nested `hub.<field>` form, which itself fails with `config parent path not found: hub`
+when a parent is genuinely missing. Setting a nested array or object field such as
+`hub.managementIngress` or `remoteGui.allowedTailscaleUsers` also replaces that field rather than
+merging into it, so read the current value before you overwrite one.
+:::
+
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10
@@ -193,11 +204,11 @@ ocx config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.
 ocx config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
 ```
 
-Use that form only when the object does not exist yet. A whole-object set **replaces** the object
-rather than merging into it, so running the line above against a config that already had
-`hub.managementIngress` silently drops the ingress. When you are adapting an existing
-configuration, set one field at a time — the parent is already there, so the nested form works and
-touches nothing else.
+Use that form only when the object does not exist yet, as the `ocx config get` check above decides.
+A whole-object set **replaces** the object rather than merging into it, so running it against a
+config that already had `hub.managementIngress` silently drops the ingress. When you are adapting an
+existing configuration, set one field at a time — the parent is already there, so the nested form
+works and touches nothing else. Setting a nested array or object field replaces that field too.
 
 Two details that decide whether a line is accepted. The value is parsed as JSON first and falls
 back to the raw string, which is why a URL is written as `'"https://…"'`: objects, arrays, booleans
@@ -708,12 +719,14 @@ Remote access is an explicit opt-in. Set `OPENCODEX_BIND_ADDRESS` to the host's 
 IP, or use `0.0.0.0` to publish on **all** host interfaces:
 
 ```bash
-OPENCODEX_BIND_ADDRESS=0.0.0.0 docker compose up -d
+OPENCODEX_PORT=10190 OPENCODEX_BIND_ADDRESS=0.0.0.0 docker compose up -d
 ```
 
 Use a firewall and an authenticated TLS/tailnet frontend before exposing the port. The bind
 override changes only the host publication; the container listener remains `0.0.0.0:10100`.
-Keep the same bind override on subsequent Compose invocations that recreate the hub. To update
+Each of these variables applies only to the command that carries it, so keep both overrides on
+every later Compose invocation that recreates the hub — or persist them in the Compose
+environment — or the recreated service returns to the default port. To update
 an existing deployment, run `docker compose build` and recreate the hub with `docker compose up -d`;
 do not repeat the one-time token initialization.
 

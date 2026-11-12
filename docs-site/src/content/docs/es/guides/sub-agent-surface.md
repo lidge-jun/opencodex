@@ -115,7 +115,7 @@ La opción **Sugerir**, junto al modelo de delegación, pide una breve descripci
 
 Para las solicitudes Responses sin estado en forma de matriz, opencodex coloca la guía generada después de los metadatos líderes del sistema y del desarrollador, incluido el desarrollador `additional_tools`, y antes de la entrada conversacional. `previous_response_id` continuaciones reutilizan la guía etiquetada solo cuando coincide con el último elemento etiquetado en su prefijo de reproducción de confianza. Otra guía generada se reutiliza cuando existe un elemento de desarrollador generado exacto en ese prefijo. Cuando la guía cambia, el protocolo de la herramienta líder permanece primero y el reemplazo se inserta antes de la entrada conversacional actual.
 
-Estas son instrucciones para el agente principal, no un router de generación del lado del proxy. En v2, una bifurcación de historia completa hereda el modelo padre y rechaza anulaciones de modelo o esfuerzo. Por lo tanto, la guía le dice a Codex que use `fork_turns: "none"` (o un recuento de giro parcial positivo como `"3"`) cuando pase `model` o `reasoning_effort`, y que haga que el mensaje de tarea sea autónomo.
+Estas son instrucciones para el agente principal, no un router de generación del lado del proxy. En v2, una bifurcación de historia completa hereda el modelo padre y rechaza anulaciones de modelo o esfuerzo. La guía generada nombra el modelo preferido y la lista, pero no impone `fork_turns`; si quieres esa combinación, el spawn debe establecer `fork_turns: "none"` (o un recuento de turnos parcial positivo como `"3"`) junto con `model` o `reasoning_effort`, con un mensaje de tarea autónomo.
 
 El texto personalizado `injectionPrompt` puede usar los cuatro marcadores de posición:
 
@@ -210,7 +210,7 @@ ocx agent fallback set gpt-5.6-luna,xai/grok-4.5 --poll-ms 60000
 ocx effort set --subagent max
 ```
 
-El comando de nivel superior `ocx effort` es el punto de entrada canónico para la inspección de esfuerzo y tapas (p. ej. `ocx effort high`, `ocx effort status`, `ocx effort clear`), con `ocx agent effort` preservado como una ruta compatible con versiones anteriores. Obsérvese que `ocx effort clear` elimina las tapas de agente principal y subagente activo mientras deja intacta la delegación `injectionEffort` (use `ocx effort set --injection -` o `ocx agent injection set --effort -` para borrar el esfuerzo de inyección).
+El comando de nivel superior `ocx effort` es el punto de entrada canónico para la inspección de esfuerzo y sus límites (p. ej. `ocx effort high`, `ocx effort status`, `ocx effort clear`), con `ocx agent effort` preservado como una ruta compatible con versiones anteriores. Obsérvese que `ocx effort clear` elimina los límites del agente principal y del subagente activo mientras deja intacta la delegación `injectionEffort` (use `ocx effort set --injection -` o `ocx agent injection set --effort -` para borrar el esfuerzo de inyección).
 
 Pase `-` para borrar un valor nullable de `ocx agent injection`, o use la acción relevante de `clear` para una lista o lista de reserva. Vea el [CLI referencia](/es/reference/cli/) para todas las familias de comando.
 

@@ -9,7 +9,7 @@ wire, decided by its adapter. When the client API and the upstream wire differ, 
 converted on the way in and the answer is converted on the way back. This page explains how that
 path is named, how to see it before and after a request, and which settings change it.
 
-The settings on this page are off by default except `antigravityDirect`, which is on. That exception enables the direct Antigravity path when applicable; the other switches require explicit activation.
+The settings on this page are off by default except `antigravityDirect`, which is on, and the two managed-Messages switches on a recognized Anthropic instance whose account pool is enabled. `antigravityDirect` enables the direct Antigravity path when applicable, and a pooled instance derives `managedMessagesNative` and `managedMessagesNativeOAuth` unless its `anthropicAccountPool.nativeMessages` is `false`. Every other switch requires explicit activation, and an explicit rollout `false` disables either pooled default.
 
 ## Delivery modes
 
@@ -93,7 +93,7 @@ each candidate and skips one that cannot carry the request.
 
 ## Rollout switches
 
-These switches stage the new paths. Each defaults to off except `antigravityDirect`, and a switch that is off changes nothing.
+These switches stage the new paths. Each defaults to off except `antigravityDirect` and, on a recognized Anthropic instance with its account pool enabled, the two managed-Messages switches. A pooled instance enables `managedMessagesNative` and `managedMessagesNativeOAuth` unless `anthropicAccountPool.nativeMessages` is `false`; an explicit rollout `false` still turns either off. A switch that is off changes nothing.
 
 | Switch | When on |
 | --- | --- |

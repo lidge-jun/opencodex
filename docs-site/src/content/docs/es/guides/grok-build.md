@@ -67,6 +67,8 @@ Grok Build requiere una clave API no vacía para los modelos personalizados, inc
 
 **El registro automático solo funciona en loopback.** Cuando opencodex escucha en una dirección que no es de loopback, incluidos los comodines `0.0.0.0` y `::`, que exponen todas las interfaces, las solicitudes necesitan tu token de admisión real y un bloque administrado no puede incluirlo de forma segura. Escribir el token literal dejaría tu secreto en `~/.grok/config.toml` y sobrescribiría lo que hayas configurado allí en el siguiente `ocx start`/`ensure`/`restart`. Por eso, en ese caso opencodex no escribe nada (y elimina cualquier bloque que quede de una configuración anterior en loopback). Debes configurar los modelos por tu cuenta fuera de los marcadores administrados, donde opencodex no puede sobrescribirlos. Consulta la tabla exacta en [Receta manual](#manual-recipe-without-auto-registration) y establece tanto `base_url` (un host accesible desde donde ejecutas `grok`) como `api_key` (tu `OPENCODEX_API_AUTH_TOKEN`).
 
+**Un `unauthenticatedLoopbackListener` habilitado es la excepción.** Con ese listener activo, opencodex sí escribe el bloque administrado, apuntando a `127.0.0.1` en el puerto del listener, porque las solicitudes de loopback allí no necesitan token de admisión, independientemente de cómo esté vinculado el listener público. Un listener complementario sin `port` comparte el puerto del proxy, y OpenCodex solo acepta esa forma en una dirección específica que no sea de loopback; con los comodines `0.0.0.0` o `::` rechaza el par, así que asigna un `port` distinto al listener de loopback para usar esta excepción. La receta manual de abajo sigue aplicándose cuando quieras gestionar esas entradas por tu cuenta.
+
 No sustituyas `api_key` por `env_key` aquí. Si `env_key` no se resuelve, la solicitud no se detiene: Grok usa como alternativa tu token de sesión de xAI y lo envía a la URL indicada por `base_url`, que en un despliegue en LAN es un endpoint HTTP sin cifrar que no pertenece a xAI.
 
 El `api_key` insertado en la entrada del proveedor ocupa el primer lugar en la cadena de credenciales de Grok para estos modelos, por lo que las interacciones con opencodex no requieren otro inicio de sesión en Grok. Conserva tu configuración habitual de `grok login` / `XAI_API_KEY` para los modelos nativos de Grok y las funciones del entorno de ejecución que contacten directamente con xAI.
@@ -75,7 +77,7 @@ El `api_key` insertado en la entrada del proveedor ocupa el primer lugar en la c
 
 ## Receta manual (sin registro automático)
 
-Si gestionas `~/.grok/config.toml` por tu cuenta, o si opencodex escucha en una dirección que no es de loopback, añade un bloque `[model_providers.opencodex]` y tablas para cada modelo que hagan referencia a él, fuera de los marcadores `# >>> opencodex managed block`:
+Si gestionas `~/.grok/config.toml` por tu cuenta, o si opencodex escucha en una dirección que no es de loopback con el listener de loopback desactivado, añade un bloque `[model_providers.opencodex]` y tablas para cada modelo que hagan referencia a él, fuera de los marcadores `# >>> opencodex managed block`:
 
 ```toml
 [model_providers.opencodex]

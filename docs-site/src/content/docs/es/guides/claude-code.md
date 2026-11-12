@@ -126,14 +126,16 @@ Deje **Modo de autenticación** en **Auto** (el valor predeterminado) en **Conec
 | Lo que encuentra | Lo que hace |
 | --- | --- |
 | Un inicio de sesión Claude (cuenta `~/.claude.json` OAuth, `.credentials.json`, el llavero macOS o un `ANTHROPIC_API_KEY` exportado) | Deja el token sin configurar, por lo que su suscripción y los conectores siguen funcionando |
-| No Claude auth en absoluto | Inyecta un token de marcador de posición, por lo que Claude Code deja de pedirle que inicie sesión y rutas a través del proxy |
+| Ninguna autenticación de Claude | Inyecta un token de marcador de posición, por lo que Claude Code deja de pedirle que inicie sesión y rutas a través del proxy |
 | No puede decir (llavero ilegible, archivo corrupto) | Asume la suscripción e imprime una advertencia: nunca mueve a un suscriptor de pago al proxy en una lectura fallida |
 
 Esto se vuelve a calcular cada lanzamiento, no recordado, por lo que el inicio o salida se recoge en el siguiente `ocx claude` sin nada que reconfigurar.
 
 Elija **Suscripción** o **Proxy** explícitamente cuando lo desee. Una opción explícita se almacena en `claudeCode.authMode` y la detección nunca la anula, incluso después de iniciar sesión o salir más tarde. Vuelve a Auto para devolver la decisión.
 
-En macOS, la conexión automática (`claudeCode.systemEnv`) sigue la misma resolución, por lo que una llanura `claude` lanzada fuera de `ocx` se comporta de la misma manera. Ese archivo es una instantánea actualizada cuando se inicia el proxy o se guarda la configuración, mientras que `ocx claude` siempre se resuelve en vivo.
+Un llavero de macOS bloqueado cuenta como «no puede decir». opencodex espera hasta 1,5 segundos a que el llavero responda, nunca cancela el aviso de desbloqueo, y un proxy en ejecución no vuelve a consultar el llavero durante 60 segundos después de que una consulta agote el tiempo, para que las actualizaciones del dashboard no acumulen avisos. Cada nuevo proceso `ocx claude` pregunta una vez por su cuenta. Con `authMode` establecido en proxy o subscription, el llavero no se consulta en absoluto.
+
+En macOS, la conexión automática (`claudeCode.systemEnv`) sigue la misma resolución, por lo que un `claude` simple lanzado fuera de `ocx` se comporta de la misma manera. Ese archivo es una instantánea actualizada cuando se inicia el proxy o se guarda la configuración, mientras que `ocx claude` siempre se resuelve en vivo.
 
 <a id="system-environment-integration-macos"></a>
 
@@ -141,7 +143,7 @@ En macOS, la conexión automática (`claudeCode.systemEnv`) sigue la misma resol
 
 <a id="claude-desktop-modes-gateway-default-and-first-party"></a>
 
-## Claude Modos de escritorio: gateway (predeterminado) y first party
+## Modos de escritorio de Claude: gateway (predeterminado) y first party
 
 Claude Desktop puede usar OpenCodex en uno de dos modos mutuamente excluyentes. Elija en **Conectar → Claude Desktop → Modo de conexión** en el tablero o con `ocx claude desktop apply
 --first-party|--gateway`.

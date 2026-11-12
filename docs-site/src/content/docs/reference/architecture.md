@@ -256,8 +256,9 @@ keepalives do not reset the adapter-event stall watchdog. The default stall
 timeout stays 300 seconds; encrypted compaction content is preserved unchanged.
 
 Native compact response buffering also enforces a body-byte inactivity deadline
-using `stallTimeoutSec` (300 seconds for a public upstream, disabled for a local one,
-and disabled everywhere when set to `0`). Nonempty chunks reset that
+using `stallTimeoutSec`. Unlike streaming, this route keeps its 300-second default even
+for a local upstream, because it buffers the whole body while holding an active-turn
+lease; an explicit value, including `0`, still wins. Nonempty chunks reset that
 deadline; a stalled body returns HTTP 504, client cancellation retains HTTP 499,
 and cleanup does not wait for a stuck upstream cancellation promise. The 32 MiB
 response ceiling and the original body bytes are preserved.

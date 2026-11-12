@@ -97,6 +97,17 @@ El listener auxiliar de loopback no exige autenticación. Cualquier proceso o us
 Escuchar en `127.0.0.1` hace que el kernel rechace conexiones remotas, pero no impide que una página visitada provoque conexiones desde tu navegador a `127.0.0.1`. Por eso el listener aplica las mismas comprobaciones de `Host` y `Origin` que un listener ordinario de loopback.
 :::
 
+:::caution[Crea los objetos `hub` y `remoteGui` solo cuando no existan]
+`ocx config set hub '{…}'` y `ocx config set remoteGui '{…}'` sustituyen el objeto completo, así que en
+una instalación existente descartan en silencio los ajustes que ya estaban allí. Compruébalo antes:
+`ocx config get hub` y `ocx config get remoteGui` responden `config path not found` cuando el objeto no
+existe y lo muestran cuando existe. Solo entonces es seguro ejecutar la línea de siembra `'{}'` de abajo;
+si el objeto existe, omítela y usa la forma anidada `hub.<field>`, que a su vez falla con
+`config parent path not found: hub` cuando falta de verdad un padre. Establecer un campo anidado de tipo
+matriz u objeto, como `hub.managementIngress` o `remoteGui.allowedTailscaleUsers`, también sustituye ese
+campo en lugar de fusionarse con él, así que lee el valor actual antes de sobrescribirlo.
+:::
+
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10
@@ -129,7 +140,7 @@ ocx config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.
 ocx config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
 ```
 
-Utilice esa forma solo cuando el objeto no existe todavía. Un conjunto de objetos enteros **sustituye** el objeto en lugar de fusionarse en él, por lo que ejecutar la línea de arriba contra una configuración que ya tenía `hub.managementIngress` silenciosamente deja caer la entrada. Cuando esté adaptando una configuración existente, establezca un campo a la vez: el padre ya está allí, por lo que la forma anidada funciona y no toca nada más.
+Utiliza esa forma solo cuando el objeto no exista todavía, según decida la comprobación `ocx config get` de arriba. Establecer el objeto entero **sustituye** el objeto en lugar de fusionarse con él, así que ejecutarlo contra una configuración que ya tenía `hub.managementIngress` descarta la entrada en silencio. Cuando estés adaptando una configuración existente, establece un campo a la vez: el padre ya está allí, por lo que la forma anidada funciona y no toca nada más. Establecer un campo anidado de tipo matriz u objeto también sustituye ese campo.
 
 Dos detalles que deciden si se acepta una línea. El valor se analiza primero como JSON y vuelve a la cadena sin procesar, por lo que una URL se escribe como `'"https://…"'`: objetos, matrices, booleanos y números deben ser válidos JSON. Y `hub` y `remoteGui` son estrictos, por lo que una clave mal escrita se rechaza en el momento de la escritura como `schema_invalid: hub.<field>` en lugar de convertirse en una configuración que nunca tiene efecto. `managementPublicOrigin` y `dataPublicOrigin` deben ser cada uno un origen desnudo sin ruta, consulta o fragmento.
 
@@ -438,10 +449,10 @@ OPENCODEX_PORT=10190 docker compose up -d
 El acceso remoto es una opción explícita. Configure `OPENCODEX_BIND_ADDRESS` en la LAN o la IP de Tailscale del host, o use `0.0.0.0` para publicar en las interfaces de host **todos**:
 
 ```bash
-OPENCODEX_BIND_ADDRESS=0.0.0.0 docker compose up -d
+OPENCODEX_PORT=10190 OPENCODEX_BIND_ADDRESS=0.0.0.0 docker compose up -d
 ```
 
-Utilice un firewall y un frontend TLS /tailnet autenticado antes de exponer el puerto. La anulación de enlace cambia solo la publicación del host; el oyente del contenedor sigue siendo `0.0.0.0:10100`. Mantenga la misma anulación de enlace en invocaciones de composición posteriores que recrean el concentrador. Para actualizar una implementación existente, ejecute `docker compose build` y vuelva a crear el concentrador con `docker compose up -d`; no repita la inicialización de token de una sola vez.
+Utiliza un firewall y un frontend TLS /tailnet autenticado antes de exponer el puerto. La anulación de enlace cambia solo la publicación del host; el oyente del contenedor sigue siendo `0.0.0.0:10100`. Cada una de estas variables se aplica solo al comando que la lleva, así que mantén ambas anulaciones en cada invocación posterior de Compose que recree el concentrador —o persístelas en el entorno de Compose— para que el servicio recreado no vuelva al puerto predeterminado. Para actualizar una implementación existente, ejecute `docker compose build` y vuelva a crear el concentrador con `docker compose up -d`; no repita la inicialización de token de una sola vez.
 
 Configure los proveedores con el panel de control a través de un frontend de administración propiedad del operador o con comandos CLI de un solo disparo que comparten el volumen de estado. Los siguientes comandos distinguen la inicialización de una instalación nueva de las actualizaciones posteriores de campos. Sustituye los orígenes y la identidad del ejemplo antes de habilitarlos:
 
@@ -517,7 +528,7 @@ Para una reversión de contenedor, conserve tanto los volúmenes de estado con n
 - **`ocx service install` rechaza `OPENCODEX_API_AUTH_TOKEN`:** ese valor es un token de administrador de administración. `unset OPENCODEX_API_AUTH_TOKEN` y reejecutar; el servicio proporciona su propio token de plano de datos. Véase [El propio token del plano de datos](#the-data-plane-token-provisions-itself).
 - **El Hub rechaza el arranque y `ocx status` muestra `admin-collision (file)`:** `service-api-token` contiene el token de administración, por lo que OpenCodex mantiene cerrada su API de administración. Elimina ese archivo y ejecuta `ocx service repair` para aprovisionar un token de datos. Eliminar la variable de entorno no corrige una colisión cuyo origen es el archivo.
 - El emparejamiento de **Plain HTTP se negó:** sobre HTTP no loopback se rechaza completamente, y no hay ninguna bandera que opte por salirse de él. Ponga el origen de la administración detrás de HTTPS o pare sobre loopback. Los tokens de administrador nunca se envían por encima de HTTP.
-- **`403 origin_rejected` de `/v1/catalog` mientras que `/readyz` devuelve `200`:** el oyente de datos está obligado a retroceder detrás de un frontend TLS. Véase [Dar al oyente de datos TLS](#giving-the-data-listener-tls).
+- **`403 origin_rejected` de `/v1/catalog` mientras que `/readyz` devuelve `200`:** el listener de datos está vinculado a loopback detrás de un frontend TLS. Véase [Dar al oyente de datos TLS](#giving-the-data-listener-tls).
 - **Finalizó la sesión remota:** Iniciar sesión o emparejar de nuevo. El cierre de sesión y la expiración invalidan solo la sesión del navegador, no una clave de datos del cliente.
 - **Revocación excepcional después de la desconexión:** usa la página **Conectar → Claves API** del panel de control central. Es el único camino de revocación posterior a la desconexión.
 
