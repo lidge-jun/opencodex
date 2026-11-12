@@ -135,15 +135,17 @@ describe("reset selection over real local HTTP", () => {
     expect(up.sends).toHaveLength(2);
   }, 10_000);
 
-  test("an EOF after a quiet prelude keeps the committed head and declines a different replacement head", async () => {
+  test("an EOF after a quiet prelude recovers even though the retry changes date and x-request-id", async () => {
     const headSent = Promise.withResolvers<void>();
+    // Explicit, and different on purpose: `date` and `x-request-id` describe the attempt, not the
+    // response identity, so a real origin varying them must not block recovery.
     const up = upstream([
-      { headers: { "x-attempt": "one" }, pull: async (controller, step) => {
+      { headers: { "x-attempt": "one", "date": "Tue, 10 Nov 2026 00:00:00 GMT", "x-request-id": "req-one" }, pull: async (controller, step) => {
         if (step === 0) { controller.enqueue(encoder.encode(created("resp_first"))); return; }
         await headSent.promise;
         return true;
       } },
-      { headers: { "x-attempt": "two" }, pull: controller => {
+      { headers: { "x-attempt": "two", "date": "Tue, 10 Nov 2026 00:00:07 GMT", "x-request-id": "req-two" }, pull: controller => {
         controller.enqueue(encoder.encode(created("resp_second") + delta("replacement") + completed("resp_second")));
         return true;
       } },
@@ -151,12 +153,39 @@ describe("reset selection over real local HTTP", () => {
     const send = proxy(localConfig(up.url));
     const response = await send({ store: false }, AbortSignal.timeout(CLIENT_HEAD_TIMEOUT_MS));
     expect(response.headers.get("x-attempt")).toBe("one");
-    // The client holds the original head before the source fails.
+    // The client holds the original head before the source ends. The 200 ms window has already
+    // committed it, so this is the post-head clean-EOF path, and the retry above emitted its own
+    // `date` and `x-request-id`. Neither is part of the response identity, so recovery must
+    // still happen; a full-header match would have refused it here.
     headSent.resolve();
     const { text } = await readAll(response);
+    expect(text).toContain("replacement");
+    expect(text).not.toContain("resp_first");
+    expect(up.sends).toHaveLength(2);
+  }, 10_000);
+
+  test("an EOF after a quiet prelude is refused when the retry serves a different model identity", async () => {
+    const headSent = Promise.withResolvers<void>();
+    const up = upstream([
+      { headers: { "x-attempt": "one", "openai-model": "gpt-5.6-sol" }, pull: async (controller, step) => {
+        if (step === 0) { controller.enqueue(encoder.encode(created("resp_first"))); return; }
+        await headSent.promise;
+        return true;
+      } },
+      { headers: { "x-attempt": "two", "openai-model": "gpt-5.6-luna" }, pull: controller => {
+        controller.enqueue(encoder.encode(created("resp_second") + delta("replacement") + completed("resp_second")));
+        return true;
+      } },
+    ]);
+    const send = proxy(localConfig(up.url));
+    const response = await send({ store: false }, AbortSignal.timeout(CLIENT_HEAD_TIMEOUT_MS));
+    expect(response.headers.get("x-attempt")).toBe("one");
+    headSent.resolve();
+    const { text } = await readAll(response);
+    // The body would be labelled with a model the held head never advertised, so the original
+    // stream and its clean end are preserved instead.
     expect(text).toContain("resp_first");
     expect(text).not.toContain("replacement");
-    // The grant still bought exactly one replacement send, which was then refused on arrival.
     expect(up.sends).toHaveLength(2);
   }, 10_000);
 

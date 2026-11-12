@@ -750,17 +750,46 @@ export type ProtocolSafeResetRecovery = (
   accepts: (candidate: Response) => boolean,
 ) => Promise<Response | null>;
 
-/** A deferred body cannot change the response head already returned to its caller. */
-export function sameDeferredResponseMetadata(original: Response, replacement: Response): boolean {
+/**
+ * The headers a committed head promises about the body that follows it.
+ *
+ * A replacement never sends its own head: the client already has the original one, so only what
+ * the client reads to interpret the swapped body can matter here. Comparing the whole header set
+ * refused every real recovery, because origins vary `date`, `x-request-id`, `cf-ray`,
+ * `server-timing`, the quota headers and `content-length` per attempt; those describe the
+ * attempt that answered, not the response identity, and the client already holds the original's
+ * values. Hop-by-hop headers are listed for the same reason: the connection is the proxy's.
+ *
+ * What is left is the identity a mismatched body would corrupt:
+ * - `openai-model` is the model the origin actually served. A body produced by a different
+ *   served model behind a head that advertised the first one mislabels the turn for the client's
+ *   follow-ups and for usage attribution.
+ * - `x-codex-turn-state` is this proxy's own handle, bound at issuance to the caller, provider
+ *   and outbound account and redeemed back to the upstream turn token only at the physical send
+ *   of a matching request (`src/server/turn-state-handles.ts`). Publishing a replacement body
+ *   under the original handle would redeem the client's next turn against a different turn state
+ *   than the one that produced the body, which is exactly the conversation corruption the handle
+ *   exists to prevent.
+ *
+ * Everything else is ignored on purpose: `date`, `x-request-id`, `request-id`, `cf-ray`,
+ * `server-timing`, `x-ratelimit-*`, `openai-processing-ms`, `content-length`,
+ * `transfer-encoding`, `connection` and `keep-alive`, plus any provider header the client
+ * never interprets.
+ */
+const DEFERRED_IDENTITY_HEADERS: readonly string[] = ["openai-model", "x-codex-turn-state"];
+
+const headerMediaType = (headers: Headers): string =>
+  headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+
+/**
+ * Whether a replacement body may be published behind an already committed head on the clean
+ * pre-output EOF path. A deferred body cannot change the head, so it must at least agree on the
+ * identity subset above.
+ */
+export function sameDeferredResponseIdentity(original: Response, replacement: Response): boolean {
   if (original.status !== replacement.status || original.statusText !== replacement.statusText) return false;
-  const first = original.headers.entries();
-  const second = replacement.headers.entries();
-  for (;;) {
-    const a = first.next();
-    const b = second.next();
-    if (a.done || b.done) return a.done === b.done;
-    if (a.value[0] !== b.value[0] || a.value[1] !== b.value[1]) return false;
-  }
+  if (headerMediaType(original.headers) !== headerMediaType(replacement.headers)) return false;
+  return DEFERRED_IDENTITY_HEADERS.every(name => (original.headers.get(name) ?? "") === (replacement.headers.get(name) ?? ""));
 }
 
 export interface DeferredResetRecoveryOptions {
@@ -803,7 +832,9 @@ const resetPreflightKeepalive = (): Uint8Array => new TextEncoder().encode(": ke
  * One protocol preflight and at most one replacement for a native SSE body, behind a head that is
  * either still open (`early`) or already committed. While the head is open, any replacement the
  * caller's recovery accepts can be published with its own status and headers. Once a head is
- * committed, a replacement must match it exactly, and the original keeps its bytes and error.
+ * committed, acceptance depends on how the stream ended: a read error keeps the permissive
+ * replacement behaviour the reset lane has always had, while a clean pre-output EOF must agree on
+ * the deferred identity subset. The original keeps its bytes and error when nothing is accepted.
  */
 function createResetSelection(
   response: Response,
@@ -834,7 +865,24 @@ function createResetSelection(
   const heartbeatMs = positiveMs(options?.heartbeatIntervalMs) ?? RESET_PREFLIGHT_HEARTBEAT_MS;
   const keepalive = options?.keepalive ?? "periodic";
   const signal = options?.signal;
-  const accepts = (candidate: Response): boolean => !headCommitted || sameDeferredResponseMetadata(response, candidate);
+  /**
+   * Acceptance narrows with the failure, not with the selection alone.
+   *
+   * A read error is the reset the recovery lane has always served: the transport died, the
+   * upstream attempt is over, and whatever a fresh attempt produced stands in for it. Nothing
+   * about the replacement's metadata can be inferred from the original's, because a real origin
+   * varies `date`, request ids and quota headers on every attempt, so requiring equality made
+   * the recovery unreachable.
+   *
+   * A clean pre-output EOF is different: the origin closed a healthy stream after its lifecycle
+   * events, so the bytes that follow are a different attempt's answer to the same turn. Behind a
+   * committed head it still has to agree on the identity subset that describes what the client
+   * will read.
+   */
+  const acceptsFor = (kind: "read-error" | "pre-output-eof"): ((candidate: Response) => boolean) =>
+    kind === "pre-output-eof"
+      ? (candidate: Response) => !headCommitted || sameDeferredResponseIdentity(response, candidate)
+      : () => true;
 
   const cancelBody = (body: ReadableStream<Uint8Array> | null, reason?: unknown): void => {
     try { void body?.cancel(reason).catch(() => {}); } catch { /* already locked or closed */ }
@@ -855,6 +903,7 @@ function createResetSelection(
     endInspectionWindow();
     let chosen: { response: Response; owner: ResetSelectionOwner } = { response: preflight.response, owner: "original" };
     if (!closed && (preflight.kind === "read-error" || preflight.kind === "pre-output-eof")) {
+      const accepts = acceptsFor(preflight.kind);
       const replacement = await recover(preflight.error, preflight.stage, preflightAbort.signal, accepts);
       if (replacement) {
         // Checked again here: the head may have been committed while the replacement was in flight.
@@ -1022,8 +1071,10 @@ function createResetSelection(
 /**
  * Defer protocol inspection behind a head the caller has already committed.
  *
- * The inspection starts at the first pull. A replacement is published only when its status and
- * headers match the committed head exactly.
+ * The inspection starts at the first pull. A replacement behind the committed head is published
+ * for a read error (the reset lane's long-standing behaviour) and, for a clean pre-output EOF,
+ * only when it agrees on the deferred identity subset (status, status text, media type,
+ * `openai-model`, `x-codex-turn-state`).
  */
 export function deferProtocolSafeResetRecovery(
   response: Response,
@@ -1041,8 +1092,9 @@ export function deferProtocolSafeResetRecovery(
  *
  * Inspection starts immediately. If selection finishes first, the caller receives the selected
  * response, a replacement included, with its own status and headers. If the deadline wins, the
- * caller receives the original head and the same preflight continues behind it, where a
- * replacement must match that head. `onCommit` names which attempt owns the published head.
+ * caller receives the original head and the same preflight continues behind it, where a read
+ * error's replacement is accepted and a clean EOF's must agree on the identity subset.
+ * `onCommit` names which attempt owns the published head.
  */
 export function selectProtocolSafeResetResponse(
   response: Response,

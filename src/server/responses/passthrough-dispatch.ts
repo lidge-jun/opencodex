@@ -171,9 +171,9 @@ import type { RequestLogContext } from "../request-log";
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import {
-  ambiguousResendAllowanceFor, ambiguousResendAuthorizer, createPhysicalReplayGuard,
-  nativePassthroughReplayJudgmentBody, selfContainedResponsesBody, UnsafePhysicalReplacement,
+  ambiguousResendAllowanceFor, ambiguousResendAuthorizer, UnsafePhysicalReplacement,
 } from "./reset-replay";
+import { createNativeReplayGuard } from "./native-replay-guard";
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
@@ -767,23 +767,15 @@ export async function preparePassthroughExchange(
     );
     const configuredTransientSendBudgetExhausted = (): boolean =>
       transientSendPolicy() !== null && transientSendAttempts() === 0;
-    const replayGuard = createPhysicalReplayGuard(() => isXaiResponsesDestination(route.provider)
-      && collectProviderExecutedCallTypes(clientToolAuthorizationBody).size > 0);
-    const recordPhysicalSend = (next?: () => void) => (body?: BodyInit | null): void => replayGuard.record(request, body, next);
-    /**
-     * Judged once. The inbound body does not change between legs, and every rebuild this lane
-     * performs only ever REMOVES a hazard -- `previous_response_id` is expanded, hosted tools
-     * are lowered into client execution -- so a body that was replaceable stays replaceable.
-     * Memoized rather than recomputed because it walks the input array, and a provider that
-     * never opted in must not pay for it at all.
-     *
-     * The physical guard is asked on every call, not memoized with it: a rebuild queued behind a
-     * claimed replacement grant can reintroduce a hazard, and `record` fences that send.
-     */
-    let selfContainedJudgment: boolean | undefined;
-    const requestIsSelfContained = (): boolean =>
-      (selfContainedJudgment ??= selfContainedResponsesBody(nativePassthroughReplayJudgmentBody(parsed)))
-      && replayGuard.isSelfContained(request);
+    // Judged once on the inbound body and once per send on the body that physically leaves; the
+    // split and its reasons live in the sibling module.
+    const replayGuard = createNativeReplayGuard({
+      providerExecuted: () => isXaiResponsesDestination(route.provider)
+        && collectProviderExecutedCallTypes(clientToolAuthorizationBody).size > 0,
+      parsed,
+      currentRequest: () => request,
+    });
+    const recordPhysicalSend = replayGuard.sendHandler;
     /**
      * The operator's replacement grant for THIS logical request.
      *
@@ -793,7 +785,7 @@ export async function preparePassthroughExchange(
      * child shares, so every ambiguous stage of this request draws on the same grant.
      */
     const ambiguousResend = () =>
-      ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend);
+      ambiguousResendAllowanceFor(route.provider, replayGuard.isSelfContained, claimAmbiguousResend);
     const authorizeAmbiguousResend = ambiguousResendAuthorizer(ambiguousResend, () => safeHostLabel(request.url));
     /**
      * The pre-header row of the stage table, asked through the one gate.
@@ -1710,7 +1702,7 @@ export async function preparePassthroughExchange(
           stream: upstreamRequestsStream,
           httpOnly: canonicalBufferedJson,
           preOutputRefusalHold: preOutputRefusalHold(),
-          onPhysicalSend: (retryRequest, body) => replayGuard.record(retryRequest, body),
+          onPhysicalSend: replayGuard.record,
           onResponse: (response, retryAuthCtx, retryRequest) => {
             adoptCodexWsStage(response, logCtx);
             captureAffinityResponse(

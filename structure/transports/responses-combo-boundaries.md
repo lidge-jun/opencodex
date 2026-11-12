@@ -163,9 +163,23 @@ only the replacement's head is then awaited, still bounded by the deadline, as a
 Canonical buffered JSON and combo children keep the deadline alone, because their consumer publishes
 no client head before its own inspection ends. A selection that finishes first publishes the selected
 response, including a replacement with its own status and headers. If the deadline or the window wins, the
-original head is returned and the same preflight continues behind it. From then on a replacement
-with a different status, status text, or header set is cancelled and the original bytes and error
-are preserved; the check runs when the recovery accepts the replacement and again when it lands.
+original head is returned and the same preflight continues behind it. From then on acceptance
+depends on how the stream ended, because a deferred body can never change the head the client
+already holds. A read error keeps the reset lane's long-standing behaviour: the replacement body is
+published behind the original head, with no metadata comparison at all, since a real origin varies
+`date`, request ids and quota headers on every attempt and requiring equality made that
+recovery unreachable. A clean pre-output EOF is a different attempt answering the same turn, so it
+must agree with the committed head under `sameDeferredResponseIdentity`: status, status text,
+content-type media type, `openai-model` and `x-codex-turn-state`
+(`src/server/responses/combo-stream-preflight.ts`). Those two headers are the identity a
+mismatched body would corrupt -- the model the origin actually served, and this proxy's own turn
+handle, bound at issuance and redeemed against the upstream turn token at the physical send --
+while volatile and hop-by-hop headers (`date`, `x-request-id`, `request-id`,
+`cf-ray`, `server-timing`, `x-ratelimit-*`, `openai-processing-ms`,
+`content-length`, `transfer-encoding`, `connection`, `keep-alive`) are
+ignored because the client already holds the original's values. A mismatch is cancelled and the
+original bytes and error are preserved; the check runs when the recovery accepts the replacement
+and again when it lands.
 `src/server/responses/passthrough-completion.ts` binds the published head to the main quota proof
 of the attempt that produced it ([OpenAI tiers](../providers/openai-tiers.md)). Direct streaming
 clients get an SSE comment on their first read after a deadline commit and then once per heartbeat
