@@ -42,5 +42,43 @@ describe("normalizeAnthropicInputSchema", () => {
     expect(normalized.allOf).toBeUndefined();
     expect(normalized.required).toEqual(["a", "b"]);
   });
+
+  test("resolves local $ref branches before flattening", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: {
+        Args: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+      allOf: [{ $ref: "#/$defs/Args" }],
+    });
+    expect(normalized.allOf).toBeUndefined();
+    expect(normalized.type).toBe("object");
+    expect(Object.keys(normalized.properties as Record<string, unknown>)).toEqual(["path"]);
+    expect(normalized.required).toEqual(["path"]);
+  });
+
+  test("keeps a parameter named __proto__ as data", () => {
+    const schema = JSON.parse(
+      '{"oneOf":[{"type":"object","properties":{"__proto__":{"type":"string"}}}]}',
+    );
+    const normalized = normalizeAnthropicInputSchema(schema);
+    const properties = normalized.properties as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(properties, "__proto__")).toBe(true);
+    expect(JSON.stringify(properties)).toContain('"__proto__"');
+  });
+
+  test("later branches win for same-named properties, as documented", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      oneOf: [
+        { type: "object", properties: { action: { enum: ["read"] } } },
+        { type: "object", properties: { action: { enum: ["write"] } } },
+      ],
+    });
+    const properties = normalized.properties as Record<string, unknown>;
+    expect(JSON.parse(JSON.stringify(properties.action))).toEqual({ enum: ["write"] });
+  });
 });
 

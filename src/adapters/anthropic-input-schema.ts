@@ -5,45 +5,87 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
  * `input_schema`. Normalize the root only: ensure `type:"object"` + `properties`, flatten root
  * composition while preserving nested schemas. Shared by the anthropic and command-code adapters.
  *
- * Known limitation: Object.assign on branch properties means later branches overwrite earlier
- * ones when the same property name appears with different schemas.
+ * The merge is lossy for alternatives: later branches win. A root `oneOf` whose branches declare
+ * `action.enum: ["read"]` and `action.enum: ["write"]` yields a schema that permits only
+ * `"write"`. Covered by tests/command-code-tool-schema.test.ts.
  */
+
+const LOCAL_REF_PREFIX = "#/";
+
+function decodePointerSegment(segment: string): string {
+  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function resolveLocalPointer(root: Record<string, unknown>, pointer: string): Record<string, unknown> | undefined {
+  if (!pointer.startsWith(LOCAL_REF_PREFIX)) return undefined;
+  let node: unknown = root;
+  for (const segment of pointer.slice(2).split("/")) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+    node = (node as Record<string, unknown>)[decodePointerSegment(segment)];
+  }
+  return node && typeof node === "object" && !Array.isArray(node)
+    ? node as Record<string, unknown>
+    : undefined;
+}
+
+/** Inline a local `#/...` reference so root-composition branches keep their definitions. */
+function dereferenceLocal(
+  node: unknown,
+  root: Record<string, unknown>,
+  seen: Set<string>,
+): Record<string, unknown> | undefined {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+  const record = node as Record<string, unknown>;
+  const ref = record.$ref;
+  if (typeof ref !== "string" || !ref.startsWith(LOCAL_REF_PREFIX) || seen.has(ref)) return record;
+  const target = resolveLocalPointer(root, ref);
+  if (!target) return record;
+  const nextSeen = new Set(seen);
+  nextSeen.add(ref);
+  const resolved = dereferenceLocal(target, root, nextSeen) ?? target;
+  const { $ref: _ignored, ...siblings } = record;
+  return { ...resolved, ...siblings };
+}
+
 export function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
   const stripped = stripResponsesOnlyEncryptedMarker(schema);
   const obj = stripped && typeof stripped === "object" && !Array.isArray(stripped)
     ? stripped as Record<string, unknown>
     : {};
+  const root = dereferenceLocal(obj, obj, new Set()) ?? obj;
   const compositionKeys = ["oneOf", "anyOf", "allOf"] as const;
-  const hasRootComposition = compositionKeys.some(key => Array.isArray(obj[key]));
-  const type = obj.type;
+  const hasRootComposition = compositionKeys.some(key => Array.isArray(root[key]));
+  const type = root.type;
   const rootObjectType = type === "object" || (Array.isArray(type) && type.includes("object"));
 
   if (!hasRootComposition) {
     const normalized: Record<string, unknown> = rootObjectType && type === "object"
-      ? { ...obj }
-      : { ...obj, type: "object" };
+      ? { ...root }
+      : { ...root, type: "object" };
     if (normalized.properties === undefined || normalized.properties === null) {
       normalized.properties = {};
     }
     return normalized;
   }
 
-  const properties: Record<string, unknown> = {};
+  // Null prototype keeps a parameter literally named "__proto__" as data instead of letting
+  // Object.assign replace this object's prototype and drop the parameter from JSON output.
+  const properties: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   const required = new Set<string>();
-  if (obj.properties && typeof obj.properties === "object" && !Array.isArray(obj.properties)) {
-    Object.assign(properties, obj.properties as Record<string, unknown>);
+  if (root.properties && typeof root.properties === "object" && !Array.isArray(root.properties)) {
+    Object.assign(properties, root.properties as Record<string, unknown>);
   }
-  if (Array.isArray(obj.required)) {
-    for (const item of obj.required) if (typeof item === "string") required.add(item);
+  if (Array.isArray(root.required)) {
+    for (const item of root.required) if (typeof item === "string") required.add(item);
   }
 
   for (const key of compositionKeys) {
-    const variants = obj[key];
+    const variants = root[key];
     if (!Array.isArray(variants)) continue;
     const mergeRequired = key === "allOf";
     for (const variant of variants) {
-      if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
-      const v = variant as Record<string, unknown>;
+      const v = dereferenceLocal(variant, root, new Set());
+      if (!v) continue;
       if (v.properties && typeof v.properties === "object" && !Array.isArray(v.properties)) {
         Object.assign(properties, v.properties as Record<string, unknown>);
       }
@@ -54,7 +96,7 @@ export function normalizeAnthropicInputSchema(schema: unknown): Record<string, u
   }
 
   const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
+  for (const [key, value] of Object.entries(root)) {
     if (key === "oneOf" || key === "anyOf" || key === "allOf") continue;
     if (key === "type" || key === "properties" || key === "required") continue;
     normalized[key] = value;
@@ -64,3 +106,4 @@ export function normalizeAnthropicInputSchema(schema: unknown): Record<string, u
   if (required.size > 0) normalized.required = [...required];
   return normalized;
 }
+
