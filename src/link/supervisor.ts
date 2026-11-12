@@ -60,14 +60,21 @@ export interface LinkSupervisor {
   stop(): Promise<void>;
 }
 
-interface OrphanWatch {
-  /** The link record instance it belongs to; a removed, replaced or one-route record retires it. */
-  instance: string;
+interface WatchedProcess {
   pid: number;
   argv: readonly string[];
   startTime?: number;
   /** Set while this supervisor is stopping the process it identified. */
   signal?: { at: number; killed: boolean };
+}
+
+interface OrphanWatch {
+  /** The link record instance it belongs to; a removed, replaced or one-route record retires it. */
+  instance: string;
+  /** The pidfile content the watch last saw; only this file is ever removed by it. */
+  file: { pid: number; argv: readonly string[]; startTime?: number };
+  /** Every process this pidfile has named since the watch began; the link stays blocked until all are gone. */
+  processes: WatchedProcess[];
 }
 
 interface Pidfile {
@@ -319,31 +326,30 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
    */
   const reapMultiRouteOrphan = (record: LinkRecord, pidfile: Pidfile): void => {
     const path = pidfilePath(record.id);
-    const watch: OrphanWatch = { instance: recordInstance(record, store.listenerPort), pid: pidfile.pid, argv: pidfile.argv, ...(pidfile.startTime === undefined ? {} : { startTime: pidfile.startTime }) };
-    if (orphanState(watch) === "gone") { removePidfile(path); return; }
+    const watched: WatchedProcess = { pid: pidfile.pid, argv: pidfile.argv, ...(pidfile.startTime === undefined ? {} : { startTime: pidfile.startTime }) };
+    if (processGone(watched)) { removePidfile(path); return; }
     orphanUnverified.add(record.id);
     const identity = platform === "linux" && pidfile.startTime !== undefined ? processIdentity(pidfile.pid, pidfile.argv, pidfile.startTime) : "unreadable";
-    if (identity === "different") { orphanUnverified.delete(record.id); removePidfile(path); return; }
-    if (identity !== "same") { orphanWatches.set(record.id, watch); return; }
-    killProcess(pidfile.pid, "SIGTERM");
-    orphanWatches.set(record.id, { ...watch, signal: { at: now(), killed: false } });
-  };
-
-  /** gone when the watched process has exited (or its pid names another process); otherwise still there. */
-  const orphanState = (watch: OrphanWatch): "gone" | "there" => {
-    if (watch.startTime !== undefined && platform === "linux") {
-      const identity = processIdentity(watch.pid, watch.argv, watch.startTime);
-      return identity === "gone" || identity === "different" ? "gone" : "there";
+    if (identity === "same") {
+      killProcess(pidfile.pid, "SIGTERM");
+      watched.signal = { at: now(), killed: false };
     }
-    return processAlive(watch.pid) === false ? "gone" : "there";
+    orphanWatches.set(record.id, { instance: recordInstance(record, store.listenerPort), file: fileIdentity(pidfile), processes: [watched] });
   };
 
-  /** The watched pidfile is still exactly the one the watch was made from. */
-  const samePidfile = (linkId: string, watch: OrphanWatch): boolean => {
-    const current = readPidfile(pidfilePath(linkId));
-    return current !== null && current.linkId === linkId && current.pid === watch.pid && sameArgv(current.argv, watch.argv)
-      && current.startTime === watch.startTime;
+  const fileIdentity = (pidfile: Pidfile): OrphanWatch["file"] => ({ pid: pidfile.pid, argv: pidfile.argv, ...(pidfile.startTime === undefined ? {} : { startTime: pidfile.startTime }) });
+
+  /** True when the process has exited (or, with a recorded start time on Linux, its pid names another one). */
+  const processGone = (watched: WatchedProcess): boolean => {
+    if (watched.startTime !== undefined && platform === "linux") {
+      const identity = processIdentity(watched.pid, watched.argv, watched.startTime);
+      return identity === "gone" || identity === "different";
+    }
+    return processAlive(watched.pid) === false;
   };
+
+  const sameFile = (file: Pidfile, seen: OrphanWatch["file"]): boolean =>
+    file.pid === seen.pid && sameArgv(file.argv, seen.argv) && file.startTime === seen.startTime;
 
   /** A watch belongs to one record instance; it never acts for a removed, replaced or one-route link. */
   const watchCurrent = (linkId: string, watch: OrphanWatch): boolean => {
@@ -355,35 +361,38 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     for (const [linkId, watch] of [...orphanWatches]) {
       if (!watchCurrent(linkId, watch)) { orphanWatches.delete(linkId); continue; }
       const file = readPidfile(pidfilePath(linkId));
-      if (file !== null && !samePidfile(linkId, watch)) {
-        // Another owner replaced the pidfile: the old watch acts no more, and the replacement is only
-        // watched (never signalled) while the link stays blocked.
-        orphanWatches.set(linkId, {
-          instance: watch.instance, pid: file.pid, argv: file.argv,
-          ...(file.startTime === undefined ? {} : { startTime: file.startTime }),
-        });
-        continue;
+      if (file !== null && file.linkId === linkId && !sameFile(file, watch.file)) {
+        // Another owner replaced the pidfile: nothing is signalled any more, and the replacement joins
+        // the watched processes; the link stays blocked until every one of them is gone.
+        for (const watched of watch.processes) delete watched.signal;
+        watch.file = fileIdentity(file);
+        if (!watch.processes.some(watched => watched.pid === file.pid)) {
+          watch.processes.push({ pid: file.pid, argv: file.argv, ...(file.startTime === undefined ? {} : { startTime: file.startTime }) });
+        }
       }
-      if (orphanState(watch) === "gone") {
+      watch.processes = watch.processes.filter(watched => !processGone(watched));
+      if (watch.processes.length === 0) {
         orphanWatches.delete(linkId);
         orphanUnverified.delete(linkId);
-        if (file !== null) removePidfile(pidfilePath(linkId));
+        if (file !== null && file.linkId === linkId && sameFile(file, watch.file)) removePidfile(pidfilePath(linkId));
         // The link was waiting for this: start its first round now.
         const record = store.links.find(link => link.id === linkId);
         if (record && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
         continue;
       }
-      const signal = watch.signal;
-      if (!signal || watch.startTime === undefined) continue;
-      if (file === null || processIdentity(watch.pid, watch.argv, watch.startTime) !== "same") {
-        // Cannot tell it is ours any more: no further signal; the watch goes on.
-        delete watch.signal;
-      } else if (!signal.killed && current - signal.at >= 2_000) {
-        signal.killed = true;
-        killProcess(watch.pid, "SIGKILL");
-      } else if (current - signal.at >= 4_000) {
-        // Still there: nothing is signalled again; the link stays blocked until the watch sees it gone.
-        delete watch.signal;
+      for (const watched of watch.processes) {
+        const signal = watched.signal;
+        if (!signal || watched.startTime === undefined) continue;
+        if (file === null || processIdentity(watched.pid, watched.argv, watched.startTime) !== "same") {
+          // Cannot tell it is ours any more: no further signal; the watch goes on.
+          delete watched.signal;
+        } else if (!signal.killed && current - signal.at >= 2_000) {
+          signal.killed = true;
+          killProcess(watched.pid, "SIGKILL");
+        } else if (current - signal.at >= 4_000) {
+          // Still there: nothing is signalled again; the link stays blocked until the watch sees it gone.
+          delete watched.signal;
+        }
       }
     }
   };

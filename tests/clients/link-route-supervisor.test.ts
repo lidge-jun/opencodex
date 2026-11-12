@@ -693,3 +693,30 @@ test.each([
   await flush();
   expect(h.state().routes?.routes[0]?.lastOutcome?.class).toBe("transient");
 });
+
+test("after a pidfile replacement the link stays blocked until the original and the replacement are both gone", async () => {
+  const oldArgv = ["ssh", "-N", "old"];
+  const newArgv = ["ssh", "-N", "new"];
+  let file: Pidfile = { version: 1, linkId: LINK, pid: 4242, argv: oldArgv, startTime: 777 };
+  const alive = new Map<number, boolean>([[4242, true], [5555, true]]);
+  const h = await started({
+    pidfile: () => file,
+    processArgv: pid => alive.get(pid) ? (pid === 4242 ? oldArgv : newArgv) : null,
+    processStart: pid => alive.get(pid) ? (pid === 4242 ? 777 : 888) : null,
+    processAlive: pid => alive.get(pid) ?? false,
+  });
+  file = { version: 1, linkId: LINK, pid: 5555, argv: newArgv, startTime: 888 };
+  await h.advance(1_000);
+  // The replacement exits first; the original still lives.
+  alive.set(5555, false);
+  await h.advance(1_000);
+  await h.advance(5_000);
+  expect(h.state().orphan).toBe("orphan-unverified");
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+  expect(h.kills).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  alive.set(4242, false);
+  await h.advance(1_000);
+  expect(h.state().orphan).toBeUndefined();
+  await h.tick();
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+});
