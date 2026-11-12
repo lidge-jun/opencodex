@@ -857,6 +857,26 @@ describe("TRAE CN ACP regression contract", () => {
       .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
   });
 
+  test("malformed update refusal drains a same-chunk prompt reply that follows it", async () => {
+    const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+    const fixture = traeFixture((request, child) => {
+      if (request.method !== "session/prompt") return false;
+      const frames = [
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: {
+          sessionUpdate: "agent_message_chunk", content: { type: "image", data: "fixture" },
+        } } },
+        { jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", usage } },
+      ];
+      (child.stdout as PassThrough).write(frames.map(frame => JSON.stringify(frame) + "\n").join(""));
+      return true;
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_acp_protocol_error", usage });
+    expect(buildResponseJSON(events, "test-model").usage)
+      .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+  });
+
   for (const trailing of [
     { name: "permission request", code: "trae_client_request_unsupported", frame: {
       jsonrpc: "2.0", id: 99, method: "session/request_permission", params: {},
@@ -1426,6 +1446,21 @@ describe("TRAE CN ACP regression contract", () => {
     expect(pinned).toBe(true);
     expect(open).toHaveBeenCalledTimes(1);
     expect(getPinnedCached("trae-cn")).toBeNull();
+  });
+
+  test("background publication does not renew a fresh roster TTL", async () => {
+    const row = { ...config(), models: [] };
+    const ttl = 2 * 60 * 60 * 1000;
+    const fetchedAt = Date.now() - 60 * 60 * 1000;
+    setCached("trae-cn", [{ id: "cached-model", provider: "trae-cn" }], fetchedAt,
+      captureModelCacheGeneration("trae-cn"));
+    const open = spyOn(traeClient, "openTraeSession");
+    let published = false;
+    await refreshTraeCnCatalogSources({ port: 10100, defaultProvider: "trae-cn", modelCacheTtlMs: ttl,
+      providers: { "trae-cn": row } }, () => true, async () => { published = true; });
+    expect(published).toBe(true);
+    expect(open).not.toHaveBeenCalled();
+    expect(getFreshCached("trae-cn", ttl, fetchedAt + ttl + 1)).toBeNull();
   });
 
   test("background publication pins the authoritative roster after ordinary cache eviction", async () => {
