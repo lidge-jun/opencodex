@@ -988,180 +988,65 @@ function isResponseFormatCapabilityRefusal(
   return false;
 }
 
-function isAllowedModerationParam(param: string): boolean {
-  const p = param.trim().toLowerCase();
-  return (
-    p === "prompt"
-    || p === "input"
-    || p === "messages"
-    || p.startsWith("input[")
-    || p.startsWith("input.")
-    || p.startsWith("messages[")
-    || p.startsWith("messages.")
-  );
-}
-
-function isReflectedValidationText(text: string): boolean {
-  const lower = text.toLowerCase();
-  return (
-    lower.includes("cannot contain")
-    || lower.includes("quotes '")
-    || lower.includes("quotes \"")
-    || /quotes\s+['"]/i.test(text)
-    || /text cannot contain/i.test(text)
-    || /is not supported for (?:field|parameter)\b/i.test(text)
-    || /invalid (?:parameter|value) '.*?'/i.test(text)
-  );
-}
-
-/** Opening quote characters and the character that closes each, ASCII and typographic. */
-const QUOTE_PAIRS: Record<string, string> = {
-  "\"": "\"", "`": "`",
-  "\u201c": "\u201d", "\u201e": "\u201c", "\u2018": "\u2019", "\u201a": "\u2018", "\u00ab": "\u00bb", "\u2039": "\u203a",
-  "\u300c": "\u300d", "\u300e": "\u300f", "\u3010": "\u3011", "\u301d": "\u301e", "\uff02": "\uff02", "\u2033": "\u2033", "\u2036": "\u2036",
-  // A closing character used as an opener (\u201dvalue\u201d, \u00bbvalue\u00bb) still quotes.
-  "\u201d": "\u201d", "\u2019": "\u2019", "\u00bb": "\u00bb", "\u203a": "\u203a", "\u300d": "\u300d", "\u300f": "\u300f",
-};
-
 /** The classification text the combo path bounds a body to (src/server/responses/core-errors.ts). */
 const MODERATION_EVIDENCE_LIMIT = 500;
 
-/** Structured codes that can stand beside a moderation verdict without being evidence of their own. */
-const MODERATION_COMPATIBLE_CODES = new Set(["moderation_refusal", "content_filter", "invalid_request_error", "400", "422"]);
-/** Error types that carry no verdict of their own (the gateway SDK wrapper type included). */
-const MODERATION_COMPATIBLE_TYPES = new Set(["error", "invalid_request_error", "ai_apicallerror", "moderation_error", "content_filter"]);
+/** The structured codes that state a provider or gateway moderation verdict. */
+const MODERATION_REFUSAL_CODES = new Set(["moderation_refusal", "content_filter"]);
 
 /**
- * A moderation phrase echoed inside quotes is a reflected parameter value (Invalid enum value
- * 'blocked by moderation'), not a verdict, so verdict evidence must appear in prose. One pass
- * blanks every quoted span; an apostrophe inside a word ("don't") is literal text, not a quote.
+ * Every other code or type a moderation refusal body may carry. Anything outside this list, at any
+ * depth, is evidence of something else and the body keeps dev's decision: the hop is granted only
+ * to bodies whose structured fields all agree that this is a moderation refusal.
  */
-/** An apostrophe between letters ("it's", "it’s") is literal text, never a quote delimiter. */
-function isInWordApostrophe(text: string, i: number): boolean {
-  const ch = text[i];
-  return (ch === "'" || ch === "\u2019") && i > 0 && /[A-Za-z]/.test(text[i - 1]!) && /[A-Za-z]/.test(text[i + 1] ?? "");
-}
+const MODERATION_COMPATIBLE_VALUES = new Set([
+  ...MODERATION_REFUSAL_CODES,
+  "invalid_request_error", "error", "ai_apicallerror", "responsibleaipolicyviolation", "400", "422",
+]);
 
-function unquotedProse(text: string): string {
-  let out = "";
-  // The text that ends the open quoted span: one character, a doubled delimiter, or an escaped quote.
-  let closer: string | null = null;
-  for (let i = 0; i < text.length;) {
-    const ch = text[i]!;
-    if (closer !== null) {
-      if (text.startsWith(closer, i) && !(closer.length === 1 && isInWordApostrophe(text, i))) {
-        out += " ".repeat(closer.length);
-        i += closer.length;
-        closer = null;
-        continue;
-      }
-      // An escaped character inside a span is content, including an escaped quote of its own kind.
-      if (ch === "\\" && !closer.startsWith("\\")) {
-        out += "  ";
-        i += 2;
-        continue;
-      }
-      out += " ";
-      i += 1;
-      continue;
-    }
-    if (ch === "\\") {
-      // A backslash-escaped quote (a JSON string read raw) opens a span its escaped twin closes.
-      const escapedClose = QUOTE_PAIRS[text[i + 1] ?? ""] ?? (text[i + 1] === "'" ? "'" : undefined);
-      if (escapedClose !== undefined) {
-        closer = "\\" + escapedClose;
-        out += "  ";
-        i += 2;
-        continue;
-      }
-      out += ch + (text[i + 1] ?? "");
-      i += 2;
-      continue;
-    }
-    const close = isInWordApostrophe(text, i) ? undefined : ch === "'" ? "'" : QUOTE_PAIRS[ch];
-    if (close !== undefined) {
-      // A doubled delimiter ("" or '') opens a span the same doubled delimiter closes.
-      closer = close === ch && text[i + 1] === ch ? ch + ch : close;
-      out += " ".repeat(closer.length);
-      i += closer.length;
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  // An unterminated quote leaves its tail blanked, matching the old "inside a quote" verdict.
-  return out;
-}
+/** Keys whose values are structured verdicts rather than prose. */
+const MODERATION_VERDICT_KEYS = new Set(["code", "type"]);
 
-const MODERATION_REFUSAL_VERDICT_PHRASES = [
-  "refused by moderation",
-  "blocked by moderation",
-  "flagged by moderation",
-];
+/** A refusal names the prompt or input it refused; any other `param` is a validation error. */
+function isAllowedModerationParam(param: string): boolean {
+  const p = param.trim().toLowerCase();
+  return p === "prompt" || p === "input" || p === "messages"
+    || p.startsWith("input[") || p.startsWith("input.") || p.startsWith("messages[") || p.startsWith("messages.");
+}
 
 /**
- * Any hard-refusal or non-replayable code anywhere in the text, structured or serialized. A
- * moderation verdict never outranks one: the client must not retry these, and a body that
- * carries both is not evidence that another target may serve the request.
+ * Any hard-refusal token in any spelling. A moderation code beside one is not evidence that another
+ * target may serve the request: the client must not retry these.
  */
 const HARD_STOP_TOKEN =
   /(?<![a-z0-9])(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|content_policy_violation|context_length_exceeded|client_closed_request|client_cancelled|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)(?![a-z0-9])/i;
 
+/** JSON \uXXXX escapes decoded, so an escaped code cannot slip past {@link HARD_STOP_TOKEN}. */
+function withJsonEscapesDecoded(text: string): string {
+  return text.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
 /**
- * Whether any hard-refusal token appears in any spelling: JSON escapes decoded, and hyphens,
- * dots and whitespace folded to underscores ("content-policy-violation", "client closed request").
- * Underscores count as separators, so a token nested in a longer identifier still matches.
+ * Whether any hard-refusal token appears in any spelling: JSON escapes decoded (including \n, \t
+ * and \r), camel humps split, and hyphens, dots, slashes and whitespace folded to underscores.
  */
 function namesHardStopToken(text: string): boolean {
-  // A raw JSON body spells whitespace as \n, \t or \r; fold those escapes as well, split camel
-  // humps (contentPolicyViolation) and treat slashes like the other separators.
   return HARD_STOP_TOKEN.test(withJsonEscapesDecoded(text)
     .replace(/\\[ntr]/g, "_")
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-.\s/]+/g, "_"));
 }
 
-/** JSON \\uXXXX escapes decoded, so an escaped nested code cannot slip past {@link HARD_STOP_TOKEN}. */
-function withJsonEscapesDecoded(text: string): string {
-  return text.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
-}
-
-function namesModerationRefusal(text: string): boolean {
-  if (isReflectedValidationText(text)) return false;
-  // Only an explicit verdict phrase counts. A validation error can name moderation categories
-  // ("Invalid metadata value: moderation categories: harassment") without any refusal.
-  const prose = unquotedProse(text.toLowerCase());
-  return MODERATION_REFUSAL_VERDICT_PHRASES.some(phrase => prose.includes(phrase));
-}
-
-/**
- * A provider or gateway moderation filter refusal is target-local in a heterogeneous combo:
- * this model or provider's guardrail refused the prompt, but another target may serve it.
- *
- * It must precede the generic invalid_request_error stop.
- */
 /** Whether the caller's status and structured code leave room for a moderation hop at all. */
 function moderationCodeAllowsHop(status: number, normalizedCode: string): boolean {
   if (status !== 400 && status !== 422) return false;
-  // Any other structured code (rate limit, quota, overload, model scope...) is its own evidence
-  // with its own cooldown; moderation prose beside it does not turn it into a free hop.
-  if (normalizedCode !== "" && !MODERATION_COMPATIBLE_CODES.has(normalizedCode)) return false;
-  return !(
-    isCyberPolicyCode(normalizedCode)
-    || isTerminalRefusalCode(normalizedCode)
-    || isNonReplayableUpstreamCode(normalizedCode)
-    // The envelope-root verdict codes (origin, content policy, context length, cancellation) stop
-    // on their own; a moderation phrase beside one cannot hop. A passed invalid_request_error is
-    // usually the error type standing in for an absent code (policy-fallback reads it that way),
-    // so it is not a verdict here; as a parsed envelope root below it still is.
-    || (normalizedCode !== "invalid_request_error" && rootCodeStatesVerdict(normalizedCode))
-  );
+  return normalizedCode === "" || MODERATION_COMPATIBLE_VALUES.has(normalizedCode);
 }
 
 /**
  * The moderation hop for one decision. A caller that read the complete bounded body (the combo
- * failure reader, the stream preflight) passes its whole-body verdict; the structured code of
- * this decision can still veto it. Without one, the possibly truncated message decides.
+ * failure reader, the stream preflight, the policy path) passes its whole-body verdict; the
+ * structured code of this decision can still veto it. Without one, the message decides.
  */
 function providerModerationHop(
   status: number, message: string, rawCode: string | null | undefined, wholeBody?: boolean, malformedResponseFormat?: boolean,
@@ -1172,6 +1057,66 @@ function providerModerationHop(
   return wholeBody && moderationCodeAllowsHop(status, normalizedFailureCode(rawCode));
 }
 
+/** Strip this proxy's wrapper prefixes and a single-line SSE data field; undefined unless JSON. */
+function moderationEnvelope(message: string): unknown {
+  let text = message.trim();
+  for (let depth = 0; depth < 3; depth += 1) {
+    const prefix = ["Provider error 400: ", "Provider error 422: ", "Provider error: ", "Gateway error 400: ", "Gateway error 422: ", "Gateway error: "]
+      .find(candidate => text.startsWith(candidate));
+    if (prefix) text = text.slice(prefix.length).trim();
+    if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
+  }
+  try { return JSON.parse(text); } catch { return undefined; }
+}
+
+/**
+ * Walk every structured verdict field (bounded). Returns whether a moderation code was seen, or
+ * null when any field states something else, a field holds a non-string value we cannot vouch
+ * for, or the body is deeper or wider than a refusal envelope.
+ */
+function moderationVerdictFields(payload: unknown): boolean | null {
+  let seen = false;
+  let nodes = 0;
+  const visit = (value: unknown, depth: number): boolean => {
+    if (++nodes > 512 || depth > 8) return false;
+    if (Array.isArray(value)) return value.every(item => visit(item, depth + 1));
+    if (!value || typeof value !== "object") return true;
+    const record = value as Record<string, unknown>;
+    // A record that states the moderation code itself is the verdict; its param names what the
+    // filter inspected. A param on any other record marks an unrelated validation error.
+    const recordStatesModeration = typeof record.code === "string" && MODERATION_REFUSAL_CODES.has(normalizedFailureCode(record.code));
+    for (const [key, field] of Object.entries(record)) {
+      if (key.toLowerCase() === "param" && !recordStatesModeration && typeof field === "string" && field.trim() !== "" && !isAllowedModerationParam(field)) {
+        return false;
+      }
+      if (MODERATION_VERDICT_KEYS.has(key.toLowerCase())) {
+        if (field === null || field === undefined) continue;
+        const normalized = normalizedFailureCode(typeof field === "number" || typeof field === "string" ? field : null);
+        if (normalized === "" && typeof field !== "string") return false;
+        if (normalized === "") continue;
+        if (!MODERATION_COMPATIBLE_VALUES.has(normalized)) return false;
+        if (MODERATION_REFUSAL_CODES.has(normalized)) seen = true;
+        continue;
+      }
+      if (!visit(field, depth + 1)) return false;
+    }
+    return true;
+  };
+  return visit(payload, 0) ? seen : null;
+}
+
+/**
+ * A provider or gateway moderation refusal on HTTP 400/422 is target-local in a heterogeneous
+ * combo: this provider's filter refused the prompt, and another target may serve it.
+ *
+ * Granted narrowly, on structured evidence only. The verdict must be a structured
+ * `moderation_refusal` or `content_filter` code (the caller's or one in the body), every other
+ * code or type anywhere in the body must be compatible with it, and no hard-refusal token, safety or
+ * terminal copy, malformed response_format diagnostic, subscription gate, or anything the shared
+ * classifier files more specifically than a generic invalid request may appear. Prose alone never
+ * hops: wording can be echoed back, and a body that carries both prose and another signal is not
+ * evidence that the next target may serve the request.
+ */
 export function isProviderModerationRefusal(
   status: number,
   message: string,
@@ -1181,158 +1126,37 @@ export function isProviderModerationRefusal(
 ): boolean {
   const normalizedCode = normalizedFailureCode(code);
   if (!moderationCodeAllowsHop(status, normalizedCode)) return false;
-  // Hard refusals anywhere in the body outrank a moderation verdict, including nested codes,
-  // serialized wrappers and safety copy. The terminal refusal path owns those bodies.
-  // Beyond the explicit refusal checks, the shared classifier must see nothing more specific than a
-  // generic invalid request: a body it maps to quota, cancellation or any other verdict is not a
-  // target-local moderation refusal, whatever prose sits beside it.
+  const callerStatesModeration = MODERATION_REFUSAL_CODES.has(normalizedCode);
+  if (!message) return callerStatesModeration;
+  // Hop only on evidence seen whole: the combo path classifies at most the first
+  // MODERATION_EVIDENCE_LIMIT characters of a body, and the body readers pass `complete` instead.
+  if (!complete && message.length >= MODERATION_EVIDENCE_LIMIT) return false;
+  if (message.length > 32_768) return false;
   const lower = message.toLowerCase();
-  if (message && (namesHardStopToken(message) || isHardPolicyOrOriginRefusal(message)
+  if (namesHardStopToken(message) || isHardPolicyOrOriginRefusal(message)
     || safetyRefusalCodeFromMessage(message) !== undefined || isCyberPolicyMessage(message)
     || lower.includes(CYBER_POLICY_FALLBACK_MESSAGE.toLowerCase())
     || lower.includes(TERMINAL_REFUSAL_FALLBACK_MESSAGE.toLowerCase())
-    // Diagnostics dev keeps terminal although the classifier files them as generic invalid
-    // requests: a malformed response_format schema and subscription-gate wording.
     || isMalformedResponseFormatRequest(status, message)
     || isSubscriptionGateMessage(lower)
-    // Classified as a 400: the moderation hop covers 422 too, and classifyError maps an untyped
-    // 422 to upstream_error rather than invalid_request_error.
-    || classifyError(400, "upstream_error", message).code !== "invalid_request_error")) {
+    // Classified as a 400: classifyError maps an untyped 422 to upstream_error.
+    || classifyError(400, "upstream_error", message).code !== "invalid_request_error") {
     return false;
   }
-  if (!message) {
-    return normalizedCode === "moderation_refusal" || normalizedCode === "content_filter";
+  const envelope = moderationEnvelope(message);
+  if (envelope === undefined) {
+    // Plain text carries no structured fields; only the caller's code can state the verdict, and a
+    // body that looks like JSON but does not parse (cut or malformed) never hops.
+    return callerStatesModeration && !/^\s*(?:data:\s*)?[[{]/.test(message);
   }
-  // Hop only on evidence seen whole. The combo path classifies at most the first
-  // MODERATION_EVIDENCE_LIMIT characters of a body (normalizeUpstreamErrorText), so a text that
-  // long may be cut, and a hard refusal after the cut would be invisible to the gate above. The
-  // body readers pass the whole body with `complete` instead.
-  if (!complete && message.length >= MODERATION_EVIDENCE_LIMIT) return false;
-  if (message.length > 32_768) return false;
-
-  let text = message.trim();
-  let wasParsed = false;
-  let moderationCodeSeen = normalizedCode === "moderation_refusal" || normalizedCode === "content_filter";
-
-  for (let depth = 0; depth < 3; depth += 1) {
-    // The same wrapper prefixes the hard-refusal parser strips (src/lib/hard-refusal.ts).
-    const prefix = ["Provider error 400: ", "Provider error 422: ", "Provider error: ", "Gateway error 400: ", "Gateway error: "]
-      .find(candidate => text.startsWith(candidate));
-    if (prefix) text = text.slice(prefix.length).trim();
-    if (text.startsWith("data:") && !text.includes("\n")) {
-      text = text.slice("data:".length).trim();
-    }
-    let payload: unknown;
-    try {
-      payload = JSON.parse(text);
-      wasParsed = true;
-    } catch {
-      if (text.startsWith("{") || text.startsWith("[") || wasParsed) {
-        if (
-          isCyberPolicyMessage(text)
-          || /["']?(?:upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused|cyber_policy|origin_rejected)["']?/i.test(text)
-          || isNonReplayableUpstreamCode(normalizedCode)
-          || normalizedCode === "origin_rejected"
-        ) {
-          return false;
-        }
-        // Match authoritative error/response envelope containing message and optionally param.
-        // A dedicated "error": { ... } or "response": { ... } takes precedence over root message.
-        const envelopeMatch = /"(?:error|response)"\s*:\s*\{([^{}]*?"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"[^{}]*)/.exec(text)
-          ?? (!/"(?:error|response)"\s*:\s*\{/.test(text) ? /^\{\s*([^{}]*?"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"[^{}]*)/.exec(text) : null);
-        if (envelopeMatch) {
-          const envelopeContent = envelopeMatch[1];
-          const rawMessage = envelopeMatch[2];
-          const paramMatch = /"param"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(envelopeContent);
-          if (paramMatch) {
-            try {
-              const extractedParam = JSON.parse(`"${paramMatch[1]}"`) as string;
-              if (!isAllowedModerationParam(extractedParam)) return false;
-            } catch {
-              return false;
-            }
-          }
-          try {
-            const extractedMsg = JSON.parse(`"${rawMessage}"`) as string;
-            if (namesModerationRefusal(extractedMsg)) {
-              return true;
-            }
-          } catch {
-            return false;
-          }
-        }
-        return false;
-      }
-      break;
-    }
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-    const rec = payload as Record<string, unknown>;
-    const error = rec.error ?? rec;
-    if (!error || typeof error !== "object" || Array.isArray(error)) return false;
-    const e = error as Record<string, unknown>;
-
-    const rootCode = normalizedFailureCode(typeof rec.code === "string" ? rec.code : undefined);
-    const errCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
-    // A verdict stated only as a type is evidence too; only the generic error types may stand
-    // beside a moderation verdict.
-    for (const t of [rec.type, e.type]) {
-      if (typeof t === "string" && t.trim() !== "" && !MODERATION_COMPATIBLE_TYPES.has(normalizedFailureCode(t))) return false;
-    }
-    for (const c of [rootCode, errCode]) {
-      if (
-        isCyberPolicyCode(c)
-        || isTerminalRefusalCode(c)
-        || isNonReplayableUpstreamCode(c)
-        || c === "origin_rejected"
-        || c === "content_policy_violation"
-        || (c !== "" && !MODERATION_COMPATIBLE_CODES.has(c))
-      ) {
-        return false;
-      }
-      if (c === "moderation_refusal" || c === "content_filter") {
-        moderationCodeSeen = true;
-      }
-    }
-    // A root verdict code stops on its own even when the caller passed only the nested code
-    // (the policy-fallback path reads error.code alone), so read the parsed root here too.
-    if (rootCode !== "" && rootCodeStatesVerdict(rootCode)) return false;
-
-    const errorObjectModerationCode = errCode === "moderation_refusal" || errCode === "content_filter";
-    if (typeof e.param === "string" && e.param) {
-      if (!isAllowedModerationParam(e.param) && !errorObjectModerationCode) {
-        return false;
-      }
-    }
-
-    if (typeof e.message === "string") {
-      const msgTrimmed = e.message.trim();
-      if (msgTrimmed.startsWith("Provider error 400: ") || msgTrimmed.startsWith("Provider error 422: ") || msgTrimmed.startsWith("{")) {
-        text = msgTrimmed;
-        continue;
-      }
-    }
-
-    if (moderationCodeSeen) return true;
-
-    const candidateTexts: string[] = [];
-    if (typeof e.message === "string") candidateTexts.push(e.message);
-    if (typeof e.error === "string") candidateTexts.push(e.error);
-    if (typeof rec.message === "string") candidateTexts.push(rec.message);
-    if (e.param && typeof e.param === "object" && !Array.isArray(e.param)) {
-      const p = e.param as Record<string, unknown>;
-      if (typeof p.message === "string") candidateTexts.push(p.message);
-      if (typeof p.error === "string") candidateTexts.push(p.error);
-    }
-
-    for (const msg of candidateTexts) {
-      if (namesModerationRefusal(msg)) return true;
-    }
-    return false;
+  // An envelope root that states a verdict code of its own (invalid_request_error, origin,
+  // context length, cancellation...) keeps it, as everywhere else in this file.
+  if (envelope && typeof envelope === "object" && !Array.isArray(envelope)) {
+    const rootCode = (envelope as Record<string, unknown>).code;
+    if (typeof rootCode === "string" && rootCodeStatesVerdict(rootCode)) return false;
   }
-
-  if (wasParsed || text.startsWith("{") || text.startsWith("[") || text.startsWith("data:")) return false;
-  if (moderationCodeSeen) return true;
-  return namesModerationRefusal(text);
+  const seen = moderationVerdictFields(envelope);
+  return seen !== null && (seen || callerStatesModeration);
 }
 
 /** Return the narrowest cooldown scope supported by this target's failure evidence. */
