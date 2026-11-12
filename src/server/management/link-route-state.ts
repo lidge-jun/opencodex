@@ -37,6 +37,14 @@ export interface LinkRouteListener {
   peerObservation?(linkId: string): import("../../link/peer-report").LinkPeerEntry;
   /** Optional: without it every link's activity reads unknown (never idle). */
   linkActivity?(linkId: string, now: number): import("../../link/child-activity").LinkActivitySnapshot;
+  /** Optional: closes the link's Responses WebSockets after a revoke commits (route fakes omit it). */
+  closeLinkSockets?(linkId: string): number;
+  /** Optional: the link's live WebSocket counters (design 9.3); without it every row reports zeros. */
+  linkTransport?(linkId: string): import("../../link/status-projection").LinkWsCounters;
+  /** Optional: the link's WebSocket activity holds and their reasons; null when nothing holds it (D8). */
+  linkHolds?(linkId: string): import("../../link/ws-activity-holds").LinkHoldsSummary | null;
+  /** Optional: the operator's clear of one link's activity holds (D8). */
+  clearLinkHolds?(linkId: string): import("../../link/ws-activity-holds").ClearHoldsResult;
   /** Optional: without it a Home row's traffic reads zero since now. */
   linkTraffic?(linkId: string): import("../../link/traffic").LinkTrafficCounters;
   /** Optional: without it only the cached pull in child-observations.json is known. */
