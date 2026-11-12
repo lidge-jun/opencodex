@@ -7,9 +7,9 @@ import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { LinkSupervisor } from "../../src/link/supervisor";
-import type { SshRunResult, SshRunner } from "../../src/link/ssh-runner";
+import type { SshRunner } from "../../src/link/ssh-runner";
 import { childLinkTraffic, createLinkTrafficBook } from "../../src/link/traffic";
-import { classifySshResolvedConfig, createLinkPathResolver } from "../../src/link/ssh-route";
+import type { LinkPathConfigDeps } from "../../src/link/ssh-route";
 import { attachLinkTrafficForState } from "../../src/server/management/link-traffic-status";
 import type { LinkRouteState } from "../../src/server/management/link-route-state";
 import type { LinkStatusDto } from "../../src/link/status-projection";
@@ -36,14 +36,27 @@ function link(id: string, overrides: Partial<LinkRecord> = {}): LinkRecord {
     tunnelPort: 41000, apiKeyId: "key-" + id.slice(-4), createdAt: "2026-11-01T00:00:00.000Z", remotePlatform: "posix", ...overrides };
 }
 
-function resolvingRunner(answer: SshRunResult, calls: string[][]): SshRunner {
+/** A runner that records any ssh it is asked to run; status must never use it. */
+function recordingRunner(calls: string[][]): SshRunner {
   return {
-    async run(argv) { calls.push([...argv]); return answer; },
-    spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
+    async run(argv) { calls.push([...argv]); return { code: 0, stdout: "", stderr: "" }; },
+    spawnTunnel: argv => { calls.push([...argv]); return { pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }; },
   };
 }
 
-function harness(answer: SshRunResult, book = createLinkTrafficBook("content-length")) {
+/** The ssh configuration status reads, in memory: only the user's file. */
+function sshConfig(body: string): LinkPathConfigDeps {
+  return {
+    home: "/home/fixture", systemConfig: null,
+    readFile: path => {
+      if (path === "/home/fixture/.ssh/config") return body;
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    },
+    glob: () => [],
+  };
+}
+
+function harness(configBody: string, book = createLinkTrafficBook("content-length")) {
   const current: LinkStore = { version: 1, listenerPort: 18181, links: [link(HUB), link(CLIENT, { direction: "client-initiated", hostKeyFingerprint: null })] };
   writeFileSync(join(temp, "ocx", "link", "links.json"), JSON.stringify(current));
   const calls: string[][] = [];
@@ -53,7 +66,8 @@ function harness(answer: SshRunResult, book = createLinkTrafficBook("content-len
     onAuthenticatedCatalog: () => () => {}, linkTraffic: (id: string) => book.snapshot(id) };
   const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: "hub", defaultProvider: "mock", providers: {}, apiKeys: [] } as OcxConfig;
   const deps: ManagementApiDeps = { readLinkStore: () => current, writeLinkStore: () => {}, linkSupervisor: () => supervisor,
-    linkListener: () => listener, linkKnownHostsPath: () => join(temp, "known_hosts"), sshRunner: resolvingRunner(answer, calls) };
+    linkListener: () => listener, linkKnownHostsPath: () => join(temp, "known_hosts"), sshRunner: recordingRunner(calls),
+    linkPathConfig: sshConfig(configBody) };
   const call = async (path: string) => {
     const url = new URL(`http://127.0.0.1${path}`);
     const response = await handleManagementAPI(new Request(url, { headers: { host: "127.0.0.1" } }), url, config, deps, "admin-token",
@@ -64,7 +78,7 @@ function harness(answer: SshRunResult, book = createLinkTrafficBook("content-len
   return { call, calls, book };
 }
 
-const PEN = { code: 0, stdout: "hostname 192.0.2.10\nproxycommand pen pipe host\nproxyusefdpass no\n", stderr: "" };
+const PEN = "Host host-*\n  ProxyCommand pen pipe %h\n";
 
 describe("GET /api/link/status?traffic=1 (#3023)", () => {
   test("without the query the document is unchanged; with it every existing field stays and two blocks are added", async () => {
@@ -80,63 +94,28 @@ describe("GET /api/link/status?traffic=1 (#3023)", () => {
     expect(hub!.path).toEqual({ via: "proxy-command" });
     // The Home cannot see how a Child-initiated link's alias goes; it never resolves it.
     expect(client!.path).toEqual({ via: "unknown" });
-    expect(h.calls).toEqual([["ssh", "-G", "--", "host-cdef"]]);
     // `ocx link status` validates both shapes key by key.
     expect(validateStatus(plain).links[0]).not.toHaveProperty("traffic");
     expect(validateStatus(counted).links[0]).toMatchObject({ traffic: { requests: 0 }, path: { via: "proxy-command" } });
   });
 
-  test("rows carry what the listener counted, and a second read reuses the resolved path", async () => {
+  test("a status read runs no ssh at all, so a slow Match exec cannot stall or outlive it", async () => {
+    const h = harness("Match exec \"sleep 3600\"\n  ProxyCommand x\nHost host-*\n  ProxyJump b\n");
+    const counted = await h.call("/api/link/status?traffic=1");
+    expect(counted.links[0]!.path).toEqual({ via: "unknown" });
+    expect(h.calls).toEqual([]);
+  });
+
+  test("rows carry what the listener counted", async () => {
     const h = harness(PEN);
     const flow = h.book.begin(HUB);
     flow.toHome(1234); flow.fromHome(99); flow.end(true);
-    await h.call("/api/link/status?traffic=1");
     const again = await h.call("/api/link/status?traffic=1");
     expect(again.links[0]!.traffic).toMatchObject({ requests: 1, toHomeBytes: 1234, fromHomeBytes: 99 });
-    expect(h.calls).toHaveLength(1);
-  });
-
-  test("an alias that fails to resolve reads unknown", async () => {
-    const h = harness({ code: 255, stdout: "", stderr: "bad configuration" });
-    expect((await h.call("/api/link/status?traffic=1")).links[0]!.path).toEqual({ via: "unknown" });
-  });
-
-  test("at most four ssh -G run at once and at most 32 aliases wait; the rest read unknown without a spawn", async () => {
-    let running = 0, peak = 0, started = 0;
-    const release: Array<() => void> = [];
-    const runner: SshRunner = {
-      async run() {
-        started += 1; running += 1; peak = Math.max(peak, running);
-        await new Promise<void>(resolve => release.push(resolve));
-        running -= 1;
-        return { code: 0, stdout: "proxycommand x\n", stderr: "" };
-      },
-      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
-    };
-    const resolver = createLinkPathResolver({ runner: () => runner });
-    const reads = Array.from({ length: 40 }, (_, i) => resolver.resolve(`alias-${i}`));
-    // The eight beyond the pending cap answer at once, before any spawn finished.
-    expect(await Promise.all(reads.slice(32))).toEqual(Array(8).fill({ via: "unknown" }));
-    while (release.length > 0) {
-      expect(running).toBeLessThanOrEqual(4);
-      release.shift()!();
-      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-    }
-    expect((await Promise.all(reads.slice(0, 32))).every(path => path.via === "proxy-command")).toBe(true);
-    expect(peak).toBe(4);
-    expect(started).toBe(32);
-  });
-
-  test("ssh -G output classification", () => {
-    expect(classifySshResolvedConfig("hostname h\nproxycommand nc %h %p\n")).toBe("proxy-command");
-    expect(classifySshResolvedConfig("hostname h\nproxyjump bastion\n")).toBe("proxy-jump");
-    expect(classifySshResolvedConfig("hostname h\nproxycommand none\nproxyusefdpass no\n")).toBe("direct");
-    expect(classifySshResolvedConfig("hostname h\n")).toBe("direct");
+    expect(h.calls).toEqual([]);
   });
 
   test("a Child row reads this process's relay book and resolves only the link it initiated", async () => {
-    const calls: string[][] = [];
-    const runner = resolvingRunner({ code: 0, stdout: "proxyjump bastion\n", stderr: "" }, calls);
     const flow = childLinkTraffic.begin(CLIENT);
     flow.toHome(77); flow.end(true);
     const dto: LinkStatusDto = { role: "child", listener: { state: "off", port: null }, child: null, links: [
@@ -144,11 +123,10 @@ describe("GET /api/link/status?traffic=1 (#3023)", () => {
         lastApplyAt: null, runtimeStartedAt: null, appliedCodexSettingsDigest: null, reportedAt: null },
     ] };
     const state = { listener: {} } as unknown as LinkRouteState;
-    await attachLinkTrafficForState(dto, state, () => runner);
+    await attachLinkTrafficForState(dto, state, sshConfig("Host home-alias\n  ProxyJump bastion\n"));
     expect(dto.links[0]!.traffic).toMatchObject({ toHomeSource: "relayed", toHomeBytes: childLinkTraffic.snapshot(CLIENT).toHomeBytes });
     expect(dto.links[0]!.traffic!.toHomeBytes).toBeGreaterThanOrEqual(77);
     expect(dto.links[0]!.path).toEqual({ via: "proxy-jump" });
-    expect(calls).toEqual([["ssh", "-G", "--", "home-alias"]]);
   });
 
   test("the CLI refuses a malformed traffic or path block", () => {
