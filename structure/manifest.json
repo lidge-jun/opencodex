@@ -1396,6 +1396,8 @@
         "src/server/management/link-routes.ts",
         "src/server/management/link-child-ops-routes.ts",
         "src/cli/link-child-ops.ts",
+        "src/cli/link-routes.ts",
+        "src/server/management/link-route-edit.ts",
         "src/cli/link-status-child.ts",
         "src/server/index/local-control-listener.ts",
         "src/lib/local-control-socket.ts",

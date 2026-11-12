@@ -83,6 +83,26 @@ If `ocx connect status --json` reports `disconnected` but a leftover service tok
 
 To confirm which Home is serving a Child, compare the `x-opencodex-served-by` header on the Child's `GET /v1/models` with the `instanceId` in the Home's `GET /healthz`. The Child passes the Home's header through unchanged, so the two match while the link works. The value is an opaque id, never a hostname; see [Home identity and the served-by header](/reference/management-api/#home-identity-and-the-served-by-header).
 
+## Several routes to one Child
+
+A Child that the Home added can be reached over more than one SSH route: for example a direct alias on the same LAN or tailnet, and a relay alias that works from anywhere. The Home keeps an ordered list of routes for the link and uses the first that works, so model traffic takes the direct path when it exists and the relay only when it does not.
+
+```text
+ocx link routes --link-id <id>
+ocx link routes add --link-id <id> --route <alias> [--position <n>]
+ocx link routes remove --link-id <id> --route <alias>
+ocx link routes order --link-id <id> --routes <alias,alias,...>
+```
+
+- **Every route reaches the same machine.** The link's own alias is its *pin*: its confirmed host key is the only key any route may present, and it stays in the list. Before `ocx link routes add` stores a route, the Home connects over it with strict host-key checking against that one key; a route that answers with another key, refuses the login or does not answer is not stored (`route_unproven` with the cause `hostkey`, `auth`, `forward` or `transient`). The Home also refuses the add when its private link `known_hosts` file holds anything but exactly one entry for the alias (`pin_mismatch`, `trust_file_unexpected`). Confirming a different host key for an alias that a Home-initiated link already uses is refused (`link_pin_conflict`); to trust a replaced machine, remove the link and add it again.
+- **A new route goes before the alias** unless you pass `--position`, so direct routes come first and the relay alias stays last.
+- **How the Home picks a route.** At each connection it tries the routes in order (10 seconds each). A route counts as working only once the Child's sshd accepted the tunnel and the Child fetched the Home's catalog through it with its link key; until then the link reads **Connecting**. A route that fails rests for a while (seconds after a network error, one minute after a forwarding refusal, five minutes after an authentication failure, ten minutes after a wrong host key) and the Home moves down the list. The link fails on the host key only when every route presented a wrong key.
+- **Returning to a better route.** Adding or reordering routes does not move a running tunnel, and a link connected on a later route stays there while it works. The Home tries the list from the top again at the next connection: after the tunnel drops, or when you run `ocx link reconnect --link-id <id>`, which interrupts requests that are running on that link.
+- **Status.** `ocx link status --json` shows, for a link with several routes, `route` (the route in use and since when), `routes` (each route, when it may be tried again and the last outcome) and `routeBlocked`.
+- **Requirements.** The Home's `ssh` must be OpenSSH (the link otherwise reads failed with `ssh_client_unsupported`). The Child needs what adding a Child already needs: `curl` on macOS and Linux, Windows PowerShell on Windows. The route commands use the Home's management API with the admin token on loopback, like `ocx link reconnect`; they are not available through the private control socket a non-loopback Hub opens for `ocx link status`.
+- **Relay fallback and privacy.** When a direct route is blocked, the link falls back to the relay; the relay carries SSH-encrypted bytes only. Route names are SSH host aliases: they appear in the Home's `ocx link status` and route commands, and never in diagnostics or logs.
+- **Downgrading.** An older Home rejects a link store that lists routes. Remove the extra routes (`ocx link routes remove`) before running an older release.
+
 ## What a Child shows and manages
 
 A Child runs on the Home's providers, accounts and settings, so the Home is where you change them.
@@ -169,6 +189,10 @@ ocx link status [--json]
 ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link routes --link-id <id> [--json]
+ocx link routes add --link-id <id> --route <alias> [--position <n>] [--json]
+ocx link routes remove --link-id <id> --route <alias> [--json]
+ocx link routes order --link-id <id> --routes <alias,alias,...> [--json]
 ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
 ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
