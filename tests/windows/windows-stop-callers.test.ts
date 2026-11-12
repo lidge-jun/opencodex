@@ -327,6 +327,9 @@ describe("guarded inspection: the binding rule decides bound-stray", () => {
       scheduler: () => ({ status: "present" }), winsw: () => "nonexistent",
       win: {
         winProcs: () => processes as WindowsStopProcessEntry[], winTaskState: () => "not-running",
+        // #7771: a not-running task promotes its survivors only after the definition is read
+        // and recognised as this installation's.
+        winTaskXml: () => "<Task>xml</Task>", winRegistrationOurs: () => true,
         winSchedulePid: () => SCHEDULE_PID, winScriptPath: () => CMD, winLauncherPath: () => VBS,
       },
     });
@@ -393,7 +396,10 @@ describe("the guarded bind uses the evidence snapshot (native creation times), n
     setWindowsServiceStopHooksForTests({ snapshot: async () => evidence(), schedulePid: async () => SCHEDULE_PID, liveDeps: () => fake.deps });
     const target = await inspectGuardedTarget(42, 10100, (pid, port, deps) => inspectGuardedManagerTarget(pid, port, {
       ...deps, platform: "win32", verifyPid: p => p, scheduler: () => ({ status: "present" }), winsw: () => "nonexistent",
-      win: { ...deps?.win, winTaskState: () => "not-running", winScriptPath: () => CMD, winLauncherPath: () => VBS },
+      win: {
+        ...deps?.win, winTaskState: () => "not-running", winScriptPath: () => CMD, winLauncherPath: () => VBS,
+        winTaskXml: () => "<Task>xml</Task>", winRegistrationOurs: () => true,
+      },
     }));
     expect(target.kind).toBe("bound-stray");
     const outcome = await stopGuardedManager({ approvedPort: 10100, receiptNonce: () => undefined, inheritedReceipts: 0 });

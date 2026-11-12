@@ -424,18 +424,12 @@ function inspectWindowsSchedulerManager(
   if (unreadableAncestorWrapperPids(approvedPid, processes).length > 0) {
     return unknown("a possible scheduler wrapper has an unreadable command line", "evidence-unreadable");
   }
-  // A registration that cannot run anything owes only the stray-wrapper check.
-  // That covers BOTH a not-running task and a task proven deleted between the
-  // caller's presence probe and this inspection: in either case nothing
-  // registered can respawn the proxy, while a surviving wrapper still can —
-  // schtasks /end would report success on the inert task and leave it alive.
-  // A task proven deleted keeps today's verdict; only a registered, not-running task can
-  // own the survivors it left behind.
-  const inertVerdict = (registered = false): GuardedManagerTarget => strays.length === 0
+  // A registration that cannot run anything owes only the stray-wrapper check: nothing
+  // registered can respawn the proxy, while a surviving wrapper still can — schtasks /end
+  // would report success on the inert task and leave it alive.
+  const inertVerdict = (): GuardedManagerTarget => strays.length === 0
     ? { kind: "absent" }
-    : registered
-      ? bindStrayWrappers(approvedPid, processes, strays, io)
-      : unknown("a surviving scheduler wrapper could not be tied to the registered task", "unbound-wrapper");
+    : unknown("a surviving scheduler wrapper could not be tied to the registered task", "unbound-wrapper");
   const state = io.winTaskState();
   if (state === "unknown") {
     // Missing vs unreadable: the state query also fails for a task deleted
@@ -445,7 +439,24 @@ function inspectWindowsSchedulerManager(
       ? inertVerdict()
       : unknown("the registered task's running state could not be proven");
   }
-  if (state === "not-running") return inertVerdict(true);
+  if (state === "not-running") {
+    // Only a registration that is provably this installation's definition may promote its
+    // survivors to bound-stray (#7771). The state word alone says the task is inert; it does
+    // not say the task is ours — a same-named foreign task would otherwise make this home's
+    // hand-started wrappers terminable. Reading the definition costs nothing when nothing
+    // survived, so a clean inert task keeps the absent verdict without a read.
+    if (strays.length === 0) return { kind: "absent" };
+    let xml: string;
+    try {
+      xml = io.winTaskXml();
+    } catch {
+      return unknown("the Task Scheduler registration of the surviving wrappers could not be read", "evidence-unreadable");
+    }
+    if (!io.winRegistrationOurs(xml, io.winTaskUserIds())) {
+      return unknown("the registered task is not a recognized OpenCodex definition");
+    }
+    return bindStrayWrappers(approvedPid, processes, strays, io);
+  }
   // Only the running path needs the registered definition: an unreadable
   // registration cannot prove the task is ours, but it must not hold an
   // otherwise-provable inert verdict unknown.
