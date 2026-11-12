@@ -1,7 +1,7 @@
 import { remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../src/link/remote-probe";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { appendFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -34,6 +34,12 @@ const BARE_OCX: SshRunResult = { code: 127, stdout: "", stderr: "bare ocx call: 
 
 function isBareOcx(argv: readonly string[]): boolean {
   return /^'ocx'( |$)/.test(argv.at(-1) ?? "");
+}
+
+/** The line OpenSSH records for a probe: under the HostKeyAlias it ran with, as the real client does. */
+function hostKeyLine(argv: readonly string[]): string {
+  const alias = argv.find(value => value.startsWith("HostKeyAlias="))?.slice("HostKeyAlias=".length) ?? "client";
+  return alias + " ssh-ed25519 AAAA\n";
 }
 
 function config(): OcxConfig {
@@ -111,7 +117,7 @@ function applyRunner(h: ReturnType<typeof harness>, connectCode = 0): SshRunner 
       const text = argv.join(" ");
       if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
       const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
-      if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
+      if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), hostKeyLine(argv));
       if (isBareOcx(argv)) return BARE_OCX;
       const remote = argv.at(-1) ?? "";
       const child = childProbe(remote, h); if (child) return child;
@@ -159,7 +165,7 @@ function versionRunner(remote: { probeCode: number; probeStderr: string; code: n
       if (argv.at(-1)?.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
       if (argv.at(-1) === remoteOcx(["--version"])) return { code: remote.code, stdout: remote.stdout, stderr: remote.stderr };
       const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
-      if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
+      if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), hostKeyLine(argv));
       return argv.at(-1) === "echo ocx-link-probe" ? { code: remote.probeCode, stdout: remote.probeCode === 0 ? "ocx-link-probe\n" : "", stderr: remote.probeStderr } : { code: 0, stdout: "", stderr: "" };
     },
     spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
@@ -1004,7 +1010,7 @@ describe("link management routes", () => {
         const text = argv.join(" ");
         if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
         const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
-        if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
+        if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), hostKeyLine(argv));
         if (isBareOcx(argv)) return BARE_OCX;
         const child = childProbe(argv.at(-1) ?? "", h); if (child) return child;
         if (argv.at(-1) === remoteOcx(["--version"])) return { code: 0, stdout: "opencodex 2.66.0\n", stderr: "" };
@@ -1032,7 +1038,7 @@ describe("link management routes", () => {
         const text = argv.join(" ");
         if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
         const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
-        if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
+        if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), hostKeyLine(argv));
         if (isBareOcx(argv)) return BARE_OCX;
         const remote = argv.at(-1) ?? "";
       const child = childProbe(remote, h); if (child) return child;
@@ -1139,11 +1145,12 @@ for (const remotePlatform of [undefined, "windows", "posix"] as const) {
 test("apply refuses when the confirmed key is no longer the one trusted for its alias", async () => {
   temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-pin-"));
   const knownHosts = join(temp, "known_hosts");
-  const scenario = async (mutate?: () => void) => {
+  const scenario = async (mutate?: (h: ReturnType<typeof harness>) => void, overrides: Partial<ManagementApiDeps> = {}) => {
     const h = harness();
     const base = applyRunner(h);
     const deps = {
       ...h.deps,
+      ...overrides,
       sshRunner: {
         ...base,
         async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
@@ -1154,7 +1161,7 @@ test("apply refuses when the confirmed key is no longer the one trusted for its 
             writeFileSync(file, destination + " ssh-ed25519 KEY" + destination + "\n");
             return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
           }
-          if ((argv.at(-1) ?? "") === remoteOcx(["link", "port"])) mutate?.();
+          if ((argv.at(-1) ?? "") === remoteOcx(["link", "port"])) mutate?.(h);
           return base.run(argv, options);
         },
       },
@@ -1181,4 +1188,59 @@ test("apply refuses when the confirmed key is no longer the one trusted for its 
   expect(changed?.status).toBe(409);
   expect((await changed!.json() as { error: { code: string } }).error.code).toBe("host_key_changed");
   expect(during.h.store.links).toEqual([]);
+  // Another line OpenSSH could match for the alias (a wildcard, a host list, a hashed entry) beside the
+  // confirmed one: the confirmed line alone no longer decides the key.
+  for (const extra of ["* ssh-ed25519 KEYother", "home,elsewhere ssh-ed25519 KEYother", "|1|c2FsdA==|aGFzaA== ssh-ed25519 KEYother"]) {
+    const shaped = await scenario(() => writeFileSync(knownHosts, readFileSync(knownHosts, "utf8") + extra + "\n"));
+    await shaped.confirm("home");
+    const response = await shaped.apply("home");
+    expect(response?.status).toBe(409);
+    expect((await response!.json() as { error: { code: string } }).error.code).toBe("host_key_changed");
+    expect(shaped.h.store.links).toEqual([]);
+  }
+  // The same key confirmed again under another spelling still trusts exactly that key.
+  const respelled = await scenario(() => writeFileSync(knownHosts, "HOME ssh-ed25519 KEYhome\n"));
+  await respelled.confirm("home");
+  expect((await respelled.apply("home"))?.status).toBe(202);
+  expect(respelled.h.store.links.map(link => link.alias)).toEqual(["home"]);
+});
+
+test("a refused apply whose key will not revoke stores no link and starts nothing", async () => {
+  temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-refused-revoke-"));
+  const knownHosts = join(temp, "known_hosts");
+  const cases: Array<[string, (h: ReturnType<typeof harness>) => void]> = [
+    ["host_key_changed", () => writeFileSync(knownHosts, "home ssh-ed25519 KEYother\n")],
+    // A Home-initiated link for another spelling of the alias appears while apply runs.
+    ["link_exists", h => h.deps.writeLinkStore!({ ...h.store, links: [{ id: "lnk_00000000000000aa", alias: "HOME", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-other", createdAt: "2026-09-25T00:00:00.000Z" }] })],
+  ];
+  for (const [refusal, mutate] of cases) {
+    const h = harness();
+    const base = applyRunner(h);
+    const deps = {
+      ...h.deps,
+      revokeApiKey: () => false,
+      sshRunner: {
+        ...base,
+        async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
+          if ((argv.at(-1) ?? "") === "echo ocx-link-probe") {
+            const file = argv.find(value => value.startsWith("UserKnownHostsFile="))!.slice("UserKnownHostsFile=".length);
+            writeFileSync(file, "home ssh-ed25519 KEYhome\n");
+            return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
+          }
+          if ((argv.at(-1) ?? "") === remoteOcx(["link", "port"])) mutate(h);
+          return base.run(argv, options);
+        },
+      },
+    };
+    expect((await call("/api/link/probe", "POST", { alias: "home" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    expect((await call("/api/link/confirm-host", "POST", { alias: "home", fingerprint: "SHA256:abcdefghijklmnop" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    const response = await call("/api/link/apply", "POST", { alias: "home" }, deps, "gui-session", true, "pairing", true, h.config);
+    expect(response?.status).toBe(500);
+    expect((await response!.json() as { error: { code: string } }).error.code).toBe("key_cleanup_failed");
+    // The refused record is never written, by apply or by its cleanup.
+    expect(h.store.links.map(link => link.id)).toEqual(refusal === "link_exists" ? ["lnk_00000000000000aa"] : []);
+    expect(h.events).not.toContain("reload");
+    expect(h.events).not.toContain("supervisor");
+    expect(h.config.apiKeys?.map(key => key.name)).toEqual(["link:home"]);
+  }
 });

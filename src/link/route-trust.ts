@@ -27,8 +27,11 @@ function meaningful(line: string): boolean {
   return trimmed !== "" && !trimmed.startsWith("#");
 }
 
-/** Whole-file check, then exactly one case-insensitive match for alias, whose key has the pinned fingerprint. */
-export function checkRouteTrust(text: string, alias: string, fingerprint: string | null): RouteTrustCheck {
+/**
+ * Whole-file check, then exactly one case-insensitive match for alias: the one line OpenSSH can use
+ * for it. Any pattern, host list, hashed entry, [host]:port form or marker fails the whole file.
+ */
+export function aliasTrustLine(text: string, alias: string): RouteTrustCheck {
   const lines = text.split(/\r?\n/).filter(meaningful);
   for (const line of lines) {
     const [host, type, key] = line.trim().split(/\s+/);
@@ -37,9 +40,16 @@ export function checkRouteTrust(text: string, alias: string, fingerprint: string
   }
   const wanted = alias.toLowerCase();
   const matches = lines.filter(line => hostField(line).toLowerCase() === wanted);
-  if (matches.length !== 1 || fingerprint === null) return { ok: false, code: "pin_mismatch" };
-  const key = matches[0]!.trim().split(/\s+/)[2]!;
-  return keyFingerprint(key) === fingerprint ? { ok: true, line: matches[0]!.trim() } : { ok: false, code: "pin_mismatch" };
+  return matches.length === 1 ? { ok: true, line: matches[0]!.trim() } : { ok: false, code: "pin_mismatch" };
+}
+
+/** aliasTrustLine, and that one line's key has the pinned fingerprint. */
+export function checkRouteTrust(text: string, alias: string, fingerprint: string | null): RouteTrustCheck {
+  const found = aliasTrustLine(text, alias);
+  if (!found.ok) return found;
+  if (fingerprint === null) return { ok: false, code: "pin_mismatch" };
+  const key = found.line.split(/\s+/)[2]!;
+  return keyFingerprint(key) === fingerprint ? found : { ok: false, code: "pin_mismatch" };
 }
 
 /** The file's meaningful lines without any line whose host field names alias in any case. */
@@ -49,14 +59,14 @@ export function withoutAliasLines(text: string, alias: string): string[] {
 }
 
 /**
- * Does the file still trust exactly the line a confirmation wrote for alias? The line must be there,
- * and no other line may name the alias in any case (OpenSSH would accept its key too).
+ * Does the file still trust exactly the line a confirmation wrote for alias? It must pass the same
+ * whole-file check as a route edit, and its one line for the alias must be the confirmed line. The
+ * probe computed the confirmed fingerprint from that very line (ssh-keygen -l), so the line carries it.
  */
 export function confirmedLineTrustedIn(text: string, alias: string, confirmedLine: string): boolean {
-  const lines = text.split(/\r?\n/).filter(meaningful).map(line => line.trim());
-  const target = confirmedLine.trim();
-  if (!lines.includes(target)) return false;
-  const wanted = alias.toLowerCase();
-  return lines.every(line => line === target || hostField(line).toLowerCase() !== wanted);
+  // The host field may be another spelling of the alias (putKnownHost replaces every case variant);
+  // the key type and key are what OpenSSH will accept.
+  const found = aliasTrustLine(text, alias);
+  return found.ok && found.line.split(/\s+/).slice(1, 3).join(" ") === confirmedLine.trim().split(/\s+/).slice(1, 3).join(" ");
 }
 

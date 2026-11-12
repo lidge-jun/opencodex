@@ -14,7 +14,7 @@ import { SshRunnerError, boundHint, sshFailureHint, sshRunnerErrorHint, type Ssh
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
-import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, type LinkRouteState } from "./link-route-state";
+import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
 const PROBE_TTL_MS = 5 * 60_000;
@@ -332,8 +332,19 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
         writeStoreFor(ctx, { ...current, links: [...current.links, record!] });
         return "written";
       });
-      if (created === "exists") { return await failed(fail("link_exists", "A link for this alias already exists.", 409)); }
-      if (created === "key_changed") { return await failed(fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409)); }
+      if (created !== "written") {
+        // The record failed identity validation and was never stored, so compensation must not store
+        // it either: drop it and revoke its key here. A key that will not revoke stays listed under
+        // API keys; say so instead of keeping the link it belonged to.
+        record = undefined;
+        if (!revokeKeyIdempotent(ctx, issued.id)) {
+          console.warn("[link] apply refused before storing the link; its issued key could not be revoked");
+          return await failed(fail("key_cleanup_failed", "The link was not created, but its issued key could not be revoked; revoke the leftover link key under API keys.", 500));
+        }
+        return await failed(created === "exists"
+          ? fail("link_exists", "A link for this alias already exists.", 409)
+          : fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409));
+      }
       await state.listener.ensureStarted();
       if (state.listener.status().state !== "listening") return await failed(fail("listener_unavailable", "The link listener is unavailable.", 503));
       await state.supervisor.ensureStarted();

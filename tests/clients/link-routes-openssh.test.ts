@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHmac, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir, userInfo } from "node:os";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 import { buildRouteProbeArgv, buildTunnelArgv } from "../../src/link/ssh-argv";
 import { createSshRunner, type SshChild } from "../../src/link/ssh-runner";
 import { composeGrantTap, routeOutcomeOfStderr } from "../../src/link/route-select";
-import { checkRouteTrust, keyFingerprint } from "../../src/link/route-trust";
+import { checkRouteTrust, confirmedLineTrustedIn, keyFingerprint } from "../../src/link/route-trust";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -170,5 +171,22 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
     const other = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-b", knownHostsFile: mixed })), { timeoutMs: 20_000 });
     expect({ code: other.code, stdout: other.stdout.trim() }).toEqual({ code: 0, stdout: "ocx-link-probe" });
     expect(checkRouteTrust(text, "pin-alias", keyFingerprint(pinnedKey!))).toEqual({ ok: false, code: "pin_mismatch" });
+  }, 60_000);
+
+  test("OpenSSH accepts another key from a wildcard, host list or hashed line beside the confirmed one; apply's check refuses each", async () => {
+    const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
+    const [otherType, otherKey] = readFileSync(join(dir, "hk-other.pub"), "utf8").split(" ");
+    const confirmed = "pin-alias " + type + " " + pinnedKey;
+    const salt = randomBytes(20);
+    const hashed = "|1|" + salt.toString("base64") + "|" + createHmac("sha1", salt).update("pin-alias").digest("base64");
+    const runner = createSshRunner();
+    for (const [label, host] of [["wildcard", "pin-*"], ["host list", "elsewhere,pin-alias"], ["hashed", hashed]] as const) {
+      const file = join(dir, "known_hosts-extra-" + label.replace(" ", "-"));
+      const text = confirmed + "\n" + host + " " + otherType + " " + otherKey!.trim() + "\n";
+      writeFileSync(file, text);
+      const other = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-b", knownHostsFile: file })), { timeoutMs: 20_000 });
+      expect({ label, code: other.code, stdout: other.stdout.trim() }).toEqual({ label, code: 0, stdout: "ocx-link-probe" });
+      expect({ label, trusted: confirmedLineTrustedIn(text, "pin-alias", confirmed) }).toEqual({ label, trusted: false });
+    }
   }, 60_000);
 });
