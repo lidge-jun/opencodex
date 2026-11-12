@@ -154,43 +154,53 @@ test.each([
   expect(h.probes).toHaveLength(0);
 });
 
-test("a change to the link, or to its pinned line, during the probe refuses the commit", async () => {
+/** A probe that waits for its release, and a promise that settles once the edit has reached it. */
+function gate() {
   let release!: (result: SshRunResult) => void;
-  const pending = harness({ probe: () => new Promise<SshRunResult>(resolve => { release = resolve; }) });
+  let reached!: () => void;
+  const started = new Promise<void>(resolve => { reached = resolve; });
+  const probe = () => { reached(); return new Promise<SshRunResult>(resolve => { release = resolve; }); };
+  return { probe, started, release: (result: SshRunResult) => release(result) };
+}
+
+test("a change to the link, or to its pinned line, during the probe refuses the commit", async () => {
+  const g1 = gate();
+  const pending = harness({ probe: g1.probe });
   const changed = pending.edit({ op: "add", route: "alpha-lan" });
-  await Bun.sleep(0);
+  await g1.started;
   pending.setStore({ ...pending.store, links: [record({ tunnelPort: 19009 })] });
-  release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
+  g1.release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
   expect(await changed).toMatchObject({ status: 409, body: { error: { code: "link_changed" } } });
 
-  const pin = harness({ probe: () => new Promise<SshRunResult>(resolve => { release = resolve; }) });
+  const g2 = gate();
+  const pin = harness({ probe: g2.probe });
   const pinChanged = pin.edit({ op: "add", route: "alpha-lan" });
-  await Bun.sleep(0);
+  await g2.started;
   writeFileSync(pin.knownHostsPath, "pen-alpha ssh-ed25519 " + OTHER_KEY + "\n");
-  release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
+  g2.release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
   expect(await pinChanged).toMatchObject({ status: 409, body: { error: { code: "pin_changed" } } });
   expect(routesOf(pin)).toBeUndefined();
 });
 
 test("a link removed by another writer during the probe is not recreated", async () => {
-  let release!: (result: SshRunResult) => void;
-  const h = harness({ probe: () => new Promise<SshRunResult>(resolve => { release = resolve; }) });
+  const g3 = gate();
+  const h = harness({ probe: g3.probe });
   const edit = h.edit({ op: "add", route: "alpha-lan" });
-  await Bun.sleep(0);
+  await g3.started;
   h.setStore({ ...h.store, links: [] });
-  release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
+  g3.release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
   expect(await edit).toMatchObject({ status: 409, body: { error: { code: "link_changed" } } });
   expect(h.store.links).toEqual([]);
 });
 
 test("the commit edits the fresh store: another record and this record's optional fields changed meanwhile survive", async () => {
-  let release!: (result: SshRunResult) => void;
   const other = record({ id: OTHER, alias: "beta-host", apiKeyId: "other-key", tunnelPort: 19003, hostKeyFingerprint: keyFingerprint(OTHER_KEY) });
-  const h = harness({ links: [record(), other], probe: () => new Promise<SshRunResult>(resolve => { release = resolve; }) });
+  const g4 = gate();
+  const h = harness({ links: [record(), other], probe: g4.probe });
   const edit = h.edit({ op: "add", route: "alpha-lan" });
-  await Bun.sleep(0);
+  await g4.started;
   h.setStore({ ...h.store, links: [record({ childKind: "full" }), { ...other, childKind: "ephemeral" }] });
-  release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
+  g4.release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
   expect((await edit).status).toBe(200);
   expect(h.store.links[0]).toMatchObject({ childKind: "full", routes: ["alpha-lan", "pen-alpha"] });
   expect(h.store.links[1]).toMatchObject({ childKind: "ephemeral" });
@@ -201,14 +211,14 @@ test("edits, removal and Child jobs exclude each other on a link", async () => {
   const h = harness();
   expect(await h.edit({ op: "add", route: "alpha-lan" })).toMatchObject({ status: 409, body: { error: { code: "link_operation_in_progress" } } });
   held();
-  let release!: (result: SshRunResult) => void;
-  const slow = harness({ probe: () => new Promise<SshRunResult>(resolve => { release = resolve; }) });
+  const g5 = gate();
+  const slow = harness({ probe: g5.probe });
   const first = slow.edit({ op: "add", route: "alpha-lan" });
-  await Bun.sleep(0);
+  await g5.started;
   expect(await slow.edit({ op: "add", route: "alpha-tailnet" })).toMatchObject({ status: 409, body: { error: { code: "link_operation_in_progress" } } });
   expect(sharedChildOpsEngine().reserve(LINK)).toBeNull();
   expect((await slow.call("DELETE", "/api/link/" + LINK, {})).status).toBe(409);
-  release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
+  g5.release({ code: 0, stdout: "ocx-link-probe\n", stderr: "" });
   expect((await first).status).toBe(200);
   const after = sharedChildOpsEngine().reserve(LINK);
   expect(after).not.toBeNull();

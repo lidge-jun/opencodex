@@ -100,5 +100,6 @@ test("an edit stored but not applied exits 1 and says the routes are stored and 
   expect(stderr).toContain("routes_stored_reload_failed");
   expect(stderr).toContain("stored");
   expect(stderr).toContain("restart");
+  expect(stderr).toContain("ocx link routes --link-id " + LINK + " reads them");
 });
 

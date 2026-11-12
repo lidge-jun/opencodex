@@ -74,7 +74,7 @@ export async function runLinkRoutes(args: string[], deps: LinkCliDeps, request: 
       const code = error.body.error.code;
       const cause = error.body.error.cause;
       const known = typeof cause === "string" && ROUTE_CAUSES.has(cause) ? " (" + cause + ")" : "";
-      const note = code === "routes_stored_reload_failed" ? "; the routes were stored, restart the proxy to apply them" : "";
+      const note = code === "routes_stored_reload_failed" ? "; the routes were stored (ocx link routes --link-id " + linkId + " reads them), restart the proxy to apply them" : "";
       throw new RuntimeApiError("Link routes request refused (" + error.status + "): " + code + known + note, error.status, error.body);
     }
     throw error;
