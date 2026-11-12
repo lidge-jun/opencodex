@@ -341,6 +341,39 @@ describe("restore of refused results across overlapping turns (T5d1-R5-01)", () 
     expect(activity.idle).toBe(true);
   });
 
+  test("an older turn's late acceptance does not settle a newer call that reuses the key (T5d1-R6-01)", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.restoreRefusedResults = true;
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_k"));
+    const inputA = toolResult("call_k");
+    const finishA = activity.beginTurn(inputA);
+    const finishB = activity.beginTurn("next");
+    // B's upstream asks for the same call id again: new work, owed by the client.
+    activity.observePayload(toolCall("call_k"));
+    activity.notifyAccepted(inputA);
+    finishA();
+    finishB();
+    expect(activity.pendingKeys()).toHaveLength(1);
+  });
+
+  test("an older turn's late acceptance does not cancel a newer refused turn's restore (T5d1-R6-01)", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.restoreRefusedResults = true;
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_n"));
+    const inputA = toolResult("call_n");
+    const finishA = activity.beginTurn(inputA);
+    const finishB = activity.beginTurn("next");
+    activity.observePayload(toolCall("call_n"));
+    finishB();
+    // C returns the new call's result and is refused: that result is owed again.
+    activity.beginTurn(toolResult("call_n"))();
+    activity.notifyAccepted(inputA);
+    finishA();
+    expect(activity.pendingKeys()).toHaveLength(1);
+  });
+
   test("an older turn that was refused, with no newer acceptance, still restores", () => {
     const activity = new CodexWebSocketActivity();
     activity.restoreRefusedResults = true;

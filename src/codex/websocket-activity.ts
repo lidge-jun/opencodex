@@ -57,7 +57,11 @@ export class CodexWebSocketActivity {
    * make unfinished client work look done. Local sockets keep settling at admission.
    */
   restoreRefusedResults = false;
-  private turnRecords = new Map<unknown, { settled: string[]; accepted: boolean }>();
+  private turnRecords = new Map<unknown, { seq: number; settled: string[]; accepted: boolean }>();
+  private turnSeq = 0;
+  // Keys an unaccepted turn put back, with that turn's sequence; a key observed again as new work
+  // loses its marker, so a late acceptance of an older turn never settles newer work.
+  private restoredKeys = new Map<string, number>();
 
   get closing(): boolean { return this.closingFlag; }
 
@@ -112,17 +116,26 @@ export class CodexWebSocketActivity {
   notifyAccepted(input: unknown): void {
     const record = this.turnRecords.get(input);
     if (record) record.accepted = true;
-    // Results this turn returned are settled for good: an older turn still finishing (superseded,
-    // refused) must not put them back.
-    // Only sockets that restore refused results (Remote Link) need this; local sockets settled at admission.
-    const returned = new Set(this.restoreRefusedResults ? resultKeysOf(input) : []);
-    if (returned.size) for (const other of this.turnRecords.values()) other.settled = other.settled.filter(key => !returned.has(key));
-    // An older turn may already have restored one of them before this acceptance: settle it again.
-    let changed = false;
-    for (const key of returned) {
-      if (this.pendingResults.delete(key)) { this.returnedResults.add(key); changed = true; }
+    // Only sockets that restore refused results (Remote Link) reconcile, and only against turns that
+    // began before the accepted one: newer turns own newer work, even when it reuses a call id.
+    const returned = new Set(this.restoreRefusedResults && record ? resultKeysOf(input) : []);
+    if (record && returned.size) {
+      // An older turn still finishing (superseded, refused) must not put these results back...
+      for (const other of this.turnRecords.values()) {
+        if (other.seq < record.seq) other.settled = other.settled.filter(key => !returned.has(key));
+      }
+      // ...and one an older turn already put back is settled again.
+      let changed = false;
+      for (const key of returned) {
+        const by = this.restoredKeys.get(key);
+        if (by !== undefined && by < record.seq && this.pendingResults.delete(key)) {
+          this.restoredKeys.delete(key);
+          this.returnedResults.add(key);
+          changed = true;
+        }
+      }
+      if (changed) this.changed();
     }
-    if (changed) this.changed();
     for (const listener of [...this.acceptedListeners]) {
       try { listener(input); } catch { /* an observer never breaks the socket's own bookkeeping */ }
     }
@@ -144,7 +157,7 @@ export class CodexWebSocketActivity {
   beginTurn(input: unknown): () => void {
     this.turns += 1;
     this.touch();
-    const record = { settled: this.settleResults(input), accepted: false };
+    const record = { seq: ++this.turnSeq, settled: this.settleResults(input), accepted: false };
     if (this.restoreRefusedResults) this.turnRecords.set(input, record);
     // Ordinary creates start a new response even when its upstream omits response.created.
     // Prior results settle old waits, but cannot suppress new calls reusing their IDs.
@@ -156,7 +169,7 @@ export class CodexWebSocketActivity {
       if (finished) return;
       finished = true;
       if (this.turnRecords.get(input) === record) this.turnRecords.delete(input);
-      if (this.restoreRefusedResults && !record.accepted) this.restoreResults(record.settled);
+      if (this.restoreRefusedResults && !record.accepted) this.restoreResults(record.settled, record.seq);
       this.turns -= 1;
       if (this.turns === 0) this.touch();
       this.changed();
@@ -179,6 +192,7 @@ export class CodexWebSocketActivity {
         const key = this.resultKeyOf(item);
         if (key !== null && this.pendingResults.delete(key)) {
           settled.push(key);
+          this.restoredKeys.delete(key);
           if (this.returnedResults.size >= MAX_PENDING_RESULTS) { this.protectUntracked(); return []; }
           else this.returnedResults.add(key);
         }
@@ -188,12 +202,13 @@ export class CodexWebSocketActivity {
   }
 
   /** A refused turn's results are owed again (restoreRefusedResults). */
-  private restoreResults(keys: readonly string[]): void {
+  private restoreResults(keys: readonly string[], seq: number): void {
     if (this.untrackedResults) return;
     for (const key of keys) {
       this.returnedResults.delete(key);
       if (this.pendingResults.size >= MAX_PENDING_RESULTS) { this.protectUntracked(); return; }
       this.pendingResults.add(key);
+      this.restoredKeys.set(key, seq);
     }
   }
 
@@ -261,6 +276,8 @@ export class CodexWebSocketActivity {
   }
 
   private observeResultKey(key: string): void {
+    // A call observed now is new work, whatever an older turn restored under the same key.
+    this.restoredKeys.delete(key);
     if (this.pendingResults.has(key) || this.returnedResults.has(key)) return;
     if (this.pendingResults.size >= MAX_PENDING_RESULTS) this.protectUntracked();
     else { this.pendingResults.add(key); this.changed(); }
