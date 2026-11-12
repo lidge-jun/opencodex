@@ -9,7 +9,7 @@ import { headersForCodexAuthContext } from "../codex/auth-context";
 import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
-import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
+import { BoundedSseFrameBuffer, MAX_CLIENT_SSE_FRAME_BYTES } from "./sse-frame-buffer";
 import { sseDataPayload as parseSseBlock } from "./sse-payload-rewrite";
 import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
@@ -19,6 +19,7 @@ import { isProxyError } from "../lib/client-error-body";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
 import { NativeContinuationRefusalError } from "./responses/native-continuation-refusal";
 import type { UsageClient } from "../usage/client";
+import { LINK_WS_LIMITS, linkPumpTimer, linkPumpWaitObserver } from "./index/link-websocket-limits";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -78,6 +79,27 @@ export interface WsData {
   /** Turn/account ownership retained for the complete sideband socket lifetime. */
   liveTurnAdmissionLease?: AdmissionLease;
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>;
+  /** Set only on Remote Link sockets: native steering and injection are unavailable there. */
+  nativeControlDisabled?: boolean;
+  /** Present only on a Remote Link socket (src/server/index/link-websocket.ts). */
+  link?: LinkSocketBinding;
+  /** Remote Link sockets only: one observer per admitted turn, by the handler's turn id. */
+  linkTurnObserver?: (turnId: number) => import("./link-turn").LinkTurnObserver;
+  /** Remote Link sockets only: the turn's cleanup ran, so its capture entry goes. */
+  linkTurnEnded?: (turnId: number) => void;
+}
+
+/** The verified identity and lease owner of one Remote Link socket; no secret is kept. */
+export interface LinkSocketBinding {
+  readonly linkId: string;
+  readonly keyId: string;
+  readonly fingerprint: string;
+  /** Set once the socket is fenced (revoked or switched off); later frames are dropped. */
+  fenced: boolean;
+  /** Releases every lease of the upgrade exactly once, from the close callback. */
+  readonly leases: { closed(): void };
+  /** Set by the link pump while it waits for Bun's drain; the link handler calls it on drain and close. */
+  drained?: () => void;
 }
 
 export interface LiveSidebandUpstreamFailure {
@@ -285,9 +307,54 @@ export async function pumpResponsesSseToWebSocket(
   };
   const cancel = () => {
     clientCancelled = true;
+    wakeLinkWait?.();
     void reader.cancel().catch(() => {});
   };
   ws.data.cancel = cancel;
+
+  // Remote Link sockets only (design T4 6.2): after a send that leaves more than the threshold
+  // buffered, wait for Bun's drain before the next event, even within one upstream chunk, and feed
+  // the framer one bounded slice of a chunk at a time. Local sockets keep the single synchronous loop.
+  const link = ws.data.link;
+  let wakeLinkWait: (() => void) | undefined;
+  let linkStopped = false;
+  const waitForLinkDrain = async (): Promise<void> => {
+    if (!link || ws.getBufferedAmount() <= LINK_WS_LIMITS.sendThresholdBytes) return;
+    let stalled = false;
+    const observer = linkPumpWaitObserver();
+    observer?.(true);
+    await new Promise<void>(resolve => {
+      const clock = linkPumpTimer();
+      // One deadline for the whole wait, however many drain callbacks arrive before it ends.
+      const timer = clock.start(() => { stalled = true; done(); }, LINK_WS_LIMITS.sendStallMs);
+      function done(): void {
+        clock.stop(timer);
+        if (link!.drained === drained) link!.drained = undefined;
+        if (wakeLinkWait === done) wakeLinkWait = undefined;
+        resolve();
+      }
+      // Bun's drain means "ready for more", not "below the threshold": re-check on every callback.
+      function drained(): void {
+        if (!clientCancelled && ws.readyState === OPEN && ws.getBufferedAmount() > LINK_WS_LIMITS.sendThresholdBytes) return;
+        done();
+      }
+      link.drained = drained;
+      wakeLinkWait = done;
+    });
+    observer?.(false);
+    if (stalled && !clientCancelled) {
+      try { ws.close(1011, "link websocket send stalled"); } catch { /* already closing */ }
+      throw new WsSendDroppedError();
+    }
+  };
+  const slicesOf = (chunk: Uint8Array): Uint8Array[] => {
+    if (!link || chunk.byteLength <= LINK_WS_LIMITS.framerSliceBytes) return [chunk];
+    const slices: Uint8Array[] = [];
+    for (let offset = 0; offset < chunk.byteLength; offset += LINK_WS_LIMITS.framerSliceBytes) {
+      slices.push(chunk.subarray(offset, offset + LINK_WS_LIMITS.framerSliceBytes));
+    }
+    return slices;
+  };
 
   const decoder = new TextDecoder();
   const framer = new BoundedSseFrameBuffer();
@@ -335,14 +402,22 @@ export async function pumpResponsesSseToWebSocket(
   };
 
   try {
-    while (!terminalSeen) {
+    reading: while (!terminalSeen) {
       const { done, value } = await reader.read();
       if (done) break;
-      for (const frame of framer.feed(value)) {
-        const payload = parseSseBlock(decoder.decode(frame.block));
-        if (payload && handlePayload(payload)) break;
+      for (const slice of slicesOf(value)) {
+        for (const frame of framer.feed(slice)) {
+          const payload = parseSseBlock(decoder.decode(frame.block));
+          if (payload && handlePayload(payload)) continue reading;
+          if (link) {
+            await waitForLinkDrain();
+            if (clientCancelled || ws.readyState !== OPEN) { linkStopped = true; break reading; }
+          }
+        }
       }
     }
+    // A link pump stopped by a cancel or close mid-chunk has nothing left to deliver or report.
+    if (linkStopped) return;
     const tail = framer.finish();
     if (!terminalSeen && tail.byteLength > 0) {
       const payload = parseSseBlock(decoder.decode(tail));
@@ -405,6 +480,81 @@ export function sendResponsesJsonAsEvents(
     sendObservedFrame(frame);
   }
   onTerminal?.(finalStatus);
+}
+
+/**
+ * Remote Link sockets only (design T4 6.2): wait until the send buffer is at or below the threshold, re-checking on
+ * every drain callback, under one stall deadline for the whole wait. A stall closes the socket with 1011 and throws,
+ * as the SSE pump does; a closed socket or a cancelled turn ends the wait, and only a live, current turn's stall
+ * closes the socket.
+ */
+async function waitForLinkSendRoom(ws: ServerWebSocket<WsData>, turn: { cancelled: boolean; wake?: () => void; isCurrent: () => boolean }): Promise<void> {
+  const link = ws.data.link;
+  if (!link || turn.cancelled || ws.getBufferedAmount() <= LINK_WS_LIMITS.sendThresholdBytes) return;
+  let stalled = false;
+  const observer = linkPumpWaitObserver();
+  observer?.(true);
+  await new Promise<void>(resolve => {
+    const clock = linkPumpTimer();
+    const timer = clock.start(() => { stalled = true; done(); }, LINK_WS_LIMITS.sendStallMs);
+    function done(): void {
+      clock.stop(timer);
+      if (link!.drained === drained) link!.drained = undefined;
+      if (turn.wake === done) turn.wake = undefined;
+      resolve();
+    }
+    function drained(): void {
+      if (!turn.cancelled && ws.readyState === OPEN && ws.getBufferedAmount() > LINK_WS_LIMITS.sendThresholdBytes) return;
+      done();
+    }
+    link.drained = drained;
+    turn.wake = done;
+  });
+  observer?.(false);
+  if (stalled && !turn.cancelled && turn.isCurrent()) {
+    try { ws.close(1011, "link websocket send stalled"); } catch { /* already closing */ }
+    throw new WsSendDroppedError();
+  }
+}
+
+/**
+ * sendResponsesJsonAsEvents for a link socket: each synthesized event waits for send room first, the turn's cancel
+ * (supersession or close) ends that wait, and an event larger than the client frame limit is never sent: the turn
+ * ends incomplete with the 502 error frame the SSE pump sends for an oversized upstream frame.
+ */
+async function sendResponsesJsonAsLinkEvents(
+  ws: ServerWebSocket<WsData>,
+  response: Record<string, unknown>,
+  isCurrent: () => boolean,
+  onTerminal?: ResponsesTerminalReporter,
+  onPayload?: ResponsesPayloadObserver,
+): Promise<void> {
+  const finalStatus = response.status === "failed" || response.status === "incomplete" ? response.status : "completed";
+  const turn: { cancelled: boolean; wake?: () => void; isCurrent: () => boolean } = { cancelled: false, isCurrent };
+  const previous = ws.data.cancel;
+  const cancel = () => {
+    turn.cancelled = true;
+    turn.wake?.();
+    previous?.();
+  };
+  ws.data.cancel = cancel;
+  try {
+    for (const frame of responsesJsonEventSequence(response)) {
+      await waitForLinkSendRoom(ws, turn);
+      if (turn.cancelled || !isCurrent() || ws.readyState !== OPEN) return;
+      const text = JSON.stringify(frame);
+      if (Buffer.byteLength(text) > MAX_CLIENT_SSE_FRAME_BYTES) {
+        onTerminal?.("incomplete");
+        sendJsonFrame(ws, buildWsErrorFrame(502, protocolError("synthesized response event exceeded " + MAX_CLIENT_SSE_FRAME_BYTES + " bytes")));
+        return;
+      }
+      try { onPayload?.(text); } catch { /* payload observation must not affect WebSocket delivery */ }
+      sendTextFrame(ws, text);
+    }
+    onTerminal?.(finalStatus);
+  } finally {
+    if (ws.data.cancel === cancel) ws.data.cancel = previous;
+  }
 }
 
 function errorPayloadFromText(text: string): Record<string, unknown> {
@@ -474,7 +624,8 @@ export async function sendResponseToWebSocket(
     const text = await response.text();
     if (!isCurrent()) return;
     const json = JSON.parse(text) as Record<string, unknown>;
-    sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
+    if (ws.data.link) await sendResponsesJsonAsLinkEvents(ws, json, isCurrent, options.onTerminal, options.onSsePayload);
+    else sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
     return;
   }
 
@@ -499,7 +650,8 @@ export async function sendResponseToWebSocket(
   const trimmed = text.trim();
   if (trimmed.startsWith("{")) {
     const json = JSON.parse(trimmed) as Record<string, unknown>;
-    sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
+    if (ws.data.link) await sendResponsesJsonAsLinkEvents(ws, json, isCurrent, options.onTerminal, options.onSsePayload);
+    else sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
     return;
   }
 

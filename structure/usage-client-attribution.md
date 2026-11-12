@@ -201,3 +201,4 @@ tag; the row's tag comes from the row's provider in `src/server/request-log.ts`.
 and the request-log hydration keep only `p` plus six lowercase hex digits and drop anything else.
 Per-account summaries still key on `accountLogLabel` and ignore the tag
 (`tests/usage/request-log-anthropic-account-tag.test.ts`).
+Remote Link rows may carry an optional `link` object (transport, continuation, hashed thread and turn refs) while the link WebSocket feature is on; it is validated in `src/usage/link-log-fields.ts` and spread into the row, the persisted entry and hydration, and described in `structure/remote-link.md`.

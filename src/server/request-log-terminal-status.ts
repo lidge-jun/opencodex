@@ -1,3 +1,6 @@
+// Re-exported so request-log.ts reaches the Remote Link turn seam through an import it already has.
+export { notifyLinkTurnFinal } from "./link-turn";
+export { linkLogField, type LinkRequestLogCarrier } from "../usage/link-log-fields";
 import {
   CYBER_POLICY_ERROR_CODE,
   httpStatusFromTerminalError,
