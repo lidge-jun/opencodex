@@ -434,8 +434,14 @@ function nestedPnpmRoots(packageDir, store, escaped, budget, storeAlias = store)
           catch { escaped.add("pnpm dependency root could not be resolved"); }
           continue;
         }
-        if (entry.isDirectory()) pending.push(child);
-        else if (entry.isSymbolicLink()) {
+        // On Windows readdir reports junctions and directory symlinks as directories; lstat decides there.
+        let isLink = entry.isSymbolicLink();
+        if (!isLink && entry.isDirectory() && process.platform === "win32") {
+          try { isLink = lstatSync(join(real, entry.name)).isSymbolicLink(); }
+          catch { escaped.add("pnpm package link could not be resolved"); continue; }
+        }
+        if (!isLink && entry.isDirectory()) pending.push(child);
+        else if (isLink) {
           try {
             const target = resolveStoreLinkChain(child, store, storeAlias);
             if (!inside(target, store)) escaped.add("pnpm package link escapes the selected store");
