@@ -24,7 +24,7 @@ import { readClientLinkState, type ClientLinkState } from "./link-state";
 import { projectClientLinkChild, projectClientLinkRow, type ClientLinkSidecarRead } from "./link-status";
 import { attachLinkTraffic } from "../link/status-projection";
 import { childLinkTraffic } from "../link/traffic";
-import { resolveLinkPathFromConfig, type LinkPathConfigDeps } from "../link/ssh-route";
+import { createLinkPathReader, type LinkPathConfigDeps } from "../link/ssh-route";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 import type { LinkReadiness } from "./link-readiness";
 import { packageVersion } from "../lib/package-version";
@@ -286,7 +286,7 @@ export function startMachineListener(
               undefined, linkHomeName(connection, sidecarOrNull));
             status.links = [row];
             await attachLinkTraffic(status, { traffic: id => childLinkTraffic.snapshot(id),
-              resolvePath: async alias => ({ via: alias === sshAlias ? resolveLinkPathFromConfig(alias, deps.linkPathConfig) : "unknown" }) });
+              resolvePath: async alias => ({ via: alias === sshAlias ? createLinkPathReader(deps.linkPathConfig)(alias) : "unknown" }) });
           }
           return Response.json({ ...status, joinAvailable: false }, { headers: { "Cache-Control": "no-store" } });
         }

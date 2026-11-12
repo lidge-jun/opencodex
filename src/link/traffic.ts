@@ -3,8 +3,9 @@
  *
  * The counters are plain integer additions on the JavaScript thread: no lock, no log line, no
  * timer and no disk. A book holds at most `MAX_LINKS` links: beyond that it forgets the oldest
- * link with no request in flight, so a running request never loses its counts (a book can exceed
- * the bound only by links with requests in flight). Each link's counters carry their own `since`:
+ * links with no request in flight, so a running request never loses its counts. Only links with
+ * requests in flight can take a book past the bound, and as each of those requests ends the book
+ * trims its oldest idle links back to the bound. Each link's counters carry their own `since`:
  * the book's start for a link counted before any eviction, otherwise when its entry was created;
  * a link without an entry reads zero since the last eviction. A process restart starts a new book.
  * A reader computes a rate only from two reads with the same `since`; a changed `since` means the
@@ -52,6 +53,8 @@ export interface LinkTrafficBook {
   begin(linkId: string): LinkTrafficFlow;
   /** This link's counters; zeros for a link that carried nothing. */
   snapshot(linkId: string): LinkTrafficCounters;
+  /** How many links the book holds now (at most MAX_LINKS once no request is in flight). */
+  linkCount(): number;
 }
 
 interface Entry {
@@ -73,18 +76,20 @@ export function createLinkTrafficBook(
   // null until the first eviction; from then on, a new or absent link counts from that moment on.
   let lastEviction: string | null = null;
   const entries = new Map<string, Entry>();
-  const evictOne = (): void => {
+  /** Forget the oldest idle links until the book is within `limit` or every link left is in flight. */
+  const trimTo = (limit: number): void => {
+    if (entries.size <= limit) return;
     for (const [linkId, entry] of entries) {
+      if (entries.size <= limit) return;
       if (entry.inFlight > 0) continue;
       entries.delete(linkId);
       lastEviction = new Date(now()).toISOString();
-      return;
     }
   };
   const entryFor = (linkId: string): Entry => {
     let entry = entries.get(linkId);
     if (!entry) {
-      if (entries.size >= MAX_LINKS) evictOne();
+      trimTo(MAX_LINKS - 1);
       entry = { since: lastEviction === null ? started : new Date(now()).toISOString(), inFlight: 0,
         requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0, toHomeUncounted: 0 };
       entries.set(linkId, entry);
@@ -106,6 +111,7 @@ export function createLinkTrafficBook(
           ended = true;
           entry.inFlight -= 1;
           if (!complete) entry.incomplete += 1;
+          trimTo(MAX_LINKS);
         },
       };
     },
@@ -121,6 +127,7 @@ export function createLinkTrafficBook(
         toHomeUncounted: entry?.toHomeUncounted ?? 0,
       };
     },
+    linkCount: () => entries.size,
   };
 }
 

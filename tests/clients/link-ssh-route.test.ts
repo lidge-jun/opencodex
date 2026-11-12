@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { resolveLinkPathFromConfig } from "../../src/link/ssh-route";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createLinkPathReader, resolveLinkPathFromConfig } from "../../src/link/ssh-route";
 
 const HOME = "/home/fixture";
 const SYSTEM = "/etc/ssh/ssh_config";
@@ -67,5 +69,34 @@ describe("link path from ssh_config, without running ssh (#3023)", () => {
     expect(resolveLinkPathFromConfig("home", tree.deps)).toBe("proxy-command");
     expect(resolveLinkPathFromConfig("home", files({}).deps)).toBe("direct");
     expect(resolveLinkPathFromConfig("home", files({}, [join(HOME, ".ssh", "config")]).deps)).toBe("unknown");
+  });
+});
+
+describe("ssh_config reading, review round 5 (#3023)", () => {
+  test("ProxyJump none blocks a later ProxyJump but not a later ProxyCommand, as OpenSSH does", () => {
+    expect(resolveLinkPathFromConfig("home", user("Host home\n  ProxyJump none\nHost *\n  ProxyCommand nc %h %p\n").deps)).toBe("proxy-command");
+    expect(resolveLinkPathFromConfig("home", user("Host home\n  ProxyJump none\nHost *\n  ProxyJump b\n").deps)).toBe("direct");
+    expect(resolveLinkPathFromConfig("home", user("Host home\n  ProxyCommand none\nHost *\n  ProxyJump b\n").deps)).toBe("direct");
+  });
+
+  test("an oversized file or too many included files read unknown without reading past the bound", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-ssh-route-"));
+    try {
+      mkdirSync(join(dir, ".ssh", "many"), { recursive: true });
+      writeFileSync(join(dir, ".ssh", "config"), "Include many/*\n");
+      for (let i = 0; i < 70; i++) writeFileSync(join(dir, ".ssh", "many", `f${String(i).padStart(2, "0")}`), "# nothing\n");
+      expect(resolveLinkPathFromConfig("home", { home: dir, systemConfig: null })).toBe("unknown");
+      writeFileSync(join(dir, ".ssh", "config"), "# " + "x".repeat(300 * 1024) + "\nHost home\n  ProxyJump b\n");
+      expect(resolveLinkPathFromConfig("home", { home: dir, systemConfig: null })).toBe("unknown");
+      writeFileSync(join(dir, ".ssh", "config"), "Host home\n  ProxyJump b\n");
+      expect(resolveLinkPathFromConfig("home", { home: dir, systemConfig: null })).toBe("proxy-jump");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("one status read reads each file once, however many rows it resolves", () => {
+    const tree = user("Host a\n  ProxyJump b\n");
+    const read = createLinkPathReader(tree.deps);
+    expect([read("a"), read("b"), read("c")]).toEqual(["proxy-jump", "direct", "direct"]);
+    expect(tree.reads.filter(path => path === join(HOME, ".ssh", "config"))).toHaveLength(1);
   });
 });
