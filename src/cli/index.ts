@@ -79,6 +79,7 @@ import {
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
 import { collectStatus, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, runtimeSupervisorLine, statusDeadProxyLines, statusProxyUp, statusUnusedProxyLines } from "./status";
+import { stopUninstallProxy } from "./uninstall-stop";
 import { endpointsToProve, everyEndpointProvenDownAsync, respawnWindowRequired, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
@@ -130,6 +131,7 @@ import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
 import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
+import { completeWindowsServiceStopReceipt } from "../service/cli-windows-stop";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
@@ -1562,6 +1564,9 @@ async function handleUninstall() {
     serviceRemoval: null,
     respawnWindowVerified: false,
   };
+  // The receipt an uninstall's Windows proxy stop claimed; discharged only after Part B
+  // and the shared restore succeeded, kept for recovery otherwise (#7771, #3008).
+  let uninstallStopNonce: string | undefined;
   await runStep("service stopped", async () => {
     const outcome = await stopServiceForUninstall();
     observed.serviceStop = outcome;
@@ -1576,39 +1581,26 @@ async function handleUninstall() {
   });
 
   await runStep("proxy stopped", async () => {
-    const pid = readPid();
-    if (!pid) {
-      // A missing pid file is not proof that nothing is serving: a proxy can outlive its
-      // record (crash, manual delete, corrupt file), which is exactly why `ocx stop` falls
-      // back to identity-checked discovery. Without this, uninstall restored shared config
-      // and reported success while that proxy kept running (#3008).
-      const live = await findLiveProxy();
-      if (!live) {
-        // A miss is not proof: `findLiveProxy` collapses a timeout and a transport failure
-        // into the same null as a dead endpoint. Ask the tri-state probe, which only says
-        // "dead" for a refused connection or a definitive non-OpenCodex answer (#3008).
-        observed.proxyProvenDown = await proxyEndpointProvenDown();
-        if (!observed.proxyProvenDown) {
-          throw new Error("no proxy could be found, but its endpoint could not be confirmed down either; confirm nothing is serving, then rerun");
-        }
-        return false;
-      }
-      if (!live.pid) {
-        throw new Error(`a proxy is answering on port ${live.port} but no process id could be resolved for it; stop it from the home that started it, then rerun`);
-      }
-      // #7771: on Windows the respawn-window step below is Part B, which owns the port
-      // wait; the legacy 15 s waitForStoppedPort must not run on top of it. Ask the
-      // port-wait question itself: `windowsPartBDue` also gates the legacy re-poll and is
-      // snapshotless-only, which is a different rule.
-      await stopProxy(live.pid, { skipPortWait: windowsPartBOwnsPortWait() });
-      observed.proxyProvenDown = true;
-      return true;
-    }
-    await stopProxy(pid, { skipPortWait: windowsPartBOwnsPortWait() });
-    removePid(pid);
-    removeRuntimePort(pid);
-    observed.proxyProvenDown = true;
-    return true;
+    // #7771 / #3008: on Windows this claims the teardown receipt before the child stop and
+    // forbids the forced fallback when Part A did not prove the manager stopped, so shared
+    // client config is never restored under a wrapper that can relaunch the proxy.
+    const result = await stopUninstallProxy({
+      platform: process.platform,
+      serviceStop: observed.serviceStop,
+      readPid,
+      findLiveProxy,
+      endpointProvenDown: proxyEndpointProvenDown,
+      partARecord: windowsPartAReceiptRecord,
+      stop: (target, io) => stopProxy(target, io),
+      removeTracked: pid => {
+        removePid(pid);
+        removeRuntimePort(pid);
+      },
+      portWaitOwned: windowsPartBOwnsPortWait,
+    });
+    uninstallStopNonce = result.nonce;
+    observed.proxyProvenDown = result.provenDown;
+    return result.changed;
   });
 
   await runStep("service removed", () => {
@@ -1668,6 +1660,12 @@ async function handleUninstall() {
     console.error("⚠️  Skipping shared teardown (native Codex restore, Grok config): a service or proxy could not be proven stopped.");
     console.error("   Resolve the failures above and rerun 'ocx uninstall' — service removal and local state cleanup are also unfinished.");
     console.error("   'ocx restore' is an interim step if you need native routing back before then.");
+  }
+
+  // The obligation the proxy stop deferred is discharged only now: Part B and the shared
+  // restore both succeeded. Otherwise the receipt stays for the next stop to finish.
+  if (uninstallStopNonce && failures.length === 0) {
+    completeWindowsServiceStopReceipt(uninstallStopNonce);
   }
 
   await runStep("system env vars reverted", () => {

@@ -18,6 +18,7 @@ import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegration, disableIntegrationCoordinated } from "../../src/integrations/writer";
 import type { OcxConfig } from "../../src/types";
+import { stopUninstallProxy } from "../../src/cli/uninstall-stop";
 
 const root = pathToFileURL(repoRoot() + "/");
 
@@ -124,11 +125,12 @@ describe("full uninstall command", () => {
     expect(uninstallBody).toContain('runStep("service stopped"');
     expect(uninstallBody).toContain('runStep("proxy stopped"');
     expect(uninstallBody).toContain('runStep("service removed"');
-    expect(uninstallBody).toContain("await stopProxy(pid, { skipPortWait: windowsPartBOwnsPortWait() });");
+    // #7771 round 7: the stop itself lives in `uninstall-stop`, which the step calls.
+    expect(uninstallBody).toContain("await stopUninstallProxy({");
     expect(uninstallBody).toContain("uninstallServiceDetailed()");
     expect(uninstallBody.indexOf('runStep("service stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("proxy stopped"'));
     expect(uninstallBody.indexOf('runStep("proxy stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("service removed"'));
-    expect(uninstallBody.indexOf("await stopProxy(pid, { skipPortWait: windowsPartBOwnsPortWait() });")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
+    expect(uninstallBody.indexOf("await stopUninstallProxy({")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
   });
 
   test("Windows uninstall leaves the port wait to Part B instead of stopProxy's legacy 15 s", async () => {
@@ -140,9 +142,11 @@ describe("full uninstall command", () => {
     // itself (not `windowsPartBDue`, which additionally gates the legacy re-poll): the
     // uninstall step must keep asking the question it means, so a later change to the
     // snapshotless rule cannot silently bring the 15 s wait back.
-    expect(uninstallBody).toContain("await stopProxy(pid, { skipPortWait: windowsPartBOwnsPortWait() });");
-    expect(uninstallBody).toContain("await stopProxy(live.pid, { skipPortWait: windowsPartBOwnsPortWait() });");
-    expect(uninstallBody).not.toContain("skipPortWait: windowsPartBDue()");
+    expect(uninstallBody).toContain("portWaitOwned: windowsPartBOwnsPortWait,");
+    const stopHelper = await readText("src/cli/uninstall-stop.ts");
+    // The helper asks the port-wait question itself rather than re-deciding it.
+    expect(stopHelper).toContain("skipPortWait: io.portWaitOwned(),");
+    expect(stopHelper).not.toContain("windowsPartBDue");
     const checked = await readText("src/cli/stop-windows-checked.ts");
     // The predicate is about the port wait only; the legacy re-poll key stays snapshotless.
     const portWait = checked.slice(checked.indexOf("export function windowsPartBOwnsPortWait"));
@@ -231,17 +235,16 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
   });
 
   test("a live orphan with no pid file blocks the teardown", async () => {
-    const cli = await readText("src/cli/index.ts");
-    const at = cli.indexOf("async function handleUninstall(");
-    const fn = cli.slice(at, at + 9000);
+    const helper = await readText("src/cli/uninstall-stop.ts");
+    const fn = helper.slice(helper.indexOf("export async function stopUninstallProxy("));
     // A missing pid file is not proof that nothing is serving — the same discovery
     // `ocx stop` performs. Without it, uninstall restored shared config under a live proxy.
-    expect(fn).toContain("const live = await findLiveProxy();");
-    expect(fn).toContain("observed.proxyProvenDown = await proxyEndpointProvenDown();");
+    expect(fn).toContain("const live = await io.findLiveProxy();");
+    expect(fn).toContain("const provenDown = await io.endpointProvenDown();");
     expect(fn).toContain("no process id could be resolved for it");
     // The orphan-with-no-pid branch THROWS, so `proxyProvenDown` stays false and the
     // authorization rule refuses the shared teardown.
-    const orphanBranch = fn.slice(fn.indexOf("const live = await findLiveProxy();"), fn.indexOf("const live = await findLiveProxy();") + 600);
+    const orphanBranch = fn.slice(fn.indexOf("const live = await io.findLiveProxy();"), fn.indexOf("const live = await io.findLiveProxy();") + 600);
     expect(orphanBranch).toContain("throw new Error(");
     // A findLiveProxy miss is not proof either: it goes through the tri-state probe first.
     expect(orphanBranch).toContain("could not be confirmed down either");
@@ -840,5 +843,83 @@ describe("uninstall restores recorded third-party integrations before deleting r
       expect(f.store.readRecordsStrict().pi).toBeDefined();
       expect(profiles[1]!.store.readRecordsStrict().aside).toBeDefined();
     } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+});
+
+describe("uninstall proxy stop defers the shared teardown through a receipt (#7771)", () => {
+  // Round 7 (A/B): the uninstall POST used to carry no deferral, so the proxy performed the
+  // shared client teardown itself BEFORE the Windows respawn window ran. If that window then
+  // failed, client config had already been restored under a wrapper that could relaunch the
+  // proxy. And when the service stop itself failed, the step could still fall through to
+  // taskkill /T /F. Both are decided here so they can be exercised without a machine.
+  const NONCE = "c".repeat(32);
+  const io = (over: Partial<Parameters<typeof stopUninstallProxy>[0]> = {}): Parameters<typeof stopUninstallProxy>[0] => ({
+    platform: "win32",
+    serviceStop: "stopped",
+    readPid: () => 4242,
+    findLiveProxy: async () => null,
+    endpointProvenDown: async () => true,
+    claim: () => ({ nonce: NONCE }),
+    stop: async () => true,
+    removeTracked: () => {},
+    portWaitOwned: () => true,
+    ...over,
+  });
+
+  test("Windows: the receipt is claimed before the child stop and its nonce travels on the POST", async () => {
+    const steps: string[] = [];
+    const seen: unknown[] = [];
+    const result = await stopUninstallProxy(io({
+      claim: () => { steps.push("claim"); return { nonce: NONCE }; },
+      stop: async (pid, stopIo) => { steps.push("stop:" + pid); seen.push(stopIo); return true; },
+      removeTracked: pid => { steps.push("remove:" + pid); },
+    }));
+    expect(steps).toEqual(["claim", "stop:4242", "remove:4242"]);
+    expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE }]);
+    expect(result).toEqual({ changed: true, provenDown: true, nonce: NONCE });
+  });
+
+  test("an orphan stop carries the same nonce and leaves the tracked records alone", async () => {
+    const seen: unknown[] = [];
+    const removed: number[] = [];
+    const result = await stopUninstallProxy(io({
+      readPid: () => null,
+      findLiveProxy: async () => ({ pid: 777, port: 12000 }),
+      stop: async (pid, stopIo) => { seen.push([pid, stopIo]); return true; },
+      removeTracked: pid => { removed.push(pid); },
+    }));
+    expect(seen).toEqual([[777, { skipPortWait: true, deferSharedTeardownNonce: NONCE }]]);
+    expect(removed).toEqual([]);
+    expect(result.nonce).toBe(NONCE);
+  });
+
+  test("a receipt that cannot be recorded refuses the stop instead of sending an undeferred POST", async () => {
+    let stopped = 0;
+    await expect(stopUninstallProxy(io({
+      claim: () => { throw new Error("disk full"); },
+      stop: async () => { stopped++; return true; },
+    }))).rejects.toThrow(/deferred-teardown receipt could not be recorded[\s\S]*disk full/);
+    expect(stopped).toBe(0);
+  });
+
+  test("off Windows nothing changes: no receipt, no fallback narrowing, today's port wait", async () => {
+    const seen: unknown[] = [];
+    let claimed = 0;
+    const result = await stopUninstallProxy(io({
+      platform: "linux", serviceStop: "failed",
+      claim: () => { claimed++; return { nonce: NONCE }; },
+      portWaitOwned: () => false,
+      stop: async (_pid, stopIo) => { seen.push(stopIo); return true; },
+    }));
+    expect(claimed).toBe(0);
+    expect(seen).toEqual([{ skipPortWait: false }]);
+    expect(result).toEqual({ changed: true, provenDown: true });
+  });
+
+  test("the receipt is finished only after the shared restore ran", async () => {
+    const { completeWindowsServiceStopReceipt } = await import("../../src/service/cli-windows-stop");
+    const cleared: string[] = [];
+    completeWindowsServiceStopReceipt(NONCE, nonce => { cleared.push(nonce); return true; });
+    expect(cleared).toEqual([NONCE]);
   });
 });
