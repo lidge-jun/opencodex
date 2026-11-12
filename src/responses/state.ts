@@ -609,9 +609,7 @@ bindSpillQueueStore({
 // once. It records the boundary whether the proxy prepended the history or the client already
 // carried it — the boundary is the same either way, and only its provenance differs.
 const replayedInputPrefixLengths = new WeakMap<object, number>();
-// Bodies whose replay boundary the CLIENT carried (the overlap-skip path): nothing was prepended,
-// so a consumer that must exclude only proxy-restored history reads a zero-length restored prefix.
-const clientCarriedReplays = new WeakSet<object>();
+const clientCarriedReplays = new WeakSet<object>(); // overlap skip: the client resent the window itself
 const replayFailures = new WeakMap<object, PreviousResponseReplayFailure>();
 let loaded = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1176,15 +1174,9 @@ export function previousResponseReplayPrefixLength(body: unknown): number {
   return replayedInputPrefixLengths.get(body) ?? 0;
 }
 
-/**
- * Number of leading input items the PROXY prepended from previous_response_id state. Unlike
- * `previousResponseReplayPrefixLength`, this is zero when the client already resent the stored
- * window verbatim (overlap skip): those items arrived on the wire from the client this turn.
- */
+/** Leading items the PROXY prepended; 0 when the client resent the stored window itself (overlap skip). */
 export function previousResponseRestoredPrefixLength(body: unknown): number {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return 0;
-  if (clientCarriedReplays.has(body)) return 0;
-  return replayedInputPrefixLengths.get(body) ?? 0;
+  return body && typeof body === "object" && clientCarriedReplays.has(body) ? 0 : previousResponseReplayPrefixLength(body);
 }
 
 /** Copy proxy-private replay provenance to an internal clone with the same materialized input. */
