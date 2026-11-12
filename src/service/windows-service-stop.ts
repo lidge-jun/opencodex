@@ -6,9 +6,10 @@
  * remove, prepareServiceInstall and the updater. It owns:
  *
  * - the stop deadline (030 "Time budget"): --deadline-ms or OCX_STOP_DEADLINE_MS for
- *   ocx stop, 60 s otherwise, measured from this process's start (performance.now() counts
- *   from performance.timeOrigin, the process start, so the deadline is an absolute value on
- *   the Part A clock);
+ *   ocx stop, measured from the command's start (performance.now() counts from
+ *   performance.timeOrigin, the process start, so the deadline is an absolute value on the
+ *   Part A clock); every other caller starts the default 60 s when its stop phase begins,
+ *   because registration and the UAC prompt can come first;
  * - the admission inputs and the mapping of Part A onto ServiceStopOutcome;
  * - the Part A record a teardown receipt carries, so /api/stop can skip a second Part A;
  * - a hook seam so caller tests run hermetically (no schtasks, PowerShell or FFI).
@@ -27,9 +28,10 @@ import { windowsStopDeadlineAt } from "./windows-stop-deadline";
 
 export { parseStopDeadlineMs, resolveStopDeadlineMs, setStopDeadlineMs, STOP_DEADLINE_ENV, windowsStopDeadlineAt } from "./windows-stop-deadline";
 
-/** Time left on the stop deadline, measured on the Part A clock. */
+/** Time left on the stop deadline, measured on the Part A clock (one clock read). */
 export function windowsStopRemainingMs(now: () => number = windowsStopClock.now): number {
-  return windowsStopDeadlineAt() - now();
+  const at = now();
+  return windowsStopDeadlineAt(at) - at;
 }
 
 export function configuredShutdownTimeoutMs(): number | undefined {

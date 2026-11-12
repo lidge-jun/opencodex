@@ -20,6 +20,7 @@ import {
   UNDER_OWN_WRAPPER_DETAIL,
   windowsPartARecord,
   windowsStopAdmission,
+  windowsStopRemainingMs,
   resolveStopDeadlineMs,
   parseStopDeadlineMs,
   serviceStopOutcomeFromWindows,
@@ -186,11 +187,34 @@ describe("the stop deadline", () => {
     expect(parseStopDeadlineMs("0")).toBeNull();
   });
 
-  test("measured from process start: the deadline is the Part A clock value", () => {
+  test("ocx stop's deadline is the command-start clock value it recorded", () => {
     setStopDeadlineMs(72_000);
-    expect(windowsStopDeadlineAt()).toBe(72_000);
+    expect(windowsStopDeadlineAt(0)).toBe(72_000);
+    expect(windowsStopDeadlineAt(42_000)).toBe(72_000);
+    // Command start, not stop phase: 30 s of the budget are already spent at t=30_000.
+    expect(windowsStopRemainingMs(() => 30_000)).toBe(42_000);
+  });
+
+  test("every other caller starts its 60 s when the stop begins, not when the process did", () => {
+    // installFreshWindowsSchedulerSafely reaches the stop only after registration and the UAC
+    // prompt, so by then this process can be minutes old. Measuring from process start made
+    // admission refuse `unverified-budget` for a stop that had its whole budget left.
     setStopDeadlineMs(null);
-    expect(windowsStopDeadlineAt()).toBe(60_000);
+    const phaseStart = 600_000;
+    expect(windowsStopRemainingMs(() => phaseStart)).toBe(DEFAULT_WINDOWS_STOP_DEADLINE_MS);
+    // One deadline governs the whole stop: a later read inside it does not slide forward.
+    expect(windowsStopDeadlineAt(phaseStart + 20_000)).toBe(phaseStart + DEFAULT_WINDOWS_STOP_DEADLINE_MS);
+    expect(windowsStopRemainingMs(() => phaseStart + 20_000)).toBe(DEFAULT_WINDOWS_STOP_DEADLINE_MS - 20_000);
+  });
+
+  test("recording a new command deadline clears an armed stop phase", () => {
+    setStopDeadlineMs(null);
+    expect(windowsStopRemainingMs(() => 5_000)).toBe(DEFAULT_WINDOWS_STOP_DEADLINE_MS);
+    setStopDeadlineMs(9_000);
+    expect(windowsStopDeadlineAt(5_000)).toBe(9_000);
+    // And un-setting it again re-arms at the next stop phase rather than keeping 9_000.
+    setStopDeadlineMs(null);
+    expect(windowsStopRemainingMs(() => 5_000)).toBe(DEFAULT_WINDOWS_STOP_DEADLINE_MS);
   });
 
   test("ocx stop parses --deadline-ms anywhere and keeps the approval grammar", () => {
