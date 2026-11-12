@@ -95,6 +95,8 @@ array, including empty, so removing a preference cannot retain an earlier build'
 replaced image function only when that send still declares the hosted capability. A filtered tool or
 lowered `none` selector never erases caller intent: missing calls retain the usual pre-commit fallback
 or post-commit typed failure. Caller hosted non-function selectors retain their terminal owner.
+The outbound request parser shared with passthrough lives in `src/server/responses/outbound-request-body.ts`,
+so required-tool checks do not import the stream recovery owner.
 Completed item events and terminal snapshots can satisfy it; a call start alone cannot.
 Missing calls turn `response.completed` into `response.failed` with
 `required_tool_contract_unsatisfied`, retaining response identity, output and usage.
@@ -135,16 +137,67 @@ event-stream token. A caller can still opt into inspecting a response without a 
 JSON from a native (non-runTurn) child is therefore never inspected here: an empty `max_output_tokens`
 limit in such a body is returned to the client unchanged, and only SSE and runTurn children fail over on it.
 
-Native post-header reset recovery shares that boundary, because it is asking the same question about
-the same bytes. With `replayReadErrors`, a read error that arrives while the preflight is still
-inspecting returns the buffered prefix with the stage it observed — `headers-only` until
-`response.created`, `protocol-prelude` after it — and the resend gate decides. Control frames
-(`response.in_progress`, `response.queued`, `response.heartbeat`, the Codex metadata frames below, a
-held mandatory-tool reasoning prelude) do not advance the stage. Once output or a payload the
-preflight could not parse commits the stream, or a terminal ends inspection, the preflight returns
-`accepted` (`failed` for a retryable zero-output terminal); a later read error belongs to the relay
-and never reaches the resend gate. A `response.created` whose snapshot already carries output items
-is not a prelude: it commits.
+Native post-header reset recovery shares that boundary, because it is asking the same question
+about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
+`headers-only` before any parsed event, `protocol-prelude` after `response.created`,
+`semantic-output` once anything else arrives, including a payload it could not parse — and the
+resend gate decides. Control frames (`response.in_progress`, `response.queued`,
+`response.heartbeat`, the Codex metadata frames below, a held mandatory-tool reasoning prelude) do
+not advance the stage. Once output commits the stream or a terminal ends inspection, a later read
+error belongs to the relay and never reaches the resend gate. A lifecycle event with output, an error, incomplete details, a contradictory
+status, a replay-unsafe mark, unknown event or snapshot fields, or unsafe nested metadata commits the original stream.
+An SSE event name that conflicts with its JSON type, an opaque frame,
+or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
+read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
+owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
+Native passthrough starts this preflight at dispatch, before it returns a head
+(`selectProtocolSafeResetResponse` in `src/server/responses/combo-stream-preflight.ts`), and only
+for a request the resend gate could replace: a request that is not self-contained is relayed without
+preflight, so nothing holds its head or prelude. Dispatch
+waits for whichever comes first: the selection, an abort, or a deadline of one 15-second heartbeat
+interval capped by the stall timeout. Returning the response is the last point at which dispatch can
+choose a head, so a direct stream also commits the original head once the original's own inspection
+has run for `DIRECT_RESET_INSPECTION_WINDOW_MS` (200 ms, `src/server/responses/passthrough-completion.ts`):
+a quiet source may be a healthy slow turn. A failure observed inside that window ends the window, and
+only the replacement's head is then awaited, still bounded by the deadline, as after a pre-header reset.
+Canonical buffered JSON and combo children keep the deadline alone, because their consumer publishes
+no client head before its own inspection ends. A selection that finishes first publishes the selected
+response, including a replacement with its own status and headers. If the deadline or the window wins, the
+original head is returned and the same preflight continues behind it. From then on acceptance
+depends on how the stream ended, because a deferred body can never change the head the client
+already holds. A read error keeps the reset lane's long-standing behaviour: the replacement body is
+published behind the original head, with no metadata comparison at all, since a real origin varies
+`date`, request ids and quota headers on every attempt and requiring equality made that
+recovery unreachable. A clean pre-output EOF is a different attempt answering the same turn, so it
+must agree with the committed head under `sameDeferredResponseIdentity`: status, status text,
+content-type media type, `openai-model` and `x-codex-turn-state`
+(`src/server/responses/combo-stream-preflight.ts`). Those two headers are the identity a
+mismatched body would corrupt -- the model the origin actually served, and this proxy's own turn
+handle, bound at issuance and redeemed against the upstream turn token at the physical send --
+while volatile and hop-by-hop headers (`date`, `x-request-id`, `request-id`,
+`cf-ray`, `server-timing`, `x-ratelimit-*`, `openai-processing-ms`,
+`content-length`, `transfer-encoding`, `connection`, `keep-alive`) are
+ignored because the client already holds the original's values. A mismatch is cancelled and the
+original bytes and error are preserved; the check runs when the recovery accepts the replacement
+and again when it lands.
+`src/server/responses/passthrough-completion.ts` binds the published head to the main quota proof
+of the attempt that produced it ([OpenAI tiers](../providers/openai-tiers.md)). Direct streaming
+clients get an SSE comment on their first read after a deadline commit and then once per heartbeat
+interval while the hold lasts. A window commit owes the same first comment at once: Bun's server
+writes a response head only with its first body bytes, so a returned head with a silent body never
+reaches the client. Combo streaming
+children omit those timer-generated comments while their parent holds the headers, so those comments
+cannot consume the retained-chunk cap. In all selection modes, the stall budget runs on upstream
+reads: `src/server/responses/passthrough-completion.ts` guards the original body and any accepted
+replacement before preflight, so each physical attempt is bounded from its own head and only its
+non-empty reads restart the clock. A prelude read during selection and replayed later, or a generated
+comment, cannot extend it, and the reset gate never resends a guard timeout. For canonical buffered
+JSON, the collector reports the guard's failure as a stall timeout. The hold emits a comment only when
+it reads non-empty upstream bytes or a replacement head lands behind a committed head, so the collector's own clock, which starts after
+selection and sees only delivered bytes, never ends a turn before the guard would. The byte and chunk
+caps and the collector's whole-turn ceiling remain in force. That ceiling runs from the moment selection began holding the head (`bufferedResetSelectionStartedAt` in `src/server/responses/passthrough-completion.ts`), so the selection wait counts against it while sends before selection do not (#8343).
+Downstream cancellation or the request's abort signal ends the selection or hold at once, aborts an
+in-flight replacement, and never awaits upstream cleanup.
 
 - a non-control Responses event (apart from the held mandatory-tool reasoning prelude above and the
   Codex metadata frames) begins client-visible output or a tool/action item, after which the

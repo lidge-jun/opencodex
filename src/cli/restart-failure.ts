@@ -1,12 +1,13 @@
 import type { ProxyRestartResult } from "./tray-proxy";
 
-export type RestartSupervisor = "desktop" | "service";
+export type RestartSupervisor = "desktop" | "service" | "service-unproven";
 
 /** Only the bound client's explicit refusal establishes a supervisor for sync. */
 export function supervisedRestartRefusal(result: ProxyRestartResult): RestartSupervisor | null {
   if (result.ok || result.phase !== "request" || !(result.error instanceof Error)) return null;
   if (result.error.message === "restart_supervised_desktop") return "desktop";
   if (result.error.message === "restart_supervised_service") return "service";
+  if (result.error.message === "restart_supervised_service-unproven") return "service-unproven";
   return null;
 }
 
@@ -35,8 +36,10 @@ export function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: f
       console.error(`The proxy's package files are unsettled. Wait for the install to finish, then run \`ocx restart\`. ${INCOMPLETE_INSTALL_RECOVERY}`);
     } else if (code === "restart_supervised_service") {
       console.error("Restart not performed; the running client runtime was kept. Its background service owns it: run `ocx service restart`.");
+    } else if (code === "restart_supervised_service-unproven") {
+      console.error("Restart not performed; the running client runtime was kept. A service manager started it (systemd opencodex-proxy.service, launchd com.opencodex.proxy or the Windows OpenCodex service), but it is not enabled or its relaunch could not be verified: restart it through the manager with 'ocx service restart', or check 'ocx service status'.");
     } else if (code === "restart_supervised_desktop") {
-      console.error("Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it: restart it from the app.");
+      console.error("Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it while its connection is current: use Quit in the OpenCodex tray menu, then reopen it. After `ocx disconnect`, `ocx restart` hands it to the app.");
     } else {
       console.error("Proxy restart request could not be confirmed; no fallback stop/start was attempted. Run `ocx status` to inspect ownership and runtime state.");
     }
