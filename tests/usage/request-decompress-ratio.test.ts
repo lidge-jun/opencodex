@@ -62,6 +62,33 @@ describe("compressed request body ratio bound (#3023)", () => {
     expect(error).toBeInstanceOf(DecompressedBodyTooLargeError);
     expect(error).not.toBeInstanceOf(CompressionRatioExceededError);
   });
+
+  test("a truncated frame yields only its complete blocks, never past the bound", () => {
+    const plain = new TextEncoder().encode(JSON.stringify({ input: "x".repeat(300_000) }));
+    const frame = zstdCompressSync(plain);
+    for (const cut of [frame.subarray(0, frame.byteLength - 5), frame.subarray(0, 8)]) {
+      const decoded = decodeRequestBody(cut, "zstd");
+      expect(decoded.byteLength).toBeLessThan(plain.byteLength);
+      expect(() => JSON.parse(new TextDecoder().decode(decoded))).toThrow();
+    }
+  });
+
+  test("concatenated frames decode in full, and the ratio bound counts their total", () => {
+    const first = new TextEncoder().encode(JSON.stringify({ input: "first" }));
+    const one = zstdCompressSync(first);
+    const block = new Uint8Array(6 * 1024 * 1024).fill(0x62);
+    const two = zstdCompressSync(block);
+    expect(decodeRequestBody(new Uint8Array(Buffer.concat([one, two])), "zstd").byteLength).toBe(first.byteLength + block.byteLength);
+    const ten = new Uint8Array(Buffer.concat(Array(10).fill(two)));
+    expect(refusal(() => decodeRequestBody(ten, "zstd"))).toBeInstanceOf(CompressionRatioExceededError);
+  });
+
+  test("a frame header asking for a window above 128 MiB is refused before any output", () => {
+    // Magic, a descriptor with no content size, the window descriptor, then one raw one-byte last block.
+    const frame = (windowLog: number) => new Uint8Array([0x28, 0xb5, 0x2f, 0xfd, 0x00, (windowLog - 10) << 3, 0x09, 0x00, 0x00, 0x41]);
+    expect(new TextDecoder().decode(decodeRequestBody(frame(27), "zstd"))).toBe("A");
+    for (const windowLog of [28, 31]) expect(() => decodeRequestBody(frame(windowLog), "zstd")).toThrow("too much memory");
+  });
 });
 
 describe("the data plane refuses a compression bomb (#3023)", () => {
@@ -89,6 +116,21 @@ describe("the data plane refuses a compression bomb (#3023)", () => {
       });
       expect(response.status).toBe(413);
       expect(await response.text()).toContain("compression bombs");
+    } finally { await server.stop(true); }
+  });
+
+  test("a truncated frame and an oversized window both answer 400 without reaching a provider", async () => {
+    const server = startServer(0);
+    try {
+      const frame = zstdCompressSync(new TextEncoder().encode(JSON.stringify({ input: "x".repeat(300_000) })));
+      const window = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd, 0x00, 18 << 3, 0x09, 0x00, 0x00, 0x41]);
+      for (const body of [frame.subarray(0, frame.byteLength - 5), window]) {
+        const response = await fetch(`http://127.0.0.1:${server.port}/v1/responses`, {
+          method: "POST", body, headers: { "content-type": "application/json", "content-encoding": "zstd" },
+        });
+        expect(response.status).toBe(400);
+        await response.arrayBuffer();
+      }
     } finally { await server.stop(true); }
   });
 });
