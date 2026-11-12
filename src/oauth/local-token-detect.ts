@@ -73,16 +73,6 @@ function claudeConfigDir(): string {
 }
 
 /**
- * Read the Claude Code OAuth credential from the macOS Keychain (darwin only). A synchronous
- * read cannot time out without killing `security`, which can crash `securityd` while an unlock
- * prompt is pending (#8161), so it does not spawn while a read is still running or backing off,
- * and its own timeout starts that backoff (`claude-keychain-read.ts`).
- */
-function readClaudeKeychain(): string | null {
-  return claudeKeychainReader.readSync();
-}
-
-/**
  * Read the Claude Code credential file (`<config-dir>/.credentials.json`).
  * Claude Code writes this on Linux/Windows (and on macOS when the Keychain is
  * unavailable); it carries the same `claudeAiOauth` payload as the Keychain item.
@@ -98,26 +88,21 @@ export function readClaudeCredentialsFile(): string | null {
   }
 }
 
-/** Keychain first on macOS, then the cross-platform credentials file. */
-function readClaudeSecureStorage(): string | null {
-  // An explicit config-dir override identifies a separate Claude installation/profile.
-  // Do not let the default macOS Keychain entry shadow that requested credential file.
-  if (process.env.CLAUDE_CONFIG_DIR?.trim()) return readClaudeCredentialsFile() ?? readClaudeKeychain();
-  return readClaudeKeychain() ?? readClaudeCredentialsFile();
-}
-
 /**
- * Non-blocking Keychain read for request paths; same item and deadline as the sync reader. A
- * timed-out child is left to exit on its own, concurrent reads share one child, and a timeout
- * backs off before the next spawn (`claude-keychain-read.ts`).
+ * The Claude Code OAuth credential from the macOS Keychain (darwin only). There is no synchronous
+ * variant: a synchronous read cannot time out without killing `security`, which can crash
+ * `securityd` while an unlock prompt is pending (#8161). A timed-out child is left to exit on its
+ * own, concurrent reads share one child, and a timeout backs off before the next spawn
+ * (`claude-keychain-read.ts`).
  */
 function readClaudeKeychainAsync(): Promise<string | null> {
   return claudeKeychainReader.readAsync();
 }
 
 /**
- * Async variant of {@link detectClaudeCodeToken} with the same source precedence. A request-path
- * caller must not hold the event loop for a Keychain lookup (up to five seconds).
+ * The Claude Code sign-in: Keychain first on macOS, then the cross-platform credentials file. An
+ * explicit `CLAUDE_CONFIG_DIR` names a separate Claude profile, so its credentials file wins and
+ * the default Keychain entry cannot shadow it.
  */
 export async function detectClaudeCodeTokenAsync(): Promise<OAuthCredentials | null> {
   const raw = process.env.CLAUDE_CONFIG_DIR?.trim()
@@ -138,12 +123,6 @@ export function parseClaudeOauthPayload(raw: string): OAuthCredentials | null {
   } catch {
     return null;
   }
-}
-
-export function detectClaudeCodeToken(): OAuthCredentials | null {
-  const raw = readClaudeSecureStorage();
-  if (!raw) return null;
-  return parseClaudeOauthPayload(raw);
 }
 
 /** Shared-token continuity for opaque Claude tokens; fully rotated pairs need authenticated account proof. */

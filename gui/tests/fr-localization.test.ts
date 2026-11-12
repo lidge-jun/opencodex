@@ -49,6 +49,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "zoom.label",
   // "Actions" is the ordinary French word for a row's action column, read only by screen readers.
   "api.colActions",
+  // The GOAT product name, which the plan's 060 key table gives as "GOAT" in every locale.
+  "remoteLink.child.kind.goat",
   "common.github",
   // Product names and ordinary French words whose correct spelling is identical to English.
   "remote.pairingCommandWindows",
