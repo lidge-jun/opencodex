@@ -1425,6 +1425,14 @@ hard lock remains a separate local policy and is not lifted by the credits switc
 
 `ocx account history openai <pool-account-id> [--limit 1-200] [--json]` reads stored observations without contacting the provider. The output separates actual observation time, WHAM or response-header source, window family and usage percentage. At most 200 observations per account are retained for 30 days, with global storage bounds.
 
+When the same pool account keeps reporting two different seven-day windows (for example 100% used
+with a reset in a few hours, then 24% used with a reset next week), the account row carries
+`weeklyQuotaConflicts` with each window's usage, reset, source and last observation time. The
+QUOTA column of `ocx account list openai --quota` adds `(weekly windows conflict)`, and the
+dashboard card explains that the reset it shows may not restore the full allowance. OpenCodex does
+not pick either window and does not change account selection, hard locks or credit use because of
+it. The warning clears once the earlier reset time has passed.
+
 Ordinary token refresh preserves history. Reauthentication, removal or account replacement retires the old publication. Native main and probes performed before a login is published are not included. Missing history means insufficient observations, not zero usage. This command does not spend quota. Effective estimates, when supported by observations, carry the limitations below.
 
 The history output also includes effective reported-token estimates when same-window observations and attributable usage support them. Each estimate includes a sample count and low confidence. Quota rounding, external usage and assumed log-label continuity limit the inference; it is not your provider’s token allowance. Missing or truncated ledger evidence returns insufficient evidence. `--limit` controls displayed history, not the bounded estimate input.

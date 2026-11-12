@@ -1134,6 +1134,8 @@ export type SseInspectorHandlers = {
    * with an empty `output`.
    */
   onParsedPayload?: (payload: unknown) => void;
+  /** Opt-in access to the original bounded frame before payload classification. */
+  onFrame?: (frame: string) => void;
   /**
    * A complete data payload that did not parse as a JSON event, `[DONE]` included.
    *
@@ -1467,6 +1469,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     const frame = takeCandidate();
     if (reported && !handlers.onCompletedResponse && !handlers.onTerminalResponse) return;
     const decoded = decoder!.decode(frame);
+    try { handlers.onFrame?.(decoded); } catch { /* inspection must never throw into the pump */ }
     scanPayload(sseDataPayload(decoded), sourceBytes);
   };
 
@@ -1524,6 +1527,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
         if (!discardingOversizedFrame && candidateBytes > 0 && !reported) {
           const sourceBytes = candidateBytes;
           const decoded = decoder!.decode(takeCandidate());
+          try { handlers.onFrame?.(decoded); } catch { /* inspection must never throw into the pump */ }
           scanPayload(decoded.trim() ? sseDataPayload(decoded) : null, sourceBytes);
         }
       } finally {

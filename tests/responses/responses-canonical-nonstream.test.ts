@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { getDefaultConfig } from "../../src/config";
@@ -17,6 +17,8 @@ import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/t
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { repoPath } from "../helpers/repo-root";
+import * as pacing from "../../src/providers/request-pacing";
+import * as adapterResolve from "../../src/server/adapter-resolve";
 
 const provider: OcxProviderConfig = {
   adapter: "openai-responses",
@@ -99,6 +101,117 @@ function call(
 function sseEvent(type: string, payload: Record<string, unknown>): string {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`;
 }
+
+describe("physical hosted image replay safety", () => {
+  test("a queued replacement is refused if credential rebuilding adds a hosted tool", async () => {
+    const sent: Record<string, unknown>[] = [];
+    let releaseQueue!: () => void;
+    let queued!: () => void;
+    const queueGate = new Promise<void>(resolve => { releaseQueue = resolve; });
+    const queuedSignal = new Promise<void>(resolve => { queued = resolve; });
+    const waitForSlot = pacing.waitForProviderRequestSlot;
+    const resolveAdapter = adapterResolve.resolveAdapter;
+    const built: Record<string, unknown>[] = [];
+    const adapterSpy = spyOn(adapterResolve, "resolveAdapter").mockImplementation((...args) => {
+      const adapter = resolveAdapter(...args);
+      const build = adapter.buildRequest.bind(adapter);
+      adapter.buildRequest = async (...buildArgs) => {
+        const request = await build(...buildArgs);
+        built.push(JSON.parse(request.body) as Record<string, unknown>);
+        return request;
+      };
+      return adapter;
+    });
+    let waits = 0;
+    const spy = spyOn(pacing, "waitForProviderRequestSlot").mockImplementation(async (...args) => {
+      if (++waits === 2) { queued(); await queueGate; }
+      return waitForSlot(...args);
+    });
+    globalThis.fetch = (async (_input, init) => {
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (sent.length === 1) throw Object.assign(new Error("fixture reset"), { code: "ECONNRESET" });
+      return new Response(sseEvent("response.completed", { response: { id: "replacement", status: "completed", output: [] } }), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const fixture: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://provider.example.test/v1",
+      authMode: "key", apiKey: "fixture-key", retryOnReset: {}, apiKeySelectionRevision: "initial",
+      requestPacing: { enabled: true, maxConcurrentRequests: 1 } };
+    const requestConfig: OcxConfig = { ...config, defaultProvider: "fixture", providers: { fixture } };
+    try {
+      const pending = call({ ...requestBody(true, false), model: "fixture/gpt-5.6-sol", tools: [{ type: "function", name: "image_gen.imagegen", parameters: { type: "object", properties: {} } }] }, {}, requestConfig);
+      await queuedSignal;
+      fixture.modelPreferHostedTools = { "gpt-5.6-sol": ["image_generation"] };
+      fixture.apiKeySelectionRevision = "changed";
+      releaseQueue();
+      const response = await pending;
+      const text = await response.text();
+      expect(built.length).toBeGreaterThanOrEqual(2);
+      expect(built.at(-1)?.tools).toContainEqual({ type: "image_generation" });
+      expect(sent).toHaveLength(1);
+      expect(text).toContain("upstream_reset_replay_refused");
+      expect(text).not.toContain("replacement");
+    } finally { releaseQueue(); spy.mockRestore(); adapterSpy.mockRestore(); pacing.resetProviderRequestPacingForTest(); }
+  });
+
+  test.each([false, true])("a purely client-executed tool can use the replacement grant (combo=%s)", async combo => {
+    const sent: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      const event = sent.length === 1
+        ? sseEvent("response.created", { response: { id: "original", status: "in_progress", output: [] } })
+        : sseEvent("response.completed", { response: { id: "replacement", status: "completed", output: [] } });
+      return new Response(event, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const requestConfig: OcxConfig = { ...config, providers: { openai: { ...provider, retryOnReset: {} },
+      ...(combo ? { fixture: { adapter: "openai-responses", baseUrl: "https://provider.example.test/v1", authMode: "key", apiKey: "fixture-key", retryOnReset: {} } } : {}) },
+      ...(combo ? { combos: { replay: { strategy: "failover", targets: [{ provider: "fixture", model: "gpt-5.6-sol" }] } } } : {}) };
+    const response = await call({ ...requestBody(true, false), ...(combo ? { model: "combo/replay" } : {}), tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }] }, {}, requestConfig);
+    const text = await response.text();
+    expect(sent).toHaveLength(2);
+    expect(text).toContain("replacement");
+  });
+
+  test("an exhausted replacement grant cannot send a third client-tool request", async () => {
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      return new Response(sseEvent("response.created", { response: { id: `attempt_${sends}`, status: "in_progress", output: [] } }), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const requestConfig: OcxConfig = { ...config, providers: { openai: { ...provider, retryOnReset: { enabled: true, replacements: 1 } } } };
+    const response = await call({ ...requestBody(true, false), tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }] }, {}, requestConfig);
+    await response.text();
+    expect(sends).toBe(2);
+  });
+
+  for (const ending of ["eof", "reset", "pre-header"] as const) {
+    test(`does not resend a substituted image tool after ${ending}`, async () => {
+      const sent: Record<string, unknown>[] = [];
+      const prelude = sseEvent("response.created", { response: { id: "original", status: "in_progress", output: [] } });
+      globalThis.fetch = (async (_input, init) => {
+        sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (sent.length > 1) return new Response(sseEvent("response.completed", { response: { id: "replacement", status: "completed", output: [] } }), { headers: { "content-type": "text/event-stream" } });
+        if (ending === "pre-header") throw Object.assign(new Error("fixture reset"), { code: "ECONNRESET" });
+        let first = true;
+        return new Response(new ReadableStream<Uint8Array>({ pull(controller) {
+          if (first) { first = false; controller.enqueue(new TextEncoder().encode(prelude)); }
+          else if (ending === "eof") controller.close();
+          else controller.error(Object.assign(new Error("fixture reset"), { code: "ECONNRESET" }));
+        } }), { headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch;
+      const requestConfig: OcxConfig = { ...config, defaultProvider: "fixture", providers: { fixture: { ...provider, baseUrl: "https://provider.example.test/v1", authMode: "key", apiKey: "fixture-key", retryOnReset: {},
+        modelPreferHostedTools: { "gpt-5.6-sol": ["image_generation"] } } } };
+      const response = await call({ ...requestBody(true, false), model: "fixture/gpt-5.6-sol", tools: [{ type: "function", name: "image_gen.imagegen", parameters: { type: "object", properties: {} } }] }, {}, requestConfig);
+      let text = "";
+      let readError: unknown;
+      try { text = await response.text(); } catch (error) { readError = error; }
+      expect(sent[0]?.tools).toContainEqual({ type: "image_generation" });
+      expect(sent).toHaveLength(1);
+      if (ending === "eof") expect(text).toContain("original");
+      if (ending === "reset") expect(readError ? String(readError) : text).toContain("fixture reset");
+      if (ending === "pre-header") expect(text).toContain("upstream_reset_replay_refused");
+      expect(text).not.toContain("replacement");
+    });
+  }
+});
 
 describe("canonical ChatGPT transport for non-streaming Responses callers (#6162)", () => {
   test.each([false, true])("forces upstream SSE without changing explicit store:%s", store => {
@@ -349,6 +462,446 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     expect(outbound).toHaveLength(2);
     expect(outbound.map(body => body.stream)).toEqual([true, true]);
   });
+
+  test.each([
+    ["self-contained buffered", false, false, true, false, 2],
+    ["self-contained streaming", true, false, true, false, 2],
+    ["no opt-in", false, false, false, false, 1],
+    ["stored request", false, true, true, false, 1],
+    ["persistent EOF", false, false, true, true, 2],
+  ] as const)("clean prelude EOF recovery: %s", async (_name, stream, store, enabled, persistent, expectedSends) => {
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      const first = sseEvent("response.created", { response: { id: "resp_first", status: "in_progress", output: [] } });
+      const completed = sseEvent("response.completed", { response: {
+        id: "resp_replacement", status: "completed", model: "gpt-5.6-sol", output: [],
+      } });
+      return new Response(sends === 1 || persistent ? first : completed, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const resetConfig: OcxConfig = {
+      ...config, providers: { openai: { ...provider, ...(enabled ? { retryOnReset: {} } : {}) } },
+    };
+    const response = await call(requestBody(stream, store), {}, resetConfig);
+    const text = await response.text();
+    expect(sends).toBe(expectedSends);
+    if (expectedSends === 2 && !persistent) {
+      expect(response.status).toBe(200);
+      expect(text).toContain("resp_replacement");
+      expect(text).not.toContain("resp_first");
+    } else {
+      expect(text).not.toContain("resp_replacement");
+    }
+  });
+
+  const selectionMatrix = (["eof", "reset"] as const).flatMap(ending => ([[true, false], [false, false], [true, true], [false, true]] as const)
+    .map(([stream, combo]) => [ending, stream, combo] as const));
+  const metadataHeaders = (turn: string, requestId: string, remaining: string): Record<string, string> => ({
+    "content-type": "text/event-stream", "x-codex-turn-state": turn, "x-request-id": requestId,
+    "x-ratelimit-remaining-requests": remaining,
+  });
+  const metadataConfig = (combo: boolean): OcxConfig => ({ ...config, providers: { openai: { ...provider, retryOnReset: {} },
+    ...(combo ? { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "fixture-key",
+      baseUrl: "https://provider.example/v1", retryOnReset: {} } } : {}) },
+    ...(combo ? { combos: { metadata: { strategy: "failover", targets: [{ provider: "fixture", model: "gpt-5.6-sol" }] } } } : {}) });
+  const metadataBody = (stream: boolean, combo: boolean) => ({ ...requestBody(stream, false), ...(combo ? { model: "combo/metadata" } : {}) });
+  /** A created prelude, then a pre-output EOF or connection reset once `gate` opens. */
+  const preludeThenEnd = (ending: "eof" | "reset", headers: Record<string, string>, waiting?: () => void, gate?: Promise<void>,
+    cancel?: () => unknown) => {
+    let sent = false;
+    return new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new TextEncoder().encode(sseEvent("response.created", { response: { id: "resp_original", status: "in_progress", output: [] } })));
+          return;
+        }
+        waiting?.();
+        await gate;
+        if (ending === "eof") controller.close();
+        else controller.error(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" }));
+      },
+      cancel,
+    }, { highWaterMark: 0 }), { headers });
+  };
+  const trackedReplacement = (state: { cancelled: boolean }) => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) { controller.enqueue(new TextEncoder().encode(sseEvent("response.completed", {
+      response: { id: "resp_replacement", status: "completed", output: [] },
+    }))); controller.close(); },
+    cancel() { state.cancelled = true; },
+  }, { highWaterMark: 0 }), { headers: metadataHeaders("second", "second-id", "6") });
+  const flushMicrotasks = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
+
+  test.each(selectionMatrix)("publishes a pre-head %s replacement with its own metadata (stream=%s, combo=%s)", async (ending, stream, combo) => {
+    let sends = 0;
+    const replacement = { cancelled: false };
+    const outboundTurnState: (string | null)[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sends++;
+      outboundTurnState.push(new Headers(init?.headers).get("x-codex-turn-state"));
+      if (sends === 1) return preludeThenEnd(ending, metadataHeaders("first", "first-id", "7"));
+      if (sends === 2) return trackedReplacement(replacement);
+      return new Response(sseEvent("response.completed", { response: { id: "resp_follow_up", status: "completed", output: [] } }),
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const resetConfig = metadataConfig(combo);
+    const response = await call(metadataBody(stream, combo), {}, resetConfig);
+    const text = await response.text();
+    expect(sends).toBe(2);
+    expect(response.status).toBe(200);
+    expect(text).toContain("resp_replacement");
+    expect(text).not.toContain("resp_original");
+    expect(replacement.cancelled).toBe(false);
+    expect(response.headers.get("x-ratelimit-remaining-requests")).toBe("6");
+    const handle = response.headers.get("x-codex-turn-state");
+    expect(handle).not.toBeNull();
+    // A key-auth combo target never receives a client turn state; the direct route redeems it.
+    if (combo) return;
+    // The client echoes the published turn state; it must redeem to the replacement's token.
+    const followUp = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer fixture-forward-token", "x-codex-turn-state": handle! },
+      body: JSON.stringify(metadataBody(true, combo)),
+    }), resetConfig, { model: "", provider: "" });
+    await followUp.text();
+    expect(sends).toBe(3);
+    expect(outboundTurnState[2]).toBe("second");
+  });
+
+  test.each(selectionMatrix)("a heartbeat commits the original head before a later %s (stream=%s, combo=%s)", async (ending, stream, combo) => {
+    jest.useFakeTimers();
+    let sends = 0;
+    const replacement = { cancelled: false };
+    const gate = Promise.withResolvers<void>();
+    const waiting = Promise.withResolvers<void>();
+    globalThis.fetch = (async () => {
+      sends++;
+      return sends === 1
+        ? preludeThenEnd(ending, metadataHeaders("first", "first-id", "7"), waiting.resolve, gate.promise)
+        : trackedReplacement(replacement);
+    }) as typeof fetch;
+    const pending = call(metadataBody(stream, combo), {}, metadataConfig(combo));
+    try {
+      // Selection is still open: the prelude is held and the upstream has not ended.
+      await waiting.promise;
+      await flushMicrotasks();
+      expect(sends).toBe(1);
+      jest.advanceTimersByTime(15_000);
+      await flushMicrotasks();
+      let text = "";
+      let response: Response;
+      if (stream && !combo) {
+        // The direct client already holds the original head and an immediate keepalive.
+        response = await pending;
+        const reader = response.body!.getReader();
+        const first = await reader.read();
+        expect(new TextDecoder().decode(first.value)).toBe(": keepalive\n\n");
+        gate.resolve();
+        for (;;) {
+          const next = await reader.read().catch(() => ({ done: true as const, value: undefined }));
+          if (next.done) break;
+          text += new TextDecoder().decode(next.value);
+        }
+      } else {
+        gate.resolve();
+        response = await pending;
+        text = await response.text();
+      }
+      expect(sends).toBe(2);
+      if (ending === "reset") {
+        // A read error behind a committed head is dev's reset lane: the fresh attempt's body is
+        // published under the head the client already holds, metadata differences included.
+        expect(replacement.cancelled).toBe(false);
+        expect(text).toContain("resp_replacement");
+        expect(text).not.toContain("resp_original");
+      } else {
+        // A clean pre-output EOF has to agree on the identity subset. This replacement differs
+        // in `x-codex-turn-state`, so it is refused and the original head keeps its own stream.
+        expect(replacement.cancelled).toBe(true);
+        expect(text).not.toContain("resp_replacement");
+        if (stream && !combo) {
+          expect(text).toContain("resp_original");
+          expect(response.headers.get("x-ratelimit-remaining-requests")).toBe("7");
+        }
+      }
+    } finally {
+      gate.resolve();
+      await pending.then(response => response.body?.cancel().catch(() => undefined), () => undefined);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  // Pre-head selection publishes a replacement's own status, so the existing 2xx refetch gate matters.
+  test.each([true, false])("a failed pre-head replacement never replaces the original (stream=%s)", async stream => {
+    let sends = 0;
+    const replacement = { cancelled: false };
+    globalThis.fetch = (async () => {
+      sends++;
+      if (sends === 1) return preludeThenEnd("reset", metadataHeaders("first", "first-id", "7"));
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { controller.enqueue(new TextEncoder().encode(sseEvent("response.completed", {
+          response: { id: "resp_replacement", status: "completed", output: [] },
+        }))); controller.close(); },
+        cancel() { replacement.cancelled = true; },
+      }, { highWaterMark: 0 }), { status: 503, headers: metadataHeaders("second", "second-id", "6") });
+    }) as typeof fetch;
+    const response = await call(metadataBody(stream, false), {}, metadataConfig(false));
+    const text = await response.text();
+    expect(sends).toBe(2);
+    expect(replacement.cancelled).toBe(true);
+    expect(response.status).not.toBe(503);
+    expect(text).not.toContain("resp_replacement");
+    expect(response.headers.get("x-ratelimit-remaining-requests")).not.toBe("6");
+  });
+
+  test("client abort ends pre-head selection although upstream cancellation never settles", async () => {
+    let sends = 0;
+    let sourceCancels = 0;
+    const waiting = Promise.withResolvers<void>();
+    globalThis.fetch = (async () => {
+      sends++;
+      return preludeThenEnd("reset", metadataHeaders("first", "first-id", "7"), waiting.resolve, new Promise<void>(() => {}), () => {
+        sourceCancels++;
+        return new Promise<void>(() => {});
+      });
+    }) as typeof fetch;
+    releaseSpendHome = acquireOwnedSpendHome();
+    const client = new AbortController();
+    const pending = handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", signal: client.signal,
+      headers: { "content-type": "application/json", authorization: "Bearer fixture-forward-token" },
+      body: JSON.stringify(metadataBody(true, false)),
+    }), metadataConfig(false), { model: "", provider: "" });
+    await waiting.promise;
+    client.abort(new Error("client left"));
+    const response = await pending;
+    await response.body?.cancel().catch(() => undefined);
+    expect(sends).toBe(1);
+    expect(sourceCancels).toBe(1);
+  });
+
+  describe("buffered stall clock across reset selection", () => {
+    const STALL_MS = 5_000;
+    const stallConfig: OcxConfig = { ...config, stallTimeoutSec: STALL_MS / 1_000, providers: { openai: { ...provider, retryOnReset: {} } } };
+    const created = sseEvent("response.created", { response: { id: "resp_original", status: "in_progress", output: [] } });
+    const heartbeat = sseEvent("response.heartbeat", {});
+    /** An upstream body that yields only what the test sends, at the fake time it sends it. */
+    const scripted = () => {
+      const queue: (string | Error)[] = [];
+      let wake: (() => void) | undefined;
+      let cancels = 0;
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          while (queue.length === 0) await new Promise<void>(resolve => { wake = resolve; });
+          const next = queue.shift()!;
+          if (typeof next === "string") controller.enqueue(new TextEncoder().encode(next));
+          else controller.error(next);
+        },
+        cancel() { cancels++; },
+      }, { highWaterMark: 0 });
+      const push = (item: string | Error) => { queue.push(item); wake?.(); wake = undefined; };
+      return { response: new Response(body, { headers: metadataHeaders("first", "first-id", "7") }), push, cancels: () => cancels };
+    };
+    const at = (ms: number, action: () => void) => { setTimeout(action, ms); };
+    /** Step the fake clock until the buffered turn settles; real I/O runs between steps. */
+    const settle = async (pending: Promise<Response>, from: () => number) => {
+      let settled: Response | undefined;
+      void pending.then(response => { settled = response; }, () => undefined);
+      for (;;) {
+        await flushMicrotasks();
+        await new Promise<void>(resolve => setImmediate(resolve));
+        await flushMicrotasks();
+        if (settled) return { response: settled, elapsed: Date.now() - from(), text: await settled.text() };
+        if (Date.now() - from() > 30_000) throw new Error("buffered turn never settled");
+        jest.advanceTimersByTime(100);
+      }
+    };
+    const withFakeClock = async (run: () => Promise<void>) => {
+      jest.useFakeTimers();
+      try { await run(); } finally { jest.clearAllTimers(); jest.useRealTimers(); }
+    };
+
+    test("a silent upstream stalls one budget after its head, not after selection", () => withFakeClock(async () => {
+      const original = scripted();
+      let sends = 0;
+      let sentAt = 0;
+      globalThis.fetch = (async () => { sends++; sentAt = Date.now(); return original.response; }) as typeof fetch;
+      const { response, elapsed, text } = await settle(call(requestBody(false, false), {}, stallConfig), () => sentAt);
+      expect(response.status).toBe(502);
+      expect(text).toContain("stalled before completing");
+      expect(elapsed).toBeGreaterThan(STALL_MS - 100);
+      expect(elapsed).toBeLessThanOrEqual(STALL_MS);
+      // A stall is not a reset: nothing is sent again, and the silent body is released.
+      expect(sends).toBe(1);
+      expect(original.cancels()).toBeGreaterThanOrEqual(1);
+    }));
+
+    test("a prelude held by selection anchors the clock at its read, not at its replay", () => withFakeClock(async () => {
+      const original = scripted();
+      let sends = 0;
+      let sentAt = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        sentAt = Date.now();
+        at(1_000, () => original.push(created));
+        return original.response;
+      }) as typeof fetch;
+      const { response, elapsed, text } = await settle(call(requestBody(false, false), {}, stallConfig), () => sentAt);
+      expect(response.status).toBe(502);
+      expect(text).toContain("stalled before completing");
+      expect(elapsed).toBeGreaterThan(1_000 + STALL_MS - 100);
+      expect(elapsed).toBeLessThanOrEqual(1_000 + STALL_MS);
+      expect(sends).toBe(1);
+    }));
+
+    test.each([
+      ["completes", 12_000, 200],
+      ["goes silent", 8_000 + STALL_MS, 502],
+    ] as const)("real upstream activity behind a held prelude keeps the turn alive until it %s", (ending, settlesAt, status) =>
+      withFakeClock(async () => {
+        const original = scripted();
+        let sends = 0;
+        let sentAt = 0;
+        globalThis.fetch = (async () => {
+          sends++;
+          sentAt = Date.now();
+          original.push(created);
+          at(4_000, () => original.push(heartbeat));
+          at(8_000, () => original.push(heartbeat));
+          if (ending === "completes") {
+            at(12_000, () => original.push(sseEvent("response.completed", {
+              response: { id: "resp_live", status: "completed", model: "gpt-5.6-sol", output: [] },
+            })));
+          }
+          return original.response;
+        }) as typeof fetch;
+        const { response, elapsed, text } = await settle(call(requestBody(false, false), {}, stallConfig), () => sentAt);
+        expect(response.status).toBe(status);
+        expect(elapsed).toBeGreaterThan(settlesAt - 100);
+        expect(elapsed).toBeLessThanOrEqual(settlesAt);
+        if (ending === "completes") expect(text).toContain("resp_live");
+        else expect(text).toContain("stalled before completing");
+        expect(sends).toBe(1);
+      }));
+
+    test.each([
+      ["before the head is committed", 3_000],
+      ["behind the committed original head", 7_000],
+    ] as const)("a replacement selected %s runs on its own attempt clock", (_name, resetAt) => withFakeClock(async () => {
+      const original = scripted();
+      const replacement = scripted();
+      let sends = 0;
+      let sentAt = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        if (sends > 1) return replacement.response;
+        sentAt = Date.now();
+        original.push(created);
+        at(4_000, () => original.push(heartbeat));
+        at(resetAt, () => original.push(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" })));
+        return original.response;
+      }) as typeof fetch;
+      const { response, elapsed, text } = await settle(call(requestBody(false, false), {}, stallConfig), () => sentAt);
+      // The replacement arrived at the reset and never spoke: one budget from its own head.
+      expect(response.status).toBe(502);
+      expect(text).toContain("stalled before completing");
+      expect(elapsed).toBeGreaterThan(resetAt + STALL_MS - 100);
+      expect(elapsed).toBeLessThanOrEqual(resetAt + STALL_MS);
+      // One replacement for the reset; its stall is final and its body is released.
+      expect(sends).toBe(2);
+      expect(replacement.cancels()).toBeGreaterThanOrEqual(1);
+    }));
+
+    test("the whole-turn ceiling counts the time selection held the head (#8343)", () => withFakeClock(async () => {
+      const original = scripted();
+      let sends = 0;
+      let sentAt = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        sentAt = Date.now();
+        original.push(created);
+        // Real upstream activity inside every stall budget, for longer than the whole-turn ceiling.
+        const beat = () => { original.push(heartbeat); setTimeout(beat, 4_000); };
+        setTimeout(beat, 4_000);
+        return original.response;
+      }) as typeof fetch;
+      // settle() gives up after 30 s of fake time; this turn has to reach its 15-minute ceiling.
+      const turn: { response?: Response } = {};
+      void call(requestBody(false, false), {}, stallConfig).then(response => { turn.response = response; }, () => undefined);
+      for (;;) {
+        await flushMicrotasks();
+        await new Promise<void>(resolve => setImmediate(resolve));
+        await flushMicrotasks();
+        if (turn.response) break;
+        if (sentAt > 0 && Date.now() - sentAt > BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS + 30_000) throw new Error("buffered turn outlived its ceiling");
+        jest.advanceTimersByTime(1_000);
+      }
+      const elapsed = Date.now() - sentAt;
+      expect(turn.response.status).toBe(502);
+      // Selection held the head for one stall budget before the collector started; the ceiling
+      // still ends the turn one total timeout after the head arrived, not after that wait.
+      expect(elapsed).toBeGreaterThan(BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS - 1_000);
+      expect(elapsed).toBeLessThanOrEqual(BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS + 1_000);
+      expect(sends).toBe(1);
+    }));
+  });
+
+  for (const ending of ["eof", "read-error"] as const) {
+    test(`native streaming preserves lifecycle snapshot output after ${ending}`, async () => {
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        const frame = new TextEncoder().encode(sseEvent("response.created", {
+          response: { id: "original", output: [], output_text: "already produced" },
+        }));
+        if (sends > 1) return new Response(sseEvent("response.completed", { response: { id: "replacement" } }), {
+          headers: { "content-type": "text/event-stream" },
+        });
+        let sent = false;
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (!sent) { sent = true; controller.enqueue(frame); }
+            else if (ending === "eof") controller.close();
+            else controller.error(new Error("upstream reset"));
+          },
+        }), { headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch;
+      const resetConfig: OcxConfig = { ...config, providers: { openai: { ...provider, retryOnReset: {} } } };
+      const response = await call(requestBody(true, false), {}, resetConfig);
+      const body = await response.text();
+      expect(sends).toBe(1);
+      expect(body).toContain("already produced");
+      expect(body).not.toContain("replacement");
+    });
+  }
+
+  for (const ending of ["eof", "read-error"] as const) {
+    test(`native streaming never resends replay-unsafe heartbeat after ${ending}`, async () => {
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        const frame = new TextEncoder().encode(sseEvent("response.heartbeat", { replayUnsafe: true }));
+        if (sends > 1) return new Response(sseEvent("response.completed", { response: { id: "replacement" } }), {
+          headers: { "content-type": "text/event-stream" },
+        });
+        let sent = false;
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (!sent) { sent = true; controller.enqueue(frame); }
+            else if (ending === "eof") controller.close();
+            else controller.error(new Error("upstream reset"));
+          },
+        }), { headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch;
+      const resetConfig: OcxConfig = { ...config, providers: { openai: { ...provider, retryOnReset: {} } } };
+      const response = await call(requestBody(true, false), {}, resetConfig);
+      const body = await response.text();
+      expect(sends).toBe(1);
+      expect(body).toContain('"replayUnsafe":true');
+      expect(body).not.toContain("replacement");
+    });
+  }
 
   test.each([
     ["clean EOF", sseEvent("response.created", { response: { id: "resp_eof", status: "in_progress", output: [] } })],
