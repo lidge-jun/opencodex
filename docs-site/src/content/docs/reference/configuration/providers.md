@@ -169,6 +169,7 @@ separate. Full request URLs such as `/api/v1/responses` are not provider base UR
 
 Opted-in pool accounts with a full included usage window refresh their credit evidence through the existing background sweep from three minutes of age. Ordinary response headers do not refresh credit balances. A failed metadata read never extends the five-minute spending-evidence lifetime.
 
+
 Across these strategies, each account's effective threshold is its `codexAccountAutoSwitchThresholds` entry when present, otherwise global `autoSwitchThreshold`. A zero override disables only proactive usage switching; startup binding, hard-lock, cooldown, entitlement checks, and failure recovery remain enforced.
 
 Setting an account's switching threshold to `0` does not disable main-account hard-lock, startup
