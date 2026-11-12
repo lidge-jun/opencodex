@@ -377,9 +377,15 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
 
     /**
      * The operator's override (D8): forgets every hold and the unknown state of one link, durably. The
-     * file is written without the link first; memory changes only once that write succeeded. An
+     * file is written without the link first; memory changes only once every write succeeded. An
      * all-links unknown state (links unreadable at start) is first written per link, which needs the
      * links to be listable; until then nothing is cleared.
+     *
+     * A failed write may already have replaced the file (a directory sync fails after the rename), so
+     * the fence carries the uncertainty: in a process that has not armed it, the clear sets it running
+     * first and clean only after the holds write succeeded. Any failure leaves it running, so the next
+     * start keeps every link unknown. An armed process keeps it running until its graceful stop, which
+     * writes the holds this process still has.
      */
     clear(linkId: string): ClearHoldsResult {
       const cleared = this.summary(linkId);
@@ -388,7 +394,13 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
         if (!markAll(allUnknown)) return { ok: false, reason: "links-unreadable" };
         allUnknown = null;
       }
-      if (!persist(linkId)) return { ok: false, reason: "write-failed" };
+      const fenced = !armed;
+      if (fenced && !write(FENCE, { version: 1, state: "running" })) return { ok: false, reason: "write-failed" };
+      if (!persist(linkId) || (fenced && !write(FENCE, { version: 1, state: "clean" }))) {
+        // Best effort: put the link back on disk. The fence is running whatever this write does.
+        persist();
+        return { ok: false, reason: "write-failed" };
+      }
       links.delete(linkId);
       return { ok: true, cleared };
     },

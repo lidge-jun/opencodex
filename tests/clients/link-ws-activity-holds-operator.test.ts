@@ -84,6 +84,55 @@ describe("clear (D8)", () => {
     expect(holds.count(A)).toBe(0);
     expect(holds.count(B)).toBe(1);
     expect(store().summary(B)).toEqual({ holds: [], unknown: "crash" });
+    // The cleared link stays clear across a fresh start; the other link stays held (T5d3a-R1-02).
+    const fresh = store();
+    expect(fresh.count(A)).toBe(0);
+    expect(fresh.count(B)).toBe(1);
+  });
+
+  test("a clear whose directory sync fails after the rename keeps the link held across a restart (T5d3a-R1-01)", () => {
+    const first = store();
+    first.arm();
+    first.add(A, { threadHash: null, pendingKeys: ["k1"], runningMarks: 0, untracked: true });
+    expect(first.stop()).toBe(true);
+    // A graceful restart: the fence is clean and the hold was loaded from disk.
+    // The clear's write lands and then its directory sync fails; the best-effort restore then fails before its rename.
+    let renamedHolds = false;
+    let holdWrites = 0;
+    const holds = store({ writeHooks: {
+      beforeRename(_t, target) { if (target.endsWith("activity-holds.json") && ++holdWrites > 1) throw new Error("EIO"); },
+      afterRename(target) { if (target.endsWith("activity-holds.json")) renamedHolds = true; },
+      syncDir() { if (renamedHolds) { renamedHolds = false; throw new Error("EIO on directory fsync"); } },
+    } });
+    expect(holds.count(A)).toBe(1);
+    expect(holds.clear(A)).toEqual({ ok: false, reason: "write-failed" });
+    expect(holds.count(A)).toBe(1);
+    // The process dies here: the next start must not see the link as idle.
+    expect(store().count(A)).toBeGreaterThan(0);
+  });
+
+  test("the same failure while link sockets have run in this process keeps the link held too (fence already running)", () => {
+    let failing = false;
+    const holds = store({ writeHooks: { beforeRename(_t, target) { if (failing && target.endsWith("activity-holds.json")) throw new Error("EIO"); } } });
+    holds.arm();
+    holds.add(A, { threadHash: null, pendingKeys: ["k1"], runningMarks: 0, untracked: true });
+    failing = true;
+    expect(holds.clear(A)).toEqual({ ok: false, reason: "write-failed" });
+    expect(holds.count(A)).toBe(1);
+    expect(store().count(A)).toBeGreaterThan(0);
+  });
+
+  test("a successful clear after a graceful restart leaves the fence clean, so other links are not marked unknown", () => {
+    const first = store();
+    first.arm();
+    first.add(A, { threadHash: null, pendingKeys: ["k1"], runningMarks: 0, untracked: true });
+    first.add(B, { threadHash: null, pendingKeys: ["k2"], runningMarks: 0, untracked: true });
+    expect(first.stop()).toBe(true);
+    expect(store().clear(A)).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(join(dir, "ws-run-state.json"), "utf8"))).toMatchObject({ state: "clean" });
+    const fresh = store();
+    expect(fresh.count(A)).toBe(0);
+    expect(fresh.summary(B)).toMatchObject({ unknown: null });
   });
 
   test("clearing a link without holds is a no-op success that writes nothing", () => {
