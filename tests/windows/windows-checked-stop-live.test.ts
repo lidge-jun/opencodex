@@ -104,10 +104,13 @@ describe("Part B port sampler and listener identity", () => {
     expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: false }) })).toEqual({ state: "unknown" });
     expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: true, pids: [77] }), alive: () => true }))
       .toEqual({ state: "listening", ownerPid: 77 });
-    const drops: number[] = [];
-    expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: true, pids: [77] }), alive: () => false, drop: port => drops.push(port) }))
+    const drops: Array<[number, readonly number[]]> = [];
+    expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: true, pids: [77] }), alive: () => false, drop: (port, pids) => drops.push([port, pids]) }))
       .toEqual({ state: "listening", ownerPid: 77 });
-    expect(drops).toEqual([10100]);
+    // Only the exited owner's rows may be cleared: a program that took the port between
+    // scans owns its own rows, and resetting them would break a connection this stop does
+    // not own.
+    expect(drops).toEqual([[10100, [77]]]);
     // The stopping process's own socket is not a listener on the stopped port.
     expect(await sampleWindowsStopPort(10100, 400, { scan: () => ({ ok: true, pids: [5] }), selfPid: 5 })).toEqual({ state: "free" });
   });

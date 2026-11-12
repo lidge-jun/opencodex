@@ -375,7 +375,8 @@ export async function sampleWindowsStopPort(
   io: {
     scan?: WindowsStopPortScan;
     alive?: (pid: number) => boolean;
-    drop?: (port: number) => unknown;
+    /** Clears the ghost rows of the exited owners only; never another program's rows. */
+    drop?: (port: number, ownerPids: readonly number[]) => unknown;
     selfPid?: number;
   } = {},
 ): Promise<WindowsPortSample> {
@@ -388,8 +389,11 @@ export async function sampleWindowsStopPort(
   const alive = io.alive ?? isProcessAlive;
   const live = pids.filter(pid => alive(pid));
   if (live.length === 0) {
-    // Same clearing the 15 s waitForStoppedPort did: a ghost row left by the exited child.
-    try { (io.drop ?? dropWindowsTcpRowsForLocalPort)(port); } catch { /* the next sample decides */ }
+    // Clear only the ghost rows the exited PID(s) left: a program that took the port after
+    // the scan owns its rows, and resetting them would break a connection this stop does not own.
+    try {
+      (io.drop ?? ((target: number, owners: readonly number[]) => dropWindowsTcpRowsForLocalPort(target, undefined, owners)))(port, pids);
+    } catch { /* the next sample decides */ }
   }
   return { state: "listening", ownerPid: live[0] ?? pids[0] ?? null };
 }
