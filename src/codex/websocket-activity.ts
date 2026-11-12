@@ -130,7 +130,8 @@ export class CodexWebSocketActivity {
         const by = this.restoredKeys.get(key);
         if (by !== undefined && by < record.seq && this.pendingResults.delete(key)) {
           this.restoredKeys.delete(key);
-          this.returnedResults.add(key);
+          // Not added to returnedResults: like beginTurn, a settled wait never suppresses a later
+          // call that reuses its id, even from an upstream that omits response.created.
           changed = true;
         }
       }

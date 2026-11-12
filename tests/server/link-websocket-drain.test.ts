@@ -406,6 +406,23 @@ describe("restore of refused results across overlapping turns (T5d1-R5-01)", () 
     expect(activity.pendingKeys()).toHaveLength(1);
   });
 
+  test("a key settled again on acceptance never suppresses a new call reusing it, even without response.created (T5d1-R8-01)", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.restoreRefusedResults = true;
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_h"));
+    const finishA = activity.beginTurn(toolResult("call_h"));
+    const inputB = toolResult("call_h");
+    const finishB = activity.beginTurn(inputB);
+    finishA();
+    activity.notifyAccepted(inputB);
+    expect(activity.pendingKeys()).toEqual([]);
+    // B's upstream asks for the same call id again and never sent response.created.
+    activity.observePayload(toolCall("call_h"));
+    finishB();
+    expect(activity.pendingKeys()).toHaveLength(1);
+  });
+
   test("an older turn that was refused, with no newer acceptance, still restores", () => {
     const activity = new CodexWebSocketActivity();
     activity.restoreRefusedResults = true;
