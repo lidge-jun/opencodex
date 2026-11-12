@@ -383,9 +383,11 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
      *
      * A failed write may already have replaced the file (a directory sync fails after the rename), so
      * the fence carries the uncertainty: in a process that has not armed it, the clear sets it running
-     * first and clean only after the holds write succeeded. Any failure leaves it running, so the next
-     * start keeps every link unknown. An armed process keeps it running until its graceful stop, which
-     * writes the holds this process still has.
+     * first. The durable holds write is the commit point: if it fails, the fence stays running (the
+     * next start keeps every link unknown) and nothing is cleared; once it succeeded, the clear is
+     * committed and the fence is set clean. That clean write may fail before its rename (running: every
+     * link unknown at the next start, fail closed) or after it (clean: the committed clear); neither
+     * contradicts the answer. An armed process keeps the fence running until its graceful stop.
      */
     clear(linkId: string): ClearHoldsResult {
       const cleared = this.summary(linkId);
@@ -396,12 +398,14 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
       }
       const fenced = !armed;
       if (fenced && !write(FENCE, { version: 1, state: "running" })) return { ok: false, reason: "write-failed" };
-      if (!persist(linkId) || (fenced && !write(FENCE, { version: 1, state: "clean" }))) {
+      if (!persist(linkId)) {
         // Best effort: put the link back on disk. The fence is running whatever this write does.
         persist();
         return { ok: false, reason: "write-failed" };
       }
       links.delete(linkId);
+      // Committed. A failed clean write leaves the fence running at worst, which only widens the next start's unknown set.
+      if (fenced) write(FENCE, { version: 1, state: "clean" });
       return { ok: true, cleared };
     },
 

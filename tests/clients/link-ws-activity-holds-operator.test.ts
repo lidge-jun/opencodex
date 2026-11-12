@@ -135,6 +135,45 @@ describe("clear (D8)", () => {
     expect(fresh.summary(B)).toMatchObject({ unknown: null });
   });
 
+  // T5d3a-R2-01: the durable holds write is the commit point. Whatever then happens to the clean-fence write, the
+  // answer matches what a fresh start (or a crash at that boundary) sees.
+  const gracefulPair = () => {
+    const first = store();
+    first.arm();
+    first.add(A, { threadHash: null, pendingKeys: ["k1"], runningMarks: 0, untracked: true });
+    first.add(B, { threadHash: null, pendingKeys: ["k2"], runningMarks: 0, untracked: true });
+    expect(first.stop()).toBe(true);
+  };
+
+  test("the clean fence lands but its directory sync fails, and a holds restore would fail: the clear is committed and stays so (T5d3a-R2-01)", () => {
+    gracefulPair();
+    let fenceWrites = 0;
+    let renamedClean = false;
+    let holdWrites = 0;
+    const holds = store({ writeHooks: {
+      beforeRename(_t, target) { if (target.endsWith("activity-holds.json") && ++holdWrites > 1) throw new Error("EIO"); },
+      afterRename(target) { if (target.endsWith("ws-run-state.json") && ++fenceWrites === 2) renamedClean = true; },
+      syncDir() { if (renamedClean) { renamedClean = false; throw new Error("EIO on directory fsync"); } },
+    } });
+    expect(holds.clear(A)).toMatchObject({ ok: true });
+    expect(holds.count(A)).toBe(0);
+    expect(JSON.parse(readFileSync(join(dir, "ws-run-state.json"), "utf8"))).toMatchObject({ state: "clean" });
+    const fresh = store();
+    expect(fresh.count(A)).toBe(0);
+    expect(fresh.count(B)).toBe(1);
+  });
+
+  test("the clean fence fails before its rename (or the process dies there): the fence stays running and the next start keeps every link held", () => {
+    gracefulPair();
+    let fenceWrites = 0;
+    const holds = store({ writeHooks: { beforeRename(_t, target) { if (target.endsWith("ws-run-state.json") && ++fenceWrites === 2) throw new Error("EIO"); } } });
+    expect(holds.clear(A)).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(join(dir, "ws-run-state.json"), "utf8"))).toMatchObject({ state: "running" });
+    const fresh = store();
+    expect(fresh.count(A)).toBeGreaterThan(0);
+    expect(fresh.count(B)).toBeGreaterThan(0);
+  });
+
   test("clearing a link without holds is a no-op success that writes nothing", () => {
     const holds = store();
     expect(holds.clear(A)).toEqual({ ok: true, cleared: null });
