@@ -17,6 +17,16 @@ export { parseOutboundRequestBody } from "./outbound-request-body";
 
 // A guarded published reset response, mapped to when its selection began holding the head.
 const guardedResetResponses = new WeakMap<Response, number>();
+// A canonical JSON turn's published head, mapped to the wall-clock time its selection began (#8343).
+const bufferedSelectionStarts = new WeakMap<Response, number>();
+
+/**
+ * When reset selection began holding this canonical JSON turn's head, if it ran. The collector's
+ * whole-turn deadline starts there, so the time selection held the head counts against it.
+ */
+export function bufferedResetSelectionStartedAt(response: Response): number | undefined {
+  return bufferedSelectionStarts.get(response);
+}
 
 /**
  * How long a direct stream's head may wait on the original's own inspection.
@@ -76,6 +86,7 @@ export function selectPassthroughResetResponse(
   const originalOwner = quotaOwner();
   let replacementOwner: MainQuotaDispatch | undefined;
   const heldSince = performance.now();
+  const selectionStartedAt = Date.now();
   return selectProtocolSafeResetResponse(protect(response), logCtx, async (error, stage, signal, accepts) => {
     // Recover returns only a validated, fresh body; wrapping earlier would hide its lock state.
     const replacement = await recover(error, stage, signal, accepts);
@@ -91,6 +102,7 @@ export function selectPassthroughResetResponse(
     maxSelectionMs: stallMs > 0 ? stallMs : undefined,
     onCommit: (published, owner) => {
       if (openGateway) guardedResetResponses.set(published, heldSince);
+      if (options.delivery === "buffered-json") bufferedSelectionStarts.set(published, selectionStartedAt);
       bindPublishedMainQuotaDispatch(published, owner === "replacement" ? replacementOwner : originalOwner);
     },
   });

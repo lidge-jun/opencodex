@@ -6,6 +6,7 @@ import type { OcxFallbackConfig } from "./fallback";
 import type { MultiAgentMode } from "./multi-agent";
 import type { OcxTelemetryConfig } from "./telemetry";
 import type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
+import type { OcxLinkHomeConfig, OcxLinkTransportConfig } from "./link";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 export type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
@@ -484,11 +485,6 @@ export interface OcxPrivacyConfig {
   maskEmails?: boolean;
 }
 
-export interface OcxLinkTransportConfig {
-  tunnelPort: number;
-  linkId: string;
-}
-
 export interface OcxClientConnectionConfig {
   serverUrl: string;
   managementUrl: string;
@@ -528,7 +524,7 @@ export interface OcxClientConnectionConfig {
   };
 }
 
-export interface OcxConfig {
+export interface OcxConfig extends OcxLinkHomeConfig {
   /** Experimental macOS app-server stdout shim; absent or false disables it. */
   chatgptDesktop?: { appServerShim?: boolean };
   port: number;
@@ -1074,8 +1070,8 @@ export interface OcxConfig {
   connectTimeoutMs?: number;
   /** Graceful shutdown drain timeout (ms). Active turns are aborted after this deadline. Default 5000. */
   shutdownTimeoutMs?: number;
-  /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */
-  websockets?: boolean;
+  /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */ websockets?: boolean;
+  /** Accept the Responses WebSocket from linked Children over the Remote Link. Default false; needs websockets too. */ linkResponsesWebsocket?: boolean;
   /** Experimental single-lane native OpenAI WebSocket steering; default off. */
   codexNativeSteering?: boolean;
   /** Experimental, default-off saved function-result injection on native multi-agent WebSockets. */

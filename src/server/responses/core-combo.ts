@@ -22,6 +22,7 @@ import {
 } from "../../reasoning-effort";
 import { admissionMayUseMeteredComboTargets, resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import { recordAttemptRequestedEffort } from "../request-log";
+import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   deriveRequestExecutionBudget,
@@ -455,6 +456,7 @@ export async function executeComboResponses(
   }
   // Local replay failures require full client replay.
   if (replayFailure) {
+    failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
     return formatErrorResponse(
       400,
       "previous_response_not_found",
@@ -470,7 +472,12 @@ export async function executeComboResponses(
     ? (rawBody as { previous_response_id: string }).previous_response_id
     : "";
   const unresolvedPrevious = requestedPreviousId.trim().length > 0 && body === rawBody;
+  // Remote Link (design T4 5 and 9.1): the combo's own expansion is the request's one capture point; its
+  // children replay a snapshot and skip theirs.
+  observeLinkTurnExpansion(options.linkTurn, req, logCtx, body,
+    requestedPreviousId.trim().length > 0 ? (unresolvedPrevious ? "unexpanded" : "chained") : "none");
   if (combo.imageInput === "disabled" && unresolvedPrevious) {
+    markLinkTurnMissing(logCtx);
     return formatErrorResponse(
       400,
       "previous_response_not_found",
@@ -1452,6 +1459,7 @@ export async function executeComboResponses(
         verifiedPlanRefusal: failure.verifiedPlanRefusal,
         malformedResponseFormat: failure.malformedResponseFormat,
         openRouterOpaque400: failure.openRouterOpaque400,
+        providerModerationRefusal: failure.providerModerationRefusal,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
         // model through another wire via `modelAdapters`, and an unresolved leg grants no hop.
         failedAdapter: childLog.providerAdapter,
@@ -1530,6 +1538,7 @@ export async function executeComboResponses(
       code: failure.upstreamCode,
       malformedResponseFormat: failure.malformedResponseFormat,
       openRouterOpaque400: failure.openRouterOpaque400,
+      providerModerationRefusal: failure.providerModerationRefusal,
     });
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;

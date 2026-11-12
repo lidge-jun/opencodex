@@ -1,5 +1,6 @@
 import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
@@ -452,6 +453,7 @@ export async function prepareResponsesRequest(
     }
     // Local replay failures require full client replay.
     if (replayFailure) {
+      failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -462,6 +464,9 @@ export async function prepareResponsesRequest(
   const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
     ?? (body !== originalBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
+  // Remote Link holds and request-log fields (design T4 sections 5, 9.1): the expanded input, before any upstream I/O.
+  if (!options.comboReplaySnapshot) observeLinkTurnExpansion(options.linkTurn, req, logCtx, body, previousResponseInputExpanded ? "chained"
+    : body && typeof body === "object" && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string" ? "unexpanded" : "none");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
   options.responsesFileImage ||= responsesHasFileImage(body);
   // Counted after replay expansion so the catalog this request pays for is the one measured:
@@ -1430,6 +1435,7 @@ export async function prepareResponsesRequest(
     hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
+    markLinkTurnMissing(logCtx);
     return markProxyError(formatErrorResponse(
       400,
       "previous_response_not_found",
@@ -1456,6 +1462,7 @@ export async function prepareResponsesRequest(
       // An unknown adapter is left to the resolution error it already raises below.
       : continuationWire === undefined || PROVIDER_OWNED_CONTINUATION_WIRES.has(continuationWire);
     if (!upstreamOwnsOmittedHistory) {
+      markLinkTurnMissing(logCtx);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",

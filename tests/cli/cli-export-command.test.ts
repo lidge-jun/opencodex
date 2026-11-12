@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleExportCommand, exportModelsFromProxyRows } from "../../src/cli/export-command";
+import { buildClientConfigText, EXPORT_CLIENTS, isExportClientId } from "../../src/clients/config-export";
 import { resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
@@ -58,6 +59,17 @@ function fakeProxy(rows: unknown = ROWS) {
     fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/api/models") return Response.json(rows);
+      // Pi is built by the serving proxy (#8172). This stands in for that route over the same
+      // rows, so the CLI framing below is exercised without a model catalog gather.
+      const client = url.searchParams.get("client") ?? "";
+      if (url.pathname === "/api/client-config" && isExportClientId(client)) {
+        const built = buildClientConfigText(client, {
+          baseUrl: `http://127.0.0.1:${server.port}/v1`,
+          models: exportModelsFromProxyRows(rows as Parameters<typeof exportModelsFromProxyRows>[0], config()),
+          config: config(),
+        });
+        return Response.json({ client, format: EXPORT_CLIENTS[client].format, config: built.document, text: built.text });
+      }
       return new Response("not found", { status: 404 });
     },
   });
@@ -420,6 +432,29 @@ describe("ocx export with no live proxy (accept criterion 5)", () => {
   });
 });
 
+describe("Pi nested selectors come from the serving proxy (#8172)", () => {
+  test("the serving proxy proves the raw selector; the CLI's saved configuration is never consulted", async () => {
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = tempDir();
+    const nested = (models: string[]) => config({ defaultProvider: "nested", providers: { nested: {
+      adapter: "openai-chat", baseUrl: "https://nested.example.test/v1", liveModels: false, models,
+    } } });
+    try {
+      // The saved configuration knows nothing about the model; it cannot prove or veto the selector.
+      const proxy = managementProxy(nested(["org/free"]));
+      const result = await run(["--client", "pi", "--json"], { baseUrl: proxy.baseUrl, config: nested([]) });
+      expect(result.code).toBe(0);
+      const ids = (JSON.parse(result.stdout) as { providers: { opencodex: { models: Array<{ id: string }> } } })
+        .providers.opencodex.models.map(model => model.id);
+      expect(ids).toContain("nested/org/free");
+      expect(ids).not.toContain("nested/org-free");
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+    }
+  });
+});
+
 describe("ocx export never serializes a key (accept criterion 6)", () => {
   test("no stdout path contains an ocx_ token even when config carries one", async () => {
     const proxy = fakeProxy();
@@ -484,7 +519,7 @@ describe("export allowlist parity", () => {
     try {
       process.env.OPENCODEX_HOME = home;
       writeFileSync(path, JSON.stringify(pending));
-      const code = await handleExportCommand(["--client", "pi", "--json"], {
+      const code = await handleExportCommand(["--client", "opencode", "--json"], {
         baseUrl: "http://127.0.0.1:10123",
         fetchImpl: async input => {
           expect(String(input)).toBe("http://127.0.0.1:10123/api/models");
@@ -496,7 +531,7 @@ describe("export allowlist parity", () => {
       });
       expect(code).toBe(0);
       expect(requests).toBe(1);
-      expect(JSON.parse(stdout()).providers.opencodex.models.map((row: { id: string }) => row.id))
+      expect(Object.keys(JSON.parse(stdout()).provider.opencodex.models))
         .toEqual(["pending/chosen"]);
       expect(pending.providers.pending!.initialModelSelection!.status).toBe("pending");
     } finally {
@@ -524,7 +559,7 @@ describe("export allowlist parity", () => {
       process.env.OPENCODEX_HOME = home;
       const localBytes = JSON.stringify(local);
       writeFileSync(path, localBytes);
-      const code = await handleExportCommand(["--client", "pi", "--json"], {
+      const code = await handleExportCommand(["--client", "opencode", "--json"], {
         baseUrl: "http://127.0.0.1:10123",
         configImpl: () => { events.push("config"); return structuredClone(resolved); },
         fetchImpl: async () => {
@@ -535,7 +570,7 @@ describe("export allowlist parity", () => {
       });
       expect(code).toBe(0);
       expect(events).toEqual(["fetch", "config"]);
-      expect(JSON.parse(stdout()).providers.opencodex.models.map((row: { id: string }) => row.id))
+      expect(Object.keys(JSON.parse(stdout()).provider.opencodex.models))
         .toEqual(["custom/remote-only"]);
       expect(readFileSync(path, "utf8")).toBe(localBytes);
     } finally {
