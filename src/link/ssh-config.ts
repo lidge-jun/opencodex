@@ -67,8 +67,7 @@ export function splitSshArgs(text: string): string[] | null {
   return out;
 }
 
-/** One config line as its lower-cased keyword and its arguments, or null for a blank, comment or invalid line. */
-export function splitSshDirective(raw: string): { keyword: string; args: string[] } | null {
+function splitDirective(raw: string): { keyword: string; args: string[] } | null {
   const line = raw.trim();
   if (!line || line.startsWith("#")) return null;
   const match = /^([A-Za-z]+)(?:\s*=\s*|\s+)(.*)$/.exec(line);
@@ -85,7 +84,7 @@ export function parseHostCandidates(text: string, options: ParseHostCandidatesOp
   const visit = (body: string, depth: number): void => {
     let block: "top" | "host" | "match" = "top";
     for (const raw of body.split(/\r?\n/)) {
-      const directive = splitSshDirective(raw);
+      const directive = splitDirective(raw);
       if (!directive) continue;
       if (directive.keyword === "match") { block = "match"; continue; }
       if (directive.keyword === "include") {

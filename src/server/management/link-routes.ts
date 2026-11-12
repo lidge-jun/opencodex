@@ -329,10 +329,10 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
       attachLinkPeers(dto, localLinkPeer(packageVersion("0.0.0"), buildPeerFeatures()),
         linkId => state.listener.peerObservation?.(linkId) ?? { observed: null, refused: null });
     }
-    // The same opt-in for the body bytes each link carried and the way its SSH alias goes (#3023).
+    // The same opt-in for the body bytes each link carried (#3023).
     if (url.searchParams.get("traffic") === "1") {
       const { attachLinkTrafficForState } = await import("./link-traffic-status");
-      await attachLinkTrafficForState(dto, state, ctx.deps.linkPathConfig);
+      attachLinkTrafficForState(dto, state);
     }
     // The same opt-in for each Home-initiated tunnel's retry progress and last failure cause.
     if (url.searchParams.get("diagnostics") === "1") attachLinkTunnelDiagnostics(dto, supervisorStates);

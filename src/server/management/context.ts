@@ -164,8 +164,6 @@ export interface ManagementApiDeps {
   writeLinkStore?: (store: LinkStore) => void;
   linkKnownHostsPath?: () => string;
   sshRunner?: SshRunner;
-  /** Test seam: the ssh_config files `GET /api/link/status?traffic=1` reads a link's path from. */
-  linkPathConfig?: import("../../link/ssh-route").LinkPathConfigDeps;
   issueApiKey?: (config: OcxConfig, name: string) => IssuedApiKey;
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
