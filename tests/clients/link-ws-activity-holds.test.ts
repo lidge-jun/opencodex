@@ -181,3 +181,36 @@ describe("crash points (SIGKILL)", () => {
   });
 });
 
+describe("review round 1 (T5d1-R1-01, -02, -04)", () => {
+  test("a directory sync that fails makes arming fail and stop report failure", () => {
+    let failSync = false;
+    const holds = store({ writeHooks: { syncDir() { if (failSync) throw new Error("EIO on directory fsync"); } } });
+    failSync = true;
+    expect(holds.arm()).toBe(false);
+    failSync = false;
+    expect(holds.arm()).toBe(true);
+    holds.add(A, hold(holds));
+    failSync = true;
+    expect(holds.stop()).toBe(false);
+  });
+
+  test("crash recovery that cannot list the links keeps every link unknown and the fence running", () => {
+    writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"running"}');
+    const blind = createActivityHolds({ dir, linkIds: () => null });
+    blind.start();
+    expect(blind.count(A)).toBe(1);
+    expect(blind.count("lnk_cccccccccccccccc")).toBe(1);
+    expect(JSON.parse(readFileSync(join(dir, "ws-run-state.json"), "utf8"))).toMatchObject({ state: "running" });
+    expect(store().describe(A).unknown).toBe("crash");
+  });
+
+  test("a reference key that cannot be loaded or replaced does not fail startup; the links stay unknown and the fence running", () => {
+    writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"clean"}');
+    writeFileSync(join(dir, "activity-holds.json"), JSON.stringify({ version: 1, keyId: "0123456789abcdef", links: { [A]: { holds: [{ threadHash: "aa", pendingKeys: ["k"], runningMarks: 0, untracked: false, createdAt: 1 }], unknown: null } } }));
+    const holds = createActivityHolds({ dir, linkIds: () => LINKS, writeHooks: { beforeRename(_t, target) { if (target.endsWith("activity-ref-key")) throw new Error("EROFS"); } } });
+    expect(() => holds.start()).not.toThrow();
+    expect(holds.describe(A).unknown).toBe("key-unavailable");
+    expect(holds.count(B)).toBe(1);
+  });
+});
+

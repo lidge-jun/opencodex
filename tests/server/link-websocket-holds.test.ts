@@ -196,5 +196,51 @@ describe("release over HTTP through the real listener", () => {
     http.destroy();
     expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(0);
   });
+  test("a relayed POST that the handler refuses after reading its body releases nothing (T5d1-R1-03)", async () => {
+    const store: LinkStore = { version: 1, listenerPort: null, links: [{ id: KEY.linkId, alias: "holds", direction: "client-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: KEY.id, createdAt: "2026-11-12T00:00:00.000Z" }] as LinkStore["links"] };
+    const current = { value: store };
+    let finish: (() => void) | undefined;
+    const seen: { message?: () => void; closed?: () => void } = {};
+    let status = 400;
+    const base: WebSocketHandler<WsData> = {
+      open(ws) { ws.data.admissionLease?.bind(ws); },
+      message(ws) { finish = ws.data.responsesActivity!.beginTurn("go"); ws.data.responsesActivity!.observePayload(toolCall("call_7")); seen.message?.(); },
+      close(ws) { ws.data.admissionLease?.release(); seen.closed?.(); },
+    };
+    const lifecycle = createLinkListenerLifecycle<WsData>({ storePath: join(dir, "link", "links.json"), readStore: () => current.value, writeStore: (_p, next) => { current.value = next; }, warn: () => {} });
+    lifecycle.start({
+      maxRequestBodySize: 1 << 20,
+      dispatch: async req => { await req.text(); return new Response("{}", { status }); },
+      keyFingerprints: () => [serviceApiTokenFingerprint(KEY.key)],
+      responsesWebsocket: { handler: base, enabled: () => true, policy },
+    });
+    cleanups.push(() => lifecycle.stop());
+    const port = lifecycle.status().port!;
+    const identity = { keyId: KEY.id, linkId: KEY.linkId, fingerprint: serviceApiTokenFingerprint(KEY.key) };
+    const ws = await LinkWireClient.open(port);
+    const { nonce } = await ws.challenge(identity);
+    expect((await ws.upgrade({ nonce, bearer: KEY.key, headers: { "thread-id": "thread-r" } })).status).toBe(101);
+    const delivered = new Promise<void>(resolve => { seen.message = resolve; });
+    ws.sendText("{}");
+    await delivered;
+    finish!();
+    const closed = new Promise<void>(resolve => { seen.closed = resolve; });
+    ws.destroy();
+    await closed;
+    const post = async () => {
+      const http = await LinkWireClient.open(port);
+      const session = await http.challenge(identity);
+      http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", authorization: "Bearer " + KEY.key, "x-opencodex-link-session": session.nonce, "thread-id": "thread-r" },
+        JSON.stringify({ model: "m", input: result("call_7") }));
+      const head = await http.readHead();
+      await lifecycle.activityHoldsSettled();
+      http.destroy();
+      return head.status;
+    };
+    expect(await post()).toBe(400);
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(1);
+    status = 200;
+    expect(await post()).toBe(200);
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(0);
+  });
 });
-

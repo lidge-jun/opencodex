@@ -270,7 +270,7 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
     if (state.threadHash === undefined) {
       const metadata = frame.client_metadata as Record<string, unknown> | undefined;
       const threadId = metadata && typeof metadata.thread_id === "string" && metadata.thread_id ? metadata.thread_id : null;
-      state.threadHash = threadId ? holds.threadHash(threadId) : null;
+      try { state.threadHash = threadId ? holds.threadHash(threadId) : null; } catch { state.threadHash = null; }
     }
     if (holds.releasable(linkId)) holds.observe(linkId, state.threadHash, resultKeysOf(frame.input));
   };
@@ -420,7 +420,10 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           // Codex sends its own thread id on the handshake; a socket without it may name one in its
           // first create's client_metadata (observeForHolds).
           const threadId = ws.data.headers?.get("thread-id");
-          if (deps.holds && threadId) state.threadHash = deps.holds.threadHash(threadId);
+          if (deps.holds && threadId) {
+            // A reference key that cannot be loaded leaves the hold operator-only rather than failing the socket.
+            try { state.threadHash = deps.holds.threadHash(threadId); } catch { state.threadHash = null; }
+          }
           states.set(ws, state);
           const activity = ws.data.responsesActivity;
           if (activity) {

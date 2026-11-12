@@ -115,7 +115,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   // written unless a crash fence exists or a link upgrade arms one.
   const holds = createActivityHolds({
     dir: dirname(storePath),
-    linkIds: () => { try { return readStore(storePath).links.map(link => link.id); } catch { return []; } },
+    // null, not []: an unreadable store must not let crash evidence be cleaned without its links.
+    linkIds: () => { try { return readStore(storePath).links.map(link => link.id); } catch { return null; } },
   });
   holds.start();
   const activity = createLinkActivity({ held: linkId => holds.count(linkId) });
@@ -177,13 +178,19 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
         // Only a link with a releasable hold pays for reading a copy of the request body.
         if (!holds.releasable(linkId)) return;
         const header = req.headers.get("thread-id");
-        const observation = req.clone().json().then((body: unknown) => {
-          const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
+        let decide!: (accepted: boolean) => void;
+        const decision = new Promise<boolean>(resolve => { decide = resolve; });
+        // The copy is read alongside the request, but released only if the handler accepted it.
+        const parsed = req.clone().json().catch(() => null);
+        const observation = Promise.all([parsed, decision]).then(([body, accepted]) => {
+          if (!accepted || !body || typeof body !== "object") return;
+          const record = body as Record<string, unknown>;
           const metadata = record.client_metadata as Record<string, unknown> | undefined;
           const threadId = header || (metadata && typeof metadata.thread_id === "string" ? metadata.thread_id : "");
           holds.observe(linkId, threadId ? holds.threadHash(threadId) : null, resultKeysOf(record.input));
         }).catch(() => {}).finally(() => { holdObservations.delete(observation); });
         holdObservations.add(observation);
+        return decide;
       } });
     let bound: Server<unknown>;
     try {

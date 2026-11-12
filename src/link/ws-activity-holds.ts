@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { atomicWriteFileStreamed, isMissingPathError, type AtomicWriteHooks } from "../config/atomic-write";
+import { isMissingPathError } from "../config/atomic-write";
 import { linkDir } from "./paths";
 import { LINK_WS_LIMITS } from "../server/index/link-websocket-limits";
 
@@ -20,7 +20,7 @@ import { LINK_WS_LIMITS } from "../server/index/link-websocket-limits";
  * when the process died. Nothing here reads or writes a file until a fence exists or is armed.
  */
 
-export type UnknownReason = "crash" | "unreadable" | "overflow" | "write-failed" | "key-rotated";
+export type UnknownReason = "crash" | "unreadable" | "overflow" | "write-failed" | "key-rotated" | "key-unavailable";
 
 export interface HoldInput {
   /** HMAC of the socket's own thread id; null when it had none (operator only). */
@@ -47,11 +47,17 @@ interface HoldsFile { version: 1; keyId: string | null; links: Record<string, Li
 export interface ActivityHoldsDeps {
   /** Directory of the files; defaults to <configDir>/link. */
   dir?: string;
-  /** Link ids in links.json, read when crash evidence must become unknown holds. */
-  linkIds: () => readonly string[];
+  /** Link ids in links.json, read when crash evidence must become unknown holds; null when unreadable. */
+  linkIds: () => readonly string[] | null;
   now?: () => number;
-  /** Test seam: atomic-write hooks, to inject a failure or a crash at a durability point. */
-  writeHooks?: AtomicWriteHooks;
+  /** Test seam: inject a failure or a crash at each durability point of a write. */
+  writeHooks?: HoldWriteHooks;
+}
+
+export interface HoldWriteHooks {
+  beforeRename?: (temp: string, target: string) => void;
+  afterRename?: (target: string) => void;
+  syncDir?: (dir: string) => void;
 }
 
 const FENCE = "ws-run-state.json";
@@ -61,7 +67,7 @@ const KEY = "activity-ref-key";
 function isLinkHolds(value: unknown): value is LinkHolds {
   if (!value || typeof value !== "object") return false;
   const entry = value as Record<string, unknown>;
-  const reasons = [null, "crash", "unreadable", "overflow", "write-failed", "key-rotated"];
+  const reasons = [null, "crash", "unreadable", "overflow", "write-failed", "key-rotated", "key-unavailable"];
   return Array.isArray(entry.holds) && reasons.includes(entry.unknown as string | null) && entry.holds.every(hold => {
     const h = hold as Record<string, unknown>;
     return h && (h.threadHash === null || typeof h.threadHash === "string") && Array.isArray(h.pendingKeys)
@@ -76,15 +82,40 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
   const links = new Map<string, LinkHolds>();
   let armed = false;
   let key: Buffer | null = null;
+  // Set when crash evidence could not be tied to the links (links.json unreadable): every link,
+  // known or not, then counts as unknown, and the fence is left running for the next start.
+  let allUnknown: UnknownReason | null = null;
+  const hooks = deps.writeHooks ?? {};
+
+  /**
+   * Strict durable replace: a private temp file, content fsync, rename, then a directory fsync whose
+   * failure is reported, because a fence or a hold that is not durable must not be treated as one.
+   * Windows has no directory descriptor to sync; NTFS journals the rename itself.
+   */
+  const durableWrite = (name: string, content: string): void => {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const target = join(dir, name);
+    const temp = target + "." + process.pid + "." + randomBytes(6).toString("hex") + ".tmp";
+    const descriptor = openSync(temp, "wx", 0o600);
+    try { writeSync(descriptor, content); fsyncSync(descriptor); } finally { closeSync(descriptor); }
+    try {
+      hooks.beforeRename?.(temp, target);
+      renameSync(temp, target);
+    } catch (error) {
+      try { unlinkSync(temp); } catch { /* reported through the original error */ }
+      throw error;
+    }
+    hooks.afterRename?.(target);
+    if (process.platform !== "win32") {
+      chmodSync(target, 0o600);
+      hooks.syncDir?.(dir);
+      const directory = openSync(dir, "r");
+      try { fsyncSync(directory); } finally { closeSync(directory); }
+    }
+  };
 
   const write = (name: string, value: unknown): boolean => {
-    try {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      const content = JSON.stringify(value) + "\n";
-      atomicWriteFileStreamed(join(dir, name), descriptor => { writeSync(descriptor, content); }, deps.writeHooks);
-      if (process.platform !== "win32") chmodSync(join(dir, name), 0o600);
-      return true;
-    } catch { return false; }
+    try { durableWrite(name, JSON.stringify(value) + "\n"); return true; } catch { return false; }
   };
 
   const readRaw = (name: string): { missing: true } | { missing: false; text: string | null } => {
@@ -101,9 +132,7 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
       return key;
     }
     const fresh = randomBytes(32);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    atomicWriteFileStreamed(join(dir, KEY), descriptor => { writeSync(descriptor, fresh.toString("hex") + "\n"); }, deps.writeHooks);
-    if (process.platform !== "win32") chmodSync(join(dir, KEY), 0o600);
+    durableWrite(KEY, fresh.toString("hex") + "\n");
     key = fresh;
     return key;
   };
@@ -115,14 +144,21 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
     return value;
   };
 
-  const markAll = (reason: UnknownReason): void => {
-    for (const linkId of deps.linkIds()) entry(linkId).unknown ??= reason;
+  /** Marks every link unknown; false when the links could not be listed (allUnknown covers them). */
+  const markAll = (reason: UnknownReason): boolean => {
+    let ids: readonly string[] | null = null;
+    try { ids = deps.linkIds(); } catch { ids = null; }
+    if (!ids) { allUnknown ??= reason; return false; }
+    for (const linkId of ids) entry(linkId).unknown ??= reason;
+    return true;
   };
 
   const total = (): number => [...links.values()].reduce((sum, value) => sum + value.holds.length, 0);
 
   const persist = (): boolean => {
-    const out: HoldsFile = { version: 1, keyId: key ? keyId() : null, links: {} };
+    let id: string | null = null;
+    try { id = key ? keyId() : null; } catch { return false; }
+    const out: HoldsFile = { version: 1, keyId: id, links: {} };
     for (const [linkId, value] of links) if (value.holds.length || value.unknown) out.links[linkId] = value;
     return write(HOLDS, out);
   };
@@ -152,6 +188,19 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
         } catch { file = null; }
         if (!file) markAll("unreadable");
       }
+      let keyUnavailable = false;
+      if (file && file.keyId !== null) {
+        try { keyId(); } catch { keyUnavailable = true; }
+      }
+      if (file && keyUnavailable) {
+        // Hashes cannot be checked or made: keyed holds and every link stay unknown, nothing is cleaned.
+        for (const [linkId, value] of Object.entries(file.links)) {
+          links.set(linkId, { holds: value.holds.filter(hold => hold.threadHash === null), unknown: value.unknown ?? "key-unavailable" });
+        }
+        markAll("key-unavailable");
+        if (state !== "clean") markAll("crash");
+        return;
+      }
       if (file) {
         const rotated = file.keyId !== null && file.keyId !== keyId();
         for (const [linkId, value] of Object.entries(file.links)) {
@@ -161,9 +210,9 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
         }
       }
       if (state !== "clean") {
-        markAll("crash");
-        // The crash evidence is now a hold; only once that is durable may the fence say clean.
-        if (persist()) write(FENCE, { version: 1, state: "clean" });
+        // The crash evidence becomes holds; only once that is durable, for links that could be listed,
+        // may the fence say clean. Otherwise it stays running and the next start does this again.
+        if (markAll("crash") && persist()) write(FENCE, { version: 1, state: "clean" });
       }
     },
 
@@ -224,12 +273,12 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
     /** Activity the restart gates see: one per hold, one more for an unknown link. */
     count(linkId: string): number {
       const value = links.get(linkId);
-      return value ? value.holds.length + (value.unknown ? 1 : 0) : 0;
+      return (value?.holds.length ?? 0) + (value?.unknown || allUnknown ? 1 : 0);
     },
 
     describe(linkId: string): { holds: number; unknown: UnknownReason | null } {
       const value = links.get(linkId);
-      return { holds: value?.holds.length ?? 0, unknown: value?.unknown ?? null };
+      return { holds: value?.holds.length ?? 0, unknown: value?.unknown ?? allUnknown };
     },
 
     /** Graceful stop, after the link sockets closed: holds first, then clean. */

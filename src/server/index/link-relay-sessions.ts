@@ -50,9 +50,10 @@ export interface LinkRelaySessionOptions {
   /**
    * A relayed POST /v1/responses on a verified session, before dispatch: it may return results a
    * closed link WebSocket of the same link and own thread was waiting for (link-websocket.ts holds).
-   * Must not consume the request body.
+   * Must not consume the request body. The returned decision is called once with true only when the
+   * handler answered below 400, so a request refused before or after reading its body releases nothing.
    */
-  observeResponsesRequest?: (linkId: string, req: Request) => void;
+  observeResponsesRequest?: (linkId: string, req: Request) => ((accepted: boolean) => void) | void;
 }
 
 /** One book per bound listener. A pending proof reserves the bind before the data request arrives. */
@@ -168,8 +169,9 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         release = () => { end(); lease(); };
       };
       if (countsActivity && sessionLink !== null) beginActivity();
+      let decideObservation: ((accepted: boolean) => void) | undefined;
       if (sessionLink !== null && req.method === "POST" && url.pathname === "/v1/responses") {
-        try { options.observeResponsesRequest?.(sessionLink, req); } catch { /* observation never blocks the request */ }
+        try { decideObservation = options.observeResponsesRequest?.(sessionLink, req) ?? undefined; } catch { /* observation never blocks the request */ }
       }
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
@@ -178,6 +180,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
       if (req.signal.aborted) beforeHeadersAbort();
       try {
         const response = await dispatch(req, server);
+        decideObservation?.(response.status < 400 && !req.signal.aborted);
         req.signal.removeEventListener("abort", beforeHeadersAbort);
         if (countsActivity && sessionLink === null && response.status < 400 && !req.signal.aborted) beginActivity();
         if (!response.body || req.method === "HEAD") { release(); return response; }
@@ -220,7 +223,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           cancel,
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-      } catch (error) { req.signal.removeEventListener("abort", beforeHeadersAbort); release(); throw error; }
+      } catch (error) { decideObservation?.(false); req.signal.removeEventListener("abort", beforeHeadersAbort); release(); throw error; }
     },
   };
 }
