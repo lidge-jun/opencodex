@@ -1123,7 +1123,14 @@ function moderationVerdictFields(payload: unknown): boolean | null {
     // A record that states the moderation code itself is the verdict; its param names what the
     // filter inspected. A param on any other record marks an unrelated validation error.
     const recordStatesModeration = typeof record.code === "string" && MODERATION_REFUSAL_CODES.has(normalizedFailureCode(record.code));
+    // A Responses terminal event (`response.failed`) carries the whole response object, which echoes
+    // the caller's instructions, tools and text format; only its error record is the verdict.
+    const responseCarrier = depth === 0 && typeof record.type === "string" && /^response\.[a-z_.]+$/.test(record.type);
     for (const [key, field] of Object.entries(record)) {
+      if (responseCarrier && key === "response" && field && typeof field === "object" && !Array.isArray(field)) {
+        if (!visit((field as Record<string, unknown>).error, depth + 1, insideFilterResult)) return false;
+        continue;
+      }
       if (key.toLowerCase() === "param" && !recordStatesModeration && typeof field === "string" && field.trim() !== "" && !isAllowedModerationParam(field)) {
         return false;
       }
@@ -1134,7 +1141,11 @@ function moderationVerdictFields(payload: unknown): boolean | null {
         if (typeof field !== "object" || field === null) continue;
       }
       if (!insideFilterResult && SAFETY_FLAG_KEY.test(key)) return false;
-      if (MODERATION_PROSE_KEYS.has(foldKey(key)) && typeof field === "string" && field.trim() !== ""
+      // Prose beside the verdict, under any key (message, hint, note, metadata.raw...), must itself
+      // describe the moderation refusal; a bare token (an id, an enum) is not prose.
+      if (typeof field === "string" && field.trim() !== "" && !insideFilterResult
+        && key.toLowerCase() !== "param" && !MODERATION_VERDICT_KEYS.has(foldKey(key))
+        && (MODERATION_PROSE_KEYS.has(foldKey(key)) || /\s/.test(field.trim()))
         && !MODERATION_PROSE.test(field)) {
         return false;
       }

@@ -367,6 +367,9 @@ describe("every prose field beside a coded verdict must describe the moderation 
       coded("The input was refused by moderation.", { accountSuspended: true }),
       coded("The input was refused by moderation.", { metadata: { account_status: "suspended" } }),
       coded("The input was refused by moderation.", { httpStatus: 429 }),
+      coded("The input was refused by moderation.", { hint: "The model gpt-9 does not exist" }),
+      coded("The input was refused by moderation.", { note: "Invalid 'temperature': maximum value is 2." }),
+      coded("The input was refused by moderation.", { metadata: { raw: "Your account is past due" } }),
     ]) {
       expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: false });
       const failure = await consumeComboFailure(new Response(body, { status: 400 }));
@@ -379,8 +382,30 @@ describe("every prose field beside a coded verdict must describe the moderation 
       coded("The input was refused by moderation. Categories: harassment."),
       JSON.stringify({ error: { code: "content_filter", message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry.", innererror: { code: "ResponsibleAIPolicyViolation" } } }),
       JSON.stringify({ error: { code: "moderation_refusal", message: "Your request was flagged by moderation." } }),
+      coded("The input was refused by moderation.", { request_id: "req_abc123" }),
     ]) {
       expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: true });
     }
+  });
+
+  test("a response.failed carrier's echoed instructions and tools do not veto its coded refusal", async () => {
+    const frame = {
+      type: "response.failed",
+      response: {
+        status: "failed",
+        model: "gpt-test",
+        instructions: "You are a helpful assistant. Answer briefly.",
+        tools: [{ type: "function", name: "lookup", description: "Look up an order by its number." }],
+        error: { code: "content_filter", message: "The input was refused by moderation." },
+      },
+    };
+    const result = await preflightComboStreamResponse(new Response(
+      "data: " + JSON.stringify(frame) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+    ), logCtx());
+    expect(result.kind).toBe("failed");
+    const failure = await consumeComboFailure(result.response);
+    const options = { code: failure.upstreamCode, rootCode: failure.upstreamRootCode, providerModerationRefusal: failure.providerModerationRefusal };
+    expect(comboFailureDecision(failure.response.status, failure.classificationText, options)).toBe("hop");
+    expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("none");
   });
 });
