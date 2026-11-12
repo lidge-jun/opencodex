@@ -743,6 +743,31 @@ describe("OAuth code-display login", () => {
     expect(printed).toContain("Confirm\\u202ccode\\u200bABCD\\u2066-\\u2069EFGH\\ufeff");
   });
 
+  // The headless device path prints provider-derived progress too: the Meta Muse device login's
+  // final line carries an action URL from the provider payload. That callback is a second print
+  // site from the browser one, so it needs its own pin rather than inheriting the first's.
+  test("ocx login --headless escapes bidi and tag-plane characters in progress text", async () => {
+    const { handleLogin } = await import("../../src/oauth/login-cli");
+    let printed = "";
+    const hostile = "Action needed: https://pay.example.test/\u202echeckout\u061c?step=1\u206a\u{e0041}";
+    const logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => { printed += `${args.join(" ")}\n`; });
+    try {
+      await handleLogin("xai", {
+        openUrl: async () => { throw new Error("must not launch"); },
+        ask: async () => "",
+        runLogin: async (_provider, ctrl) => {
+          ctrl.onAuth?.({ url: "https://accounts.x.ai/oauth2/device?user_code=ABCD", deviceCode: "ABCD" });
+          ctrl.onProgress?.(hostile);
+          return { refresh: "r", access: "a", expires: Date.now() + 3600_000 };
+        },
+      }, { codeMode: true });
+    } finally {
+      logSpy.mockRestore();
+    }
+    for (const code of [0x202e, 0x061c, 0x206a, 0xe0041]) expect(printed).not.toContain(String.fromCodePoint(code));
+    expect(printed).toContain("https://pay.example.test/\\u202echeckout\\u061c?step=1\\u206a\\u{e0041}");
+  });
+
   test("an unknown mode is rejected before any flow starts", async () => {
     const server = startServer(0);
     try {

@@ -29,15 +29,28 @@
  * disguise: ZWNJ (`U+200C`) and ZWJ (`U+200D`) join the glyphs of Indic and Persian words and the
  * members of an emoji sequence, so escaping them would corrupt legitimate script and display the
  * escape in its place. Variation selectors are legitimate emoji presentation for the same reason.
+ *
+ * The tag block (`U+E0000`–`U+E007F`) is included for a different reason: those characters render
+ * as nothing anywhere, so they carry text the operator cannot see. It is also how a subdivision
+ * flag is drawn, and escaping a flag's tags loses that flag's shape — accepted, because an
+ * unreadable channel through a security boundary costs more than one glyph. The range is outside
+ * the BMP, which is why the expression needs the `u` flag: without it `\u{e0000}` is a syntax
+ * error and a surrogate-pair spelling would match half a character at a time.
  */
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2028\u2029\u2060-\u206f\ufeff]/g;
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2028\u2029\u2060-\u206f\ufeff\u{e0000}-\u{e007f}]/gu;
 
-/** Escape one character as the `\xNN` / `\uNNNN` literal a reader can see. */
+/**
+ * Escape one character as the `\xNN` / `\uNNNN` / `\u{...}` literal a reader can see.
+ *
+ * `codePointAt` rather than `charCodeAt`: the tag block has no BMP spelling, so its characters are
+ * a surrogate pair in a JavaScript string, and reading one unit would print half of it as a lone
+ * surrogate. Escaping the code point keeps the pair whole and the escape recognizable.
+ */
 function escapeCharacter(character: string): string {
-  const code = character.charCodeAt(0);
-  return code <= 0x7f
-    ? `\\x${code.toString(16).padStart(2, "0")}`
-    : `\\u${code.toString(16).padStart(4, "0")}`;
+  const code = character.codePointAt(0)!;
+  if (code <= 0x7f) return `\\x${code.toString(16).padStart(2, "0")}`;
+  if (code <= 0xffff) return `\\u${code.toString(16).padStart(4, "0")}`;
+  return `\\u{${code.toString(16)}}`;
 }
 
 export function terminalSafeText(value: string): string {

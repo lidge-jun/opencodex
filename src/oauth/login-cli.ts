@@ -186,7 +186,9 @@ async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> 
           console.log(`\n🔐 Open this URL in any browser to approve ${name}:\n${terminalSafeText(url)}\n`);
           if (instructions) console.log(terminalSafeText(instructions));
         },
-        onProgress: (m) => console.log(`   ${m}`),
+        // The Meta Muse device flow's last line quotes an action URL from the provider payload, so
+        // this is not a fixed sentence: it is provider-derived text on its way to a tty.
+        onProgress: (m) => console.log(`   ${terminalSafeText(m)}`),
         onManualCodeInput: async () => await ask("Paste the code shown after approval: "),
       }, device ? { flow: "device" } : { codeMode: true });
     });
@@ -222,7 +224,7 @@ export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}, op
         // thing that could collide with it waits below (#5261).
         browser.track(launch(url));
       },
-      onProgress: (m) => console.log(`   ${m}`),
+      onProgress: (m) => console.log(`   ${terminalSafeText(m)}`),
       onManualCodeInput: async () => {
         // "or wait for browser" is a lie if nothing opened, and a warning printed after readline
         // has drawn the prompt lands on the line the user is typing on.

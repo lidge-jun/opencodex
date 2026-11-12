@@ -167,12 +167,21 @@ const STDIN_SENTINEL = "-";
 const DEVICE_NATIVE_PROVIDERS = new Set(["kimi", "nous", "github-copilot"]);
 /** Providers with a device grant besides their browser login; --device selects it. */
 const DEVICE_OPT_IN_PROVIDERS = new Set(["xai"]);
-const stripTerminalControls = (value: string): string => value.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "");
+/**
+ * The native Kiro handoff, rendered for a terminal.
+ *
+ * Every field here is provider- or proxy-supplied, so they go through the same sanitizer as the
+ * OAuth CLI's instructions rather than a local strip regex: a narrower strip both left characters
+ * reachable (the Arabic letter mark, the line separators, the deprecated `U+206A`–`U+206F` bidi
+ * controls) and deleted ones that must survive (ZWNJ/ZWJ, which shape Persian and emoji). Escaping
+ * keeps the value readable in a pasted report and leaves the layout below intact, because a
+ * newline inside a field is escaped rather than allowed to add a line.
+ */
 export function formatKiroDeviceInstructions(start: { verificationUriComplete?: string; verificationUri?: string; userCode?: string; flowId?: string }): string {
   return [
-    stripTerminalControls(start.verificationUriComplete ?? start.verificationUri ?? ""),
-    start.userCode ? `User code: ${stripTerminalControls(start.userCode)}` : "",
-    start.flowId ? `Flow: ${stripTerminalControls(start.flowId)}` : "",
+    terminalSafeText(start.verificationUriComplete ?? start.verificationUri ?? ""),
+    start.userCode ? `User code: ${terminalSafeText(start.userCode)}` : "",
+    start.flowId ? `Flow: ${terminalSafeText(start.flowId)}` : "",
   ].filter(Boolean).join("\n");
 }
 

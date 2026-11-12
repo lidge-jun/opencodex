@@ -54,6 +54,34 @@ describe("terminalSafeText", () => {
     },
   );
 
+  // Unicode tag characters (U+E0000–U+E007F) live outside the BMP and are invisible in every
+  // terminal, which makes them a delivery channel for text the operator never sees. They are also
+  // what shapes a subdivision flag, so this is the one place where escaping costs a legitimate
+  // glyph its shape — that is the right side of the trade, because the alternative is printing
+  // something that reads as nothing at all.
+  test("tag-plane characters are escaped by code point, not split into surrogates", () => {
+    const tag = "\u{e0041}";
+    const rendered = terminalSafeText(`left${tag}right`);
+    expect(rendered).toBe("left\\u{e0041}right");
+    expect(rendered).not.toContain(tag);
+    // A whole run, including both ends of the block, and nothing left as a lone surrogate.
+    const run = [0xe0000, 0xe0041, 0xe007f].map(code => String.fromCodePoint(code)).join("");
+    const escapedRun = terminalSafeText(`a${run}b`);
+    expect(escapedRun).toBe("a\\u{e0000}\\u{e0041}\\u{e007f}b");
+    for (const character of escapedRun) {
+      const code = character.codePointAt(0)!;
+      expect(code >= 0xd800 && code <= 0xdfff).toBe(false);
+    }
+  });
+
+  test("astral text next to the tag plane is untouched", () => {
+    // The plane boundary is where a naive range would start eating real characters: U+E0100 is a
+    // variation selector, and U+1F1F0/U+1F1F7 are the regional indicators of a flag.
+    for (const value of ["\u{e0100}", "\u{1f1f0}\u{1f1f7}", "\u{1f600}", "\u{20000}"]) {
+      expect(terminalSafeText(value)).toBe(value);
+    }
+  });
+
   test("a bidi override cannot reorder the text around it", () => {
     // The attack the review named: an override swaps how the rest of the line reads, so a
     // provider-supplied instruction can claim a different URL or code than the one it prints.
@@ -96,7 +124,8 @@ describe("terminalSafeText", () => {
     const source = readFileSync(repoPath("src", "lib", "terminal-safe-text.ts"), "utf8");
     const literal = codePoints(source).filter(code =>
       (code >= 0x7f && code <= 0x9f) || (code >= 0x200b && code <= 0x200f) || (code >= 0x202a && code <= 0x202e)
-      || (code >= 0x2060 && code <= 0x206f) || code === 0xfeff || code === 0x061c);
+      || (code >= 0x2060 && code <= 0x206f) || (code >= 0xe0000 && code <= 0xe007f)
+      || code === 0xfeff || code === 0x061c);
     expect(literal).toEqual([]);
   });
 });
