@@ -1120,7 +1120,7 @@
   "oauth-provider-reconcile.test.ts": "oauth",
   "oauth-reconcile-operator-maps.test.ts": "oauth", "oauth-public-surface.test.ts": "oauth",
   "oauth-reauth-bind.test.ts": "oauth", "oauth-refresh-generic-lock.test.ts": "oauth", "oauth-refresh-stale-capacity.test.ts": "oauth",
-  "oauth-refresh-lock-multiprocess.test.ts": "oauth", "oauth-refresh.test.ts": "oauth",
+  "oauth-refresh-lock-multiprocess.test.ts": "oauth", "oauth-refresh.test.ts": "oauth", "oauth-refresh-connection-refused.test.ts": "oauth",
   "oauth-status-privacy.test.ts": "oauth", "oauth-store-multi.test.ts": "oauth", "oauth-store-quota-isolation.test.ts": "oauth",
   "oauth-tos-warning.test.ts": "gui", "oauth-upsert-preserves-api-key.test.ts": "oauth",
   "ocx-launcher-runtime.test.ts": "cli", "ocx-launcher-fixture-trust.test.ts": "cli", "ocx-launcher-source.test.ts": "cli",
