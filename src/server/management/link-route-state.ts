@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { linkKnownHostsPath, linkStorePath } from "../../link/paths";
 import { clearCompensationFailed, compensationPath, markCompensationFailed } from "../../link/compensation";
 import { readLinkStore, writeLinkStore, type LinkStore } from "../../link/store";
+import { withoutAliasLines } from "../../link/route-trust";
 import { boundHint, createSshRunner, type SshRunner } from "../../link/ssh-runner";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
@@ -128,11 +129,29 @@ export function knownHostsFile(ctx: ManagementContext): string {
 
 export function putKnownHost(path: string, alias: string, line: string): string {
   const before = (() => { try { return readFileSync(path, "utf8"); } catch { return ""; } })();
-  const lines = before.split(/\r?\n/).filter(value => value && !value.startsWith(`${alias} `) && !value.startsWith(`${alias},`));
+  // OpenSSH compares known_hosts names without case, so every spelling of the alias is replaced.
+  const lines = withoutAliasLines(before, alias);
   lines.push(line.trim());
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   atomicWriteFile(path, `${lines.join("\n")}\n`);
   return before;
+}
+
+/**
+ * confirm-host's only write. Inside the config mutation lock, immediately before writing, a
+ * Home-initiated link that owns this alias (ignoring case) with another fingerprint refuses it: a
+ * link's routes trust exactly its record's key, and a confirmation must not replace that key.
+ * False when refused; nothing is written then.
+ */
+export function putConfirmedKnownHost(ctx: ManagementContext, alias: string, line: string, fingerprint: string): boolean {
+  return withConfigMutationLockSync(() => {
+    const wanted = alias.toLowerCase();
+    const conflict = readStoreFor(ctx).links.some(link => link.direction === "hub-initiated"
+      && link.alias.toLowerCase() === wanted && link.hostKeyFingerprint !== fingerprint);
+    if (conflict) return false;
+    putKnownHost(knownHostsFile(ctx), alias, line);
+    return true;
+  });
 }
 
 export function issueKey(ctx: ManagementContext, name: string): IssuedApiKey {

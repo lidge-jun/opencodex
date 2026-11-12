@@ -376,6 +376,16 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     return handleLinkChildOpsRoutes(ctx, state);
   }
   const reconnectPath = req.method === "POST" ? /^\/api\/link\/([^/]+)\/reconnect$/.exec(path) : null;
+  // Before the DELETE matcher, which would read "<id>/routes" as a link id.
+  const routesPath = req.method === "GET" || req.method === "POST" ? /^\/api\/link\/([^/]+)\/routes$/.exec(path) : null;
+  if (routesPath) {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    let id: string;
+    try { id = decodeURIComponent(routesPath[1]!); } catch { return fail("invalid_link_id", "The link id is invalid.", 400); }
+    const { handleLinkRouteEdit } = await import("./link-route-edit");
+    return handleLinkRouteEdit(ctx, state, id);
+  }
   if (reconnectPath) {
     const denied = auth(ctx, "either");
     if (denied) return denied;

@@ -13,7 +13,7 @@ import { SshRunnerError, boundHint, sshFailureHint, sshRunnerErrorHint, type Ssh
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
-import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putKnownHost, issueKey, compensateNewLink, type LinkRouteState } from "./link-route-state";
+import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, type LinkRouteState } from "./link-route-state";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
 const PROBE_TTL_MS = 5 * 60_000;
@@ -21,7 +21,7 @@ const MIN_REMOTE_OCX = [2, 66, 0] as const;
 const REMOTE_OCX_VERSION = /^opencodex (\d{1,9})\.(\d{1,9})\.(\d{1,9})(-[0-9A-Za-z.-]{1,64})?(\+[0-9A-Za-z.-]{1,64})?(?=\s|$)/;
 
 /** Same-alias operations refuse overlap rather than overwrite a confirmed generation. */
-async function serialized(state: LinkRouteState, alias: string, action: () => Promise<Response>): Promise<Response> {
+export async function serialized(state: LinkRouteState, alias: string, action: () => Promise<Response>): Promise<Response> {
   const operations = state.operations ??= new Set();
   if (operations.has(alias)) return fail("link_operation_in_progress", "A link operation for this alias is already running.", 409);
   operations.add(alias);
@@ -143,7 +143,7 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
         if (inspected.runtimeKind === "missing") {
           const source = resolveBinary(inspected.targetTriple);
           if (state.pendingHosts.get(alias) !== pending || now() - pending.probedAt > PROBE_TTL_MS) return fail("host_confirmation_expired", "The SSH host probe changed or expired.", 409);
-          withConfigMutationLockSync(() => putKnownHost(knownHostsFile(ctx), alias, pending.knownHostLine));
+          if (!putConfirmedKnownHost(ctx, alias, pending.knownHostLine, pending.fingerprint)) return linkPinConflict();
           const confirmed = {
             ...pending,
             remotePlatform,
@@ -170,7 +170,7 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
         if (!version) return fail("remote_ocx_unrecognized", "The remote ocx did not report an OpenCodex version.", 502);
         if (isOutdatedVersion(version.parts)) return fail("remote_ocx_outdated", "The remote OpenCodex is older than 2.66.0.", 409, boundHint("opencodex " + version.version));
         if (state.pendingHosts.get(alias) !== pending || now() - pending.probedAt > PROBE_TTL_MS) return fail("host_confirmation_expired", "The SSH host probe changed or expired.", 409);
-        withConfigMutationLockSync(() => putKnownHost(knownHostsFile(ctx), alias, pending.knownHostLine));
+        if (!putConfirmedKnownHost(ctx, alias, pending.knownHostLine, pending.fingerprint)) return linkPinConflict();
         const confirmed = { ...pending, remotePlatform, sshLatencyMs: Math.max(pending.sshLatencyMs ?? 0, now() - started), ocxVersion: version.version, runtimeKind: inspected.runtimeKind, targetTriple: inspected.targetTriple, plantable: false };
         (state.confirmedHosts ??= new Map()).set(alias, confirmed);
         state.pendingHosts.delete(alias);
@@ -190,7 +190,7 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
       if (!version) return fail("remote_ocx_unrecognized", "The remote ocx did not report an OpenCodex version.", 502);
       if (isOutdatedVersion(version.parts)) return fail("remote_ocx_outdated", "The remote OpenCodex is older than 2.66.0.", 409, boundHint("opencodex " + version.version));
       if (state.pendingHosts.get(alias) !== pending || now() - pending.probedAt > PROBE_TTL_MS) return fail("host_confirmation_expired", "The SSH host probe changed or expired.", 409);
-      withConfigMutationLockSync(() => putKnownHost(knownHostsFile(ctx), alias, pending.knownHostLine));
+      if (!putConfirmedKnownHost(ctx, alias, pending.knownHostLine, pending.fingerprint)) return linkPinConflict();
       const confirmed = { ...pending, remotePlatform, sshLatencyMs: Math.max(pending.sshLatencyMs ?? 0, now() - started), ocxVersion: version.version };
       (state.confirmedHosts ??= new Map()).set(alias, confirmed);
       state.pendingHosts.delete(alias);
@@ -198,6 +198,10 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
     } catch (error) { return fail("version_probe_failed", "The remote ocx version could not be confirmed.", 502, sshRunnerErrorHint(error)); }
     finally { rmSync(dir, { recursive: true, force: true }); }
   });
+}
+
+function linkPinConflict(): Response {
+  return fail("link_pin_conflict", "A Home-initiated link already pins another key for this alias; remove that link before trusting another key.", 409);
 }
 
 function parsePort(stdout: string): number | null {
@@ -362,4 +366,3 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     } finally { input?.fill(0); rmSync(dir, { recursive: true, force: true }); }
   });
 }
-
