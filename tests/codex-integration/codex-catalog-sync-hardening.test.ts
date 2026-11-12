@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -9,6 +9,9 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { withConfigMutationLockSync } from "../../src/config/mutation-lock";
 import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+
+// Catalog reconciliation is exercised through real child processes, including cold imports.
+setDefaultTimeout(SPAWN_BUDGET_MS);
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 
@@ -1138,7 +1141,7 @@ describe("Codex catalog sync hardening", () => {
     slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/legacy-model");
     expect(slugs).toContain("cursor/composer-2.5");
-  }, SPAWN_BUDGET_MS);
+  });
 
   test("drops legacy combo-alias ghost rows in both gather branches", () => {
     const legacyComboAlias = {
