@@ -21,7 +21,9 @@ import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, relayHubManagementRequest } from "./h
 import { createLinkKeySource, handleLinkIngress, type LinkIngress, type LinkKeySourceDeps } from "./link-ingress";
 import type { LinkTunnelGate } from "./link-relay";
 import { readClientLinkState, type ClientLinkState } from "./link-state";
-import { projectClientLinkChild, type ClientLinkSidecarRead } from "./link-status";
+import { projectClientLinkChild, projectClientLinkRow, type ClientLinkSidecarRead } from "./link-status";
+import { attachLinkTraffic } from "../link/status-projection";
+import { childLinkTraffic } from "../link/traffic";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 import type { LinkReadiness } from "./link-readiness";
 import { packageVersion } from "../lib/package-version";
@@ -273,7 +275,16 @@ export function startMachineListener(
         if (url.pathname === LINK_DIAGNOSTICS_ROUTE) return linkDiagnosticsResponse(url);
         if (url.pathname === "/api/link/status") {
           // A Child never joins again from here, so the dashboard reads `joinAvailable: false`.
-          const status = projectClientLinkChild(readSidecarSafely(readSidecar), deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
+          const sidecar = readSidecarSafely(readSidecar);
+          const status = projectClientLinkChild(sidecar, deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
+          // Opt-in (#3023): this Child's link as a row, with the bytes its link transport carried.
+          if (url.searchParams.get("traffic") === "1" && connection.link) {
+            // One sidecar read per status read: the Home's name is needed only when there is none,
+            // and then only from the Home's published settings.
+            status.links = [projectClientLinkRow({ ...connection, link: connection.link }, sidecar, status.child, Date.now(),
+              undefined, sidecar === null ? linkHomeName(connection, () => null) : null)];
+            attachLinkTraffic(status, id => childLinkTraffic.snapshot(id));
+          }
           return Response.json({ ...status, joinAvailable: false }, { headers: { "Cache-Control": "no-store" } });
         }
         return await handleMachineApi(req, url, connection, machineApiDeps) ?? json404(req);

@@ -530,6 +530,34 @@ async function readJsonBody(ctx: ManagementContext): Promise<unknown | Response>
   }
 }
 
+/**
+ * `ocx sync` refreshes an already-connected Pi file through this route instead of rebuilding it
+ * in the CLI process. Pi may carry raw nested selectors, and a raw selector is only safe when the
+ * proxy that will serve it proves it routes to the same model (#8172). Proving it against the
+ * CLI's own saved configuration and router cache could write a selector this proxy routes
+ * elsewhere, so the refresh runs here, against this process's config, router and roster.
+ */
+export const PI_SYNC_PATH = "/api/client-integrations/pi/sync";
+
+async function piSyncResponse(ctx: ManagementContext): Promise<Response> {
+  const body = await readJsonBody(ctx);
+  if (body instanceof Response) return body;
+  if (!isPlainRecord(body) || Object.keys(body).length !== 0) {
+    return jsonResponse({ error: "Pi sync expects an empty object", code: "invalid_pi_sync_body" }, 400, ctx.req, ctx.config);
+  }
+  const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
+  const results = await refreshOwnedCatalogIntegrations({
+    config: ctx.config,
+    port: managementInferencePort(ctx),
+    models: () => loadExportModels(ctx.config),
+    store: integrationStore(),
+    ...pathOverrides(),
+    ...(integrationMutationTestHooks?.io ? { io: integrationMutationTestHooks.io } : {}),
+  }, ["pi"]);
+  const ok = results.every(result => result.ok);
+  return jsonResponse({ ok, clientId: "pi", results }, ok ? 200 : 207, ctx.req, ctx.config);
+}
+
 function writerFailureResponse(
   clientId: IntegrationClientId,
   /*
@@ -710,6 +738,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   const profileOptions = asideOptions(ctx);
   const aside = await handleAsideProfileRoutes(ctx, profileOptions);
   if (aside) return aside;
+  if (url.pathname === PI_SYNC_PATH && req.method === "POST") return piSyncResponse(ctx);
   if (url.searchParams.has("profile")
     && (url.pathname === INTEGRATION_COLLECTION_PATH || url.pathname.startsWith(INTEGRATION_ROUTE_PREFIX))
     && !INTEGRATION_HISTORY_PATHS.includes(url.pathname)) {

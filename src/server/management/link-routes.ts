@@ -8,7 +8,7 @@ import { clearCompensationFailed, compensationPath, readCompensation } from "../
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
-import { attachLinkPeers, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
+import { attachLinkPeers, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
 import { codexSettingsDigest, projectHomeCodexSettings } from "../../link/codex-settings";
 import { localLinkPeer } from "../../link/compatibility";
@@ -268,8 +268,10 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
         return filtered;
       });
-      clearCompensationFailed(id, compensationPath());
     } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
+    // Same task as the commit, before any fallible cleanup: an open link WebSocket must not outlive its link (design T4 2.4).
+    state.listener.closeLinkSockets?.(id);
+    try { clearCompensationFailed(id, compensationPath()); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
     state.compensationFailures?.delete(id);
     await state.supervisor.reload();
     if (next.links.length === 0) await state.listener.close();
@@ -329,8 +331,20 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
       attachLinkPeers(dto, localLinkPeer(packageVersion("0.0.0"), buildPeerFeatures()),
         linkId => state.listener.peerObservation?.(linkId) ?? { observed: null, refused: null });
     }
+    // The same opt-in for the body bytes each link carried (#3023).
+    if (url.searchParams.get("traffic") === "1") {
+      const { attachLinkTrafficForState } = await import("./link-traffic-status");
+      attachLinkTrafficForState(dto, state);
+    }
     // The same opt-in for each Home-initiated tunnel's retry progress and last failure cause.
     if (url.searchParams.get("diagnostics") === "1") attachLinkTunnelDiagnostics(dto, supervisorStates);
+    // The same opt-in for each row's live link WebSocket counters and hold count (design 9.3).
+    if (url.searchParams.get("transport") === "1") {
+      attachLinkTransport(dto, linkId => state.listener.linkTransport?.(linkId) ?? null, linkId => {
+        const held = state.listener.linkHolds?.(linkId) ?? null;
+        return held ? held.holds.length + (held.unknown ? 1 : 0) : 0;
+      });
+    }
     // The same opt-in for each Home row's Child versions, catalog freshness, activity and operations.
     if (url.searchParams.get("children") === "1" && dto.role === "home") {
       const { attachLinkChildOpsForState } = await import("./link-child-ops-routes");

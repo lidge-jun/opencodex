@@ -48,6 +48,20 @@ export function linkConnectionProof(fingerprint: string, keyId: string, linkId: 
     .update(`opencodex-link-connection-v1\0${keyId}\0${linkId}\0${nonce}\0${generation}`).digest("hex");
 }
 
+/**
+ * Whether this Home accepts the Responses WebSocket over the link, on a verified relay-auth answer.
+ * Sent only while the feature is on; a Child applies an answer without it as off. The proof binds
+ * the value to the nonce and both identities, as linkConnectionProof does.
+ */
+export const LINK_RELAY_WS_STATE_HEADER = "x-opencodex-link-ws-state";
+export const LINK_RELAY_WS_STATE_PROOF_HEADER = "x-opencodex-link-ws-proof";
+
+export function linkWebsocketStateProof(fingerprint: string, keyId: string, linkId: string, nonce: string, value: "on" | "off"): string | null {
+  if (!linkRelayProof(fingerprint, "listener", keyId, linkId, nonce)) return null;
+  return createHmac("sha256", Buffer.from(fingerprint, "hex"))
+    .update(`opencodex-link-ws-v1\0${keyId}\0${linkId}\0${nonce}\0${value}`).digest("hex");
+}
+
 /** The direction and both identities are covered; a caller proof is never a listener proof. */
 export function linkRelayProof(
   fingerprint: string, direction: "caller" | "listener", keyId: string, linkId: string, nonce: string,
