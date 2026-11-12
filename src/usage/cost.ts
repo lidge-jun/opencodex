@@ -744,10 +744,14 @@ export function estimateAttemptCost(
   const [effectiveCost4, multiplier] = applyPriorityMultiplier(
     tieredCost4, price.provider, attempt.model, attemptServiceTier, contextTier, customThresholdApplied,
   );
-  const priorityLowerBound = contextPriorityLowerBound
-    || isOpenRouterPriorityLowerBound(price.provider, attempt.tierOutcome);
   const billed = resolveAttemptCost(attempt.provider, attempt.usage, creditPrices, tokens, effectiveCost4);
   if (!billed) return null;
+  // A credit charge is `providerCredits x creditPriceUsd`. The token rates were still resolved to
+  // decide whether this row falls back to them, but they did not produce the amount, so the
+  // `priorityLowerBound` they imply is a statement about a price nobody was charged. A lower bound
+  // is only honest for the rate that actually priced the row.
+  const priorityLowerBound = billed.billing === undefined
+    && (contextPriorityLowerBound || isOpenRouterPriorityLowerBound(price.provider, attempt.tierOutcome));
   return {
     ordinal: attempt.ordinal,
     provider: attempt.provider,
@@ -874,12 +878,14 @@ export function estimateRequestCost(
   const [effectiveCost4, multiplier] = applyPriorityMultiplier(
     tieredCost4, price.provider, input.model, input.serviceTier, contextTier, customThresholdApplied,
   );
-  const priorityLowerBound = contextPriorityLowerBound || isOpenRouterPriorityLowerBound(
-    price.provider,
-    typeof input.serviceTier === "object" ? input.serviceTier.tierOutcome : undefined,
-  );
   const billed = resolveAttemptCost(input.provider, input.usage, creditPrices, tokens, effectiveCost4);
   if (!billed) return null;
+  // See `estimateAttemptCost`: a credit charge is exact for its configured price, so it must not
+  // inherit the token-rate floor that the fallback path resolved on the way in.
+  const priorityLowerBound = billed.billing === undefined && (contextPriorityLowerBound || isOpenRouterPriorityLowerBound(
+    price.provider,
+    typeof input.serviceTier === "object" ? input.serviceTier.tierOutcome : undefined,
+  ));
   return {
     tokens,
     price,

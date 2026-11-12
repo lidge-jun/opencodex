@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { DICTS } from "../src/i18n/catalogs";
 import { interpolate, type Locale, type TFn } from "../src/i18n/shared";
 import {
+  effectivePriorityLowerBound,
+  estimateReasonsForBilling,
   formatEstimatedUsd,
   formatEstimatedUsdValue,
   summarizeEstimatedCosts,
@@ -56,5 +58,38 @@ describe("conversation cost lower-bound aggregation", () => {
       unpricedRequests: 1,
       unmeteredRequests: 1,
     });
+  });
+});
+
+describe("a billing basis governs what the estimate may claim", () => {
+  const credits = { source: "provider-credits" as const, providerCredits: 2, creditPriceUsd: 0.04 };
+
+  test("a credit or mixed estimate cannot render as a lower bound, even from a stale row", () => {
+    expect(effectivePriorityLowerBound({ priorityLowerBound: true })).toBe(true);
+    expect(effectivePriorityLowerBound({ priorityLowerBound: true, billing: credits })).toBe(false);
+    expect(effectivePriorityLowerBound({ priorityLowerBound: true, billing: { source: "mixed" } })).toBe(false);
+    expect(effectivePriorityLowerBound({ priorityLowerBound: false, billing: credits })).toBe(false);
+    expect(formatEstimatedUsd(
+      { kind: "value", estimate: { cost: { total: 0.08 }, priorityLowerBound: true, billing: credits } },
+      translator("en"),
+      "en-US",
+    )).toBe("$0.0800");
+  });
+
+  test("token-only reasons drop for a credit charge but keep the usage caveat", () => {
+    const reasons = ["usage_estimated", "cache_detail_missing", "expected_price_overlay", "provider_cost_overlay", "priority_lower_bound"] as const;
+    expect(estimateReasonsForBilling(reasons, { billing: credits })).toEqual(["usage_estimated"]);
+    // A mixed total keeps its token leg's real caveats, but one exact leg means the sum is not a floor.
+    expect(estimateReasonsForBilling(reasons, { billing: { source: "mixed" } })).toEqual([
+      "usage_estimated", "cache_detail_missing", "expected_price_overlay", "provider_cost_overlay",
+    ]);
+    // No basis is a token price: every reason the proxy sent describes it.
+    expect(estimateReasonsForBilling(reasons, {})).toEqual([...reasons]);
+  });
+
+  test("a credit row in a conversation total is not aggregated as a lower bound", () => {
+    expect(summarizeEstimatedCosts([
+      { usageStatus: "reported", displayMetrics: { cost: { kind: "value", estimate: { cost: { total: 0.08 }, priorityLowerBound: true, billing: credits } } } },
+    ])).toMatchObject({ estimatedCostUsd: 0.08, priorityLowerBound: false });
   });
 });

@@ -4,9 +4,53 @@ export type CostBilling =
   | { source: "provider-credits"; providerCredits: number; creditPriceUsd: number }
   | { source: "mixed" };
 
+/** The reasons the proxy may attach to a value estimate. */
+export type CostEstimateReason =
+  | "usage_estimated"
+  | "cache_detail_missing"
+  | "expected_price_overlay"
+  | "provider_cost_overlay"
+  | "priority_lower_bound";
+
+/**
+ * What a billed estimate can say about itself.
+ *
+ * `priorityLowerBound` claims the amount is a floor under a rate the proxy could not resolve.
+ * A credit charge is `credits x price`, exact for the configured price, and a mixed total sums
+ * one — so neither is a floor. The proxy already withholds the marker at read time; this guard
+ * covers a row seeded into the dashboard by an older build or served by an older proxy, where a
+ * `>=` over an exact charge is a false claim about the amount rather than a stale label.
+ */
+type BillingBasis = { billing?: CostBilling };
+
+export function effectivePriorityLowerBound(estimate: BillingBasis & { priorityLowerBound?: boolean }): boolean {
+  return estimate.priorityLowerBound === true && estimate.billing === undefined;
+}
+
+/**
+ * Reasons that qualify the TOKEN price rather than the charge.
+ *
+ * A credit charge never used the resolved token rates: the cache caveat, both price overlays and
+ * the Priority floor describe a rate nobody was billed. `usage_estimated` stays, because the
+ * credits were still derived from an estimated usage reading. A `mixed` total keeps the token
+ * leg's real caveats but not a floor, since one exact leg means the sum is exact.
+ */
+const TOKEN_PRICE_REASONS: ReadonlySet<CostEstimateReason> = new Set([
+  "cache_detail_missing", "expected_price_overlay", "provider_cost_overlay", "priority_lower_bound",
+]);
+
+export function estimateReasonsForBilling(
+  reasons: readonly CostEstimateReason[],
+  estimate: BillingBasis,
+): CostEstimateReason[] {
+  if (!estimate.billing) return [...reasons];
+  if (estimate.billing.source === "mixed") return reasons.filter(reason => reason !== "priority_lower_bound");
+  return reasons.filter(reason => !TOKEN_PRICE_REASONS.has(reason));
+}
+
 type EstimatedCostResult = {
   kind: "value";
-  estimate: { cost: { total: number }; priorityLowerBound?: boolean };
+  estimate: { cost: { total: number }; priorityLowerBound?: boolean; billing?: CostBilling };
 } | { kind: "unavailable" };
 
 /**
@@ -81,7 +125,7 @@ export function formatEstimatedUsd(
     result.estimate.cost.total,
     t,
     localeTag,
-    result.estimate.priorityLowerBound,
+    effectivePriorityLowerBound(result.estimate),
   );
 }
 
@@ -112,7 +156,7 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
       if (Number.isFinite(total) && total >= 0) {
         estimatedCostUsd += total;
         pricedEstimates += 1;
-        everyPricedEstimateIsLowerBound &&= cost.estimate.priorityLowerBound === true;
+        everyPricedEstimateIsLowerBound &&= effectivePriorityLowerBound(cost.estimate);
         continue;
       }
     }
