@@ -999,7 +999,7 @@ describe("status reports stale process records end to end", () => {
     } finally {
       removeTreeWithRetry(home);
     }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("a clean home reports false and says nothing about a previous run", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-stale-clean-"));
@@ -1019,7 +1019,7 @@ describe("status reports stale process records end to end", () => {
     } finally {
       removeTreeWithRetry(home);
     }
-  });
+  }, SPAWN_BUDGET_MS);
 
   // Review blocker 3: a recycled pid must suppress rather than assert. This process is
   // certainly alive, so recording it stands in for a reused pid.
