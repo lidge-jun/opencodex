@@ -370,6 +370,13 @@ describe("every prose field beside a coded verdict must describe the moderation 
       coded("The input was refused by moderation.", { hint: "The model gpt-9 does not exist" }),
       coded("The input was refused by moderation.", { note: "Invalid 'temperature': maximum value is 2." }),
       coded("The input was refused by moderation.", { metadata: { raw: "Your account is past due" } }),
+      coded("The input was refused by moderation.", { param: "temperature" }),
+      coded("The input was refused by moderation.", { param: "max_tokens" }),
+      coded("The input was refused by moderation.", { details: ["The model gpt-9 does not exist"] }),
+      coded("The input was refused by moderation.", { details: ["Your account is past due"] }),
+      coded("The input was refused by moderation.", { note: "Refused by moderation. Your account is past due." }),
+      coded("The input was refused by moderation.", { note: "Refused by moderation; your organization is over its spend limit." }),
+      coded("The input was refused by moderation.", { note: "The model gpt-9 does not exist BUT the input was refused by moderation." }),
     ]) {
       expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: false });
       const failure = await consumeComboFailure(new Response(body, { status: 400 }));
@@ -383,6 +390,8 @@ describe("every prose field beside a coded verdict must describe the moderation 
       JSON.stringify({ error: { code: "content_filter", message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry.", innererror: { code: "ResponsibleAIPolicyViolation" } } }),
       JSON.stringify({ error: { code: "moderation_refusal", message: "Your request was flagged by moderation." } }),
       coded("The input was refused by moderation.", { request_id: "req_abc123" }),
+      coded("The input was refused by moderation.", { param: "input", details: ["harassment"] }),
+      JSON.stringify({ error: { code: "content_filter", message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry. To learn more about our content filtering policies please read our documentation: https://go.microsoft.com/fwlink/?linkid=2198766" } }),
     ]) {
       expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: true });
     }
@@ -416,6 +425,9 @@ describe("every prose field beside a coded verdict must describe the moderation 
       { safety_violation: true },
       { note: "The model gpt-9 does not exist" },
       { incomplete_details: { reason: "Your account is past due" } },
+      { metadata: { raw: "Your account is past due" } },
+      { metadata: { httpStatus: 503 } },
+      { metadata: { safety_violation: true } },
     ]) {
       const frame = { type: "response.failed", response: { status: "failed", ...extra, error } };
       const result = await preflightComboStreamResponse(new Response(

@@ -1021,6 +1021,25 @@ const MODERATION_PROSE_KEYS = new Set(["message", "error", "detail", "details", 
  */
 const MODERATION_PROSE = /moderat|content[\s_-]*(?:filter|management|safety)|\bfiltered\b|responsible[\s_-]*ai/i;
 
+/**
+ * Clauses a refusal may carry beside its verdict without adding evidence of its own: the category
+ * list, the advice to change the prompt and retry, and the pointer to documentation.
+ */
+const MODERATION_PROSE_FOLLOW_UP =
+  /^(?:categor(?:y|ies)\b.*|(?:please\s+)?(?:modify|revise|rephrase|change|adjust|edit|update)\s+(?:your|the)\s+(?:prompt|input|request|message|content)s?\b.*|(?:please\s+)?(?:try|retry)(?:\s+again)?\b.*|.*\b(?:learn\s+more|more\s+information|documentation)\b.*)$/i;
+
+/**
+ * Whether a prose string only describes the moderation refusal. Each clause (split at sentence
+ * ends, semicolons, commas and joining words) must name the refusal or be a known follow-up, so a
+ * string that also reports an account, model, parameter or billing problem keeps dev's decision.
+ */
+function describesOnlyModeration(text: string): boolean {
+  const clauses = text.split(/(?<=[.!?;,])\s+|\s+(?:and|but|however|while|although|because)\s+|\n+/i)
+    .map(clause => clause.trim()).filter(clause => clause !== "");
+  return clauses.some(clause => MODERATION_PROSE.test(clause))
+    && clauses.every(clause => MODERATION_PROSE.test(clause) || MODERATION_PROSE_FOLLOW_UP.test(clause));
+}
+
 /** Fold a key for comparison: lowercase, underscores and hyphens removed. */
 function foldKey(key: string): string {
   return key.toLowerCase().replace(/[_-]/g, "");
@@ -1029,7 +1048,7 @@ function foldKey(key: string): string {
 /** Response-object fields that echo the caller's request rather than describe the failure. */
 const RESPONSE_REQUEST_ECHO_KEYS = new Set([
   "instructions", "tools", "tool_choice", "text", "reasoning", "input", "output", "prompt", "include",
-  "metadata", "user", "safety_identifier", "prompt_cache_key", "previous_response_id", "conversation",
+  "user", "safety_identifier", "prompt_cache_key", "previous_response_id", "conversation",
 ]);
 
 /**
@@ -1123,12 +1142,14 @@ function moderationVerdictFields(payload: unknown): boolean | null {
   let nodes = 0;
   const visit = (value: unknown, depth: number, insideFilterResult: boolean): boolean => {
     if (++nodes > 512 || depth > 8) return false;
-    if (Array.isArray(value)) return value.every(item => visit(item, depth + 1, insideFilterResult));
+    if (Array.isArray(value)) {
+      // A string item is prose like any other field (`details: ["..."]`).
+      return value.every(item => typeof item === "string"
+        ? insideFilterResult || !/\s/.test(item.trim()) || describesOnlyModeration(item)
+        : visit(item, depth + 1, insideFilterResult));
+    }
     if (!value || typeof value !== "object") return true;
     const record = value as Record<string, unknown>;
-    // A record that states the moderation code itself is the verdict; its param names what the
-    // filter inspected. A param on any other record marks an unrelated validation error.
-    const recordStatesModeration = typeof record.code === "string" && MODERATION_REFUSAL_CODES.has(normalizedFailureCode(record.code));
     // A Responses terminal event (`response.failed`) carries the whole response object, which echoes
     // the caller's request (instructions, tools, text format...). Those echoes say nothing about the
     // verdict; every other field of the response object is still read.
@@ -1140,7 +1161,9 @@ function moderationVerdictFields(payload: unknown): boolean | null {
         if (!visit(verdictFields, depth + 1, insideFilterResult)) return false;
         continue;
       }
-      if (key.toLowerCase() === "param" && !recordStatesModeration && typeof field === "string" && field.trim() !== "" && !isAllowedModerationParam(field)) {
+      // A param names what the filter inspected: the prompt or input. Any other param, on any
+      // record, marks a validation error.
+      if (key.toLowerCase() === "param" && typeof field === "string" && field.trim() !== "" && !isAllowedModerationParam(field)) {
         return false;
       }
       if (MODERATION_STATUS_KEYS.has(foldKey(key))) {
@@ -1155,7 +1178,7 @@ function moderationVerdictFields(payload: unknown): boolean | null {
       if (typeof field === "string" && field.trim() !== "" && !insideFilterResult
         && key.toLowerCase() !== "param" && !MODERATION_VERDICT_KEYS.has(foldKey(key))
         && (MODERATION_PROSE_KEYS.has(foldKey(key)) || /\s/.test(field.trim()))
-        && !MODERATION_PROSE.test(field)) {
+        && !describesOnlyModeration(field)) {
         return false;
       }
       if (MODERATION_VERDICT_KEYS.has(foldKey(key))) {
@@ -1225,7 +1248,7 @@ export function isProviderModerationRefusal(
   if (envelope === undefined) {
     // Plain text carries no structured fields; only the caller's code can state the verdict, and a
     // body that looks like JSON but does not parse (cut or malformed) never hops.
-    return callerStatesModeration && !/^\s*(?:data:\s*)?[[{]/.test(message) && MODERATION_PROSE.test(message);
+    return callerStatesModeration && !/^\s*(?:data:\s*)?[[{]/.test(message) && describesOnlyModeration(message);
   }
   // An envelope root that states a verdict code of its own (invalid_request_error, origin,
   // context length, cancellation...) keeps it, as everywhere else in this file.

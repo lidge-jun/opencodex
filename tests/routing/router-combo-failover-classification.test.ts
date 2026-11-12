@@ -1564,7 +1564,7 @@ describe("provider moderation refusal", () => {
     expect(comboFailureDecision(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("stop");
   });
 
-  test("explicit content_filter code triggers failover even when param names other input field", () => {
+  test("a param outside the prompt or input keeps the body terminal even on the coded record", () => {
     const body = JSON.stringify({
       error: {
         code: "content_filter",
@@ -1572,9 +1572,9 @@ describe("provider moderation refusal", () => {
         param: "instructions",
       },
     });
-    expect(isProviderModerationRefusal(400, body)).toBe(true);
-    expect(comboFailureDecision(400, body)).toBe("hop");
-    expect(comboFailureCooldownScope(400, body)).toBe("none");
+    expect(isProviderModerationRefusal(400, body)).toBe(false);
+    expect(comboFailureDecision(400, body)).toBe("stop");
+    expect(comboFailureCooldownScope(400, body)).not.toBe("none");
   });
 
   test("root content_filter code does not exempt nested validation error with disallowed param", () => {
