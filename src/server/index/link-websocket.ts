@@ -146,6 +146,9 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
   // False from last-link close() until the next bind: a session reserved before close() must not
   // become a socket close() never sees, or the listener drain would wait on it forever.
   let accepting = true;
+  // Upgraded but not yet opened: Bun runs open() after the fetch returns, so a revoke or close() in
+  // between must still reach the socket. The value is the close it owes when it opens.
+  const pending = new Map<LinkSocketBinding, { code: number; reason: string } | null>();
 
   const authorized = (identity: { keyId: string; linkId: string; fingerprint: string }): boolean => {
     try { return deps.authorized(identity); } catch { return false; }
@@ -219,6 +222,7 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
       // Off: the request keeps today's path and today's refusal, byte for byte.
       if (!on) return { handled: false };
       const leases = new LinkUpgradeLeases(grant.release);
+      let binding: LinkSocketBinding | undefined;
       const refuse = (response: Response): LinkUpgradeOutcome => {
         leases.release();
         return { handled: true, response };
@@ -246,17 +250,20 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           sessionLaneIdFromRequest(req.headers),
           classifyUsageClient(req.headers),
         );
-        const binding: LinkSocketBinding = { linkId: grant.linkId, keyId: grant.keyId, fingerprint: grant.fingerprint, fenced: false, leases };
+        binding = { linkId: grant.linkId, keyId: grant.keyId, fingerprint: grant.fingerprint, fenced: false, leases };
         data.nativeControlDisabled = true;
         data.link = binding;
         if (req.signal.aborted) return refuse(formatErrorResponse(426, "upgrade_required", "The upgrade request was aborted."));
         leases.upgrading();
+        pending.set(binding, null);
         if (!(server as unknown as Server<WsData>).upgrade(req, { data })) {
+          pending.delete(binding);
           return refuse(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"));
         }
         leases.upgraded();
         return { handled: true, response: undefined };
       } catch {
+        if (binding) pending.delete(binding);
         return refuse(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"));
       }
     },
@@ -273,8 +280,13 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
         open(ws) {
           const link = ws.data.link;
           if (!link) { ws.close(1011, "link socket without a binding"); return; }
+          const owed = pending.get(link) ?? null;
+          pending.delete(link);
           track(ws, link.linkId);
           base.open?.(ws);
+          // A revoke or last-link close() that ran between the upgrade and now still applies.
+          if (owed) fence(ws, owed);
+          else if (!accepting) fence(ws, LINK_WS_REVOKED_CLOSE);
         },
         message(ws, raw) {
           const link = ws.data.link;
@@ -289,6 +301,7 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           } finally {
             const link = ws.data.link;
             if (link) {
+              pending.delete(link);
               untrack(ws, link.linkId);
               link.leases.closed();
             }
@@ -301,7 +314,13 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
     closeLink(linkId: string): number {
       const set = [...(sockets.get(linkId) ?? [])];
       for (const ws of set) fence(ws, LINK_WS_REVOKED_CLOSE);
-      return set.length;
+      let owed = 0;
+      for (const binding of pending.keys()) {
+        if (binding.linkId !== linkId) continue;
+        pending.set(binding, LINK_WS_REVOKED_CLOSE);
+        owed += 1;
+      }
+      return set.length + owed;
     },
 
     /** Last link removed: no new link socket, and every open one closes before the listener drains. */
@@ -309,7 +328,8 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
       accepting = false;
       const all = allSockets();
       for (const ws of all) fence(ws, LINK_WS_REVOKED_CLOSE);
-      return all.length;
+      for (const binding of pending.keys()) pending.set(binding, LINK_WS_REVOKED_CLOSE);
+      return all.length + pending.size;
     },
 
     /** A listener bound again after close() accepts link upgrades again. */

@@ -38,3 +38,19 @@ export const LINK_WS_REVOKED_CLOSE = { code: 4401, reason: "link revoked" } as c
 /** Close code for a socket closed because the feature was switched off. */
 export const LINK_WS_DISABLED_CLOSE = { code: 1000, reason: "link websocket disabled" } as const;
 
+/**
+ * Release gate. The reservation above assumes the link-only bounded pump of design 6.2 (per-event
+ * backpressure wait, 256 KiB framing slices), which is not in this build yet. Until the slice that
+ * lands it sets this to true, linkResponsesWebsocket cannot admit or advertise anything, whatever
+ * the config says. Tests of the admission path turn it on for themselves only.
+ */
+let transportReady = false;
+
+export function linkWebsocketTransportReady(): boolean {
+  return transportReady;
+}
+
+export function setLinkWebsocketTransportReadyForTests(ready: boolean): void {
+  transportReady = ready;
+}
+

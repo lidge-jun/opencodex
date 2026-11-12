@@ -11,6 +11,7 @@ import { getRequestLogEntries } from "../../src/server/request-log";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient, frameType, type WireMessage } from "../helpers/link-ws-client";
+import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 
 // The Home side of the Responses WebSocket over a Remote Link (lane T5a). Every case drives a real
 // Home: the relay-auth challenge, the session request and the upgrade share one TCP connection.
@@ -110,6 +111,7 @@ async function removeLink(id: string): Promise<Response> {
 }
 
 beforeEach(() => {
+  setLinkWebsocketTransportReadyForTests(true);
   testHome = mkdtempSync(join(tmpdir(), "ocx-link-ws-"));
   process.env.OPENCODEX_HOME = testHome;
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = ADMIN;
@@ -127,6 +129,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setLinkWebsocketTransportReadyForTests(false);
   for (const opened of clients.splice(0)) opened.destroy();
   if (server) await server.stop(true);
   server = null;
@@ -156,6 +159,17 @@ describe("link Responses WebSocket switched off (characterization)", () => {
     expect(answer.status).toBe(404);
     expect(JSON.parse(answer.body)).toMatchObject({ error: { code: "not_found" } });
     expect(upstreamRequests).toHaveLength(0);
+  });
+
+  test("switch on, but the build's release gate closed: today's 404 and no WebSocket state (R1-02)", async () => {
+    setLinkWebsocketTransportReadyForTests(false);
+    const port = await startHome();
+    const wire = await client(port);
+    const { nonce, head } = await wire.challenge(identityA);
+    expect(head.headers.has("x-opencodex-link-ws-state")).toBe(false);
+    const answer = await wire.upgrade({ nonce, bearer: KEY_A });
+    expect(answer.status).toBe(404);
+    expect(JSON.parse(answer.body)).toMatchObject({ error: { code: "not_found" } });
   });
 });
 
@@ -221,6 +235,8 @@ describe("link Responses WebSocket switched on", () => {
     expect(closed).toMatchObject({ type: "close", code: 4401 });
     const rowsBefore = getRequestLogEntries().length;
     a.sendJson(create("after revoke"));
+    // Synchronize on the Home ending the connection before reading the counters.
+    expect(await a.nextMessage()).toEqual({ type: "eof" });
     expect(upstreamRequests).toHaveLength(0);
     expect(getRequestLogEntries().length).toBe(rowsBefore);
     const turn = await runTurn(b);
@@ -247,6 +263,16 @@ describe("link Responses WebSocket switched on", () => {
     wire.sendJson(create());
     expect(await wire.nextMessage()).toMatchObject({ type: "close", code: 4401 });
     expect(upstreamRequests).toHaveLength(0);
+  });
+
+  test("a proof made on one connection never upgrades another, even on the same port (S1, S4)", async () => {
+    const port = await startHome();
+    const proved = await client(port);
+    const { nonce } = await proved.challenge(identityA);
+    const other = await client(port);
+    expect((await other.upgrade({ nonce, bearer: KEY_A })).status).toBe(404);
+    // The nonce was consumed by the refused attempt, so the proving connection cannot use it either.
+    expect((await proved.upgrade({ nonce, bearer: KEY_A })).status).toBe(404);
   });
 
   test("native control frames get native_control_unavailable_on_link even with steering and injection on (11.1-5a)", async () => {

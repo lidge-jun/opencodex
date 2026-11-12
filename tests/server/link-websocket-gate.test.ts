@@ -8,6 +8,7 @@ import type { LinkStore } from "../../src/link/store";
 import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
 import { createLinkWebsocketGate, LinkUpgradeLeases, type LinkSessionGrant } from "../../src/server/index/link-websocket";
 import { LINK_WS_LIMITS } from "../../src/server/index/link-websocket-limits";
+import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 import { requestPolicyView } from "../../src/server/auth-cors";
 import { codexWebSocketAdmissionMetrics, tryReserveCodexWebSocket } from "../../src/codex/websocket-registry";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -15,6 +16,8 @@ import type { AdmissionReservation } from "../../src/lib/admission";
 import type { WsData } from "../../src/server/ws-bridge";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient } from "../helpers/link-ws-client";
+import { createLinkRelaySessions } from "../../src/server/index/link-relay-sessions";
+import { LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_VERSION, linkRelayProof } from "../../src/link/relay-auth";
 
 // Lane T5a, gate level: the lease state machine of design 2.3 row by row, the caps and budget of
 // 6.3/6.4, the sweep on an injected timer, and the same-task fence of the revocation hook.
@@ -30,11 +33,13 @@ const clients: LinkWireClient[] = [];
 const stops: Array<() => Promise<void>> = [];
 
 beforeEach(() => {
+  setLinkWebsocketTransportReadyForTests(true);
   tempHome = mkdtempSync(join(tmpdir(), "ocx-link-ws-gate-"));
   process.env.OPENCODEX_HOME = tempHome;
 });
 
 afterEach(async () => {
+  setLinkWebsocketTransportReadyForTests(false);
   for (const client of clients.splice(0)) client.destroy();
   for (const stop of stops.splice(0)) await stop();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
@@ -244,6 +249,28 @@ describe("link upgrade lease state machine (design 2.3, 11.1-7)", () => {
     expect(gate.snapshot()).toEqual({ open: 0, admitted: 0, reservedBytes: 0, sweeping: false });
   });
 
+  test.each([
+    ["last-link close()", "all"],
+    ["the link's revoke hook", "link"],
+  ] as const)("%s between a successful upgrade and open() still closes the socket when it opens (R1-01)", (_label, which) => {
+    const session = countedGrant();
+    const gate = unitGate({ reserveSocket: countedSocketLease().reserve });
+    let data: WsData | undefined;
+    gate.upgrade(upgradeRequest(), fakeServer((_req, options) => { data = options.data; return true; }), session.grant);
+    if (which === "all") expect(gate.closeAll()).toBe(1); else expect(gate.closeLink(FIRST.linkId)).toBe(1);
+    const base = baseHandler();
+    const handler = gate.handler(base.handler);
+    const closes: number[] = [];
+    const ws = { data, close(code: number) { closes.push(code); }, readyState: 1 } as unknown as ServerWebSocket<WsData>;
+    handler.open?.(ws);
+    expect(closes).toEqual([4401]);
+    handler.message?.(ws, "late frame");
+    expect(base.delivered).toEqual([]);
+    handler.close?.(ws, 4401, "link revoked");
+    expect(session.released()).toBe(1);
+    expect(gate.snapshot()).toEqual({ open: 0, admitted: 0, reservedBytes: 0, sweeping: false });
+  });
+
   test("a revocation fences the socket in the same task: a frame already queued never reaches the shared handler", () => {
     const gate = unitGate({ reserveSocket: countedSocketLease().reserve });
     let data: WsData | undefined;
@@ -365,4 +392,35 @@ describe("link socket sweep and revocation (design 2.4, 11.1-4)", () => {
     expect(base.delivered).toEqual([]);
   });
 });
+
+describe("relay-auth answer while the link WebSocket is off (characterization)", () => {
+  test("the verified 204 is identical to a relay book without any WebSocket option", async () => {
+    const fingerprint = serviceApiTokenFingerprint(FIRST.key);
+    const nonce = "a".repeat(64);
+    const challenge = () => {
+      const url = new URL("http://127.0.0.1" + LINK_RELAY_AUTH_PATH);
+      url.searchParams.set("version", LINK_RELAY_AUTH_VERSION);
+      url.searchParams.set("key", FIRST.id);
+      url.searchParams.set("link", FIRST.linkId);
+      url.searchParams.set("nonce", nonce);
+      url.searchParams.set("proof", linkRelayProof(fingerprint, "caller", FIRST.id, FIRST.linkId, nonce)!);
+      return new Request(url);
+    };
+    const peerServer = { requestIP: () => ({ address: "127.0.0.1", port: 40000, family: "IPv4" }) } as unknown as Server<unknown>;
+    const unreachable = async () => new Response(null, { status: 500 });
+    const today = createLinkRelaySessions({ fingerprints: () => [fingerprint], reservationMs: 1 });
+    const off = createLinkRelaySessions({
+      fingerprints: () => [fingerprint], reservationMs: 1,
+      upgrade: () => ({ handled: false }), websocketAdvertised: () => false,
+    });
+    const a = await today.dispatch(challenge(), peerServer, unreachable);
+    const b = await off.dispatch(challenge(), peerServer, unreachable);
+    expect(b.status).toBe(a.status);
+    expect([...b.headers.entries()]).toEqual([...a.headers.entries()]);
+    expect(await b.text()).toBe(await a.text());
+    today.abortReservations();
+    off.abortReservations();
+  });
+});
+
 

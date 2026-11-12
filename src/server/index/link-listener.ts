@@ -5,6 +5,7 @@ import type { Server, WebSocketHandler } from "bun";
 import type { RequestPolicyView } from "../auth-cors";
 import type { WsData } from "../ws-bridge";
 import { createLinkWebsocketGate, type LinkWebsocketGateDeps } from "./link-websocket";
+import { linkWebsocketTransportReady } from "./link-websocket-limits";
 import {
   emptyLinkStore,
   readLinkStore,
@@ -125,7 +126,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
     return startContext?.keyFingerprints?.(keyId) ?? [];
   };
-  const websocketEnabled = (): boolean => startContext?.responsesWebsocket?.enabled() === true;
+  // The release gate comes first: until the bounded pump lands, the switch admits nothing.
+  const websocketEnabled = (): boolean => linkWebsocketTransportReady() && startContext?.responsesWebsocket?.enabled() === true;
   const websocketGate = createLinkWebsocketGate({
     ...deps.websocket,
     enabled: websocketEnabled,
