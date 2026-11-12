@@ -1,9 +1,10 @@
 import { DEFAULT_IDLE_AFTER_MS, isLinkIdle } from "../../link/child-activity";
+import { readChildPolicy, updateChildPolicy, validPolicyPatch } from "../../link/child-policy";
 import { createCatalogRevisionMonitor, type CatalogRevisionMonitor } from "../../link/child-catalog-freshness";
 import { observeChild } from "../../link/child-observe";
 import { patchChildObservation, readChildObservations, updateChildObservations } from "../../link/child-observations";
 import { sharedChildOpsEngine, type ChildOpsEngine, type SubmitRefusal, type SubmitResult } from "../../link/child-ops-engine";
-import { CHILD_OPS, type ChildOp, type ChildOpsEnv, type ChildRestart } from "../../link/child-ops-types";
+import { CHILD_OPS, CHILD_OPS_MAX_LINK_IDS, type ChildOp, type ChildOpsEnv, type ChildRestart } from "../../link/child-ops-types";
 import { requireRemotePlatform } from "../../link/remote-platform";
 import { inspectRemoteChildRuntime } from "../../link/remote-plant";
 import { attachLinkChildOps, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
@@ -16,7 +17,7 @@ import { auth, fail, isRecord, knownHostsFile, readStoreFor, runnerFor, type Lin
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const JOB_ID = /^ljob_[0-9a-f]{16}$/;
-const MAX_LINK_IDS = 64;
+const MAX_LINK_IDS = CHILD_OPS_MAX_LINK_IDS;
 const JOB_PATH = /^\/api\/link\/children\/jobs\/([^/]+)$/;
 const NO_STORE = { "cache-control": "no-store" };
 
@@ -132,7 +133,8 @@ export function attachLinkChildOpsForState(dto: LinkStatusDto, state: LinkRouteS
   const observations = readChildObservations();
   const known = new Set(store.links.map(link => link.id));
   return attachLinkChildOps(dto, {
-    homeVersion: packageVersion("0.0.0"), now, idleAfterMs: DEFAULT_IDLE_AFTER_MS, revision,
+    // The policy threshold governs every idle decision (050 reconciliation item 5).
+    homeVersion: packageVersion("0.0.0"), now, idleAfterMs: readChildPolicy().policy.idleAfterMs, revision,
     peerVersion: linkId => state.listener.peerObservation?.(linkId).observed?.version ?? null,
     observation: linkId => known.has(linkId) ? observations.children[linkId] ?? null : null,
     activity: linkId => state.listener.linkActivity?.(linkId, now) ?? null,
@@ -152,9 +154,20 @@ export async function handleLinkChildOpsRoutes(ctx: ManagementContext, state: Li
     const operation = parseOperation(await readManagementJsonBodyOr(req, null));
     if (!operation) return fail("invalid_body", "The body must be exactly {op, linkIds, restart?}; restart is app-server or codex and needs explicit linkIds.", 400);
     let result: SubmitResult;
-    try { result = childOpsEngineFor(state).submit({ ...operation, trigger: "manual" }, childOpsEnvFor(ctx, state)); }
+    try { result = childOpsEngineFor(state).submit({ ...operation, trigger: "manual" }, childOpsEnvFor(ctx, state, readChildPolicy().policy.idleAfterMs)); }
     catch { return fail("link_unavailable", "The link store could not be read.", 503); }
     return result.ok ? Response.json({ job: result.job }, { status: 202, headers: NO_STORE }) : refusal(result.code);
+  }
+  // 050: the Child policy. The handler-wide auth above admits a dashboard session or the admin token on loopback.
+  if (url.pathname === "/api/link/children/policy" && req.method === "GET") return Response.json(readChildPolicy(), { headers: NO_STORE });
+  if (url.pathname === "/api/link/children/policy" && req.method === "PUT") {
+    // Same refusal as POST operations: a Child's policy file would govern nothing.
+    if (ctx.config.runtimeRole === "client") return fail("runtime_role_client", "A Child runtime does not operate other Children.", 409);
+    const body = await readManagementJsonBodyOr(req, null);
+    const patch = isRecord(body) && Object.keys(body).length > 0 ? validPolicyPatch(body) : null;
+    if (!patch) return fail("invalid_body", "Send one or more of catalogFanout, childCodexRestart, updates, idleAfterMs with valid values.", 400);
+    try { return Response.json({ policy: updateChildPolicy(patch), warning: null }, { headers: NO_STORE }); }
+    catch { return fail("policy_write_failed", "The Child policy could not be saved.", 503); }
   }
   const jobPath = req.method === "GET" ? JOB_PATH.exec(path) : null;
   if (jobPath) {

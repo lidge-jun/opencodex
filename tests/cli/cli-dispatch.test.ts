@@ -733,16 +733,17 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(recovery.indexOf("markCrossHomeSibling()")).toBeGreaterThan(-1);
     expect(recovery.indexOf("markCrossHomeSibling()")).toBeLessThan(recovery.indexOf("reconcileStartupJournal()"));
     const detached = slice("function detachedStartEnvironment(", "async function handleEnsure(");
-    expect(detached).toContain("const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);");
+    expect(detached).toContain("const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));");
     expect(detached).toContain("delete env.OCX_SERVICE;");
-    expect(detached).toContain("delete env[SERVICE_MANAGED_ENV];");
-    expect(detached).toContain("delete env[WINDOWS_WRAPPER_PROTOCOL_ENV];");
-    expect(cliSource).toContain("env: withProcessRuntimeProvenance(withoutSiblingMarker(process.env)),");
+    expect(cliSource).toContain("env: withProcessRuntimeProvenance(withoutSupervisorMarkers(withoutSiblingMarker(process.env))),");
     // Every other detached `ocx start` is an ordinary owner too: the client auto-starts and the
     // updater's restart. A stray marker would mark them before any probe.
     const opencodeStartEnv = "env: withProcessRuntimeProvenance(opencodeProxyStartEnv(withoutSiblingMarker(process.env)) as NodeJS.ProcessEnv),";
     for (const [path, env] of [
-      ["src/cli/claude.ts", 'env: withProcessRuntimeProvenance(withoutSiblingMarker({ ...process.env, OCX_SERVICE: "1" })),'],
+      // ocx claude builds its proxy's environment in claudeProxyStartEnv (also read by the restart's
+      // owner classification) and spawns with it.
+      ["src/cli/claude.ts", 'return withoutSupervisorMarkers(withoutSiblingMarker({ ...base, OCX_SERVICE: "1" }));'],
+      ["src/cli/claude.ts", "env: withProcessRuntimeProvenance(claudeProxyStartEnv()),"],
       ["src/cli/opencode.ts", opencodeStartEnv],
       ["src/cli/minimax.ts", opencodeStartEnv],
       ["src/update/job-pinned-start.ts", "const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);"],

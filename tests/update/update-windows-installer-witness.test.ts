@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { repoPath } from "../helpers/repo-root";
@@ -229,12 +229,17 @@ describe("legacy witnessless marker recovery hint (#8524 decision A)", () => {
 
   test("the hint names the marker and a reversible rename for the platform", () => {
     const root = home();
+    // The hint is formatted for the platform it names, whatever host runs the test.
+    const windowsPath = win32.join(root, "update-orchestrated.json");
+    const posixPath = posix.join(root, "update-orchestrated.json");
     const windows = staleUpdateMarkerHint(root, "win32").join("\n");
-    expect(windows).toContain(markerPath(root));
-    expect(windows).toContain(`ren "${markerPath(root)}" update-orchestrated.json.stale`);
+    expect(windows).toContain(windowsPath);
+    expect(windows).toContain(`ren "${windowsPath}" update-orchestrated.json.stale`);
     expect(windows).toContain("ocx update");
-    const posix = staleUpdateMarkerHint(root, "linux").join("\n");
-    expect(posix).toContain(`mv -n '${markerPath(root)}' '${markerPath(root)}.stale'`);
+    expect(staleUpdateMarkerHint("C:\\Users\\a\\.opencodex", "win32").join("\n"))
+      .toContain('ren "C:\\Users\\a\\.opencodex\\update-orchestrated.json" update-orchestrated.json.stale');
+    const posixHint = staleUpdateMarkerHint(root, "linux").join("\n");
+    expect(posixHint).toContain(`mv -n '${posixPath}' '${posixPath}.stale'`);
     // Nothing in a pasted command may expand: POSIX quotes a quote; Windows prints no command at all.
     expect(staleUpdateMarkerHint("/home/o'neil/.opencodex", "linux").join("\n"))
       .toContain("mv -n '/home/o'\\''neil/.opencodex/update-orchestrated.json'");

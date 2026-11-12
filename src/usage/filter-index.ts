@@ -77,7 +77,13 @@ import { USAGE_CODEX_CLIENT_LABELS, type UsageSourceFilter } from "./source-filt
 import { usageAttributions } from "./summary";
 import type { UsageTimeWindow } from "./time-range";
 
-export const USAGE_FILTER_INDEX_SCHEMA_VERSION = 4;
+/**
+ * Bumped to 5 when the candidate indexes moved `byte_offset` ahead of every other ordered column.
+ * The shape of `usage_rows` is unchanged, but a version 4 projection carries indexes that cannot
+ * deliver the pager's order; the derived tables are recreated and rebuilt from the ledger rather
+ * than migrated, so no stale index survives to re-introduce the per-page sort.
+ */
+export const USAGE_FILTER_INDEX_SCHEMA_VERSION = 5;
 export const USAGE_FILTER_INDEX_DB_FILENAME = "usage-filter-index.sqlite";
 /** Rows per SQLite transaction during ingest; also the peak pending-row allocation. */
 export const USAGE_FILTER_INDEX_INSERT_BATCH = 500;
@@ -91,8 +97,26 @@ const SQLITE_BUSY_TIMEOUT_MS = 250;
 const RETAINED_WAL_LIMIT_BYTES = 4 * 1024 * 1024;
 const BATCH_BUSY_RETRIES = 3;
 const BATCH_BUSY_RETRY_MS = 5;
+// Contention is retried briefly and then degrades to the streaming read, which answers the same
+// request from the ledger. A longer wait only holds a dashboard request (and, through SQLite's
+// synchronous busy timeout, the event loop) behind another writer.
 const BUSY_RETRY_DELAYS_MS = [10, 25, 50] as const;
+// A rebuild-required error resolves as soon as the competing publish settles, so it retries on
+// the original short schedule instead of parking behind the long busy backoff.
+const REBUILD_RETRY_DELAYS_MS = [10, 25, 50] as const;
 
+/**
+ * The candidate tables and their indexes.
+ *
+ * Every candidate branch pages in ascending `byte_offset` with `byte_offset > cursor`, so the
+ * ordered column must follow each equality prefix with nothing ordered-by-varying in between. A
+ * `(generation, timestamp, byte_offset)` index cannot satisfy that order without sorting the whole
+ * candidate range on every page, which made a deep page cost seconds instead of the streaming
+ * scan's fraction of one. The window filter is therefore a residual predicate over
+ * `idx_usage_rows_window`, whose monotonic cursor makes the scan one amortized pass. The same rule
+ * is why `idx_usage_attr_provider_offset` and `idx_usage_attr_model_offset` exist: a lone provider
+ * or model equality, like a lone client equality, still has to deliver `byte_offset` in order.
+ */
 const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS ${META_TABLE} (
   key TEXT PRIMARY KEY,
@@ -111,11 +135,11 @@ CREATE TABLE IF NOT EXISTS usage_rows (
   PRIMARY KEY (generation, byte_offset)
 ) WITHOUT ROWID;
 
-CREATE INDEX IF NOT EXISTS idx_usage_rows_ts ON usage_rows(generation, timestamp, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_rows_key ON usage_rows(generation, api_key_id, timestamp, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_rows_client ON usage_rows(generation, client, timestamp, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_rows_admission ON usage_rows(generation, admission_kind, api_key_id, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_rows_unattributable ON usage_rows(generation, unattributable);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_window ON usage_rows(generation, byte_offset, timestamp);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_key ON usage_rows(generation, api_key_id, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_client ON usage_rows(generation, client, byte_offset, surface);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_admission ON usage_rows(generation, admission_kind, byte_offset, api_key_id);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_unattributable ON usage_rows(generation, unattributable, byte_offset);
 
 CREATE TABLE IF NOT EXISTS usage_attributions (
   generation  TEXT NOT NULL,
@@ -126,7 +150,8 @@ CREATE TABLE IF NOT EXISTS usage_attributions (
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS idx_usage_attr_provider ON usage_attributions(generation, provider, model, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_attr_model ON usage_attributions(generation, model, provider, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_attr_provider_offset ON usage_attributions(generation, provider, byte_offset, model);
+CREATE INDEX IF NOT EXISTS idx_usage_attr_model_offset ON usage_attributions(generation, model, byte_offset, provider);
 
 CREATE TABLE IF NOT EXISTS usage_filter_index_writers (
   generation   TEXT PRIMARY KEY,
@@ -185,6 +210,17 @@ export class UsageFilterIndexHomeChangedError extends Error {
 }
 
 /**
+ * A candidate page could not be read from the index after the reader was handed out. The
+ * projection cannot serve this query, so the caller streams the ledger instead of failing.
+ */
+export class UsageFilterIndexPageError extends Error {
+  constructor(readonly pageError: unknown) {
+    super("usage filter index candidate page could not be read");
+    this.name = "UsageFilterIndexPageError";
+  }
+}
+
+/**
  * A retained filtered projection read this generation. A full rebuild replaces every offset,
  * so a projection from an older generation must be discarded even when the file identity and
  * size are unchanged.
@@ -220,8 +256,15 @@ export interface UsageFilterIndexQuery {
 
 export interface UsageFilterCandidateRead {
   snapshot: UsageFilterIndexSnapshot;
-  /** Ascending row-start offsets selected by the index. */
-  offsets: number[];
+  /** Number of candidates returned by pages consumed so far. */
+  candidateRows: number;
+  /** Returns the next bounded page of ascending row-start offsets. */
+  nextPage(): number[];
+  /**
+   * Closes the database handle. Pages are not read from one long snapshot: each `nextPage()`
+   * re-checks schema and generation inside its own short transaction.
+   */
+  close(): void;
 }
 
 /**
@@ -264,6 +307,12 @@ export interface UsageFilterIndexTestHooks {
   afterRefresh?: (info: { dbPath: string }) => void;
   /** Runs when a read met another writer's lock, before its back-off and retry. */
   beforeBusyRetry?: (info: { dbPath: string; attempt: number }) => void;
+  /**
+   * Runs instead of the real back-off before a retry, with the delay the caller would use.
+   * Returning `true` means the hook supplied the wait; a test can then advance its own clock
+   * instead of racing a real timer. Returning nothing keeps the production delay.
+   */
+  beforeRetryDelay?: (info: { dbPath: string; attempt: number; delayMs: number }) => boolean | void;
 }
 
 interface IndexMeta {
@@ -1145,10 +1194,29 @@ async function refreshUsageFilterIndex(
   }
 }
 
-function buildCandidateSelect(
+interface CandidateBranch {
+  /** Stable branch name; used to label a page statement in diagnostics and `EXPLAIN` seams. */
+  label: string;
+  sql: string;
+  values: Array<string | number>;
+}
+
+/**
+ * One branch of the candidate select. `paged` adds the keyset bound `byte_offset > ?`; the caller
+ * appends the cursor value at the end of each branch's values.
+ *
+ * Every branch is served by an index whose key order is `(generation, <equality prefix>,
+ * byte_offset, ...)`, so `ORDER BY byteOffset` walks the index and the `LIMIT` stops the scan.
+ * That is the whole point of the split: a compound `UNION` cannot keep that order, because
+ * SQLite sorts each compound operand, so the previous single-statement pager re-materialized and
+ * sorted the entire candidate range on every page. The branches are merged in JS by offset
+ * instead, which keeps the one ascending-order contract the accumulator and the tests rely on.
+ */
+function candidateBranches(
   query: UsageFilterIndexQuery,
   snapshot: UsageFilterIndexSnapshot,
-): { sql: string; values: Array<string | number> } {
+  paged: boolean,
+): CandidateBranch[] {
   const attrClauses: string[] = [];
   const attrValues: Array<string | number> = [];
   const rowClauses: string[] = [];
@@ -1182,13 +1250,15 @@ function buildCandidateSelect(
   const client = query.sourceFilter?.client;
   // Each alternative is its own index-friendly predicate. Keeping the Codex and unknown
   // expansions as an OR inside one scan made SQLite walk the whole generation; as separate
-  // branches each one searches the client index.
+  // branches each one searches the client index. The Codex roster is expanded one label per
+  // branch for the same reason a pager needs it: `client IN (...)` matches across several key
+  // values, so SQLite cannot also deliver ascending `byte_offset` from the index and sorts the
+  // whole match set on every page. Separate equalities keep each branch a single ordered seek.
   const clientAlternatives: Array<{ clauses: string[]; values: Array<string | number> }> = [];
   if (client === "codex") {
-    clientAlternatives.push({
-      clauses: [`r.client IN (${USAGE_CODEX_CLIENT_LABELS.map(() => "?").join(", ")})`],
-      values: [...USAGE_CODEX_CLIENT_LABELS],
-    });
+    for (const label of USAGE_CODEX_CLIENT_LABELS) {
+      clientAlternatives.push({ clauses: ["r.client = ?"], values: [label] });
+    }
     // Mirrors matchesUsageSource: legacy Codex-surface rows are included too.
     clientAlternatives.push({ clauses: ["r.client IS NULL AND r.surface IS NULL"], values: [] });
   } else if (client === "unknown") {
@@ -1205,11 +1275,15 @@ function buildCandidateSelect(
     rowClauses.push("r.timestamp >= ? AND r.timestamp <= ?");
     rowValues.push(query.window.since, query.window.until);
   }
-  if (query.afterOffset !== undefined) {
+  // A paged read starts every branch cursor at the append offset instead (see candidatePager): a
+  // second lower bound on the same column makes SQLite seek from afterOffset on every page.
+  if (query.afterOffset !== undefined && !paged) {
     rowClauses.push("r.byte_offset >= ?");
     rowValues.push(query.afterOffset);
   }
-  rowClauses.push("r.byte_offset <= ?");
+  // The indexed offset is where the next unindexed row starts. Pages run in separate
+  // transactions, so a concurrent refresh can index a row at exactly that offset mid-read.
+  rowClauses.push("r.byte_offset < ?");
   rowValues.push(snapshot.indexedOffset);
   const alternativeSql = clientAlternatives
     .map(alternative => alternative.clauses.length > 0 ? `(${alternative.clauses.join(" AND ")})` : "")
@@ -1223,38 +1297,51 @@ function buildCandidateSelect(
     // estimate prefers the row primary key, which examines every row in the ledger even when
     // one API key or client matches a handful.
     const baseIndex = rowAccessIndexWithoutClient(query);
-    const branches = clientAlternatives.map(alternative => {
+    const cursor = paged ? " AND r.byte_offset > ?" : "";
+    return clientAlternatives.map((alternative, ordinal) => {
       const index = alternative.clauses.length > 0 ? "idx_usage_rows_client" : baseIndex;
       const clauses = [...rowClauses, ...alternative.clauses];
       return {
-        sql: `SELECT r.byte_offset AS byteOffset FROM usage_rows r${index ? ` INDEXED BY ${index}` : ""} WHERE r.generation = ? AND ${clauses.join(" AND ")}`,
+        label: `row[${ordinal}]${index ? ` ${index}` : " primary key"}`,
+        sql: `SELECT r.byte_offset AS byteOffset FROM usage_rows r${index ? ` INDEXED BY ${index}` : ""} WHERE r.generation = ? AND ${clauses.join(" AND ")}${cursor}`,
         values: [snapshot.generation, ...rowValues, ...alternative.values],
       };
     });
-    return {
-      sql: `${branches.map(branch => branch.sql).join(" UNION ")} ORDER BY byteOffset`,
-      values: branches.flatMap(branch => branch.values),
-    };
   }
   // Drive from the attribution index rather than scanning the row range: SQLite's default
   // estimate otherwise prefers the row primary key, which examines every row in the ledger.
-  const attrIndex = query.provider === null ? "idx_usage_attr_model" : "idx_usage_attr_provider";
+  // A provider+model equality pair uses the tight `(provider, model, byte_offset)` index; a lone
+  // provider or model still needs an offset-ordered index or the page would sort every match.
+  const attrIndex = query.provider !== null && query.model !== null
+    ? "idx_usage_attr_provider"
+    : query.provider !== null
+      ? "idx_usage_attr_provider_offset"
+      : "idx_usage_attr_model_offset";
   // Rows with no usable attribution are selected too: the accumulator is what decides, and a
   // hand-edited row with a missing model must fail a provider/model filter exactly as the
   // streaming read does rather than disappear from the result.
-  return {
-    sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset <= ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql}) UNION SELECT r.byte_offset AS byteOffset FROM usage_rows r INDEXED BY idx_usage_rows_unattributable WHERE r.generation = ? AND r.unattributable = 1 AND ${rowSql} ORDER BY byteOffset`,
-    values: [
-      snapshot.generation,
-      ...attrValues,
-      snapshot.indexedOffset,
-      ...rowValues,
-      ...clientAlternatives.flatMap(alternative => alternative.values),
-      snapshot.generation,
-      ...rowValues,
-      ...clientAlternatives.flatMap(alternative => alternative.values),
-    ],
-  };
+  return [
+    {
+      label: `attribution ${attrIndex}`,
+      sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset < ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql})${paged ? " AND a.byte_offset > ?" : ""}`,
+      values: [
+        snapshot.generation,
+        ...attrValues,
+        snapshot.indexedOffset,
+        ...rowValues,
+        ...clientAlternatives.flatMap(alternative => alternative.values),
+      ],
+    },
+    {
+      label: "unattributable",
+      sql: `SELECT r.byte_offset AS byteOffset FROM usage_rows r INDEXED BY idx_usage_rows_unattributable WHERE r.generation = ? AND r.unattributable = 1 AND ${rowSql}${paged ? " AND r.byte_offset > ?" : ""}`,
+      values: [
+        snapshot.generation,
+        ...rowValues,
+        ...clientAlternatives.flatMap(alternative => alternative.values),
+      ],
+    },
+  ];
 }
 
 /** The index that answers the non-client part of a row-only filter. */
@@ -1263,18 +1350,132 @@ function rowAccessIndexWithoutClient(query: UsageFilterIndexQuery): string | nul
   const device = query.sourceFilter?.device;
   if (device?.kind === "no-key" || device?.kind === "key") return "idx_usage_rows_key";
   if (device?.kind === "unconfigured") return "idx_usage_rows_admission";
-  if (query.window) return "idx_usage_rows_ts";
+  // The window is a residual predicate over a byte-offset-ordered index rather than a seek into
+  // a timestamp-ordered one. A timestamp prefix cannot also deliver ascending `byte_offset`
+  // without sorting, so the choice is a sort of every match on every page or one monotonic pass
+  // over the generation's index entries; the latter is what a streaming scan would cost anyway.
+  if (query.window) return "idx_usage_rows_window";
   return null;
 }
 
-function selectCandidates(
+export const CANDIDATE_PAGE_SIZE = 2_000;
+
+/**
+ * The page statements behind the candidate pager: each branch seeks from the page cursor and
+ * stops at the page size, so a late page reads at most `CANDIDATE_PAGE_SIZE` rows per branch and
+ * never sorts. The pager merges the branch pages by offset; the cursor value is appended at the
+ * end of each branch's values, followed by the page size, when the statement runs.
+ */
+function candidatePageStatements(
+  query: UsageFilterIndexQuery,
+  snapshot: UsageFilterIndexSnapshot,
+): Array<{ label: string; sql: string; values: Array<string | number> }> {
+  return candidateBranches(query, snapshot, true).map(branch => ({
+    label: branch.label,
+    sql: `${branch.sql} ORDER BY byteOffset LIMIT ?`,
+    values: branch.values,
+  }));
+}
+
+/**
+ * Keyset pager over the candidate select: bounded pages, each validated in its own transaction.
+ *
+ * Each branch is its own statement so its index order supplies `ORDER BY byteOffset`, and each
+ * keeps its own fetch cursor plus the rows it fetched but the last page did not need. Those rows
+ * are carried into the next page instead of being fetched again: the whole read therefore touches
+ * each candidate about once, bounded by one page of surplus per branch, and never grows with the
+ * number of pages already served. Merging the branch heads yields one ascending, de-duplicated
+ * page; an offset that appears in two branches is emitted once because every head at that value is
+ * consumed together.
+ */
+function candidatePager(
   db: Database,
   snapshot: UsageFilterIndexSnapshot,
   query: UsageFilterIndexQuery,
-): number[] {
-  const { sql, values } = buildCandidateSelect(query, snapshot);
-  const rows = db.query(sql).all(...values) as Array<{ byteOffset: number }>;
-  return rows.map(row => row.byteOffset);
+): Pick<UsageFilterCandidateRead, "candidateRows" | "nextPage"> {
+  // An append read starts at its offset; the cursor is exclusive, so start one byte before it.
+  const startCursor = (query.afterOffset ?? 0) - 1;
+  const branches = candidatePageStatements(query, snapshot).map(branch => ({
+    statement: db.query(branch.sql),
+    values: branch.values,
+    /** Ascending matches fetched after `fetchCursor` but not yet returned. */
+    pending: [] as number[],
+    /** Read position in `pending`; advancing it keeps draining linear instead of shifting. */
+    head: 0,
+    /** The last offset this branch fetched; each branch bounds its own next fetch by it. */
+    fetchCursor: startCursor,
+    exhausted: false,
+  }));
+  let cursor = startCursor;
+  const pager = {
+    candidateRows: 0,
+    /**
+     * Returns the next bounded page of ascending offsets, re-validating schema and generation
+     * inside its own transaction; a changed generation throws `UsageLedgerRebuildRequiredError`.
+     */
+    nextPage(): number[] {
+      try {
+        db.exec("BEGIN");
+        const meta = readMeta(db);
+        if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION
+          || meta.generation !== snapshot.generation) {
+          throw new UsageLedgerRebuildRequiredError("content_changed");
+        }
+        const offsets: number[] = [];
+        while (offsets.length < CANDIDATE_PAGE_SIZE) {
+          // Refill only a branch that ran dry, so a candidate fetched once is never fetched again.
+          for (const branch of branches) {
+            if (branch.head < branch.pending.length || branch.exhausted) continue;
+            branch.pending.length = 0;
+            branch.head = 0;
+            const rows = branch.statement.all(
+              ...branch.values,
+              branch.fetchCursor,
+              CANDIDATE_PAGE_SIZE,
+            ) as Array<{ byteOffset: number }>;
+            let accepted = 0;
+            for (const row of rows) {
+              // A branch that ignored its own bound cannot re-offer an already fetched offset.
+              if (row.byteOffset <= branch.fetchCursor) continue;
+              branch.fetchCursor = row.byteOffset;
+              branch.pending.push(row.byteOffset);
+              accepted += 1;
+            }
+            // A short page is the end; so is a page that made no progress, which stops a branch
+            // that returns the same rows from spinning the merge without advancing the cursor.
+            if (rows.length < CANDIDATE_PAGE_SIZE || accepted === 0) branch.exhausted = true;
+          }
+          let lowest: number | null = null;
+          for (const branch of branches) {
+            const value = branch.pending[branch.head];
+            if (value !== undefined && (lowest === null || value < lowest)) lowest = value;
+          }
+          if (lowest === null) break;
+          // Consume every head holding that offset, which de-duplicates across branches.
+          for (const branch of branches) {
+            if (branch.pending[branch.head] === lowest) branch.head += 1;
+          }
+          // Defensive: the merge only moves forward, so a rewind is a branch contract violation.
+          if (lowest > cursor) {
+            cursor = lowest;
+            offsets.push(lowest);
+          }
+        }
+        db.exec("COMMIT");
+        pager.candidateRows += offsets.length;
+        return offsets;
+      } catch (error) {
+        try { db.exec("ROLLBACK"); } catch { /* nothing to roll back */ }
+        // A generation change keeps the rebuild retry; every other index-side failure means
+        // this projection cannot serve the page, so the caller streams the ledger instead.
+        if (error instanceof UsageLedgerRebuildRequiredError) throw error;
+        // Paging cannot repair a damaged projection; ask the next active refresh to rebuild it.
+        if (isCorruptError(error)) requestUsageFilterIndexRebuild();
+        throw new UsageFilterIndexPageError(error);
+      }
+    },
+  };
+  return pager;
 }
 
 /** A published generation with a nonzero row count must actually hold rows. */
@@ -1283,6 +1484,10 @@ function hasPublishedRows(db: Database, generation: string): boolean {
     .get(generation) !== null;
 }
 
+/**
+ * Refreshes the projection, then returns a paged reader for the published generation. Throws
+ * `UsageLedgerRebuildRequiredError` when the published meta moved under the open.
+ */
 async function readActive(
   dir: string,
   path: string,
@@ -1304,22 +1509,28 @@ async function readActive(
         ingestedRows: refreshed.ingestedRows,
         ingestPasses: refreshed.ingestPasses,
       };
-      const offsets = selectCandidates(db, snapshot, query);
-      if (offsets.length === 0 && meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
+      if (meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
         // The published generation claims rows it no longer has. Never serve that as a
         // complete zero; drop the projection and rebuild. The refresh alone cannot see this
         // (the cursor and identity still match), so the rebuild must be requested explicitly.
         requestUsageFilterIndexRebuild();
         throw new UsageLedgerRebuildRequiredError("content_changed");
       }
+      const pager = candidatePager(db, snapshot, query);
       db.exec("COMMIT");
-      return { snapshot, offsets };
+      return {
+        snapshot,
+        get candidateRows() { return pager.candidateRows; },
+        nextPage: () => pager.nextPage(),
+        close: () => db.close(),
+      };
     } catch (error) {
       try { db.exec("ROLLBACK"); } catch { /* nothing to roll back */ }
       throw error;
     }
-  } finally {
+  } catch (error) {
     db.close();
+    throw error;
   }
 }
 
@@ -1343,26 +1554,34 @@ export async function readUsageFilterCandidates(
       return await readActive(dir, path, query);
     } catch (error) {
       if (error instanceof UsageFilterIndexSourceError) throw error;
-      if (error instanceof UsageFilterIndexForeignError
-        || error instanceof UnsafeSqlitePathError
-        || error instanceof UsageFilterIndexHomeChangedError) {
+      // A changed home never heals on a re-check; every later open targets the new directory.
+      if (error instanceof UsageFilterIndexHomeChangedError) {
         return null;
       }
-      if (error instanceof UsageLedgerRebuildRequiredError) {
-        const delay = BUSY_RETRY_DELAYS_MS[attempt];
+      // A foreign classification or unsafe-path flag can still be a transient view: the file at
+      // this path can be replaced mid-flight, or a sidecar appears or vanishes mid-stat while
+      // another writer transacts. Give them the short re-check schedule before degrading, exactly
+      // like a moved publish.
+      if (error instanceof UsageLedgerRebuildRequiredError
+        || error instanceof UsageFilterIndexForeignError
+        || error instanceof UnsafeSqlitePathError) {
+        const delay = REBUILD_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
-        await new Promise<void>(resolve => setTimeout(resolve, delay));
+        if (testHooks?.beforeRetryDelay?.({ dbPath: path, attempt, delayMs: delay }) !== true) {
+          await new Promise<void>(resolve => setTimeout(resolve, delay));
+        }
         continue;
       }
       if (isBusyError(error)) {
-        // Contention, including a peer still creating the projection, is waited out rather than
-        // read as a foreign file. The bound is four busy timeouts (the fourth attempt has no
-        // back-off) plus these delays, about 1.1 s, before the request falls back to the
-        // streaming read.
+        // Contention, including a peer still creating the projection, is waited out briefly rather
+        // than read as a foreign file. The bound is the BUSY_RETRY_DELAYS_MS sum (85 ms) plus up to
+        // four busy timeouts before the request falls back to the streaming read.
         const delay = BUSY_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
         testHooks?.beforeBusyRetry?.({ dbPath: path, attempt });
-        await new Promise<void>(resolve => setTimeout(resolve, delay));
+        if (testHooks?.beforeRetryDelay?.({ dbPath: path, attempt, delayMs: delay }) !== true) {
+          await new Promise<void>(resolve => setTimeout(resolve, delay));
+        }
         continue;
       }
       // Any other index-side failure (permissions, disk full, a corrupt file) degrades to the
@@ -1396,16 +1615,21 @@ export async function readUsageFilterCandidatesPassive(
       || !tables.has("usage_rows")
       || !tables.has("usage_attributions")
       || !tables.has("usage_filter_index_writers")) {
-      return null;
+      throw new UsageFilterIndexForeignError();
     }
     db.exec("BEGIN");
     try {
       const meta = readMeta(db);
       const revision = currentUsageLogRevision();
-      if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION || !meta.generation) return null;
-      if (usageLogIdentityKey(meta.revision) !== usageLogIdentityKey(revision)) return null;
-      if (!revision || meta.indexedOffset !== revision.size) return null;
-      if (usageLogRevisionKey(meta.revision) !== usageLogRevisionKey(revision)) return null;
+      if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION || !meta.generation) {
+        throw new UsageLedgerRebuildRequiredError("content_changed");
+      }
+      if (usageLogIdentityKey(meta.revision) !== usageLogIdentityKey(revision)
+        || !revision
+        || meta.indexedOffset !== revision.size
+        || usageLogRevisionKey(meta.revision) !== usageLogRevisionKey(revision)) {
+        throw new UsageLedgerRebuildRequiredError("content_changed");
+      }
       const snapshot = snapshotFrom(meta, 0, 0);
       // The exact revision match above already proves the ledger is the one indexed; the
       // empty read keeps the passive path on the same validation as the active one.
@@ -1417,33 +1641,58 @@ export async function readUsageFilterCandidatesPassive(
         expectedProcessedThroughDigest: snapshot.processedThroughDigest,
         expectedFileSize: snapshot.revision?.size,
       });
-      const offsets = selectCandidates(db, snapshot, query);
-      if (offsets.length === 0 && meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
+      if (meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
         // Same guard as the active read: a published generation that lost its rows must not
         // be reported as a complete zero.
-        return null;
+        throw new UsageLedgerRebuildRequiredError("content_changed");
       }
-      return { snapshot, offsets };
-    } finally {
-      try { db.exec("COMMIT"); } catch { /* read-only transaction */ }
+      const pager = candidatePager(db, snapshot, query);
+      db.exec("COMMIT");
+      return {
+        snapshot,
+        get candidateRows() { return pager.candidateRows; },
+        nextPage: () => pager.nextPage(),
+        close: () => db.close(),
+      };
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* read-only transaction */ }
+      throw error;
     }
   } catch {
-    return null;
-  } finally {
+    try { db.exec("ROLLBACK"); } catch { /* transaction may not have started */ }
     db.close();
+    return null;
   }
 }
 
-/** Test seam: the SQLite plan for one filter's candidate select. */
-export function usageFilterCandidatePlan(query: UsageFilterIndexQuery): string[] {
+/**
+ * Test seam: the SQLite plan for one filter's candidate statements, one labeled block per branch.
+ * `paged` explains the statement the pager actually runs, including its keyset bound and `LIMIT`;
+ * the unpaged form is the same branch without the cursor. Neither form may sort: an index-ordered
+ * branch is the contract that keeps a page proportional to its page size rather than to the
+ * candidate set.
+ */
+export function usageFilterCandidatePlan(
+  query: UsageFilterIndexQuery,
+  options: { paged?: boolean } = {},
+): string[] {
   const path = indexPathForCurrentHome();
   const db = new Database(path, { readonly: true });
   try {
     const meta = readMeta(db);
     const snapshot = snapshotFrom(meta, 0, 0);
-    const { sql, values } = buildCandidateSelect(query, snapshot);
-    const rows = db.query(`EXPLAIN QUERY PLAN ${sql}`).all(...values) as Array<{ detail: string }>;
-    return rows.map(row => row.detail);
+    const statements = options.paged
+      ? candidatePageStatements(query, snapshot)
+      : candidateBranches(query, snapshot, false)
+        .map(branch => ({ label: branch.label, sql: branch.sql, values: branch.values }));
+    return statements.flatMap(statement => {
+      const params = options.paged
+        ? [...statement.values, 0, CANDIDATE_PAGE_SIZE]
+        : statement.values;
+      const rows = db.query(`EXPLAIN QUERY PLAN ${statement.sql}`).all(...params) as
+        Array<{ detail: string }>;
+      return [`-- ${statement.label}`, ...rows.map(row => row.detail)];
+    });
   } finally {
     db.close();
   }

@@ -1,5 +1,5 @@
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import { acquireOwnershipMutationLease, inspectOwnershipMutationLease, ownershipMutationLeasePath } from "../service/ownership-mutation-lease.mjs";
 import { serviceStateFilesFor } from "../service/install-state-contract.mjs";
 import { homedir } from "node:os";
@@ -107,8 +107,9 @@ export function acquireSyncGuard(home, args) {
  * never clears by itself. Formatting only: the witnessless fact comes from the refusing inspection.
  */
 export function staleUpdateMarkerHint(home, platform = process.platform) {
-  const path = join(home, "update-orchestrated.json");
   const windows = platform === "win32";
+  // Formatted for the platform the hint names, so the separator matches its rename command.
+  const path = (windows ? win32 : posix).join(home, "update-orchestrated.json");
   // A copy-paste command must not expand anything from the path. POSIX single quotes expand
   // nothing. cmd.exe and PowerShell disagree on quoting (PowerShell also closes a string on
   // typographic quotes and globs [ ]), so Windows gets a command only for plain printable ASCII

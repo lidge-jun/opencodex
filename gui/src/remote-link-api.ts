@@ -1,3 +1,5 @@
+import { parseChildOps, type ChildOpsRowView } from "./remote-link-child-ops-api";
+
 export const LINK_ERROR_CODES = [
   "admission_timeout",
   "admission_failed",
@@ -11,6 +13,7 @@ export const LINK_ERROR_CODES = [
   "host_not_confirmed",
   "invalid_alias",
   "invalid_body",
+  "invalid_job_id",
   "invalid_link_id",
   "join_connect_failed",
   "join_in_progress",
@@ -20,15 +23,19 @@ export const LINK_ERROR_CODES = [
   "join_restart_failed",
   "join_rollback_failed",
   "join_tunnel_failed",
+  "job_not_found",
   "key_issue_failed",
   "key_revoke_failed",
   "link_apply_failed",
   "link_exists",
   "link_not_found",
   "link_not_home_initiated",
+  "link_operation_in_progress",
   "link_remove_failed",
   "link_unavailable",
   "listener_unavailable",
+  "no_eligible_links",
+  "policy_write_failed",
   "probe_failed",
   "purge_unsupported",
   "remote_connect_failed",
@@ -40,6 +47,7 @@ export const LINK_ERROR_CODES = [
   "remote_plant_timeout",
   "remote_plant_unavailable",
   "remote_port_failed",
+  "runtime_role_client",
   "standalone_required",
   "tailscale_session_refused",
   "version_probe_failed",
@@ -76,6 +84,8 @@ export interface LinkRowWire {
   tunnelPort: number;
   childKind?: "full" | "ephemeral" | null;
   appliedCodexSettingsDigest?: string | null;
+  /** Present only on a Home that runs wp2 or later; absent rows render exactly as before. */
+  child?: ChildOpsRowView | null;
 }
 export interface RemoteLinkStatusWire {
   role: "standalone" | "home" | "child";
@@ -113,7 +123,7 @@ export class LinkApiError extends Error {
 
 const HINT_MAX_CHARS = 160;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
@@ -147,7 +157,8 @@ export function parseRemoteLinkStatus(value: unknown): RemoteLinkStatusWire {
     if (!isRecord(item) || !nonEmpty(item.id) || !nonEmpty(item.alias) || !["hub-initiated", "client-initiated"].includes(String(item.direction)) || !isLinkState(item.state) || !nonEmpty(item.since) || (item.reason !== null && typeof item.reason !== "string") || typeof item.tunnelPort !== "number") throw new Error("invalid link");
     const childKind: "full" | "ephemeral" | null = item.childKind === "full" || item.childKind === "ephemeral" ? item.childKind : null;
     const appliedCodexSettingsDigest = nonEmpty(item.appliedCodexSettingsDigest) ? item.appliedCodexSettingsDigest : null;
-    return { id: item.id, alias: item.alias, direction: item.direction as LinkWireDirection, state: item.state, since: item.since, reason: item.reason as string | null, tunnelPort: item.tunnelPort, childKind, appliedCodexSettingsDigest };
+    return { id: item.id, alias: item.alias, direction: item.direction as LinkWireDirection, state: item.state, since: item.since, reason: item.reason as string | null, tunnelPort: item.tunnelPort, childKind, appliedCodexSettingsDigest,
+      child: parseChildOps(item.child) };
   });
   let child: RemoteLinkStatusWire["child"] = null;
   if (value.child !== null) {

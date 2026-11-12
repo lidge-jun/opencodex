@@ -162,6 +162,22 @@ describe("ssh capture window", () => {
   });
 });
 
+describe("ssh capture queue under a flood", () => {
+  test("an error line is stored even when debug lines filled the queue before the writer ran", async () => {
+    const { linkDirectory, dir } = fixture();
+    startSshCapture({ linkDirectory, now: T0 });
+    const opener = createSshCaptureOpener({ linkDirectory, now: () => T0 });
+    const spawn = opener("home", LINK)!;
+    // All of these arrive before the asynchronous writer gets a turn, as on a slow disk.
+    for (let index = 0; index < 1_500; index++) spawn.stderrLine("debug1: channel " + index + ": connected to 127.0.0.1 port 19001");
+    spawn.stderrLine("alice@home.example.test: Permission denied (publickey).");
+    await opener.flush();
+    const stored = records(join(dir, "ssh-" + T0 + ".jsonl"));
+    expect(stored.some(record => record.event === "auth.denied")).toBe(true);
+    expect(stored.some(record => record.event === "queue_overflow")).toBe(true);
+  });
+});
+
 describe("ssh capture window extension", () => {
   test("a tunnel spawned before an extension keeps recording until the extended expiry, and not after it", async () => {
     const { linkDirectory, dir } = fixture();
