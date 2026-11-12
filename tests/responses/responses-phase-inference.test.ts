@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createResponsesPhaseInferenceBlockRewrite } from "../../src/server/responses-phase-inference";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { relaySseWithBlockRewrite } from "../../src/server/sse-payload-rewrite";
@@ -35,6 +35,27 @@ function phaseOf(block: string): string | undefined {
 }
 
 describe("Responses phase inference block rewrite", () => {
+  for (const hasTool of [false, true]) {
+    test(`large snapshot continuation avoids quadratic suffix copies (tool=${hasTool})`, () => {
+      const messages = Array.from({ length: 512 }, (_, i) => ({ type: "message", id: `copy-budget-${i}` }));
+      const output = hasTool ? [...messages, { type: "function_call", id: "tool" }] : messages;
+      const slice = Array.prototype.slice;
+      let copiedEntries = 0;
+      const copies = spyOn(Array.prototype, "slice").mockImplementation(function (this: unknown[], start?: number, end?: number) {
+        const result = slice.call(this, start, end);
+        if (this.length === output.length && (this[0] as { id?: string })?.id === "copy-budget-0") copiedEntries += result.length;
+        return result;
+      });
+      const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
+      try {
+        const [out] = rewrite(completed(output));
+        const phases = JSON.parse(out!.split("data: ")[1]!).response.output.map((item: { phase?: string }) => item.phase);
+        expect(phases.slice(0, messages.length)).toEqual(messages.map(() => hasTool ? "commentary" : "final_answer"));
+        expect(copiedEntries).toBeLessThanOrEqual(output.length);
+      } finally { copies.mockRestore(); rewrite.dispose?.(); }
+    });
+  }
+
   test("snapshot-only tool work classifies preceding messages as commentary", () => {
     const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const call = { type: "custom_tool_call", id: "tool", call_id: "read", name: "exec", input: "read source" };
@@ -62,6 +83,16 @@ describe("Responses phase inference block rewrite", () => {
       { type: "message", id: "last" },
     ])].flatMap(block => rewrite(block));
     expect(out.map(phaseOf)).toEqual(["final_answer", "final_answer,,final_answer"]);
+    rewrite.dispose?.();
+  });
+
+  test("different explicit IDs cannot borrow unphased snapshot continuation by index", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
+    const out = [messageDone(0, "reading"), completed([
+      { type: "message", id: "other" },
+      { type: "function_call", id: "tool", call_id: "read", name: "shell", arguments: "{}" },
+    ])].flatMap(block => rewrite(block));
+    expect(out.map(phaseOf)).toEqual(["final_answer", "commentary,"]);
     rewrite.dispose?.();
   });
 

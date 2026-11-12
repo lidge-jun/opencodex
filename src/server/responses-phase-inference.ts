@@ -116,15 +116,15 @@ function decidedPhase(decisions: PhaseDecisions, id: string | null, position: nu
   return byIndex && (byIndex.id === null || id === null) ? byIndex.phase : undefined;
 }
 
-function snapshotPhase(output: unknown[], position: number): OcxMessagePhase {
+function snapshotPhase(output: unknown[], position: number, lastToolIndex: number): OcxMessagePhase {
   if (position < 0 || position >= output.length) return "final_answer";
   const item = output[position];
   if (!isPlainObject(item) || item.type !== "message") return "final_answer";
   if (isMessagePhase(item.phase)) return item.phase;
-  return output.slice(position + 1).some(isToolCallItem) ? "commentary" : "final_answer";
+  return position < lastToolIndex ? "commentary" : "final_answer";
 }
 
-function withSnapshotPhases(block: string, decisions: PhaseDecisions): string {
+function withSnapshotPhases(block: string, decisions: PhaseDecisions, lastToolIndex: number): string {
   const parsed = parseDataPayload(block);
   if (!parsed) return block;
   const response = parsed.response;
@@ -138,7 +138,7 @@ function withSnapshotPhases(block: string, decisions: PhaseDecisions): string {
       // whose output_item.done said commentary. Otherwise, use following
       // snapshot tool work as continuation evidence; no work means final.
       const id = typeof item.id === "string" ? item.id : null;
-      const phase = decidedPhase(decisions, id, position) ?? snapshotPhase(sourceOutput, position);
+      const phase = decidedPhase(decisions, id, position) ?? snapshotPhase(sourceOutput, position, lastToolIndex);
       changed = true;
       return { ...item, phase };
     }
@@ -218,6 +218,8 @@ export function createResponsesPhaseInferenceBlockRewrite(budget: TranslatorBudg
       // A terminal snapshot can reveal tool work omitted from item events.
       // Use that continuation evidence before committing a pending phase.
       const output = isPlainObject(parsed?.response) && Array.isArray(parsed.response.output) ? parsed.response.output : [];
+      // Any later tool proves continuation; one reverse scan suffices for every message.
+      const lastToolIndex = type === "response.failed" ? -1 : output.findLastIndex(isToolCallItem);
       const held = pending === null ? null : parseDataPayload(pending);
       const heldItem = held?.item;
       const id = isPlainObject(heldItem) && typeof heldItem.id === "string" ? heldItem.id : null;
@@ -228,8 +230,8 @@ export function createResponsesPhaseInferenceBlockRewrite(budget: TranslatorBudg
       const indexed = index === null ? undefined : output[index];
       const position = matched >= 0 ? matched
         : index !== null && (id === null || (isPlainObject(indexed) && typeof indexed.id !== "string")) ? index : -1;
-      const released = releasePending(type === "response.failed" ? "final_answer" : snapshotPhase(output, position));
-      const snapshot = type === "response.failed" ? block : withSnapshotPhases(block, decisions);
+      const released = releasePending(type === "response.failed" ? "final_answer" : snapshotPhase(output, position, lastToolIndex));
+      const snapshot = type === "response.failed" ? block : withSnapshotPhases(block, decisions, lastToolIndex);
       clearState();
       return [...released, snapshot];
     }
