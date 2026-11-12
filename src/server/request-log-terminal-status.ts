@@ -164,13 +164,20 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
       delete logCtx.terminalErrorCode;
     }
     // The verdict carries the status every reader uses: a recognized class its own status, an
-    // explicit refusal 400, an unrecognized class the wrapper status the upstream stated, and
-    // otherwise the synthetic 502. The row never re-derives a different one from the frame.
-    const status = evidence.verdict.httpStatus;
-    logCtx.terminalHttpStatus = status;
-    provisionalStatuses.set(logCtx, status);
-    if (evidence.typed) untypedProvisionalStatuses.delete(logCtx);
-    else untypedProvisionalStatuses.add(logCtx);
+    // explicit refusal 400, and an unrecognized class the wrapper status the upstream stated. A
+    // typed frame with none of those leaves the row open, as before, so combo preflight still
+    // reads its wider set of explicit event fields (`bareErrorStatus`) and the row falls back to
+    // the synthetic 502 on its own; an untyped envelope keeps its provisional synthetic 502.
+    const status = evidence.typed ? evidence.verdict.httpStatus : evidence.verdict.terminalStatus;
+    if (status === undefined) {
+      provisionalStatuses.delete(logCtx);
+      untypedProvisionalStatuses.delete(logCtx);
+    } else {
+      logCtx.terminalHttpStatus = status;
+      provisionalStatuses.set(logCtx, status);
+      if (evidence.typed) untypedProvisionalStatuses.delete(logCtx);
+      else untypedProvisionalStatuses.add(logCtx);
+    }
     if (evidence.verdict.refusalCode === CYBER_POLICY_ERROR_CODE) logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
     else delete logCtx.terminalErrorCode;
   }

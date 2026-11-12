@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
+import { httpStatusForRequestLogTerminal, inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { consumeForInspection, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
@@ -1322,7 +1322,10 @@ describe("one bare-error precedence rule across client, account and row", () => 
               ? [frame(typed(first), "typed"), frame(untyped(second), "untyped")]
               : [frame(untyped(first), "untyped"), frame(typed(second), "typed")], log);
             expect(outcomes).toEqual([status(winner)]);
-            expect(log.terminalHttpStatus).toBe(status(winner));
+            // The status the failed row records. A typed unknown leaves the context open so combo
+            // preflight can still read explicit event fields, and the row falls back to 502; a
+            // stale provisional status from the losing frame must not survive either way.
+            expect(httpStatusForRequestLogTerminal("failed", log)).toBe(status(winner));
             expect(classifyCodexUpstreamOutcome(outcomes[0]!)).toBe(
               winner === "quota" ? "quota" : winner === "refusal" ? "caller" : "transient");
             const failed = text.split("event: response.failed\ndata: ")[1]?.split("\n")[0];
@@ -1416,11 +1419,13 @@ describe("one bare-error precedence rule across client, account and row", () => 
     // the synthetic 502 a reset already records.
     const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
     const { text } = await relayMixed(mode, [frame(untyped("unknown"), "untyped")], log, { failAfter: true });
-    // The client's own error event echoes the provider's copy; the synthesized terminal is what
-    // must not adopt the unrecognized code as its verdict.
+    // The client's own error event echoes the provider's copy; the synthesized terminal neither
+    // adopts the unrecognized code nor invents a provider verdict, matching the typed rule in
+    // tests/server/relay-eager.test.ts ("ordinary top-level error fail-closed on reader error").
     expect(text).toContain('event: response.failed');
-    expect(text).toContain('"code":"upstream_server_error"');
-    expect(text).not.toContain('"code":"upstream_reset"');
+    expect(text).toContain('"code":"upstream_reset"');
+    expect(text).not.toContain('"code":"upstream_server_error"');
+    expect(text).not.toContain('"code":"mystery_code","message":"Upstream');
     expect(log.terminalHttpStatus).toBe(502);
   });
 

@@ -1744,7 +1744,7 @@ export function consumeForInspection(
         const verdict = bareEvidence?.verdict;
         // The request log already reduced the same evidence into terminalHttpStatus. Falling back
         // to the verdict keeps the two readers aligned when one has not observed the frame yet.
-        onTerminal("failed", verdict !== undefined
+        onTerminal("failed", verdict?.httpStatus !== undefined
           ? (logCtx?.terminalHttpStatus ?? verdict.httpStatus) : 502);
       }
     },

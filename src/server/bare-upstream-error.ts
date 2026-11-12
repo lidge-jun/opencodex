@@ -40,8 +40,13 @@ export interface BareUpstreamError {
   /** The one server status every reader records; never absent. */
   terminalStatus: number;
   errorCode: string | undefined;
-  /** Same value as {@link terminalStatus}, kept for the row's existing field name. */
-  httpStatus: number;
+  /**
+   * The status the provider itself stated: an explicit refusal (400), a recognized class, or a
+   * Codex WebSocket wrapper 5xx. Undefined for an unrecognized class, so a reader that has a wider
+   * set of explicit fields (combo preflight) or a transport failure that followed (a read reset)
+   * still decides; {@link terminalStatus} is the synthetic wire status for the same verdict.
+   */
+  httpStatus: number | undefined;
 }
 
 /** Preserve first-code precedence when deriving a bounded provisional stream verdict. */
@@ -90,7 +95,8 @@ export function bareUpstreamError(payload: unknown): BareUpstreamError | undefin
     ? "invalid_request_error" : recognized?.type ?? "upstream_error";
   const terminalCode = refusalCode ?? recognized?.code ?? "upstream_server_error";
   const wrapped = wrappedServerErrorStatus(payload);
-  const terminalStatus = refusalCode !== undefined ? 400 : recognized?.httpStatus ?? wrapped ?? 502;
+  const httpStatus = refusalCode !== undefined ? 400 : recognized?.httpStatus ?? wrapped;
+  const terminalStatus = httpStatus ?? 502;
   return {
     message: message ?? (refusalCode ? terminalRefusalFallbackMessage(refusalCode)
       : fallback ? `Upstream error without a message (${redactSecretString(fallback)})` : "The upstream reported an error."),
@@ -100,7 +106,7 @@ export function bareUpstreamError(payload: unknown): BareUpstreamError | undefin
     terminalType,
     terminalCode,
     terminalStatus,
-    httpStatus: terminalStatus,
+    httpStatus,
   };
 }
 
