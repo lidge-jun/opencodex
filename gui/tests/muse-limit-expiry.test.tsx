@@ -160,8 +160,8 @@ test("Groq daily request and minute token windows retain their distinct periods"
 
 test("the quota strip renders unknown families from passive cache with their observation time", async () => {
   const cache = new PassiveKeyLimitCache({ retentionMs: 120_000 });
-  const identity = { owner: "gui-fixture", provider: "mistral" as const, model: "model" };
-  cache.record(identity, new Headers({ "x-ratelimit-remaining-req-minute": "0" }), now - 60_000, 1);
+  const identity = { home: "gui-home", owner: "gui-fixture", provider: "mistral" as const, model: "model" };
+  cache.record(identity, new Headers({ "x-ratelimit-remaining-req-minute": "0" }), now - 60_000, 1, 200);
   const view = await mount("", 0, [], [{ provider: "mistral", keyId: "opaque", model: "model", windows: cache.get(identity, now) }], true);
   const chip = view.host.querySelector('a[href="#providers?provider=mistral&tab=accounts"]');
   expect(chip?.textContent).toContain("0 / Unknown");
