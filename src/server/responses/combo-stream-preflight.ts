@@ -109,6 +109,11 @@ function bareErrorStatus(payload: unknown): number | undefined {
       ? String(rawCode)
       : null;
   if (explicitStatus === undefined && code === "invalid_request_error") return 400;
+  // A structured moderation verdict with no stated status is the request-level 400 the HTTP and
+  // native readers judge it as, not an unknown code's 5xx.
+  if (explicitStatus === undefined && isProviderModerationRefusal(400, JSON.stringify(event), undefined, true)) {
+    return 400;
+  }
   // Status is the record's own evidence; whether that record speaks for the envelope is the
   // decision's question, so a root hard stop still reports 400 instead of inventing a 5xx.
   if (explicitStatus === undefined && isOpenRouterOpaque400Record(envelopeErrorRecord(event))) {

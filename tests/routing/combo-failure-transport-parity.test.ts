@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { comboFailureCooldownScope, comboFailureDecision } from "../../src/combos/failover";
+import { comboFailureCooldownScope, comboFailureDecision, isProviderModerationRefusal } from "../../src/combos/failover";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { preflightComboStreamResponse } from "../../src/server/responses/combo-stream-preflight";
 import { preflightNativeMessagesResponse } from "../../src/server/messages-native-preflight";
@@ -271,4 +271,52 @@ test("a genuine coded refusal in a response.failed frame hops without cooling, l
   };
   expect(comboFailureDecision(failure.response.status, failure.classificationText, options)).toBe("hop");
   expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("none");
+});
+
+describe("stated statuses and structured flags beside a coded moderation verdict", () => {
+  const loopOf = async (response: Response) => {
+    const failure = await consumeComboFailure(response);
+    const options = {
+      code: failure.upstreamCode, rootCode: failure.upstreamRootCode,
+      malformedResponseFormat: failure.malformedResponseFormat, openRouterOpaque400: failure.openRouterOpaque400,
+      providerModerationRefusal: failure.providerModerationRefusal,
+    };
+    return {
+      decision: comboFailureDecision(failure.response.status, failure.classificationText, options),
+      scope: comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal }),
+    };
+  };
+  const coded = { type: "invalid_request_error", message: "The input was refused by moderation.", code: "content_filter" };
+
+  test("a body that states a non-400 status of its own is not a moderation refusal over HTTP", async () => {
+    for (const stated of [{ status: 429 }, { status: 503 }, { status_code: "429" }, { http_status: "429" }]) {
+      const body = JSON.stringify({ error: { ...coded, ...stated } });
+      const outcome = await loopOf(new Response(body, { status: 400 }));
+      expect({ stated, outcome }).toEqual({ stated, outcome: { decision: "stop", scope: "target" } });
+    }
+  });
+
+  test("structured safety or reason fields veto the hop", async () => {
+    for (const extra of [{ safety_violation: true }, { blocked: true, reason: "policy" }, { reason: "rate_limit_exceeded" }]) {
+      const body = JSON.stringify({ error: { ...coded, ...extra } });
+      expect({ extra, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ extra, verdict: false });
+      expect((await loopOf(new Response(body, { status: 400 }))).scope).not.toBe("none");
+    }
+  });
+
+  test("Azure per-category filter results stay compatible", async () => {
+    const body = JSON.stringify({ error: { code: "content_filter", message: "The response was filtered.", status: 400,
+      innererror: { code: "ResponsibleAIPolicyViolation", content_filter_result: { hate: { filtered: true, severity: "high" }, jailbreak: { filtered: false, detected: false } } } } });
+    expect(await loopOf(new Response(body, { status: 400 }))).toEqual({ decision: "hop", scope: "none" });
+  });
+
+  test("a status-less coded stream frame keeps the no-cool verdict", async () => {
+    const event = { type: "error", code: "moderation_refusal" };
+    const result = await preflightComboStreamResponse(new Response(
+      "data: " + JSON.stringify(event) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+    ), logCtx());
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+    expect(await loopOf(result.response)).toEqual({ decision: "hop", scope: "none" });
+  });
 });

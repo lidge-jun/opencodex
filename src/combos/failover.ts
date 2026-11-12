@@ -1005,7 +1005,18 @@ const MODERATION_COMPATIBLE_VALUES = new Set([
 ]);
 
 /** Keys whose values are structured verdicts rather than prose. */
-const MODERATION_VERDICT_KEYS = new Set(["code", "type"]);
+const MODERATION_VERDICT_KEYS = new Set(["code", "type", "error_code", "error_type", "reason", "kind", "category"]);
+
+/** Keys that state an HTTP status; any stated status other than 400/422 is evidence of its own. */
+const MODERATION_STATUS_KEYS = new Set(["status", "status_code", "statuscode", "http_status"]);
+
+/**
+ * Structured safety or policy flags (`safety_violation`, `blocked`, `policy_violation`). A
+ * flag is the upstream's own safety verdict; only Azure's per-category content-filter results,
+ * which describe the moderation verdict itself, may carry such fields.
+ */
+const SAFETY_FLAG_KEY = /safety|violation|block|polic/i;
+const MODERATION_RESULT_KEY = /^content_filter_results?$|^prompt_filter_results?$/i;
 
 /**
  * Safety-system wording in any of its upstream phrasings ("rejected as a result of our safety
@@ -1084,9 +1095,9 @@ function moderationEnvelope(message: string): unknown {
 function moderationVerdictFields(payload: unknown): boolean | null {
   let seen = false;
   let nodes = 0;
-  const visit = (value: unknown, depth: number): boolean => {
+  const visit = (value: unknown, depth: number, insideFilterResult: boolean): boolean => {
     if (++nodes > 512 || depth > 8) return false;
-    if (Array.isArray(value)) return value.every(item => visit(item, depth + 1));
+    if (Array.isArray(value)) return value.every(item => visit(item, depth + 1, insideFilterResult));
     if (!value || typeof value !== "object") return true;
     const record = value as Record<string, unknown>;
     // A record that states the moderation code itself is the verdict; its param names what the
@@ -1096,6 +1107,13 @@ function moderationVerdictFields(payload: unknown): boolean | null {
       if (key.toLowerCase() === "param" && !recordStatesModeration && typeof field === "string" && field.trim() !== "" && !isAllowedModerationParam(field)) {
         return false;
       }
+      if (MODERATION_STATUS_KEYS.has(key.toLowerCase())) {
+        const stated = typeof field === "number" ? field
+          : typeof field === "string" && /^\d{3}$/.test(field.trim()) ? Number(field) : undefined;
+        if (stated !== undefined && stated >= 400 && stated !== 400 && stated !== 422) return false;
+        if (typeof field !== "object" || field === null) continue;
+      }
+      if (!insideFilterResult && SAFETY_FLAG_KEY.test(key)) return false;
       if (MODERATION_VERDICT_KEYS.has(key.toLowerCase())) {
         if (field === null || field === undefined) continue;
         // A Responses terminal event names itself in its root `type` (`response.failed`): that is
@@ -1108,11 +1126,11 @@ function moderationVerdictFields(payload: unknown): boolean | null {
         if (MODERATION_REFUSAL_CODES.has(normalized)) seen = true;
         continue;
       }
-      if (!visit(field, depth + 1)) return false;
+      if (!visit(field, depth + 1, insideFilterResult || MODERATION_RESULT_KEY.test(key))) return false;
     }
     return true;
   };
-  return visit(payload, 0) ? seen : null;
+  return visit(payload, 0, false) ? seen : null;
 }
 
 /**
