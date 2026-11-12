@@ -1162,7 +1162,10 @@ function moderationVerdictFields(payload: unknown): boolean | null {
     const normalized = normalizedFailureCode(field);
     if (normalized === "") return typeof field === "string";
     if (!MODERATION_COMPATIBLE_VALUES.has(normalized)) return false;
-    if (MODERATION_REFUSAL_CODES.has(normalized)) seen = true;
+    // Only a code states the provider's moderation verdict. A `type` or an incomplete `reason` of
+    // content_filter may sit beside it, but alone it is a model's own output filter, which stays
+    // terminal (structure/transports/responses.md).
+    if (MODERATION_REFUSAL_CODES.has(normalized) && (foldKey(key) === "code" || foldKey(key) === "errorcode")) seen = true;
     return true;
   };
   const visitFilterResult = (value: unknown, depth: number): boolean => {

@@ -440,6 +440,8 @@ describe("every prose field beside a coded verdict must describe the moderation 
       azureWith({ hate: { filtered: true, severity: "past_due" } }),
       azureWith({ error: { code: "content_filter_error", message: "The contents are not filtered" } }),
       azureWith({ hate: { filtered: true, severity: "high", status: 429 } }),
+      // Only a code states the verdict; a type of content_filter alone is not one.
+      JSON.stringify({ error: { type: "content_filter", message: "The input was refused by moderation." } }),
     ]) {
       expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: false });
       const failure = await consumeComboFailure(new Response(body, { status: 400 }));
@@ -479,8 +481,10 @@ describe("every prose field beside a coded verdict must describe the moderation 
       { metadata: { httpStatus: 503 } },
       { metadata: { safety_violation: true } },
       { metadata: { client: "my app v2" } },
+      // A model's own output filter (incomplete reason only, no code) stays terminal.
+      { incomplete_details: { reason: "content_filter" }, error: null },
     ]) {
-      const frame = { type: "response.failed", response: { status: "failed", ...extra, error } };
+      const frame = { type: "response.failed", response: { status: "failed", error, ...extra } };
       const result = await preflightComboStreamResponse(new Response(
         "data: " + JSON.stringify(frame) + "\n\n", { headers: { "content-type": "text/event-stream" } },
       ), logCtx());
