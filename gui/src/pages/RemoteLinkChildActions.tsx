@@ -96,7 +96,7 @@ export function ChildRowBadges({ row }: { row: ChildOpsRowView }): ReactElement 
       {version && <StateBadge tone="neutral">v{version}</StateBadge>}
       {kindKey && <StateBadge tone="neutral">{t(kindKey)}</StateBadge>}
       {row.installKind !== null && !kindKey && <StateBadge tone="neutral"><CodeToken>{row.installKind}</CodeToken></StateBadge>}
-      {row.childBuild && <StateBadge tone="neutral"><CodeToken>ocx-child {row.childBuild}</CodeToken></StateBadge>}
+      {row.childBuild && <StateBadge tone="neutral"><CodeToken>{`ocx-child ${row.childBuild}`}</CodeToken></StateBadge>}
       {row.versionSkew === "same" && <StateBadge tone="ok">{t("remoteLink.child.skew.same")}</StateBadge>}
       {row.versionSkew === "behind" && <StateBadge tone="warn">{t("remoteLink.child.skew.behind", { version: row.homeVersion })}</StateBadge>}
       {row.versionSkew === "ahead" && <StateBadge tone="warn">{t("remoteLink.child.skew.ahead")}</StateBadge>}
