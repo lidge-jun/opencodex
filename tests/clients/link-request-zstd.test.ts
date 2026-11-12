@@ -9,8 +9,12 @@ import { createLinkTrafficBook } from "../../src/link/traffic";
 import { LINK_REQUEST_ZSTD_FEATURE } from "../../src/link/request-compression";
 import { forgetLinkHomeFeaturesForTests } from "../../src/client/link-home-features";
 import { readJsonRequestBody } from "../../src/server/request-decompress";
-import { buildPeerFeatures } from "../../src/remote/features";
+import { buildPeerFeatures, linkHomeFeatures } from "../../src/remote/features";
 import { createInboundBodyBudget } from "../../src/server/inbound-body-budget";
+import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
+import type { LinkStore } from "../../src/link/store";
+import { configSchema } from "../../src/config/schema/config-schema";
+import { getDefaultConfig } from "../../src/config";
 
 const key = `ocx_data_${"a".repeat(40)}`;
 const keyId = "test-link-key", linkId = "lnk_0123456789abcdef";
@@ -210,5 +214,39 @@ describe("per-body zstd from Child to Home (#3023)", () => {
     expect((await pending).status).toBe(503);
     expect(budget.snapshot()).toEqual({ reservedBytes: 0, activeLeases: 0, queuedRequests: 0 });
     expect(h.seen).toHaveLength(1);
+  });
+});
+
+describe("the Home's switch for per-body zstd (#3023)", () => {
+  const store = (): LinkStore => ({ version: 1, listenerPort: null, links: [{ id: linkId, alias: "child", direction: "client-initiated",
+    hostKeyFingerprint: null, tunnelPort: 22222, apiKeyId: keyId, createdAt: "2026-10-22T00:00:00.000Z" }] });
+
+  /** Two relayed bodies through a real Home listener lifecycle; the encodings its data plane saw. */
+  async function encodingsThrough(homeFeatures?: () => readonly string[]): Promise<(string | null)[]> {
+    const encodings: (string | null)[] = [];
+    let current = store();
+    const lifecycle = createLinkListenerLifecycle({ readStore: () => current, writeStore: (_path, next) => { current = next; } });
+    lifecycle.start({ maxRequestBodySize: 1024 * 1024, keyFingerprints: id => id === keyId ? [fp] : [], ...(homeFeatures ? { homeFeatures } : {}),
+      dispatch: async req => { encodings.push(req.headers.get("content-encoding")); await req.arrayBuffer(); return Response.json({ ok: true }); } });
+    try {
+      for (let i = 0; i < 2; i++) expect((await relay(post("/v1/responses", big), lifecycle.status().port!)).status).toBe(200);
+    } finally { await lifecycle.stop(); }
+    return encodings;
+  }
+
+  test("on by default; linkRequestCompression: false stops the Home naming it, and its Child sends identity bodies", async () => {
+    expect(linkHomeFeatures(undefined)).toEqual(buildPeerFeatures());
+    expect(linkHomeFeatures({ linkRequestCompression: true })).toEqual(buildPeerFeatures());
+    expect(linkHomeFeatures({ linkRequestCompression: false })).toEqual(buildPeerFeatures().filter(id => id !== LINK_REQUEST_ZSTD_FEATURE));
+    expect(await encodingsThrough()).toEqual([null, "zstd"]);
+    forgetLinkHomeFeaturesForTests();
+    expect(await encodingsThrough(() => linkHomeFeatures({ linkRequestCompression: false }))).toEqual([null, null]);
+  });
+
+  test("the config keeps a boolean and reads anything else as unset, which is on", () => {
+    const base = { ...getDefaultConfig(), defaultProvider: "fixture", providers: { fixture: { adapter: "openai-responses", baseUrl: "https://provider.invalid/v1" } } };
+    expect(configSchema.parse({ ...base, linkRequestCompression: false }).linkRequestCompression).toBe(false);
+    expect(configSchema.parse({ ...base, linkRequestCompression: "off" }).linkRequestCompression).toBeUndefined();
+    expect(getDefaultConfig().linkRequestCompression).toBeUndefined();
   });
 });

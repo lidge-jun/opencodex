@@ -115,6 +115,8 @@ To see how much a link carries, run `ocx link status --json`. Each link has a `t
 
 Between a Child and a Home that both run this version, the Child compresses large model requests (above 1 KiB, up to 16 MiB, with no encoding of their own) with zstd before they cross the link, each request on its own. It does so only after the Home has said, on the link itself, that it accepts them, so a Child linked to an older Home sends requests as before. The Home refuses a compressed request that would expand more than 200 times past 8 MiB, which protects it from compression bombs. The SSH connection itself is not compressed.
 
+To turn this off, set `"linkRequestCompression": false` in the Home's `config.json` and restart the Home. It then stops offering compression on the link, and its Children send requests uncompressed, exactly as before. Compression has one cost to weigh. Someone who can put chosen text into a request next to a secret and see the size of many such requests can guess the secret from how well each request compresses. On a link that means a relay operator or anyone on the network path, because the tunnel hides what a request says but not how large it is. It is on by default because that needs both control over text inside the conversation and a view of each request's size, while it cuts the bytes sent toward the Home by more than half.
+
 ## Troubleshooting
 
 When a step fails, the dashboard shows the reason and, when SSH reported one, a short sanitized hint from its last non-empty error line under the message. Remote-shell errors can appear there even when the remote shell emits non-UTF-8 text; OpenCodex removes terminal controls, link keys and URL queries and limits the hint's length.

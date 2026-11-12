@@ -25,7 +25,7 @@
 import { LINK_MANAGEMENT_READ_PATHS } from "../link/management-routes";
 import { LINK_PEER_REPORT_VERSION } from "../link/peer-report";
 import { LINK_RELAY_AUTH_VERSION } from "../link/relay-auth";
-import { LINK_REQUEST_ZSTD_VERSION } from "../link/request-compression";
+import { LINK_REQUEST_ZSTD_FEATURE, LINK_REQUEST_ZSTD_VERSION } from "../link/request-compression";
 import { MANAGEMENT_ROUTES, type ManagementRoute } from "../server/management/route-registry";
 import { SERVED_BY_HEADER_EMITTED } from "./served-by";
 
@@ -78,4 +78,14 @@ let buildFeatures: readonly string[] | undefined;
 export function buildPeerFeatures(): string[] {
   buildFeatures ??= Object.freeze(servedPeerFeatures());
   return [...buildFeatures];
+}
+
+/**
+ * The features a Home names to its Children on every relay-auth answer. `linkRequestCompression:
+ * false` leaves out per-body zstd, so Children send identity bodies exactly as before it existed;
+ * the Home still decodes a zstd body any client sends, and `GET /readyz` still lists what the build can do.
+ */
+export function linkHomeFeatures(config: { linkRequestCompression?: boolean } | undefined): string[] {
+  const features = buildPeerFeatures();
+  return config?.linkRequestCompression === false ? features.filter(id => id !== LINK_REQUEST_ZSTD_FEATURE) : features;
 }
