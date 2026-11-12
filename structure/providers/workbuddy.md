@@ -52,8 +52,16 @@ probe/cache path supplies refresh, paused-account exclusion, stale-reading and 4
 semantics. Unknown or malformed summaries never become zero. Explicit zero balances remain visible.
 `workbuddyCredits` is a display-only field in the quota DTO, separate from USD balances and
 quota windows, so credit exhaustion does not disable free models or influence account ranking.
-`src/providers/workbuddy-credit-balance.ts` validates the numeric-only public projection for the
-GUI. The shared provider quota panel shows the remaining credits, usage, group balances and
+`src/providers/workbuddy-credit-balance.ts` validates the numeric public projection for the GUI.
+An optional `exact` pair carries plain decimal text for `total` and `remaining`: quoted
+summary or enterprise values keep their text (unquoted numbers are already rounded by
+`JSON.parse` and use their shortest decimal), at most 16 integer and 32 fractional digits.
+Any input outside those bounds, including subnormal numbers, omits the pair and leaves the
+numeric fields alone; numeric-only payloads stay valid. When present, the numeric fields are
+the nearest numbers to the exact text, and normalization rejects a balance whose pair is
+malformed, unbounded or encodes different numbers. The header quota bar rounds the
+unavailable share from the exact pair when present, so a share just below one half percent
+stays distinct from an exact tie; the pair never reaches routing or account eligibility. The shared provider quota panel shows the remaining credits, usage, group balances and
 optional expiry; the existing refresh and stale-state controls apply to it.
 
 ## Verification

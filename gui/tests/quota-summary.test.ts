@@ -104,6 +104,23 @@ describe("quota summary", () => {
     expect(buildQuotaSummary(reports, name).map(row => formatQuotaPercent(row.headline.percent))).toEqual(["7%", "6%"]);
   });
 
+  test("exact WorkBuddy decimals separate a below-half share from an exact tie after transport", () => {
+    const balance = (...remaining: string[]) => JSON.parse(JSON.stringify(parseWorkBuddyCredits({ Packages: remaining.map(value => ({
+      CycleTotalCapacity: "0.5", CycleUsedCapacity: "0", CycleRemainCapacity: value,
+    })) })));
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance("0.4975", "0.49750000000000005") } },
+      { provider: "tie", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance("0.4975", "0.4975") } },
+      { provider: "above", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance("0.4975", "0.49749999999999995") } },
+      { provider: "full", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance("0.5", "0.5") } },
+      { provider: "over-total", updatedAt: now, quota: { updatedAt: now, weeklyPercent: 25, workbuddyCredits: balance("0.5", "0.50000000000000001") } },
+    ], now);
+    const rows = buildQuotaSummary(reports, name);
+    expect(rows.map(row => [row.provider, formatQuotaPercent(row.headline.percent)]))
+      .toEqual([["below", "0%"], ["tie", "1%"], ["above", "1%"], ["full", "0%"], ["over-total", "25%"]]);
+    expect(rows[4]!.windows.map(window => window.labelKey)).toEqual(["quota.weeklyLimit"]);
+  });
+
   test("WorkBuddy rounds an exact half percent up and a smaller share down", () => {
     const balance = (total: number, remaining: number) => ({ total, used: 0, remaining, frozen: 0, groups: [] });
     const reports = freshQuotaReportsFromResponse([
