@@ -90,6 +90,32 @@ export function mixedComboRow(requestId: string) {
 }
 
 /**
+ * The same two legs, but the token leg resolves an exact standard rate: under the long-context
+ * band and with no Priority outcome, so nothing in the sum is a floor.
+ */
+export function mixedExactComboRow(requestId: string) {
+  const attempt = (overrides: Record<string, unknown>) => ({ ...baseRow, ...overrides });
+  return requestLogDto({
+    ...baseRow,
+    requestId, provider: "combo", model: "combo/mixed-exact",
+    durationMs: 2_000,
+    usageStatus: "estimated",
+    usage: { inputTokens: 701_000, outputTokens: 1_400, estimated: true },
+    attempts: [
+      attempt({
+        ordinal: 1, provider: "kiro", model: "claude-opus-5.5", adapter: "kiro",
+        usageStatus: "estimated",
+        usage: { inputTokens: 600_000, outputTokens: 400, providerCredits: 1.95, estimated: true },
+      }),
+      attempt({
+        ordinal: 2, provider: "xai", model: "grok-4.7", adapter: "openai",
+        usageStatus: "reported", usage: { inputTokens: 100_000, outputTokens: 1_000 },
+      }),
+    ],
+  } as never);
+}
+
+/**
  * A row produced by a build from before this follow-up: it already carried `billing` (so the
  * total is correctly denominated in credits) but the estimate still inherited the token rate's
  * `priorityLowerBound` and token-only reasons. A dashboard seeded from that build — or reading a

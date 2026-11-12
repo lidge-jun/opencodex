@@ -16,15 +16,18 @@ export type CostEstimateReason =
  * What a billed estimate can say about itself.
  *
  * `priorityLowerBound` claims the amount is a floor under a rate the proxy could not resolve.
- * A credit charge is `credits x price`, exact for the configured price, and a mixed total sums
- * one — so neither is a floor. The proxy already withholds the marker at read time; this guard
- * covers a row seeded into the dashboard by an older build or served by an older proxy, where a
- * `>=` over an exact charge is a false claim about the amount rather than a stale label.
+ * A credit charge is `credits x price`, exact for the configured price, so `>=` over it would be
+ * a false claim about the amount. The proxy already withholds the marker at read time; this guard
+ * covers a row seeded into the dashboard by an older build or served by an older proxy.
+ *
+ * A `mixed` total is a different case. `credits x price + >=token` is still `>=` the true total,
+ * so an exact credit leg does not erase the floor a token leg earned. Only the credits-only basis
+ * is stripped here.
  */
 type BillingBasis = { billing?: CostBilling };
 
 export function effectivePriorityLowerBound(estimate: BillingBasis & { priorityLowerBound?: boolean }): boolean {
-  return estimate.priorityLowerBound === true && estimate.billing === undefined;
+  return estimate.priorityLowerBound === true && estimate.billing?.source !== "provider-credits";
 }
 
 /**
@@ -32,8 +35,9 @@ export function effectivePriorityLowerBound(estimate: BillingBasis & { priorityL
  *
  * A credit charge never used the resolved token rates: the cache caveat, both price overlays and
  * the Priority floor describe a rate nobody was billed. `usage_estimated` stays, because the
- * credits were still derived from an estimated usage reading. A `mixed` total keeps the token
- * leg's real caveats but not a floor, since one exact leg means the sum is exact.
+ * credits were still derived from an estimated usage reading. A `mixed` total keeps its token
+ * leg's caveats — including the floor, since `credits + >=token` remains a floor — and a
+ * credits-only total keeps none of them.
  */
 const TOKEN_PRICE_REASONS: ReadonlySet<CostEstimateReason> = new Set([
   "cache_detail_missing", "expected_price_overlay", "provider_cost_overlay", "priority_lower_bound",
@@ -44,7 +48,7 @@ export function estimateReasonsForBilling(
   estimate: BillingBasis,
 ): CostEstimateReason[] {
   if (!estimate.billing) return [...reasons];
-  if (estimate.billing.source === "mixed") return reasons.filter(reason => reason !== "priority_lower_bound");
+  if (estimate.billing.source === "mixed") return [...reasons];
   return reasons.filter(reason => !TOKEN_PRICE_REASONS.has(reason));
 }
 

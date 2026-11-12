@@ -73,12 +73,20 @@ providerCredits, creditPriceUsd }` means the total is `providerCredits x creditP
 four token component fields carry no allocation; a Combo reports it only when every attempt shared
 one credit price, and reports `{ source: "mixed" }` when the attempts were billed differently, so
 the parent total is real but its split exists only per attempt. Absent `billing` means a token
-price, which is what every older row reports. A credit-priced row whose count or price cannot
-produce a representable amount is unavailable with `credit_cost_unrepresentable` rather than
-falling back to a token estimate, and a token-priced row whose normalized token count exceeds the
-bound is `invalid_usage`. `tests/usage/usage-provider-credit-price.test.ts`,
-`tests/server/management-api-logs-metrics.test.ts` and
-`gui/tests/logs-cost-credit-billing.test.tsx` cover the bounds, the mixed aggregation and the
+price, which is what every older row reports.
+
+`priorityLowerBound` follows the rate that produced each amount, and a Combo's total is a floor
+when its token-priced legs are. A credit charge is exact for its configured price, so it never
+sets the marker and never vetoes one: `credits x price + >=token` is still `>=` the true total, so
+a mixed Combo keeps the floor its token leg earned. A credit leg's own catalog rate contributes
+nothing, because that rate priced neither the leg nor the total. A credits-only Combo is exact and
+reports no floor. `gui/src/pages/logs-cost-format.ts` applies the same rule to a row seeded by an
+older build or served by an older proxy, where the marker and reasons were already persisted. A
+credit-priced row whose count or price cannot produce a representable amount is unavailable with
+`credit_cost_unrepresentable` rather than falling back to a token estimate, and a token-priced row
+whose normalized token count exceeds the bound is `invalid_usage`.
+`tests/usage/usage-provider-credit-price.test.ts`, `tests/server/management-api-logs-metrics.test.ts`
+and `gui/tests/logs-cost-credit-billing.test.tsx` cover the bounds, the mixed aggregation and the
 rendered detail.
 
 `src/usage/user-cost-overlays.ts` copies the complete policy into its versioned registry:

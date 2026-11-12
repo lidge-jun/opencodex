@@ -802,6 +802,30 @@ function comboBilling(estimates: readonly AttemptCostEstimate[], total: number):
 }
 
 /**
+ * Whether the summed total is a known lower bound.
+ *
+ * A credit charge is `credits x price`, exact for the configured price, so it can never be the
+ * reason a total is a floor — and it must not veto one either. A mixed combo of an exact credit
+ * leg beside a token leg under an unresolved Priority rate still sums to `>=` the true total:
+ * `exact + >=token`. Consulting the token legs alone keeps that floor, while a credit leg whose
+ * own catalog rate happened to be a floor contributes nothing, because that rate priced neither
+ * the leg nor the total.
+ *
+ * The token-only rule is unchanged: a combo is a floor only when every attempt is one. That is
+ * more conservative than the sum requires (`exact + >=token` is also a floor there), but it is
+ * the documented behavior for a single-basis total and not what this path fixes.
+ */
+function comboIsLowerBound(
+  estimates: readonly AttemptCostEstimate[],
+  billing: CreditBilling | undefined,
+): boolean {
+  const pricedFromTokens = billing
+    ? estimates.filter(est => est.billing === undefined)
+    : estimates;
+  return pricedFromTokens.length > 0 && pricedFromTokens.every(est => est.priorityLowerBound === true);
+}
+
+/**
  * Combo: price every attempt with its own rate and sum. Fail closed — if ANY
  * attempt is unpriced or unnormalizable, return null rather than a partial sum.
  */
@@ -847,9 +871,7 @@ export function estimateComboCost(
       : {}),
     ...(estimates.some(est => est.contextTier) ? { contextTier: "long" as const } : {}),
     ...(estimates.some(est => est.customThresholdApplied) ? { customThresholdApplied: true as const } : {}),
-    ...(estimates.every(est => est.priorityLowerBound === true)
-      ? { priorityLowerBound: true as const }
-      : {}),
+    ...(comboIsLowerBound(estimates, billing) ? { priorityLowerBound: true as const } : {}),
   };
 }
 
