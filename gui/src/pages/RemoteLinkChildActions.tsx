@@ -240,6 +240,10 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
   const updatable = operable.filter(row => updateAvailable(row.child!));
   if (operable.length === 0) return null;
   const homeVersion = updatable[0]?.child?.homeVersion ?? operable[0]?.child?.homeVersion ?? "";
+  // The server expands "all" to every stored link and runs a pinned sync before it decides currency, so a
+  // link outside the confirmation could still be reached. Both bulk actions name exactly the rows they cover:
+  // update the updatable ones the dialog counts, observe the operable ones in the bar's own list.
+  const ids = (rows: readonly LinkRowWire[]) => rows.map(row => row.id);
   const run = async (body: ChildOperationBody) => {
     props.onError(null);
     props.onRun({ linkId: "all", op: body.op });
@@ -249,13 +253,13 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
   };
   return (
     <div className="remote-link-child-bulk flex flex-wrap items-center gap-2 px-1 py-2">
-      <Button variant="ghost" size="sm" onClick={() => void run({ op: "observe", linkIds: "all" })}>{t("remoteLink.child.checkAll")}</Button>
+      <Button variant="ghost" size="sm" onClick={() => void run({ op: "observe", linkIds: ids(operable) })}>{t("remoteLink.child.checkAll")}</Button>
       <Button variant="outline" size="sm" disabled={updatable.length === 0}
         onClick={() => setConfirming("all")}>{t("remoteLink.child.updateAll")}</Button>
       <ChildConfirmDialog open={confirming === "all"} title={t("remoteLink.child.updateAll")}
         body={t("remoteLink.child.updateAllConfirm", { count: updatable.length, version: homeVersion })}
         confirm={t("remoteLink.child.updateAll")} onCancel={() => setConfirming(null)}
-        onConfirm={() => { setConfirming(null); void run({ op: "update", linkIds: "all" }); }} />
+        onConfirm={() => { setConfirming(null); void run({ op: "update", linkIds: ids(updatable) }); }} />
     </div>
   );
 }

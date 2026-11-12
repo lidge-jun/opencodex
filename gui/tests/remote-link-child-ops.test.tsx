@@ -219,7 +219,7 @@ test("Update and Update all confirm the disruption and post their bodies", async
   expect(bulkDialog.textContent).toContain("ends any turn currently relayed for it");
   expect(bulkDialog.textContent).toContain("Automatic updates wait until a Child is idle.");
   await click([...bulkDialog.querySelectorAll("button")].find(item => item.textContent === "Update all")!);
-  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: "all" });
+  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: ["l1"] });
 
   const firstRow = host.querySelectorAll(".remote-link-row")[0]!;
   await click([...firstRow.querySelectorAll("button")].find(item => item.textContent === "Update")!);
@@ -228,6 +228,29 @@ test("Update and Update all confirm the disruption and post their bodies", async
   expect(rowDialog.textContent).toContain("ends any turn currently relayed for it");
   await click([...rowDialog.querySelectorAll("button")].find(item => item.textContent === "Update")!);
   expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: ["l1"] });
+});
+
+test("Update all and Check all name exactly the rows they cover", async () => {
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([
+      row("l1", "box-one", childBlock()),
+      row("l2", "box-two", childBlock({ versionSkew: "same", update: { route: "orchestrated", reason: null, observedAt: null } })),
+      row("l3", "box-three", childBlock(), "client-initiated"),
+      row("l4", "box-four", childBlock()),
+    ]));
+    if (call.path === "/api/link/children/operations") return response({ job: job({ state: "done", items: [] }) }, 202);
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await click(button(host, "Update all"));
+  const bulk = host.querySelector(".remote-link-child-bulk")!;
+  const bulkDialog = bulk.querySelector("dialog")!;
+  expect(bulkDialog.textContent).toContain("Update 2 Children to 2.35.0, one at a time.");
+  await click([...bulkDialog.querySelectorAll("button")].find(item => item.textContent === "Update all")!);
+  // l2 is current and l3 was started from itself, so neither is in the confirmation or the request.
+  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: ["l1", "l4"] });
+  await click(button(host, "Check all"));
+  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "observe", linkIds: ["l1", "l2", "l4"] });
 });
 
 test("a running job shows per-item progress and refreshes status once when done", async () => {
