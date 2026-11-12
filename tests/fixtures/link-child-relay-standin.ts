@@ -24,7 +24,7 @@ export interface RelayStandin {
   /**
    * In order: "upgrade" for an admitted link socket, "upgrade-refused:<status>", "ws-create:<bytes>" for each
    * response.create Codex sent on a link socket, "ws-oversize:<bytes>" for a Codex message over the limit (closed 1009),
-   * and "http:<status>" for each relayed HTTP request.
+   * "home-close:<code>" when the Home closes a link socket, and "http:<status>" for each relayed HTTP request.
    */
   events: string[];
   stop(): Promise<void>;
@@ -91,6 +91,7 @@ export function startRelayStandin(options: {
           for (;;) {
             const message = await ws.data.home.nextMessage();
             if (message.type === "text") { ws.send(message.data); continue; }
+            if (message.type === "close") events.push("home-close:" + (message.code ?? "none"));
             try { ws.close(message.type === "close" ? message.code ?? 1000 : 1011, message.type === "close" ? message.reason : "home connection ended"); } catch { /* already closed */ }
             return;
           }

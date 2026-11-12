@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,10 +32,22 @@ const LABEL = {
   gate: " [release gate: Codex sha256 " + digest + " matches the reviewed digest for openai/codex " + PIN.revision.slice(0, 7) + " in tests/fixtures/link-gate-codex.json]",
   smoke: " [smoke only, not release evidence: Codex sha256 " + digest + " is not the reviewed digest for openai/codex " + PIN.revision.slice(0, 7) + " (tests/fixtures/link-gate-codex.json" + (PINNED_SHA256 ? "" : " records none yet") + ")]",
 }[mode];
-const gate = (title: string, body: () => Promise<void>) => test.skipIf(!usable)(title + LABEL, body, 180_000);
+// Codex is an external process: the bound is this file's default, not a per-test timeout.
+setDefaultTimeout(180_000);
+const gate = (title: string, body: () => Promise<void>) => test.skipIf(!usable)(title + LABEL, body);
 
 const KEY_ID = "gate-key"; const SECRET = "gate-secret-0123456789abcdef"; const LINK = "lnk_9a9a9a9a9a9a9a9a";
 const identity = { keyId: KEY_ID, linkId: LINK, fingerprint: serviceApiTokenFingerprint(SECRET) };
+
+/** A turn that ends by calling get_goal, a read-only tool Codex declares, so Codex sends a second request. */
+function toolCall(id: string): string {
+  const call = { type: "function_call", id: "fc_" + id, call_id: "call_gate_goal", name: "get_goal", status: "completed", arguments: "{}" };
+  return [
+    "event: response.created\ndata: " + JSON.stringify({ type: "response.created", response: { id, status: "in_progress", output: [] } }) + "\n\n",
+    "event: response.output_item.done\ndata: " + JSON.stringify({ type: "response.output_item.done", output_index: 0, item: call }) + "\n\n",
+    "event: response.completed\ndata: " + JSON.stringify({ type: "response.completed", response: { id, status: "completed", output: [call], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }) + "\n\n",
+  ].join("");
+}
 
 function completed(id: string): string {
   const message = { type: "message", id: "msg_" + id, role: "assistant", status: "completed", content: [{ type: "output_text", text: "gate-ok", annotations: [] }] };
@@ -125,18 +137,39 @@ describe("link WebSocket release gate (design 11.1 item 13)", () => {
     expect(PIN.sha256 === null || /^[0-9a-f]{64}$/.test(PIN.sha256)).toBe(true);
   });
 
-  gate("drain: the switch goes off after the upgrade, the socket drains, and the turn ends on HTTP", async () => {
-    const h = await home((_body, index) => new Response(completed("resp_" + index), { headers: { "content-type": "text/event-stream" } }));
-    let turnedOff = false;
-    standin = startRelayStandin({ linkPort: h.linkPort, identity, bearer: SECRET, onUpgrade: () => {
-      // The Home's switch goes off while this socket is open: the Home drains it and later upgrades are refused.
-      if (!turnedOff) { turnedOff = true; setLinkWebsocketTransportReadyForTests(false); }
-    } });
-    const result = await runCodex(standin.port, { argument: "say gate-ok" });
-    expectCompleted(result);
-    expect(standin.events[0]).toBe("upgrade");
-    expect(standin.events.some(event => event.startsWith("upgrade-refused:"))).toBe(true);
-    expect(standin.events.at(-1)).toBe("http:200");
+  gate("drain: the switch goes off under a running turn; it finishes and its tool result is admitted, the idle socket is fenced, and the next session ends on HTTP", async () => {
+    let atFirst: string[] = [];
+    const bodies: string[] = [];
+    const h = await home((body, index) => {
+      bodies.push(body);
+      if (index === 0) {
+        atFirst = [...(standin?.events ?? [])];
+        // The first request is running on the link socket: the Home's switch goes off under it (design 2.5).
+        setLinkWebsocketTransportReadyForTests(false);
+        // The turn asks for a read-only tool Codex declares, so Codex returns its result in a second request.
+        return new Response(toolCall("resp_" + index), { headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(completed("resp_" + index), { headers: { "content-type": "text/event-stream" } });
+    });
+    standin = startRelayStandin({ linkPort: h.linkPort, identity, bearer: SECRET });
+    expectCompleted(await runCodex(standin.port, { argument: "say gate-ok" }));
+    // The first request ran on the admitted socket, before any HTTP.
+    expect(atFirst[0]).toBe("upgrade");
+    expect(atFirst.some(event => event.startsWith("ws-create:"))).toBe(true);
+    expect(atFirst.some(event => event.startsWith("http:"))).toBe(false);
+    // The running turn was not cancelled: Codex ran its tool and returned the result, which the draining socket
+    // admits because it returns a pending result (design 2.5); then the idle socket was fenced with 1000.
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toContain("call_gate_goal");
+    const firstRun = [...standin.events];
+    expect(firstRun.some(event => event.startsWith("http:"))).toBe(false);
+    expect(firstRun.indexOf("home-close:1000")).toBeGreaterThan(firstRun.lastIndexOf(firstRun.filter(event => event.startsWith("ws-create:")).at(-1)!));
+    // The next session's upgrade is refused while the switch is off, and its request completes over HTTP.
+    expectCompleted(await runCodex(standin.port, { argument: "say gate-ok" }));
+    const secondRun = standin.events.slice(firstRun.length);
+    expect(secondRun.some(event => event.startsWith("upgrade-refused:"))).toBe(true);
+    expect(secondRun).not.toContain("upgrade");
+    expect(secondRun.at(-1)).toBe("http:200");
   });
 
   gate("a request over the 8 MiB message limit goes over HTTP", async () => {
