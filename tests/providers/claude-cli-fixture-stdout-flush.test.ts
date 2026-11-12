@@ -6,10 +6,11 @@ import { fixturePath } from "../helpers/repo-root";
 
 /**
  * The owned Claude CLI fixture answers the synthetic image replay with one JSONL frame whose text
- * is the whole replayed conversation. That frame exceeds what a pipe buffers, which is the shape
- * the fixture's original bug needed: it wrote the frame and then called `process.exit(0)`, and
- * `process.exit` terminates without draining stdout, so the tail of the frame was discarded and the
- * reader saw a malformed frame.
+ * is the whole replayed conversation. That frame is megabytes, which is the shape the fixture's
+ * original bug needed: it wrote the frame and then called `process.exit(0)`, and `process.exit`
+ * terminates without draining stdout, so whatever the runtime still held was discarded and the
+ * reader saw a malformed frame. The size alone proves nothing here — Bun buffers internally — which
+ * is why the observations below come from the write's own callback rather than from byte counts.
  *
  * The fix and the observation share one function. `writeReplayAndExit` in the fixture is the only
  * place the exit sequence exists, and the production run calls it with no hooks. An earlier version
@@ -22,12 +23,18 @@ import { fixturePath } from "../helpers/repo-root";
  * Claims measured here, kept separate on purpose:
  *
  *  - The contract, on the default path: all three frames and the whole replayed text arrive through
- *    the production reader, with a zero exit. This is the case that fails when only the production
- *    write-and-exit is reverted.
- *  - A blocked write is *observed*, not inferred from payload size. The fixture reports, in the
- *    write's own tick and again after one loop turn, whether the runtime accepted the bytes and
- *    whether the completion callback has run. With stdout deliberately unread a multi-megabyte
- *    write has neither; a control measured inside the portable pipe bound has both.
+ *    the production reader, with a zero exit. This is the case that carries the fix: reverting only
+ *    the production write-and-exit fails it, and also fails the reader-release case below, which
+ *    waits for a mark the reverted sequence never emits.
+ *  - The unsettled state is *observed*, not inferred from payload size. The fixture reports, in the
+ *    write's own tick and again after one loop turn, whether the runtime took the bytes into its own
+ *    queue and whether the completion callback had run by then. With stdout deliberately unread a
+ *    multi-megabyte write has neither at that point; a small control has both. That contrast is
+ *    buffering and size behavior on this platform — it is not a claim about a pipe threshold, and no
+ *    later-turn behavior is asserted.
+ *  - The narrowness is deliberate: the multi-megabyte case says the callback had not run within one
+ *    turn, not that it can never run without a reader. Releasing the reader later does settle it,
+ *    and that is the next case.
  *  - The failure paths fail: the pre-fix exit drops the frame, a malformed frame followed by a child
  *    that never exits surfaces the protocol error and is reaped, and a child that never reads stdin
  *    fails the parent's write with EPIPE instead of aborting an unrelated test.
@@ -39,15 +46,15 @@ import { fixturePath } from "../helpers/repo-root";
  */
 const REPLAY_CHARS = 3_000_000;
 /**
- * The control must fit *every* platform's pipe, so it is measured against the portable floor rather
- * than a number that happens to work here. POSIX guarantees only PIPE_BUF = 512 bytes for a write
- * that completes without blocking; a larger payload can block on a platform with a smaller buffer,
- * which would silently turn the control into a second copy of the case it contrasts with. The
- * fixture reports the byte count it actually wrote, and the control asserts against that rather
- * than against a character count.
+ * The control is deliberately tiny: the point is only that a small write settles while the large one
+ * has not, through the same statements. It is kept at a byte count no plausible destination can fail
+ * to take in one piece, and the guard below applies only to the fixture's own reported byte count.
+ * It is *not* a measured pipe threshold, and nothing here asserts that a write above it blocks or
+ * that a write below it cannot: Bun's internal buffering means the runtime's return value describes
+ * its own queue, not the kernel destination.
  */
-const PIPE_ATOMIC_MAX_BYTES = 512;
-/** Frame overhead is fixed, so this many characters stays well inside that bound. */
+const CONTROL_SIZE_GUARD_BYTES = 512;
+/** Frame overhead is fixed, so this many characters stays well inside that guard. */
 const CONTROL_CHARS = 64;
 /** Marks are newline-delimited on stderr behind a sentinel, since stderr also carries diagnostics. */
 const MARK_PREFIX = "OCXPROBE ";
@@ -241,10 +248,12 @@ test("the fixture's replay write is still pending while stdout has no reader", a
     const returned = await probe.waitForMark("replay-returned");
     const turn = await probe.waitForMark("replay-turn");
 
-    // The payload really did exceed any pipe: this is the child's own byte count, not the test's.
-    expect(returned.bytes as number).toBeGreaterThan(PIPE_ATOMIC_MAX_BYTES * 1000);
-    // The runtime queued the bytes rather than accepting them, and one loop turn later the write's
-    // own callback still has not run. Both are the child's state; neither is inferred from size.
+    // The payload is the same multi-megabyte frame the contract case uses; this is the child's own
+    // byte count, not the test's.
+    expect(returned.bytes as number).toBeGreaterThan(CONTROL_SIZE_GUARD_BYTES * 1000);
+    // The runtime took the bytes into its own queue instead of handing them all over, and one loop
+    // turn later the write's own callback still had not run. Both are the child's state, observed in
+    // the child; neither is inferred from the payload size, and neither claims more than one turn.
     expect(returned.accepted).toBe(false);
     expect(turn.settled).toBe(false);
   } finally {
@@ -252,18 +261,20 @@ test("the fixture's replay write is still pending while stdout has no reader", a
   }
 }, 60_000);
 
-test("a payload inside the portable pipe bound settles with no reader, so the pending write is capacity", async () => {
+test("a small payload settles with no reader, which is the buffering and size contrast", async () => {
   const probe = spawnProbe("observe", replayContent(CONTROL_CHARS));
   try {
     const returned = await probe.waitForMark("replay-returned");
     const turn = await probe.waitForMark("replay-turn");
     const settled = await probe.waitForMark("replay-settled");
 
-    // The control is only a control if it is inside the bound every platform guarantees. The byte
-    // count comes from the fixture, so a framing change cannot quietly push it past the floor.
-    expect(returned.bytes as number).toBeLessThanOrEqual(PIPE_ATOMIC_MAX_BYTES);
-    // Same statements, same code path, same absent reader. Only the byte count changed, so the
-    // difference from the case above is pipe capacity: accepted, and settled within one turn.
+    // The byte count comes from the fixture, so a framing change cannot quietly push the control up
+    // into the size range of the case it contrasts with. This is a guard on that count only.
+    expect(returned.bytes as number).toBeLessThanOrEqual(CONTROL_SIZE_GUARD_BYTES);
+    // Same statements, same code path, same absent reader; only the size changed. Observed on this
+    // platform: the runtime accepted the bytes and the callback had run within one turn. The
+    // specific size at which that flips is not asserted — Bun's buffering, not the pipe bound,
+    // decides it.
     expect(returned.accepted).toBe(true);
     expect(turn.settled).toBe(true);
     // The state in the mark is the write's own callback result, not a field this test invented.
@@ -353,9 +364,9 @@ test("a child that never reads stdin fails the parent's write with EPIPE instead
     // startup.
     await probe.waitForMark("ready");
 
-    // The write is megabytes against a pipe nobody is draining, so it must be queued rather than
-    // accepted whole. That is asserted, not assumed: it is the precondition for the failure below
-    // coming from the pipe closing rather than the write having already finished.
+    // The write is megabytes against a pipe nobody is draining, so the runtime queues it instead of
+    // handing it all over. That return value is asserted, not assumed: it is the precondition for the
+    // failure below coming from the pipe closing rather than the write having already finished.
     const accepted = probe.child.stdin!.write("z".repeat(REPLAY_CHARS) + "\n", () => {});
     expect(accepted).toBe(false);
 

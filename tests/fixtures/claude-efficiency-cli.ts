@@ -55,22 +55,24 @@ interface ReplayHooks {
 async function writeReplayAndExit(replayText: string, hooks: ReplayHooks): Promise<never> {
   const replayFrame = `${JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: replayText } } })}\n`;
   const resultFrame = `${JSON.stringify({ type: "result", subtype: "success", usage: { input_tokens: 2, output_tokens: 4 } })}\n`;
-  // The replay frame is megabytes, far beyond what a pipe buffers, so this write completes only
-  // while a reader drains it. `process.exit` terminates without draining stdout still queued, which
-  // discarded the tail of this frame. Awaiting the result write's callback below orders every
-  // earlier write ahead of it and returns only once the frame is out of the process, so the exit
-  // cannot cut it.
+  // The replay frame is megabytes. Bun buffers what it cannot hand to the destination immediately, so
+  // this write is not proof about reader progress on its own; the completion callback is. `process.exit`
+  // terminates without draining stdout still queued, which discarded the tail of this frame.
+  // Awaiting the result write's callback below orders every earlier write ahead of it and returns
+  // only once the frame is out of the process, so the exit cannot cut it.
   let replaySettled = false;
   const accepted = process.stdout.write(replayFrame, error => {
     replaySettled = true;
     hooks.onReplaySettled?.(error ? String((error as { code?: string }).code ?? error) : null);
   });
-  // `accepted` is the call's own return value: false means the runtime queued the bytes because the
-  // destination could not take them in one piece.
+  // `accepted` is the call's own return value. `false` says the runtime took the bytes into its own
+  // queue instead of handing them all to the destination within this call; it does not by itself say
+  // anything about the kernel pipe's capacity, because the runtime buffers internally first.
   hooks.onReplayReturned?.(accepted, Buffer.byteLength(replayFrame));
   if (hooks.onReplayTurn) {
-    // One turn of the event loop, not a delay: a write that already completed has had its callback
-    // run by now, while a write blocked on a full pipe has not, and no further turn changes that.
+    // One turn of the event loop, not a delay. This reports only whether the callback had run by the
+    // end of that single turn. It is not a statement that no later turn can change the answer: a
+    // reader that drains the destination later does complete the pending write.
     await new Promise<void>(resolve => setImmediate(resolve));
     hooks.onReplayTurn(replaySettled);
   }
