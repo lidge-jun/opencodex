@@ -100,33 +100,59 @@ window.
 asynchronous `schtasks` and `sc.exe` calls through `execFile` (a deadline-derived timeout is
 floored to whole milliseconds and one that floors to 0 spawns nothing, because `execFile` reads 0
 as no timeout), the evidence snapshot `windowsProcessSnapshot` for every bind, the checked
-terminate, the exit watch, the Part B port sampler (`scanListenPids`; a row whose owner has exited
-is cleared like `reclaimListenPort` does) and the listener identity (`verifyPidIdentity`: ours or
-foreign). The task's running state is read from `schtasks /query /fo CSV`, falling back to
-`Get-ScheduledTask` inside the same 1 s cap when the status word is localized.
+terminate, the exit watch, the Part B port sampler and the listener identity. The task's running
+state is read from `schtasks /query /fo CSV`, falling back to `Get-ScheduledTask` inside the same
+1 s cap when the status word is localized.
+
+The port sampler is `sampleWindowsStopPort(port, timeoutMs)`, async and bounded by the caller's
+timeout: it runs `netstat.exe` from the trusted System32 directory through `execFile` with that
+timeout and `SIGKILL`, and a scan that misses the timeout, or cannot be read, samples `unknown`.
+A synchronous scan would ignore the cap and could stall the stop for the helper's own 5 s. A row
+whose owner has exited is cleared like `reclaimListenPort` does. The listener identity is
+tri-state over `inspectOcxStartProcessIdentity`: only a positive `mismatch` is `foreign`, and an
+`unverifiable` probe (another account's or an elevated process's command line) stays `unknown`.
+`verifyPidIdentity`'s null collapses those two, which would report a listener we merely could not
+read as another program holding the port.
 
 `src/service/windows-service-stop.ts` is what callers call: `runWindowsServiceStopPartA` (optional
 admission, a reused bind snapshot, the updater's authorizer, a hard cap for the route),
 `confirmWindowsServiceStop` (Part B), the mapping onto `ServiceStopOutcome` (absent, stopped;
 survived, denied and unverified-budget are failed; unknown is state-unknown), the additive
 `serviceStopReason` and the receipt record. The deadline lives in
-`src/service/windows-stop-deadline.ts`: `ocx stop` takes `--deadline-ms <n>`, else
-`OCX_STOP_DEADLINE_MS` (empty or invalid counts as absent), else 60 s, measured from the CLI's own
-process start (the Part A clock is `performance.now()`, which counts from the process start).
+`src/service/windows-stop-deadline.ts`, and its origin depends on who is stopping. `ocx stop`
+takes `--deadline-ms <n>`, else `OCX_STOP_DEADLINE_MS` (empty or invalid counts as absent), else
+60 s, measured from the command's own start: that is the operator's budget, and
+`performance.now()` counting from `performance.timeOrigin` makes it an absolute value on the Part
+A clock. Every other caller starts the default 60 s when its stop phase begins, because it
+reaches the stop after work it cannot charge to the stop — the scheduler registration and the UAC
+prompt — and a budget measured from process start could already be spent, which made admission
+refuse `unverified-budget` a stop that had its whole budget left. The first deadline read in a
+stop phase arms it and later reads inside that phase keep it, so one deadline governs the whole
+stop instead of sliding forward.
 
 - `stopServiceIfInstalledReport` / `stopServiceIfInstalledDetailed` (`src/service/orchestration.ts`)
   are async and run Part A on Windows. On Windows Task Scheduler never yields `stopped-respawnable`.
 - Plain `ocx stop` (`src/cli/stop-windows-checked.ts`) admits against the deadline with orphan
   discovery and the inherited receipts counted. A Part A other than stopped or absent holds the
   child: no `/api/stop` POST, the shared teardown skipped, `service` failed or state-unknown,
-  `proxy` unknown. After a stopped Part A, the POST skips `stopProxy`'s port wait, orphan discovery
-  is capped at 3 s, and Part B replaces the respawn re-poll: our identity back on the port is
-  `proxy: respawned`, an unconfirmed port is `evidence-unreadable`, and another program on the port
-  sets `portHeldByForeign` without failing the stop.
+  `proxy` unknown. After a stopped Part A, the POST skips `stopProxy`'s legacy 15 s
+  `waitForStoppedPort`, orphan discovery is capped at 3 s, and Part B replaces the respawn re-poll:
+  our identity back on the port is `proxy: respawned`, an unconfirmed port is
+  `evidence-unreadable`, and another program on the port sets `portHeldByForeign` without failing
+  the stop. The port wait is skipped on BOTH Windows paths, guarded included, through
+  `windowsPartBOwnsPortWait`; `windowsPartBDue` stays snapshotless-only because it also gates the
+  legacy respawn re-poll. `ocx uninstall`'s two `stopProxy` calls pass the same predicate.
 - The guarded path reads the evidence snapshot and the Schedule host PID once per inspection;
   `stopManager` binds on the revalidation's snapshot (so its admission does not count a second
   enumeration), Part B runs after `settle` on the approved endpoint, and the manager-state checks
   reuse Part B's final enumeration.
+- A registered task whose state is `not-running` promotes its surviving wrappers to `bound-stray`
+  only after `winTaskXml` and `winRegistrationOurs` pass (`src/service/windows-guarded-manager.ts`).
+  The state word says the task is inert, not that it is ours; promoting on the word alone let a
+  same-named foreign task make this home's hand-started wrappers terminable. Nothing surviving
+  keeps the `absent` verdict without the read; an unreadable definition is `evidence-unreadable`
+  and a definition that is not this installation's is `unknown`, both leaving the previous
+  verdict.
 - The teardown receipt carries the Part A record (`partA` stopped or absent, the registered
   managers, the ended wrappers as pid + creation time): written at the claim, or added by the owner
   for a receipt claimed before Part A. `/api/stop` (`src/server/stop-service-route.ts`) skips its
@@ -139,6 +165,14 @@ process start (the Part A clock is `performance.now()`, which counts from the pr
   shared teardown (a failed claim sends no child stop), runs Part B, and clears the receipt only
   after the restore. `ocx service uninstall` / `remove` refuse before deleting the task unless
   Part A stopped (or found nothing) and Part B did not find our identity or an unreadable port.
+  Removal claims the same receipt, carrying Part A's record, before its child stop: Part A leaves
+  the scheduler task registered, so a receipt-less POST answers `respawnable_service` (409) and
+  the removal refuses with the proxy left running. The receipt is discharged only after the
+  shared restore, and a failed claim sends no child stop.
+- Every tracked-proxy stop takes its orphan-discovery cap from the caller
+  (`TrackedProxyStopIo.orphanDiscoveryCapMs`). The checked Windows callers pass the admitted 3 s
+  (`WINDOWS_STOP_CAPS.orphanDiscovery`), which is what admission priced; the omitted default stays
+  the legacy 7 s so macOS and Linux timing is unchanged.
 - `prepareServiceInstall` refuses before replacing anything on a Part A other than stopped or
   absent and stops install and switch on any Part B result other than a free port, naming the
   owner. `ocx uninstall` runs Part B as its respawn window after a stopped Part A.
@@ -176,9 +210,12 @@ PowerShell or FFI call. The FFI primitive itself is exercised only by the cases 
 Windows x64.
 
 The callers are covered by `tests/windows/windows-checked-stop-live.test.ts` (adapters, ARM64
-strict, whole-millisecond timeouts, the ancestry check), `tests/windows/windows-service-stop-wiring.test.ts`
-(the real Part A through the wiring: the own-wrapper refusal, the cap, admission, the deadline and
-the receipt record), `tests/windows/windows-stop-callers.test.ts` (the route, the service commands,
-the guarded order, `bound-stray`, and the bind on the evidence snapshot) and
-`tests/windows/windows-stop-ocx-stop.test.ts` (plain `ocx stop` through the real CLI with the
-platform simulated). None of them reaches `schtasks`, PowerShell or FFI.
+strict, whole-millisecond timeouts, the ancestry check, the bounded port sampler and the tri-state
+listener identity), `tests/windows/windows-service-stop-wiring.test.ts`
+(the real Part A through the wiring: the own-wrapper refusal, the cap, admission, the deadline's
+two origins and the receipt record), `tests/windows/windows-stop-callers.test.ts` (the route, the
+service commands, the guarded order, `bound-stray`, the orphan-discovery cap and the bind on the
+evidence snapshot), `tests/windows/windows-guarded-manager.test.ts` (the not-running promotion
+behind its registration proof) and `tests/windows/windows-stop-ocx-stop.test.ts` (plain `ocx stop`
+through the real CLI with the platform simulated). None of them reaches `schtasks`, PowerShell or
+FFI.
