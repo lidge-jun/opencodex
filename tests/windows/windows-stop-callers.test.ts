@@ -352,6 +352,27 @@ describe("guarded inspection: the binding rule decides bound-stray", () => {
     expect(inspect(cimOnly)).toMatchObject({ kind: "unknown", stopReason: "evidence-unreadable" });
   });
 
+  test("the same bindable survivors stay unknown when the not-running registration is not provably ours", () => {
+    // #7771: this tree binds to bound-stray when the definition is ours (test above). A
+    // same-named foreign task, or a definition that cannot be read, must not turn this
+    // home's surviving wrappers into terminable ones.
+    const withDefinition = (win: { winTaskXml?: () => string; winRegistrationOurs?: () => boolean }) =>
+      inspectGuardedManagerTarget(42, 10100, {
+        platform: "win32", verifyPid: pid => pid,
+        scheduler: () => ({ status: "present" }), winsw: () => "nonexistent",
+        win: {
+          winProcs: () => tree(), winTaskState: () => "not-running",
+          winTaskXml: () => "<Task>xml</Task>", winRegistrationOurs: () => true,
+          winSchedulePid: () => SCHEDULE_PID, winScriptPath: () => CMD, winLauncherPath: () => VBS,
+          ...win,
+        },
+      });
+    expect(withDefinition({}).kind).toBe("bound-stray");
+    expect(withDefinition({ winRegistrationOurs: () => false }).kind).toBe("unknown");
+    expect(withDefinition({ winTaskXml: () => { throw new Error("access denied"); } }))
+      .toMatchObject({ kind: "unknown", stopReason: "evidence-unreadable" });
+  });
+
   test("a hand-started launcher under a live shell stays unknown / unbound-wrapper", () => {
     const shell = entry(60, 1, "pwsh.exe", "pwsh", 100);
     // The task's own wrappers bind; a second launcher started by hand from a live shell is not
