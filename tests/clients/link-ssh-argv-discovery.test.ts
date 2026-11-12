@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, windowsPinnedSyncArgv, packedPowerShellArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
-import { quoteRemote, REMOTE_OCX_SCRIPT, remoteOcxArgv } from "../../src/link/ssh-argv";
+import { quoteRemote, REMOTE_OCX_SCRIPT, REMOTE_SERVED_RUNTIME, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { recordServingRuntime } from "../../src/config/serving-runtimes";
 import { remoteInspectRuntimeArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -112,9 +112,9 @@ test.skipIf(process.platform === "win32").each(["Windows_NT", "MSYS_NT-10.0-2263
  * #8359: the install that last started serving this home wins over a stale Desktop or PATH copy.
  * The census is written by the real recorder, so a format change on that side breaks these cases.
  */
-function servedFixture() {
+function servedFixture(tools = ["awk", "dd", "wc"]) {
   const f = fixture();
-  for (const tool of ["awk", "wc"]) symlinkSync(Bun.which(tool)!, join(f.home, "remote-bin", tool));
+  for (const tool of tools) symlinkSync(Bun.which(tool)!, join(f.home, "remote-bin", tool));
   f.install(0); // a runnable Desktop copy that must lose to the served install
   const census = (command: string[]) => recordServingRuntime(
     { command, version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" },
@@ -166,18 +166,41 @@ test.skipIf(process.platform === "win32")("a served install that is gone or cann
   expect((await entryless.run()).stdout).toBe("0\nlink\0port\0");
 }, SPAWN_BUDGET_MS);
 
+/** Runs the remote census reader alone, so a rejection is observed as no output and status 1. */
+async function readCensus(body: string): Promise<{ exitCode: number; stdout: string }> {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-served-census-")); roots.push(dir);
+  const file = join(dir, "serving-runtimes.json");
+  writeFileSync(file, body);
+  const child = Bun.spawn(["sh", "-c", REMOTE_SERVED_RUNTIME + 'served_runtime "$1"', "sh", file], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  return { exitCode, stdout };
+}
+const censusBody = (runtimes: unknown[]) => JSON.stringify({ runtimes }, null, 2) + "\n";
+
+test.skipIf(process.platform === "win32")("the census reader prints only the first record's command (#8359)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-served-census-")); roots.push(home);
+  recordServingRuntime({ command: ["/opt/old/ocx"], version: "2.70.0", servedAt: "2026-11-01T00:00:00.000Z" }, home);
+  recordServingRuntime({ command: ["/opt/npm prefix/bun", "/opt/npm prefix/index.ts"], version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" }, home);
+  expect(await readCensus(readFileSync(join(home, "serving-runtimes.json"), "utf8")))
+    .toEqual({ exitCode: 0, stdout: "/opt/npm prefix/bun\n/opt/npm prefix/index.ts\n" });
+}, SPAWN_BUDGET_MS);
+
+const complete = censusBody([{ command: ["/opt/good/ocx"], version: "2.99.0" }, { command: ["/opt/stale/ocx"], version: "2.70.0" }]);
 test.skipIf(process.platform === "win32").each([
-  ["a relative path", '{\n  "runtimes": [\n    {\n      "command": [\n        "relative/ocx"\n      ]\n    }\n  ]\n}\n'],
-  ["a quoted path", '{\n  "runtimes": [\n    {\n      "command": [\n        "/tmp/a\\"b/ocx"\n      ]\n    }\n  ]\n}\n'],
-  ["three entries", '{\n  "runtimes": [\n    {\n      "command": [\n        "/a",\n        "/b",\n        "/c"\n      ]\n    }\n  ]\n}\n'],
-  ["a truncated file", '{\n  "runtimes": [\n    {\n      "command": [\n        "/a"\n'],
-] as const)("a census with %s is ignored (#8359)", async (_label, body) => {
-  const f = servedFixture();
-  mkdirSync(join(f.home, ".opencodex"), { recursive: true });
-  writeFileSync(join(f.home, ".opencodex/serving-runtimes.json"), body);
-  const result = await f.run();
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).toBe("0\nlink\0port\0");
+  ["a relative path", censusBody([{ command: ["relative/ocx"] }])],
+  ["a quoted path", censusBody([{ command: ['/tmp/a"b/ocx'] }])],
+  ["a backslash", censusBody([{ command: ["/tmp/a\\b/ocx"] }])],
+  ["three entries", censusBody([{ command: ["/a", "/b", "/c"] }])],
+  ["an empty command", censusBody([{ command: [] }])],
+  ["a first record without a command", censusBody([{ version: "2.77.0" }, { command: ["/opt/stale/ocx"] }])],
+  ["a top-level command before the runtimes", JSON.stringify({ command: ["/opt/stray/ocx"], runtimes: [{ version: "2.77.0" }] }, null, 2) + "\n"],
+  ["a truncation inside the command", complete.slice(0, complete.indexOf('"/opt/good/ocx"') + 16)],
+  ["a truncation after the command", complete.slice(0, complete.indexOf("],") + 3)],
+  ["a truncation after the first record", complete.slice(0, complete.indexOf("},") + 3)],
+  ["another layout", JSON.stringify({ runtimes: [{ command: ["/opt/good/ocx"] }] })],
+  ["a census over 64 KiB", censusBody([{ command: ["/opt/good/ocx"], version: "x".repeat(70_000) }])],
+] as const)("the census reader rejects %s (#8359)", async (_label, body) => {
+  expect(await readCensus(body)).toEqual({ exitCode: 1, stdout: "" });
 }, SPAWN_BUDGET_MS);
 
 test.skipIf(process.platform !== "win32")("Windows native execution preserves spaces quotes Unicode empty arguments and stdin bytes", async () => {
@@ -294,7 +317,7 @@ test.skipIf(process.platform !== "win32")("a Windows ocx that cannot be containe
   // Constrained Language Mode blocks Add-Type, so the Job helper cannot exist; the session enters
   // it before the unchanged script runs.
   const native = windowsNativeArgv(process.execPath, [script, marker]);
-  const constrained = powershellArgv("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(native.at(-1)!, "base64").toString("utf16le"));
+  const constrained = constrainedArgv(native);
   const child = Bun.spawn(constrained, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const code = await child.exited;
   expect(code).toBe(WINDOWS_CONTAINMENT_EXIT);
@@ -304,10 +327,31 @@ test.skipIf(process.platform !== "win32")("a Windows ocx that cannot be containe
 // Every packed command inflates itself before its containment helper exists; a session that cannot
 // inflate must still refuse with 126. The candidate homes and PATH hold no ocx.exe, so 126 can only
 // be that refusal: an unguarded inflate exits 1 and exhausted discovery exits 127.
-for (const [name, build] of [
+const CONTAINMENT_PROBES = [
   ["discovery", () => windowsOcxArgv(["--version"])],
   ["pinned sync", () => windowsPinnedSyncArgv("lnk_0123456789abcdef")],
-] as const) {
+] as const;
+
+// The language-mode prefix is test scaffolding: no command Home sends carries it, so it is encoded
+// beside the builder's own command instead of spending the cmd.exe budget the builder already
+// enforced. Re-encoding through powershellArgv also repeated its preamble, and once the pinned
+// sync script grew to 7740 encoded characters (#8505) that overhead alone crossed the 8000 cap.
+function constrainedArgv(argv: readonly string[]): string[] {
+  const script = "$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(argv.at(-1)!, "base64").toString("utf16le");
+  return [...argv.slice(0, -1), Buffer.from(script, "utf16le").toString("base64")];
+}
+
+test("the constrained containment probes run each builder's own command unchanged", () => {
+  for (const [, build] of CONTAINMENT_PROBES) {
+    const argv = build();
+    const constrained = constrainedArgv(argv);
+    expect(constrained.slice(0, -1)).toEqual(argv.slice(0, -1));
+    expect(Buffer.from(constrained.at(-1)!, "base64").toString("utf16le"))
+      .toBe("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(argv.at(-1)!, "base64").toString("utf16le"));
+  }
+});
+
+for (const [name, build] of CONTAINMENT_PROBES) {
   test.skipIf(process.platform !== "win32")(`a Windows ${name} command that cannot be contained is refused before any candidate is probed`, async () => {
     const empty = mkdtempSync(join(tmpdir(), "ocx-windows-refuse-candidates-")); roots.push(empty);
     const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
@@ -315,7 +359,7 @@ for (const [name, build] of [
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !isolated.has(key.toLowerCase())) env[key] = value;
     Object.assign(env, { PATH: system32, USERPROFILE: empty, LOCALAPPDATA: empty, ProgramFiles: empty });
-    const constrained = powershellArgv("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(build().at(-1)!, "base64").toString("utf16le"));
+    const constrained = constrainedArgv(build());
     const child = Bun.spawn([join(system32, "WindowsPowerShell", "v1.0", "powershell.exe"), ...constrained.slice(1)], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [code] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code).toBe(WINDOWS_CONTAINMENT_EXIT);
@@ -387,11 +431,70 @@ test.skipIf(process.platform === "win32")("runtime inspection reports the served
   writeFileSync(cli, "// entry\n");
   recordServingRuntime({ command: [bun, cli], version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" }, join(home, ".opencodex"));
   const bin = join(home, "tools"); mkdirSync(bin);
-  for (const tool of ["sh", "uname", "awk", "wc"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
+  for (const tool of ["sh", "uname", "awk", "dd", "wc"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
   const result = Bun.spawnSync(remoteInspectRuntimeArgv("posix"), { env: { HOME: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
   const lines = result.stdout.toString().split("\n");
   expect(result.exitCode).toBe(0);
   expect(lines).toContain("ocx-inspect:kind:full");
   expect(lines).toContain("ocx-inspect:version:opencodex 2.99.0");
 });
+
+
+// A root runner reads the census whatever its mode, so the unreadable path cannot be exercised there.
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable census falls through without stderr noise (#8359)", async () => {
+  const f = servedFixture();
+  const served = join(f.home, "standalone/ocx");
+  executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
+  f.census([served]);
+  chmodSync(join(f.home, ".opencodex/serving-runtimes.json"), 0o000);
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+  expect(result.stderr).toBe("");
+}, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform === "win32")("a Child without awk falls through without stderr noise (#8359)", async () => {
+  const f = servedFixture(["dd", "wc"]);
+  const served = join(f.home, "standalone/ocx");
+  executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
+  f.census([served]);
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+  expect(result.stderr).toBe("");
+}, SPAWN_BUDGET_MS);
+
+// Without dd the census size cannot be bounded, so the census is not read at all.
+test.skipIf(process.platform === "win32")("a Child without dd falls through without reading the census (#8359)", async () => {
+  const f = servedFixture(["awk", "wc"]);
+  const served = join(f.home, "standalone/ocx");
+  executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
+  f.census([served]);
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+  expect(result.stderr).toBe("");
+}, SPAWN_BUDGET_MS);
+
+// A dd that fails counts zero bytes through wc; zero is refused, so the census is not parsed unbounded.
+test.skipIf(process.platform === "win32")("a failing dd falls through without reading the census (#8359)", async () => {
+  const f = servedFixture(["awk", "wc"]);
+  executable(join(f.home, "remote-bin/dd"), "exit 1");
+  const served = join(f.home, "standalone/ocx");
+  executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
+  f.census([served]);
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+  expect(result.stderr).toBe("");
+}, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform === "win32")("only the first record's command counts; a later record is never run (#8359)", async () => {
+  const f = servedFixture();
+  const older = join(f.home, "older/ocx");
+  executable(older, "if [ \"$1\" = --version ]; then printf 'opencodex 2.80.0\\n'; exit 0; fi\nprintf 'older ran\\n'");
+  mkdirSync(join(f.home, ".opencodex"), { recursive: true });
+  writeFileSync(join(f.home, ".opencodex/serving-runtimes.json"), JSON.stringify({ runtimes: [
+    { version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" },
+    { command: [older], version: "2.80.0", servedAt: "2026-11-08T00:00:00.000Z" },
+  ] }, null, 2) + "\n");
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+}, SPAWN_BUDGET_MS);
 

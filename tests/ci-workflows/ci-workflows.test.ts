@@ -312,7 +312,7 @@ describe("GitHub Actions hardening", () => {
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'macos-control'");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
@@ -725,7 +725,8 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("cancel-in-progress: false");
-    expect(workflow).toContain("timeout-minutes: 15");
+    // The publish job bounds its two post-publish registry waits (about 20 minutes each, ~55 worst case).
+    expect(workflow).toContain("timeout-minutes: 75");
 
     // The exact-SHA CI gate already includes the three hosted keyring legs. The
     // release workflow must not duplicate the Linux bootstrap and drift from CI.
@@ -736,9 +737,9 @@ describe("GitHub Actions hardening", () => {
     const packageJson = JSON.parse(await readText("package.json")) as { scripts?: Record<string, string> };
     expect(packageJson.scripts?.prepublishOnly).toContain("bun run audit:high");
     expect(workflow).toContain("npm run prepublishOnly");
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"')).toBe(2);
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline"')).toBe(2);
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service "$SOURCE_SHA"')).toBe(2);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"')).toBe(3);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline"')).toBe(3);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service "$SOURCE_SHA"')).toBe(3);
 
     // Dry-run first by default; tokenless trusted publishing only.
     expect(workflow).toMatch(/dry-run:[\s\S]*?default: true/);
@@ -906,6 +907,7 @@ describe("GitHub Actions hardening", () => {
 
   async function readEnforcePrTarget(): Promise<{
     workflow: WorkflowShape;
+    triggers: WorkflowShape["on"];
     jobs: [string, WorkflowJob][];
     steps: WorkflowStep[];
     allSteps: WorkflowStep[];
@@ -913,6 +915,11 @@ describe("GitHub Actions hardening", () => {
   }> {
     const text = await readText(".github/workflows/enforce-pr-target.yml");
     const workflow = Bun.YAML.parse(text) as WorkflowShape;
+    // Since #7654 the gate runs as a local reusable workflow of pr-gates.yml, which
+    // owns its pull_request_target and status triggers; the gate itself is
+    // workflow_call-only. pr-gates-workflow.test.ts pins the caller's shape.
+    expect(Object.keys(workflow.on ?? {})).toEqual(["workflow_call"]);
+    const caller = Bun.YAML.parse(await readText(".github/workflows/pr-gates.yml")) as WorkflowShape;
     const jobs = Object.entries(workflow.jobs ?? {});
     const steps = workflow.jobs?.["enforce-target"]?.steps;
     expect(Array.isArray(steps)).toBe(true);
@@ -923,7 +930,7 @@ describe("GitHub Actions hardening", () => {
     const scriptStep = steps!.find(step => typeof step.with?.script === "string");
     expect(scriptStep).toBeDefined();
     const script = stripComments(String(scriptStep!.with!.script));
-    return { workflow, jobs, steps: steps!, allSteps, script };
+    return { workflow, triggers: caller.on, jobs, steps: steps!, allSteps, script };
   }
 
   const SCRIPT_LOAD = [
@@ -1059,7 +1066,7 @@ describe("GitHub Actions hardening", () => {
    * characterisation test on a privileged workflow actually needs.
    */
   test("PR target enforcement's structure is an exact allowlist, not a deny-list", async () => {
-    const { workflow, jobs, steps } = await readEnforcePrTarget();
+    const { workflow, triggers, jobs, steps } = await readEnforcePrTarget();
 
     // Top level: concurrency lives on the write job after read-only PR resolution.
     expect(Object.keys(workflow).sort()).toEqual([
@@ -1079,7 +1086,7 @@ describe("GitHub Actions hardening", () => {
     // `status` is the only extra trigger. CodeRabbit publishes a legacy
     // commit status; this privileged workflow is loaded from the default branch
     // and re-reads live review evidence before any mutation.
-    expect(Object.keys(workflow.on ?? {}).sort()).toEqual([
+    expect(Object.keys(triggers ?? {}).sort()).toEqual([
       "pull_request_target",
       "status",
     ]);
@@ -1093,8 +1100,8 @@ describe("GitHub Actions hardening", () => {
     // particular files change, which on a docs-only PR means never. Both are
     // additive, both look like ordinary scoping in a diff, and neither failed a
     // single assertion.
-    expect(Object.keys(workflow.on?.pull_request_target ?? {})).toEqual(["types"]);
-    expect(Object.prototype.hasOwnProperty.call(workflow.on ?? {}, "status")).toBe(true);
+    expect(Object.keys(triggers?.pull_request_target ?? {})).toEqual(["types"]);
+    expect(Object.prototype.hasOwnProperty.call(triggers ?? {}, "status")).toBe(true);
 
     // Exactly the scopes this gate needs. `pull-requests: write` covers title and
     // comment updates. `contents: write` is required for the draft GraphQL
@@ -1138,13 +1145,16 @@ describe("GitHub Actions hardening", () => {
     expect(new Set(wakeLabels).size).toBe(wakeLabels.length);
     expect([...wakeLabels].sort()).toEqual([...HYGIENE_GATE_LABELS, "gui-screenshot-waived"].sort());
 
+    // The shared comment lock sits on the hygiene job (#7654): it exists only when
+    // pr-gates.yml runs hygiene, so a skipped event never enters the group.
     const hygieneWorkflow = Bun.YAML.parse(
       await readText(".github/workflows/pr-hygiene.yml"),
-    ) as { concurrency?: { group?: string; "cancel-in-progress"?: boolean } };
-    expect(hygieneWorkflow.concurrency?.group).toBe(
+    ) as { concurrency?: unknown; jobs?: { hygiene?: { concurrency?: { group?: string; "cancel-in-progress"?: boolean } } } };
+    expect(hygieneWorkflow.concurrency).toBeUndefined();
+    expect(hygieneWorkflow.jobs?.hygiene?.concurrency?.group).toBe(
       "pr-gate-comment-${{ github.event.pull_request.number }}",
     );
-    expect(hygieneWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
+    expect(hygieneWorkflow.jobs?.hygiene?.concurrency?.["cancel-in-progress"]).toBe(false);
 
     expect(jobs.map(([name]) => name)).toEqual(["resolve-pr", "enforce-target"]);
 
@@ -1232,7 +1242,8 @@ describe("GitHub Actions hardening", () => {
   });
 
   test("PR target enforcement reacts to the events that can change the verdict", async () => {
-    const { workflow, script } = await readEnforcePrTarget();
+    const { triggers: on, script } = await readEnforcePrTarget();
+    const workflow = { on };
 
     // `edited` is what catches a retarget; `ready_for_review` is what re-applies
     // the draft when someone undoes it by hand. Dropping either silently makes
@@ -5382,8 +5393,9 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
   const scenarios = [
     { mode: "match", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
     { mode: "delayed", dry: false, status: 0, receipt: true, verification: "verified", reads: 3 },
-    { mode: "unavailable", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
-    { mode: "timeout", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
+    // npm took ~15 minutes to serve 2.100.1, so the smoke waits 40 x 30 s before reporting pending.
+    { mode: "unavailable", dry: false, status: 0, receipt: true, verification: "pending", reads: 40 },
+    { mode: "timeout", dry: false, status: 0, receipt: true, verification: "pending", reads: 40 },
     { mode: "wrong", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
     { mode: "empty", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
     { mode: "dist-failure", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
@@ -5453,7 +5465,7 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
       if (scenario.verification === "pending") {
         expect(stdout).toContain("::warning::npm publish succeeded");
         expect(readFileSync(summary, "utf8")).toContain("registry verification pending");
-        expect(log.filter(line => line === "sleep 5")).toHaveLength(5);
+        expect(log.filter(line => line === "sleep 30")).toHaveLength(39);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }

@@ -152,6 +152,8 @@ import { requiresPlaintextReasoningReplay } from "../../adapters/openai-response
 import { destinationDecodesNativeCompactionBlob, isOpenAiOperatedResponsesDestination } from "../../providers/openai-tiers-destination";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import { commitReasoningReplayServingIdentity } from "../../responses/reasoning-replay-cache";
+import { rewriteRoutedCustomToolsForUpstream, RoutedCustomToolCompatError, validateFinalCustomToolCompatibility } from "../../responses/custom-tool-compat";
+import { findInvalidRetainedCompactionEnvelope, InvalidRetainedCompactionEnvelopeError } from "../../responses/retained-compaction";
 import { nativeCompactResponseSchema } from "../../responses/schema";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
@@ -176,10 +178,11 @@ import {
   DecompressedBodyTooLargeError,
   UnsupportedContentEncodingError,
 } from "../request-decompress";
-import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
+import { projectCapturedCustomToolPolicy, resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { transientSendCapFor } from "./request-send-budget";
 import { distributedKeyPhysicalFetch, recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import { stampApiKeyAccountLabel } from "../../providers/label";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -670,6 +673,11 @@ export async function bufferCompactResponse(
 
 
 
+/**
+ * Route one `/v1/responses/compact` request: validate the body (rejecting malformed
+ * proxy-owned retained envelopes before routing or credential resolution), select the
+ * compact target, and dispatch through the adapter pipeline.
+ */
 export async function handleResponsesCompact(
   req: Request,
   config: OcxConfig,
@@ -699,6 +707,10 @@ export async function handleResponsesCompact(
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
   }
+  // A malformed proxy-owned envelope is a caller error, so reject it before routing or
+  // credential resolution can spend a token refresh on a request that cannot succeed.
+  const invalidEnvelope = findInvalidRetainedCompactionEnvelope(raw.input);
+  if (invalidEnvelope) return formatErrorResponse(400, "invalid_request_error", invalidEnvelope.message);
   options.onRequestBodyRead?.();
   // Correct the IDENTITY before routing, or the synthetic id does not route at all. Held in
   // a local rather than written back to `raw.model`: assigning to the property widens it out
@@ -947,7 +959,7 @@ export async function handleResponsesCompact(
     const base = isCanonicalOpenAiForwardProvider(compactProvider)
       ? CODEX_FORWARD_BASE_URL
       : (compactProvider.baseUrl ?? "").replace(/\/+$/, "");
-    if (compactProvider.authMode !== "forward" && compactProvider.apiKey) {
+    if (compactProvider.authMode !== "forward" && (compactProvider.apiKey || compactProvider.apiKeyPool?.length)) {
       // Native compact never enters handleResponses, so it needs its own pre-dispatch key
       // pick. Kept inside this branch on purpose: the overlay above owns the forward and
       // codexAccountMode cases, and the picker returns null for them anyway.
@@ -958,11 +970,19 @@ export async function handleResponsesCompact(
       catch (error) {
         const refusal = requestPacingOverloadResponse(error);
         if (refusal) return refusal;
+        if (error instanceof ProviderApiKeyPausedError) {
+          return formatErrorResponse(403, "permission_error", error.message);
+        }
         throw error;
       }
       if (warmKeyProvider?.apiKey) compactProvider = warmKeyProvider;
-      headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
-      stampApiKeyAccountLabel(logCtx, route.providerName, compactProvider);
+      if (compactProvider.apiKey) {
+        headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
+        stampApiKeyAccountLabel(logCtx, route.providerName, compactProvider);
+      }
+    }
+    if (compactProvider.authMode !== "forward" && isProviderApiKeyPaused(compactProvider)) {
+      return formatErrorResponse(403, "permission_error", new ProviderApiKeyPausedError().message);
     }
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
     const requireCompactPlaintextReasoning = !isOpenAiOperatedResponsesDestination(compactProvider)
@@ -1174,6 +1194,8 @@ export async function handleResponsesCompact(
       sendAuthCtx: CodexAuthContext,
       onPhysicalDispatch?: () => void,
     ): Promise<Response> => {
+      // Only the captured custom-tool contract: native compact keeps the provider's own wire.
+      sendProvider = projectCapturedCustomToolPolicy(sendProvider, route.staticPolicy);
       // A gateway send carries only its own transport headers, whatever recovery handed in.
       // An account-change scrub that removed the turn state from the send headers still applies.
       let wireHeaders = gatewayTransport ? new Headers(gatewayTransport.headers) : sendHeaders;
@@ -1210,8 +1232,17 @@ export async function handleResponsesCompact(
           replayBody = isolateCodexPoolClientMetadata(replayBody, sendAuthCtx.chatgptAccountId) as typeof replayBody;
         }
         // A queued key selection can refresh the destination; project only for this send.
-        return isOpenAiOperatedResponsesDestination(sendProvider)
+        replayBody = isOpenAiOperatedResponsesDestination(sendProvider)
           ? repairUrlCitationAnnotations(replayBody) : stripCanonicalOnlyInputItems(stripCanonicalOnlyTopLevelFields(replayBody));
+        // Only an explicit `false` lowers custom tools here; with no declaration, native compact
+        // forwards every custom tool and its history exactly as before this capability existed.
+        if (sendProvider.supportsResponsesCustomTools === false && !isCanonicalOpenAiForwardProvider(sendProvider)) {
+          replayBody = rewriteRoutedCustomToolsForUpstream(
+            replayBody, sendProvider.supportsResponsesCustomTools,
+          ).body as typeof replayBody;
+          validateFinalCustomToolCompatibility(replayBody, sendProvider.supportsResponsesCustomTools);
+        }
+        return replayBody;
       };
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,
@@ -1242,8 +1273,10 @@ export async function handleResponsesCompact(
                   if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current?.apiKey || !supportsNativeResponsesCompactEndpoint(route.providerName, current)) {
+                  if (!current?.apiKey && isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
                   throw new Error("Provider key selection is no longer available for compact");
                 }
+                current = projectCapturedCustomToolPolicy(current, route.staticPolicy);
                 const rebuilt = new Headers(sendHeaders);
                 for (const name of Object.keys(sendProvider.headers ?? {})) rebuilt.delete(name);
                 for (const [name, value] of Object.entries(current.headers ?? {})) rebuilt.set(name, value);
@@ -1305,7 +1338,12 @@ export async function handleResponsesCompact(
     let outcomeCtx = authCtx;
     const localDispatchRefusal = (error: unknown): Response | undefined => {
       const cause = unwrapUpstreamRetryEvidenceError(error);
-      const response = requestPacingOverloadResponse(cause) ?? spendLedgerStorageErrorResponse(error, logCtx) ?? (cause instanceof SendBudgetExhaustedError
+      const response = (cause instanceof RoutedCustomToolCompatError
+        ? formatErrorResponse(400, "invalid_request_error", redactSecretString(cause.message))
+        : cause instanceof InvalidRetainedCompactionEnvelopeError
+        ? formatErrorResponse(400, "invalid_request_error", cause.message)
+        : cause instanceof ProviderApiKeyPausedError ? formatErrorResponse(403, "permission_error", cause.message) : undefined)
+        ?? requestPacingOverloadResponse(cause) ?? spendLedgerStorageErrorResponse(error, logCtx) ?? (cause instanceof SendBudgetExhaustedError
         ? unboundPoolSpendRefusalResponse(logCtx) ?? formatErrorResponse(429, "request_send_budget_exhausted", cause.message)
         : mapCodexAuthContextErrorToResponse(cause, {
           now: Date.now(), accountSelector: route.codexAccountNamespace,

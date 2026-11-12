@@ -368,6 +368,7 @@ function createAnthropicMessageWriter(
         ...(search.sources.length > 0 ? { sources: search.sources } : {}),
         ...(search.anthropic ? { anthropic_blocks: search.anthropic } : {}),
       });
+      if (!pair) return;
       const toolIndex = blockIndex++;
       emit("content_block_start", {
         type: "content_block_start", index: toolIndex,

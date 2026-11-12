@@ -30,6 +30,8 @@ export const DEVIN_STATIC_MODELS = [
   // 261027 preemptive: GPT-6.1 Terra (mirrors Devin's GPT-6.1 Sol seed; uid unverified).
   "gpt-6-1-terra",
   "claude-opus-4-8",
+  // 261110: Claude Fable 5.2 (docs.devin.ai/desktop/models; uid claude-fable-5-2-<effort>).
+  "claude-fable-5-2",
   "claude-fable-5-1",
   "claude-sonnet-5",
   "glm-5-2",
@@ -74,6 +76,7 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // 260923: read from the live catalog (devin/claude-opus-5-5 context_length 1_000_000).
   "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,
+  "claude-fable-5-2": 1_000_000,
   "claude-fable-5-1": 1_000_000,
   // 260929 preemptive: Claude Sonnet 5.5 (1M per Anthropic) seeded before Devin's live catalog lists it.
   "claude-sonnet-5-5": 1_000_000,

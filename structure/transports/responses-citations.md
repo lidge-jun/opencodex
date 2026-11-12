@@ -18,4 +18,10 @@ gateway preservation and both refresh directions;
 compact repair, while `tests/responses/responses-url-citation-title-repair.test.ts` covers ordinary
 HTTP/WS projection, helper independence and input immutability.
 
+The same final compact body builder applies the captured exact-model custom-tool policy after
+destination-specific citation projection, and only for an explicit `false`: with no declaration
+the compact body keeps every custom tool and its history unchanged. A custom-tool history compatibility refusal returns
+HTTP 400 before network dispatch and releases host admission without recording a transport failure.
+`tests/responses/model-custom-tool-capability.test.ts` covers lowering and collision refusal.
+
 The separate [Responses include normalization](responses-wire-shapes.md) is gated to xAI and Meta; it does not change this projection or its destination boundary.

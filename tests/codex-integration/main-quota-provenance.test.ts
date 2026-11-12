@@ -184,7 +184,9 @@ describe("main quota credential provenance", () => {
 describe("main policy quota writes", () => {
   test("legacy data remains public but cannot be blessed by a tagged credits-only write", () => {
     const writer = writerFor();
-    setAccountQuotaFromParsed(MAIN, { weeklyPercent: 99, shortPercent: 100, resetCredits: 8 });
+    // Unchanged ticket count: a drop would be a redeemed reset ticket, which retires the display
+    // weekly tuple on purpose (codex-quota-weekly-rollover). This case is about policy provenance.
+    setAccountQuotaFromParsed(MAIN, { weeklyPercent: 99, shortPercent: 100, resetCredits: 2 });
     expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
     expect(getMainPolicyQuota()).toBeNull();
     setAccountQuotaFromParsed(MAIN, { resetCredits: 2 }, undefined, writer);

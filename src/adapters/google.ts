@@ -3,6 +3,7 @@ import type { AdapterFetchContext, AdapterRequest, IncomingMeta, ProviderAdapter
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
 import { openCodeGoGeminiEndpoint } from "../types/opencode-go";
+import { withProviderFailureFacts } from "../lib/failure-detail";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
   AdapterEvent,
@@ -20,6 +21,7 @@ import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, too
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { bindVertexRequestAuthority, GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessTokenWithAuthority } from "../lib/gcp-adc";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { readDisplaySafeErrorPayloadText } from "./upstream-http-error";
@@ -1238,6 +1240,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return { url, method: "POST", headers, body: JSON.stringify(envelope) };
       }
 
+      if (isProviderApiKeyPaused(provider)) throw new ProviderApiKeyPausedError();
+
       if (provider.googleMode === "vertex") {
         if (provider.authMode === "forward") throw new Error("Vertex does not support forward authentication");
         const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
@@ -1390,12 +1394,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
         // Inline provider error inside a 200 stream → terminal error (see openai-chat.ts).
         if (chunk.error) {
-          const err = chunk.error as { message?: string } | undefined;
+          const err = chunk.error as { message?: string; status?: unknown } | undefined;
           // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
           // Drop the cache entry and durable store entry for rejected calls so the next turn
           // starts clean instead of re-injecting a bad sig.
           handleSignatureRejection(err?.message);
-          yield { type: "error", message: err?.message ?? "upstream error" };
+          // Only the closed RPC status class and finish reason ride along for the request log (#8446).
+          yield withProviderFailureFacts({ type: "error", message: err?.message ?? "upstream error" } as AdapterEvent,
+            { type: err?.status, finishReason: lastFinishReason });
           return "terminate";
         }
 

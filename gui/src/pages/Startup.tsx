@@ -8,6 +8,7 @@ import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
 import { Banner, CopyButton, PageHeader } from "../components/v2-startup/primitives";
 import { startupPresentation } from "../startup-health-ui";
+import { useStartupDesktopFocus } from "./startup-desktop-focus";
 import {
   StartupHeroSection,
   StartupOptionsSection,
@@ -253,6 +254,7 @@ export default function Startup({ apiBase, machineApiBase = apiBase, connected =
   const loading = loadState.refreshing;
   const failed = Boolean(data?.diagnosticStale) || loadState.showError;
   const unverified = data !== null && startupPresentation(data, failed) === "unverified";
+  useStartupDesktopFocus(Boolean(data?.desktop));
 
   useEffect(() => {
     if (!data?.diagnosticStale) return;

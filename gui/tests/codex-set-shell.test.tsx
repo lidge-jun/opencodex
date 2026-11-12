@@ -157,6 +157,19 @@ test("desktop compatibility deep link mounts only its read-only status surface",
   await act(async () => { root.unmount(); });
 });
 
+test("the Codex CLI deep link mounts its tab and reads nothing until Check (#2811)", async () => {
+  testWindow.location.hash = "#codex-set/cli";
+  const calls = stubRoutes(() => json({}));
+  const { container, root } = await mountShell("/shared", "/machine");
+  expect(hashBelongsToPage("codex-set/cli", "codex-set")).toBe(true);
+  expect(resolveAppHashChange("codex-set/cli").replaceTo).toBeNull();
+  expect(panel(container, "cli")?.hasAttribute("hidden")).toBe(false);
+  expect(panel(container, "multiauth")).toBeNull(); expect(panel(container, "desktop")).toBeNull();
+  expect(container.querySelector("#codex-set-tab-cli")?.getAttribute("aria-selected")).toBe("true");
+  expect(calls).toHaveLength(0);
+  await act(async () => { root.unmount(); });
+});
+
 test("2. #codex-set/prompt renders the Prompt panel", async () => {
   testWindow.location.hash = "#codex-set/prompt";
   stubRoutes(() => json(snapshot()));

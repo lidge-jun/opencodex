@@ -21,7 +21,7 @@ const CI_JOBS = Object.freeze([
   'changes', 'select windows runner', 'storage policy', 'api usage', 'gates',
   ...Array.from({length: 5}, (_, i) => `test ${i + 1}/5`),
   ...Array.from({length: 4}, (_, i) => `macos ${i + 1}/4`),
-  'macos control', ...Array.from({length: 11}, (_, i) => `windows ${i + 1}/11`),
+  ...Array.from({length: 11}, (_, i) => `windows ${i + 1}/11`),
   'keyring ubuntu', 'keyring windows', 'keyring macos', 'docker smoke',
   'docs site build', 'structure gate', 'macos widget + bundle', 'desktop shell',
   ...['ubuntu-latest', 'windows-latest', 'macos-latest'].flatMap(os => [

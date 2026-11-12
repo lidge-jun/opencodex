@@ -307,6 +307,7 @@
       "documents": [
         "src/advisor/",
         "src/server/responses/advisor-slot.ts",
+        "src/server/responses/advisor-question.ts",
         "src/server/responses/advisor-plan-slot.ts",
         "src/server/advisor-admission-scope.ts",
         "src/server/capture-admission-policy.ts",
@@ -521,9 +522,9 @@
     {
       "path": "data-planes/claude-tool-loading.md",
       "tier": 3,
-      "title": "Append-only Claude Tool Loading",
-      "scope": "Physical-adapter tool-loading projection, preserved catalogs, fallback exclusions and opt-in prerequisites.",
-      "documents": ["src/claude/", "src/server/responses/"]
+      "title": "Claude Tool Loading: Append-only and Chat Dispatcher",
+      "scope": "Physical-adapter tool-loading projections (Responses additional_tools and the Chat use_loaded_tool dispatcher with its response rewrite), preserved catalogs, fallback exclusions and opt-in prerequisites.",
+      "documents": ["src/claude/", "src/server/responses/", "src/types/claude-tool-loading.ts"]
     },
     {
       "path": "data-planes/ollama-inbound.md",
@@ -691,6 +692,15 @@
       ]
     },
     {
+      "path": "providers/anthropic-output-caps.md",
+      "tier": 4,
+      "title": "Anthropic Output Caps by Model Id",
+      "scope": "Routed omitted-output caps for adapter:anthropic rows keyed by Claude model id, precedence and unknown-id fallback.",
+      "documents": [
+        "src/providers/anthropic-output-caps.ts"
+      ]
+    },
+    {
       "path": "providers/anthropic-key-billing.md",
       "tier": 4,
       "title": "Anthropic API-key Billing Recovery",
@@ -738,6 +748,7 @@
         "src/oauth/",
         "src/providers/",
         "src/providers/quota/anthropic-account-quota.ts",
+        "src/providers/quota/anthropic-cooldown-recovery-worker.ts",
         "src/server/management/anthropic-pool-settings.ts",
         "src/sidecar/anthropic-binding.ts"
       ]
@@ -876,6 +887,19 @@
         "src/adapters/",
         "src/chat/",
         "src/responses/"
+      ]
+    },
+    {
+      "path": "providers/hosted-tool-denials.md",
+      "tier": 4,
+      "title": "Hosted-Tool Denials",
+      "scope": "Provider-declared Responses hosted-tool denials, unconditional and conditional on client tools, with their validation and save carry.",
+      "documents": [
+        "src/responses/hosted-tool-policy.ts",
+        "src/adapters/openai-responses/tool-schema.ts",
+        "src/config/schema/leaf-validators.ts",
+        "src/server/auth-cors.ts",
+        "src/server/management/provider-overwrite-carry.ts"
       ]
     },
     {
@@ -1280,6 +1304,20 @@
       ]
     },
     {
+      "path": "ops/windows-checked-stop.md",
+      "tier": 6,
+      "title": "Windows Checked Service Stop",
+      "scope": "Windows process evidence, the wrapper binding rule, and the checked manager stop and port confirmation that are not yet wired to a stop path.",
+      "documents": [
+        "src/service/windows-checked-stop.ts",
+        "src/service/windows-process-evidence.ts",
+        "src/service/windows-process-native.ts",
+        "src/service/windows-stop-binding.ts",
+        "src/service/windows-stop-budget.ts",
+        "src/service/windows-stop-confirm.ts"
+      ]
+    },
+    {
       "path": "ops/update-supervised-recovery.md",
       "tier": 6,
       "title": "Update Supervised Recovery",
@@ -1356,6 +1394,9 @@
         "src/local-credentials/",
         "src/server/index/link-management.ts",
         "src/server/management/link-routes.ts",
+        "src/server/management/link-child-ops-routes.ts",
+        "src/cli/link-child-ops.ts",
+        "src/cli/link-status-child.ts",
         "src/server/index/local-control-listener.ts",
         "src/lib/local-control-socket.ts",
         "src/cli/link-local-control.ts",
@@ -1429,7 +1470,9 @@
         "gui/src/hooks/useProviderAccountPools.ts",
         "src/config/account-auto-pause-revisions.ts",
         "src/oauth/api-key-pool-preserve.ts",
-        "gui/src/account-pause-display.ts"
+        "gui/src/account-pause-display.ts",
+        "src/oauth/account-resume-health.ts",
+        "src/codex/account-resume-health.ts"
       ]
     },
     {

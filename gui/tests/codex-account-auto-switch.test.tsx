@@ -297,4 +297,63 @@ describe("Codex account auto-switch threshold", () => {
     expect(await putAutoSwitchThreshold("", 101, fetchImpl)).toBe(false);
     expect(calls).toBe(0);
   });
+
+  test("the auto-switch save carries the captured relay target", async () => {
+    const { Window } = await import("happy-dom");
+    const { act, useLayoutEffect } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { configureApiTargets } = await import("../src/api");
+    const { standaloneApiTargets } = await import("../src/api-targets");
+    const { useCodexAutoSwitch } = await import("../src/hooks/useCodexAutoSwitch");
+    const win = new Window({ url: "http://localhost/" });
+    const saved = (["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT"] as const)
+      .map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
+    Object.defineProperties(globalThis, {
+      window: { configurable: true, value: win },
+      document: { configurable: true, value: win.document },
+      navigator: { configurable: true, value: win.navigator },
+      IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
+    });
+    const base = standaloneApiTargets("");
+    configureApiTargets({
+      ...base,
+      connected: true,
+      shared: { ...base.shared, baseUrl: "/api/machine/hub-relay", serverOrigin: "https://hub-a.example", transport: "relay" },
+      apiKeyId: "fixture-key",
+      relayTargetCheck: "expected-target-v1",
+    });
+    const expected: Array<string | null> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        expected.push(new Headers(init.headers).get("x-opencodex-expected-target"));
+        return new Response(null, { status: 204 });
+      }
+      return Response.json({});
+    }) as typeof fetch;
+    let controller!: ReturnType<typeof useCodexAutoSwitch>;
+    function Probe() {
+      const current = useCodexAutoSwitch("/api/machine/hub-relay", { updated: "u", updateFailed: "f", invalid: "i" });
+      // Publish after commit: the compiler rejects a render-phase write of a hook result
+      // into a module binding, and the test body only reads it after act().
+      useLayoutEffect(() => { controller = current; });
+      return null;
+    }
+    const host = win.document.createElement("div");
+    win.document.body.appendChild(host as never);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<Probe />); });
+      await act(async () => { controller.hydrateServerValue(80); });
+      await act(async () => { await controller.toggle(); });
+      expect(expected).toEqual(["https://hub-a.example"]);
+    } finally {
+      await act(async () => { root.unmount(); });
+      configureApiTargets(standaloneApiTargets(""));
+      for (const [key, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+        else delete (globalThis as Record<string, unknown>)[key];
+      }
+      await win.happyDOM?.close?.();
+    }
+  });
 });
