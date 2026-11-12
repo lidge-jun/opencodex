@@ -1,6 +1,7 @@
 import { createLinkRelaySessions, type LinkCatalogServed } from "./link-relay-sessions";
 import { createLinkPeerObservations, type LinkPeerEntry } from "../../link/peer-report";
 import { createLinkActivity, type LinkActivitySnapshot } from "../../link/child-activity";
+import { createLinkTrafficBook, type LinkTrafficCounters } from "../../link/traffic";
 import type { Server } from "bun";
 import {
   emptyLinkStore,
@@ -61,6 +62,8 @@ export interface LinkListenerLifecycle<T> {
   peerObservation(linkId: string): LinkPeerEntry;
   /** Relayed model traffic for one link (D5); legacy key admissions count against every link. */
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
+  /** Body bytes each link carried since this lifecycle started (#3023); zeros before any traffic. */
+  linkTraffic(linkId: string): LinkTrafficCounters;
   /** A Child read a whole 200 `GET /v1/catalog` body through the relay. */
   onCatalogServed(listener: (served: LinkCatalogServed) => void): () => void;
   status(): LinkListenerStatus;
@@ -92,6 +95,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const peers = createLinkPeerObservations();
   // Lifecycle-owned so a rebind keeps the book.
   const activity = createLinkActivity();
+  const traffic = createLinkTrafficBook("content-length");
 
   const setStatus = (state: LinkListenerStatus["state"], port: number | null, reason: string | null): void => {
     lifecycleStatus = { state, port, reason };
@@ -123,7 +127,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       return;
     }
     const requestedPort = store.listenerPort ?? 0;
-    const sessions = createLinkRelaySessions({ peers, activity, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
+    const sessions = createLinkRelaySessions({ peers, activity, traffic, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: (keyId, linkId) => {
       if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
       return startContext?.keyFingerprints?.(keyId) ?? [];
@@ -236,6 +240,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     },
     peerObservation: linkId => peers.get(linkId),
     linkActivity: (linkId, now) => activity.snapshot(linkId, now),
+    linkTraffic: linkId => traffic.snapshot(linkId),
     onCatalogServed(listener) {
       catalogServedListeners.add(listener);
       return () => { catalogServedListeners.delete(listener); };

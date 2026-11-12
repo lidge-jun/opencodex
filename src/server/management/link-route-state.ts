@@ -38,6 +38,8 @@ export interface LinkRouteListener {
   peerObservation?(linkId: string): import("../../link/peer-report").LinkPeerEntry;
   /** Optional: without it every link's activity reads unknown (never idle). */
   linkActivity?(linkId: string, now: number): import("../../link/child-activity").LinkActivitySnapshot;
+  /** Optional: without it a Home row's traffic reads zero since now. */
+  linkTraffic?(linkId: string): import("../../link/traffic").LinkTrafficCounters;
   /** Optional: without it only the cached pull in child-observations.json is known. */
   catalogPull?(linkId: string): import("../../link/child-catalog-freshness").CatalogPull | null;
   /** Optional: persist pulls held inside the recorder's 30 s write window (best effort). */
