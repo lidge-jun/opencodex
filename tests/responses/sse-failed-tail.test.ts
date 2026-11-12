@@ -1656,6 +1656,45 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     expect(classifyCodexUpstreamOutcome(log.terminalHttpStatus!)).toBe("quota");
   });
 
+  const wsPump = async (relayed: ReadableStream<Uint8Array>, log: RequestLogContext, rawUpstream = false) => {
+    const sent: string[] = [];
+    const terminals: Array<[string, number]> = [];
+    const ws = { readyState: 1, data: {}, send(message: string) { sent.push(message); return 1; } } as unknown as ServerWebSocket<WsData>;
+    // The live WS log observes the client stream and hands the row status to the account recorder.
+    await pumpResponsesSseToWebSocket(ws, relayed, { untilEof: true, rawUpstream,
+      onSsePayload: payload => inspectResponseLogSsePayload(log, payload),
+      onTerminal: status => { terminals.push([status, log.terminalHttpStatus ?? 502]); } });
+    return { frames: sent.map(frame => JSON.parse(frame) as { type?: string; response?: { error?: { code?: string } }; error?: { code?: string } }), terminals };
+  };
+
+  test.each(["tee", "eager"] as const)("%s WS row keeps the bare verdict behind the relay's own tail", async mode => {
+    for (const copy of ["unauthorized request", "rate limit hit, slow down"]) {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const src = sourceStream([`event: error\ndata: ${JSON.stringify({ error: { code: "mystery_code", message: copy } })}\n\n`]);
+      const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController()) : relaySseEagerBounded(src, new AbortController(), parityHooks);
+      const { frames, terminals } = await wsPump(relayed, log);
+      expect([copy, frames.find(frame => frame.type === "response.failed")?.response?.error?.code]).toEqual([copy, "upstream_server_error"]);
+      expect([copy, terminals, httpStatusForRequestLogTerminal("failed", log)]).toEqual([copy, [["failed", 502]], 502]);
+    }
+  });
+
+  test("a raw WS upstream body keeps an untyped envelope as the protocol error, off the row", async () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const src = sourceStream([`event: error\ndata: ${JSON.stringify({ error: { code: "rate_limit_exceeded", message: "untyped quota" } })}\n\n`]);
+    const { frames, terminals } = await wsPump(src, log, true);
+    expect(frames.map(frame => frame.error?.code ?? frame.type)).toEqual(["websocket_protocol_error"]);
+    expect(terminals).toEqual([["incomplete", 502]]);
+    expect(log.terminalHttpStatus).toBeUndefined();
+  });
+
+  test("a genuine terminal clears diagnostics an untyped frame recorded", () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(log, JSON.stringify({ error: { code: "gateway_broken", message: "flagged for possible cybersecurity risk" } }));
+    expect(log.upstreamErrorCode).toBe("cyber_policy");
+    inspectResponseLogSsePayload(log, JSON.stringify({ type: "response.completed", response: { status: "completed" } }));
+    expect([log.terminalHttpStatus, log.upstreamErrorCode, log.upstreamErrorType]).toEqual([undefined, undefined, undefined]);
+  });
+
   test("an untyped credential echo stays redacted on the winning WS row", () => {
     const credential = "fixture-bare-echo-CANARY9live";
     const registry = new OutboundCredentialRegistry();
