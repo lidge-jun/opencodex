@@ -270,12 +270,15 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       return windowsSchedulerCsvIncludesTask(listing.stdout, TASK) ? { status: "present" } : { status: "absent" };
     },
     async probeWinsw(timeoutMs) {
+      // One cap covers both reads: the ownership query gets only what the state query left.
+      const started = Date.now();
       const state = await scQuery(timeoutMs);
       const status = winswStatusFromScState(state);
       // Absence, and anything already unreadable, needs no ownership read.
       if (status !== "started") return status;
-      const started = Date.now();
-      const qc = await scQcRun(Math.max(1, timeoutMs - (Date.now() - started)));
+      const remaining = Math.floor(timeoutMs - (Date.now() - started));
+      if (remaining < 1) return "unknown";
+      const qc = await scQcRun(remaining);
       const ownership = classifyWinswOwnership(qc);
       // Foreign is `nonexistent` for Part A: a manager this home must not stop.
       if (ownership === "foreign") return "nonexistent";

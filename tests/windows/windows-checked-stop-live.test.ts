@@ -210,6 +210,26 @@ describe("WinSW ownership before Part A stops it (#7771 follow-up)", () => {
     expect(await probe({ query: result(0, "        STATE              : 4  RUNNING") })).toBe("unknown");
   });
 
+  test("the ownership read gets only the time the state query left of one cap", async () => {
+    const running = result(0, "        STATE              : 4  RUNNING");
+    let qcTimeout = -1;
+    const status = await windowsCheckedStopLiveDeps({
+      run: async () => { await Bun.sleep(120); return running; },
+      scQcRun: async timeoutMs => { qcTimeout = timeoutMs; return qc(`"${winswExePath()}"`); },
+    }).probeWinsw(400);
+    expect(status).toBe("started");
+    expect(qcTimeout).toBeGreaterThan(0);
+    expect(qcTimeout).toBeLessThanOrEqual(400 - 100);
+    // A state query that spent the whole cap leaves nothing: unknown, and no ownership read.
+    let qcCalls = 0;
+    const spent = await windowsCheckedStopLiveDeps({
+      run: async () => { await Bun.sleep(60); return running; },
+      scQcRun: async () => { qcCalls++; return qc(`"${winswExePath()}"`); },
+    }).probeWinsw(40);
+    expect(spent).toBe("unknown");
+    expect(qcCalls).toBe(0);
+  });
+
   test("a service that does not exist needs no ownership read", async () => {
     let qcCalls = 0;
     const status = await windowsCheckedStopLiveDeps({
