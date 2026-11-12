@@ -123,3 +123,18 @@ hyds/deepseek-v4.1-flash-1m and hyds/deepseek-v4.1-flash failed with provider 40
 CodeRabbit (5 minor) — accepted: per-grant limit wording in `anthropicGrant.desc` (11 locales) and docs (8 locales);
 unparsable dates hidden; empty `clears` shows `anthropicGrant.confirmClearsUnknown`.
 
+
+## Final review — system24/deepseek-v4.1-flash, head 7f90636f41, APPROVE with should-fix
+
+1. No tab stop when nothing is selectable — accepted: the first grant is the group's tab stop when none is selected.
+2. Re-read on open blanked the list and badge — accepted: `refresh(accountId, { keepSnapshot: true })` keeps a ready entry
+   during the read and the dialog disables "Use 1 reset" until it lands. A failed re-read still turns the entry into
+   an error (fail closed on a spend path) — that sub-point is rebutted.
+3. Hint with no real choice — accepted: shown only with two or more selectable grants.
+4. Missing test for a pick surviving a re-read — accepted (test added; it passes on the previous head too, as a guard).
+5. German du/Sie — accepted. 6. Turkish docs wording — accepted.
+
+Security review round 2 (combo/deepseek-flash-pool, head 6f93946d70): APPROVE; its nits (account wording in
+`anthropicGrant.unresolvedPrior`, structure scope per pool journal, newest open record named by the ledger) were folded in 7f90636f41.
+Model trail for reviews: hyds/deepseek-v4.1-flash-1m and hyds/deepseek-v4.1-flash returned 403 again; combo stalled on two final-review briefs.
+

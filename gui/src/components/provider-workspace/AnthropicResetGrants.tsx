@@ -133,10 +133,11 @@ function clearedWindows(grant: AnthropicResetGrant, locale: string, t: TFn): str
 }
 
 /** One grant as a radio option. Unusable grants stay visible, disabled, with their reason. */
-function GrantOption({ grant, snapshot, checked, selectable, optionRef, onSelect, onKeyDown, locale, t }: {
+function GrantOption({ grant, snapshot, checked, tabStop, selectable, optionRef, onSelect, onKeyDown, locale, t }: {
   grant: AnthropicResetGrant;
   snapshot: AnthropicResetGrantSnapshot;
   checked: boolean;
+  tabStop: boolean;
   selectable: boolean;
   optionRef: (element: HTMLDivElement | null) => void;
   onSelect: () => void;
@@ -155,7 +156,7 @@ function GrantOption({ grant, snapshot, checked, selectable, optionRef, onSelect
       role="radio"
       aria-checked={checked}
       aria-disabled={selectable ? undefined : true}
-      tabIndex={selectable && checked ? 0 : -1}
+      tabIndex={tabStop ? 0 : -1}
       className={`credit-item anthropic-grant-option${checked ? " credit-next" : ""}`}
       data-anthropic-grant={grant.id}
       onClick={onSelect}
@@ -244,9 +245,13 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
 
   // The row's badge may have been read long ago. Re-read on open so an attempt another
   // tab or process left open shows its retry screen instead of a picker for a new one.
+  // The list stays on screen meanwhile, but nothing can be spent until the read lands.
   const { refresh } = controller;
+  const [opening, setOpening] = useState(true);
   useEffect(() => {
-    void refresh(accountId);
+    let live = true;
+    void refresh(accountId, { keepSnapshot: true }).finally(() => { if (live) setOpening(false); });
+    return () => { live = false; };
   }, [accountId, refresh]);
 
   useEffect(() => {
@@ -330,7 +335,7 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
   };
 
   const startConfirm = () => {
-    if (!selected || unresolved || !snapshot || !grantSelectable(snapshot, selected)) return;
+    if (opening || !selected || unresolved || !snapshot || !grantSelectable(snapshot, selected)) return;
     const operationId = newOperationId();
     if (!operationId) {
       setOutcome({ tone: "warn", key: "anthropicGrant.noOperationId" });
@@ -375,6 +380,9 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
   );
 
   const confirmEndsAt = confirming ? validTime(confirming.grant.endsAt) : null;
+  // One tab stop for the group even when nothing can be chosen, so the reasons stay reachable.
+  const tabStopId = selected?.id ?? snapshot?.grants[0]?.id;
+  const selectableCount = snapshot ? snapshot.grants.filter(grant => grantSelectable(snapshot, grant)).length : 0;
   const heldGrant = unresolved && snapshot ? snapshot.grants.find(grant => grant.id === unresolved.grantId) : undefined;
   const total = snapshot ? unspentResets(snapshot) : 0;
 
@@ -467,6 +475,7 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
                     {entry.snapshot.grants.map(grant => (
                       <GrantOption key={grant.id} grant={grant} snapshot={entry.snapshot}
                         checked={grant.id === selected?.id}
+                        tabStop={grant.id === tabStopId}
                         selectable={grantSelectable(entry.snapshot, grant)}
                         optionRef={element => {
                           if (element) optionRefs.current.set(grant.id, element);
@@ -477,11 +486,11 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
                         locale={locale} t={t} />
                     ))}
                   </div>
-                  {entry.snapshot.grants.length > 1 && (
+                  {selectableCount > 1 && (
                     <p className="card-sub text-caption" style={{ marginTop: 8 }}>{t("anthropicGrant.pickHint")}</p>
                   )}
                   <button type="button" className="btn btn-primary" data-anthropic-grant-use
-                    style={{ marginTop: 12, width: "100%" }} onClick={startConfirm} disabled={!selected || busy}>
+                    style={{ marginTop: 12, width: "100%" }} onClick={startConfirm} disabled={!selected || busy || opening}>
                     {t("anthropicGrant.useOne")}
                   </button>
                   <p className="card-sub text-caption" style={{ marginTop: 8, textAlign: "center" }}>{t("anthropicGrant.desc")}</p>

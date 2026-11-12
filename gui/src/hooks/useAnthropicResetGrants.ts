@@ -58,7 +58,8 @@ export type AnthropicSpendOutcome =
 
 export interface AnthropicResetGrantController {
   entries: Record<string, AnthropicGrantEntry>;
-  refresh: (accountId: string) => Promise<void>;
+  /** `keepSnapshot` re-reads without blanking a ready entry (and the row badge) while the read runs. */
+  refresh: (accountId: string, options?: { keepSnapshot?: boolean }) => Promise<void>;
   spend: (accountId: string, request: { grantId: string; operationId: string }) => Promise<AnthropicSpendOutcome>;
 }
 
@@ -254,8 +255,8 @@ export function useAnthropicResetGrants({ apiBase, provider = "anthropic", accou
     return () => { epoch.current += 1; };
   }, [enabled, identity, read]);
 
-  const refresh = useCallback(async (accountId: string) => {
-    setEntry(accountId, { status: "loading" });
+  const refresh = useCallback(async (accountId: string, options: { keepSnapshot?: boolean } = {}) => {
+    if (!options.keepSnapshot) setEntry(accountId, { status: "loading" });
     await read(accountId, epoch.current);
   }, [read, setEntry]);
 

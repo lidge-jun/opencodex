@@ -2490,7 +2490,7 @@ export const de: Record<TKey, string> = {
   "anthropicGrant.notUsable": "Noch nicht verwendbar",
   "anthropicGrant.requiresLimit": "Verwendbar, sobald dieses Konto ein Limit erreicht",
   "anthropicGrant.chooseLabel": "Zu verwendende Rücksetzung wählen",
-  "anthropicGrant.pickHint": "Die zuerst ablaufende Rücksetzung ist ausgewählt. Wählen Sie eine andere, um stattdessen diese zu verwenden.",
+  "anthropicGrant.pickHint": "Die zuerst ablaufende Rücksetzung ist ausgewählt. Wähle eine andere, um stattdessen diese zu verwenden.",
   "anthropicGrant.exhausted": "Keine Rücksetzungen mehr",
   "anthropicGrant.confirmExpires": "Läuft am {date} ab",
   "anthropicGrant.confirmClears": "Setzt zurück: {windows}",

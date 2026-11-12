@@ -534,3 +534,50 @@ test("opening the dialog re-reads the account, so an attempt started elsewhere l
   await act(async () => { root.unmount(); });
 });
 
+
+test("with nothing selectable the radio group still has exactly one tab stop", async () => {
+  globalThis.fetch = pickerFetch([], { read: () => ({ ...PICKER, journalAvailable: false }) });
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  const stops = [...container.querySelectorAll('[role="radio"]')].filter(option => (option as HTMLElement).tabIndex === 0);
+  expect(stops.map(option => option.getAttribute("data-anthropic-grant"))).toEqual(["late"]);
+  // Two grants but no choice: the "expires first is selected" hint would be false.
+  expect(container.textContent).not.toContain("The reset that expires first is selected");
+  await act(async () => { root.unmount(); });
+});
+
+test("the re-read on open keeps the list and badge, and holds the spend button until it lands", async () => {
+  let reads = 0;
+  let release: (() => void) | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.startsWith("/api/anthropic/reset-grants?")) throw new Error("unexpected fetch " + url);
+    reads += 1;
+    if (reads === 1) return Response.json(PICKER);
+    await new Promise<void>(resolve => { release = resolve; });
+    return Response.json(PICKER);
+  }) as typeof fetch;
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  expect(reads).toBe(2);
+  expect(container.querySelector("[data-anthropic-grant-badge]")?.getAttribute("data-anthropic-grant-badge")).toBe("6");
+  expect(checkedId(container)).toBe("soon");
+  expect((container.querySelector("[data-anthropic-grant-use]") as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => { release!(); });
+  await tick();
+  await tick();
+  expect((container.querySelector("[data-anthropic-grant-use]") as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { root.unmount(); });
+});
+
+test("a picked grant stays picked across a re-read while it is still usable", async () => {
+  globalThis.fetch = pickerFetch([]);
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  await act(async () => { radio(container, "late").click(); });
+  await act(async () => { await harnessController!.refresh("acct-1"); });
+  await tick();
+  expect(checkedId(container)).toBe("late");
+  await act(async () => { root.unmount(); });
+});
+
