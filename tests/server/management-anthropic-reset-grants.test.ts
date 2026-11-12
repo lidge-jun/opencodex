@@ -185,6 +185,26 @@ describe("POST /api/anthropic/reset-grants/consume", () => {
     expect(up.claims).toEqual([]);
   });
 
+  test("the dashboard's chosen grant is gated and claimed by its own id, not the first grant", async () => {
+    // The picker can send any listed grant; the server re-reads and gates that exact id.
+    const SECOND = "spring-bonus-20261101";
+    const second = { ...grantBlock().grants[0], id: SECOND, label: "Spring bonus", ends_at: "2026-10-01T16:00:00+00:00" };
+    const up = upstream();
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], { ...second, paused: true }] }) });
+    expect(await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP }))
+      .toMatchObject({ status: 409, json: { error: { code: "grant_not_usable", reason: "paused" } } });
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], { ...second, resets_left: 0 }] }) });
+    expect((await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP })).json.error.reason).toBe("exhausted");
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], { ...second, usable_now: false }] }) });
+    expect((await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP })).json.error.reason).toBe("not_usable");
+    expect((await consume(deps(up), { accountId: "acct-1", grantId: "not-listed", operationId: OP })).json.error.reason).toBe("unknown_grant");
+    expect(up.claims).toEqual([]);
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], second] }) });
+    const spent = await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP });
+    expect(spent).toMatchObject({ status: 200, json: { code: "reset", grantId: SECOND } });
+    expect(up.claims.map(claim => claim.body.grant_id)).toEqual([SECOND]);
+  });
+
   test("a spend posts once with the operation id as request id and then replays", async () => {
     const up = upstream();
     const first = await consume(deps(up));
