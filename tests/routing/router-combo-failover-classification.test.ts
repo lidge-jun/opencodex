@@ -1379,5 +1379,14 @@ describe("unoffered tool-call refusal", () => {
       },
     });
     expect(comboFailureDecision(400, contradicted)).toBe("stop");
+    // A matching param.error cannot mask a contradicting param.message.
+    const mixed = JSON.stringify({
+      error: {
+        message: verdict, type: "AI_APICallError",
+        param: { error: verdict, message: "Invalid value for tools", statusCode: 400 },
+      },
+    });
+    expect(comboFailureDecision(400, mixed)).toBe("stop");
+    expect(comboFailureCooldownScope(400, mixed)).toBe("target");
   });
 });

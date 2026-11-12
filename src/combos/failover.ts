@@ -1052,8 +1052,11 @@ function unofferedToolCallRecordShape(record: Record<string, unknown>): boolean 
       // when a nested string field independently carries the same anchored verdict, so the
       // object cannot smuggle a different claim.
       const nested = record.param as Record<string, unknown>;
-      const carrier = [nested.error, nested.message].find((v): v is string => typeof v === "string");
-      if (carrier === undefined || !isUnofferedToolCallVerdict(carrier)) return false;
+      const diagnostics = [nested.error, nested.message].filter((v) => v !== undefined && v !== null);
+      if (diagnostics.length === 0) return false;
+      for (const diagnostic of diagnostics) {
+        if (typeof diagnostic !== "string" || !isUnofferedToolCallVerdict(diagnostic)) return false;
+      }
     } else {
       return false;
     }
