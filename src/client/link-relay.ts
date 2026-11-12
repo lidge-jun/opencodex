@@ -12,6 +12,11 @@ import { linkRouteAllowed } from "../link/routes";
 import { isLinkPort } from "../link/ports";
 import { resolveInboundBodyLimitBytes } from "../server/request-decompress";
 import type { LinkTrafficBook } from "../link/traffic";
+import { LINK_REQUEST_ZSTD_FEATURE } from "../link/request-compression";
+import { linkHomeAcceptsRequestZstd } from "./link-home-features";
+import {
+  chooseLinkBody, compressLinkBody, linkRequestCompressible, readDeclaredBody, type LinkBodyCompressor, type PreparedLinkBody,
+} from "./link-request-compression";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
@@ -90,6 +95,12 @@ export interface LinkRelayDeps {
   routeAllowed?: (url: URL, req: Request) => boolean;
   /** Where the link transport counts the bodies it carries; this process's Child book by default. */
   traffic?: LinkTrafficBook;
+  /**
+   * Per-body zstd toward the Home (#3023). On by default; it applies only when the Home named
+   * `link-request-zstd/1` on its last verified answer and again on the connection carrying the body.
+   * Test seams: the compressor and the Home's last answer.
+   */
+  requestCompression?: { enabled?: boolean; compress?: LinkBodyCompressor; homeAccepts?: (linkId: string) => boolean };
 }
 
 export const LINK_RELAY_RETRY_AFTER_SECONDS = 1;
@@ -346,6 +357,19 @@ function idleBoundedStream(
 }
 
 /**
+ * The fetch seam has no relay-auth answer, so a prepared body is chosen from the Home's last
+ * recorded features, as the transport would choose it from this connection's.
+ */
+function seamInit(init: RequestInit, select: ((features: readonly string[] | null) => { body: Uint8Array; headers: Record<string, string> }) | undefined,
+  linkId: string | undefined): RequestInit {
+  if (!select) return init;
+  const chosen = select(linkId && linkHomeAcceptsRequestZstd(linkId) ? [LINK_REQUEST_ZSTD_FEATURE] : null);
+  const headers = new Headers(init.headers);
+  for (const [name, value] of Object.entries(chosen.headers)) headers.set(name, value);
+  return { ...init, headers, body: chosen.body };
+}
+
+/**
  * Admit an allowlisted route and stream it through the authenticated tunnel with bounded bodies.
  * Owner/auth preflight deadlines share one recovery attempt before data dispatch; an ambiguous
  * post-dispatch failure never earns that recovery. Diagnostic failures cannot change admission.
@@ -402,14 +426,32 @@ export async function relayLinkDataRequest(
   };
   if (req.signal.aborted) onClientAbort();
 
+  // Per-body zstd (#3023): a compressible body for a Home that named the capability is read into
+  // one buffer of its declared length (at most LINK_REQUEST_COMPRESSION_MAX_BYTES) and compressed
+  // once; every other body streams exactly as before.
+  const compression = deps.requestCompression;
+  let prepared: PreparedLinkBody | null = null;
+  if (compression?.enabled !== false && target.linkId && declaredLength !== null && Number(declaredLength) <= bodyLimit
+    && linkRequestCompressible(url, req, declaredLength) && (compression?.homeAccepts ?? linkHomeAcceptsRequestZstd)(target.linkId)) {
+    let raw: Uint8Array;
+    try {
+      raw = await readDeclaredBody(req.body!, Number(declaredLength), relayAbort.signal);
+    } catch {
+      cleanup();
+      // An aborted caller or the header deadline: the same answer a wait for the tunnel ends with.
+      return relayAbort.signal.aborted ? homeUnreachable("link tunnel unavailable") : jsonError(400, "link relay request body unreadable");
+    }
+    prepared = { raw, zstd: await compressLinkBody(raw, compression?.compress) };
+  }
   let bodyOverflow = false;
   let bodyCancelled = false;
-  const body = req.method === "GET" || req.method === "HEAD" || !req.body
+  const body = prepared || req.method === "GET" || req.method === "HEAD" || !req.body
     ? null
     : byteCappedRequestBody(req.body, bodyLimit, () => { bodyOverflow = true; }, () => { bodyCancelled = true; });
   // A streamed body keeps the caller's Content-Length, so the Home sees the same framing a
   // buffered body produced instead of a chunked upload.
   if (body && declaredLength !== null) headers.set("content-length", declaredLength);
+  if (prepared) headers.set("content-length", String(prepared.raw.byteLength));
 
   // The hold: only while the tunnel is connecting or reconnecting, and at most `holdMs` from the
   // first wait. A positive connected verdict is required again before every fetch.
@@ -467,9 +509,12 @@ export async function relayLinkDataRequest(
         headers,
         redirect: "manual",
         signal: relayAbort.signal,
-        ...(body ? { body, duplex: "half" } : {}),
+        ...(body ? { body, duplex: "half" } : prepared ? { body: prepared.raw } : {}),
       };
-      upstream = await (deps.fetchImpl ? deps.fetchImpl(destination, init) : fetchBoundLinkRelay(target, destination, init, { traffic: deps.traffic }));
+      const selectBody = prepared ? (features: readonly string[] | null) => chooseLinkBody(prepared!, features) : undefined;
+      upstream = await (deps.fetchImpl
+        ? deps.fetchImpl(destination, seamInit(init, selectBody, target.linkId))
+        : fetchBoundLinkRelay(target, destination, init, { traffic: deps.traffic, ...(selectBody ? { selectBody } : {}) }));
     } catch (error) {
       if (error instanceof LinkRelayAuthenticationError) {
         return await tunnelUnavailable("auth_failed", error.message);
