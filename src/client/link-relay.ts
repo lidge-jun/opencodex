@@ -362,7 +362,7 @@ function idleBoundedStream(
  * The fetch seam has no relay-auth answer, so a prepared body is chosen from the Home's last
  * recorded features, as the transport would choose it from this connection's.
  */
-function seamInit(init: RequestInit, select: ((features: readonly string[] | null) => { body: Uint8Array; headers: Record<string, string> }) | undefined,
+function seamInit(init: RequestInit, select: ((features: readonly string[] | null) => { body: Uint8Array<ArrayBuffer>; headers: Record<string, string> }) | undefined,
   linkId: string | undefined): RequestInit {
   if (!select) return init;
   const chosen = select(linkId && linkHomeAcceptsRequestZstd(linkId) ? [LINK_REQUEST_ZSTD_FEATURE] : null);
@@ -442,7 +442,7 @@ export async function relayLinkDataRequest(
     : null;
   releasePrepared = () => { lease?.release(); };
   if (lease) {
-    let raw: Uint8Array;
+    let raw: Uint8Array<ArrayBuffer>;
     try {
       raw = await readDeclaredBody(req.body!, Number(declaredLength), relayAbort.signal);
     } catch {

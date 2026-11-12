@@ -294,7 +294,7 @@ export async function fetchBoundLinkRelay(
      * Choose the request body once this connection's Home has proved itself and named its
      * features: a prepared body's zstd form only when this very answer names the capability.
      */
-    selectBody?: (homeFeatures: readonly string[] | null) => { body: Uint8Array; headers: Record<string, string> };
+    selectBody?: (homeFeatures: readonly string[] | null) => { body: Uint8Array<ArrayBuffer>; headers: Record<string, string> };
     /** Called once the data request's body was flushed to the socket or the request was torn down. */
     onBodySettled?: () => void;
   } = {},

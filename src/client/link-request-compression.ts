@@ -13,7 +13,7 @@ export const LINK_REQUEST_PREPARE_BUDGET_BYTES = 128 * 1024 * 1024;
 export const linkRequestPrepareBudget: InboundBodyBudget = createInboundBodyBudget(LINK_REQUEST_PREPARE_BUDGET_BYTES, 0);
 
 /** One body ready for the link: the caller's bytes and, when it paid off, their zstd form. */
-export interface PreparedLinkBody { raw: Uint8Array; zstd: Uint8Array | null }
+export interface PreparedLinkBody { raw: Uint8Array<ArrayBuffer>; zstd: Uint8Array<ArrayBuffer> | null }
 
 export type LinkBodyCompressor = (raw: Uint8Array) => Promise<Uint8Array>;
 
@@ -33,7 +33,7 @@ export function linkRequestCompressible(url: URL, req: Request, declaredLength: 
 }
 
 /** Read exactly the declared bytes into one buffer; more than declared is refused, fewer is a short body. */
-export async function readDeclaredBody(body: ReadableStream<Uint8Array>, declared: number, signal: AbortSignal): Promise<Uint8Array> {
+export async function readDeclaredBody(body: ReadableStream<Uint8Array>, declared: number, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
   const reader = body.getReader();
   const out = new Uint8Array(declared);
   let filled = 0;
@@ -61,18 +61,18 @@ export async function readDeclaredBody(body: ReadableStream<Uint8Array>, declare
  * decoder admits (`compressedBodyDecodeLimit`, the policy `link-request-zstd/1` names); otherwise
  * null and the raw body goes, which the Home admits under its ordinary limit as before.
  */
-export async function compressLinkBody(raw: Uint8Array, compress: LinkBodyCompressor = defaultLinkBodyCompressor): Promise<Uint8Array | null> {
+export async function compressLinkBody(raw: Uint8Array, compress: LinkBodyCompressor = defaultLinkBodyCompressor): Promise<Uint8Array<ArrayBuffer> | null> {
   try {
     const out = await compress(raw);
     return out instanceof Uint8Array && out.byteLength > 0 && out.byteLength < raw.byteLength
-      && raw.byteLength <= compressedBodyDecodeLimit(out.byteLength, Number.POSITIVE_INFINITY) ? out : null;
+      && raw.byteLength <= compressedBodyDecodeLimit(out.byteLength, Number.POSITIVE_INFINITY) ? out as Uint8Array<ArrayBuffer> : null;
   } catch {
     return null;
   }
 }
 
 /** The body for one connection, given the features its Home just named. */
-export function chooseLinkBody(prepared: PreparedLinkBody, homeFeatures: readonly string[] | null): { body: Uint8Array; headers: Record<string, string> } {
+export function chooseLinkBody(prepared: PreparedLinkBody, homeFeatures: readonly string[] | null): { body: Uint8Array<ArrayBuffer>; headers: Record<string, string> } {
   if (prepared.zstd && homeFeatures?.includes(LINK_REQUEST_ZSTD_FEATURE)) {
     return { body: prepared.zstd, headers: { "content-encoding": "zstd", "content-length": String(prepared.zstd.byteLength) } };
   }
