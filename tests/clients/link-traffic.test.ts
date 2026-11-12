@@ -8,7 +8,7 @@ import { linkBoundFetch } from "../../src/client/link-home";
 import { gzipSync } from "node:zlib";
 import { PassThrough } from "node:stream";
 import type { IncomingMessage } from "node:http";
-import { linkResponseOnConnectionForTests } from "../../src/client/link-relay-transport";
+import { fetchBoundLinkRelay, linkResponseOnConnectionForTests } from "../../src/client/link-relay-transport";
 
 const key = `ocx_data_${"a".repeat(40)}`;
 const keyId = "test-link-key", linkId = "lnk_0123456789abcdef";
@@ -112,7 +112,10 @@ describe("link traffic counters (#3023)", () => {
 
   test("the book is bounded and reads zeros since its start for a link it never saw", () => {
     const book = createLinkTrafficBook("relayed", { now: () => Date.parse("2026-11-12T00:00:00.000Z") });
-    for (let i = 0; i <= MAX_LINKS; i++) book.begin(`lnk_${i.toString(16).padStart(16, "0")}`).toHome(1);
+    for (let i = 0; i <= MAX_LINKS; i++) {
+      const flow = book.begin(`lnk_${i.toString(16).padStart(16, "0")}`);
+      flow.toHome(1); flow.end(true);
+    }
     expect(book.snapshot("lnk_0000000000000000")).toEqual({ since: "2026-11-12T00:00:00.000Z", requests: 0, incomplete: 0,
       toHomeBytes: 0, fromHomeBytes: 0, toHomeSource: "relayed", toHomeUncounted: 0 });
     expect(book.snapshot(`lnk_${MAX_LINKS.toString(16).padStart(16, "0")}`).toHomeBytes).toBe(1);
@@ -189,5 +192,51 @@ describe("link traffic counters at the transport boundary (#3023 review)", () =>
     await relayed.catch(() => undefined);
     await answered.promise;
     expect(h.book.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1 });
+  });
+});
+
+describe("traffic book eviction and buffered bodies (#3023 final review)", () => {
+  test("eviction never drops a link with a request in flight, and each entry says since when it counted", () => {
+    let clock = Date.parse("2026-11-12T00:00:00.000Z");
+    const book = createLinkTrafficBook("relayed", { now: () => clock });
+    const live = book.begin("lnk_ffffffffffffffff");
+    live.toHome(10);
+    for (let i = 0; i < MAX_LINKS + 5; i++) {
+      clock += 1;
+      const flow = book.begin(`lnk_${(i + 1).toString(16).padStart(16, "0")}`);
+      flow.toHome(1); flow.end(true);
+    }
+    live.toHome(5); live.end(true);
+    // The live link kept its entry and every byte, counted since the book began.
+    expect(book.snapshot("lnk_ffffffffffffffff")).toMatchObject({ since: "2026-11-12T00:00:00.000Z", requests: 1, toHomeBytes: 15 });
+    // An evicted link reads zero only since the last eviction, never since the book began.
+    const evicted = book.snapshot("lnk_0000000000000001");
+    expect(evicted.toHomeBytes).toBe(0);
+    expect(Date.parse(evicted.since)).toBeGreaterThan(Date.parse("2026-11-12T00:00:00.000Z"));
+    // Counted again, it starts a new window with its own since.
+    clock += 1000;
+    const again = book.begin("lnk_0000000000000001"); again.toHome(3); again.end(true);
+    expect(book.snapshot("lnk_0000000000000001")).toMatchObject({ since: new Date(clock).toISOString(), requests: 1, toHomeBytes: 3 });
+  });
+
+  test("a buffered body counts only once the socket took it", async () => {
+    const answered = gate();
+    // Bun sends response headers with the first body chunk, so the Home answers with one event at once.
+    const h = home(async () => {
+      answered.resolve();
+      return new Response(new ReadableStream<Uint8Array>({ start(c) { c.enqueue(encoder.encode("data: early\n\n")); } }), { headers: { "content-type": "text/event-stream" } });
+    });
+    const child = createLinkTrafficBook("relayed");
+    const caller = new AbortController();
+    // Larger than any socket buffer, and the Home never reads it, so its single write cannot complete.
+    const body = "x".repeat(48 * 1024 * 1024);
+    const response = await fetchBoundLinkRelay(target(h.port), `http://127.0.0.1:${h.port}/v1/responses`,
+      { method: "POST", body, headers: { "content-type": "application/json" }, signal: caller.signal }, { traffic: child });
+    await answered.promise;
+    const reader = response.body!.getReader();
+    expect((await reader.read()).value?.byteLength).toBeGreaterThan(0);
+    expect(child.snapshot(linkId).toHomeBytes).toBe(0);
+    await reader.cancel();
+    expect(child.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1, toHomeBytes: 0 });
   });
 });

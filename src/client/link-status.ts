@@ -61,14 +61,16 @@ export function projectClientLinkRow(
   sidecar: ClientLinkSidecarRead,
   child: LinkStatusDto["child"],
   now: number,
-  childInitiated: (linkId: string) => boolean = isChildInitiatedLink,
+  childInitiated: (linkId: string) => boolean = (linkId: string) => isChildInitiatedLink(linkId),
+  /** The Home's recorded name for a Home-initiated row; never the loopback URL this Child connects to. */
+  homeName: string | null = null,
 ): { row: LinkStatusDto["links"][number]; sshAlias: string | null } {
   const base = { id: connection.link.linkId, tunnelPort: connection.link.tunnelPort, ...EMPTY_LINK_CHILD_PARITY };
   if (sidecar === null && childInitiated(connection.link.linkId)) {
     return { row: { ...base, alias: "unknown", direction: "client-initiated", state: "failed", since: new Date(now).toISOString(), reason: "sidecar_missing" }, sshAlias: null };
   }
   if (sidecar === null) {
-    return { row: { ...base, alias: connection.serverUrl, direction: "hub-initiated", state: "idle", since: connection.connectedAt, reason: null }, sshAlias: null };
+    return { row: { ...base, alias: homeName ?? "unknown", direction: "hub-initiated", state: "idle", since: connection.connectedAt, reason: null }, sshAlias: null };
   }
   if (sidecar === "invalid" || sidecar.linkId !== connection.link.linkId) {
     const reason = sidecar === "invalid" ? "sidecar_invalid" : "sidecar_mismatch";
