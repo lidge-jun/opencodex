@@ -1,0 +1,65 @@
+import {
+  LINK_REQUEST_COMPRESSIBLE_PATHS, LINK_REQUEST_COMPRESSION_MAX_BYTES, LINK_REQUEST_COMPRESSION_MIN_BYTES, LINK_REQUEST_ZSTD_FEATURE,
+} from "../link/request-compression";
+
+/** One body ready for the link: the caller's bytes and, when it paid off, their zstd form. */
+export interface PreparedLinkBody { raw: Uint8Array; zstd: Uint8Array | null }
+
+export type LinkBodyCompressor = (raw: Uint8Array) => Promise<Uint8Array>;
+
+/** One-shot zstd, level 3, per body. Never a streaming context reused across bodies. */
+export const defaultLinkBodyCompressor: LinkBodyCompressor = raw => Bun.zstdCompress(raw, { level: 3 });
+
+/**
+ * Whether a request body may be buffered and compressed: a POST on a route whose Home handler
+ * decodes Content-Encoding, carrying no Content-Encoding of its own, with a declared length above
+ * the threshold and within the buffering bound. A chunked body (no declared length) streams as is.
+ */
+export function linkRequestCompressible(url: URL, req: Request, declaredLength: string | null): boolean {
+  if (req.method !== "POST" || !req.body || !LINK_REQUEST_COMPRESSIBLE_PATHS.has(url.pathname)) return false;
+  if (req.headers.has("content-encoding") || declaredLength === null || !/^\d+$/.test(declaredLength)) return false;
+  const length = Number(declaredLength);
+  return length > LINK_REQUEST_COMPRESSION_MIN_BYTES && length <= LINK_REQUEST_COMPRESSION_MAX_BYTES;
+}
+
+/** Read exactly the declared bytes into one buffer; more than declared is refused, fewer is a short body. */
+export async function readDeclaredBody(body: ReadableStream<Uint8Array>, declared: number, signal: AbortSignal): Promise<Uint8Array> {
+  const reader = body.getReader();
+  const out = new Uint8Array(declared);
+  let filled = 0;
+  const onAbort = () => { void reader.cancel(signal.reason).catch(() => undefined); };
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const next = await reader.read();
+      signal.throwIfAborted();
+      if (next.done) break;
+      if (next.value.byteLength > declared - filled) throw new RangeError("link request body longer than declared");
+      out.set(next.value, filled);
+      filled += next.value.byteLength;
+    }
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    try { reader.releaseLock(); } catch { /* a pending cancel may hold it */ }
+  }
+  return filled === declared ? out : out.slice(0, filled);
+}
+
+/** The zstd form when compression succeeds and saves bytes; otherwise null and the raw body goes. */
+export async function compressLinkBody(raw: Uint8Array, compress: LinkBodyCompressor = defaultLinkBodyCompressor): Promise<Uint8Array | null> {
+  try {
+    const out = await compress(raw);
+    return out instanceof Uint8Array && out.byteLength > 0 && out.byteLength < raw.byteLength ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The body for one connection, given the features its Home just named. */
+export function chooseLinkBody(prepared: PreparedLinkBody, homeFeatures: readonly string[] | null): { body: Uint8Array; headers: Record<string, string> } {
+  if (prepared.zstd && homeFeatures?.includes(LINK_REQUEST_ZSTD_FEATURE)) {
+    return { body: prepared.zstd, headers: { "content-encoding": "zstd", "content-length": String(prepared.zstd.byteLength) } };
+  }
+  return { body: prepared.raw, headers: { "content-length": String(prepared.raw.byteLength) } };
+}
