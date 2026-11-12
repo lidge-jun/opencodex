@@ -1,4 +1,4 @@
-import type { QuotaHistorySample } from "./quota-history";
+import type { QuotaHistorySample, ReadonlyQuotaHistorySample } from "./quota-history";
 
 /**
  * Conflicting weekly quota windows for one Codex pool account (#8574).
@@ -20,6 +20,9 @@ import type { QuotaHistorySample } from "./quota-history";
  */
 export const RESET_TOLERANCE_MS = 60 * 60_000;
 
+/** The largest epoch-ms JavaScript Date can hold; beyond it date formatting throws (8.64e15). */
+const MAX_DATE_MS = 8.64e15;
+
 export interface WeeklyWindowObservation {
   resetAtMs: number;
   usedPercent: number;
@@ -37,9 +40,11 @@ interface Cluster { resetAtMs: number; firstObservedAt: number; latest: WeeklyWi
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const nonNegative = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
+/** A time a dashboard can format: a nanosecond-style epoch would make Intl.DateTimeFormat throw. */
+const dateTime = (value: unknown): value is number => nonNegative(value) && value <= MAX_DATE_MS;
 
 function parseObservation(value: unknown): WeeklyWindowObservation | undefined {
-  if (!record(value) || !nonNegative(value.resetAtMs) || !nonNegative(value.observedAt)
+  if (!record(value) || !dateTime(value.resetAtMs) || !dateTime(value.observedAt)
     || !nonNegative(value.usedPercent) || value.usedPercent > 100
     || (value.source !== "wham" && value.source !== "response-header")) return undefined;
   return { resetAtMs: value.resetAtMs, usedPercent: value.usedPercent, source: value.source, observedAt: value.observedAt };
@@ -58,7 +63,7 @@ export function parseWeeklyWindowConflicts(value: unknown): WeeklyWindowConflict
 }
 
 export function detectWeeklyWindowConflicts(
-  samples: readonly QuotaHistorySample[],
+  samples: readonly ReadonlyQuotaHistorySample[],
   credentialGeneration: number | undefined,
   now: number,
 ): WeeklyWindowConflict[] {
@@ -66,9 +71,9 @@ export function detectWeeklyWindowConflicts(
   const conflicts: WeeklyWindowConflict[] = [];
   for (const family of ["account", "spark"] as const) {
     const observations = samples
-      .filter(sample => sample.credentialGeneration === credentialGeneration && sample.observedAt <= now)
+      .filter(sample => sample.credentialGeneration === credentialGeneration && sample.observedAt <= now && dateTime(sample.observedAt))
       .flatMap(sample => sample.windows
-        .filter(window => window.family === family && window.window === "weekly" && window.resetAtMs !== undefined)
+        .filter(window => window.family === family && window.window === "weekly" && dateTime(window.resetAtMs))
         .map(window => ({ resetAtMs: window.resetAtMs!, usedPercent: window.usedPercent, source: sample.source, observedAt: sample.observedAt })))
       .sort((a, b) => a.observedAt - b.observedAt);
     // Cluster by reset time; a window's reported reset moves by seconds, two windows by days.

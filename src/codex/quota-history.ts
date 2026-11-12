@@ -16,6 +16,8 @@ export interface QuotaHistorySample {
   credentialGeneration: number;
   windows: QuotaHistoryWindow[];
 }
+/** A stored sample handed out without a copy; the compiler, not a comment, keeps it unmodified. */
+export type ReadonlyQuotaHistorySample = Readonly<Omit<QuotaHistorySample, "windows">> & { readonly windows: readonly Readonly<QuotaHistoryWindow>[] };
 type Envelope = { identity: string; samples: QuotaHistorySample[] };
 type Bucket = Envelope & { costs: number[]; overhead: number };
 const encoder = new TextEncoder();
@@ -101,10 +103,10 @@ export class CodexQuotaHistory {
 
   /**
    * The stored samples, without pruning, clearing or cloning: a passive read changes nothing.
-   * The caller must not mutate them. Samples past the age limit may still be here; a caller
-   * that cares about age filters by `observedAt` itself.
+   * The type is deeply read-only so a caller cannot mutate stored history. Samples past the age
+   * limit may still be here; a caller that cares about age filters by `observedAt` itself.
    */
-  peekSamples(accountId: string, identity: string | undefined): readonly QuotaHistorySample[] {
+  peekSamples(accountId: string, identity: string | undefined): readonly ReadonlyQuotaHistorySample[] {
     const bucket = this.accounts.get(accountId);
     if (!identity || !bucket || bucket.identity !== identity) return [];
     return bucket.samples;

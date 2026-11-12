@@ -61,6 +61,16 @@ describe("conflicting weekly quota windows (#8574)", () => {
     const { parseWeeklyWindowConflicts } = await import("../../src/codex/quota-window-conflict");
     expect(parseWeeklyWindowConflicts([...conflicts, conflicts[0]])).toHaveLength(2);
   });
+
+  test("a reset time outside JavaScript Date's range never becomes a conflict", async () => {
+    const huge = 1e16;
+    const flip = [sample(at(15, 0), "wham", 24, huge), sample(at(15, 5), "wham", 100, RESET_A), sample(at(15, 10), "wham", 24, huge), sample(at(15, 15), "wham", 100, RESET_A)];
+    expect(detectWeeklyWindowConflicts(flip, 1, at(15, 20))).toEqual([]);
+    const { parseWeeklyWindowConflicts } = await import("../../src/codex/quota-window-conflict");
+    const window = { resetAtMs: RESET_A, usedPercent: 100, source: "wham", observedAt: at(15, 5) };
+    expect(parseWeeklyWindowConflicts([{ family: "account", windows: [window, { ...window, resetAtMs: huge }] }])).toBeUndefined();
+    expect(parseWeeklyWindowConflicts([{ family: "account", windows: [window, { ...window, resetAtMs: RESET_B, observedAt: huge }] }])).toBeUndefined();
+  });
 });
 
 describe("the pool account row names a weekly window conflict (#8574)", () => {
@@ -184,6 +194,10 @@ describe("the conflict reaches the dashboard and CLI without free text (#8574)",
     expect(text).toContain("may not restore the full allowance");
     expect(weeklyWindowConflictText(undefined, t, "en-US")).toBeUndefined();
     expect(weeklyWindowConflictText([{ family: "account", windows: [{ resetAtMs: "soon" }] }], t, "en-US")).toBeUndefined();
+    // A nanosecond-style epoch would make Intl.DateTimeFormat throw and blank the Providers page.
+    const outOfRange = [{ family: "account", windows: [conflict[0]!.windows[0], { ...conflict[0]!.windows[1], resetAtMs: 1e16 }] }];
+    expect(() => weeklyWindowConflictText(outOfRange, t, "en-US")).not.toThrow();
+    expect(weeklyWindowConflictText(outOfRange, t, "en-US")).toBeUndefined();
   });
 
   test("every locale translates the sentence and keeps both placeholders", async () => {
