@@ -105,8 +105,9 @@ function requestOnConnection(
         }
       } else if (body != null) {
         if (typeof body === "string" || body instanceof Uint8Array) {
-          outgoing.write(body);
-          onSent?.(typeof body === "string" ? Buffer.byteLength(body) : body.byteLength);
+          // Counted once the socket took it, like each streamed chunk; a write that never completes counts nothing.
+          const bytes = typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
+          outgoing.write(body, error => { if (!error) onSent?.(bytes); });
         } else throw new TypeError("unsupported link relay body");
       }
       outgoing.end();
