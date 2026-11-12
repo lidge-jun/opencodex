@@ -82,6 +82,20 @@ function inlineCode(markdown: string): Set<string> {
   }
   return values;
 }
+/** Read backslash-escaped code spans, which render as literal backtick-delimited text, not <code>. */
+function escapedCodeSpans(markdown: string): Set<string> {
+  const prose = withoutFencedCode(markdown);
+  const values = new Set<string>();
+  for (let at = 0; at < prose.length; at++) {
+    if (prose[at] !== "\\" || prose[at + 1] !== "`") continue;
+    const closing = prose.indexOf("\\`", at + 2);
+    if (closing < 0) break;
+    const value = prose.slice(at + 2, closing);
+    if (!/[\n]/.test(value)) values.add(value.trim());
+    at = closing + 1;
+  }
+  return values;
+}
 /** Find exact canonical code identifiers absent from the translation, across all model families. */
 function missingInlineIdentifiers(english: string, spanish: string): string[] {
   const translated = inlineCode(spanish);
@@ -231,6 +245,27 @@ describe("Spanish documentation localization", () => {
   test("edit links target the current development branch", () => {
     expect(config).toContain('baseUrl: "https://github.com/lidge-jun/opencodex/edit/dev/docs-site/"');
     expect(config).not.toContain("/edit/main/");
+  });
+
+  test("escaped code spans stay escaped wherever the canonical page escapes them", () => {
+    // An escaped span renders literal backticks, so a translation that emits a real <code> span changes the page.
+    const markdown = ["Escaped \\`openai-model\\` and real `models.json`.", "",
+      "```sh", "printf '\\`fenced\\`'", "```", ""].join("\n");
+    expect([...escapedCodeSpans(markdown)]).toEqual(["openai-model"]);
+    expect([...inlineCode(markdown)]).toEqual(["models.json"]);
+    expect([...escapedCodeSpans("plain `models.json` only")]).toEqual([]);
+    let escapedPages = 0;
+    for (const path of pages(root, true)) {
+      const spanish = source(join(root, "es", path));
+      const canonical = escapedCodeSpans(source(join(root, path)));
+      if (canonical.size === 0) continue;
+      escapedPages++;
+      const translated = escapedCodeSpans(spanish);
+      expect([...canonical].filter(value => !translated.has(value)), `${path} escaped code spans`).toEqual([]);
+      expect([...canonical].filter(value => inlineCode(spanish).has(value)), `${path} escaped code became a code span`)
+        .toEqual([]);
+    }
+    expect(escapedPages).toBeGreaterThan(0);
   });
 
   test("keeps executable examples and frontmatter in the current English shape", () => {
