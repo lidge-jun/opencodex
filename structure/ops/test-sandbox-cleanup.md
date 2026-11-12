@@ -52,6 +52,11 @@ paths, delayed generation transitions, member/release ordering and gate-holder d
 
 ## Sandbox lifecycle
 
+The runner and preload both remove live credentials and `OCX_SERVICE`/`OCX_SERVICE_MANAGED`
+before executing tests. A proxy-launched test process must not inherit service-child authority
+or require its temporary fixture home to own the developer's service. The owner regression in
+`tests/ci-workflows/test-runner.test.ts` checks service identity removal alongside credential removal.
+
 The batch runner's per-process home isolation and live-home/service-manager guards remain active
 because the preload installs them before the lock boundary. `tests/preload.ts` resolves cleanup
 dependencies after home/lock admission and before test cases. Teardown awaits native-main startup

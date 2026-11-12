@@ -25,15 +25,17 @@ export interface IsolatedTestEnvironment {
 }
 
 /**
- * Credentials of the developer's own OpenCodex install that the sandbox must not inherit. A
+ * Live credentials and service identity that the sandbox must not inherit. A
  * Windows install stores its data-plane token as a user environment variable, so every shell on
  * that machine carries it; a test that then builds a service definition or starts a proxy reads
  * the live token instead of its fixture and fails only on a developer machine.
  */
-export const LIVE_INSTALL_CREDENTIAL_ENV = [
+export const LIVE_INSTALL_ENV = [
   "OPENCODEX_API_AUTH_TOKEN",
   "OPENCODEX_ADMIN_AUTH_TOKEN",
   "OCX_API_TOKEN_FILE",
+  "OCX_SERVICE",
+  "OCX_SERVICE_MANAGED",
 ] as const;
 
 export function createIsolatedTestEnvironment(
@@ -70,7 +72,7 @@ export function createIsolatedTestEnvironment(
   }
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
   const inherited = { ...baseEnv };
-  for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete inherited[name];
+  for (const name of LIVE_INSTALL_ENV) delete inherited[name];
 
   return {
     root,

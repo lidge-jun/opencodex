@@ -20,7 +20,7 @@ import {
   changedSelectionFailure,
   captureTestOutput,
   createIsolatedTestEnvironment,
-  LIVE_INSTALL_CREDENTIAL_ENV,
+  LIVE_INSTALL_ENV,
   ensureGuiDependencies,
   inspectChangedRun,
   resolveBunTestArgs,
@@ -334,16 +334,20 @@ describe("test runner isolation", () => {
     expect(existsSync(isolated.root)).toBe(false);
   });
 
-  test("drops the developer's live install credentials and keeps the rest of the environment", () => {
+  test("drops the developer's live credentials and service identity while keeping fixture environment", () => {
     const isolated = createIsolatedTestEnvironment({
       PATH: "/test/bin",
       FIXTURE: "unchanged",
       OPENCODEX_API_AUTH_TOKEN: "live-data-token",
       OPENCODEX_ADMIN_AUTH_TOKEN: "live-admin-token",
       OCX_API_TOKEN_FILE: "/real/home/.opencodex/service-api-token",
+      OCX_SERVICE: "1",
+      OCX_SERVICE_MANAGED: "1",
     });
     try {
-      for (const name of LIVE_INSTALL_CREDENTIAL_ENV) expect(name in isolated.env).toBe(false);
+      for (const name of LIVE_INSTALL_ENV) expect(name in isolated.env).toBe(false);
+      expect(isolated.env.OCX_SERVICE).toBeUndefined();
+      expect(isolated.env.OCX_SERVICE_MANAGED).toBeUndefined();
       expect(isolated.env.FIXTURE).toBe("unchanged");
       expect(isolated.env.PATH).toBe("/test/bin");
     } finally {
