@@ -1,4 +1,5 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, jest, spyOn, test } from "bun:test";
+import { collectBufferedResponsesSse } from "../../src/server/responses/buffered-sse-json";
 import { bridgeToResponsesSSE } from "../../src/bridge";
 import {
   comboStreamPayloadCommitsOutput,
@@ -17,6 +18,7 @@ const sse = (...payloads: unknown[]): Response => new Response(
 );
 
 const preflightChunkLimit = Math.max(1, Math.ceil(MAX_CLIENT_SSE_FRAME_BYTES / 1024));
+const flushMicrotasks = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
 function prefixThenReadError(prefix: Uint8Array, error: Error): {
   response: Response;
@@ -54,6 +56,98 @@ const createdPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
 `);
 
 describe("combo stream preflight", () => {
+  test.each(["silence", "comment", "lifecycle"] as const)("buffered collector counts upstream activity, not timer heartbeats (%s)", async activity => {
+    jest.useFakeTimers();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let cancelled = 0;
+    const original = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller; }, cancel() { cancelled++; },
+    }), { headers: { "content-type": "text/event-stream" } });
+    const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => null,
+      { heartbeatIntervalMs: 15_000, keepalive: "upstream-activity" });
+    const upstream = new AbortController();
+    const cancellation = new AbortController();
+    const pending = collectBufferedResponsesSse(wrapped.body!, upstream,
+      { signal: cancellation.signal, read: { firstByteTimeoutMs: 300_000, inactivityTimeoutMs: 300_000, totalTimeoutMs: 900_000 } });
+    let result: Awaited<typeof pending> | undefined;
+    void pending.then(value => { result = value; });
+    try {
+      await flushMicrotasks();
+      for (let i = 0; i < 19; i++) { jest.advanceTimersByTime(15_000); await flushMicrotasks(); }
+      expect(result).toBeUndefined();
+      if (activity !== "silence") {
+        source.enqueue(activity === "comment" ? new TextEncoder().encode(": upstream\n\n") : createdPrefix);
+        await flushMicrotasks();
+        for (let i = 0; i < 19; i++) { jest.advanceTimersByTime(15_000); await flushMicrotasks(); }
+        expect(result).toBeUndefined();
+      }
+      jest.advanceTimersByTime(15_000);
+      await flushMicrotasks();
+      expect(result?.ok).toBe(false);
+      if (result && !result.ok) expect(result.kind).toBe("timeout");
+      expect(upstream.signal.aborted).toBe(true);
+      expect(cancelled).toBe(1);
+    } finally {
+      cancellation.abort();
+      await pending;
+      jest.useRealTimers();
+    }
+  });
+
+  test("combo preflight can fail over after more than its chunk cap of heartbeat intervals", async () => {
+    jest.useFakeTimers();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const original = new Response(new ReadableStream<Uint8Array>({ start(controller) { source = controller; } }),
+      { headers: { "content-type": "text/event-stream" } });
+    const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => null,
+      { heartbeatIntervalMs: 1, keepalive: "none" });
+    const abort = new AbortController();
+    const pending = preflightComboStreamResponse(wrapped, { model: "m1", provider: "a" }, undefined, { signal: abort.signal });
+    let result: Awaited<typeof pending> | undefined;
+    void pending.then(value => { result = value; }, () => {});
+    try {
+      await flushMicrotasks();
+      for (let i = 0; i <= preflightChunkLimit; i++) { jest.advanceTimersByTime(1); await flushMicrotasks(); }
+      expect(result).toBeUndefined();
+      source.enqueue(new TextEncoder().encode('data: {"type":"response.failed","response":{"status":"failed","error":{"message":"busy"}}}\n\n'));
+      source.close();
+      await flushMicrotasks();
+      expect((await pending).kind).toBe("failed");
+    } finally { abort.abort(); await pending.catch(() => {}); jest.useRealTimers(); }
+  });
+
+  test("buffered collector accepts a successful recovery after real prelude activity", async () => {
+    let replacements = 0;
+    const wrapped = deferProtocolSafeResetRecovery(
+      sse({ type: "response.created", response: { id: "original", status: "in_progress", output: [] } }),
+      { model: "m1", provider: "a" }, async () => {
+        replacements++;
+        return sse({ type: "response.completed", response: { id: "replacement", status: "completed", output: [] } });
+      }, { keepalive: "upstream-activity" },
+    );
+    const result = await collectBufferedResponsesSse(wrapped.body!, new AbortController());
+    expect(result).toMatchObject({ ok: true, terminal: { status: "completed", response: { id: "replacement" } } });
+    expect(replacements).toBe(1);
+  });
+
+  test("buffered collector cancellation aborts held preflight without starting recovery", async () => {
+    let cancelled = 0;
+    let replacements = 0;
+    const original = new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled++; } }),
+      { headers: { "content-type": "text/event-stream" } });
+    const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+      replacements++;
+      return null;
+    }, { keepalive: "upstream-activity" });
+    const cancellation = new AbortController();
+    const result = collectBufferedResponsesSse(wrapped.body!, new AbortController(), { signal: cancellation.signal });
+    await flushMicrotasks();
+    cancellation.abort(new Error("client cancelled"));
+    expect(await result).toMatchObject({ ok: false, kind: "aborted" });
+    await flushMicrotasks();
+    expect(cancelled).toBe(1);
+    expect(replacements).toBe(0);
+  });
   test("a required-tool contract failure carrying a tool call is not replayed", async () => {
     const failed = (output: unknown[], retryable?: boolean) => sse({ type: "response.failed", response: {
       id: "r1", status: "failed", output,
@@ -916,6 +1010,197 @@ describe("combo stream preflight", () => {
     expect(seen).toEqual([]);
   });
 
+  test("a clean prelude-only EOF offers one replacement before relaying the prefix", async () => {
+    const original = sse({ type: "response.created", response: { id: "first", output: [] } });
+    const stages: RequestFailureStage[] = [];
+    const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async (_error, stage) => {
+      stages.push(stage);
+      return sse({ type: "response.completed", response: { id: "replacement", status: "completed" } });
+    });
+    const text = await wrapped.text();
+    expect(stages).toEqual(["protocol-prelude"]);
+    expect(text).toContain("replacement");
+    expect(text).not.toContain('"first"');
+  });
+
+  test("declined clean EOF recovery preserves the original prelude", async () => {
+    const original = sse({ type: "response.created", response: { id: "first", output: [] } });
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+      calls++;
+      return null;
+    });
+    expect(await wrapped.text()).toContain('"first"');
+    expect(calls).toBe(1);
+  });
+
+  test.each([
+    [{ type: "response.completed", response: { status: "completed", output: [] } }],
+    [{ type: "response.output_text.delta", delta: "visible" }],
+    [{ error: { type: "server_error", message: "fixture" } }],
+    [{ type: "response.created", response: { output: [{ type: "message" }] } }],
+  ])("terminal, output or explicit error never offers EOF recovery (%j)", async payload => {
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(sse(payload), { model: "m1", provider: "a" }, async () => {
+      calls++;
+      return null;
+    });
+    await wrapped.text();
+    expect(calls).toBe(0);
+  });
+
+  test.each(["data: {not-json}\n\n", 'data: {"type":"response.output'])(
+    "opaque or truncated payload never offers EOF recovery", async payload => {
+      let calls = 0;
+      const source = new Response(payload, { headers: { "content-type": "text/event-stream" } });
+      const wrapped = deferProtocolSafeResetRecovery(source, { model: "m1", provider: "a" }, async () => { calls++; return null; });
+      expect(await wrapped.text()).toBe(payload);
+      expect(calls).toBe(0);
+    },
+  );
+
+  test("downstream cancellation while the prelude is held never starts a replacement", async () => {
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let onPull!: () => void;
+    const pulled = new Promise<void>(resolve => { onPull = resolve; });
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) { source = controller; },
+      pull() { onPull(); },
+    });
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(new Response(upstream, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" }, async () => { calls++; return null; });
+    const reader = wrapped.body!.getReader();
+    const pending = reader.read();
+    await pulled;
+    await reader.cancel();
+    try { source.close(); } catch { /* a correct wrapper may already cancel the source */ }
+    await pending;
+    await Bun.sleep(0);
+    expect(calls).toBe(0);
+  });
+
+  test("downstream cancellation aborts a replacement already in flight", async () => {
+    let started!: (signal: AbortSignal) => void;
+    const recoveryStarted = new Promise<AbortSignal>(resolve => { started = resolve; });
+    const wrapped = deferProtocolSafeResetRecovery(
+      sse({ type: "response.created", response: { id: "first", output: [] } }),
+      { model: "m1", provider: "a" },
+      async (_error, _stage, signal) => {
+        started(signal);
+        return new Promise(resolve => signal.addEventListener("abort", () => resolve(null), { once: true }));
+      },
+    );
+    const reader = wrapped.body!.getReader();
+    const pending = reader.read();
+    const signal = await recoveryStarted;
+    await reader.cancel();
+    await pending;
+    expect(signal.aborted).toBe(true);
+  });
+
+  test("held prelude sends bounded keepalive comments while upstream is silent", async () => {
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const upstream = new ReadableStream<Uint8Array>({ start(controller) { source = controller; }, pull() {} });
+    const wrapped = deferProtocolSafeResetRecovery(new Response(upstream, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" }, async () => null, { heartbeatIntervalMs: 5 });
+    const reader = wrapped.body!.getReader();
+    try {
+      for (let i = 0; i < 2; i++) {
+        const result = await Promise.race([reader.read(), Bun.sleep(150).then(() => null)]);
+        expect(result).not.toBeNull();
+        if (result && !result.done) expect(new TextDecoder().decode(result.value)).toMatch(/^:.*\n\n$/);
+      }
+      source.enqueue(new TextEncoder().encode('data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n'));
+      source.close();
+      const result = await reader.read();
+      expect(result.done).toBe(false);
+      if (!result.done) expect(new TextDecoder().decode(result.value)).toContain("response.completed");
+      expect((await reader.read()).done).toBe(true);
+    } finally { await reader.cancel(); }
+  });
+
+  test.each([
+    ['event: error\ndata: {"type":"response.created"}\n\n'],
+    ['event: response.output_text.delta\ndata: {"type":"response.created"}\n\n'],
+    ['event: response.created\nevent: error\ndata: {"type":"response.created"}\n\n'],
+    ['event: error\ndata: {"type":"response.failed","response":{"status":"failed"}}\n\n'],
+    ['event: error\ndata:\n\n'],
+  ])("conflicting or opaque SSE frames preserve original bytes (%s)", async frame => {
+    const bytes = new TextEncoder().encode(frame);
+    let offset = 0;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset === bytes.length) return controller.close();
+        controller.enqueue(bytes.slice(offset, ++offset));
+      },
+    });
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(
+      new Response(source, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" }, async () => { calls++; return sse({ type: "response.completed" }); },
+    );
+    expect(await wrapped.text()).toBe(frame);
+    expect(calls).toBe(0);
+  });
+
+  test.each([
+    'data: {"type":"response.created"}\n\n',
+    'event: error\nevent: response.created\ndata: {"type":"response.created"}\n\n',
+    'event:\ndata: {"type":"response.created"}\n\n',
+  ])("ordinary prelude event semantics still allow EOF recovery (%s)", async frame => {
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(
+      new Response(frame, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" }, async () => { calls++; return sse({ type: "response.completed", response: { id: "replacement" } }); },
+    );
+    expect(await wrapped.text()).toContain('"replacement"');
+    expect(calls).toBe(1);
+  });
+
+  test("a retryable bare error remains authoritative over a later conflicting frame in the same chunk", async () => {
+    const body = 'data: {"type":"error","error":{"message":"first"}}\n\n'
+      + 'event: error\ndata: {"type":"response.created"}\n\n';
+    const result = await preflightComboStreamResponse(
+      new Response(body, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" },
+    );
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+  });
+
+  test.each([
+    'data: {"type":"response.output_text.delta","delta":"original"}',
+    'data: {"type":"error","error":{"message":"original"}}',
+    'data: {"type":"response.completed","response":{"status":"completed"}}',
+    'data: {"type":"response.output',
+    'data:',
+    'event: error',
+  ])("read rejection retains unfinished unsafe frame and the same error (%s)", async frame => {
+    const readError = new Error("original reset");
+    const prefix = new TextEncoder().encode(frame);
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(
+      prefixThenReadError(prefix, readError).response, { model: "m1", provider: "a" },
+      async () => { calls++; return sse({ type: "response.completed", response: { id: "replacement" } }); },
+    );
+    const reader = wrapped.body!.getReader();
+    expect((await reader.read()).value).toEqual(prefix);
+    await expect(reader.read()).rejects.toBe(readError);
+    expect(calls).toBe(0);
+  });
+
+  test("read rejection after an unfinished empty control still allows recovery", async () => {
+    const prefix = new TextEncoder().encode('data: {"type":"response.created","response":{"output":[]}}');
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(
+      prefixThenReadError(prefix, new Error("reset")).response, { model: "m1", provider: "a" },
+      async () => { calls++; return sse({ type: "response.completed", response: { id: "replacement" } }); },
+    );
+    expect(await wrapped.text()).toContain('"replacement"');
+    expect(calls).toBe(1);
+  });
+
   // #8107: the Codex WebSocket writes its quota/metadata frames into the same body, usually before
   // `response.created`. They must neither commit the child nor end the preflight.
   test("Codex metadata control frames neither commit nor terminate the preflight", async () => {
@@ -978,6 +1263,214 @@ describe("combo stream preflight", () => {
     })).toBe(true);
   });
 
+  for (const type of ["response.created", "response.in_progress", "response.queued", "response.heartbeat"]) {
+    for (const extra of [
+      { output_text: "already produced" },
+      { content: [{ type: "output_text", text: "already produced" }] },
+      { tool_calls: [{ type: "function", name: "act" }] },
+      { future_signal: { effect: "unknown" } },
+      { text: "already produced" },
+      { text: { output_text: "already produced" } },
+      { reasoning: { summary: [{ type: "summary_text", text: "already produced" }] } },
+      { model: { output_text: "already produced" } },
+      { prompt: { output_text: "already produced" } },
+      { tool_choice: { output_text: "already produced" } },
+      { instructions: { output_text: "already produced" } },
+      { usage: { output_tokens_details: { output_text: "already produced" } } },
+      { usage: { input_tokens: { output_text: "already produced" } } },
+      { prompt: { id: { output_text: "already produced" } } },
+      { tool_choice: { type: "function", function: { output_text: "already produced" } } },
+      { tools: [{ type: "web_search" }] },
+      { tools: [{ type: "function", name: "read", output_text: "already produced" }] },
+      { tools: [{ type: "namespace", name: "ns", tools: [{ type: "mcp" }] }] },
+      { tools: [{ type: "custom", name: "act", format: { type: { output_text: "already produced" } } }] },
+      { tool_choice: "already produced" },
+      { reasoning: { summary: "already produced" } },
+    ]) {
+      for (const ending of ["eof", "read-error"] as const) {
+        test(`${type} preserves unknown snapshot evidence on ${ending}`, async () => {
+          const frame = `data: ${JSON.stringify({ type, response: { output: [], ...extra } })}\n\n`;
+          const bytes = new TextEncoder().encode(frame);
+          const error = new Error("original reset");
+          const original = ending === "eof"
+            ? new Response(bytes, { headers: { "content-type": "text/event-stream" } })
+            : prefixThenReadError(bytes, error).response;
+          let calls = 0;
+          const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+            calls++;
+            return sse({ type: "response.completed", response: { id: "replacement" } });
+          });
+          const reader = wrapped.body!.getReader();
+          expect((await reader.read()).value).toEqual(bytes);
+          if (ending === "eof") expect((await reader.read()).done).toBe(true);
+          else await expect(reader.read()).rejects.toBe(error);
+          expect(calls).toBe(0);
+        });
+      }
+    }
+    test(`${type} with ordinary response metadata remains replayable`, async () => {
+      let calls = 0;
+      const response = {
+        id: "resp_first", object: "response", created_at: 1, completed_at: null, status: type === "response.queued" ? "queued" : "in_progress",
+        model: "m1", output: [], error: null, incomplete_details: null,
+        usage: { input_tokens: 4, output_tokens: 0, total_tokens: 4, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
+        background: false, instructions: null, max_output_tokens: null, max_tool_calls: null,
+        metadata: {}, parallel_tool_calls: true, previous_response_id: null, prompt_cache_key: null,
+        reasoning: { effort: null, summary: null }, safety_identifier: null, service_tier: "default",
+        store: false, temperature: 1, text: { format: { type: "text" } },
+        tool_choice: { type: "function", name: "read" }, tools: [{ type: "function", name: "read", parameters: { type: "object", properties: {} }, strict: false }], top_p: 1, truncation: "disabled", user: null,
+      };
+      const wrapped = deferProtocolSafeResetRecovery(sse({ type, response }),
+        { model: "m1", provider: "a" }, async () => {
+          calls++;
+          return sse({ type: "response.completed", response: { id: "replacement" } });
+        });
+      expect(await wrapped.text()).toContain('"replacement"');
+      expect(calls).toBe(1);
+    });
+    for (const value of [true, null, "false", 0]) {
+      for (const ending of ["eof", "read-error"] as const) {
+        test(`${type} preserves replayUnsafe=${JSON.stringify(value)} on ${ending}`, async () => {
+          const frame = `data: ${JSON.stringify({ type, replayUnsafe: value })}\n\n`;
+          const bytes = new TextEncoder().encode(frame);
+          const error = new Error("original reset");
+          const original = ending === "eof"
+            ? new Response(bytes, { headers: { "content-type": "text/event-stream" } })
+            : prefixThenReadError(bytes, error).response;
+          let calls = 0;
+          const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+            calls++;
+            return sse({ type: "response.completed", response: { id: "replacement" } });
+          });
+          const reader = wrapped.body!.getReader();
+          expect((await reader.read()).value).toEqual(bytes);
+          if (ending === "eof") expect((await reader.read()).done).toBe(true);
+          else await expect(reader.read()).rejects.toBe(error);
+          expect(calls).toBe(0);
+        });
+      }
+    }
+    test(`${type} with replayUnsafe=false remains replayable`, async () => {
+      let calls = 0;
+      const wrapped = deferProtocolSafeResetRecovery(sse({ type, replayUnsafe: false, sequence_number: 1 }),
+        { model: "m1", provider: "a" }, async () => {
+          calls++;
+          return sse({ type: "response.completed", response: { id: "replacement" } });
+        });
+      expect(await wrapped.text()).toContain('"replacement"');
+      expect(calls).toBe(1);
+    });
+    for (const field of ["error", "response.error", "response.last_error", "last_error"] as const) {
+      for (const ending of ["eof", "read-error"] as const) {
+        test(`${type} preserves ${field} evidence on ${ending}`, async () => {
+          const payload = field === "error" || field === "last_error"
+            ? { type, [field]: { message: "original error" }, response: { output: [] } }
+            : { type, response: { output: [], [field === "response.error" ? "error" : "last_error"]: { message: "original error" } } };
+          const frame = `data: ${JSON.stringify(payload)}\n\n`;
+          const bytes = new TextEncoder().encode(frame);
+          const error = new Error("original reset");
+          const original = ending === "eof"
+            ? new Response(bytes, { headers: { "content-type": "text/event-stream" } })
+            : prefixThenReadError(bytes, error).response;
+          let replacements = 0;
+          const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+            replacements++;
+            return sse({ type: "response.completed", response: { id: "replacement" } });
+          });
+          const reader = wrapped.body!.getReader();
+          expect((await reader.read()).value).toEqual(bytes);
+          if (ending === "read-error") await expect(reader.read()).rejects.toBe(error);
+          else expect((await reader.read()).done).toBe(true);
+          expect(replacements).toBe(0);
+        });
+      }
+    }
+    for (const status of ["completed", "failed", "incomplete", "cancelled", "future_terminal", 400]) {
+      for (const ending of ["eof", "read-error"] as const) {
+        test(`${type} preserves snapshot status ${status} on ${ending}`, async () => {
+          const frame = `data: ${JSON.stringify({ type, response: { output: [], status } })}\n\n`;
+          const bytes = new TextEncoder().encode(frame);
+          const error = new Error("original reset");
+          const original = ending === "eof"
+            ? new Response(bytes, { headers: { "content-type": "text/event-stream" } })
+            : prefixThenReadError(bytes, error).response;
+          let calls = 0;
+          const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+            calls++;
+            return sse({ type: "response.completed", response: { id: "replacement" } });
+          });
+          const reader = wrapped.body!.getReader();
+          expect((await reader.read()).value).toEqual(bytes);
+          if (ending === "eof") expect((await reader.read()).done).toBe(true);
+          else await expect(reader.read()).rejects.toBe(error);
+          expect(calls).toBe(0);
+        });
+      }
+    }
+    for (const payload of [
+      { type, status: 400 },
+      { type, last_error: { message: "original" } },
+      { type, output: [{ type: "message" }] },
+      { type, item: { type: "function_call" } },
+      { type, delta: "original output" },
+      { type, response: { output: [], incomplete_details: { reason: "upstream_stall_timeout" } } },
+      { type, response: ["malformed snapshot"] },
+      { type, stream_id: "another-stream" },
+      { type, sequence_number: "invalid" },
+      { type, response: { output: [], replayUnsafe: true } },
+      { type, future_signal: { effect: "unknown" } },
+    ]) {
+      test(`${type} preserves contradictory or malformed evidence at EOF (%j)`, async () => {
+        const original = sse(payload);
+        const expected = await original.clone().text();
+        let calls = 0;
+        const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+          calls++;
+          return sse({ type: "response.completed", response: { id: "replacement" } });
+        });
+        expect(await wrapped.text()).toBe(expected);
+        expect(calls).toBe(0);
+      });
+    }
+    for (const [description, snapshot] of [
+      ["output", { output: [{ type: "message", role: "assistant" }] }],
+      ["malformed output", { output: { type: "message" } }],
+      ["error", { output: [], error: { code: "server_error", message: "original failure" } }],
+    ] as const) {
+      test(`${type} snapshot with ${description} preserves the original at EOF`, async () => {
+        const original = sse({ type, response: snapshot });
+        const expected = await original.clone().text();
+        let calls = 0;
+        const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+          calls++;
+          return sse({ type: "response.completed", response: { id: "replacement" } });
+        });
+        expect(await wrapped.text()).toBe(expected);
+        expect(calls).toBe(0);
+      });
+    }
+    test(`${type} with an empty snapshot still permits EOF recovery`, async () => {
+      let calls = 0;
+      const original = sse({ type, error: null, last_error: null, response: { output: [], error: null, last_error: null, status: "in_progress" } });
+      const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+        calls++;
+        return sse({ type: "response.completed", response: { id: "replacement" } });
+      });
+      expect(await wrapped.text()).toContain('"replacement"');
+      expect(calls).toBe(1);
+    });
+    test(`${type} with null errors still permits read-error recovery`, async () => {
+      const frame = new TextEncoder().encode(`data: ${JSON.stringify({ type, error: null, response: { output: [], error: null, last_error: null } })}\n\n`);
+      let calls = 0;
+      const wrapped = deferProtocolSafeResetRecovery(prefixThenReadError(frame, new Error("reset")).response,
+        { model: "m1", provider: "a" }, async () => {
+          calls++;
+          return sse({ type: "response.completed", response: { id: "replacement" } });
+        });
+      expect(await wrapped.text()).toContain('"replacement"');
+      expect(calls).toBe(1);
+    });
+  }
   test("converts a zero-output incomplete with max_output_tokens into a retryable failure", async () => {
     const source = sse(
       { type: "response.created", response: { id: "r1", status: "in_progress" } },
