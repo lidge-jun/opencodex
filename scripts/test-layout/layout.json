@@ -1491,6 +1491,7 @@
     "request-log-estimate-cap.test.ts": "usage",
     "request-log-jev.test.ts": "usage",
     "request-body-log.test.ts": "usage",
+    "request-decompress-ratio.test.ts": "usage",
     "request-log-nonstream.test.ts": "usage",
     "request-log-protocol-trace.test.ts": "usage",
     "request-log-served-model.test.ts": "usage", "request-log-model-filter.test.ts": "usage",
