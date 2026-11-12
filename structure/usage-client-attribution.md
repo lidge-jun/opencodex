@@ -133,7 +133,8 @@ projection read-only, requires this projection's full table set rather than a co
 table, and only uses it when it is current for the exact ledger revision; otherwise it streams,
 and it never creates, writes or registers anything. The passive read makes a single attempt and
 degrades to the streaming scan on any error; it does not retry. Only the active index read
-(`readUsageFilterCandidates`) retries contention on nine delays totaling about 6.4 s and runs a
+(`readUsageFilterCandidates`) retries contention on three short delays (85 ms, plus SQLite's
+250 ms busy timeout per attempt) before streaming, and runs a
 foreign or unsafe open and a rebuild-required read through three short delays before degrading.
 Any other
 index-side failure -- unwritable home,

@@ -576,6 +576,8 @@ async function runPackageManagerSelfUpdate(manager, child) {
     }
     const env = mutationChildEnvironment();
     delete env.OCX_SERVICE;
+    // Not launched by a supervisor: none of its markers (src/lib/supervisor-markers.ts) may ride along.
+    for (const name of ["OCX_DESKTOP_SUPERVISED", "OCX_SERVICE_MANAGED", "OCX_WINDOWS_WRAPPER_PROTOCOL"]) delete env[name];
     // The restarted proxy is an ordinary owner; only a sibling's own replacement carries this.
     delete env.OCX_SIBLING_OF_PORT;
     delete env.OCX_SIBLING_HANDOFF_NONCE;

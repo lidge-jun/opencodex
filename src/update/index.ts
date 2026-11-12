@@ -693,6 +693,8 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
     const env = mutation.controlEnvironment(withoutSiblingMarker(process.env));
     delete env.OCX_SERVICE;
+    // Not launched by a supervisor: none of its markers (src/lib/supervisor-markers.ts) may ride along.
+    for (const name of ["OCX_DESKTOP_SUPERVISED", "OCX_SERVICE_MANAGED", "OCX_WINDOWS_WRAPPER_PROTOCOL"]) delete env[name];
     const runtimeEnv = withProcessRuntimeProvenance(env);
     if (!homePolicy.authorizeMutation("runtime")) return "refused";
     const child = guardedSpawn(homePolicy.authorizeMutation, "runtime", process.execPath, [postUpdateLauncher, "start", "--port", String(capturedListen.port)], {

@@ -100,6 +100,32 @@ Home에서 `ocx link check (--link-id <id> | --all)`를 실행하면 Home이 추
 
 `ocx link sync`, `ocx link restart-codex`, `ocx link update`는 Home이 추가한 Child에서 링크의 SSH 연결로 실행되며 작업을 JSON으로 출력합니다. `sync`는 고정된 `ocx sync --expect-link`를 실행합니다(Child 2.93.0 이상). `restart-codex`는 동기화한 뒤 Child의 Codex app-server를 재시작해 실행 중인 Codex가 현재 카탈로그를 읽게 합니다. `--scope codex`는 데스크톱 앱도 다시 실행합니다. 재시작은 링크 하나만 지정합니다. `restart-codex`와 `--restart-codex`에는 `--yes`가 필요하지만 `ocx link sync --link-id <id> --restart-app-server-only`는 확인 없이 app-server를 재시작합니다. Home이 그 Child의 모델 요청을 중계하는 동안에는 재시작을 건너뜁니다(`restart-skipped:link-active`). 2.69보다 오래된 Child에서는 스트리밍이 아닌 요청이 응답이 시작된 뒤에야 보입니다. `update --yes`는 Child 자체 업데이트 도구로 Child의 OpenCodex를 이 Home의 버전으로만 업데이트합니다(Child 2.97.0 이상. npm과 pnpm은 Node 런처로 적용하므로 `ocx link check`도 그곳에서 읽기 전용 `node --version`을 실행합니다). 한 번에 Child 하나씩 처리하며, 적용이 성공, 실패, 롤백된 뒤에는 다시 동기화합니다. 결과를 알 수 없는 적용은 다시 실행하거나 동기화하지 않으므로 `ocx link check`로 확인하세요. 그 Child로 중계 중인 요청은 끝납니다. Windows Child는 `sync`만 지원하고, `ocx-child` Child는 재시작과 업데이트를 지원하지 않는다고 보고합니다. CLI는 루프백에 바인딩된 Home이 필요합니다. 그렇지 않은 Home에서는 이 작업을 실행할 수 없으며, 대시보드에도 이 작업은 없습니다. 자세한 내용과 종료 코드는 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)(영문)를 참고하세요. 이 보호는 최선의 노력일 뿐입니다. 확인과 재시작 사이에 시작된 요청은 끝날 수 있으므로, 턴을 보존해야 하면 그 Child에서 새 요청을 멈추세요. `ocx sync --restart-children`(또는 `--restart-children=codex --yes`)는 Home 동기화를 전파할 때 모든 Child 또는 `--child <linkId>`로 지정한 Child에 같은 규칙을 적용합니다. 각 Child는 동기화되고, 중계 중인 요청이 있는 동안에는 재시작만 건너뜁니다(`restart-skipped:link-active`).
 
+### 카탈로그 자동 전파와 Child 정책
+
+카탈로그 전파는 기본으로 켜져 있습니다. Home의 카탈로그가 바뀌면(카탈로그 자동 새로 고침이 변경을 보고하거나, 5분마다 하는 확인이 대시보드나 관리 API에서의 편집을 발견하면) Home은 편집이 끝나도록 60초를 기다립니다(첫 변경 후 최대 5분). 그다음 사용자의 조작 없이 대상 Child마다 백그라운드 SSH 세션을 열고, `ocx link sync`와 같은 고정된 `ocx sync --expect-link`를 실행합니다. Codex 재시작은 켜지 않는 한 하지 않습니다(아래 `childCodexRestart`). Home이 시작한 링크이고, 터널이 연결되어 있고, 다른 작업이 실행 중이지 않으며, 이 Home이 그 Child에서 마지막으로 실행한 동기화가 변경보다 이전인 Child가 대상입니다. 카탈로그를 내려받기만 한 Child는 여전히 뒤처진 것으로 봅니다. 모델 요청을 중계 중인 Child는 Codex 설정이 이미 Home과 같고 그 설정을 적용한 뒤 OpenCodex 클라이언트 런타임이 재시작된 경우에만 동기화합니다. 그렇지 않으면 동기화가 그 런타임을 재시작하기 때문입니다. 그렇지 않으면 유휴 상태가 된 뒤 동기화합니다. 실패한 동기화는 5분 뒤 다시 시도하며 간격은 두 배씩 늘어 최대 6시간이 됩니다. 2.93.0보다 오래된 Child는 다른 버전을 보고할 때까지 다시 시도하지 않습니다. 이 작업들은 다른 작업과 똑같이 표시되며 `trigger: "auto"`가 붙습니다. 링크가 없는 Home에서는 이 중 어느 것도 실행되지 않습니다.
+
+전파로 고쳐지는 것은 Child의 카탈로그 파일입니다. Child에서 이미 실행 중인 Codex app-server는 재시작할 때까지 불러온 목록을 그대로 씁니다. `ocx link restart-codex --link-id <id> --yes` 또는 `ocx sync --restart-children`을 사용하거나, `ocx link policy --child-codex-restart app-server-when-idle`로 Home이 app-server를 재시작하게 하세요. Home은 동기화가 실행될 때 여전히 유휴 상태인 Child에서만 이를 수행합니다. 이 설정은 다음 자동 동기화부터 적용되며, 카탈로그가 이미 최신인 Child는 동기화되지 않으므로 재시작도 되지 않습니다. 그런 Child는 직접 재시작하세요.
+
+정책은 Home의 `<configDir>/link/child-policy.json`에 저장되며 `config.json`에는 들어가지 않습니다.
+
+| 설정 | 기본값 | 값 |
+|---|---|---|
+| `catalogFanout` | `auto` | `auto`, `manual` |
+| `childCodexRestart` | `never` | `never`, `app-server-when-idle` |
+| `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
+| `idleAfterMs` | `600000` (10분) | 1~60분 |
+
+`updates`의 기본값은 유휴 Child를 자동으로 Home 버전에 맞추는 것입니다. 자동 업데이트는 이번 릴리스에서는 아직 동작하지 않습니다. 설정은 지금부터 저장되므로 `ocx link policy --updates notify` 또는 `--updates off`로 꺼 두면 자동 업데이트가 도입될 때도 그 선택이 유지됩니다. `idleAfterMs`는 중계된 모델 요청이 없는 시간이 얼마나 지나야 Child를 유휴로 볼지를 정하며, `ocx link status`의 `activity.idle`도 이 값으로 결정됩니다.
+
+```text
+ocx link policy                                    # 정책 읽기
+ocx link policy --catalog-fanout manual            # 카탈로그 자동 전파 끄기
+ocx link policy --child-codex-restart app-server-when-idle
+ocx link policy --updates off --idle-after-minutes 20 --json
+```
+
+`GET`과 `PUT /api/link/children/policy`는 같은 설정을 읽고 바꿉니다(루프백에서의 관리자 토큰 또는 대시보드 세션). `PUT`은 바꾸는 설정만 보냅니다. 파일이 손상되었거나 알 수 없는 값을 담고 있으면 카탈로그 자동 전파와 자동 업데이트가 꺼지고, `ocx link policy`가 이를 알려 줍니다. 저장하면 경고는 사라지지만 지정하지 않은 설정은 꺼진 채로 남으므로 `ocx link policy --catalog-fanout auto --updates auto-when-idle`처럼 명시적으로 켜세요. Home은 이 파일을 스스로 다시 쓰지 않습니다.
+
 소유하지 않은 컴퓨터는 링크하지 마세요. Home은 그 컴퓨터에서 사용자의 SSH 키로 명령을 실행합니다.
 
 ## 관련 가이드

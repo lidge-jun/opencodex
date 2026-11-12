@@ -168,13 +168,17 @@ import {
   refusedReasoningEffortDowngrade, withRawBodyReasoningEffort,
 } from "./core-opaque-recovery";
 import type { RequestLogContext } from "../request-log";
-import { deferProtocolSafeResetRecovery, preflightComboStreamResponse } from "./combo-stream-preflight";
-import { ambiguousResendAllowanceFor, ambiguousResendAuthorizer, nativePassthroughReplayJudgmentBody, selfContainedResponsesBody } from "./reset-replay";
+import { preflightComboStreamResponse } from "./combo-stream-preflight";
+import type { RequestFailureStage } from "../../lib/request-failure-model";
+import {
+  ambiguousResendAllowanceFor, ambiguousResendAuthorizer, UnsafePhysicalReplacement,
+} from "./reset-replay";
+import { createNativeReplayGuard } from "./native-replay-guard";
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { createNativeContinuationDispatch } from "./native-continuation-send";
-import { guardPassthroughCompletion, parseOutboundRequestBody } from "./passthrough-completion";
+import { guardPassthroughCompletion, isResetReplacementStream, parseOutboundRequestBody, selectPassthroughResetResponse } from "./passthrough-completion";
 
 /** Transfer an uncommitted Copilot exchange to the existing translated pipeline without new admission. */
 export interface PassthroughAdapterHandoff { kind: "adapter-handoff" }
@@ -763,16 +767,15 @@ export async function preparePassthroughExchange(
     );
     const configuredTransientSendBudgetExhausted = (): boolean =>
       transientSendPolicy() !== null && transientSendAttempts() === 0;
-    /**
-     * Judged once. The inbound body does not change between legs, and every rebuild this lane
-     * performs only ever REMOVES a hazard -- `previous_response_id` is expanded, hosted tools
-     * are lowered into client execution -- so a body that was replaceable stays replaceable.
-     * Memoized rather than recomputed because it walks the input array, and a provider that
-     * never opted in must not pay for it at all.
-     */
-    let selfContainedJudgment: boolean | undefined;
-    const requestIsSelfContained = (): boolean =>
-      selfContainedJudgment ??= selfContainedResponsesBody(nativePassthroughReplayJudgmentBody(parsed));
+    // Judged once on the inbound body and once per send on the body that physically leaves; the
+    // split and its reasons live in the sibling module.
+    const replayGuard = createNativeReplayGuard({
+      providerExecuted: () => isXaiResponsesDestination(route.provider)
+        && collectProviderExecutedCallTypes(clientToolAuthorizationBody).size > 0,
+      parsed,
+      currentRequest: () => request,
+    });
+    const recordPhysicalSend = replayGuard.sendHandler;
     /**
      * The operator's replacement grant for THIS logical request.
      *
@@ -782,7 +785,7 @@ export async function preparePassthroughExchange(
      * child shares, so every ambiguous stage of this request draws on the same grant.
      */
     const ambiguousResend = () =>
-      ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend);
+      ambiguousResendAllowanceFor(route.provider, replayGuard.isSelfContained, claimAmbiguousResend);
     const authorizeAmbiguousResend = ambiguousResendAuthorizer(ambiguousResend, () => safeHostLabel(request.url));
     /**
      * The pre-header row of the stage table, asked through the one gate.
@@ -791,7 +794,12 @@ export async function preparePassthroughExchange(
      * the server tree; routing the answer through `authorizeResendForRecovery` here is what
      * keeps the decision derived from the table rather than restated as a boolean.
      */
-    const claimPreHeaderResend = (): boolean => authorizeAmbiguousResend("pre-header");
+    const claimRecoveryResend = (stage: RequestFailureStage): boolean => {
+      const allowed = authorizeAmbiguousResend(stage);
+      if (allowed) replayGuard.authorize();
+      return allowed;
+    };
+    const claimPreHeaderResend = (): boolean => claimRecoveryResend("pre-header");
     /**
      * The one replacement send the ambiguous rows at the end of the recovery loop may buy: an SSE
      * body that died before any output, and a Codex WebSocket that died under its create frame
@@ -827,7 +835,12 @@ export async function preparePassthroughExchange(
         providerName: route.providerName,
         modelId: route.modelId,
         dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
-        onPhysicalDispatch: accounting.onPhysicalDispatch ? () => { accounting.onPhysicalDispatch!(); started = true; } : undefined,
+        onPhysicalDispatch: recordPhysicalSend(() => {
+          transportState.noteRoutedAttemptSend(passthroughEstimate, "connection-reset");
+          if (accounting.onPhysicalDispatch) accounting.onPhysicalDispatch();
+          else if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(errorDestinationLabel(request.url));
+          started = true;
+        }),
         beforeDispatch: headers => {
           if (signal.aborted) throw signal.reason;
           if (!transportState.selectionIsCurrent(transportState.requestBindings.get(request))) {
@@ -841,16 +854,6 @@ export async function preparePassthroughExchange(
               options.admission,
               options.visionDescribeTerminal === true,
             )?.(headers);
-          }
-          // Recorded with the kind the gate derived its cause from, at the moment the
-          // send actually leaves. One authorisation, one recorded reason, one send.
-          transportState.noteRoutedAttemptSend(passthroughEstimate, "connection-reset");
-          // Charged to the SAME request counter every other send goes through. The
-          // replacement is bought here rather than by a nested retry helper, so there is
-          // one charge for one send and no per-layer counter to reconcile.
-          if (!accounting.onPhysicalDispatch) {
-            if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(errorDestinationLabel(request.url));
-            started = true;
           }
         },
       }),
@@ -1031,7 +1034,7 @@ export async function preparePassthroughExchange(
               dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
               providerName: route.providerName,
               modelId: route.modelId,
-              onPhysicalDispatch: receiptMode ? sendBudgetState.noteInitialDispatch : initialAccounting.onPhysicalDispatch,
+              onPhysicalDispatch: recordPhysicalSend(receiptMode ? sendBudgetState.noteInitialDispatch : initialAccounting.onPhysicalDispatch),
               onContinuationDispatch,
               accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: admissionState.authCtx }, headers),
               onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
@@ -1170,7 +1173,7 @@ export async function preparePassthroughExchange(
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
                 dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
-                onPhysicalDispatch: recoveryAccounting.onPhysicalDispatch,
+                onPhysicalDispatch: recordPhysicalSend(recoveryAccounting.onPhysicalDispatch),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onContinuationDispatch,
@@ -1291,6 +1294,7 @@ export async function preparePassthroughExchange(
               && responseEffects.plaintextV2AgentMessageToolNames.size === 0
               ? options.nativeControl : undefined,
             dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
+            onPhysicalDispatch: recordPhysicalSend(),
             providerName: route.providerName,
             modelId: route.modelId,
             onContinuationDispatch,
@@ -1440,7 +1444,7 @@ export async function preparePassthroughExchange(
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
                 dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
-                onPhysicalDispatch: oauthReplayAccounting.onPhysicalDispatch,
+                onPhysicalDispatch: recordPhysicalSend(oauthReplayAccounting.onPhysicalDispatch),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onContinuationDispatch,
@@ -1590,7 +1594,7 @@ export async function preparePassthroughExchange(
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
                 dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
-                onPhysicalDispatch: failoverAccounting.onPhysicalDispatch,
+                onPhysicalDispatch: recordPhysicalSend(failoverAccounting.onPhysicalDispatch),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onContinuationDispatch,
@@ -1698,6 +1702,7 @@ export async function preparePassthroughExchange(
           stream: upstreamRequestsStream,
           httpOnly: canonicalBufferedJson,
           preOutputRefusalHold: preOutputRefusalHold(),
+          onPhysicalSend: replayGuard.record,
           onResponse: (response, retryAuthCtx, retryRequest) => {
             adoptCodexWsStage(response, logCtx);
             captureAffinityResponse(
@@ -1862,17 +1867,18 @@ export async function preparePassthroughExchange(
       // Asked before the gate, which claims last: a replacement the budget cannot fund must not
       // spend the request's one grant.
       && remainingTransientSendBudget(transientSendAttempts()) > 0
-      && authorizeAmbiguousResend(socketDeathStage)
+      && claimRecoveryResend(socketDeathStage)
     ) {
-      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
       console.warn(`[upstream-retry] codex websocket died before any Responses event (${safeHostLabel(request.url)}); `
         + "using one replacement over HTTP");
       let replacement: Response | undefined;
+      let unsafeReplacement = false;
       while (!replacement) {
         try {
           replacement = await sendAmbiguousReplacement().then(adoptObservedResponse);
         } catch (err) {
           if (upstream.signal.aborted) return transportFailureResponse(err);
+          if (err instanceof UnsafePhysicalReplacement) { unsafeReplacement = true; break; }
           // A replacement that reset before its head is the pre-header row again: a configured
           // second grant (and a send the budget can still fund) may buy one more send. The gate
           // claims from the request's finite allowance, so this loop is bounded by it.
@@ -1886,6 +1892,8 @@ export async function preparePassthroughExchange(
       }
       // The first send may already have run the turn, so a replacement that failed settles as
       // the refusal rather than as a transport error the client would retry.
+      if (unsafeReplacement) break passthroughRecovery;
+      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
       upstreamResponse = replacement ? settleOperatorReplacement(replacement) : replayRefusalResponse();
       continue passthroughRecovery;
     }
@@ -1905,32 +1913,32 @@ export async function preparePassthroughExchange(
       // This preflight retains that event until output commits, so the two contracts cannot
       // share one body owner.
       && !(options.nativeControl && options.inboundTransport === "websocket")
-      && ambiguousResend() !== undefined
+      // Only a self-contained request can be replaced; any other preflight only delays its head.
+      && ambiguousResend()?.selfContained === true
       && remainingTransientSendBudget(transientSendAttempts()) > 0
       && (streamRecoveryContentType.includes("text/event-stream") || (!streamRecoveryContentType && upstreamRequestsStream));
     if (protocolRecoveryCandidate) {
-      upstreamResponse = deferProtocolSafeResetRecovery(
-        upstreamResponse,
+      // Selection may publish the replacement's own head until one is committed; see the helper.
+      upstreamResponse = await selectPassthroughResetResponse(
+        upstreamResponse, admissionState,
         { model: logCtx.model, provider: logCtx.provider },
-        (error, stage) => refetchAfterProtocolSafeReset(
+        (error, stage, signal, accepts) => refetchAfterProtocolSafeReset(
           (signal = upstream.signal) => sendAmbiguousReplacement(signal).then(adoptObservedResponse),
           error,
           {
-            abortSignal: upstream.signal,
+            abortSignal: AbortSignal.any([upstream.signal, signal]),
             label: safeHostLabel(request.url), destination: errorDestinationLabel(request.url),
             attempts: remainingTransientSendBudget(transientSendAttempts()),
             // The whole decision, including the stage the preflight observed and the grant the
             // pre-header helper shares. A committed stage refuses here without touching the
             // allowance, which is what keeps a turn that already emitted output from draining
             // the replacement a later ambiguous reset would have been entitled to.
-            authorize: () => authorizeAmbiguousResend(stage),
-            acceptResponse: candidate => {
-              const type = candidate.headers.get("content-type")?.toLowerCase() ?? "";
-              return type.includes("text/event-stream") || (!type && upstreamRequestsStream);
-            },
+            authorize: () => claimRecoveryResend(stage),
+            acceptResponse: candidate => accepts(candidate) && isResetReplacementStream(candidate, upstreamRequestsStream),
           },
         ),
-        { allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream },
+        { request, config, signal: upstream.signal, allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream,
+          delivery: canonicalBufferedJson ? "buffered-json" : options.comboAttempt ? "combo-child" : "direct-stream" },
       );
     }
     break;

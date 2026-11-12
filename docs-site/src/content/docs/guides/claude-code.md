@@ -267,6 +267,12 @@ decides at each launch:
 | No Claude auth at all | Injects a placeholder token, so Claude Code stops asking you to log in and routes through the proxy |
 | It cannot tell (unreadable keychain, corrupt file) | Assumes subscription and prints a warning — it never moves a paying subscriber onto the proxy on a failed read |
 
+A locked macOS keychain counts as "cannot tell". opencodex waits up to 1.5 seconds for the
+keychain to answer, never cancels the unlock prompt, and a running proxy does not ask the keychain
+again for 60 seconds after a lookup times out, so dashboard refreshes do not stack prompts. Each
+new `ocx claude` process asks once on its own. With `authMode` set to proxy or subscription, the
+keychain is not asked at all.
+
 This is recomputed every launch, not remembered, so logging in or out is picked up on the
 next `ocx claude` with nothing to reconfigure.
 

@@ -180,6 +180,19 @@ describe("CLI Remote Link enrollment", () => {
     } finally { h.restore(); }
   });
 
+  test("a Child restart preflight refusal names the condition, the fix and the code", async () => {
+    let step = 0;
+    const h = harness();
+    try {
+      const hint = "The Child still serves a client runtime (/healthz role client on port 10100). On the Child run: ocx restart.";
+      h.deps.fetchImpl = async () => ++step < 3 ? Response.json(step === 1 ? probe : confirm) : Response.json({ error: { code: "child_restart_unsupported", message: "x", hint } }, { status: 409 });
+      expect(await runLinkCommand(["add", "child-a", "--expect-fingerprint", fingerprint], h.deps)).not.toBe(0);
+      const message = h.err.join("\n");
+      expect(message).toContain("Remote Link failed during Child restart preflight: " + hint);
+      expect(message).toContain("(code child_restart_unsupported)");
+    } finally { h.restore(); }
+  });
+
   test("only the bounded, redacted hint survives from an error body (#8357)", async () => {
     let step = 0;
     const h = harness();

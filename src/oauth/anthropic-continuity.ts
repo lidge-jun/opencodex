@@ -1,4 +1,4 @@
-import { detectClaudeCodeToken, hasClaudeCredentialContinuity } from "./local-token-detect";
+import { detectClaudeCodeTokenAsync, hasClaudeCredentialContinuity } from "./local-token-detect";
 import { normalizeAnthropicIdentity, resolveAnthropicAccountIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { credentialGeneration, type AuthStore } from "./store";
 import { mergeOAuthPlan } from "./plan";
@@ -24,7 +24,7 @@ export async function newerClaudeCredentialForInstance(
 ): Promise<ClaudeCredentialObservation> {
   if (instance === "anthropic2") return { kind: "absent" };
   if (stored.source !== "local-cli") return { kind: "absent" };
-  const disk = detectClaudeCodeToken();
+  const disk = await detectClaudeCodeTokenAsync();
   if (!disk || !Number.isFinite(disk.expires) || disk.expires <= now + REFRESH_SKEW_MS
     || credentialGeneration(disk) === credentialGeneration(stored)) return { kind: "absent" };
   const diskGeneration = credentialGeneration(disk);
@@ -47,7 +47,24 @@ export async function newerClaudeCredentialForInstance(
   } };
 }
 
-/** Capture primitives before network awaits; check them again inside the serialized writer. */
+/**
+ * Fresh re-read of the Claude CLI credential for a write that depends on it. Adoption awaits it
+ * inside the serialized writer (afterPrePersistRead) so a rotation while the writer was queued is
+ * caught; the read is asynchronous (a Keychain lookup must never be killed, #8161), so the writer's
+ * synchronous ownership predicate only consumes its result. Fails closed: a missing, unreadable,
+ * near-expiry or different generation is not current.
+ */
+export async function claudeCredentialGenerationCurrent(diskGeneration: string, now: () => number = Date.now): Promise<boolean> {
+  const disk = await detectClaudeCodeTokenAsync();
+  return disk !== null && disk.expires > now() + REFRESH_SKEW_MS && credentialGeneration(disk) === diskGeneration;
+}
+
+/**
+ * Capture primitives before network awaits; check them again inside the serialized writer.
+ * `diskVerified` marks a write that depends on the CLI credential and carries the caller's
+ * {@link claudeCredentialGenerationCurrent} result: undefined for a write that does not depend on
+ * it, and false fails closed. Store-side generation and selection checks stay in the predicate.
+ */
 export function captureAnthropicCredentialOwner(set: ProviderAccountSet, accountId: string) {
   return captureAnthropicCredentialOwnerForInstance("anthropic", set, accountId);
 }
@@ -59,17 +76,16 @@ export function captureAnthropicCredentialOwnerForInstance(instance: AnthropicIn
   const metadata = identityMetadata(row.credential);
   const needsReauth = row.needsReauth;
   const selection = { id: set.activeAccountId, revision: set.selectionRevision };
-  return (store: AuthStore, diskGeneration?: string, allowPaused = false): boolean => {
+  return (store: AuthStore, diskVerified?: boolean, allowPaused = false): boolean => {
     const current = store[instance];
     const account = current?.accounts.find(candidate => candidate.id === accountId);
     if (!account || (!allowPaused && account.paused) || account.loginId !== loginId
       || account.needsReauth !== needsReauth || credentialGeneration(account.credential) !== generation
       || identityMetadata(account.credential) !== metadata) return false;
-    if (diskGeneration !== undefined) {
+    if (diskVerified !== undefined) {
       if (instance === "anthropic2") return false;
       if (current?.activeAccountId !== selection.id || current?.selectionRevision !== selection.revision) return false;
-      const disk = detectClaudeCodeToken();
-      if (!disk || disk.expires <= Date.now() + REFRESH_SKEW_MS || credentialGeneration(disk) !== diskGeneration) return false;
+      if (!diskVerified) return false;
     }
     return true;
   };
