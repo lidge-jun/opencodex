@@ -143,7 +143,10 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
       // The Home itself announces when every link pump is waiting on a drain at once. The HTTP
       // diagnostic has no pump to observe and settles for the upstream having enqueued its third chunk.
       if (TRANSPORT === "websocket") {
-        for (;;) if ((await nextLine()).stalled === true) break;
+        const announced = (async () => { for (;;) if ((await nextLine()).stalled === true) return "stalled" as const; })();
+        const finished = Promise.all(signals.slice(1).map(signal => signal.cancelled)).then(() => "finished" as const);
+        // A load that completes before every pump waits never reached the condition being measured.
+        expect(await Promise.race([announced, finished])).toBe("stalled");
       } else await Promise.all(signals.slice(1).map(signal => signal.reachedStall));
       const enqueuedAtStallMiB = delivered.slice(1).map(bytes => Math.round(bytes / MiB));
       // Cut every socket in a seeded random order, at different points of its stalled stream.
@@ -155,12 +158,15 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
       child.stdin.write("peak\n");
       child.stdin.flush();
       const peakAnswer = await nextLine();
-      const peak = Number(peakAnswer.rss);
+      const peak = peakAnswer.rss === null ? Number.NaN : Number(peakAnswer.rss);
       const method = String(peakAnswer.method);
       const after = await ask("gc-rss");
       const delta = peak - idle;
       const budget = SOCKETS * LINK_WS_LIMITS.socketReservationBytes;
       console.log(JSON.stringify({ method, transport: TRANSPORT, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
+      // Only a kernel high-water mark, reset after the idle reading and read back, can satisfy the gate.
+      expect(method).toBe("kernel-vmhwm");
+      expect(Number.isFinite(peak) && peak >= idle).toBe(true);
       expect(delta).toBeLessThanOrEqual(budget);
     } finally {
       for (const client of clients) client.destroy();

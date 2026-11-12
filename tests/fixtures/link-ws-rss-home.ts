@@ -43,7 +43,14 @@ const kernel = readKernelPeak() !== null && resetKernelPeak();
 let highWater = process.memoryUsage().rss;
 const sample = (): void => { highWater = Math.max(highWater, process.memoryUsage().rss); };
 if (!kernel) setInterval(sample, 2).unref();
-const peak = (): number => (kernel ? readKernelPeak() ?? 0 : (sample(), highWater));
+// A kernel run whose peak read or reset fails reports a method that cannot satisfy the acceptance.
+let resetFailed = false;
+const peakAnswer = (): { rss: number | null; method: string } => {
+  if (!kernel) { sample(); return { rss: highWater, method: "sampled" }; }
+  const value = readKernelPeak();
+  if (value === null) return { rss: null, method: "kernel-unreadable" };
+  return { rss: value, method: resetFailed ? "kernel-reset-failed" : "kernel-vmhwm" };
+};
 let waiting = 0;
 let announced = false;
 setLinkPumpWaitObserverForTests(isWaiting => {
@@ -80,10 +87,10 @@ for (;;) {
   const next = await lines.next();
   if (next.done) break;
   const command = String(next.value).trim();
-  if (command === "peak") console.log(JSON.stringify({ rss: peak(), method: kernel ? "kernel-vmhwm" : "sampled" }));
+  if (command === "peak") console.log(JSON.stringify(peakAnswer()));
   else if (command === "gc-rss") {
     Bun.gc(true);
-    if (kernel) resetKernelPeak();
+    if (kernel && !resetKernelPeak()) resetFailed = true;
     highWater = process.memoryUsage().rss;
     console.log(JSON.stringify({ rss: highWater }));
   }
