@@ -3175,7 +3175,7 @@ export const en = {
   "anthropicGrant.replayed": "This reset already settled earlier. Nothing was used again.",
   "anthropicGrant.notUsableNow": "This reset cannot be used right now. Re-read the account.",
   "anthropicGrant.inFlight": "This reset is still being processed. Wait a moment, then re-read the account.",
-  "anthropicGrant.unresolvedPrior": "An earlier attempt on this reset is not confirmed yet. Retry that attempt instead of starting a new one.",
+  "anthropicGrant.unresolvedPrior": "An earlier reset attempt on this account is not confirmed yet. Retry that attempt instead of starting a new one.",
   "anthropicGrant.expired": "The earlier attempt could not be confirmed in time. Re-read the account before using a reset.",
   "anthropicGrant.identityMismatch": "That reset belongs to another account. Close this dialog and start again.",
   "anthropicGrant.sessionRequired": "Open the dashboard from its own login to use resets.",

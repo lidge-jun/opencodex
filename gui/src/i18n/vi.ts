@@ -3104,7 +3104,7 @@ export const vi: Record<TKey, string> = {
   "anthropicGrant.replayed": "Lần đặt lại này đã hoàn tất trước đó. Không có lần nào được sử dụng thêm.",
   "anthropicGrant.notUsableNow": "Hiện không thể sử dụng lần đặt lại này. Hãy đọc lại tài khoản.",
   "anthropicGrant.inFlight": "Lần đặt lại này vẫn đang được xử lý. Hãy đợi giây lát rồi đọc lại tài khoản.",
-  "anthropicGrant.unresolvedPrior": "Một lần thử trước đó với lần đặt lại này vẫn chưa được xác nhận. Hãy thử lại lần đó thay vì bắt đầu lần mới.",
+  "anthropicGrant.unresolvedPrior": "Một lần thử đặt lại trước đó trên tài khoản này vẫn chưa được xác nhận. Hãy thử lại lần đó thay vì bắt đầu lần mới.",
   "anthropicGrant.expired": "Không thể xác nhận lần thử trước đó kịp thời. Hãy đọc lại tài khoản trước khi dùng một lần đặt lại.",
   "anthropicGrant.identityMismatch": "Lần đặt lại đó thuộc tài khoản khác. Hãy đóng hộp thoại này và bắt đầu lại.",
   "anthropicGrant.sessionRequired": "Hãy mở dashboard từ phiên đăng nhập của chính nó để dùng các lần đặt lại.",

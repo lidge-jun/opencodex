@@ -2373,7 +2373,7 @@ export const zhTW: Record<TKey, string> = {
   "anthropicGrant.replayed": "此重設請求稍早已完成，未再次使用重設機會。",
   "anthropicGrant.notUsableNow": "目前無法使用此重設機會。請重新讀取帳號。",
   "anthropicGrant.inFlight": "此重設仍在處理中。請稍候再重新讀取帳號。",
-  "anthropicGrant.unresolvedPrior": "此重設機會先前的使用嘗試尚未確認。請重試該次請求，不要開始新的請求。",
+  "anthropicGrant.unresolvedPrior": "此帳號先前的重設嘗試尚未確認。請重試該次請求，不要開始新的請求。",
   "anthropicGrant.expired": "先前的使用嘗試未能及時確認。使用重設機會前，請重新讀取帳號。",
   "anthropicGrant.identityMismatch": "該重設機會屬於其他帳號。請關閉此對話框後重新開始。",
   "anthropicGrant.sessionRequired": "請從儀表板本身的登入入口開啟儀表板，才能使用重設機會。",

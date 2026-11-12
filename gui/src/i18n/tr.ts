@@ -3110,7 +3110,7 @@ export const tr: Record<TKey, string> = {
   "anthropicGrant.replayed": "Bu sıfırlama daha önce sonuçlandı. Yeniden bir sıfırlama kullanılmadı.",
   "anthropicGrant.notUsableNow": "Bu sıfırlama şu anda kullanılamaz. Hesabı yeniden okuyun.",
   "anthropicGrant.inFlight": "Bu sıfırlama hâlâ işleniyor. Biraz bekleyip hesabı yeniden okuyun.",
-  "anthropicGrant.unresolvedPrior": "Bu sıfırlamayla ilgili önceki girişim henüz doğrulanmadı. Yeni bir işlem başlatmak yerine o girişimi yeniden deneyin.",
+  "anthropicGrant.unresolvedPrior": "Bu hesaptaki önceki sıfırlama girişimi henüz doğrulanmadı. Yeni bir işlem başlatmak yerine o girişimi yeniden deneyin.",
   "anthropicGrant.expired": "Önceki girişim zamanında doğrulanamadı. Bir sıfırlama kullanmadan önce hesabı yeniden okuyun.",
   "anthropicGrant.identityMismatch": "Bu sıfırlama başka bir hesaba ait. Bu iletişim kutusunu kapatıp yeniden başlayın.",
   "anthropicGrant.sessionRequired": "Sıfırlamaları kullanmak için kontrol panelini kendi oturum açma sayfasından açın.",

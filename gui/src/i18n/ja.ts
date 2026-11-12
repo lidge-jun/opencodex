@@ -2991,7 +2991,7 @@ export const ja: Record<TKey, string> = {
   "anthropicGrant.replayed": "このリセットは以前に処理済みです。再度使用されてはいません。",
   "anthropicGrant.notUsableNow": "現在、このリセットは使用できません。アカウントを再読み込みしてください。",
   "anthropicGrant.inFlight": "このリセットは処理中です。少し待ってからアカウントを再読み込みしてください。",
-  "anthropicGrant.unresolvedPrior": "このリセットに対する前回の試行はまだ結果が確認できていません。新しい試行を始めず、前回の試行を再試行してください。",
+  "anthropicGrant.unresolvedPrior": "このアカウントでの前回のリセット試行はまだ結果が確認できていません。新しい試行を始めず、前回の試行を再試行してください。",
   "anthropicGrant.expired": "前回の試行は期限内に結果を確認できませんでした。リセットを使用する前にアカウントを再読み込みしてください。",
   "anthropicGrant.identityMismatch": "このリセットは別のアカウントのものです。このダイアログを閉じてやり直してください。",
   "anthropicGrant.sessionRequired": "リセットを使用するには、ダッシュボードに直接ログインして開いてください。",

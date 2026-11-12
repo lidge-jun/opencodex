@@ -2561,7 +2561,7 @@ export const ko: Record<TKey, string> = {
   "anthropicGrant.replayed": "이 리셋은 이전에 이미 처리되었습니다. 다시 사용되지 않았습니다.",
   "anthropicGrant.notUsableNow": "지금은 이 리셋을 쓸 수 없습니다. 계정을 다시 읽어 보세요.",
   "anthropicGrant.inFlight": "이 리셋은 아직 처리 중입니다. 잠시 기다린 뒤 계정을 다시 읽으세요.",
-  "anthropicGrant.unresolvedPrior": "이 리셋의 이전 시도가 아직 확인되지 않았습니다. 새로 시작하지 말고 그 시도를 다시 보내세요.",
+  "anthropicGrant.unresolvedPrior": "이 계정의 이전 리셋 시도가 아직 확인되지 않았습니다. 새로 시작하지 말고 그 시도를 다시 보내세요.",
   "anthropicGrant.expired": "이전 시도를 제때 확인하지 못했습니다. 리셋을 쓰기 전에 계정을 다시 읽으세요.",
   "anthropicGrant.identityMismatch": "이 리셋은 다른 계정에 속합니다. 이 대화상자를 닫고 다시 시작하세요.",
   "anthropicGrant.sessionRequired": "리셋은 대시보드에 직접 로그인한 세션에서만 사용할 수 있습니다.",

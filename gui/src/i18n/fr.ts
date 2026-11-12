@@ -3092,7 +3092,7 @@ export const fr: Record<TKey, string> = {
   "anthropicGrant.replayed": "Cette réinitialisation a déjà été traitée. Rien n’a été utilisé de nouveau.",
   "anthropicGrant.notUsableNow": "Cette réinitialisation ne peut pas être utilisée pour le moment. Relisez le compte.",
   "anthropicGrant.inFlight": "Cette réinitialisation est encore en cours. Patientez un instant, puis relisez le compte.",
-  "anthropicGrant.unresolvedPrior": "Une tentative précédente sur cette réinitialisation n’est pas encore confirmée. Réessayez cette tentative au lieu d’en lancer une nouvelle.",
+  "anthropicGrant.unresolvedPrior": "Une tentative de réinitialisation précédente sur ce compte n’est pas encore confirmée. Réessayez cette tentative au lieu d’en lancer une nouvelle.",
   "anthropicGrant.expired": "La tentative précédente n’a pas pu être confirmée à temps. Relisez le compte avant d’utiliser une réinitialisation.",
   "anthropicGrant.identityMismatch": "Cette réinitialisation appartient à un autre compte. Fermez cette boîte de dialogue et recommencez.",
   "anthropicGrant.sessionRequired": "Ouvrez le tableau de bord depuis sa propre page de connexion pour utiliser les réinitialisations.",

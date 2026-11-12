@@ -2516,7 +2516,7 @@ export const de: Record<TKey, string> = {
   "anthropicGrant.replayed": "Diese Rücksetzung wurde bereits zuvor abgeschlossen. Es wurde nicht erneut etwas verbraucht.",
   "anthropicGrant.notUsableNow": "Diese Rücksetzung kann gerade nicht verwendet werden. Lies das Konto erneut.",
   "anthropicGrant.inFlight": "Diese Rücksetzung wird noch verarbeitet. Warte einen Moment und lies das Konto dann erneut.",
-  "anthropicGrant.unresolvedPrior": "Ein früherer Versuch mit dieser Rücksetzung ist noch nicht bestätigt. Wiederhole diesen Versuch, statt einen neuen zu starten.",
+  "anthropicGrant.unresolvedPrior": "Ein früherer Rücksetzungsversuch für dieses Konto ist noch nicht bestätigt. Wiederhole diesen Versuch, statt einen neuen zu starten.",
   "anthropicGrant.expired": "Der frühere Versuch konnte nicht rechtzeitig bestätigt werden. Lies das Konto erneut, bevor du eine Rücksetzung verwendest.",
   "anthropicGrant.identityMismatch": "Diese Rücksetzung gehört zu einem anderen Konto. Schließe diesen Dialog und starte erneut.",
   "anthropicGrant.sessionRequired": "Öffne das Dashboard über seine eigene Anmeldung, um Rücksetzungen zu verwenden.",

@@ -2534,7 +2534,7 @@ export const zh: Record<TKey, string> = {
   "anthropicGrant.replayed": "此次重置此前已完成，未再次使用重置机会。",
   "anthropicGrant.notUsableNow": "此次重置目前不可用。请重新读取账号。",
   "anthropicGrant.inFlight": "此次重置仍在处理中。请稍等片刻，再重新读取账号。",
-  "anthropicGrant.unresolvedPrior": "此重置机会的较早一次尝试尚未确认。请重试该次请求，不要发起新请求。",
+  "anthropicGrant.unresolvedPrior": "此账号较早的一次重置尝试尚未确认。请重试该次请求，不要发起新请求。",
   "anthropicGrant.expired": "较早一次尝试未能及时确认。使用重置机会前请重新读取账号。",
   "anthropicGrant.identityMismatch": "该重置机会属于其他账号。请关闭此对话框后重新开始。",
   "anthropicGrant.sessionRequired": "请从仪表板自身的登录入口打开仪表板，才能使用重置机会。",

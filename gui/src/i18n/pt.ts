@@ -3134,7 +3134,7 @@ export const pt: Record<TKey, string> = {
   "anthropicGrant.replayed": "Este reset já foi concluído antes. Nada foi usado novamente.",
   "anthropicGrant.notUsableNow": "Este reset não pode ser usado no momento. Releia a conta.",
   "anthropicGrant.inFlight": "Este reset ainda está sendo processado. Aguarde um instante e releia a conta.",
-  "anthropicGrant.unresolvedPrior": "Uma tentativa anterior deste reset ainda não foi confirmada. Repita essa tentativa em vez de iniciar uma nova.",
+  "anthropicGrant.unresolvedPrior": "Uma tentativa anterior de reset nesta conta ainda não foi confirmada. Repita essa tentativa em vez de iniciar uma nova.",
   "anthropicGrant.expired": "A tentativa anterior não pôde ser confirmada a tempo. Releia a conta antes de usar um reset.",
   "anthropicGrant.identityMismatch": "Esse reset pertence a outra conta. Feche este diálogo e comece de novo.",
   "anthropicGrant.sessionRequired": "Abra o painel pelo login próprio dele para usar os resets.",
