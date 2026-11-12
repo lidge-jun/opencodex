@@ -205,6 +205,8 @@ export class CodexWebSocketActivity {
   private restoreResults(keys: readonly string[], seq: number): void {
     if (this.untrackedResults) return;
     for (const key of keys) {
+      // Already pending means newer work under the same key: it keeps its own generation, untagged.
+      if (this.pendingResults.has(key)) continue;
       this.returnedResults.delete(key);
       if (this.pendingResults.size >= MAX_PENDING_RESULTS) { this.protectUntracked(); return; }
       this.pendingResults.add(key);
