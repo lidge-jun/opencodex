@@ -1098,6 +1098,9 @@ function moderationVerdictFields(payload: unknown): boolean | null {
       }
       if (MODERATION_VERDICT_KEYS.has(key.toLowerCase())) {
         if (field === null || field === undefined) continue;
+        // A Responses terminal event names itself in its root `type` (`response.failed`): that is
+        // the transport's label for the carrier, not the upstream's verdict.
+        if (depth === 0 && key === "type" && typeof field === "string" && /^response\.[a-z_.]+$/.test(field)) continue;
         const normalized = normalizedFailureCode(typeof field === "number" || typeof field === "string" ? field : null);
         if (normalized === "" && typeof field !== "string") return false;
         if (normalized === "") continue;
@@ -1138,7 +1141,8 @@ export function isProviderModerationRefusal(
   // Hop only on evidence seen whole: the combo path classifies at most the first
   // MODERATION_EVIDENCE_LIMIT characters of a body, and the body readers pass `complete` instead.
   if (!complete && message.length >= MODERATION_EVIDENCE_LIMIT) return false;
-  if (message.length > 32_768) return false;
+  // The same bound as the bounded body readers (64 KiB), so no carrier silently loses a refusal.
+  if (message.length > 65_536) return false;
   const lower = message.toLowerCase();
   if (namesHardStopToken(message) || isHardPolicyOrOriginRefusal(message)
     || safetyRefusalCodeFromMessage(message) !== undefined || SAFETY_SYSTEM_WORDING.test(message)

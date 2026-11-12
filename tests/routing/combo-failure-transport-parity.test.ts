@@ -253,3 +253,22 @@ describe("vetoed moderation bodies agree across transports", () => {
     }
   });
 });
+
+test("a genuine coded refusal in a response.failed frame hops without cooling, like the bare error frame and HTTP", async () => {
+  const error = { type: "invalid_request_error", code: "content_filter", message: "The input was refused by moderation.",
+    innererror: { code: "ResponsibleAIPolicyViolation", content_filter_result: { hate: { filtered: true, severity: "high" } } } };
+  const frame = { type: "response.failed", status: "failed", response: { status: "failed", error } };
+  const ctx: RequestLogContext = { ...logCtx(), terminalHttpStatus: 400 };
+  const result = await preflightComboStreamResponse(new Response(
+    "data: " + JSON.stringify(frame) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+  ), ctx);
+  expect(result.kind).toBe("failed");
+  const failure = await consumeComboFailure(result.response);
+  const options = {
+    code: failure.upstreamCode, rootCode: failure.upstreamRootCode,
+    malformedResponseFormat: failure.malformedResponseFormat, openRouterOpaque400: failure.openRouterOpaque400,
+    providerModerationRefusal: failure.providerModerationRefusal,
+  };
+  expect(comboFailureDecision(failure.response.status, failure.classificationText, options)).toBe("hop");
+  expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("none");
+});
