@@ -22,6 +22,7 @@ import { createManagementSessionControl, requireManagementAuth, managementPrinci
 import { issueGuiSession, consumeGuiPairingGrant } from "../../src/server/gui-session";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { DESKTOP_GUI_PAIR_PATH, GUI_PAIR_CAPABILITY_VERSION } from "../../src/lib/gui-pair-capability";
+import { DESKTOP_AUTHORIZATION_PATH } from "../../src/server/gui-desktop-authorization";
 import { desktopGuiOrigin } from "../../src/lib/desktop-gui-origin";
 import { LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, createLocalAttestationProof } from "../../src/lib/local-management-attestation";
 
@@ -152,6 +153,82 @@ test("Desktop purpose cannot be forged onto ordinary pairing, remote roles, wron
       { grant: grant.grant }, cfg, s, Date.now(), { ingress: "public", peerAddress: "127.0.0.1", tailscaleUser: null, browserOrigin: ORIGIN })).toBeNull();
     expect(s.sessions.size).toBe(0);
   } finally { intent.dispose(); }
+});
+
+test("a configured localhost bind is unsupported and never advertises an unreachable Desktop command", async () => {
+  const cfg = { ...config(), hostname: "localhost" }, origin = "http://localhost:10100";
+  // #8427: startServer canonicalizes a localhost BIND to 127.0.0.1 before listening, so the
+  // configured spelling never names the served origin. Consent must not admit it in either form.
+  for (const value of [origin, ORIGIN]) expect(desktopGuiOrigin(cfg, value)).toBeNull();
+  expect(desktopGuiOrigin({ ...cfg, hostname: "localhost." }, origin)).toBeNull();
+  let discovery = 0, grantRequests = 0, printed = "";
+  const print = spyOn(console, "log").mockImplementation(value => { printed = String(value); });
+  const warn = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const result = await runGuiCommand(["pair", "--desktop", "--origin", origin, "--json"], {
+      loadConfig: () => cfg, openDefaultGui: async () => 99,
+      findLiveProxy: async () => { discovery++; return { source: "runtime", pid: 4242, port: cfg.port, hostname: "127.0.0.1" }; },
+      requestPairingGrant: async () => { grantRequests++; throw new Error("must not request a Desktop grant"); },
+    });
+    expect(result).toBe(1);
+    expect(printed).toBe("");
+    expect(discovery).toBe(0);
+    expect(grantRequests).toBe(0);
+  } finally { print.mockRestore(); warn.mockRestore(); }
+});
+
+test("literal loopback binds accept their exact origin and the localhost page alias only", () => {
+  const ipv4 = config(), ipv6 = { ...config(), hostname: "::1" };
+  expect(desktopGuiOrigin(ipv4, ORIGIN)).toBe(ORIGIN);
+  expect(desktopGuiOrigin(ipv4, "http://localhost:10100")).toBe("http://localhost:10100");
+  expect(desktopGuiOrigin(ipv6, "http://[::1]:10100")).toBe("http://[::1]:10100");
+  expect(desktopGuiOrigin(ipv6, "http://localhost:10100")).toBe("http://localhost:10100");
+  // Cross-host spellings stay distinct; no alias is normalized into another origin.
+  expect(desktopGuiOrigin(ipv4, "http://[::1]:10100")).toBeNull();
+  expect(desktopGuiOrigin(ipv6, ORIGIN)).toBeNull();
+  for (const value of [ORIGIN, "http://localhost:10100"])
+    expect(desktopGuiOrigin({ ...ipv4, hostname: "0.0.0.0" }, value)).toBeNull();
+  expect(desktopGuiOrigin(ipv4, "http://LOCALHOST:10100")).toBeNull();
+});
+
+test("a refused Desktop exchange leaves the issued grant unspent", async () => {
+  const cfg = config(), s: Extract<ManagementAuthState, { available: true }> = {
+    available: true, token: "fixture-admin-only", source: "environment", sessions: new Map(), pairingGrants: new Map(),
+  };
+  const origin = "http://localhost:10100", secret = "D".repeat(43), pid = 4242;
+  const session = issueGuiSession(new Request(origin, { headers: { host: "localhost:10100", Origin: origin } }), cfg, s)!;
+  const control = createManagementSessionControl(s);
+  const print = spyOn(console, "log").mockImplementation(() => {}), warn = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const result = await runGuiCommand(["pair", "--desktop", "--origin", origin], {
+      loadConfig: () => cfg, openDefaultGui: async () => 99,
+      findLiveProxy: async () => ({ source: "runtime", pid, port: cfg.port, hostname: cfg.hostname! }),
+      requestPairingGrant: (target, browser, options) => requestBoundGuiPairingGrant(target, browser, {
+        ...options, readRuntime: () => ({ pid, port: cfg.port, hostname: cfg.hostname!, attestationSecret: secret }),
+        fetchImpl: async (input, init) => {
+          if (String(input).endsWith("/healthz")) {
+            const nonce = new Headers(init?.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER)!;
+            return Response.json({ service: "opencodex", status: "ok", version: "fixture", uptime: 1, pid, port: cfg.port,
+              guiPairCapability: GUI_PAIR_CAPABILITY_VERSION }, { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, pid, cfg.port)! } });
+          }
+          const req = new Request(String(input), init);
+          expect(requireManagementAuth(req, s, cfg, { attestationSecret: secret, pid, port: cfg.port })).toBeNull();
+          return Response.json(deliverGuiPairingGrant(req, cfg, s), { status: 201 });
+        },
+      }),
+    });
+    expect(result).toBe(0);
+  } finally { print.mockRestore(); warn.mockRestore(); }
+  expect(s.pairingGrants.size).toBe(1);
+  const [digest, record] = [...s.pairingGrants.entries()][0]!;
+  expect(record.desktopPurpose && record.serverOrigin === origin && record.browserOrigin === origin).toBe(true);
+  // A wrong code is refused without spending the issued Desktop grant.
+  const wrongCode = new Request(origin + DESKTOP_AUTHORIZATION_PATH, { method: "POST", headers: {
+    host: "localhost:10100", Origin: origin, "x-opencodex-api-key": session.token,
+    "x-opencodex-gui-origin": origin, "x-opencodex-csrf-token": session.csrfToken,
+  }, body: JSON.stringify({ grant: "ocx_pair_" + "B".repeat(43) }) });
+  expect(control.authorizeLocalDesktop!(wrongCode, cfg, "ocx_pair_" + "B".repeat(43))).toBe(false);
+  expect(s.pairingGrants.has(digest)).toBe(true);
 });
 
 describe("one-use local CLI pairing intent", () => {

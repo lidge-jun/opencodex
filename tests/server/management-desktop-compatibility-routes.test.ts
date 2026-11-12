@@ -112,8 +112,8 @@ const desktopPosts = [
   ["settings", { startOnProxyStart: false, revision: "a".repeat(64), confirmed: true }],
 ] as const;
 
-function desktopBoundary(origin = "http://localhost:10100") {
-  const config = { providers: {}, runtimeRole: "standalone", hostname: "127.0.0.1", port: 10100 } as OcxConfig;
+function desktopBoundary(origin = "http://localhost:10100", hostname = "127.0.0.1") {
+  const config = { providers: {}, runtimeRole: "standalone", hostname, port: 10100 } as OcxConfig;
   const state: Extract<ManagementAuthState, { available: true }> = { available: true, token: "fixture-admin", source: "environment", sessions: new Map(), pairingGrants: new Map() };
   const bootstrap = issueGuiSession(new Request(origin, { headers: { host: new URL(origin).host, Origin: origin } }), config, state)!;
   const control = createManagementSessionControl(state), calls: string[] = [];
@@ -215,6 +215,21 @@ test("the Desktop authorization exchange refuses raw tokens, remembered sessions
   expect((await io.dispatch(post(io.bootstrap, { grant: once }))).status).toBe(403);
   // Replay neither re-mints the grant nor reaches a service call.
   expect(io.state.pairingGrants.has(digest(once))).toBe(false);
+  expect(io.calls).toEqual([]);
+});
+
+test("a configured localhost bind reports Desktop unsupported and refuses its authorization route", async () => {
+  const io = desktopBoundary("http://localhost:10100", "localhost");
+  const read = await io.dispatch(io.request("authorization"));
+  expect(read.status).toBe(200);
+  expect(await read.json()).toEqual({ ok: true, supported: false, authorized: false });
+  // `startServer` canonicalizes this bind to 127.0.0.1, so the configured spelling never names
+  // the served origin. The signed grant route is closed too: no usable command can be offered.
+  // A grant actually issued for the literal listener must still be unspent after the refusal.
+  const issued = createGuiPairingGrant("http://localhost:10100", { ...io.config, hostname: "127.0.0.1" },
+    io.state, Date.now(), true);
+  expect((await io.dispatch(io.request("authorization", { grant: issued.grant }))).status).toBe(403);
+  expect(io.state.pairingGrants.has(createHash("sha256").update(issued.grant).digest("base64url"))).toBe(true);
   expect(io.calls).toEqual([]);
 });
 

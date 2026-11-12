@@ -85,6 +85,25 @@ test("an ordinary loopback session offers explicit Desktop authorization and dis
   expect(requests.every(request => request.method === "GET")).toBe(true);
 });
 
+test("a host the server does not support offers no Desktop command a user could not run", async () => {
+  // #8427: a configured `localhost` bind is canonicalized to 127.0.0.1 before listening, so the
+  // page's own origin cannot be the served origin and the CLI refuses it. The server says so in
+  // `supported`, and the dashboard must not print a command that would fail.
+  server(); globalThis.fetch = (async (input, init) => {
+    const url = String(input), method = init?.method ?? "GET";
+    requests.push({ url, method });
+    if (url.endsWith("/authorization")) return Response.json({ ok: true, supported: false, authorized: false });
+    if (url.endsWith("/settings")) return Response.json({ ok: true, settings: { startOnProxyStart: false, revision: "a".repeat(64) } });
+    return Response.json(url.endsWith("/certificate") ? { ok: true, certificate: { supported: true, state: "prepared", busy: null, fingerprint: "A".repeat(64) } }
+      : { ok: true, runtime: { supported: true, running: false, phase: "off" } });
+  }) as typeof fetch;
+  const container = await mount();
+  expect(container.textContent).not.toContain("ocx gui pair --desktop --origin");
+  expect(container.querySelector('input[type="password"]')).toBeNull();
+  expect(button(container, "Register trust").disabled).toBe(true);
+  expect(requests.every(request => request.method === "GET")).toBe(true);
+});
+
 test.each([false, true])("a one-use Desktop grant enables actions only after authorization (authorized: %s)", async allowed => {
   const calls: { path: string; method: string }[] = []; let authorized = false;
   globalThis.fetch = (async (input, init) => {
