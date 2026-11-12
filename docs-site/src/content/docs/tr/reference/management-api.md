@@ -103,11 +103,11 @@ Doğrulanamayan kullanım HTTP 502, `error.code: "attempt_unresolved"` ve geçer
 Claude kullanım sıfırlamaları **Providers > Anthropic > Accounts** üzerinden aynı
 şekilde çalışır. Oturum açmış her hesap satırında kalan sıfırlamaları gösteren
 bir bilet rozeti bulunur; iletişim kutusu ikinci bir onaydan sonra bir sıfırlama
-kullanır. Sıfırlama, haftalık sıfırlama gününü değiştirmeden 5 saatlik ve
-haftalık limitleri yeniler. Bir talep zamanında yanıt vermezse iletişim kutusu
+kullanır. Her sıfırlama hakkının kendi son kullanma tarihi ve sıfırladığı limitler olduğundan iletişim kutusu hangisinin kullanılacağını seçtirir: şu anda kullanılabilen ve ilk sona eren hak önceden seçilir, şu anda kullanılamayan haklar gerekçeleriyle birlikte devre dışı gösterilir ve onay adımı o `grantId` gönderilmeden önce seçilen hakkın adını, son kullanma tarihini ve sıfırladığı limitleri gösterir. Sunucu seçilen hakkı yeniden denetler ve kullanılamayan bir hakkı `409 grant_not_usable` ile reddeder. Sıfırlama, haftalık sıfırlama gününü değiştirmeden o hakkın sıfırladığı limitleri (genellikle 5 saatlik ve
+haftalık limitleri) yeniler. Bir talep zamanında yanıt vermezse iletişim kutusu
 `operationId` değerini korur ve on dakika boyunca aynı kimlikle yeniden deneme
 olanağı sunar; Claude Code istemcisi de bu şekilde toparlanır. Bu süre içinde
-aynı sıfırlama hakkı için yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
+o hesapta hangi sıfırlama hakkı için olursa olsun yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
 panelinden kullanılabilir: tek başına yönetici belirteci `403 session_required`
 yanıtını alır.
 
