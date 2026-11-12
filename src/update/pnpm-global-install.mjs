@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep, win32 } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, win32 } from "node:path";
 import { pnpmInvocationForPath } from "./pnpm-invocation.mjs";
 import { pnpmPackageUsesGlobalStoreLinks, verifyPnpmInstallTree } from "./transactional-install.mjs";
 

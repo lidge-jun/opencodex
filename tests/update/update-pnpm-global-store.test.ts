@@ -154,6 +154,16 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(result.ok).toBe(false);
   });
 
+  test("the relative link pnpm itself writes (a ../ climb from the global group into the store) is accepted", () => {
+    const layout = globalStoreLayout(root);
+    const text = relative(dirname(layout.exposed), layout.real);
+    expect(text.startsWith("..")).toBe(true);
+    unlinkSync(layout.exposed);
+    symlinkSync(text, layout.exposed);
+    expect(verifyPnpmInstallTree(layout.exposed, "1.0.0", layout.store, layout.globalRoot)).toEqual({ ok: true, failures: [] });
+    expect(resolveOwner(layout)).toMatchObject({ ok: true, owner: { globalStore: true, storePath: layout.store } });
+  });
+
   test("pnpm 11 uses the same proof", () => {
     const layout = globalStoreLayout(root, { pnpmVersion: "11.20.0" });
     expect(resolveOwner(layout)).toMatchObject({ ok: true, owner: { globalStore: true } });

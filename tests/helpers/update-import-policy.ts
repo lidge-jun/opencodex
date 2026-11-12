@@ -142,7 +142,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
   "src/update/install-detection.mjs": [
     "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
     // Dependency-free pnpm store-layout spelling shared with the tree verifier (#8183).
-    "import { isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
+    "import { isInMarkedPnpmCustomStore, isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/job-pinned-start.ts": [
     "import { guardedSpawn } from \"./mutation-guard.mjs\";",
@@ -302,10 +302,10 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { acquireOwnershipMutationLease, ownershipMutationLeaseChildEnvironment, unprivilegedOwnershipMutationEnvironment, } from \"../service/ownership-mutation-lease.mjs\";"
   ],
   "src/update/pnpm-global-install.mjs": [
-    "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
-    "import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from \"node:path\";",
+    "import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
+    "import { basename, dirname, isAbsolute, join, parse, relative, resolve, win32 } from \"node:path\";",
     "import { pnpmInvocationForPath } from \"./pnpm-invocation.mjs\";",
-    "import { verifyPnpmInstallTree } from \"./transactional-install.mjs\";"
+    "import { pnpmPackageUsesGlobalStoreLinks, verifyPnpmInstallTree } from \"./transactional-install.mjs\";"
   ],
   "src/update/pnpm-invocation.mjs": [
     "import { existsSync } from \"node:fs\";",
@@ -378,7 +378,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { globalPaths } from \"node:module\";",
     "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
     "import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from \"node:path\";",
-    "import { isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
+    "import { isInMarkedPnpmCustomStore, isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/tray-update-plan.mjs": [],
   "src/update/update-failure-guidance.mjs": [
