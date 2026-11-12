@@ -1026,6 +1026,12 @@ function foldKey(key: string): string {
   return key.toLowerCase().replace(/[_-]/g, "");
 }
 
+/** Response-object fields that echo the caller's request rather than describe the failure. */
+const RESPONSE_REQUEST_ECHO_KEYS = new Set([
+  "instructions", "tools", "tool_choice", "text", "reasoning", "input", "output", "prompt", "include",
+  "metadata", "user", "safety_identifier", "prompt_cache_key", "previous_response_id", "conversation",
+]);
+
 /**
  * Structured safety or policy flags (`safety_violation`, `blocked`, `policy_violation`). A
  * flag is the upstream's own safety verdict; only Azure's per-category content-filter results,
@@ -1124,11 +1130,14 @@ function moderationVerdictFields(payload: unknown): boolean | null {
     // filter inspected. A param on any other record marks an unrelated validation error.
     const recordStatesModeration = typeof record.code === "string" && MODERATION_REFUSAL_CODES.has(normalizedFailureCode(record.code));
     // A Responses terminal event (`response.failed`) carries the whole response object, which echoes
-    // the caller's instructions, tools and text format; only its error record is the verdict.
+    // the caller's request (instructions, tools, text format...). Those echoes say nothing about the
+    // verdict; every other field of the response object is still read.
     const responseCarrier = depth === 0 && typeof record.type === "string" && /^response\.[a-z_.]+$/.test(record.type);
     for (const [key, field] of Object.entries(record)) {
       if (responseCarrier && key === "response" && field && typeof field === "object" && !Array.isArray(field)) {
-        if (!visit((field as Record<string, unknown>).error, depth + 1, insideFilterResult)) return false;
+        const verdictFields = Object.fromEntries(Object.entries(field as Record<string, unknown>)
+          .filter(([responseKey]) => !RESPONSE_REQUEST_ECHO_KEYS.has(responseKey)));
+        if (!visit(verdictFields, depth + 1, insideFilterResult)) return false;
         continue;
       }
       if (key.toLowerCase() === "param" && !recordStatesModeration && typeof field === "string" && field.trim() !== "" && !isAllowedModerationParam(field)) {

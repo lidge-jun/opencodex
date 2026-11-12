@@ -408,4 +408,23 @@ describe("every prose field beside a coded verdict must describe the moderation 
     expect(comboFailureDecision(failure.response.status, failure.classificationText, options)).toBe("hop");
     expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("none");
   });
+
+  test("evidence on a response.failed carrier outside its error record still vetoes the no-cool hop", async () => {
+    const error = { code: "content_filter", message: "The input was refused by moderation." };
+    for (const extra of [
+      { status_code: 429 },
+      { safety_violation: true },
+      { note: "The model gpt-9 does not exist" },
+      { incomplete_details: { reason: "Your account is past due" } },
+    ]) {
+      const frame = { type: "response.failed", response: { status: "failed", ...extra, error } };
+      const result = await preflightComboStreamResponse(new Response(
+        "data: " + JSON.stringify(frame) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+      ), logCtx());
+      expect(result.kind).toBe("failed");
+      const failure = await consumeComboFailure(result.response);
+      const scope = comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal });
+      expect({ extra, scope }).not.toEqual({ extra, scope: "none" });
+    }
+  });
 });
