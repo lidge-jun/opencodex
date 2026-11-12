@@ -1,18 +1,13 @@
 name: PR Labeler
 
-# pull_request_target always loads this workflow from the repository DEFAULT
-# branch, which is `dev`. A change lands on the live labeler as soon as it is on
-# `dev` — same model as enforce-issue-quality.yml.
+# Called by pr-gates.yml (#7654), which owns the pull_request_target trigger and
+# starts this job only for opened, edited, synchronize, labeled and unlabeled.
+# pull_request_target always loads the caller from the repository DEFAULT branch,
+# which is `dev`, and a local reusable workflow loads from that same commit, so a
+# change lands on the live labeler as soon as it is on `dev` — same model as
+# enforce-issue-quality.yml. The `github` context here is the caller's event.
 on:
-  pull_request_target:
-    # labeled/unlabeled let a human type-label change enqueue a fresher run in the
-    # per-PR concurrency group, cancelling any in-flight title sync that started
-    # before the override (PR #518 race).
-    types: [opened, edited, synchronize, labeled, unlabeled]
-
-concurrency:
-  group: pr-labeler-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  workflow_call:
 
 permissions:
   contents: read
@@ -29,6 +24,14 @@ permissions:
 jobs:
   label:
     runs-on: ubuntu-latest
+    # labeled/unlabeled let a human type-label change enqueue a fresher run in the
+    # per-PR concurrency group, cancelling any in-flight title sync that started
+    # before the override (PR #518 race). The group sits on this job, not on the
+    # caller: this job exists only when the caller decided to run it, so a skipped
+    # event can never enter (or cancel) the group.
+    concurrency:
+      group: pr-labeler-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
       - name: Checkout labeler script (default-branch trusted code)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

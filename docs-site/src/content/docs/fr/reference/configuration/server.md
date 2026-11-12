@@ -31,6 +31,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | activé lorsqu'il est utilisable | Options du service auxiliaire de recherche Web. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | activé lorsqu'il est utilisable | Options du service auxiliaire de description d'images. |
 | `images?` | `OcxImagesConfig` | sélection automatique OpenAI | Options de relais d'images autonomes pour Codex `image_gen`. |
+| `telemetry?` | `OcxTelemetryConfig` | activé par défaut après information d'un humain | État du consentement à la télémétrie quotidienne anonyme (`decision`, `decidedAt`, `noticeShownAt`). Rien n'est envoyé tant qu'une personne n'a pas vu l'avis ou donné son accord. Remplacé par `OCX_TELEMETRY=0` ou `DO_NOT_TRACK=1`. Voir [Télémétrie (`telemetry`)](#télémétrie-telemetry) et [Télémétrie et confidentialité](/fr/guides/telemetry/). |
 
 Si une ancienne version de développement a modifié les métadonnées de l'historique de reprise avant que la prise en charge de la sauvegarde n'existe, exécutez
 `ocx recover-history --legacy-openai --yes` pour forcer la récupération du fournisseur natif.
@@ -154,6 +155,35 @@ La commande `ssh -L` simple écoute sur votre interface de bouclage locale et co
 `ssh -g -L`, une publication de conteneur trop large ou des modes de redirection qui exposent le côté client sur
 `0.0.0.0`. Liez explicitement avec `ssh -L 127.0.0.1:20100:localhost:10100` en cas de doute.
 :::
+
+## Télémétrie (`telemetry`)
+
+La télémétrie d'utilisation quotidienne anonyme n'est activée par défaut qu'après qu'une personne a vu l'avis d'information (dans la fenêtre du tableau de bord ou une invite de terminal interactif). Le bloc `telemetry` dans `config.json` enregistre cet état de consentement :
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| Champ | Type | Par défaut | Signification |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | non défini (indécis) | Choix explicite de l'utilisateur. `"declined"` désactive la télémétrie et supprime `<OPENCODEX_HOME>/telemetry-id.json` ; `"accepted"` active les rapports quotidiens. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | non défini | Horodatage UTC de l'enregistrement de `decision`. Seuls les jours calendaires UTC complets strictement postérieurs au jour UTC de `decidedAt ?? noticeShownAt` (`day > formatUtcDay(decidedAt ?? noticeShownAt)`) sont envoyés ; le jour du consentement et les jours antérieurs ne sont jamais envoyés rétroactivement. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | non défini | Horodatage UTC auquel un humain a vu l'avis dans le tableau de bord web ou un terminal interactif. Lorsque `decision` n'est pas défini, la télémétrie n'envoie de rapport que si `noticeShownAt` est défini (`default-on`) ; sans lui, le proxy reste en `awaiting-notice`. |
+
+Le point de terminaison du collecteur (`https://telemetry.opencodex.me/v1/events`) est une constante du code et ne peut pas être configuré dans `config.json`.
+
+Deux variables d'environnement remplacent `config.json` et désactivent immédiatement la télémétrie sans modifier `config.json` (observer l'une d'elles au démarrage ou lors d'un cycle enregistre aussi `ineligibleThroughDay` dans `<OPENCODEX_HOME>/telemetry-state.json` et supprime `<OPENCODEX_HOME>/telemetry-id.json`, de sorte que ces jours ne sont jamais envoyés ultérieurement) :
+
+- `OCX_TELEMETRY=0` (accepte aussi `false`, `off` ou `no`, insensible à la casse)
+- `DO_NOT_TRACK=1` (accepte aussi `true` ou `yes`, insensible à la casse)
+
+`ocx config set telemetry` et `ocx config unset telemetry` sont refusés, et `ocx config import` ignore tout bloc `telemetry` importé pour tous les appelants en préservant l'état existant ; utilisez plutôt `ocx telemetry enable` (nécessite un terminal humain interactif avec invite de confirmation, sinon échoue avec `agent_consent_required` / `tty_required`), `ocx telemetry disable`, `ocx telemetry status [--json]` ou le commutateur **Détails du proxy** du tableau de bord. Voir [Télémétrie et confidentialité](/fr/guides/telemetry/) pour le schéma complet et la politique de conservation.
 
 ## Nettoyage du stockage
 

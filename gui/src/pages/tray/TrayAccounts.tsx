@@ -18,7 +18,7 @@ function QuotaRows({ account, locale, t }: { account: TrayAccount; locale: strin
   const windows = quotaWindows(account.quota);
   if (!windows.length) return <p className="tray-missing">{t(account.unavailable ? 'startup.tray.unavailable' : 'pws.dashboard.noQuota')}</p>;
   return <>{windows.map(window => {
-    const label = 'key' in window ? t(window.key!) : window.label;
+    const label = 'key' in window ? t(window.key!) : ('displayLabel' in window && window.displayLabel ? window.displayLabel : window.label);
     const reset = relativeReset(window.reset, locale);
     const percent = finite(window.percent) ? Math.min(100, window.percent) : null;
     return <div className="tray-quota" key={window.id}>

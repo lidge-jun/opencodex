@@ -60,8 +60,8 @@ D11 Client honors HTTP 429 Retry-After (and 503): persist retryAfterUntil in tel
 D12 Privacy statement (README.md, all 7 readme/README.*.md, docs-site/src/content/docs/reference/code-signing.md and its tr copy, SPONSORS.md): replace the SignPath "will not transfer any information..." sentence with an accurate statement: opencodex sends one anonymous daily usage summary (version, platform, counts; never prompts, outputs, keys, accounts, hosts or paths) to telemetry.opencodex.me only after the person installing or operating it has seen the notice (dashboard popup or interactive CLI prompt) and has not declined; it can be turned off at install time in that prompt and anytime with ocx telemetry disable, OCX_TELEMETRY=0, DO_NOT_TRACK=1 or Proxy details; project-wide aggregates are public; otherwise data goes only where the user configures. Keep the README Privacy line in English in every translation (as today) unless readme/i18n-manifest.json rules require otherwise. code-signing.md: also fix the "carry none of your ... usage data" claim.
 D13 GUI popup dismissal (Escape/backdrop/close) records NOTHING; only Continue (PUT /api/telemetry) records decision and notice; the popup returns on the next app start while undecided. Remove POST /api/telemetry/notice entirely (server route, registry entry, capability exemptions, GUI call, tests, docs).
 D14 Stats semantics: activeInstalls in totals and installs in breakdowns are INSTALL-DAYS (sum of daily reporting installs); add totals.avgDailyActiveInstalls (install-days / days in range, rounded to 1 decimal). Dashboard shows "Avg daily active installs" as the KPI with install-days in the tooltip.
-D15 Small-cohort protection (collector): add an installs column (count of contributing reports) to daily_models and daily_errors (and dailyByProvider derivation); in every breakdown (providers, models, versions, platforms, channels, errors, dailyByProvider per day) fold rows with fewer than 10 install-days in the selected range into "other"; drop "other" if it is itself below 10; totals/daily/heatmap unchanged. Document the residual subtraction risk.
-D16 Rate limit: 120 reports/hour per salted IP hash (shared IP / CGNAT capacity); 429 with Retry-After.
+D15 Small-cohort protection (collector; revised after the round-2 review of #8304): every breakdown (providers, models, versions, platforms, channels, errors, dailyByProvider) publishes a value only for (day, key) pairs reported by at least 10 DISTINCT installs on that day, and applies the threshold before summing days into the range. One install therefore cannot pass it alone by reporting on many days or by spreading usage over many provider/family rows. Distinct per-day counts: daily_installs (one row per install-day) for version/platform/channel; daily_errors.installs (+1 per report per cause); daily_provider_installs and daily_family_installs (+1 per report per provider and per model family, however many daily_models rows the report carries). Single-valued dimensions (version, platform, install channel) fold a day's sub-threshold rows into that day's "other", published only if it reaches 10 on that day; the versions list keeps 49 named rows and folds the tail into "other". Multi-valued dimensions (providers, model families, error causes) drop sub-threshold rows instead of folding them, because a bucket of several such rows can be one install counted several times; a native "other" key needs 10 distinct installs like any key. totals/daily/heatmap unchanged. Document the residual subtraction risk.
+D16 Rate limit: 120 reports/hour per salted hourly hash of the client key (shared IP / CGNAT capacity); 429 with Retry-After. The key comes only from cf-connecting-ip: IPv4 per address, IPv4-mapped IPv6 as its IPv4 address, other IPv6 collapsed to its /64 prefix (one subscriber usually holds a whole /64). x-forwarded-for is never consulted; a request without a valid cf-connecting-ip shares one fixed bucket.
 D17 Dashboard labels all figures "self-reported by opencodex installs"; docs note reports are unauthenticated and can be forged within rate limits.
 D18 Collector-first rollout: any roster/contract change must be deployed to the collector before a client release emits it (README of collector + structure doc).
 D19 Guide discloses the salted hourly IP hash for rate limiting (pruned after 2 hours).
@@ -101,5 +101,27 @@ D20 Dashboard: GitHub release download totals follow pagination (per_page=100, f
 
 - Reports are unauthenticated. Rate limits and the self-reported label bound, but do not prevent, forged
   figures.
-- Folding small rows into `other` limits single-install exposure; a suppressed value can still be
-  approximated by subtracting published rows from published totals when only one row is folded.
+- The per-day distinct-install threshold keeps one install's numbers out of every breakdown row, but
+  totals, daily and heatmap stay unfiltered, so the combined value of suppressed rows can still be
+  approximated by subtracting published rows from published totals.
+- The rate limit keys IPv6 on the /64, so a client holding a larger prefix (a /48 has 65,536 /64s)
+  gets one budget per /64; requests without cf-connecting-ip all share one budget.
+- Installs without an installer (the standalone `ocx.exe`, npm) meet SignPath's install-time conditions
+  only through the first-run notice (CLI prompt or dashboard popup); D21 accepts that reading.
+
+## Delivery (round 1)
+
+| Layer | Fix commit | Merged upward as |
+| --- | --- | --- |
+| 1 plan | `3e4597d1ba` | — |
+| 2 client core | `9e0284d392` | `64ac26aa7d` (layer 1 merged in) |
+| 3 GUI | `5b6092ca14` | `ea8175f2b7` |
+| 4 collector | `057c57e8be` | `54019606ff` |
+| 5 docs | `d8fc29c2c1` | `4ebb3c1499` |
+| 6 dashboard | `ea78acfa0f` | `bed30cf2b7` |
+
+The layer 5 merge conflicted where layers 2 and 5 both rewrote the privacy statement (README, seven
+translations, `readme/i18n-manifest.json`, `code-signing.md`, Turkish `code-signing.md`) and
+`structure/telemetry.md`. Layer 5's text was kept: it carries the same D12 statement plus the guide link,
+and its structure doc is a superset of layer 2's. Layer 2's README test passes against it. Branches move by
+merge commits, never by force-push.

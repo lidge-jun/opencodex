@@ -608,11 +608,21 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
         text = await response.text();
       }
       expect(sends).toBe(2);
-      expect(replacement.cancelled).toBe(true);
-      expect(text).not.toContain("resp_replacement");
-      if (stream && !combo) {
-        expect(text).toContain("resp_original");
-        expect(response.headers.get("x-ratelimit-remaining-requests")).toBe("7");
+      if (ending === "reset") {
+        // A read error behind a committed head is dev's reset lane: the fresh attempt's body is
+        // published under the head the client already holds, metadata differences included.
+        expect(replacement.cancelled).toBe(false);
+        expect(text).toContain("resp_replacement");
+        expect(text).not.toContain("resp_original");
+      } else {
+        // A clean pre-output EOF has to agree on the identity subset. This replacement differs
+        // in `x-codex-turn-state`, so it is refused and the original head keeps its own stream.
+        expect(replacement.cancelled).toBe(true);
+        expect(text).not.toContain("resp_replacement");
+        if (stream && !combo) {
+          expect(text).toContain("resp_original");
+          expect(response.headers.get("x-ratelimit-remaining-requests")).toBe("7");
+        }
       }
     } finally {
       gate.resolve();

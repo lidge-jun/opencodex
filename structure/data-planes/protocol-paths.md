@@ -376,7 +376,7 @@ probe uses the bridge's credential-free affinity headers, existing plan and auth
 short-lived selection lease; uncertain admission keeps the bridge. Without a runnable plan search alone
 does not decline native Messages. `count_tokens` and the planner lack runtime facts and remain conservative.
 
-Failover combos reuse this lane for eligible concrete first-party Anthropic children through the existing `core-combo-native.ts` source/dispatcher seam. Only strict failover without a default effort qualifies; policy/JEV/other strategies and bridge-only rewrites retain the bridge. The shared executor inherits the combo's attempt, target budget, prepaid permit and gated callbacks, opening no second tracker/final row. Key source system/messages/tools/cache markers retain the native allowlist, image/tool-id safety; explicit operator TTL wins, otherwise TTL-less combo breakpoints stay unchanged. OAuth keeps its preamble/metadata/tool transformations. Counts/previews still decline logical combos without picking accounts. A source declaring a tool the translated body drops with no out-of-body lane (`hasNativeOnlyTool` in `src/claude/inbound-content-options.ts`: `bash_*`, `text_editor_*`, ...; unrestricted `web_search_*` stays portable, while `web_fetch_*` and a domain- or location-restricted `web_search_*` stay portable only to a first-party Anthropic bridge child) makes every translated child unpickable under any `unrepresentable` policy, so a refused native child surfaces its own failure instead of continuing without the tool; non-combo translated routes are unchanged. [Commit boundaries](../transports/responses-combo-boundaries.md) own failover and preserve upstream read evidence before OAuth framing; `tests/claude-integration/messages-native-combo.test.ts` covers the boundary and mocked prefix preservation, not live cache-hit metrics.
+Failover combos reuse this lane for eligible concrete Anthropic children, including key-auth compatible endpoints, through the existing `core-combo-native.ts` source/dispatcher seam. OAuth remains first-party only. Only strict failover without a default effort qualifies; policy/JEV/other strategies and bridge-only rewrites retain the bridge. The shared executor inherits the combo's attempt, target budget, prepaid permit and gated callbacks, opening no second tracker/final row. Key source system/messages/tools/cache markers retain the native allowlist, image/tool-id safety; explicit operator TTL wins, otherwise TTL-less combo breakpoints stay unchanged. OAuth keeps its preamble/metadata/tool transformations. Counts/previews still decline logical combos without picking accounts. A source declaring a tool the translated body drops with no out-of-body lane (`hasNativeOnlyTool` in `src/claude/inbound-content-options.ts`: `bash_*`, `text_editor_*`, ...; unrestricted `web_search_*` stays portable, while `web_fetch_*` and a domain- or location-restricted `web_search_*` stay portable only to a first-party Anthropic bridge child; a typed `advisor_*` declaration rides that lane too but is optional, so it never makes a child unpickable) makes every translated child unpickable under any `unrepresentable` policy, so a refused native child surfaces its own failure instead of continuing without the tool; non-combo translated routes are unchanged. [Commit boundaries](../transports/responses-combo-boundaries.md) own failover and preserve upstream read evidence before OAuth framing; `tests/claude-integration/messages-native-combo.test.ts` covers the boundary and mocked prefix preservation, not live cache-hit metrics.
 
 With the switch on, a declined route re-marks its bridge entry with the decline reason (after
 any `effort-row` / `fast-row`), so the trace says why the bridge was taken; with it off nothing is
@@ -391,7 +391,7 @@ is `envelope.freshBody()` when a source envelope exists, otherwise the ingress's
 `src/server/messages-native.ts` is imported lazily, only for an eligible route. Native Messages errors reuse the shared OpenCode Zen guidance before resolving client retry headers. A Zen rate-limit 429, identified by message or explicit `rate_limit_error` type, without an upstream retry hint receives the same 15-second hint as the translated path; quota/billing and spent-usage-limit errors remain unchanged and valid upstream retry headers retain precedence. Both native Messages and `src/server/responses/adapter-dispatch.ts` forward parsed error types and codes to the shared guidance. Local workflow errors retain the Anthropic envelope and refusal metadata under the [physical-send contract](../transports/responses-spend.md#workflow-physical-send-ceiling).
 
 Configured admission-key model scope also applies to separately billed Advisor models before
-managed native key or OAuth dispatch. Scope intersections retain each member's tool-model restrictions. `src/server/messages-native-scope.ts` resolves active
+managed native key or OAuth dispatch. On the translated lane `src/server/responses/request-prepare.ts` applies the same per-declaration check to the settled route and drops a denied `advisor_*` declaration instead of refusing, recording `advisor-tool-outside-model-scope`, because the Advisor is optional there. Scope intersections retain each member's tool-model restrictions. `src/server/messages-native-scope.ts` resolves active
 top-level and system-message tool declarations, including replacement, removal and re-offer;
 deferred definitions remain scoped because tool search can load them. Missing Advisor model
 identity cannot satisfy a model list. Anthropic rejects tool changes in a turn-scoped system
@@ -434,7 +434,7 @@ fails closed. Because the source body is never mutated, each build — including
 re-selection moves to another domain — decides from the full envelope copy the lane was given.
 
 Client identity. `src/adapters/anthropic/client-identity.ts` captures a bounded observed CLI or Desktop Code bundle
-on an opaque request-local handle: recognized CLI/SDK/Desktop Code UA plus valid session UUID, `X-App: cli`, JS and Node
+on an opaque request-local handle: recognized CLI/SDK/Desktop Code UA plus valid session UUID, `X-App: cli` (or `cli-bg`, a background session), JS and Node
 SDK markers are required. Optional allowlisted SDK and request-id fields retain valid scalars.
 The TypeScript Agent SDK's `sdk-ts` entrypoint is accepted alongside `cli`, `sdk-cli` and `sdk`,
 with the same required headers and bounds, so its first-party native feature betas are retained.
@@ -464,7 +464,7 @@ an exact credential generation and rechecks the current route and binding before
 Route changes during asynchronous preparation re-enter bounded admission; pause, manual selection,
 credential replacement and provider UUID changes cannot authorize a stale send. Planning and
 `count_tokens` select, refresh and write no accounts. The body retains the native preamble when
-recognized, otherwise gets the Claude Code identity block, with declared OAuth tool names.
+recognized, otherwise gets the Claude Code identity block, with declared OAuth tool names (prefixed unless the client is observed, below).
 `src/adapters/anthropic/account-metadata.ts` copy-on-write aligns a valid JSON-string
 `metadata.user_id.account_uuid` and per-account `device_id` with the serving provider UUID.
 The local pool id is never used; malformed, absent and unknown metadata stays unchanged.
@@ -480,7 +480,7 @@ The [instance runtime contract](../providers/anthropic-account-pool.md#instance-
 owns per-pool state and credential/target fencing.
 Native OAuth Messages collect top-level and typed inline tool declarations before rewriting declared
 client names in tool choices, uses, references, additions and removals, including typed tool-result
-content. Typed built-in names stay fixed; ambiguous original or wire-name collisions are refused.
+content; an observed Claude Code client (`hasObservedAnthropicClientIdentity`) keeps its own names, as its OAuth login sends them, so tool-name-keyed first-party features (auto mode's server review) see its tools, and its reverse map stays empty. Typed built-in names stay fixed; ambiguous original or wire-name collisions are refused for every caller.
 The copy-on-write traversal leaves input schemas, tool arguments, unknown containers and cache markers
 (including lifetimes) opaque. Nested inline support is structural; it does not assert upstream acceptance.
 Key-auth and caller-forward requests retain their metadata. The answer's
@@ -497,13 +497,13 @@ does not generate or sign billing text. Counting uses the same observed bundle. 
 native beta allowance retains the source-listed inline-tool, per-turn control, thinking display,
 advisor, scoped-cache and context-management schemas. The table in
 `src/adapters/anthropic/beta-body-pairs.ts` owns admission and final-header pairing for
-`context_management` and `thinking.block_binding`. First-party key and OAuth requests admit
-`thinking-binding-controls-2026-08-01` for every caller; `context-management-2025-06-27` retains
-its observed-native-client requirement. After caller and operator betas merge, the builder removes
+`context_management`, `safeguards` and `thinking.block_binding`. First-party key and OAuth requests admit
+`thinking-binding-controls-2026-08-01` for every caller; `context-management-2025-06-27` and `dangerous-tool-use-2026-09-03` (auto mode's server review: context in `safeguards`, verdicts relayed unchanged in `message_delta.delta.safeguard_results`) retain
+the observed-native-client requirement. After caller and operator betas merge, the builder removes
 unsupported or unpaired fields copy-on-write; binding also requires adaptive or enabled thinking.
 Operator betas can enable first-party fields; compatible and cloud destinations receive neither caller
 beta nor paired field. Header-only thinking controls remain valid for transformation diagnostics. OAuth rewrites context edits' `exclude_tools`
-to the prefixed wire names of declared client tools. Translated Responses constructs its own thinking
+to the prefixed wire names of declared client tools when names are prefixed. Translated Responses constructs its own thinking
 configuration and never copies these native-only fields. Advisor may perform sub-inference
 already requested by the caller; no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
 and compatible destinations receive no first-party allowance. These handles grant no credential authority.

@@ -611,7 +611,7 @@ describe("credential-bound plain-main Responses quota", () => {
     type: "response.completed", response: { id, status: "completed", output: [] },
   })}\n\n`);
 
-  test("a head committed before the reset keeps the arrival head and never publishes replacement quota", async () => {
+  test("a head committed before the reset keeps the arrival head and its quota while publishing the replacement body", async () => {
     observe();
     const renewalSpy = spyOn(mainCache, "renewMainQuotaDispatchForAttempt");
     const claimSpy = spyOn(mainCache, "isMainQuotaDispatchWsClaimed");
@@ -656,9 +656,13 @@ describe("credential-bound plain-main Responses quota", () => {
       gate.resolve();
       const text = await response.text();
       expect(httpCalls).toBe(2);
-      expect(replacementCancelled).toBe(true);
-      expect(text).toContain("fixture-original");
-      expect(text).not.toContain("fixture-replacement");
+      // A read error behind a committed head keeps dev's reset behaviour: the replacement body is
+      // published under the head the client already holds.
+      expect(replacementCancelled).toBe(false);
+      expect(text).toContain("fixture-replacement");
+      expect(text).not.toContain("fixture-original");
+      // The head keeps the arrival attempt's quota headers, so the arrival proof still owns the
+      // observation: publishing the replacement's 99 would describe headers the client never saw.
       expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
       expect(getMainPolicyQuota()?.weeklyPercent).toBe(17);
       expect(renewalSpy).toHaveBeenCalledTimes(2);

@@ -165,15 +165,17 @@ import {
   resetStreamedOpaqueBlobLogContext,
   consoleGoUploadRejectionBody,
   CONSOLE_GO_UPLOAD_RETRY_DELAY_MS,
-  reasoningEffortRejectionText,
+  refusedReasoningEffortDowngrade, withRawBodyReasoningEffort,
 } from "./core-opaque-recovery";
 import type { RequestLogContext } from "../request-log";
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
-import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
-import { ambiguousResendAllowanceFor, createPhysicalReplayGuard, selfContainedResponsesBody, UnsafePhysicalReplacement } from "./reset-replay";
+import type { RequestFailureStage } from "../../lib/request-failure-model";
+import {
+  ambiguousResendAllowanceFor, ambiguousResendAuthorizer, UnsafePhysicalReplacement,
+} from "./reset-replay";
+import { createNativeReplayGuard } from "./native-replay-guard";
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
-import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { createNativeContinuationDispatch } from "./native-continuation-send";
 import { guardPassthroughCompletion, isResetReplacementStream, parseOutboundRequestBody, selectPassthroughResetResponse } from "./passthrough-completion";
@@ -765,10 +767,15 @@ export async function preparePassthroughExchange(
     );
     const configuredTransientSendBudgetExhausted = (): boolean =>
       transientSendPolicy() !== null && transientSendAttempts() === 0;
-    const replayGuard = createPhysicalReplayGuard(() => isXaiResponsesDestination(route.provider)
-      && collectProviderExecutedCallTypes(clientToolAuthorizationBody).size > 0);
-    const requestIsSelfContained = (): boolean => selfContainedResponsesBody(parsed._rawBody) && replayGuard.isSelfContained(request);
-    const recordPhysicalSend = (next?: () => void) => (body?: BodyInit | null): void => replayGuard.record(request, body, next);
+    // Judged once on the inbound body and once per send on the body that physically leaves; the
+    // split and its reasons live in the sibling module.
+    const replayGuard = createNativeReplayGuard({
+      providerExecuted: () => isXaiResponsesDestination(route.provider)
+        && collectProviderExecutedCallTypes(clientToolAuthorizationBody).size > 0,
+      parsed,
+      currentRequest: () => request,
+    });
+    const recordPhysicalSend = replayGuard.sendHandler;
     /**
      * The operator's replacement grant for THIS logical request.
      *
@@ -778,7 +785,8 @@ export async function preparePassthroughExchange(
      * child shares, so every ambiguous stage of this request draws on the same grant.
      */
     const ambiguousResend = () =>
-      ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend);
+      ambiguousResendAllowanceFor(route.provider, replayGuard.isSelfContained, claimAmbiguousResend);
+    const authorizeAmbiguousResend = ambiguousResendAuthorizer(ambiguousResend, () => safeHostLabel(request.url));
     /**
      * The pre-header row of the stage table, asked through the one gate.
      *
@@ -786,8 +794,8 @@ export async function preparePassthroughExchange(
      * the server tree; routing the answer through `authorizeResendForRecovery` here is what
      * keeps the decision derived from the table rather than restated as a boolean.
      */
-    const claimRecoveryResend = (stage: Parameters<typeof authorizeResendForRecovery>[0]): boolean => {
-      const allowed = authorizeResendForRecovery(stage, "connection-reset", ambiguousResend()).allowed;
+    const claimRecoveryResend = (stage: RequestFailureStage): boolean => {
+      const allowed = authorizeAmbiguousResend(stage);
       if (allowed) replayGuard.authorize();
       return allowed;
     };
@@ -1056,7 +1064,8 @@ export async function preparePassthroughExchange(
     }
 
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
-    // At most one reasoning-effort downgrade per request.
+    // Direct requests get one reasoning-effort downgrade. Combo candidates may walk down the
+    // published ladder one refused rung at a time; the request send budget bounds those retries.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
     /** Rebind the refreshed wire before transferring this request to the Chat pipeline. */
     function bindRefreshedAdapter(refreshedAdapter: typeof transportState.adapter) {
@@ -1090,6 +1099,7 @@ export async function preparePassthroughExchange(
     let rateLimitRetries = 0;
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
+      preserveFailureResponse?: Response,
     ): Promise<Response | { failed: Response | PassthroughAdapterHandoff }> => {
       const retryAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -1140,6 +1150,8 @@ export async function preparePassthroughExchange(
         { allowFinalRecoveryReserve: transientSendPolicy() === null },
       );
       if (recovery === "empty-completion") allowance.attempts = Math.min(1, allowance.attempts);
+      // An unfunded combo rung keeps the upstream refusal for combo failover instead of a budget 429.
+      if (preserveFailureResponse && allowance.attempts < 1) { request.releaseBodyObservation?.(); return { failed: preserveFailureResponse }; }
       const recoveryAccounting = copilotSendAccounting(allowance.permit);
       try {
         return await fetchWithTransientRetry(
@@ -1690,7 +1702,7 @@ export async function preparePassthroughExchange(
           stream: upstreamRequestsStream,
           httpOnly: canonicalBufferedJson,
           preOutputRefusalHold: preOutputRefusalHold(),
-          onPhysicalSend: (retryRequest, body) => replayGuard.record(retryRequest, body),
+          onPhysicalSend: replayGuard.record,
           onResponse: (response, retryAuthCtx, retryRequest) => {
             adoptCodexWsStage(response, logCtx);
             captureAffinityResponse(
@@ -1822,34 +1834,24 @@ export async function preparePassthroughExchange(
         continue passthroughRecovery;
       }
     }
-    // Reasoning-effort downgrade: a rung the catalog still advertises can be refused upstream --
-    // the metadata records the model's ladder, not this account's entitlement (a Muse Code
-    // subscription gates max on muse-spark-1.3-contributor, for example). Learn the refusal so
-    // later turns clamp before dispatch, then replay once at the next lower published rung
-    // instead of failing the turn; requestedEffort/effectiveEffort keep both values in usage.
-    if (!reasoningEffortDowngradeGuard.attempted) {
-      const rejectionText = await reasoningEffortRejectionText(
-        upstreamResponse,
-        reasoningEffortDowngradeGuard.attempted,
-        upstream.signal,
-      );
-      const downgrade = rejectionText === undefined
-        ? undefined
-        : planReasoningEffortDowngrade({
-            provider: route.provider,
-            modelId: parsed.modelId,
-            requested: parsed.options.reasoning,
-            rejectionText,
-          });
-      if (downgrade && !configuredTransientSendBudgetExhausted()) {
-        reasoningEffortDowngradeGuard.attempted = true;
-        parsed.options.reasoning = downgrade.effort;
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        const result = await rebuildAndRefetch("reasoning-effort-downgrade");
-        if ("failed" in result) return result.failed;
-        upstreamResponse = result;
-        continue passthroughRecovery;
-      }
+    // A rung the catalog advertises can still be refused upstream -- metadata describes the
+    // model's ladder, not this account's entitlement. Learn each refusal so later turns clamp
+    // before dispatch. Direct requests repair once; combo candidates may retry the next lower
+    // published rung until it works, the ladder ends, or the send budget is spent.
+    const downgrade = await refusedReasoningEffortDowngrade(upstreamResponse, upstream.signal, reasoningEffortDowngradeGuard,
+      options.comboAttempt, { provider: route.provider, modelId: parsed.modelId, requested: parsed.options.reasoning });
+    if (downgrade && !configuredTransientSendBudgetExhausted()) {
+      reasoningEffortDowngradeGuard.attempted = true;
+      parsed.options.reasoning = downgrade.effort;
+      parsed._rawBody = withRawBodyReasoningEffort(parsed._rawBody, downgrade.effort);
+      // A combo keeps the refusal, so an unfunded rung still reaches combo failover as the original 400.
+      const refusal = options.comboAttempt ? upstreamResponse : undefined;
+      if (!refusal) try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+      const result = await rebuildAndRefetch("reasoning-effort-downgrade", refusal);
+      if ("failed" in result) return result.failed;
+      if (refusal) try { void refusal.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+      upstreamResponse = result;
+      continue passthroughRecovery;
     }
 
     // The WebSocket row of the same table (#4191). A Codex socket that closed or failed under its

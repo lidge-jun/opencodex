@@ -42,6 +42,8 @@ shipped v1 config는 marker 2의 단일 옵션 행으로 자동 이관됩니다.
 `~/.opencodex/config.json.pre-openai-tiers-v2.bak`에 한 번 보존되며 다음 명령으로 복원합니다:
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
 
+[Claude OAuth 클라이언트 버전 오류](/ko/guides/claude-code/#claude-oauth-클라이언트-버전-오류)
+
 ## 인증 모드
 
 프로바이더 설정에서 쓸 수 있는 `authMode`는 세 가지이며, 기본값은 `key`입니다. 빌트인 레지스트리는
@@ -213,7 +215,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 106개 들어 있습니다. 키 방식 85개, OAuth 17개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 107개 들어 있습니다. 키 방식 86개, OAuth 17개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 

@@ -162,6 +162,15 @@ function isClaudeModelId(modelId: string | undefined): boolean {
   return tail.startsWith("claude-");
 }
 
+/**
+ * The Claude root flattening above, for other wires that front Claude with a translated tool
+ * schema (Devin's GetChatMessage). Root oneOf/anyOf/allOf branches merge into one object;
+ * nested schemas, property values and literal data are copied as they are.
+ */
+export function flattenClaudeRootToolParameters(parameters: unknown): Record<string, unknown> {
+  return ensureZenRootObjectSchema(parameters, false);
+}
+
 function isAzureOpenAiChatTarget(provider: OcxProviderConfig): boolean {
   try {
     const host = new URL(provider.baseUrl).hostname.toLowerCase();

@@ -9,12 +9,24 @@
  * one whose second send cannot do more than run the same inference again, and the whole
  * logical request gets a fixed number of replacements no matter how many legs ask.
  *
- * Callers select the body to judge. Native passthrough judges physical outbound bodies and
- * adapter substitution metadata; translated dispatch retains its own inbound-body policy.
+ * The judgment is made on the inbound body the client sent, which is already parsed. It is
+ * conservative for the outbound request: the proxy expands `previous_response_id` and lowers
+ * hosted tools into client execution, so every hazard that reaches the wire was visible here,
+ * and a hazard visible here may already have been removed. A cheap fail-closed answer beats
+ * re-parsing a multi-megabyte outbound body on every send.
+ *
+ * One removal is certain enough to judge on directly: a `previous_response_id` this proxy
+ * expanded from its own replay state. The native adapter strips that id from every send, so the
+ * wire carries the complete input and no continuation handle (#8453).
+ *
+ * Native passthrough judges BOTH: this inbound body, plus the physical outbound body and adapter
+ * substitution metadata through `createPhysicalReplayGuard`, because a rebuild after the grant
+ * was claimed can reintroduce a hazard the inbound body never had.
  */
-import type { OcxProviderConfig } from "../../types";
+import type { OcxParsedRequest, OcxProviderConfig } from "../../types";
 import { resetReplayPolicyFor } from "../../providers/key-failover";
-import type { AmbiguousResendAllowance } from "../../lib/request-resend-gate";
+import { authorizeResendForRecovery, type AmbiguousResendAllowance, type ResendDecision } from "../../lib/request-resend-gate";
+import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { AdapterRequest } from "../../adapters/base";
 import { parseOutboundRequestBody } from "./outbound-request-body";
 
@@ -114,6 +126,57 @@ export function selfContainedResponsesBody(body: unknown): boolean {
     if (item.type === undefined) return typeof item.role === "string" && MESSAGE_ROLES.has(item.role);
     return typeof item.type === "string" && CLIENT_INPUT_ITEM_TYPES.has(item.type);
   });
+}
+
+/**
+ * The native passthrough body to judge: the inbound body, minus a `previous_response_id` the
+ * proxy already expanded into `input`.
+ *
+ * `expandPreviousResponseInput` keeps the id on the expanded body because Kiro and Cursor read
+ * their conversation ids from it, so the inbound body always names it. The native Responses
+ * adapter (and the Azure adapter that wraps it) removes it whenever `_previousResponseInputExpanded`
+ * is set, which is the flag read here. Judging the id that never reaches the wire refused every
+ * chained Codex turn, so an operator's `retryOnReset` opt-in applied only to first turns.
+ *
+ * An id that was NOT expanded is forwarded to the destination and still refuses: that send
+ * continues state stored on the origin.
+ */
+export function nativePassthroughReplayJudgmentBody(
+  parsed: Pick<OcxParsedRequest, "_rawBody" | "_previousResponseInputExpanded">,
+): unknown {
+  const body = parsed._rawBody;
+  if (parsed._previousResponseInputExpanded !== true || !record(body) || !Object.hasOwn(body, "previous_response_id")) {
+    return body;
+  }
+  const { previous_response_id: _expandedLocally, ...wire } = body;
+  return wire;
+}
+
+/**
+ * Log why an ambiguous reset was not replaced. Operators who opted in otherwise saw only the
+ * terminal 429 and could not tell a missing policy from a request judged not replayable or an
+ * allowance already spent (#8453). Host label, stage and reason only: no body, no credential.
+ */
+export function warnAmbiguousResendRefusal(decision: ResendDecision, hostLabel: string): void {
+  if (decision.allowed || !decision.refusal.startsWith("ambiguous-")) return;
+  console.warn(`[upstream-retry] ambiguous reset not replaced (${hostLabel}, ${decision.stage}): ${decision.refusal}`);
+}
+
+/**
+ * One gate answer for every ambiguous row of a lane -- pre-header, post-header SSE, and a Codex
+ * WebSocket that died under its create frame -- asked through `authorizeResendForRecovery` and
+ * with its refusal reason logged. The allowance and host label are read per ask, because the
+ * recovery loop reassigns the provider row and the request URL.
+ */
+export function ambiguousResendAuthorizer(
+  allowance: () => AmbiguousResendAllowance | undefined,
+  hostLabel: () => string,
+): (stage: RequestFailureStage) => boolean {
+  return stage => {
+    const decision = authorizeResendForRecovery(stage, "connection-reset", allowance());
+    warnAmbiguousResendRefusal(decision, hostLabel());
+    return decision.allowed;
+  };
 }
 
 /**

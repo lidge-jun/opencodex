@@ -200,7 +200,7 @@ test("empty tokens do not prove a duplicate", async () => {
 
 test("B rejects every local import request before detector/flow entry and leaves the CLI fixture unchanged", async () => {
   const before = readFileSync(cliFile, "utf8");
-  const detect = spyOn(localTokens, "detectClaudeCodeToken").mockImplementation(() => { throw new Error("detector must not run"); });
+  const detect = spyOn(localTokens, "detectClaudeCodeTokenAsync").mockImplementation(() => { throw new Error("detector must not run"); });
   const flow = spyOn(AnthropicOAuthFlow.prototype, "login").mockResolvedValue(credential("browser"));
   try {
     for (const importLocal of ["fallback", "only"] as const) {
@@ -393,7 +393,7 @@ test("A's factory still imports the valid local CLI fixture without rewriting it
 });
 
 test("A force-login still bypasses CLI import and starts the browser flow", async () => {
-  const detect = spyOn(localTokens, "detectClaudeCodeToken").mockImplementation(() => { throw new Error("force-login must not detect"); });
+  const detect = spyOn(localTokens, "detectClaudeCodeTokenAsync").mockImplementation(() => { throw new Error("force-login must not detect"); });
   const flow = spyOn(AnthropicOAuthFlow.prototype, "login").mockResolvedValue(credential("a-browser"));
   try {
     expect((await OAUTH_PROVIDERS.anthropic!.login({}, { forceLogin: true })).access).toBe("synthetic-a-browser-access");

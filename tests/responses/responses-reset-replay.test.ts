@@ -40,6 +40,18 @@ describe("early reset selection", () => {
       cancel() { state.cancels++; return state.hangCancel ? new Promise<void>(() => {}) : undefined; },
     }, { highWaterMark: 0 }), { headers: originalHeaders });
   }
+  /** A prelude, then a clean close once `gate` opens: the prelude-only EOF this PR recovers. */
+  function cleanEofOriginal(gate: Promise<void>, state: { waiting?: () => void }) {
+    let sent = false;
+    return new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(prelude)); return; }
+        state.waiting?.();
+        await gate;
+        controller.close();
+      },
+    }, { highWaterMark: 0 }), { headers: originalHeaders });
+  }
   function trackedReplacement(state: { cancelled: boolean }, headers: Record<string, string> = replacementHeaders, status = 200) {
     return new Response(new ReadableStream<Uint8Array>({
       pull(controller) { controller.enqueue(new TextEncoder().encode(completed)); controller.close(); },
@@ -78,7 +90,7 @@ describe("early reset selection", () => {
     expect(replacement.cancelled).toBe(false);
   });
 
-  test("a deadline commits the original head; a later mismatched replacement is refused", async () => {
+  test("a deadline commits the original head; a later read-error replacement is still published", async () => {
     useFakeTimers();
     const gate = Promise.withResolvers<void>();
     const waiting = Promise.withResolvers<void>();
@@ -104,10 +116,12 @@ describe("early reset selection", () => {
     expect(decoder.decode((await reader.read()).value)).toBe(": keepalive\n\n");
     gate.resolve();
     const rest = await readAll(reader);
-    expect(acceptedAfterCommit).toBe(false);
-    expect(replacement.cancelled).toBe(true);
-    expect(rest.text).toBe(prelude);
-    expect(String(rest.error)).toContain("fixture reset");
+    // A read error after the head is committed keeps the reset lane's permissive replacement:
+    // the transport died, so the fresh attempt stands in for it whatever its headers say.
+    expect(acceptedAfterCommit).toBe(true);
+    expect(replacement.cancelled).toBe(false);
+    expect(rest.text).toBe(completed);
+    expect(rest.error).toBeUndefined();
   });
 
   test("a matching replacement still continues behind a committed head", async () => {
@@ -179,7 +193,7 @@ describe("early reset selection", () => {
     expect(replacement.cancelled).toBe(true);
   });
 
-  test("a replacement in flight when the deadline fires must then match the committed head", async () => {
+  test("a replacement in flight when the deadline fires is published after the committed head", async () => {
     useFakeTimers();
     const started = Promise.withResolvers<void>();
     const pending = Promise.withResolvers<Response>();
@@ -195,17 +209,16 @@ describe("early reset selection", () => {
     jest.advanceTimersByTime(15_000);
     const published = await selected;
     expect(commits).toEqual(["original"]);
-    expect(accepts(candidate)).toBe(false);
+    expect(accepts(candidate)).toBe(true);
     const read = readAll(published.body!.getReader());
     pending.resolve(candidate);
     const rest = await read;
-    expect(replacement.cancelled).toBe(true);
-    expect(rest.text).toBe(prelude);
-    expect(String(rest.error)).toContain("fixture reset");
+    expect(replacement.cancelled).toBe(false);
+    expect(rest.text).toBe(completed);
     expect(commits).toEqual(["original"]);
   });
 
-  test("an inspection window commits a quiet original head, then keeps inspecting behind it", async () => {
+  test("an inspection window commits a quiet original head, then still serves a read-error replacement", async () => {
     useFakeTimers();
     const gate = Promise.withResolvers<void>();
     const waiting = Promise.withResolvers<void>();
@@ -241,10 +254,9 @@ describe("early reset selection", () => {
     expect(second).toBe(": keepalive\n\n");
     gate.resolve();
     const rest = await readAll(reader);
-    expect(acceptedAfterCommit).toBe(false);
-    expect(replacement.cancelled).toBe(true);
-    expect(rest.text).toBe(prelude);
-    expect(String(rest.error)).toContain("fixture reset");
+    expect(acceptedAfterCommit).toBe(true);
+    expect(replacement.cancelled).toBe(false);
+    expect(rest.text).toBe(completed);
     expect(order).toEqual(["commit:original", "returned"]);
   });
 
@@ -289,19 +301,16 @@ describe("early reset selection", () => {
 });
 
 describe("deferred response metadata", () => {
-  const baseHeaders = { "content-type": "text/event-stream", "x-request-id": "id-one", "x-codex-turn-state": "turn-one", "x-ratelimit-remaining-requests": "7", "x-model": "model-one" };
+  // A `Response` built from a string closes cleanly, so every case in this block is the
+  // prelude-only EOF path: the strict identity subset applies behind a committed head.
+  const baseHeaders = { "content-type": "text/event-stream", "x-request-id": "id-one", "x-codex-turn-state": "turn-one", "x-ratelimit-remaining-requests": "7", "openai-model": "model-one" };
   test.each([
     ["status", { status: 201, headers: baseHeaders }],
     ["status text", { statusText: "Different", headers: baseHeaders }],
     ["content type", { headers: { ...baseHeaders, "content-type": "application/json" } }],
     ["turn state", { headers: { ...baseHeaders, "x-codex-turn-state": "turn-two" } }],
-    ["quota", { headers: { ...baseHeaders, "x-ratelimit-remaining-requests": "6" } }],
-    ["model", { headers: { ...baseHeaders, "x-model": "model-two" } }],
-    ["request id", { headers: { ...baseHeaders, "x-request-id": "id-two" } }],
-    ["missing header", { headers: { "content-type": "text/event-stream" } }],
-    ["extra header", { headers: { ...baseHeaders, "x-new-provider-field": "value" } }],
-    ["set-cookie", { headers: { ...baseHeaders, "set-cookie": "fixture=value" } }],
-  ])("refuses a replacement with different %s and cancels its body", async (_name, replacementInit) => {
+    ["model", { headers: { ...baseHeaders, "openai-model": "model-two" } }],
+  ])("refuses a clean-EOF replacement with a different %s and cancels its body", async (_name, replacementInit) => {
     let cancelled = false;
     const original = new Response(prelude, { headers: baseHeaders });
     const replacement = new Response(new ReadableStream<Uint8Array>({
@@ -313,6 +322,23 @@ describe("deferred response metadata", () => {
     expect(result.status).toBe(200);
     expect([...result.headers]).toEqual([...original.headers]);
     expect(cancelled).toBe(true);
+  });
+
+  test.each([
+    ["quota", { headers: { ...baseHeaders, "x-ratelimit-remaining-requests": "6" } }],
+    ["request id", { headers: { ...baseHeaders, "x-request-id": "id-two" } }],
+    ["date", { headers: { ...baseHeaders, "date": "Tue, 10 Nov 2026 00:00:00 GMT" } }],
+    ["missing volatile header", { headers: { "content-type": "text/event-stream", "x-codex-turn-state": "turn-one", "openai-model": "model-one" } }],
+    ["extra provider header", { headers: { ...baseHeaders, "x-new-provider-field": "value" } }],
+    ["set-cookie", { headers: { ...baseHeaders, "set-cookie": "fixture=value" } }],
+    ["content-type parameter", { headers: { ...baseHeaders, "content-type": "text/event-stream; charset=utf-8" } }],
+  ])("accepts a clean-EOF replacement whose only difference is %s", async (_name, replacementInit) => {
+    const original = new Response(prelude, { headers: baseHeaders });
+    const result = deferProtocolSafeResetRecovery(original, responseLog,
+      async () => new Response(completed, replacementInit), { keepalive: "none" });
+    expect(await result.text()).toBe(completed);
+    // The head the client already holds never changes, even when the body behind it does.
+    expect([...result.headers]).toEqual([...original.headers]);
   });
 
   test("accepts equal metadata and leaves ordinary calls unchanged", async () => {
@@ -328,7 +354,7 @@ describe("deferred response metadata", () => {
     expect(recovered).toBe(false);
   });
 
-  test("refuses a changed repeated header", async () => {
+  test("accepts a changed repeated header", async () => {
     const first = new Headers(baseHeaders);
     first.append("set-cookie", "a=1");
     first.append("set-cookie", "b=2");
@@ -337,10 +363,12 @@ describe("deferred response metadata", () => {
     second.append("set-cookie", "b=3");
     const result = deferProtocolSafeResetRecovery(new Response(prelude, { headers: first }), responseLog,
       async () => new Response(completed, { headers: second }), { keepalive: "none" });
-    expect(await result.text()).toBe(prelude);
+    expect(await result.text()).toBe(completed);
   });
 
-  test("retains the original read error on metadata refusal", async () => {
+  test("publishes a read-error replacement whose metadata differs from the committed head", async () => {
+    // Dev's reset path: the transport died after the head was committed, so a fresh attempt's
+    // body stands in for it whatever its headers say. This is the behaviour the PR must keep.
     const failure = new Error("original reset");
     let sent = false;
     const original = new Response(new ReadableStream<Uint8Array>({ pull(controller) {
@@ -348,8 +376,23 @@ describe("deferred response metadata", () => {
       else controller.error(failure);
     } }), { headers: baseHeaders });
     const result = deferProtocolSafeResetRecovery(original, responseLog, async () => new Response(completed, {
-      headers: { ...baseHeaders, "x-request-id": "id-two" },
+      headers: { ...baseHeaders, "x-request-id": "id-two", "x-codex-turn-state": "turn-two", "openai-model": "model-two" },
     }), { keepalive: "none" });
+    const reader = result.body!.getReader();
+    // The replacement body stands in for the original's buffered prelude as well: the client
+    // already holds the head, and the replacement stream carries its own complete turn.
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(completed);
+    expect((await reader.read()).done).toBe(true);
+  });
+
+  test("retains the original read error when no replacement is offered", async () => {
+    const failure = new Error("original reset");
+    let sent = false;
+    const original = new Response(new ReadableStream<Uint8Array>({ pull(controller) {
+      if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(prelude)); }
+      else controller.error(failure);
+    } }), { headers: baseHeaders });
+    const result = deferProtocolSafeResetRecovery(original, responseLog, async () => null, { keepalive: "none" });
     const reader = result.body!.getReader();
     expect(new TextDecoder().decode((await reader.read()).value)).toBe(prelude);
     await expect(reader.read()).rejects.toBe(failure);
@@ -424,6 +467,45 @@ describe("createPhysicalReplayGuard", () => {
     expect(() => guard.record(request(safeBody), safeBody, () => { throw new Error("send budget exhausted"); }))
       .toThrow("send budget exhausted");
     expect(() => guard.record(request(unsafeBody), unsafeBody)).not.toThrow();
+  });
+
+  test("a send that fails before leaving keeps judging against the body that did leave", () => {
+    const guard = createPhysicalReplayGuard(() => false);
+    guard.record(request(safeBody), safeBody);
+    guard.authorize();
+    // `next` throws after the judgment: the replacement never physically left, so the previous
+    // physical attempt is still the one a later rebuild has to match.
+    expect(() => guard.record(request(safeBody), safeBody, () => { throw new Error("authorize refused"); }))
+      .toThrow("authorize refused");
+    expect(guard.isSelfContained(request(safeBody))).toBe(true);
+    expect(guard.isSelfContained(request(unsafeBody))).toBe(false);
+  });
+
+  test("an authorized replacement carrying hosted substitutions is refused", () => {
+    const guard = createPhysicalReplayGuard(() => false);
+    guard.record(request(safeBody), safeBody);
+    guard.authorize();
+    expect(() => guard.record(request(safeBody, true), safeBody)).toThrow(UnsafePhysicalReplacement);
+    // The refusal spends the authorization: a later ordinary send is not a replacement.
+    expect(() => guard.record(request(safeBody, true), safeBody)).not.toThrow();
+  });
+
+  test("an authorized replacement whose send executes provider-side calls is refused", () => {
+    let providerExecuted = false;
+    const guard = createPhysicalReplayGuard(() => providerExecuted);
+    guard.record(request(safeBody), safeBody);
+    providerExecuted = true;
+    guard.authorize();
+    expect(() => guard.record(request(safeBody), safeBody)).toThrow(UnsafePhysicalReplacement);
+    expect(() => guard.record(request(safeBody), safeBody)).not.toThrow();
+  });
+
+  test("a body that is not the string the attempt sent is judged on its own", () => {
+    const guard = createPhysicalReplayGuard(() => false);
+    guard.record(request(safeBody), safeBody);
+    expect(guard.isSelfContained(request(unsafeBody))).toBe(false);
+    // A non-string body (a stream, FormData) cannot be inspected, so it is never replaceable.
+    expect(guard.isSelfContained({ body: new Blob([safeBody]) } as unknown as AdapterRequest)).toBe(false);
   });
 });
 

@@ -1,4 +1,14 @@
-import { codexAccountModelRefusal, codexAccountModelRefusalPayload, hasConflictingCodexModelRefusalEnvelopes, type CodexAccountModelRefusal } from "../../combos/failover";
+import {
+  codexAccountModelRefusal,
+  codexAccountModelRefusalPayload,
+  envelopeErrorRecord,
+  envelopeRecordCode,
+  hasConflictingCodexModelRefusalEnvelopes,
+  isMalformedResponseFormatRecord,
+  isOpenRouterOpaque400EnvelopeRoot,
+  isOpenRouterOpaque400Record,
+  type CodexAccountModelRefusal,
+} from "../../combos/failover";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { comboFailureDecision } from "../../combos";
 import { httpStatusFromTerminalError } from "../../lib/errors";
@@ -10,6 +20,7 @@ import { createSseInspector } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
+import { isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
 
@@ -231,10 +242,26 @@ function bareErrorStatus(payload: unknown): number | undefined {
         ? Number(value)
         : undefined)
     .find(value => value !== undefined && value >= 400 && value <= 599);
-  const code = typeof error.code === "string"
-    ? error.code
-    : typeof event.code === "string" ? event.code : null;
+  const rawCode = error.code ?? event.code;
+  const code = typeof rawCode === "string"
+    ? rawCode
+    : typeof rawCode === "number" && Number.isFinite(rawCode)
+      ? String(rawCode)
+      : null;
   if (explicitStatus === undefined && code === "invalid_request_error") return 400;
+  // Status is the record's own evidence; whether that record speaks for the envelope is the
+  // decision's question, so a root hard stop still reports 400 instead of inventing a 5xx.
+  if (explicitStatus === undefined && isOpenRouterOpaque400Record(envelopeErrorRecord(event))) {
+    return 400;
+  }
+  // OpenRouter-style envelopes carry the HTTP status as a bare numeric `code` (e.g. `code: 400`)
+  // with no separate status field. `httpStatusFromTerminalError` only understands symbolic codes,
+  // so without this the opaque 400 stringifies to "400", reads as unknown, and falls back to 502 —
+  // which cools the target on the generic 5xx path instead of taking the intended no-cool hop.
+  if (explicitStatus === undefined
+    && typeof rawCode === "number" && Number.isInteger(rawCode) && rawCode >= 400 && rawCode <= 599) {
+    return rawCode;
+  }
   return explicitStatus ?? httpStatusFromTerminalError({
     type: typeof error.type === "string" && error.type !== "error" ? error.type : undefined,
     code,
@@ -270,38 +297,98 @@ function bareErrorIsRetryable(payload: unknown): boolean {
     return false;
   }
   const event = payload as Record<string, unknown>;
-  const nested = event.error;
-  const error = nested && typeof nested === "object" && !Array.isArray(nested)
-    ? nested as Record<string, unknown>
-    : event;
-  const code = typeof error.code === "string"
-    ? error.code
-    : typeof event.code === "string" ? event.code : null;
+  // The record selection, the opaque verdict and the code conflict rule are shared with the HTTP
+  // consumer; only the carrier (one parsed frame here, one body there) differs.
+  const record = envelopeErrorRecord(event);
+  const error = record ?? event;
+  const rootCode = envelopeRecordCode(event);
+  const recordCode = envelopeRecordCode(record);
   const message = typeof error.message === "string"
     ? error.message
     : typeof event.message === "string" ? event.message : "";
+  const rawRecord = {
+    ...(error as Record<string, unknown>),
+    ...(typeof event.detail === "string" ? { detail: event.detail } : {}),
+  };
+  const malformedResponseFormat = status === 400 ? isMalformedResponseFormatRecord(rawRecord, message) : undefined;
+  const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400EnvelopeRoot(event) : undefined;
+  // A conflicting root and record code hop only when each would hop on its own, so a root hard
+  // stop is never hidden behind a retryable record code (and a retryable pair keeps dev's hop).
   return comboFailureDecision(status, message, {
-    code, codexModelRefusal: terminalModelRefusal(status, event),
+    code: recordCode ?? rootCode, rootCode,
+    codexModelRefusal: terminalModelRefusal(status, event),
+    malformedResponseFormat, openRouterOpaque400,
   }) === "hop";
 }
 
-function retryableZeroOutputTerminal(payload: unknown): boolean {
+/**
+ * Only text and reasoning items, which the required-tool guard holds back until it decides. Both the
+ * snapshot's and the event's own `output` are read; an absent or empty one contributes nothing.
+ */
+function heldOnlyOutput(...outputs: unknown[]): boolean {
+  const items = outputs.flatMap(output => Array.isArray(output) ? output : []);
+  if (outputs.some(output => output !== undefined && !Array.isArray(output))) return false;
+  return items.length > 0 && items.every(item => item !== null && typeof item === "object"
+    && !Array.isArray(item) && ["message", "reasoning"].includes((item as { type?: unknown }).type as string));
+}
+
+function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as {
     type?: unknown;
-    response?: { incomplete_details?: { reason?: unknown }; output?: unknown };
+    status?: unknown;
+    end_turn?: unknown;
+    incomplete_details?: { reason?: unknown; retryable?: unknown };
+    output?: unknown;
+    error?: { code?: unknown; retryable?: unknown };
+    response?: {
+      status?: unknown;
+      end_turn?: unknown;
+      incomplete_details?: { reason?: unknown; retryable?: unknown };
+      output?: unknown;
+      error?: { code?: unknown; retryable?: unknown };
+    };
   };
   if (bareErrorIsRetryable(event)) return true;
-  if (event.type === "response.failed") {
-    const error = (event.response as { error?: { code?: unknown; retryable?: unknown } } | undefined)?.error;
+  const target = (event.response && typeof event.response === "object" && !Array.isArray(event.response))
+    ? event.response as Record<string, unknown>
+    : event as Record<string, unknown>;
+  const emptyOutput = (!Array.isArray(event.output) || event.output.length === 0)
+    && (!Array.isArray(target.output) || target.output.length === 0);
+
+  if (event.type === "response.failed" || event.status === "failed") {
+    const error = (event.response as { error?: { code?: unknown; retryable?: unknown } } | undefined)?.error
+      ?? event.error;
     const code = error?.code;
-    if (code === REQUIRED_TOOL_CONTRACT_CODE && error?.retryable === false) return false;
+    // The required-tool guard synthesizes this terminal over output it held back from the client,
+    // so held text and reasoning are not evidence of anything sent; it keeps the retryability it
+    // carries. Any other output item (a tool call, an action) still commits it.
+    if (code === REQUIRED_TOOL_CONTRACT_CODE) {
+      return error?.retryable !== false && (emptyOutput || heldOnlyOutput(target.output, event.output));
+    }
+    if (!emptyOutput) return false;
     return !(typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code));
   }
-  if (event.type !== "response.incomplete") return false;
-  const reason = event.response?.incomplete_details?.reason;
-  // A terminal-only upstream can carry output without preceding delta/item events.
-  if (reason === undefined) return !Array.isArray(event.response?.output) || event.response.output.length === 0;
+  const isIncomplete = event.type === "response.incomplete" || event.status === "incomplete";
+  if (!isIncomplete) return false;
+  if (!emptyOutput) return false;
+  const details = (target.incomplete_details && typeof target.incomplete_details === "object" && !Array.isArray(target.incomplete_details))
+    ? target.incomplete_details as { reason?: unknown; retryable?: unknown }
+    : undefined;
+  const reason = details?.reason;
+  if (reason === undefined) return true;
+  if (reason === "max_output_tokens") {
+    // Same evidence the run-turn classifier requires before it treats an output limit as a
+    // replayable zero-output terminal: an explicitly unfinished turn or an explicitly
+    // non-retryable limit is an answer, not a target failure. A normalized Anthropic
+    // `pause_turn` also reads as max_output_tokens on the wire, so the request-scoped marker
+    // keeps a paused turn the client must continue from hopping to another provider.
+    if (isPausedTurn(context)) return false;
+    const endTurn = target.end_turn ?? event.end_turn;
+    if (endTurn === false) return false;
+    if (details?.retryable === false) return false;
+    return true;
+  }
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
 }
 
@@ -342,6 +429,10 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
         || (snapshot.background != null && snapshot.background !== false)
         || (snapshot.store != null && snapshot.store !== false) || snapshot.previous_response_id != null) return true;
     }
+  }
+  if (type === "response.output_text.delta") {
+    const delta = (payload as { delta?: unknown }).delta;
+    if (delta === undefined || (typeof delta === "string" && delta.length === 0)) return false;
   }
   return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !CODEX_METADATA_CONTROL_EVENTS.has(type)
     && !TERMINAL_EVENTS.has(type);
@@ -417,13 +508,19 @@ function failedTerminalResponse(
   const nested = terminalPayload.response;
   const terminalResponse = nested && typeof nested === "object" && !Array.isArray(nested)
     ? nested as Record<string, unknown>
-    : {};
-  const nestedError = terminalResponse.error;
+    : terminalPayload;
+  const nestedError = (nested as Record<string, unknown> | undefined)?.error;
   const topLevelError = terminalPayload.error;
   const error = nestedError && typeof nestedError === "object" && !Array.isArray(nestedError)
     ? nestedError as Record<string, unknown>
     : topLevelError && typeof topLevelError === "object" && !Array.isArray(topLevelError)
       ? topLevelError as Record<string, unknown>
+    : isOpenRouterOpaque400Record(terminalPayload)
+      ? {
+        message: terminalPayload.message,
+        code: terminalPayload.code,
+        metadata: terminalPayload.metadata,
+      }
     : {
       // A caller-validated flat error can carry its identity beside type:error.
       // Retain it when that caller established a 400, rather than discarding the
@@ -431,10 +528,20 @@ function failedTerminalResponse(
       type: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
         ? "invalid_request_error" : "upstream_error",
       code: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
-        ? (typeof terminalPayload.code === "string" ? terminalPayload.code : null) : "upstream_server_error",
+        ? (typeof terminalPayload.code === "string"
+            ? terminalPayload.code
+            : typeof terminalPayload.code === "number" && Number.isFinite(terminalPayload.code)
+              ? String(terminalPayload.code)
+              : null)
+        : ((terminalPayload.type === "response.incomplete" || terminalPayload.status === "incomplete")
+          && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
+            ? "zero_output_token_limit" : "upstream_server_error"),
       message: typeof terminalPayload.message === "string"
         ? terminalPayload.message
-        : logCtx.upstreamError ?? "Provider stream failed before producing output",
+        : ((terminalPayload.type === "response.incomplete" || terminalPayload.status === "incomplete")
+          && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
+            ? "Provider reached its output token limit before producing output"
+            : logCtx.upstreamError ?? "Provider stream failed before producing output"),
     };
   const headers = new Headers(response.headers);
   headers.set("content-type", "application/json");
@@ -443,6 +550,7 @@ function failedTerminalResponse(
   const usage = terminalResponse.usage;
   return new Response(JSON.stringify({
     error,
+    ...(typeof terminalPayload.detail === "string" ? { detail: terminalPayload.detail } : {}),
     // The combo classifier needs only the error and optional usage. Do not carry
     // response ids, provider metadata, or future terminal fields into the client
     // error envelope merely because they shared the terminal snapshot.
@@ -480,13 +588,24 @@ export type ComboStreamPreflightResult =
 export async function preflightComboStreamResponse(
   response: Response,
   logCtx: RequestLogContext,
-  retryableTerminal: (payload: unknown) => boolean = retryableZeroOutputTerminal,
-  options?: { allowMissingContentType?: boolean; replayReadErrors?: boolean; replayCleanEof?: boolean; requiredToolPrelude?: boolean; signal?: AbortSignal; onUpstreamActivity?: () => void },
+  retryableTerminal?: (payload: unknown) => boolean,
+  options?: {
+    allowMissingContentType?: boolean;
+    replayReadErrors?: boolean;
+    replayCleanEof?: boolean;
+    requiredToolPrelude?: boolean;
+    signal?: AbortSignal;
+    onUpstreamActivity?: () => void;
+  },
 ): Promise<ComboStreamPreflightResult> {
+  const retryableTerminalFor = retryableTerminal ?? ((payload: unknown) => retryableZeroOutputTerminal(payload, logCtx));
   const contentType = response.headers.get("content-type");
   const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
     || (!contentType && options?.allowMissingContentType === true);
-  if (!response.ok || !response.body || !isEventStream) {
+  if (!response.ok || !response.body) {
+    return { kind: "accepted", response };
+  }
+  if (!isEventStream) {
     return { kind: "accepted", response };
   }
 
@@ -515,7 +634,7 @@ export async function preflightComboStreamResponse(
       if (terminalStatus !== undefined || outputCommitted || retryableTerminalPayload) return;
       if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
         && (payload as { type?: unknown }).type === "response.created") responseCreated = true;
-      const retryable = retryableTerminal(payload);
+      const retryable = retryableTerminalFor(payload);
       const matchedBareError = retryable && payload !== null && typeof payload === "object"
         && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
       // A zero-output bare error is terminal evidence. Explicit client errors stay
@@ -631,17 +750,46 @@ export type ProtocolSafeResetRecovery = (
   accepts: (candidate: Response) => boolean,
 ) => Promise<Response | null>;
 
-/** A deferred body cannot change the response head already returned to its caller. */
-export function sameDeferredResponseMetadata(original: Response, replacement: Response): boolean {
+/**
+ * The headers a committed head promises about the body that follows it.
+ *
+ * A replacement never sends its own head: the client already has the original one, so only what
+ * the client reads to interpret the swapped body can matter here. Comparing the whole header set
+ * refused every real recovery, because origins vary `date`, `x-request-id`, `cf-ray`,
+ * `server-timing`, the quota headers and `content-length` per attempt; those describe the
+ * attempt that answered, not the response identity, and the client already holds the original's
+ * values. Hop-by-hop headers are listed for the same reason: the connection is the proxy's.
+ *
+ * What is left is the identity a mismatched body would corrupt:
+ * - `openai-model` is the model the origin actually served. A body produced by a different
+ *   served model behind a head that advertised the first one mislabels the turn for the client's
+ *   follow-ups and for usage attribution.
+ * - `x-codex-turn-state` is this proxy's own handle, bound at issuance to the caller, provider
+ *   and outbound account and redeemed back to the upstream turn token only at the physical send
+ *   of a matching request (`src/server/turn-state-handles.ts`). Publishing a replacement body
+ *   under the original handle would redeem the client's next turn against a different turn state
+ *   than the one that produced the body, which is exactly the conversation corruption the handle
+ *   exists to prevent.
+ *
+ * Everything else is ignored on purpose: `date`, `x-request-id`, `request-id`, `cf-ray`,
+ * `server-timing`, `x-ratelimit-*`, `openai-processing-ms`, `content-length`,
+ * `transfer-encoding`, `connection` and `keep-alive`, plus any provider header the client
+ * never interprets.
+ */
+const DEFERRED_IDENTITY_HEADERS: readonly string[] = ["openai-model", "x-codex-turn-state"];
+
+const headerMediaType = (headers: Headers): string =>
+  headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+
+/**
+ * Whether a replacement body may be published behind an already committed head on the clean
+ * pre-output EOF path. A deferred body cannot change the head, so it must at least agree on the
+ * identity subset above.
+ */
+export function sameDeferredResponseIdentity(original: Response, replacement: Response): boolean {
   if (original.status !== replacement.status || original.statusText !== replacement.statusText) return false;
-  const first = original.headers.entries();
-  const second = replacement.headers.entries();
-  for (;;) {
-    const a = first.next();
-    const b = second.next();
-    if (a.done || b.done) return a.done === b.done;
-    if (a.value[0] !== b.value[0] || a.value[1] !== b.value[1]) return false;
-  }
+  if (headerMediaType(original.headers) !== headerMediaType(replacement.headers)) return false;
+  return DEFERRED_IDENTITY_HEADERS.every(name => (original.headers.get(name) ?? "") === (replacement.headers.get(name) ?? ""));
 }
 
 export interface DeferredResetRecoveryOptions {
@@ -684,7 +832,9 @@ const resetPreflightKeepalive = (): Uint8Array => new TextEncoder().encode(": ke
  * One protocol preflight and at most one replacement for a native SSE body, behind a head that is
  * either still open (`early`) or already committed. While the head is open, any replacement the
  * caller's recovery accepts can be published with its own status and headers. Once a head is
- * committed, a replacement must match it exactly, and the original keeps its bytes and error.
+ * committed, acceptance depends on how the stream ended: a read error keeps the permissive
+ * replacement behaviour the reset lane has always had, while a clean pre-output EOF must agree on
+ * the deferred identity subset. The original keeps its bytes and error when nothing is accepted.
  */
 function createResetSelection(
   response: Response,
@@ -715,7 +865,24 @@ function createResetSelection(
   const heartbeatMs = positiveMs(options?.heartbeatIntervalMs) ?? RESET_PREFLIGHT_HEARTBEAT_MS;
   const keepalive = options?.keepalive ?? "periodic";
   const signal = options?.signal;
-  const accepts = (candidate: Response): boolean => !headCommitted || sameDeferredResponseMetadata(response, candidate);
+  /**
+   * Acceptance narrows with the failure, not with the selection alone.
+   *
+   * A read error is the reset the recovery lane has always served: the transport died, the
+   * upstream attempt is over, and whatever a fresh attempt produced stands in for it. Nothing
+   * about the replacement's metadata can be inferred from the original's, because a real origin
+   * varies `date`, request ids and quota headers on every attempt, so requiring equality made
+   * the recovery unreachable.
+   *
+   * A clean pre-output EOF is different: the origin closed a healthy stream after its lifecycle
+   * events, so the bytes that follow are a different attempt's answer to the same turn. Behind a
+   * committed head it still has to agree on the identity subset that describes what the client
+   * will read.
+   */
+  const acceptsFor = (kind: "read-error" | "pre-output-eof"): ((candidate: Response) => boolean) =>
+    kind === "pre-output-eof"
+      ? (candidate: Response) => !headCommitted || sameDeferredResponseIdentity(response, candidate)
+      : () => true;
 
   const cancelBody = (body: ReadableStream<Uint8Array> | null, reason?: unknown): void => {
     try { void body?.cancel(reason).catch(() => {}); } catch { /* already locked or closed */ }
@@ -736,6 +903,7 @@ function createResetSelection(
     endInspectionWindow();
     let chosen: { response: Response; owner: ResetSelectionOwner } = { response: preflight.response, owner: "original" };
     if (!closed && (preflight.kind === "read-error" || preflight.kind === "pre-output-eof")) {
+      const accepts = acceptsFor(preflight.kind);
       const replacement = await recover(preflight.error, preflight.stage, preflightAbort.signal, accepts);
       if (replacement) {
         // Checked again here: the head may have been committed while the replacement was in flight.
@@ -903,8 +1071,10 @@ function createResetSelection(
 /**
  * Defer protocol inspection behind a head the caller has already committed.
  *
- * The inspection starts at the first pull. A replacement is published only when its status and
- * headers match the committed head exactly.
+ * The inspection starts at the first pull. A replacement behind the committed head is published
+ * for a read error (the reset lane's long-standing behaviour) and, for a clean pre-output EOF,
+ * only when it agrees on the deferred identity subset (status, status text, media type,
+ * `openai-model`, `x-codex-turn-state`).
  */
 export function deferProtocolSafeResetRecovery(
   response: Response,
@@ -922,8 +1092,9 @@ export function deferProtocolSafeResetRecovery(
  *
  * Inspection starts immediately. If selection finishes first, the caller receives the selected
  * response, a replacement included, with its own status and headers. If the deadline wins, the
- * caller receives the original head and the same preflight continues behind it, where a
- * replacement must match that head. `onCommit` names which attempt owns the published head.
+ * caller receives the original head and the same preflight continues behind it, where a read
+ * error's replacement is accepted and a clean EOF's must agree on the identity subset.
+ * `onCommit` names which attempt owns the published head.
  */
 export function selectProtocolSafeResetResponse(
   response: Response,
