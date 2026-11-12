@@ -1,4 +1,4 @@
-import type { ProxyRestartStartOutcome } from "./tray-proxy";
+import type { ProxyRestartIo, ProxyRestartStartOutcome } from "./tray-proxy";
 import type { RestartSupervisor } from "./restart-failure";
 /**
  * Registry-driven command dispatch (Phase 3 of the CLI deepening).
@@ -60,7 +60,8 @@ export interface CliDispatchDeps {
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
   handleTrayProxyRestart: () => Promise<void>;
   handleRestartStartWhenStopped: (recoveringLiveRestart?: boolean) => Promise<ProxyRestartStartOutcome>;
-  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void) => Promise<boolean>;
+  /** `bindIo` lets a caller bind the restart to one target (ocx disconnect: src/cli/disconnect-runtime.ts). */
+  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void, bindIo?: (io: ProxyRestartIo, deadlineAt: number) => ProxyRestartIo) => Promise<boolean>;
   handleUninstall: () => Promise<void>;
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
@@ -423,7 +424,35 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   disconnect: async deps => {
     const { handleDisconnectCommand } = await import("./connect");
-    return await handleDisconnectCommand(deps.args.slice(1));
+    const code = await handleDisconnectCommand(deps.args.slice(1));
+    // Token recovery refuses any live client runtime and leaves nothing to restart.
+    if (code !== 0 || deps.args.includes("--orphaned-token")) return code;
+    const { bindRestartToRuntime, restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
+    const { observeProxyLiveness } = await import("../server/proxy-liveness");
+    const { readClientConnectionStateWithEvidence } = await import("../client/state");
+    const { readRuntimePort } = await import("../config/process-state");
+    const { requestBoundSystemRestart } = await import("./system-restart-client");
+    return await restartRuntimeAfterDisconnect({
+      observe: () => observeProxyLiveness({ attempts: 2 }),
+      capture: live => {
+        if (live.pid === null) return null;
+        const record = readRuntimePort(live.pid);
+        return record?.attestationSecret && record.pid === live.pid && record.port === live.port
+          ? { ...record, attestationSecret: record.attestationSecret } : null;
+      },
+      connectionState: () => {
+        const state = readClientConnectionStateWithEvidence();
+        return state.kind === "invalid" || state.kind === "mismatched" ? { kind: state.kind, reason: state.reason } : { kind: state.kind };
+      },
+      restart: async target => {
+        let refusedBy: "service-unproven" | undefined;
+        const ok = await deps.handleProxyRestart(deps.handleRestartStartWhenStopped, supervisor => { if (supervisor === "service-unproven") refusedBy = supervisor; }, (io, deadlineAt) =>
+          bindRestartToRuntime(io, target, (previous, readRuntime) =>
+            requestBoundSystemRestart(previous as Parameters<typeof requestBoundSystemRestart>[0], deadlineAt, { readRuntime: readRuntime as typeof readRuntimePort })));
+        return { ok, ...(refusedBy ? { refusedBy } : {}) };
+      },
+      json: deps.args.includes("--json"),
+    });
   },
   catalog: async deps => {
     const { handleCatalogCommand } = await import("./catalog");
