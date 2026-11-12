@@ -8,7 +8,7 @@ import { clearCompensationFailed, compensationPath, readCompensation } from "../
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
-import { attachLinkPeers, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
+import { attachLinkPeers, attachLinkRoutes, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
 import { codexSettingsDigest, projectHomeCodexSettings } from "../../link/codex-settings";
 import { localLinkPeer } from "../../link/compatibility";
@@ -331,6 +331,8 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     }
     // The same opt-in for each Home-initiated tunnel's retry progress and last failure cause.
     if (url.searchParams.get("diagnostics") === "1") attachLinkTunnelDiagnostics(dto, supervisorStates);
+    // The same opt-in for the route each multi-route link uses and why the others rest.
+    if (url.searchParams.get("routes") === "1") attachLinkRoutes(dto, supervisorStates);
     // The same opt-in for each Home row's Child versions, catalog freshness, activity and operations.
     if (url.searchParams.get("children") === "1" && dto.role === "home") {
       const { attachLinkChildOpsForState } = await import("./link-child-ops-routes");

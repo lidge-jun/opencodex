@@ -174,7 +174,7 @@ export function validateStatus(value: unknown): LinkStatusPayload {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
-    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "child"], `link ${index}`);
+    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "child", "routes", "route", "routeBlocked"], `link ${index}`);
     const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
@@ -196,6 +196,7 @@ export function validateStatus(value: unknown): LinkStatusPayload {
       ...(candidate.peer !== undefined ? { peer: validatePeer(candidate.peer, index) } : {}),
       ...(candidate.tunnel !== undefined ? { tunnel: validateTunnel(candidate.tunnel, index) } : {}),
       ...(candidate.child !== undefined ? { child: validateChildOps(candidate.child, index) } : {}),
+      ...validateRoutes(candidate, index),
     };
   });
   let child: LinkStatusPayload["child"] = null;
@@ -327,7 +328,7 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
   // A proxy older than the compatibility report, the tunnel diagnostics or the Child block ignores
   // the query and answers without those fields.
   const result = validateStatus(await viaLocalControlSocket(baseUrl, deps,
-    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1&children=1", {}, statusDeps)));
+    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1&children=1&routes=1", {}, statusDeps)));
   console.log(JSON.stringify(result));
 }
 
@@ -426,6 +427,40 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
 }
 
 const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt"] as const;
+const ROUTE_OUTCOMES = new Set(["transient", "readiness", "grant_unobserved", "forward", "auth", "hostkey"]);
+const ROUTE_BLOCKS = new Set(["ssh_client_unsupported", "stop_unconfirmed"]);
+
+/** The `?routes=1` fields of a multi-route row, all three or none. */
+function validateRoutes(candidate: Record<string, unknown>, index: number): Pick<LinkStatusPayload["links"][number], "routes" | "route" | "routeBlocked"> {
+  const fail = (): never => { throw new Error(`invalid link API response: link ${index} routes`); };
+  const { routes, route, routeBlocked } = candidate;
+  if (routes === undefined && route === undefined && routeBlocked === undefined) return {};
+  if (!Array.isArray(routes) || routes.length < 2 || route === undefined || routeBlocked === undefined) return fail();
+  const parsed = routes.map(entry => {
+    if (!isRecord(entry)) return fail();
+    assertExactKeys(entry, ["name", "eligibleAt", "lastOutcome"], `link ${index} route entry`);
+    if (!validString(entry.name) || (entry.eligibleAt !== null && !validIso(entry.eligibleAt))) fail();
+    const outcome = entry.lastOutcome;
+    if (outcome !== null) {
+      if (!isRecord(outcome)) return fail();
+      assertExactKeys(outcome, ["class", "at"], `link ${index} route outcome`);
+      if (!ROUTE_OUTCOMES.has(outcome.class as string) || !validIso(outcome.at)) fail();
+    }
+    return entry as unknown as NonNullable<LinkStatusPayload["links"][number]["routes"]>[number];
+  });
+  if (route !== null) {
+    if (!isRecord(route)) return fail();
+    assertExactKeys(route, ["name", "index", "since"], `link ${index} route`);
+    if (!validString(route.name) || typeof route.index !== "number" || !Number.isSafeInteger(route.index) || route.index < 0
+      || route.index >= routes.length || !validIso(route.since)) fail();
+  }
+  if (routeBlocked !== null && !ROUTE_BLOCKS.has(routeBlocked as string)) fail();
+  return {
+    routes: parsed,
+    route: route as LinkStatusPayload["links"][number]["route"],
+    routeBlocked: routeBlocked as LinkStatusPayload["links"][number]["routeBlocked"],
+  };
+}
 const WIRE_STATES = new Set(["connecting", "connected", "reconnecting", "failed", "idle"]);
 const CAUSES = new Set<string>(TUNNEL_CAUSES);
 
