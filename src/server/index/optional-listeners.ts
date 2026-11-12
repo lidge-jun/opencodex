@@ -55,6 +55,12 @@ export interface OptionalListenerSet<T> {
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
   /** Close one link's Responses WebSockets with 4401; the revoke route calls it after its commit. */
   closeLinkSockets(linkId: string): number;
+  /** The link's WebSocket activity holds and their reasons; null when nothing holds it (D8). */
+  linkHolds(linkId: string): import("../../link/ws-activity-holds").LinkHoldsSummary | null;
+  /** The operator's clear of one link's activity holds (D8). */
+  clearLinkHolds(linkId: string): import("../../link/ws-activity-holds").ClearHoldsResult;
+  /** The link's live WebSocket counters (design 9.3). */
+  linkTransport(linkId: string): import("../../link/status-projection").LinkWsCounters;
   /** The last relayed catalog pull of a link in this process; null before start or before any pull. */
   catalogPull(linkId: string): CatalogPull | null;
   /** Write every catalog pull still held in memory; a failed write is logged and kept for the next attempt. */
@@ -172,6 +178,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
     peerObservation: linkId => linkListener.peerObservation(linkId),
     linkActivity: (linkId, now) => linkListener.linkActivity(linkId, now),
     closeLinkSockets: linkId => linkListener.closeLinkSockets(linkId),
+    linkHolds: linkId => linkListener.linkHolds(linkId),
+    clearLinkHolds: linkId => linkListener.clearLinkHolds(linkId),
+    linkTransport: linkId => linkListener.linkTransport(linkId),
     catalogPull: linkId => catalogPulls?.pulled(linkId) ?? null,
     flushCatalogPulls: () => { catalogPulls?.flush(); },
     status: () => linkListener.status(),

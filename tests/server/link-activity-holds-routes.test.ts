@@ -174,3 +174,10 @@ describe("status with ?transport=1 (T5e2, design 9.3)", () => {
     }
   });
 });
+describe("a listener without the clear hook (T5e2-R1-02)", () => {
+  test("answers 503 and never reports a successful empty clear", async () => {
+    const response = await clear(harness({ withHolds: false }));
+    expect(response.status).toBe(503);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("activity_holds_unavailable");
+  });
+});

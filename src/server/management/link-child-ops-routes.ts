@@ -164,7 +164,9 @@ async function clearActivityHolds(ctx: ManagementContext, state: LinkRouteState)
   let store: LinkStore;
   try { store = readStoreFor(ctx); } catch { return fail("link_unavailable", "The link store could not be read.", 503); }
   if (!store.links.some(link => link.id === linkId)) return fail("link_not_found", "The link was not found.", 404);
-  const result = state.listener.clearLinkHolds?.(linkId) ?? { ok: true as const, cleared: null };
+  // A listener without the hook cannot clear anything; answering "nothing held" would hide a wiring gap.
+  if (!state.listener.clearLinkHolds) return fail("activity_holds_unavailable", "This Home cannot clear link activity holds.", 503);
+  const result = state.listener.clearLinkHolds(linkId);
   if (!result.ok) {
     return result.reason === "links-unreadable"
       ? fail("link_unavailable", "The links could not be listed, so every link stays held; try again once links.json is readable.", 503)

@@ -8,6 +8,14 @@ import { CodexWebSocketActivity } from "../../src/codex/websocket-activity";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { attachLinkTransport, type LinkStatusDto } from "../../src/link/status-projection";
 import type { WsData } from "../../src/server/ws-bridge";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { linkStorePath } from "../../src/link/paths";
+import { writeLinkStore, type LinkStore } from "../../src/link/store";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { LinkWireClient } from "../helpers/link-ws-client";
 
 // Lane T5e2: the live link WebSocket counters of design 9.3, in memory and display only.
 
@@ -104,5 +112,60 @@ describe("status projection (?transport=1)", () => {
   test("a Home without counters reports zeros, never an absent block", () => {
     const out = attachLinkTransport(dto(), () => null, () => 0);
     expect((out.links[0] as unknown as { ws: unknown }).ws).toEqual({ open: 0, upgrades: 0, refused: {}, closes: {}, holds: 0 });
+  });
+});
+describe("through a real Home's management routes (T5e2-R1-01, -02)", () => {
+  const KEY_ID = "tc-home"; const SECRET = "tc-home-secret-0123456789"; const LINK = "lnk_7878787878787878";
+  const previous = { home: process.env.OPENCODEX_HOME };
+  let dir = "";
+  let codexHome: IsolatedCodexHome | null = null;
+  let server: Server<unknown> | null = null;
+  const clients: LinkWireClient[] = [];
+  afterEach(async () => {
+    for (const c of clients.splice(0)) c.destroy();
+    if (server) await server.stop(true);
+    server = null;
+    codexHome?.restore(); codexHome = null;
+    if (previous.home === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous.home;
+    if (dir) removeTreeWithRetry(dir);
+    dir = "";
+  });
+
+  test("status shows the held link and its socket counters, and the clear really clears", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ocx-link-ws-status-home-"));
+    process.env.OPENCODEX_HOME = dir;
+    codexHome = installIsolatedCodexHome("ocx-link-ws-status-codex-");
+    writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify({ models: [] }));
+    writeLinkStore(linkStorePath(), { version: 1, listenerPort: null, links: [{ id: LINK, alias: "tc", direction: "client-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: KEY_ID, createdAt: "2026-11-12T00:00:00.000Z" }] as LinkStore["links"] });
+    // The last run died with the feature on: the next start holds every link (unknown, crash) until the operator clears it.
+    mkdirSync(join(dir, "link"), { recursive: true });
+    writeFileSync(join(dir, "link", "ws-run-state.json"), '{"version":1,"state":"running"}');
+    const { saveConfig } = await import("../../src/config");
+    saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "fixture", websockets: true, linkResponsesWebsocket: true, codexAutoStart: false, clientIntegrations: { codex: false },
+      providers: { fixture: { adapter: "openai-responses", baseUrl: "http://127.0.0.1:9/v1", authMode: "key", apiKey: "fixture-upstream-key", allowPrivateNetwork: true, models: ["fixture"] } },
+      apiKeys: [{ id: KEY_ID, name: KEY_ID, key: SECRET, createdAt: "2026-11-12T00:00:00.000Z" }] } as OcxConfig);
+    const { startServer } = await import("../../src/server");
+    server = startServer(0) as unknown as Server<unknown>;
+    const admin = readFileSync(join(dir, "admin-api-token"), "utf8").trim();
+    const api = (path: string, init: RequestInit = {}) => fetch(new URL(path, server!.url), { ...init, headers: { "content-type": "application/json", "x-opencodex-api-key": admin, ...(init.headers ?? {}) } });
+    const row = async () => ((await (await api("/api/link/status?children=1&transport=1")).json()) as { links: Array<{ child?: { holds?: unknown }; ws?: { holds: number; upgrades: number; open: number } }> }).links[0]!;
+
+    const before = await row();
+    expect(before.child?.holds).toEqual({ holds: [], unknown: "crash" });
+    expect(before.ws).toMatchObject({ holds: 1, upgrades: 0, open: 0 });
+
+    const port = JSON.parse(readFileSync(linkStorePath(), "utf8")).listenerPort as number;
+    const ws = await LinkWireClient.open(port);
+    clients.push(ws);
+    const session = await ws.challenge({ keyId: KEY_ID, linkId: LINK, fingerprint: serviceApiTokenFingerprint(SECRET) });
+    expect((await ws.upgrade({ nonce: session.nonce, bearer: SECRET, headers: { "thread-id": "thread-tc" } })).status).toBe(101);
+    expect((await row()).ws).toMatchObject({ upgrades: 1, open: 1 });
+
+    const cleared = await api("/api/link/children/activity/clear", { method: "POST", body: JSON.stringify({ linkId: LINK }) });
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toEqual({ linkId: LINK, cleared: { holds: [], unknown: "crash" } });
+    const after = await row();
+    expect(after.child).not.toHaveProperty("holds");
+    expect(after.ws?.holds).toBe(0);
   });
 });
