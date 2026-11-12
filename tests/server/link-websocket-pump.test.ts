@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import { pumpResponsesSseToWebSocket, sendResponseToWebSocket, type WsData } from "../../src/server/ws-bridge";
-import { BoundedSseFrameBuffer } from "../../src/server/sse-frame-buffer";
+import { BoundedSseFrameBuffer, MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
 import { LINK_WS_LIMITS, setLinkPumpTimerForTests } from "../../src/server/index/link-websocket-limits";
 import { createLinkWebsocketGate } from "../../src/server/index/link-websocket";
 
@@ -187,7 +187,7 @@ describe("T5g: synthesized JSON events are paced like SSE events on a link socke
   test("a bounded JSON response to a stalled link reader keeps the buffer bounded and delivers every frame and the terminal", async () => {
     const socket = stalledSocket(true);
     const item = (index: number) => ({ type: "message", id: "m" + index, role: "assistant", status: "completed",
-      content: [{ type: "output_text", text: "x".repeat(1.5 * MiB), annotations: [] }] });
+      content: [{ type: "output_text", text: "x".repeat(1.2 * MiB), annotations: [] }] });
     const response = Response.json({ id: "r", status: "completed", output: [item(0), item(1), item(2)] });
     let terminal: string | undefined;
     const pump = sendResponseToWebSocket(socket.ws, response, () => true, { onTerminal: status => { terminal = status; } });
@@ -198,7 +198,7 @@ describe("T5g: synthesized JSON events are paced like SSE events on a link socke
       socket.drain();
     }
     await pump;
-    // The terminal repeats the output (about 4.5 MiB); nothing else may sit beside it in the buffer.
+    // The terminal repeats the output (about 3.6 MiB); nothing else may sit beside it in the buffer.
     expect(socket.peak()).toBeLessThanOrEqual(LINK_WS_LIMITS.sendThresholdBytes + 5 * MiB);
     expect(JSON.parse(socket.sent.at(-1)!).type).toBe("response.completed");
     expect(terminal).toBe("completed");
@@ -234,3 +234,75 @@ describe("T5g: a stalled link reader of a JSON response closes 1011 like the SSE
     expect(terminal).toBeUndefined();
   });
 });
+
+describe("T5g-R1: a synthesized JSON response on a link socket ends with its turn and stays within the client frame limit", () => {
+  const item = (index: number, bytes: number) => ({ type: "message", id: "m" + index, role: "assistant", status: "completed",
+    content: [{ type: "output_text", text: "x".repeat(bytes), annotations: [] }] });
+  const macrotask = () => new Promise<void>(resolve => setImmediate(resolve));
+
+  test("a superseded turn's drain wait ends at once and its stall deadline never closes the socket", async () => {
+    const fired: Array<{ callback: () => void; ms: number }> = [];
+    const stopped: unknown[] = [];
+    setLinkPumpTimerForTests({ start(callback, ms) { const entry = { callback, ms }; fired.push(entry); return entry; }, stop(entry) { stopped.push(entry); } });
+    restores.push(() => setLinkPumpTimerForTests(null));
+    const socket = stalledSocket(true);
+    const closes: number[] = [];
+    (socket.ws as unknown as { close: (code: number) => void }).close = code => { closes.push(code); };
+    let current = true;
+    let terminal: string | undefined;
+    const pump = sendResponseToWebSocket(socket.ws, Response.json({ id: "r", status: "completed", output: [item(0, 2 * MiB), item(1, 2 * MiB)] }),
+      () => current, { onTerminal: status => { terminal = status; } });
+    while (fired.length === 0) await socket.nextSend();
+    const sentBefore = socket.sent.length;
+    // The shared handler supersedes turn A: it calls the socket's cancel and starts turn B.
+    current = false;
+    expect(socket.ws.data.cancel).toBeDefined();
+    socket.ws.data.cancel?.();
+    await macrotask();
+    let settled = false;
+    void pump.then(() => { settled = true; }, () => { settled = true; });
+    await macrotask();
+    expect(settled).toBe(true);
+    expect(stopped).toContain(fired[0]);
+    // Even a deadline that fires late (a timer the platform could not stop) leaves turn B's socket open.
+    fired[0]!.callback();
+    await pump;
+    expect(closes).toEqual([]);
+    expect(socket.sent).toHaveLength(sentBefore);
+    expect(terminal).toBeUndefined();
+  });
+
+  test("an individual event over the client frame limit is never sent: the turn ends incomplete with a 502 error frame", async () => {
+    const socket = stalledSocket(true);
+    let terminal: string | undefined;
+    const pump = sendResponseToWebSocket(socket.ws, Response.json({ id: "r", status: "completed", output: [item(0, 5 * MiB)] }), () => true,
+      { onTerminal: status => { terminal = status; } });
+    let finished = false;
+    void pump.then(() => { finished = true; });
+    while (!finished) { await Promise.race([socket.nextSend(), pump]); socket.drain(); }
+    await pump;
+    expect(socket.sent.every(payload => Buffer.byteLength(payload) <= MAX_CLIENT_SSE_FRAME_BYTES)).toBe(true);
+    const last = JSON.parse(socket.sent.at(-1)!) as { type: string; status?: number };
+    expect([last.type, last.status]).toEqual(["error", 502]);
+    expect(socket.sent.some(payload => (JSON.parse(payload) as { type: string }).type === "response.completed")).toBe(false);
+    expect(terminal).toBe("incomplete");
+  });
+
+  test("a terminal that repeats more output than the limit is never sent: the earlier items arrive, then the 502", async () => {
+    const socket = stalledSocket(true);
+    let terminal: string | undefined;
+    const pump = sendResponseToWebSocket(socket.ws, Response.json({ id: "r", status: "completed", output: [item(0, 1.5 * MiB), item(1, 1.5 * MiB), item(2, 1.5 * MiB)] }),
+      () => true, { onTerminal: status => { terminal = status; } });
+    let finished = false;
+    void pump.then(() => { finished = true; });
+    while (!finished) { await Promise.race([socket.nextSend(), pump]); socket.drain(); }
+    await pump;
+    expect(socket.sent.every(payload => Buffer.byteLength(payload) <= MAX_CLIENT_SSE_FRAME_BYTES)).toBe(true);
+    const types = socket.sent.map(payload => (JSON.parse(payload) as { type: string }).type);
+    expect(types.filter(type => type === "response.output_item.done")).toHaveLength(3);
+    expect(types.at(-1)).toBe("error");
+    expect(types).not.toContain("response.completed");
+    expect(terminal).toBe("incomplete");
+  });
+});
+

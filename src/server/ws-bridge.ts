@@ -8,7 +8,7 @@ import { headersForCodexAuthContext } from "../codex/auth-context";
 import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
-import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
+import { BoundedSseFrameBuffer, MAX_CLIENT_SSE_FRAME_BYTES } from "./sse-frame-buffer";
 import { sseDataPayload as parseSseBlock } from "./sse-payload-rewrite";
 import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
@@ -472,11 +472,12 @@ export function sendResponsesJsonAsEvents(
 /**
  * Remote Link sockets only (design T4 6.2): wait until the send buffer is at or below the threshold, re-checking on
  * every drain callback, under one stall deadline for the whole wait. A stall closes the socket with 1011 and throws,
- * as the SSE pump does; a closed socket ends the wait.
+ * as the SSE pump does; a closed socket or a cancelled turn ends the wait, and only a live, current turn's stall
+ * closes the socket.
  */
-async function waitForLinkSendRoom(ws: ServerWebSocket<WsData>): Promise<void> {
+async function waitForLinkSendRoom(ws: ServerWebSocket<WsData>, turn: { cancelled: boolean; wake?: () => void; isCurrent: () => boolean }): Promise<void> {
   const link = ws.data.link;
-  if (!link || ws.getBufferedAmount() <= LINK_WS_LIMITS.sendThresholdBytes) return;
+  if (!link || turn.cancelled || ws.getBufferedAmount() <= LINK_WS_LIMITS.sendThresholdBytes) return;
   let stalled = false;
   const observer = linkPumpWaitObserver();
   observer?.(true);
@@ -486,22 +487,28 @@ async function waitForLinkSendRoom(ws: ServerWebSocket<WsData>): Promise<void> {
     function done(): void {
       clock.stop(timer);
       if (link!.drained === drained) link!.drained = undefined;
+      if (turn.wake === done) turn.wake = undefined;
       resolve();
     }
     function drained(): void {
-      if (ws.readyState === OPEN && ws.getBufferedAmount() > LINK_WS_LIMITS.sendThresholdBytes) return;
+      if (!turn.cancelled && ws.readyState === OPEN && ws.getBufferedAmount() > LINK_WS_LIMITS.sendThresholdBytes) return;
       done();
     }
     link.drained = drained;
+    turn.wake = done;
   });
   observer?.(false);
-  if (stalled) {
+  if (stalled && !turn.cancelled && turn.isCurrent()) {
     try { ws.close(1011, "link websocket send stalled"); } catch { /* already closing */ }
     throw new WsSendDroppedError();
   }
 }
 
-/** sendResponsesJsonAsEvents for a link socket: each synthesized event waits for send room first. */
+/**
+ * sendResponsesJsonAsEvents for a link socket: each synthesized event waits for send room first, the turn's cancel
+ * (supersession or close) ends that wait, and an event larger than the client frame limit is never sent: the turn
+ * ends incomplete with the 502 error frame the SSE pump sends for an oversized upstream frame.
+ */
 async function sendResponsesJsonAsLinkEvents(
   ws: ServerWebSocket<WsData>,
   response: Record<string, unknown>,
@@ -510,14 +517,31 @@ async function sendResponsesJsonAsLinkEvents(
   onPayload?: ResponsesPayloadObserver,
 ): Promise<void> {
   const finalStatus = response.status === "failed" || response.status === "incomplete" ? response.status : "completed";
-  for (const frame of responsesJsonEventSequence(response)) {
-    await waitForLinkSendRoom(ws);
-    if (!isCurrent() || ws.readyState !== OPEN) return;
-    const text = JSON.stringify(frame);
-    try { onPayload?.(text); } catch { /* payload observation must not affect WebSocket delivery */ }
-    sendTextFrame(ws, text);
+  const turn: { cancelled: boolean; wake?: () => void; isCurrent: () => boolean } = { cancelled: false, isCurrent };
+  const previous = ws.data.cancel;
+  const cancel = () => {
+    turn.cancelled = true;
+    turn.wake?.();
+    previous?.();
+  };
+  ws.data.cancel = cancel;
+  try {
+    for (const frame of responsesJsonEventSequence(response)) {
+      await waitForLinkSendRoom(ws, turn);
+      if (turn.cancelled || !isCurrent() || ws.readyState !== OPEN) return;
+      const text = JSON.stringify(frame);
+      if (Buffer.byteLength(text) > MAX_CLIENT_SSE_FRAME_BYTES) {
+        onTerminal?.("incomplete");
+        sendJsonFrame(ws, buildWsErrorFrame(502, protocolError("synthesized response event exceeded " + MAX_CLIENT_SSE_FRAME_BYTES + " bytes")));
+        return;
+      }
+      try { onPayload?.(text); } catch { /* payload observation must not affect WebSocket delivery */ }
+      sendTextFrame(ws, text);
+    }
+    onTerminal?.(finalStatus);
+  } finally {
+    if (ws.data.cancel === cancel) ws.data.cancel = previous;
   }
-  onTerminal?.(finalStatus);
 }
 
 function errorPayloadFromText(text: string): Record<string, unknown> {
