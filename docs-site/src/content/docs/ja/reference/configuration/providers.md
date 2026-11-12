@@ -185,6 +185,8 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 `codex-sandbox` は現在、`off` と同様にフェールクローズされます。 |
 
+ネイティブ Responses では、ライフサイクルイベントだけを受信して正常 EOF で終了した場合にも同じオプトインが適用されます。自己完結したリクエストと置換回数の制限は変わりません。これらの制限外のリクエストは検査されず、ストリームが保留されることはありません。直接ストリームは、上流がまだ無応答でも 200 ミリ秒以内に元の応答ヘッダーを受け取ります。そのヘッダーを返す前にリセットまたは EOF が起きた場合、置換応答のヘッダーを最大 15 秒（ストールタイムアウトの方が短い場合はその時間）待ち、クライアントは置換応答をそのステータスとヘッダーのまま受け取ります。JSON に収集する非ストリーミングリクエストとコンボのターゲットは、応答の収集または選択までクライアントにヘッダーが返らないため、ヘッダーの選択を同じ時間まで待つことがあります。ヘッダーを返した後の置換可否は、ストリームがどう終了したかで決まります。読み取りエラーではリセット経路の既存動作をそのまま維持し、置換本文を元のヘッダーの後ろに公開します。ライフサイクルイベントだけを受信して正常 EOF で終了した場合は同じターンへの別の試行なので、より厳格です。置換応答はコミット済みのヘッダーとステータス、ステータステキスト、content-type メディアタイプ、`openai-model`、`x-codex-turn-state` で一致しなければなりません。変動するヘッダーとホップバイホップヘッダー(`date`、リクエスト id、`cf-ray`、`server-timing`、`x-ratelimit-*`、`openai-processing-ms`、`content-length`、`transfer-encoding`、`connection`、`keep-alive`)は一致不要です。クライアントはすでに元のヘッダーの値を持っており、実際の上流は試行ごとにこれらを変えるためです。不一致の場合は元のストリームとそのエラーを保持します。その後も検査中の直接ストリームにはヘッダーとともに SSE keepalive コメントが送られ、その後は 15 秒ごとに送られます。コンボのプリフライトは応答を選択するまでこれらのコメントを保留します。
+
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 
 

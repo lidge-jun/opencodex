@@ -2869,6 +2869,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.needsReauth": "再ログイン",
   "codexAuth.reauthenticate": "再認証",
   "codexAuth.tokenExpired": "トークンが期限切れ — このアカウントを再認証してください",
+  "codexAuth.weeklyConflict": "週間ウィンドウが2つ報告されています: {first}、{second}。上のリセットで上限がすべて戻るとは限りません。",
   "codexAuth.mainTokenExpired": "トークンの有効期限切れ — 下のデバイスコードまたは Codex アプリログインで再ログインしてください",
   "codexAuth.mainReauthSucceeded": "サインインしました",
   "codexAuth.mainReauthFailed": "再ログインに失敗しました",

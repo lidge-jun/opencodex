@@ -2971,6 +2971,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.needsReauth": "Se reconnecter",
   "codexAuth.reauthenticate": "Se réauthentifier",
   "codexAuth.tokenExpired": "Jeton expiré — réauthentifiez ce compte",
+  "codexAuth.weeklyConflict": "Deux fenêtres hebdomadaires ont été signalées : {first} et {second}. La réinitialisation ci-dessus ne rétablit peut-être pas tout le quota.",
   "codexAuth.mainTokenExpired": "Jeton expiré — reconnectez-vous avec un code appareil ci-dessous ou via la connexion Codex App",
   "codexAuth.mainReauthSucceeded": "Connecté",
   "codexAuth.mainReauthFailed": "Échec de la reconnexion",

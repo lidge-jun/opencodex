@@ -2413,6 +2413,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.needsReauth": "重新登录",
   "codexAuth.reauthenticate": "重新认证",
   "codexAuth.tokenExpired": "令牌已过期 — 请重新认证此账号",
+  "codexAuth.weeklyConflict": "报告了两个每周窗口：{first} 和 {second}。上方的重置时间不一定会恢复全部额度。",
   "codexAuth.mainTokenExpired": "令牌已过期 — 请使用下方设备码或通过 Codex 应用登录重新登录",
   "codexAuth.mainReauthSucceeded": "已登录",
   "codexAuth.mainReauthFailed": "重新登录失败",

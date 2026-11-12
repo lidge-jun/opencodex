@@ -2253,6 +2253,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.needsReauth": "重新登入",
   "codexAuth.reauthenticate": "重新認證",
   "codexAuth.tokenExpired": "權杖已過期 — 請重新認證此帳號",
+  "codexAuth.weeklyConflict": "回報了兩個每週視窗：{first} 和 {second}。上方的重置時間不一定會恢復全部額度。",
   "codexAuth.mainTokenExpired": "權杖已過期 — 請使用下方裝置碼或透過 Codex 應用程式登入重新登入",
   "codexAuth.mainReauthSucceeded": "已登入",
   "codexAuth.mainReauthFailed": "重新登入失敗",

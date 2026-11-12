@@ -694,7 +694,7 @@
     "codex-quota-auto-refresh-main-admission.test.ts": "codex-integration",
     "codex-quota-auto-refresh.test.ts": "codex-integration",
     "codex-quota-capacity.test.ts": "codex-integration",
-    "codex-quota-history.test.ts": "codex-integration",
+    "codex-quota-history.test.ts": "codex-integration", "codex-quota-window-conflict.test.ts": "codex-integration",
     "codex-quota-parser-parity.test.ts": "codex-integration",
     "codex-quota-prime.test.ts": "codex-integration",
     "codex-quota-rejection.test.ts": "codex-integration",
