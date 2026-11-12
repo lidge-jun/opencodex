@@ -159,7 +159,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
       }
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
-      const beforeHeadersAbort = () => release();
+      const beforeHeadersAbort = () => { flow?.end(false); release(); };
       req.signal.addEventListener("abort", beforeHeadersAbort, { once: true });
       if (req.signal.aborted) beforeHeadersAbort();
       try {

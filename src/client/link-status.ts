@@ -5,6 +5,8 @@ import type { ClientLinkIdentity } from "../link/status-projection";
 import type { LinkStatusDto } from "../link/status-projection";
 import type { ClientLinkState } from "./link-state";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
+import { EMPTY_LINK_CHILD_PARITY } from "../link/child-parity";
+import type { OcxClientConnectionConfig } from "../types";
 
 /** What the status route read from the client sidecar: the state, none, or an unreadable file. */
 export type ClientLinkSidecarRead = ClientLinkState | null | "invalid";
@@ -39,6 +41,28 @@ function childState(sidecar: ClientLinkSidecarRead, supervisor: ClientLinkSuperv
     // readiness as not ready) names the cause better than the tunnel state, so it wins; otherwise
     // a failed tunnel shows its own reason.
     reason: supervisor.probe ?? (tunnel.kind === "failed" ? tunnel.reason : null),
+  };
+}
+
+/**
+ * The connected Child's own link as a status row, for `?traffic=1` (#3023), which attaches its
+ * counters and path to it. A Child that initiated the link names its SSH alias from the sidecar; a
+ * Home-initiated Child has no sidecar, owns no tunnel and reads idle since it connected, as the
+ * management projection reads it. Parity fields are the Home's view and stay empty here.
+ */
+export function projectClientLinkRow(
+  connection: Pick<OcxClientConnectionConfig, "serverUrl" | "connectedAt"> & { link: { linkId: string; tunnelPort: number } },
+  sidecar: ClientLinkSidecarRead,
+  child: LinkStatusDto["child"],
+): LinkStatusDto["links"][number] {
+  const own = sidecar && sidecar !== "invalid" && sidecar.linkId === connection.link.linkId ? sidecar : null;
+  return {
+    id: connection.link.linkId,
+    alias: own?.alias ?? child?.alias ?? connection.serverUrl,
+    direction: own ? "client-initiated" : "hub-initiated",
+    ...(own && child ? { state: child.state, since: child.since, reason: child.reason } : { state: "idle" as const, since: connection.connectedAt, reason: null }),
+    tunnelPort: connection.link.tunnelPort,
+    ...EMPTY_LINK_CHILD_PARITY,
   };
 }
 

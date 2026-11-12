@@ -21,7 +21,11 @@ import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, relayHubManagementRequest } from "./h
 import { createLinkKeySource, handleLinkIngress, type LinkIngress, type LinkKeySourceDeps } from "./link-ingress";
 import type { LinkTunnelGate } from "./link-relay";
 import { readClientLinkState, type ClientLinkState } from "./link-state";
-import { projectClientLinkChild, type ClientLinkSidecarRead } from "./link-status";
+import { projectClientLinkChild, projectClientLinkRow, type ClientLinkSidecarRead } from "./link-status";
+import { attachLinkTraffic } from "../link/status-projection";
+import { childLinkTraffic } from "../link/traffic";
+import { createLinkPathResolver, type LinkPathResolver } from "../link/ssh-route";
+import { createSshRunner, type SshRunner } from "../link/ssh-runner";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 import type { LinkReadiness } from "./link-readiness";
 import { packageVersion } from "../lib/package-version";
@@ -62,6 +66,8 @@ export interface MachineListenerDeps {
   linkStatus?: () => ClientLinkSupervisorStatus;
   /** Link mode: the sidecar read for `GET /api/link/status`. */
   readSidecar?: () => ClientLinkState | null;
+  /** Link mode: the runner `GET /api/link/status?traffic=1` resolves this Child's SSH alias with. */
+  linkSshRunner?: SshRunner;
   /** Link mode: how the link key is read; the listener reads it once and caches it. */
   linkKey?: LinkKeySourceDeps;
   /** Link mode: a key source the runtime already holds (shared with the tunnel supervisor). */
@@ -144,6 +150,7 @@ export function startMachineListener(
   let hubReachability: HubReachability = "unknown";
   const readSidecar = deps.readSidecar ?? (() => readClientLinkState());
   const sidecarOrNull = () => { const read = readSidecarSafely(readSidecar); return read === "invalid" ? null : read; };
+  let pathResolver: LinkPathResolver | undefined;
   const machineApiDeps: MachineApiDeps = {
     sync: deps.machineApi?.sync ?? syncConnectedClient,
     disconnect: deps.machineApi?.disconnect ?? disconnectClient,
@@ -273,7 +280,15 @@ export function startMachineListener(
         if (url.pathname === LINK_DIAGNOSTICS_ROUTE) return linkDiagnosticsResponse(url);
         if (url.pathname === "/api/link/status") {
           // A Child never joins again from here, so the dashboard reads `joinAvailable: false`.
-          const status = projectClientLinkChild(readSidecarSafely(readSidecar), deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
+          const sidecar = readSidecarSafely(readSidecar);
+          const status = projectClientLinkChild(sidecar, deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
+          // Opt-in (#3023): this Child's link as a row, with the bytes its relay carried and its SSH path.
+          if (url.searchParams.get("traffic") === "1" && connection.link) {
+            status.links = [projectClientLinkRow({ ...connection, link: connection.link }, sidecar, status.child)];
+            pathResolver ??= createLinkPathResolver({ runner: () => deps.linkSshRunner ?? createSshRunner() });
+            const resolver = pathResolver;
+            await attachLinkTraffic(status, { traffic: id => childLinkTraffic.snapshot(id), resolvePath: alias => resolver.resolve(alias) });
+          }
           return Response.json({ ...status, joinAvailable: false }, { headers: { "Cache-Control": "no-store" } });
         }
         return await handleMachineApi(req, url, connection, machineApiDeps) ?? json404(req);

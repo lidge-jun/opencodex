@@ -9,7 +9,7 @@ import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { LinkSupervisor } from "../../src/link/supervisor";
 import type { SshRunResult, SshRunner } from "../../src/link/ssh-runner";
 import { childLinkTraffic, createLinkTrafficBook } from "../../src/link/traffic";
-import { classifySshResolvedConfig } from "../../src/link/ssh-route";
+import { classifySshResolvedConfig, createLinkPathResolver } from "../../src/link/ssh-route";
 import { attachLinkTrafficForState } from "../../src/server/management/link-traffic-status";
 import type { LinkRouteState } from "../../src/server/management/link-route-state";
 import type { LinkStatusDto } from "../../src/link/status-projection";
@@ -99,6 +99,32 @@ describe("GET /api/link/status?traffic=1 (#3023)", () => {
   test("an alias that fails to resolve reads unknown", async () => {
     const h = harness({ code: 255, stdout: "", stderr: "bad configuration" });
     expect((await h.call("/api/link/status?traffic=1")).links[0]!.path).toEqual({ via: "unknown" });
+  });
+
+  test("at most four ssh -G run at once and at most 32 aliases wait; the rest read unknown without a spawn", async () => {
+    let running = 0, peak = 0, started = 0;
+    const release: Array<() => void> = [];
+    const runner: SshRunner = {
+      async run() {
+        started += 1; running += 1; peak = Math.max(peak, running);
+        await new Promise<void>(resolve => release.push(resolve));
+        running -= 1;
+        return { code: 0, stdout: "proxycommand x\n", stderr: "" };
+      },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
+    };
+    const resolver = createLinkPathResolver({ runner: () => runner });
+    const reads = Array.from({ length: 40 }, (_, i) => resolver.resolve(`alias-${i}`));
+    // The eight beyond the pending cap answer at once, before any spawn finished.
+    expect(await Promise.all(reads.slice(32))).toEqual(Array(8).fill({ via: "unknown" }));
+    while (release.length > 0) {
+      expect(running).toBeLessThanOrEqual(4);
+      release.shift()!();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    }
+    expect((await Promise.all(reads.slice(0, 32))).every(path => path.via === "proxy-command")).toBe(true);
+    expect(peak).toBe(4);
+    expect(started).toBe(32);
   });
 
   test("ssh -G output classification", () => {

@@ -11,7 +11,7 @@ import type { LinkDiagnosticRecord, LinkDiagnosticSink } from "../link/diagnosti
 import { linkRouteAllowed } from "../link/routes";
 import { isLinkPort } from "../link/ports";
 import { resolveInboundBodyLimitBytes } from "../server/request-decompress";
-import { childLinkTraffic, type LinkTrafficBook, type LinkTrafficFlow } from "../link/traffic";
+import type { LinkTrafficBook } from "../link/traffic";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
@@ -88,7 +88,7 @@ export interface LinkRelayDeps {
    * authenticated management relay passes the read-only management table (#6957).
    */
   routeAllowed?: (url: URL, req: Request) => boolean;
-  /** Where the bodies this relay carries are counted; this process's Child book by default. */
+  /** Where the link transport counts the bodies it carries; this process's Child book by default. */
   traffic?: LinkTrafficBook;
 }
 
@@ -214,14 +214,13 @@ function positive(value: number | undefined): number | undefined {
 /**
  * The caller's body streamed through unchanged while its bytes are counted. Nothing is
  * buffered: each chunk goes to the upstream as it arrives, and crossing `limit` errors the
- * stream, which fails the upstream fetch. `onSent` sees each chunk handed to the upstream.
+ * stream, which fails the upstream fetch.
  */
 function byteCappedRequestBody(
   body: ReadableStream<Uint8Array>,
   limit: number,
   onOverflow: () => void,
   onCancel: () => void,
-  onSent: (bytes: number) => void = () => {},
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let bytes = 0;
@@ -241,7 +240,6 @@ function byteCappedRequestBody(
           controller.error(error);
           return;
         }
-        onSent(next.value.byteLength);
         controller.enqueue(next.value);
       } catch (error) {
         controller.error(error);
@@ -252,36 +250,6 @@ function byteCappedRequestBody(
       try { await reader.cancel(reason); } catch { /* best effort */ }
     },
   });
-}
-
-/**
- * The Home's response body, counted for the link's traffic book as it is read. Reaching the end
- * marks the request complete; a cancel or a read error marks it incomplete. Pull-driven, so the
- * caller's backpressure reaches the Home unchanged.
- */
-function countedResponseBody(body: ReadableStream<Uint8Array>, flow: LinkTrafficFlow): ReadableStream<Uint8Array> {
-  const reader = body.getReader();
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const next = await reader.read();
-        if (next.done) {
-          flow.end(true);
-          try { controller.close(); } catch { /* cancelled meanwhile */ }
-          return;
-        }
-        flow.fromHome(next.value.byteLength);
-        controller.enqueue(next.value);
-      } catch (error) {
-        flow.end(false);
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      flow.end(false);
-      try { await reader.cancel(reason); } catch { /* best effort */ }
-    },
-  }, { highWaterMark: 0 });
 }
 
 /**
@@ -434,17 +402,11 @@ export async function relayLinkDataRequest(
   };
   if (req.signal.aborted) onClientAbort();
 
-  // Counted only once a send to the Home starts; a request refused before that never used the link.
-  // The stream reads one chunk ahead of the transport, so bytes read before the send are added then.
-  let flow: LinkTrafficFlow | undefined;
-  let readAhead = 0;
-  const endFlow = (complete: boolean) => flow?.end(complete);
   let bodyOverflow = false;
   let bodyCancelled = false;
   const body = req.method === "GET" || req.method === "HEAD" || !req.body
     ? null
-    : byteCappedRequestBody(req.body, bodyLimit, () => { bodyOverflow = true; }, () => { bodyCancelled = true; },
-      bytes => { if (flow) flow.toHome(bytes); else readAhead += bytes; });
+    : byteCappedRequestBody(req.body, bodyLimit, () => { bodyOverflow = true; }, () => { bodyCancelled = true; });
   // A streamed body keeps the caller's Content-Length, so the Home sees the same framing a
   // buffered body produced instead of a chunked upload.
   if (body && declaredLength !== null) headers.set("content-length", declaredLength);
@@ -467,7 +429,6 @@ export async function relayLinkDataRequest(
   ): Promise<Response> => {
     diagnostic("relay_failure", relayAbort.signal.aborted
       ? req.signal.aborted ? "client_abort" : "header_timeout" : reason, elapsedMs);
-    endFlow(false);
     cleanup();
     try { await body?.cancel(); } catch { /* best effort */ }
     const response = reason === "auth_failed" ? relayAuthenticationFailed(message) : homeUnreachable(message);
@@ -500,10 +461,6 @@ export async function relayLinkDataRequest(
   while (!upstream) {
     if (!await readyForFetch()) return await tunnelUnavailable();
     const fetchStartedAt = performance.now();
-    if (!flow && target.linkId) {
-      flow = (deps.traffic ?? childLinkTraffic).begin(target.linkId);
-      flow.toHome(readAhead);
-    }
     try {
       const init: RequestInit & { duplex?: "half" } = {
         method: req.method,
@@ -512,13 +469,12 @@ export async function relayLinkDataRequest(
         signal: relayAbort.signal,
         ...(body ? { body, duplex: "half" } : {}),
       };
-      upstream = await (deps.fetchImpl ? deps.fetchImpl(destination, init) : fetchBoundLinkRelay(target, destination, init));
+      upstream = await (deps.fetchImpl ? deps.fetchImpl(destination, init) : fetchBoundLinkRelay(target, destination, init, { traffic: deps.traffic }));
     } catch (error) {
       if (error instanceof LinkRelayAuthenticationError) {
         return await tunnelUnavailable("auth_failed", error.message);
       }
       if (bodyOverflow) {
-        endFlow(false);
         cleanup();
         return jsonError(413, "link relay request body too large");
       }
@@ -543,7 +499,6 @@ export async function relayLinkDataRequest(
   const sse = isSse(upstream.headers);
   const responseHeaders = sanitizeLinkResponseHeaders(upstream.headers);
   if (!headersWithinLimit(responseHeaders)) {
-    endFlow(false);
     cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return jsonError(502, "link relay response headers too large");
@@ -551,14 +506,12 @@ export async function relayLinkDataRequest(
   const responseLength = upstream.headers.get("content-length");
   if (!sse && responseLength !== null && (!/^\d+$/.test(responseLength)
     || Number(responseLength) > bodyLimit)) {
-    endFlow(false);
     cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return jsonError(502, "link relay response body too large");
   }
   if (recoveryAttempts > 0 && upstream.ok) diagnostic("relay_recovered", "recovered");
   if (req.method === "HEAD" || !upstream.body) {
-    endFlow(true);
     cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
@@ -566,10 +519,9 @@ export async function relayLinkDataRequest(
 
   // The header deadline ends once a response exists. The body owns cleanup after that.
   stopHeaderDeadline();
-  const upstreamBody = flow ? countedResponseBody(upstream.body, flow) : upstream.body;
   const responseBody = sse
-    ? idleBoundedStream(upstreamBody, relayAbort.signal, clock,
+    ? idleBoundedStream(upstream.body, relayAbort.signal, clock,
       deps.sseIdleTimeoutMs ?? LINK_RELAY_SSE_IDLE_TIMEOUT_MS, () => relayAbort.abort(new DOMException("link relay SSE idle timeout", "TimeoutError")), cleanup)
-    : boundedRelayResponseStream(upstreamBody, bodyLimit, relayAbort.signal, cleanup);
+    : boundedRelayResponseStream(upstream.body, bodyLimit, relayAbort.signal, cleanup);
   return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
 }
