@@ -1422,6 +1422,35 @@ describe("one bare-error precedence rule across client, account and row", () => 
   });
 
   test.each([
+    ["policy copy", "flagged for possible cybersecurity risk", "cyber_policy"],
+    ["safety copy", "This request was blocked by our safety systems.", "invalid_prompt"],
+  ] as const)("a %s refusal that echoes a sent credential stays a refusal on every reader", async (_name, copy, code) => {
+    const secret = "fixture_refusal_echo_credential_8415";
+    const registry = new OutboundCredentialRegistry();
+    registry.remember({ authorization: `Bearer ${secret}` });
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      for (const mode of ["tee", "eager"] as const) {
+        const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+        const { text, outcomes } = await relayMixed(mode, [frame({ code: "gateway_broken", message: `${copy} ${secret}` }, "untyped")], log);
+        expect([mode, failedCode(text), outcomes, httpStatusForRequestLogTerminal("failed", log)]).toEqual([mode, code, [400], 400]);
+        expect([mode, (log.upstreamError ?? "").includes(secret)]).toEqual([mode, false]);
+      }
+    } finally { restore(); }
+  });
+
+  test("a genuine terminal with the generic upstream identity is classified like on its own", () => {
+    const failed = { type: "response.failed", response: { status: "failed", error: { type: "upstream_error", code: "upstream_server_error", message: "invalid api key" } } };
+    const alone: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(alone, JSON.stringify(failed));
+    const afterBare: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(afterBare, JSON.stringify({ type: "error", code: "mystery_code", message: "typed unknown" }));
+    inspectResponseLogSsePayload(afterBare, JSON.stringify(failed));
+    expect(httpStatusForRequestLogTerminal("failed", afterBare)).toBe(httpStatusForRequestLogTerminal("failed", alone));
+    expect(alone.terminalHttpStatus).toBe(401);
+  });
+
+  test.each([
     ["an unrecognized untyped error", frame(untyped("unknown"), "untyped"), true],
     ["an unrecognized typed error", frame(typed("unknown"), "typed"), true],
     ["a recognized quota class", frame(typed("quota"), "typed"), false],

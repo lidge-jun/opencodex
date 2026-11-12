@@ -129,10 +129,11 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     genuineTerminals.add(logCtx);
     // A reader of the client stream (the WebSocket log) also sees the relay's own synthesized
     // response.failed. It renders the winning bare verdict, so the row keeps that verdict
-    // instead of inferring a different class from the provider copy it carries.
+    // instead of inferring a different class from the provider copy it carries. A genuine upstream
+    // terminal can carry the same generic type and code, so the copy must be the verdict's too.
     const tail = json.response?.error;
-    if (prior !== undefined && type === "response.failed"
-      && tail?.code === prior.verdict.terminalCode && tail?.type === prior.verdict.terminalType) return;
+    if (prior !== undefined && type === "response.failed" && tail?.code === prior.verdict.terminalCode
+      && tail?.type === prior.verdict.terminalType && tail?.message === prior.verdict.message) return;
     // Untyped evidence wrote the diagnostics; the terminal that retires it owns them now.
     if (prior !== undefined && !prior.typed) {
       delete logCtx.upstreamErrorCode;

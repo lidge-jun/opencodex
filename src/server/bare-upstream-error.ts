@@ -92,6 +92,9 @@ export function bareUpstreamError(payload: unknown, mask?: BareCopyMask): BareUp
     : field(root, "message") ?? upstreamErrorMessageFromPayload(payload);
   const message = rawMessage
     ? redactSecretString(guardBareCopy(rawMessage, mask)).slice(0, MAX_BARE_ERROR_MESSAGE_CHARS) : undefined;
+  // The verdict is read from the provider's own words, not from the copy the guard may have
+  // replaced: a refusal that also echoes a credential is still a refusal. Never stored or shown.
+  const evidenceCopy = rawMessage ? redactSecretString(rawMessage).slice(0, MAX_BARE_ERROR_MESSAGE_CHARS) : undefined;
   // An explicit refusal code is the provider's own verdict. Otherwise verified refusal copy is
   // recognized beside an unrelated code: a gateway that wraps the refusal in its own class still
   // ended the turn with a refusal, and retrying it would loop. A recognized quota/overload class
@@ -99,9 +102,9 @@ export function bareUpstreamError(payload: unknown, mask?: BareCopyMask): BareUp
   // delivery failure rather than the provider's verdict, so copy quoted inside its diagnostic
   // text is not evidence of a refusal.
   const refusalCode = isTerminalRefusalCode(code) ? code
-    : message === undefined || recognizedUpstreamError({ type: errorType, code }) !== undefined
+    : evidenceCopy === undefined || recognizedUpstreamError({ type: errorType, code }) !== undefined
       || (code !== undefined && isTransportFailureCode(code)) ? undefined
-      : isCyberPolicyMessage(message) ? CYBER_POLICY_ERROR_CODE : safetyRefusalCodeFromMessage(message);
+      : isCyberPolicyMessage(evidenceCopy) ? CYBER_POLICY_ERROR_CODE : safetyRefusalCodeFromMessage(evidenceCopy);
   if (message === undefined && refusalCode === undefined && code === undefined && errorType === undefined && !untyped) return undefined;
   const recognized = recognizedUpstreamError({ type: errorType, code });
   const fallback = code ?? errorType;
