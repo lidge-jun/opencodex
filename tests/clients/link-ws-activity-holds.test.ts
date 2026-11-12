@@ -212,6 +212,19 @@ describe("review round 1 (T5d1-R1-01, -02, -04)", () => {
     expect(holds.describe(A).unknown).toBe("key-unavailable");
     expect(holds.count(B)).toBe(1);
   });
+
+  test("a stored hold without a marks field, kept while the reference key is unavailable, is read by the status paths without throwing (#8607)", () => {
+    writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"clean"}');
+    writeFileSync(join(dir, "activity-holds.json"), JSON.stringify({ version: 1, keyId: "0123456789abcdef", links: { [A]: { holds: [{ threadHash: null, pendingKeys: [], runningMarks: 1, untracked: false, createdAt: 1 }], unknown: null } } }));
+    const holds = createActivityHolds({ dir, linkIds: () => LINKS, limits: LINK_WS_LIMITS, writeHooks: { beforeRename(_t, target) { if (target.endsWith("activity-ref-key")) throw new Error("EROFS"); } } });
+    holds.start();
+    expect(holds.describe(A).unknown).toBe("key-unavailable");
+    expect(() => holds.summary(A)).not.toThrow();
+    expect(holds.summary(A)?.holds).toHaveLength(1);
+    expect(holds.hasMarks(A)).toBe(false);
+    expect(holds.count(A)).toBeGreaterThan(0);
+  });
+
 });
 
 describe("review round 2 (T5d1-R2-01)", () => {

@@ -258,7 +258,8 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
       if (file && keyUnavailable) {
         // Hashes cannot be checked or made: keyed holds and every link stay unknown, nothing is cleaned.
         for (const [linkId, value] of Object.entries(file.links)) {
-          links.set(linkId, { holds: value.holds.filter(hold => hold.threadHash === null).map(hold => ({ ...hold, seq: ++holdSeq })), unknown: value.unknown ?? "key-unavailable" });
+          links.set(linkId, { holds: value.holds.filter(hold => hold.threadHash === null)
+            .map(hold => ({ ...hold, pendingKeys: [...hold.pendingKeys], marks: [...(hold.marks ?? [])], seq: ++holdSeq })), unknown: value.unknown ?? "key-unavailable" });
         }
         markAll("key-unavailable");
         if (state !== "clean") markAll("crash");
