@@ -26,10 +26,24 @@ const { linkStorePath } = await import("../../src/link/paths");
 const { saveConfig } = await import("../../src/config");
 const { setLinkWebsocketTransportReadyForTests, setLinkPumpWaitObserverForTests } = await import("../../src/server/index/link-websocket-limits");
 
-// High-water RSS, sampled continuously in this process (measurement only; nothing waits on it).
+// Peak RSS. On Linux the kernel keeps the process high-water mark (VmHWM in /proc/self/status), so
+// a peak that rises and falls inside one synchronous operation is still counted; writing "5" to
+// /proc/self/clear_refs resets it to the current RSS (Linux 4.0 and later). Elsewhere the fixture
+// falls back to sampling on this event loop, which can miss such a peak, and says so in "method".
+const readKernelPeak = (): number | null => {
+  try {
+    const match = /^VmHWM:\s+(\d+) kB$/m.exec(readFileSync("/proc/self/status", "utf8"));
+    return match ? Number(match[1]) * 1024 : null;
+  } catch { return null; }
+};
+const resetKernelPeak = (): boolean => {
+  try { writeFileSync("/proc/self/clear_refs", "5"); return true; } catch { return false; }
+};
+const kernel = readKernelPeak() !== null && resetKernelPeak();
 let highWater = process.memoryUsage().rss;
 const sample = (): void => { highWater = Math.max(highWater, process.memoryUsage().rss); };
-setInterval(sample, 2).unref();
+if (!kernel) setInterval(sample, 2).unref();
+const peak = (): number => (kernel ? readKernelPeak() ?? 0 : (sample(), highWater));
 let waiting = 0;
 let announced = false;
 setLinkPumpWaitObserverForTests(isWaiting => {
@@ -66,8 +80,13 @@ for (;;) {
   const next = await lines.next();
   if (next.done) break;
   const command = String(next.value).trim();
-  if (command === "peak") { sample(); console.log(JSON.stringify({ rss: highWater })); }
-  else if (command === "gc-rss") { Bun.gc(true); highWater = process.memoryUsage().rss; console.log(JSON.stringify({ rss: highWater })); }
+  if (command === "peak") console.log(JSON.stringify({ rss: peak(), method: kernel ? "kernel-vmhwm" : "sampled" }));
+  else if (command === "gc-rss") {
+    Bun.gc(true);
+    if (kernel) resetKernelPeak();
+    highWater = process.memoryUsage().rss;
+    console.log(JSON.stringify({ rss: highWater }));
+  }
   else if (command === "stop") break;
 }
 await server.stop(true);

@@ -14,6 +14,8 @@ import { repoPath } from "../helpers/repo-root";
 // near-maximum message, every reader stalls, upstream chunks run from 1 byte to 16 MiB around near-4 MiB
 // events, and the sockets are then cut in a seeded random order. Accepted when peak RSS minus idle RSS
 // of the Home process stays within n link socket reservations (the 768 MiB budget at n = 24).
+// The peak is the kernel's high-water mark (VmHWM, reset after the idle reading) on Linux 4.0 or later;
+// elsewhere the Home samples RSS on its own event loop, may miss a short peak, and reports "sampled".
 
 const ENABLED = process.env.OCX_LINK_WS_RSS_ACCEPTANCE === "1";
 const SOCKETS = Number(process.env.OCX_LINK_WS_RSS_SOCKETS ?? LINK_WS_LIMITS.totalSockets);
@@ -150,11 +152,15 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
       for (const { client } of order.sort((a, b) => a.key - b.key)) client.destroy();
       await Promise.all(signals.map(signal => signal.cancelled));
       // High-water mark over setup, load and cancellation, sampled inside the Home.
-      const peak = await ask("peak");
+      child.stdin.write("peak\n");
+      child.stdin.flush();
+      const peakAnswer = await nextLine();
+      const peak = Number(peakAnswer.rss);
+      const method = String(peakAnswer.method);
       const after = await ask("gc-rss");
       const delta = peak - idle;
       const budget = SOCKETS * LINK_WS_LIMITS.socketReservationBytes;
-      console.log(JSON.stringify({ transport: TRANSPORT, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
+      console.log(JSON.stringify({ method, transport: TRANSPORT, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
       expect(delta).toBeLessThanOrEqual(budget);
     } finally {
       for (const client of clients) client.destroy();
