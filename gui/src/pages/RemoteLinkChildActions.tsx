@@ -21,7 +21,7 @@ const ERROR_TKEY: Record<string, TKey> = {
   runtime_role_client: "remoteLink.error.runtime_role_client",
 };
 
-export function linkActionError(error: unknown): LinkActionErrorView {
+function linkActionError(error: unknown): LinkActionErrorView {
   const key = error instanceof LinkApiError && error.code in ERROR_TKEY ? ERROR_TKEY[error.code]! : "remoteLink.error.generic";
   return { key, hint: error instanceof LinkApiError ? error.hint : null };
 }
@@ -253,12 +253,15 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
   );
 }
 
-export function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJobView; missing: boolean } {
-  const [snapshot, setSnapshot] = useState(job);
-  const [missing, setMissing] = useState(false);
+function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJobView; missing: boolean } {
+  // Both states are keyed by job id so a new job renders its own prop without a reset effect: an effect that
+  // synchronously reset them would cascade renders (react-compiler EffectSetState), and a stale snapshot would
+  // otherwise leak across jobs.
+  const [polled, setPolled] = useState<{ jobId: string; value: ChildJobView } | null>(null);
+  const [missingFor, setMissingFor] = useState<string | null>(null);
+  const snapshot = polled?.jobId === job.jobId ? polled.value : job;
+  const missing = missingFor === job.jobId;
   useEffect(() => {
-    setSnapshot(job);
-    setMissing(false);
     if (job.state === "done") return;
     let stopped = false;
     const controller = new AbortController();
@@ -266,13 +269,13 @@ export function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJob
       if (document.visibilityState === "hidden") return;
       try {
         const next = await getChildJob(apiBase, job.jobId, controller.signal);
-        if (!stopped) setSnapshot(next);
+        if (!stopped) setPolled({ jobId: job.jobId, value: next });
       } catch (error) {
         if (stopped) return;
         if (error instanceof LinkApiError && (error.code === "job_not_found" || error.status === 404)) {
           stopped = true;                       // the Home restarted (retention is 1 h / 32 jobs)
           controller.abort();
-          setMissing(true);
+          setMissingFor(job.jobId);
         }
       }
     };
@@ -334,7 +337,13 @@ export function ChildPolicyPanel(props: { apiBase: string; busy: boolean; onBusy
       setRead(value); setDraft(value.policy);
     } catch (error) { if (!signal?.aborted) onError(linkActionError(error)); }
   }, [apiBase, onError]);
-  useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
+  // Deferred a microtask so the fetch starts after mount commits; calling the loader directly trips
+  // react-compiler's EffectSetState rule even though its state writes land after the await.
+  useEffect(() => {
+    const controller = new AbortController();
+    void Promise.resolve().then(() => load(controller.signal));
+    return () => controller.abort();
+  }, [load]);
   if (!draft || !read) return null;
   const changed = changedPolicyKeys(read.policy, draft);
   const damaged = read.warning === "policy-file-invalid";
