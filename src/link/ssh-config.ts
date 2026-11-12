@@ -67,7 +67,8 @@ export function splitSshArgs(text: string): string[] | null {
   return out;
 }
 
-function splitDirective(raw: string): { keyword: string; args: string[] } | null {
+/** One config line as its lower-cased keyword and its arguments, or null for a blank, comment or invalid line. */
+export function splitSshDirective(raw: string): { keyword: string; args: string[] } | null {
   const line = raw.trim();
   if (!line || line.startsWith("#")) return null;
   const match = /^([A-Za-z]+)(?:\s*=\s*|\s+)(.*)$/.exec(line);
@@ -84,7 +85,7 @@ export function parseHostCandidates(text: string, options: ParseHostCandidatesOp
   const visit = (body: string, depth: number): void => {
     let block: "top" | "host" | "match" = "top";
     for (const raw of body.split(/\r?\n/)) {
-      const directive = splitDirective(raw);
+      const directive = splitSshDirective(raw);
       if (!directive) continue;
       if (directive.keyword === "match") { block = "match"; continue; }
       if (directive.keyword === "include") {
@@ -148,7 +149,8 @@ function normalizeIncludeGlob(pattern: string): string {
   return normalized;
 }
 
-function defaultGlob(pattern: string): string[] {
+/** Expand one absolute Include pattern the way OpenSSH globs it; a pattern without a wildcard is itself. */
+export function expandSshIncludeGlob(pattern: string): string[] {
   if (!/[*?[]/.test(pattern)) return [pattern];
   const base = dirname(pattern.slice(0, pattern.search(/[*?[]/) + 1));
   // Only native Windows separators become slashes; POSIX backslash escapes stay intact.
@@ -166,7 +168,7 @@ export function loadHostCandidates(options: LoadHostCandidatesOptions = {}): Hos
   const home = options.home ?? homedir();
   const sshDir = join(home, ".ssh");
   const read = options.readFile ?? ((path: string) => readFileSync(path, "utf8"));
-  const glob = options.glob ?? defaultGlob;
+  const glob = options.glob ?? expandSshIncludeGlob;
   const safeRead = (path: string): string | null => {
     try { return read(path); } catch { return null; }
   };

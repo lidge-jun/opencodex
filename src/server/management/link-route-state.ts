@@ -56,8 +56,6 @@ export interface LinkRouteState {
   childOps?: import("../../link/child-ops-engine").ChildOpsEngine;
   /** The Home catalog revision read on `?children=1`; defaults to the shared production monitor. */
   catalogRevision?: import("../../link/child-catalog-freshness").CatalogRevisionMonitor;
-  /** `?traffic=1` path resolution, cached per alias for this state's lifetime. */
-  pathResolver?: import("../../link/ssh-route").LinkPathResolver;
 }
 
 export function fail(code: string, message: string, status: number, hint?: string): Response {
