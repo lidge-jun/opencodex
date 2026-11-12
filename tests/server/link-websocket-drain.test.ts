@@ -374,6 +374,22 @@ describe("restore of refused results across overlapping turns (T5d1-R5-01)", () 
     expect(activity.pendingKeys()).toHaveLength(1);
   });
 
+  test("an older turn's late acceptance does not prune a newer turn still in flight, which restores when refused (T5d1-R6-01)", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.restoreRefusedResults = true;
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_f"));
+    const inputA = toolResult("call_f");
+    const finishA = activity.beginTurn(inputA);
+    activity.beginTurn("next")();
+    activity.observePayload(toolCall("call_f"));
+    const finishC = activity.beginTurn(toolResult("call_f"));
+    activity.notifyAccepted(inputA);
+    finishA();
+    finishC();
+    expect(activity.pendingKeys()).toHaveLength(1);
+  });
+
   test("an older turn that was refused, with no newer acceptance, still restores", () => {
     const activity = new CodexWebSocketActivity();
     activity.restoreRefusedResults = true;
