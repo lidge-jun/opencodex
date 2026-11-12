@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
-import { act } from "react";
+import { act, type ReactElement } from "react";
 import RemoteLink from "../src/pages/RemoteLink";
+import { ChildJobProgress } from "../src/pages/RemoteLinkChildActions";
 import { LanguageProvider } from "../src/i18n/provider";
 import { parseChildJob, parseChildOps } from "../src/remote-link-child-ops-api";
 
@@ -89,6 +90,16 @@ async function mount(): Promise<HTMLDivElement> {
   return host;
 }
 
+/** Mounts one component on its own; a finished job's panel leaves the page, so its last render is asserted here. */
+async function mountNode(element: ReactElement): Promise<HTMLDivElement> {
+  const host = win.document.createElement("div");
+  win.document.body.append(host);
+  root = (await import("react-dom/client")).createRoot(host);
+  await act(async () => { root?.render(<LanguageProvider>{element}</LanguageProvider>); });
+  await flush();
+  return host;
+}
+
 function button(host: HTMLElement, label: string): HTMLButtonElement {
   const found = [...host.querySelectorAll("button")].find(item => item.textContent?.trim() === label);
   if (!found) throw new Error(`no button ${label}: ${host.textContent}`);
@@ -110,6 +121,13 @@ function openSelect(host: HTMLElement, index: number): HTMLButtonElement {
   const trigger = triggers[index];
   if (!trigger) throw new Error(`no select ${index}`);
   return trigger;
+}
+
+/** The first dialog in a row that has rendered its body (the closed restart dialog comes first). */
+function openDialog(host: HTMLElement): HTMLDialogElement {
+  const dialog = [...host.querySelectorAll("dialog")].find(item => item.textContent !== "");
+  if (!dialog) throw new Error(`no open dialog: ${host.textContent}`);
+  return dialog as HTMLDialogElement;
 }
 
 test("status is requested with children=1", async () => {
@@ -168,14 +186,14 @@ test("Restart Codex picks a scope and states the app-server caveat", async () =>
   });
   const host = await mount();
   await click(button(host, "Restart Codex"));
-  const dialog = host.querySelector(".remote-link-confirm-dialog")!;
-  expect(dialog.querySelectorAll("input[type=radio]")[0]?.hasAttribute("checked")).toBe(true as unknown as boolean);
+  const dialog = openDialog(host);
+  expect(dialog.querySelectorAll<HTMLInputElement>("input[type=radio]")[0]?.checked).toBe(true);
   expect(dialog.textContent).toContain("The Codex desktop app's own app-server is not refreshed");
   await click([...dialog.querySelectorAll("button")].find(item => item.textContent === "Restart")!);
   expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "restart-codex", linkIds: ["l1"], restart: "app-server" });
 
   await click(button(host, "Restart Codex"));
-  const reopened = host.querySelector(".remote-link-confirm-dialog")!;
+  const reopened = openDialog(host);
   await click(reopened.querySelectorAll<HTMLInputElement>("input[type=radio]")[1]!);
   expect(reopened.textContent).toContain("Quits and relaunches the Codex desktop app on box-one");
   await click([...reopened.querySelectorAll("button")].find(item => item.textContent === "Restart")!);
@@ -205,7 +223,7 @@ test("Update and Update all confirm the disruption and post their bodies", async
 
   const firstRow = host.querySelectorAll(".remote-link-row")[0]!;
   await click([...firstRow.querySelectorAll("button")].find(item => item.textContent === "Update")!);
-  const rowDialog = firstRow.querySelector("dialog")!;
+  const rowDialog = openDialog(firstRow);
   expect(rowDialog.textContent).toContain("Update box-one to 2.35.0?");
   expect(rowDialog.textContent).toContain("ends any turn currently relayed for it");
   await click([...rowDialog.querySelectorAll("button")].find(item => item.textContent === "Update")!);
@@ -231,14 +249,27 @@ test("a running job shows per-item progress and refreshes status once when done"
   expect(panel.textContent).toContain("Running");
   const statusReads = calls.filter(call => call.path.includes("/api/link/status")).length;
   await pollJobs();
-  await settleUntil(() => host.querySelector(".remote-link-job")?.textContent?.includes("Succeeded") ?? false);
-  const finished = host.querySelector(".remote-link-job")!;
-  expect(finished.textContent).toContain("Succeeded");
-  expect(finished.textContent).toContain("Synced");
-  expect(finished.textContent).toContain("Restart requested");
-  await settleUntil(() => calls.filter(call => call.path.includes("/api/link/status")).length > statusReads);
-  expect(calls.filter(call => call.path.includes("/api/link/status")).length).toBe(statusReads + 1);
+  // The panel leaves the page once the job is done; the rows carry the result after one refresh.
+  await settleUntil(() => host.querySelector(".remote-link-job") === null);
+  expect(host.querySelector(".remote-link-job")).toBeNull();
+  // pollJobs also wakes the page's own status poll, so count the completion refresh where it is exact: onDone.
+  expect(calls.filter(call => call.path.includes("/api/link/status")).length).toBeGreaterThan(statusReads);
   expect(jobPolls).toBeGreaterThan(0);
+});
+
+test("a finished job renders item states, sync and restart outcomes", async () => {
+  installFetch(call => call.path.startsWith("/api/link/children/jobs/")
+    ? response({ job: job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", sync: { state: "synced", reason: null }, restart: { requested: "app-server", outcome: "requested" }, startedAt: null, finishedAt: null }] }) })
+    : response({ error: { code: "not_found" } }, 404));
+  const finished = job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", sync: { state: "synced", reason: null }, restart: { requested: "app-server", outcome: "requested" }, startedAt: null, finishedAt: null }] });
+  let doneCalls = 0;
+  const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(finished)} onDone={() => { doneCalls += 1; }} />);
+  const panel = host.querySelector(".remote-link-job")!;
+  expect(panel.textContent).toContain("Succeeded");
+  expect(panel.textContent).toContain("Synced");
+  expect(panel.textContent).toContain("Restart requested");
+  expect(panel.textContent).toContain("2.34.0 → 2.35.0");
+  expect(doneCalls).toBe(1);
 });
 
 test("a job_not_found answer stops polling and marks running items uncertain", async () => {
@@ -252,13 +283,20 @@ test("a job_not_found answer stops polling and marks running items uncertain", a
   await click([...host.querySelectorAll(".remote-link-row button")].find(item => item.textContent === "Update")!);
   await click([...host.querySelectorAll(".remote-link-row dialog button")].find(item => item.textContent === "Update")!);
   await pollJobs();
+  const polls = calls.filter(call => call.path.startsWith("/api/link/children/jobs/")).length;
+  await settleUntil(() => host.querySelector(".remote-link-job") === null);
+  await pollJobs();
+  expect(calls.filter(call => call.path.startsWith("/api/link/children/jobs/")).length).toBe(polls);
+  expect(polls).toBeGreaterThan(0);
+});
+
+test("a lost job says its progress is gone and marks a running item uncertain", async () => {
+  installFetch(() => response({ error: { code: "job_not_found" } }, 404));
+  const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(job())} onDone={() => {}} />);
   await settleUntil(() => (host.querySelector(".remote-link-job")?.textContent ?? "").includes("Outcome unknown"));
   const panel = host.querySelector(".remote-link-job")!;
   expect(panel.textContent).toContain("Outcome unknown");
   expect(panel.textContent).toContain("This Home restarted, so the job's progress is gone.");
-  const polls = calls.filter(call => call.path.startsWith("/api/link/children/jobs/")).length;
-  await pollJobs();
-  expect(calls.filter(call => call.path.startsWith("/api/link/children/jobs/")).length).toBe(polls);
 });
 
 test("a 409 link_operation_in_progress is shown translated", async () => {
@@ -279,7 +317,7 @@ test("an active job holds the row and its progress is adopted on load", async ()
       row("l2", "box-two", childBlock({ activeJob: { jobId: "ljob_fedcba9876543210", op: "update", state: "running" } })),
     ]));
     if (call.path === "/api/link/children/jobs/ljob_0123456789abcdef") return response({ job: job({ jobId: "ljob_0123456789abcdef", op: "sync" }) });
-    if (call.path === "/api/link/children/jobs/ljob_fedcba9876543210") return response({ job: job({ jobId: "ljob_fedcba9876543210", op: "update", state: "done", items: [] }) });
+    if (call.path === "/api/link/children/jobs/ljob_fedcba9876543210") return response({ job: job({ jobId: "ljob_fedcba9876543210", op: "update" }) });
     return response({ error: { code: "not_found" } }, 404);
   });
   const host = await mount();
@@ -350,35 +388,32 @@ test("a damaged policy file warns and a save writes every knob", async () => {
 });
 
 test("a withheld restart says a request was in flight", async () => {
-  installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
-    if (call.path === "/api/link/children/operations") return response({ job: job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "skipped" }, startedAt: null, finishedAt: null }] }) }, 202);
-    return response({ error: { code: "not_found" } }, 404);
-  });
-  const host = await mount();
-  await click(button(host, "Restart Codex"));
-  await click([...host.querySelectorAll(".remote-link-confirm-dialog button")].find(item => item.textContent === "Restart")!);
+  installFetch(() => response({ job: job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "skipped" }, startedAt: null, finishedAt: null }] }) }));
+  const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(job({ op: "restart-codex" }))} onDone={() => {}} />);
+  await settleUntil(() => (host.querySelector(".remote-link-job")?.textContent ?? "").includes("Restart withheld"));
   const panel = host.querySelector(".remote-link-job")!;
   expect(panel.textContent).toContain("Restart withheld: a request was in flight on this Child.");
   expect(panel.textContent).not.toContain("Restart requested");
 });
 
-test("an unknown restart outcome and an unknown last-operation state render as code", async () => {
-  installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock({
-      lastOperation: { op: "update", jobId: "ljob_0123456789abcdef", state: "melted", reason: null, fromVersion: null, toVersion: null, finishedAt: null },
-    }))]));
-    if (call.path === "/api/link/children/operations") return response({ job: job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "done" }, startedAt: null, finishedAt: null }] }) }, 202);
-    return response({ error: { code: "not_found" } }, 404);
-  });
+test("an unknown last-operation state renders as code", async () => {
+  installFetch(() => response(status([row("l1", "box-one", childBlock({
+    lastOperation: { op: "update", jobId: "ljob_0123456789abcdef", state: "melted", reason: null, fromVersion: null, toVersion: null, finishedAt: null },
+  }))])));
   const host = await mount();
   const badges = host.querySelector(".remote-link-child-badges")!;
-  expect(badges.querySelector("code")?.textContent).toBe("melted");
-  await click(button(host, "Restart Codex"));
-  await click([...host.querySelectorAll(".remote-link-confirm-dialog button")].find(item => item.textContent === "Restart")!);
-  const panel = host.querySelector(".remote-link-job")!;
-  expect(panel.querySelector("code")?.textContent).toBe("done");
-  expect(panel.textContent).not.toContain("Restart requested");
+  expect([...badges.querySelectorAll("code")].map(item => item.textContent)).toContain("melted");
+  // The plan's `remoteLink.job.last` reuses the active label with the ellipsis trimmed.
+  expect(badges.textContent).toContain("Last Updating: melted");
+});
+
+test("an unknown restart outcome renders as code instead of a guessed sentence", async () => {
+  const melted = job({ items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "melted" }, startedAt: null, finishedAt: null }] });
+  installFetch(() => response({ job: melted }));
+  const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(melted)} onDone={() => {}} />);
+  await settleUntil(() => [...host.querySelectorAll("code")].some(item => item.textContent === "melted"));
+  expect([...host.querySelectorAll("code")].map(item => item.textContent)).toContain("melted");
+  expect(host.querySelector(".remote-link-job")!.textContent).not.toContain("Restart requested");
 });
 
 test("parsers reject a malformed child block and keep an unknown job state", () => {
