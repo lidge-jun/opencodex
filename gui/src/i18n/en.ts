@@ -3054,6 +3054,7 @@ export const en = {
   "codexAuth.needsReauth": "Re-login",
   "codexAuth.reauthenticate": "Re-authenticate",
   "codexAuth.tokenExpired": "Token expired — re-authenticate this account",
+  "codexAuth.weeklyConflict": "Two weekly windows were reported: {first} and {second}. The reset above may not restore the full allowance.",
   "codexAuth.mainTokenExpired": "Token expired — re-login with a device code below, or via Codex App login",
   "codexAuth.mainReauthSucceeded": "Signed in",
   "codexAuth.mainReauthFailed": "Re-login failed",

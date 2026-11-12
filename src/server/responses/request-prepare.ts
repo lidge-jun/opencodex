@@ -71,6 +71,7 @@ import {
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
+  previousResponseRestoredPrefixLength,
   previousResponseReplayFailure,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -185,6 +186,7 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
+import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -458,6 +460,15 @@ export async function prepareResponsesRequest(
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
   options.responsesFileImage ||= responsesHasFileImage(body);
+  // Counted after replay expansion so the catalog this request pays for is the one measured:
+  // input restored from stored continuation state is history, and the prefix removes it.
+  if (inboundWire === "responses" && !concreteSelection) {
+    warnEagerCodexToolCatalog(body, req.headers, {
+      surface: eagerCodexToolCatalogSurface(body, options.compactionRecoveryKind),
+      replayPrefixLength: previousResponseRestoredPrefixLength(body),
+      logicalRequest: logCtx,
+    });
+  }
 
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
