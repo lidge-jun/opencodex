@@ -1199,7 +1199,7 @@ test("apply refuses when the confirmed key is no longer the one trusted for its 
     expect(response?.status).toBe(409);
     const body = await response!.json() as { error: { code: string; message: string } };
     expect(body.error.code).toBe("trust_file_unexpected");
-    expect(body.error.message).toContain("remove it");
+    expect(body.error.message).toContain("remove that line");
     expect(shaped.h.store.links).toEqual([]);
     expect(shaped.h.config.apiKeys).toEqual([]);
   }
