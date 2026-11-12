@@ -13,6 +13,7 @@ import {
   linkRelayChallenge, linkRelayProofMatches,
 } from "../link/relay-auth";
 import { forgetVerifiedHomeConnection, recordVerifiedHomeConnection } from "./link-connection";
+import { linkChildReportFeatures } from "../link/compatibility";
 import { childLinkTraffic, type LinkTrafficBook, type LinkTrafficFlow } from "../link/traffic";
 import { LINK_HOME_FEATURES_HEADER } from "../link/request-compression";
 import { recordLinkHomeFeatures } from "./link-home-features";
@@ -247,7 +248,7 @@ function relayChallenge(target: BoundLinkRelayTarget, origin: URL) {
   probe.search = new URLSearchParams({ version: LINK_RELAY_AUTH_VERSION, key: target.apiKeyId!,
     link: target.linkId!, nonce: challenge.nonce, proof: challenge.caller }).toString();
   // The challenge also carries this Child's version and features for the Home's link status.
-  peerReport ??= linkPeerReportHeaders(packageVersion("0.0.0"), buildPeerFeatures());
+  peerReport ??= linkPeerReportHeaders(packageVersion("0.0.0"), linkChildReportFeatures(buildPeerFeatures()));
   return { challenge, probe, headers: peerReport };
 }
 

@@ -31,6 +31,19 @@ export const LINK_PROTOCOL_RELEASES: readonly LinkProtocolRelease[] = [
   { id: LINK_REQUEST_ZSTD_FEATURE, since: "2.100.0", summary: "The Home decodes per-body zstd request bodies and the Child sends them." },
 ];
 
+/**
+ * Features a Child uses only when its Home names them on the link, and otherwise works without:
+ * per-body zstd falls back to identity bodies. A Child leaves them out of its peer report, because
+ * a Home that predates one counts every feature it does not serve as used and would tell the owner
+ * to upgrade it, and a Home never counts one against itself.
+ */
+export const LINK_OPTIONAL_CHILD_FEATURES: ReadonlySet<string> = new Set([LINK_REQUEST_ZSTD_FEATURE]);
+
+/** The feature ids a Child reports on the relay challenge. */
+export function linkChildReportFeatures(features: readonly string[]): string[] {
+  return features.filter(id => !LINK_OPTIONAL_CHILD_FEATURES.has(id));
+}
+
 export type LinkCompatibilityVerdict = "compatible" | "degraded" | "incompatible" | "unknown";
 
 export interface LinkLocalPeer {
@@ -104,7 +117,7 @@ export function linkPeerStatus(local: LinkLocalPeer, entry: LinkPeerEntry): Link
       reasons: [`relay-auth/${observed.relayAuth} matches, but the Child's ${observed.version === null && observed.features === null ? "version and feature list were" : observed.version === null ? "version was" : "feature list was"} missing or invalid, so its features cannot be checked.`],
     };
   }
-  const childOnly = observed.features.filter(id => !local.features.includes(id));
+  const childOnly = observed.features.filter(id => !local.features.includes(id) && !LINK_OPTIONAL_CHILD_FEATURES.has(id));
   if (childOnly.length > 0) {
     return {
       ...base, version: observed.version, versionRange: null, compatibility: "degraded",
