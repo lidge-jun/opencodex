@@ -47,8 +47,11 @@ const USAGE = `Usage:
 
 --device runs the device-code login instead of the browser callback (codex and
 xai): use it when the proxy has no browser or nothing can reach its localhost
-callback, such as a headless or remote hub. Enter the printed code at the
-printed URL from any other machine.
+callback, such as a headless or remote hub. Both print a URL and a short code;
+confirm that code in any browser and the login finishes here, so nothing is
+pasted back and no local port is used. Each flow polls until its own deadline:
+Codex's 15-minute device grant, and xAI's provider-issued expires_in bounded to
+30 minutes and to one poll a second.
 
 The redirect URL or authorization code is a short-lived credential. Pipe it in
 rather than passing it as an argument, where it lands in shell history and is
