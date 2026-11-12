@@ -254,3 +254,10 @@ describe("T5g: a request settles only holds that existed when it began (final re
     expect(holds.count(A)).toBe(0);
   });
 });
+describe("T5g: a write that fails before the rename leaves no temporary file (final review area b, P3)", () => {
+  test("the temporary file is removed when the content write or its fsync throws", () => {
+    const holds = store({ writeHooks: { afterOpen() { throw new Error("ENOSPC"); } } });
+    expect(holds.arm()).toBe(false);
+    expect(readdirSync(dir).filter(name => name.endsWith(".tmp"))).toEqual([]);
+  });
+});

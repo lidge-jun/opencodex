@@ -8,6 +8,7 @@ import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { LinkSupervisor } from "../../src/link/supervisor";
 import { createActivityHolds } from "../../src/link/ws-activity-holds";
+import * as compensation from "../../src/link/compensation";
 import { LINK_WS_LIMITS } from "../../src/server/index/link-websocket-limits";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -44,6 +45,7 @@ function harness(options: { runtimeRole?: OcxConfig["runtimeRole"]; withHolds?: 
   const store: LinkStore = { version: 1, listenerPort: 18181, links: [link(HELD), link(FREE)] };
   writeFileSync(join(temp, "ocx", "link", "links.json"), JSON.stringify(store));
   const holdsDir = join(temp, "holds");
+  const closed: string[] = [];
   const holds = createActivityHolds({ dir: holdsDir, linkIds: () => (options.linksReadable?.() ?? true) ? [HELD, FREE] : null, limits: LINK_WS_LIMITS,
     now: () => 1_762_819_000_000,
     writeHooks: { beforeRename(_t, target) { if (options.failWrites?.() && target.endsWith("activity-holds.json")) throw new Error("EIO"); } } });
@@ -53,6 +55,7 @@ function harness(options: { runtimeRole?: OcxConfig["runtimeRole"]; withHolds?: 
   const listener = {
     ensureStarted: async () => {}, status: () => ({ state: "listening" as const, port: 18181, reason: null }), close: async () => {},
     onAuthenticatedCatalog: () => () => {},
+    closeLinkSockets: (linkId: string) => { closed.push(linkId); return 1; },
     linkActivity: (linkId: string, now: number) => ({ inFlight: holds.count(linkId), lastDataEndAt: now - 700_000, observedSince: now - 900_000 }),
     ...(options.withHolds === false ? {} : { linkHolds: (linkId: string) => holds.summary(linkId), clearLinkHolds: (linkId: string) => holds.clear(linkId) }),
     ...(options.withTransport ? { linkTransport: (linkId: string) => ({ open: linkId === HELD ? 1 : 0, upgrades: linkId === HELD ? 2 : 0, refused: linkId === HELD ? { cap: 1 } : {}, closes: {} }) } : {}),
@@ -60,7 +63,7 @@ function harness(options: { runtimeRole?: OcxConfig["runtimeRole"]; withHolds?: 
   const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: options.runtimeRole ?? "hub", defaultProvider: "mock", providers: {}, apiKeys: [] } as OcxConfig;
   const deps: ManagementApiDeps = {
     readLinkStore: () => store, writeLinkStore: () => {}, linkSupervisor: () => supervisor, linkListener: () => listener,
-    linkKnownHostsPath: () => join(temp, "known_hosts"), now: () => 1_762_819_200_000,
+    linkKnownHostsPath: () => join(temp, "known_hosts"), now: () => 1_762_819_200_000, revokeApiKey: () => true,
   };
   const call = async (path: string, method = "GET", body?: unknown, principal: "admin-token" | "gui-session" | null = "admin-token",
     issuance: "pairing" | "tailscale-identity" | null = null) => {
@@ -70,7 +73,7 @@ function harness(options: { runtimeRole?: OcxConfig["runtimeRole"]; withHolds?: 
       { trustedLoopback: true, guiSessionIssuance: issuance }))!;
   };
   const hold = () => { holds.arm(); holds.add(HELD, { threadHash: null, pendingKeys: ["k"], runningMarks: 1, untracked: false }); };
-  return { call, holds, hold };
+  return { call, holds, hold, closed };
 }
 
 const clear = (h: ReturnType<typeof harness>, body: unknown = { linkId: HELD }, principal?: "admin-token" | "gui-session" | null, issuance?: "pairing" | "tailscale-identity" | null) =>
@@ -179,5 +182,18 @@ describe("a listener without the clear hook (T5e2-R1-02)", () => {
     const response = await clear(harness({ withHolds: false }));
     expect(response.status).toBe(503);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("activity_holds_unavailable");
+  });
+});
+
+describe("T5g: revoke fences the link's sockets before fallible cleanup (final review area a, P3)", () => {
+  test("a failed compensation cleanup after the commit still closes the link's sockets in the same task", async () => {
+    const h = harness();
+    const cleanup = spyOn(compensation, "clearCompensationFailed").mockImplementation(() => { throw new Error("EIO"); });
+    try {
+      const response = await h.call("/api/link/" + HELD, "DELETE", { force: true });
+      expect(response.status).toBe(503);
+      expect(cleanup).toHaveBeenCalled();
+      expect(h.closed).toEqual([HELD]);
+    } finally { cleanup.mockRestore(); }
   });
 });

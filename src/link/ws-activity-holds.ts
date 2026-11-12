@@ -105,6 +105,8 @@ export interface ActivityHoldsDeps {
 }
 
 export interface HoldWriteHooks {
+  /** Test seam: runs after the temporary file is opened, before its content is written. */
+  afterOpen?: (temp: string) => void;
   beforeRename?: (temp: string, target: string) => void;
   afterRename?: (target: string) => void;
   syncDir?: (dir: string) => void;
@@ -149,7 +151,13 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
     const target = join(dir, name);
     const temp = target + "." + process.pid + "." + randomBytes(6).toString("hex") + ".tmp";
     const descriptor = openSync(temp, "wx", 0o600);
-    try { writeSync(descriptor, content); fsyncSync(descriptor); } finally { closeSync(descriptor); }
+    try {
+      try { hooks.afterOpen?.(temp); writeSync(descriptor, content); fsyncSync(descriptor); } finally { closeSync(descriptor); }
+    } catch (error) {
+      // A failure before the rename must not leave the temporary file behind.
+      try { unlinkSync(temp); } catch { /* reported through the original error */ }
+      throw error;
+    }
     try {
       hooks.beforeRename?.(temp, target);
       renameSync(temp, target);

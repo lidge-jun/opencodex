@@ -268,10 +268,10 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
         return filtered;
       });
-      clearCompensationFailed(id, compensationPath());
     } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
-    // Same task as the commit: an open link WebSocket must not outlive its link (design T4 2.4).
+    // Same task as the commit, before any fallible cleanup: an open link WebSocket must not outlive its link (design T4 2.4).
     state.listener.closeLinkSockets?.(id);
+    try { clearCompensationFailed(id, compensationPath()); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
     state.compensationFailures?.delete(id);
     await state.supervisor.reload();
     if (next.links.length === 0) await state.listener.close();
