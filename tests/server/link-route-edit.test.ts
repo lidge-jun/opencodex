@@ -38,7 +38,7 @@ function record(overrides: Partial<LinkRecord> = {}): LinkRecord {
 type ProbeAnswer = SshRunResult | Promise<SshRunResult> | (() => never);
 interface Probe { destination: string; knownHostsFile: string; knownHostsText: string }
 
-function harness(options: { links?: LinkRecord[]; knownHosts?: string; probe?: (destination: string) => ProbeAnswer } = {}) {
+function harness(options: { links?: LinkRecord[]; knownHosts?: string; probe?: (destination: string) => ProbeAnswer; reloadFails?: boolean } = {}) {
   const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: "hub", defaultProvider: "mock", providers: {}, apiKeys: [] } as unknown as OcxConfig;
   let current: LinkStore = { version: 1, listenerPort: 19001, links: options.links ?? [record()] };
   const knownHostsPath = join(temp, "known_hosts");
@@ -56,7 +56,9 @@ function harness(options: { links?: LinkRecord[]; knownHosts?: string; probe?: (
     spawnTunnel: () => { throw new Error("no tunnel in route edit tests"); },
   };
   const supervisor: LinkSupervisor = {
-    start() {}, ensureStarted: async () => {}, reload: async () => { events.push("reload"); }, stopLink: async () => {},
+    start() {}, ensureStarted: async () => {},
+    reload: async () => { events.push("reload"); if (options.reloadFails) throw new Error("reload failed in alpha-lan"); },
+    stopLink: async () => {},
     reconnect: async () => true, status: () => [], stop: async () => {},
   };
   const listener = {
@@ -118,7 +120,7 @@ test.each([
   const h = harness({ probe: () => ({ code: 255, stdout: "", stderr }) });
   const response = await h.edit({ op: "add", route: "alpha-lan" });
   expect(response.status).toBe(409);
-  expect(response.body).toEqual({ error: { code: "route_unproven", message: expect.any(String), hint: cause } });
+  expect(response.body).toEqual({ error: { code: "route_unproven", message: expect.any(String), cause } });
   expect(JSON.stringify(response.body)).not.toContain("alpha-lan");
   expect(JSON.stringify(response.body)).not.toContain("10.0.0.5");
   expect(routesOf(h)).toBeUndefined();
@@ -129,7 +131,7 @@ test("a runner exception is an unproven route with a fixed cause, and the link i
   let thrown = true;
   const h = harness({ probe: () => thrown ? () => { throw new SshRunnerError("timeout", "ssh command exceeded 15000ms on alpha-lan"); } : { code: 0, stdout: "ocx-link-probe\n", stderr: "" } });
   const response = await h.edit({ op: "add", route: "alpha-lan" });
-  expect(response.body).toEqual({ error: { code: "route_unproven", message: expect.any(String), hint: "transient" } });
+  expect(response.body).toEqual({ error: { code: "route_unproven", message: expect.any(String), cause: "transient" } });
   expect(JSON.stringify(response.body)).not.toContain("15000");
   thrown = false;
   expect((await h.edit({ op: "add", route: "alpha-lan" })).status).toBe(200);
@@ -274,4 +276,15 @@ test("the route endpoints are reachable neither over the Child-readable relay no
     const url = new URL("http://localhost" + path);
     expect(localControlRouteAllowed(url, new Request(url, { method }))).toBe(false);
   }
+});
+
+test("an edit stored but not applied by the running supervisor is an explicit error, never a 200", async () => {
+  const h = harness({ reloadFails: true });
+  const response = await h.edit({ op: "add", route: "alpha-lan" });
+  expect(response.status).toBe(500);
+  expect(response.body).toEqual({ error: { code: "routes_stored_reload_failed", message: expect.stringContaining("Restart"), linkId: LINK, pin: "pen-alpha", routes: ["alpha-lan", "pen-alpha"] } });
+  expect(JSON.stringify(response.body)).not.toContain("reload failed in");
+  // The store holds the edit, so a restart applies it.
+  expect(routesOf(h)).toEqual(["alpha-lan", "pen-alpha"]);
+  expect(h.events).toEqual(["store", "reload"]);
 });

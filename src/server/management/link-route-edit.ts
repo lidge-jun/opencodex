@@ -37,8 +37,12 @@ function sameList(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function routesBody(record: LinkRecord): { linkId: string; pin: string; routes: string[] } {
+  return { linkId: record.id, pin: record.alias, routes: effectiveLinkRoutes(record) };
+}
+
 function document(record: LinkRecord): Response {
-  return Response.json({ linkId: record.id, pin: record.alias, routes: effectiveLinkRoutes(record) }, { headers: { "cache-control": "no-store" } });
+  return Response.json(routesBody(record), { headers: { "cache-control": "no-store" } });
 }
 
 function parseEdit(value: unknown): Edit | null {
@@ -127,7 +131,10 @@ async function applyEdit(ctx: ManagementContext, state: LinkRouteState, record: 
   if (outcome === "link_changed") return fail("link_changed", "The link changed while its routes were being edited; read it again.", 409);
   if (outcome === "pin_changed") return fail("pin_changed", "The link's pinned key changed while the route was being proved.", 409);
   try { await state.supervisor.reload(); } catch {
+    // The store holds the edit, the running tunnels may not: say so instead of reporting success.
     console.warn("[link] route edit stored; tunnel reload failed linkId=" + record.id);
+    const message = "The routes were stored, but the running proxy did not apply them. Restart the proxy to apply them.";
+    return Response.json({ error: { code: "routes_stored_reload_failed", message, ...routesBody(outcome) } }, { status: 500, headers: { "cache-control": "no-store" } });
   }
   return document(outcome);
 }
@@ -150,7 +157,7 @@ async function proveRoute(ctx: ManagementContext, record: LinkRecord, route: str
     } catch {
       cause = "transient";
     }
-    return fail("route_unproven", "The route did not prove the link's pinned host key.", 409, cause);
+    return Response.json({ error: { code: "route_unproven", message: "The route did not prove the link's pinned host key.", cause } }, { status: 409, headers: { "cache-control": "no-store" } });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

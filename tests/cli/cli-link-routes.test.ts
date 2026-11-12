@@ -81,8 +81,24 @@ test.each([
 });
 
 test("a refused add exits 5 and shows only the code and its fixed cause", async () => {
-  const result = await run(["add", "--link-id", LINK, "--route", "alpha-lan", "--json"], { error: { code: "route_unproven", message: "The route did not prove the link's pinned host key.", hint: "hostkey" } }, 409);
+  const result = await run(["add", "--link-id", LINK, "--route", "alpha-lan", "--json"], { error: { code: "route_unproven", message: "The route did not prove the link's pinned host key.", cause: "hostkey" } }, 409);
   expect(result.code).toBe(5);
-  expect(result.stderr.join("\n")).toContain("route_unproven");
+  expect(result.stderr.join("\n")).toContain("route_unproven (hostkey)");
+});
+
+test("an unknown cause word is not echoed", async () => {
+  const result = await run(["add", "--link-id", LINK, "--route", "alpha-lan"], { error: { code: "route_unproven", message: "x", cause: "alpha-lan.example" } }, 409);
+  expect(result.code).toBe(5);
+  expect(result.stderr.join("\n")).not.toContain("alpha-lan.example");
+});
+
+test("an edit stored but not applied exits 1 and says the routes are stored and a restart applies them", async () => {
+  const body = { error: { code: "routes_stored_reload_failed", message: "The routes were stored, but the running proxy did not apply them. Restart the proxy to apply them.", linkId: LINK, pin: "pen-alpha", routes: ["alpha-lan", "pen-alpha"] } };
+  const result = await run(["add", "--link-id", LINK, "--route", "alpha-lan"], body, 500);
+  expect(result.code).toBe(1);
+  const stderr = result.stderr.join("\n");
+  expect(stderr).toContain("routes_stored_reload_failed");
+  expect(stderr).toContain("stored");
+  expect(stderr).toContain("restart");
 });
 

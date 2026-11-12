@@ -17,6 +17,8 @@ export const LINK_ROUTES_USAGE = [
 ];
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
+// The class words an unproven route can carry (RouteOutcomeClass); anything else is not echoed.
+const ROUTE_CAUSES = new Set(["transient", "readiness", "grant_unobserved", "forward", "auth", "hostkey"]);
 
 export interface LinkRoutesDocument { linkId: string; pin: string; routes: string[] }
 
@@ -66,11 +68,14 @@ export async function runLinkRoutes(args: string[], deps: LinkCliDeps, request: 
       ? await request<unknown>(path, {}, deps)
       : await request<unknown>(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, deps);
   } catch (error) {
-    // The link request already reduced the body to {error: {code, hint?}}: a fixed code and, for an
-    // unproven route, a class word. Name them; the status keeps the exit code (4 on 404, 5 on 409).
+    // Name the fixed code and, for an unproven route, its class word; only known words are shown.
+    // The status keeps the exit code (4 on 404, 5 on 409, 1 otherwise).
     if (error instanceof RuntimeApiError && isRecord(error.body) && isRecord(error.body.error) && typeof error.body.error.code === "string") {
-      const hint = typeof error.body.error.hint === "string" ? " (" + error.body.error.hint + ")" : "";
-      throw new RuntimeApiError("Link routes request refused (" + error.status + "): " + error.body.error.code + hint, error.status, error.body);
+      const code = error.body.error.code;
+      const cause = error.body.error.cause;
+      const known = typeof cause === "string" && ROUTE_CAUSES.has(cause) ? " (" + cause + ")" : "";
+      const note = code === "routes_stored_reload_failed" ? "; the routes were stored, restart the proxy to apply them" : "";
+      throw new RuntimeApiError("Link routes request refused (" + error.status + "): " + code + known + note, error.status, error.body);
     }
     throw error;
   }

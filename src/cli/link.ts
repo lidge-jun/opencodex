@@ -276,7 +276,7 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string; hint?: string }; residual?: true } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
   if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
@@ -284,7 +284,9 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string };
   // line, already bounded and redacted, and it is bounded and redacted again here. The rest of
   // the body is still never echoed.
   const hint = typeof body.error.hint === "string" ? boundHint(body.error.hint) : undefined;
-  return { error: { code, ...(hint ? { hint } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
+  // A cause is a class word (an unproven route's `hostkey`, `auth`, ...): kept only in that shape.
+  const cause = typeof body.error.cause === "string" && /^[a-z_]{1,32}$/.test(body.error.cause) ? body.error.cause : undefined;
+  return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
