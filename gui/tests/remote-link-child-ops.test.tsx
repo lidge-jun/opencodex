@@ -5,7 +5,10 @@ import { act, type ReactElement } from "react";
 import RemoteLink from "../src/pages/RemoteLink";
 import { ChildJobProgress } from "../src/pages/RemoteLinkChildActions";
 import { LanguageProvider } from "../src/i18n/provider";
-import { CHILD_JOB_POLL_MS, CHILD_JOB_POLL_TIMEOUT_MS, parseChildJob, parseChildOps } from "../src/remote-link-child-ops-api";
+import { CHILD_OPS_MAX_LINK_IDS } from "../../src/link/child-ops-types";
+import {
+  CHILD_JOB_POLL_MS, CHILD_JOB_POLL_TIMEOUT_MS, CHILD_OPERATION_MAX_LINK_IDS, chunkLinkIds, parseChildJob, parseChildOps, postChildOperation,
+} from "../src/remote-link-child-ops-api";
 
 const HOME = "http://fixture";
 let win: Window;
@@ -282,15 +285,38 @@ test("bulk actions split more than 64 Children into requests the server accepts"
   await click(button(host, "Check all"));
   await settleUntil(() => calls.filter(call => call.method === "POST").length === 2);
   const checks = calls.filter(call => call.method === "POST").map(call => call.body);
-  expect(checks).toEqual([{ op: "observe", linkIds: ids.slice(0, 64) }, { op: "observe", linkIds: ids.slice(64) }]);
+  expect(checks).toEqual([{ op: "observe", linkIds: ids.slice(0, 33) }, { op: "observe", linkIds: ids.slice(33) }]);
   await click(button(host, "Update all"));
   const bulkDialog = host.querySelector(".remote-link-child-bulk dialog")!;
   expect(bulkDialog.textContent).toContain("Update 65 Children");
   await click([...bulkDialog.querySelectorAll("button")].find(item => item.textContent === "Update all")!);
   await settleUntil(() => calls.filter(call => call.method === "POST").length === 4);
   const updates = calls.filter(call => call.method === "POST").slice(2).map(call => call.body);
-  expect(updates).toEqual([{ op: "update", linkIds: ids.slice(0, 64) }, { op: "update", linkIds: ids.slice(64) }]);
+  expect(updates).toEqual([{ op: "update", linkIds: ids.slice(0, 33) }, { op: "update", linkIds: ids.slice(33) }]);
   expect(host.textContent).not.toContain("could not be completed");
+});
+
+test("the GUI copy of the per-request link cap equals the route's, and groups are even and within it", () => {
+  // gui/ cannot import the route; a drifted copy would turn every large bulk action into whole-group refusals.
+  expect(CHILD_OPERATION_MAX_LINK_IDS).toBe(CHILD_OPS_MAX_LINK_IDS);
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => `l${index}`);
+  expect(chunkLinkIds(ids(64)).map(group => group.length)).toEqual([64]);
+  expect(chunkLinkIds(ids(65)).map(group => group.length)).toEqual([33, 32]);
+  expect(chunkLinkIds(ids(129)).map(group => group.length)).toEqual([43, 43, 43]);
+  expect(chunkLinkIds([])).toEqual([]);
+  for (const count of [1, 63, 65, 128, 200, 1000]) {
+    const groups = chunkLinkIds(ids(count));
+    expect(groups.flat()).toEqual(ids(count));
+    expect(groups.every(group => group.length <= CHILD_OPS_MAX_LINK_IDS && (count === 1 || group.length > 1))).toBe(true);
+  }
+});
+
+test("a submit that never settles is abandoned at its deadline", async () => {
+  // The bulk bar and row actions stay busy until the POST settles; one that hangs and ignores its signal must still end.
+  globalThis.fetch = (() => new Promise<Response>(() => undefined)) as unknown as typeof fetch;
+  const started = Date.now();
+  await expect(postChildOperation(HOME, { op: "observe", linkIds: ["l1"] }, 30)).rejects.toBeDefined();
+  expect(Date.now() - started).toBeLessThan(2_000);
 });
 
 test("a refused bulk group shows its error while the accepted group is still tracked", async () => {
@@ -299,7 +325,7 @@ test("a refused bulk group shows its error while the accepted group is still tra
     if (call.path.startsWith("/api/link/status")) return response(status(ids.map(id => row(id, `box-${id}`, childBlock()))));
     if (call.path === "/api/link/children/operations") {
       const linkIds = call.body?.linkIds as string[];
-      if (linkIds.length === 1) return response({ error: { code: "link_operation_in_progress" } }, 409);
+      if (linkIds.includes("l64")) return response({ error: { code: "link_operation_in_progress" } }, 409);
       return response({ job: job({ jobId: "ljob_bulkgroup0000000", op: "observe", items: [
         { linkId: "l0", alias: "box-l0", state: "running", reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
       ] }) }, 202);
@@ -311,8 +337,16 @@ test("a refused bulk group shows its error while the accepted group is still tra
   await click(button(host, "Check all"));
   await settleUntil(() => host.textContent?.includes("Another operation is running on this Child.") === true);
   expect(host.textContent).toContain("Another operation is running on this Child.");
-  // The 64-id group was accepted, so its job panel shows and its row stays held.
+  // The first group was accepted, so its job panel shows and the row its job names (l0) is held.
   expect(host.querySelector(".remote-link-job")).not.toBeNull();
+  const firstRow = host.querySelectorAll(".remote-link-row")[0]!;
+  const rowButtons = [...firstRow.querySelectorAll("button")];
+  for (const label of ["Check", "Sync now", "Update", "Disconnect"]) {
+    expect(rowButtons.find(item => item.textContent === label)!.disabled).toBe(true);
+  }
+  // A row the accepted job does not name keeps its controls.
+  const otherRow = host.querySelectorAll(".remote-link-row")[1]!;
+  expect([...otherRow.querySelectorAll("button")].find(item => item.textContent === "Check")!.disabled).toBe(false);
 });
 
 test("a running job shows per-item progress and refreshes status once when done", async () => {

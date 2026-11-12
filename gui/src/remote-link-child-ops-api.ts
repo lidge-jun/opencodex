@@ -114,9 +114,18 @@ export function parseChildPolicyRead(value: unknown): ChildPolicyReadView {
 }
 
 const json = { "content-type": "application/json" };
-export async function postChildOperation(apiBase: string, body: ChildOperationBody): Promise<ChildJobView> {
-  const out = await requestLinkJson<{ job?: unknown }>(apiBase, "/api/link/children/operations", { method: "POST", headers: json, body: JSON.stringify(body) });
-  return parseChildJob(out.job);
+/** A submit that never settles would keep the row (or the bulk bar) busy until a reload; the job, if the Home took it,
+ *  still shows up through the status rows' `activeJob`. */
+export const CHILD_OPERATION_POST_TIMEOUT_MS = 30_000;
+export async function postChildOperation(apiBase: string, body: ChildOperationBody,
+  timeoutMs: number = CHILD_OPERATION_POST_TIMEOUT_MS): Promise<ChildJobView> {
+  const request = new AbortController();
+  const deadline = setTimeout(() => request.abort(), timeoutMs);
+  try {
+    const out = await settleOrAbort(requestLinkJson<{ job?: unknown }>(apiBase, "/api/link/children/operations",
+      { method: "POST", headers: json, body: JSON.stringify(body), signal: request.signal }), request.signal);
+    return parseChildJob(out.job);
+  } finally { clearTimeout(deadline); }
 }
 export async function getChildJob(apiBase: string, jobId: string, signal?: AbortSignal): Promise<ChildJobView> {
   const out = await requestLinkJson<{ job?: unknown }>(apiBase, `/api/link/children/jobs/${encodeURIComponent(jobId)}`, { signal });
@@ -148,12 +157,17 @@ export function jobHoldsLink(jobs: readonly ChildJobView[], linkId: string): boo
     && job.items.some(item => item.linkId === linkId && (item.state === "queued" || item.state === "running")));
 }
 export const CHILD_JOB_POLL_MS = 2_000;
-/** The operations route refuses a body naming more links than this (`MAX_LINK_IDS` in link-child-ops-routes.ts). */
+/** The operations route refuses a body naming more links than this (`CHILD_OPS_MAX_LINK_IDS` in src/link/child-ops-types.ts;
+ *  gui/tests/remote-link-child-ops.test.tsx pins the copy). */
 export const CHILD_OPERATION_MAX_LINK_IDS = 64;
-/** Splits a bulk target list into request-sized groups; a Home's link count is unbounded. */
+/** Splits a bulk target list into request-sized groups of even size; a Home's link count is unbounded. Even groups
+ *  never leave a one-id tail, which the route would treat as a single-link request (a held link answers 409 for the
+ *  whole request instead of a `busy` item). */
 export function chunkLinkIds(ids: readonly string[], size = CHILD_OPERATION_MAX_LINK_IDS): string[][] {
+  const groups = Math.ceil(ids.length / size);
+  const each = groups > 0 ? Math.ceil(ids.length / groups) : size;
   const chunks: string[][] = [];
-  for (let start = 0; start < ids.length; start += size) chunks.push(ids.slice(start, start + size));
+  for (let start = 0; start < ids.length; start += each) chunks.push(ids.slice(start, start + each));
   return chunks;
 }
 /** One job poll may take this long; a GET that never settles would otherwise stop every later poll. */
