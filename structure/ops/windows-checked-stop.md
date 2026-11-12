@@ -2,12 +2,16 @@
 
 The checked Windows service stop (#7771) is a library of primitives and two operations that
 stop a Task Scheduler or WinSW manager, end the wrappers that would relaunch the proxy, and
-then confirm the port is free. Every Windows stop path uses it: `ocx stop` with and without a
-consent snapshot, `ocx uninstall`, `/api/stop`, `ocx service stop` / `uninstall` / `remove`,
-service install and backend switch, and the updater. The best-effort path-token sweep in
-`src/lib/windows-service-wrappers.ts` is no longer called by any stop path. macOS and Linux keep
-their manager stops and timing; only the signatures turned async. The design and its slices live
-in `devlog/_plan/261111_windows_service_stop/`.
+then confirm the port is free. Every Windows stop path that also restores shared client state
+uses it: `ocx stop` with and without a consent snapshot, `ocx uninstall`, `/api/stop`,
+`ocx service stop` / `uninstall` / `remove`, service install and backend switch, and the updater.
+The best-effort path-token sweep in `src/lib/windows-service-wrappers.ts` is no longer called by
+any stop path. `ocx service repair` is the one remaining exception: it still stops the manager
+through `stopWindows()` (`src/service/repair.ts:259`) because it does not restore shared client
+state, so the #3008 relaunch window this stop exists to close does not apply to it. Wiring repair
+is its own follow-up slice (`devlog/_plan/261111_windows_service_stop/060_implementation.md`,
+"Follow-up slices"). macOS and Linux keep their manager stops and timing; only the signatures
+turned async. The design and its slices live in `devlog/_plan/261111_windows_service_stop/`.
 
 ## Process evidence
 
@@ -102,13 +106,20 @@ floored to whole milliseconds and one that floors to 0 spawns nothing, because `
 as no timeout), the evidence snapshot `windowsProcessSnapshot` for every bind, the checked
 terminate, the exit watch, the Part B port sampler and the listener identity. The task's running
 state is read from `schtasks /query /fo CSV`, falling back to `Get-ScheduledTask` inside the same
-1 s cap when the status word is localized.
+1 s cap when the status word is localized. A running WinSW service is only this home's manager
+when `sc qc` shows a `BINARY_PATH_NAME` naming this installation's WinSW executable, the same
+proof the guarded manager path uses: the service ID is fixed, so a successful `sc query` alone
+would let Part A stop another installation's service. An unreadable registration is `unknown`
+(`evidence-unreadable`, nothing changed); a foreign executable is reported as `nonexistent`, so
+Part A stops nothing and answers `absent`.
 
 The port sampler is `sampleWindowsStopPort(port, timeoutMs)`, async and bounded by the caller's
 timeout: it runs `netstat.exe` from the trusted System32 directory through `execFile` with that
 timeout and `SIGKILL`, and a scan that misses the timeout, or cannot be read, samples `unknown`.
 A synchronous scan would ignore the cap and could stall the stop for the helper's own 5 s. A row
-whose owner has exited is cleared like `reclaimListenPort` does. The listener identity is
+whose owner has exited is cleared like `reclaimListenPort` does, but only the rows that exited
+PID owns: `dropWindowsTcpRowsForLocalPort` takes an owner filter, so a program that took the port
+between scans keeps its connections. The listener identity is
 tri-state over `inspectOcxStartProcessIdentity`: only a positive `mismatch` is `foreign`, and an
 `unverifiable` probe (another account's or an elevated process's command line) stays `unknown`.
 `verifyPidIdentity`'s null collapses those two, which would report a listener we merely could not
