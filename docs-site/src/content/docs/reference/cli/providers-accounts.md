@@ -323,15 +323,20 @@ A Claude account that belongs to several organizations can be added once per org
 `ocx login anthropic` again and pick the other organization on Claude's consent screen. Each
 organization has its own subscription and limits, so it becomes its own pool account instead of
 replacing the first. Logging in to an organization that already has an account refreshes that
-account. Reauthenticating an account into a different organization is refused; add it as a new
-login instead.
+account.
 
-A separate account needs proof of both organizations. Claude reports a grant's organization at
-login and on token refresh, but only when that report succeeds is it recorded. An existing account
+All of this depends on organization evidence, which Claude reports at login and on token refresh;
+it is recorded only when that report succeeds. A login gets its own account only when both
+organizations are known and differ. When the login's organization is known, an existing account
 with no recorded organization (for example, one saved before this release) is checked through its
-own token when you log in; if that token has expired or the check fails, the new login replaces
-that account, as earlier releases did. Before adding another organization, make sure the existing
-account is signed in and its token is current, for example by sending it one request.
+own token, if that token is still current. An account of the login's organization is preferred.
+Otherwise, if the existing account's organization stays unknown (expired token, failed check, or a
+login whose own organization was not reported), the login may replace it, as earlier releases did.
+Reauthenticating an account is refused when its known organization differs from the login's, or
+when another account already holds the login's organization; add the other organization as a new
+login instead. With an unknown organization on either side, reauthentication proceeds as before. Before adding another
+organization, make sure the existing account is signed in and its token is current, for example
+by sending it one request.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned
