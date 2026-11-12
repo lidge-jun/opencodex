@@ -76,3 +76,28 @@ test("a connected Child's status read with ?traffic=1 shows its link, the bytes 
   expect(counted.links[0]!.traffic).toMatchObject({ toHomeBytes: 321, fromHomeBytes: 45, toHomeSource: "relayed" });
   expect(calls).toEqual([["ssh", "-G", "--", "home-mac"]]);
 });
+
+for (const [label, sidecar, reason] of [
+  ["unreadable", () => { throw new Error("damaged"); }, "sidecar_invalid"],
+  ["another link's", () => ({ linkId: "lnk_00000000000000dd", alias: "elsewhere", hubHostKeyFingerprint: `SHA256:${"a".repeat(43)}`, peerListenerPort: 45678, tunnelPort: TUNNEL_PORT }), "sidecar_mismatch"],
+] as const) {
+  test(`an ${label} sidecar makes the traffic row failed with an unknown alias and resolves nothing`, async () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole: "client", client: connection }));
+    const calls: string[][] = [];
+    const runner: SshRunner = {
+      async run(argv) { calls.push([...argv]); return { code: 0, stdout: "", stderr: "" }; },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
+    };
+    const server = startMachineListener(0, {
+      state: connection, managementAuthState: authState(), linkSshRunner: runner,
+      linkStatus: () => ({ kind: "tunnel", linkId: LINK_ID, state: { kind: "connected", since: Date.parse("2026-09-26T01:00:00.000Z") }, pid: 4242 }),
+      readSidecar: sidecar as () => null,
+    });
+    servers.push(server);
+    const html = await (await fetch(new URL("/opencodex-session", server.url))).text();
+    const headers = { "X-OpenCodex-API-Key": meta(html, "opencodex-session-token"), "X-OpenCodex-GUI-Origin": meta(html, "opencodex-session-origin") };
+    const counted = await (await fetch(new URL("/api/link/status?traffic=1", server.url), { headers })).json() as { links: Array<Record<string, unknown>> };
+    expect(counted.links[0]).toMatchObject({ id: LINK_ID, alias: "unknown", direction: "client-initiated", state: "failed", reason, path: { via: "unknown" } });
+    expect(calls).toEqual([]);
+  });
+}

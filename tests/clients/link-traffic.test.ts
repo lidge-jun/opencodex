@@ -6,6 +6,9 @@ import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { childLinkTraffic, createLinkTrafficBook, MAX_LINKS } from "../../src/link/traffic";
 import { linkBoundFetch } from "../../src/client/link-home";
 import { gzipSync } from "node:zlib";
+import { PassThrough } from "node:stream";
+import type { IncomingMessage } from "node:http";
+import { linkResponseOnConnectionForTests } from "../../src/client/link-relay-transport";
 
 const key = `ocx_data_${"a".repeat(40)}`;
 const keyId = "test-link-key", linkId = "lnk_0123456789abcdef";
@@ -152,6 +155,22 @@ describe("link traffic counters at the transport boundary (#3023 review)", () =>
     const after = childLinkTraffic.snapshot(ownLink);
     expect(after.requests - before.requests).toBe(1);
     expect(after.fromHomeBytes - before.fromHomeBytes).toBe(encoder.encode(body).byteLength);
+  });
+
+  test("identity bytes read off the socket count even when the caller cancels before consuming them", async () => {
+    const incoming = Object.assign(new PassThrough(), { statusCode: 200, rawHeaders: ["content-type", "text/event-stream"] });
+    const book = createLinkTrafficBook("relayed");
+    const flow = book.begin(linkId);
+    const first = encoder.encode("data: first\n\n"), second = encoder.encode("data: queued but never read\n\n");
+    incoming.write(first); incoming.write(second);
+    let closed = 0;
+    const response = await linkResponseOnConnectionForTests(incoming as unknown as IncomingMessage, async () => { closed += 1; }, "POST", flow);
+    const reader = response.body!.getReader();
+    const read = await reader.read();
+    expect(read.value?.byteLength).toBeGreaterThan(0);
+    await reader.cancel();
+    expect(book.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1, fromHomeBytes: first.byteLength + second.byteLength });
+    expect(closed).toBeGreaterThan(0);
   });
 
   test("a Home request aborted before its headers stays incomplete when the handler then answers without a body", async () => {
