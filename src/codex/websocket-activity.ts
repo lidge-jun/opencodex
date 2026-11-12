@@ -51,6 +51,13 @@ export class CodexWebSocketActivity {
   // Remote Link sockets observe their own activity; local sockets register nothing.
   private listeners: Array<() => void> = [];
   private acceptedListeners: Array<(input: unknown) => void> = [];
+  /**
+   * Remote Link sockets only: a turn the shared handler never reports as accepted (notifyAccepted)
+   * puts the results it settled back to pending when it finishes, so a refused or failed turn cannot
+   * make unfinished client work look done. Local sockets keep settling at admission.
+   */
+  restoreRefusedResults = false;
+  private turnRecords = new Map<unknown, { settled: string[]; accepted: boolean }>();
 
   get closing(): boolean { return this.closingFlag; }
 
@@ -103,6 +110,8 @@ export class CodexWebSocketActivity {
 
   /** The shared handler's turn was accepted by every admission and the pipeline answered ok. */
   notifyAccepted(input: unknown): void {
+    const record = this.turnRecords.get(input);
+    if (record) record.accepted = true;
     for (const listener of [...this.acceptedListeners]) {
       try { listener(input); } catch { /* an observer never breaks the socket's own bookkeeping */ }
     }
@@ -124,7 +133,8 @@ export class CodexWebSocketActivity {
   beginTurn(input: unknown): () => void {
     this.turns += 1;
     this.touch();
-    this.settleResults(input);
+    const record = { settled: this.settleResults(input), accepted: false };
+    if (this.restoreRefusedResults) this.turnRecords.set(input, record);
     // Ordinary creates start a new response even when its upstream omits response.created.
     // Prior results settle old waits, but cannot suppress new calls reusing their IDs.
     this.returnedResults.clear();
@@ -134,6 +144,8 @@ export class CodexWebSocketActivity {
     return () => {
       if (finished) return;
       finished = true;
+      if (this.turnRecords.get(input) === record) this.turnRecords.delete(input);
+      if (this.restoreRefusedResults && !record.accepted) this.restoreResults(record.settled);
       this.turns -= 1;
       if (this.turns === 0) this.touch();
       this.changed();
@@ -142,26 +154,36 @@ export class CodexWebSocketActivity {
 
   /** Called only after admission or native control accepts the client's results. */
   acceptResults(input: unknown): void {
-    if (this.settleResults(input)) this.changed();
+    if (this.settleResults(input).length) this.changed();
   }
 
-  /** Settles returned results; true when the pending set changed. Notifies nobody. */
-  private settleResults(input: unknown): boolean {
-    if (this.untrackedResults) return false;
-    let changed = false;
+  /** Settles returned results; the keys taken off the pending set. Notifies nobody. */
+  private settleResults(input: unknown): string[] {
+    const settled: string[] = [];
+    if (this.untrackedResults) return settled;
     if (Array.isArray(input)) {
       for (const item of input) {
         // Ordinary Codex shell results use function_call_output; native steering
         // also accepts its explicit local_shell_call_output continuation stub.
         const key = this.resultKeyOf(item);
         if (key !== null && this.pendingResults.delete(key)) {
-          changed = true;
-          if (this.returnedResults.size >= MAX_PENDING_RESULTS) { this.protectUntracked(); return false; }
+          settled.push(key);
+          if (this.returnedResults.size >= MAX_PENDING_RESULTS) { this.protectUntracked(); return []; }
           else this.returnedResults.add(key);
         }
       }
     }
-    return changed;
+    return settled;
+  }
+
+  /** A refused turn's results are owed again (restoreRefusedResults). */
+  private restoreResults(keys: readonly string[]): void {
+    if (this.untrackedResults) return;
+    for (const key of keys) {
+      this.returnedResults.delete(key);
+      if (this.pendingResults.size >= MAX_PENDING_RESULTS) { this.protectUntracked(); return; }
+      this.pendingResults.add(key);
+    }
   }
 
   /** Preserve tool waits even when the response terminal omits its output array. */

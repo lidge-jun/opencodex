@@ -427,6 +427,8 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           states.set(ws, state);
           const activity = ws.data.responsesActivity;
           if (activity) {
+            // A refused or failed turn on this socket leaves its results owed (design 5).
+            activity.restoreRefusedResults = true;
             const stopChange = activity.onChange(() => observe(ws, state));
             // An admitted turn may return results a closed socket of this link and own thread waited for.
             const stopAccepted = deps.holds ? activity.onAccepted(input => {

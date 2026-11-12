@@ -46,6 +46,8 @@ function turnHandler() {
       ws.data.cancel?.();
       ws.data.cancel = () => { cancels += 1; };
       finishes.push(ws.data.responsesActivity!.beginTurn(frame.input));
+      // The real handler reports a turn its pipeline answered ok as accepted (websocket-handler.ts).
+      ws.data.responsesActivity!.notifyAccepted(frame.input);
     },
     close(ws) { ws.data.admissionLease?.release(); },
   };

@@ -369,6 +369,39 @@ describe("link Responses WebSocket switched on", () => {
     expect(holdsOf()).toBe(0);
   });
 
+  test("with the real shared handler, a result refused on its own socket stays pending, so a later close still holds (T5d1-R4-01)", async () => {
+    const callTurn = [
+      'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_tool2","status":"in_progress","output":[]}}\n\n',
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_tool2","status":"completed","output":[{"type":"function_call","id":"fc_same","call_id":"call_same","name":"shell","arguments":"{}","status":"completed"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n',
+    ].join("");
+    upstreamBody = () => (upstreamRequests.length === 1 ? callTurn : COMPLETED);
+    const port = await startHome();
+    const holdsPath = join(testHome, "link", "activity-holds.json");
+    const holdsOf = () => (JSON.parse(readFileSync(holdsPath, "utf8")) as { links: Record<string, { holds: unknown[] }> }).links[LINK_A]?.holds.length ?? 0;
+    const holdsChanged = () => new Promise<void>(resolve => {
+      const watcher = watch(join(testHome, "link"), (_event, name) => { if (name === "activity-holds.json") { watcher.close(); resolve(); } });
+    });
+    const wire = await client(port);
+    const session = await wire.challenge(identityA);
+    expect((await wire.upgrade({ nonce: session.nonce, bearer: KEY_A, headers: { "thread-id": "thread-same" } })).status).toBe(101);
+    await runTurn(wire);
+    const returned = create([{ type: "function_call_output", call_id: "call_same", output: "done" }]);
+    const refuse = spyOn(workflow, "admitHttpWorkflowTurn").mockImplementation(() => ({ admitted: false, reason: "workflow-sends-exhausted", rootId: "" }));
+    try {
+      wire.sendJson(returned);
+      expect(frameType(await wire.nextMessage())).toBe("error");
+    } finally { refuse.mockRestore(); }
+    upstreamStatus = () => 400;
+    wire.sendJson(returned);
+    const failed = await wire.until(message => frameType(message) === "error" || frameType(message) === "response.failed");
+    expect(failed.map(frameType).some(type => type === "error" || type === "response.failed")).toBe(true);
+    upstreamStatus = () => 200;
+    const written = holdsChanged();
+    wire.destroy();
+    await written;
+    expect(holdsOf()).toBe(1);
+  });
+
   test("a revoked socket's inject is refused by the authorization check, not answered (11.1-5a)", async () => {
     const port = await startHome({ codexNativeInjection: true });
     const wire = await openSocket(port);
