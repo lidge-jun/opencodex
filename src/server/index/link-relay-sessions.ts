@@ -3,10 +3,11 @@ import { createHash } from "node:crypto";
 import {
   LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION, LINK_RELAY_CONNECTION_HEADER,
   LINK_RELAY_CONNECTION_PROOF_HEADER, LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkConnectionProof,
-  linkRelayProof, linkRelayProofMatches,
+  linkRelayProof, linkRelayProofMatches, LINK_RELAY_WS_STATE_HEADER, LINK_RELAY_WS_STATE_PROOF_HEADER, linkWebsocketStateProof,
 } from "../../link/relay-auth";
 import { parseLinkPeerReport, type LinkPeerObservations } from "../../link/peer-report";
 import { linkActivityCounts, type LinkActivity } from "../../link/child-activity";
+import type { LinkSessionGrant, LinkUpgradeOutcome } from "./link-websocket";
 
 /** A 200 `GET /v1/catalog` whose body the Child read to the end (wp2 catalog freshness). */
 export interface LinkCatalogServed { linkId: string | null; keyId: string | null; etag: string }
@@ -37,6 +38,15 @@ export interface LinkRelaySessionOptions {
    * bytes served, the same value as `catalogEtag(body)`. Cancel, abort, a read error and HEAD report nothing.
    */
   catalogServed?: (served: LinkCatalogServed) => void;
+  /**
+   * The Responses WebSocket over the link (link-websocket.ts). Called only for a request with an
+   * Upgrade header on a session this book has just consumed and verified; it owns the session's
+   * lease when it handles the request. Absent, or answering handled: false, the request keeps
+   * today's path.
+   */
+  upgrade?: (req: Request, server: Server<unknown>, grant: LinkSessionGrant) => LinkUpgradeOutcome;
+  /** Whether verified answers advertise the link WebSocket; the header pair is sent only while on. */
+  websocketAdvertised?: () => boolean;
 }
 
 /** One book per bound listener. A pending proof reserves the bind before the data request arrives. */
@@ -100,10 +110,14 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         let generation: string | undefined;
         try { generation = options.connectionGeneration?.(linkId); } catch { generation = undefined; }
         const connectionProof = generation === undefined ? null : linkConnectionProof(fingerprint, keyId, linkId, nonce, generation);
+        let advertised = false;
+        try { advertised = options.websocketAdvertised?.() === true; } catch { advertised = false; }
+        const websocketProof = advertised ? linkWebsocketStateProof(fingerprint, keyId, linkId, nonce, "on") : null;
         const answer = () => new Response(null, { status: 204, headers: {
           "x-opencodex-link-proof": linkRelayProof(fingerprint, "listener", keyId, linkId, nonce)!,
           "cache-control": "no-store",
           ...(connectionProof ? { [LINK_RELAY_CONNECTION_HEADER]: generation!, [LINK_RELAY_CONNECTION_PROOF_HEADER]: connectionProof } : {}),
+          ...(websocketProof ? { [LINK_RELAY_WS_STATE_HEADER]: "on", [LINK_RELAY_WS_STATE_PROOF_HEADER]: websocketProof } : {}),
         } });
         // A readiness probe closes after this answer and sends no data request, so it reserves
         // nothing: no session to consume, no capacity and no drain lease held until expiry.
@@ -128,6 +142,10 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         }
         // Keep the native Request identity: Bun's requestIP/timeout APIs need the original request.
         try { req.headers.delete(LINK_RELAY_SESSION_HEADER); } catch { release(); return refuse(); }
+        if (options.upgrade && req.headers.has("upgrade")) {
+          const outcome = options.upgrade(req, server as Server<unknown>, { keyId: session.keyId, linkId: session.linkId, fingerprint: session.fingerprint, release });
+          if (outcome.handled) return outcome.response as Response;
+        }
       } else {
         if (closing) return new Response(null, { status: 503 });
         // Older peers may still use the ordinary key admission. Its response also owns a drain lease.

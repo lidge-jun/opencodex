@@ -1,6 +1,9 @@
 import { serviceApiTokenFingerprint } from "../../lib/service-secrets";
-import type { Server } from "bun";
+import type { Server, WebSocketHandler } from "bun";
 import type { OcxConfig } from "../../types";
+import type { RequestPolicyView } from "../auth-cors";
+import type { WsData } from "../ws-bridge";
+import { linkResponsesWebsocketEnabled } from "../../config/feature-flags";
 import {
   createClaudeInterceptLifecycle,
   type ClaudeInterceptLifecycle,
@@ -35,6 +38,9 @@ export interface OptionalListenerStartContext<T> {
   requestedPort?: number;
   maxRequestBodySize: number;
   dispatch: (req: Request, server: Server<T>) => Promise<Response>;
+  /** The shared Responses WebSocket handler and the hub-link policy, for the link WebSocket. */
+  websocket?: WebSocketHandler<WsData>;
+  linkPolicy?: () => RequestPolicyView;
 }
 
 export interface OptionalListenerSet<T> {
@@ -47,6 +53,8 @@ export interface OptionalListenerSet<T> {
   notifyAuthenticatedCatalog(apiKeyId: string): void;
   peerObservation(linkId: string): import("../../link/peer-report").LinkPeerEntry;
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
+  /** Close one link's Responses WebSockets with 4401; the revoke route calls it after its commit. */
+  closeLinkSockets(linkId: string): number;
   /** The last relayed catalog pull of a link in this process; null before start or before any pull. */
   catalogPull(linkId: string): CatalogPull | null;
   /** Write every catalog pull still held in memory; a failed write is logged and kept for the next attempt. */
@@ -163,6 +171,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
     notifyAuthenticatedCatalog: apiKeyId => linkListener.notifyAuthenticatedCatalog(apiKeyId),
     peerObservation: linkId => linkListener.peerObservation(linkId),
     linkActivity: (linkId, now) => linkListener.linkActivity(linkId, now),
+    closeLinkSockets: linkId => linkListener.closeLinkSockets(linkId),
     catalogPull: linkId => catalogPulls?.pulled(linkId) ?? null,
     flushCatalogPulls: () => { catalogPulls?.flush(); },
     status: () => linkListener.status(),
@@ -173,6 +182,11 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
       localControl.start({ config: ctx.config, publicPort: ctx.publicPort, dispatch: ctx.dispatch });
       linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize,
         connectionGeneration: linkId => supervisor.connectionGeneration?.(linkId),
+        ...(ctx.websocket && ctx.linkPolicy ? { responsesWebsocket: {
+          handler: ctx.websocket,
+          enabled: () => activeConfig !== undefined && linkResponsesWebsocketEnabled(activeConfig),
+          policy: ctx.linkPolicy,
+        } } : {}),
         keyFingerprints: apiKeyId => {
           const entry = activeConfig?.apiKeys?.find(candidate => candidate.id === apiKeyId);
           if (!entry?.key) return [];

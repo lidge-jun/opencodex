@@ -1688,5 +1688,7 @@
   "link-child-ops-no-timer.test.ts": "lab",
   "link-child-policy-routes.test.ts": "server",
   "cli-link-policy.test.ts": "cli",
-  "link-child-catalog-oracle.test.ts": "e2e-style"
+  "link-child-catalog-oracle.test.ts": "e2e-style",
+  "link-websocket-upgrade.test.ts": "server",
+  "link-websocket-gate.test.ts": "server"
 }

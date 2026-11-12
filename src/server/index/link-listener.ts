@@ -1,7 +1,10 @@
 import { createLinkRelaySessions, type LinkCatalogServed } from "./link-relay-sessions";
 import { createLinkPeerObservations, type LinkPeerEntry } from "../../link/peer-report";
 import { createLinkActivity, type LinkActivitySnapshot } from "../../link/child-activity";
-import type { Server } from "bun";
+import type { Server, WebSocketHandler } from "bun";
+import type { RequestPolicyView } from "../auth-cors";
+import type { WsData } from "../ws-bridge";
+import { createLinkWebsocketGate, type LinkWebsocketGateDeps } from "./link-websocket";
 import {
   emptyLinkStore,
   readLinkStore,
@@ -29,6 +32,14 @@ export interface LinkListenerStartContext<T> {
   keyFingerprints?: (apiKeyId: string) => readonly string[];
   /** The Home supervisor's current tunnel connection for a link (relay-auth.ts). */
   connectionGeneration?: (linkId: string) => string | undefined;
+  /** The Responses WebSocket over the link (link-websocket.ts); route fakes omit it. */
+  responsesWebsocket?: {
+    /** The shared Responses handler the public listener uses; link sockets wrap it. */
+    handler: WebSocketHandler<WsData>;
+    /** linkResponsesWebsocketEnabled on the live config. */
+    enabled(): boolean;
+    policy(): RequestPolicyView;
+  };
 }
 
 export interface LinkListenerDeps {
@@ -37,6 +48,8 @@ export interface LinkListenerDeps {
   writeStore?: (path: string, store: LinkStore) => void;
   serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
   warn?: (message: string) => void;
+  /** Test seams for the link WebSocket gate: limits, timers, socket reservation, drain state. */
+  websocket?: Pick<LinkWebsocketGateDeps, "limits" | "timers" | "reserveSocket" | "draining">;
 }
 
 export type LinkListenerStatus = {
@@ -60,6 +73,8 @@ export interface LinkListenerLifecycle<T> {
   peerObservation(linkId: string): LinkPeerEntry;
   /** Relayed model traffic for one link (D5); legacy key admissions count against every link. */
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
+  /** The Home's own revoke path closes this link's WebSockets (4401) in the same task. */
+  closeLinkSockets(linkId: string): number;
   /** A Child read a whole 200 `GET /v1/catalog` body through the relay. */
   onCatalogServed(listener: (served: LinkCatalogServed) => void): () => void;
   status(): LinkListenerStatus;
@@ -104,6 +119,19 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const readStoreForAdmission = (): LinkStore => {
     try { return readStore(storePath); } catch { return emptyLinkStore(); }
   };
+  // The one fingerprint predicate: relay-auth verification, session consumption, and the link
+  // WebSocket's per-frame authorization check all read links.json uncached through it.
+  const fingerprintsFor = (keyId: string, linkId: string): readonly string[] => {
+    if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
+    return startContext?.keyFingerprints?.(keyId) ?? [];
+  };
+  const websocketEnabled = (): boolean => startContext?.responsesWebsocket?.enabled() === true;
+  const websocketGate = createLinkWebsocketGate({
+    ...deps.websocket,
+    enabled: websocketEnabled,
+    policy: () => startContext!.responsesWebsocket!.policy(),
+    authorized: identity => fingerprintsFor(identity.keyId, identity.linkId).includes(identity.fingerprint),
+  });
   // OCX-11: the fallback policy resolves a link data key to its link id through this slot.
   const releaseFallbackLinkResolver = registerFallbackLinkResolver(keyId =>
     readStoreForAdmission().links.find(link => link.apiKeyId === keyId)?.id);
@@ -122,11 +150,10 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       return;
     }
     const requestedPort = store.listenerPort ?? 0;
+    const linkWebsocket = startContext.responsesWebsocket;
     const sessions = createLinkRelaySessions({ peers, activity, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
-      catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: (keyId, linkId) => {
-      if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
-      return startContext?.keyFingerprints?.(keyId) ?? [];
-    } });
+      catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: fingerprintsFor,
+      ...(linkWebsocket ? { upgrade: websocketGate.upgrade, websocketAdvertised: websocketEnabled } : {}) });
     let bound: Server<unknown>;
     try {
       bound = serve({
@@ -137,6 +164,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
         idleTimeout: 255,
         maxRequestBodySize: startContext.maxRequestBodySize,
         fetch: (req: Request, server: Server<unknown>) => sessions.dispatch(req, server as Server<T>, startContext!.dispatch),
+        // Only a verified link upgrade with the feature on ever reaches server.upgrade (link-websocket.ts).
+        ...(linkWebsocket ? { websocket: websocketGate.handler(linkWebsocket.handler) } : {}),
       } as Parameters<typeof Bun.serve>[0]);
     } catch (error) {
       reportFailure("bind", error, "bind");
@@ -176,6 +205,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     }
     listener = bound as Server<T>;
     relaySessions = sessions;
+    websocketGate.accept();
     setStatus("listening", bound.port ?? (requestedPort > 0 ? requestedPort : null), null);
   };
 
@@ -202,6 +232,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       // Retain the bound port AND ingress ownership while an authenticated connection is
       // reserved or a dispatched response is still being consumed. No new proofs are issued.
       if (current) {
+        // A link WebSocket holds its session lease until its close callback; close them first.
+        websocketGate.closeAll();
         await relaySessions?.drain();
         await current.stop(false);
       }
@@ -235,6 +267,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     },
     peerObservation: linkId => peers.get(linkId),
     linkActivity: (linkId, now) => activity.snapshot(linkId, now),
+    closeLinkSockets: linkId => websocketGate.closeLink(linkId),
     onCatalogServed(listener) {
       catalogServedListeners.add(listener);
       return () => { catalogServedListeners.delete(listener); };
@@ -251,6 +284,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       relaySessions?.abortReservations();
       if (listener) await listener.stop(true);
       await close();
+      websocketGate.dispose();
       startContext = undefined;
       setStatus("off", null, null);
     },

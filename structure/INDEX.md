@@ -453,6 +453,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/index/link-websocket-limits.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/index/link-websocket.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/live-sideband.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index/local-control-listener.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/ollama-routes.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |

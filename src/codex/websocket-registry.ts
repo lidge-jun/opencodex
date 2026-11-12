@@ -25,8 +25,12 @@ function reclaimOldestIdleSocket(): void {
   }
 }
 
-export function tryReserveCodexWebSocket(): AdmissionReservation<ServerWebSocket<WsData>> | null {
-  if (websocketGate.metrics().active >= MAX_TRACKED_CODEX_WEBSOCKETS) reclaimOldestIdleSocket();
+/**
+ * A slot in the shared socket gate. A local upgrade may reclaim the least recently used idle
+ * socket when the gate is full; a Remote Link upgrade passes reclaim: false and never evicts.
+ */
+export function tryReserveCodexWebSocket(options: { reclaim?: boolean } = {}): AdmissionReservation<ServerWebSocket<WsData>> | null {
+  if (options.reclaim !== false && websocketGate.metrics().active >= MAX_TRACKED_CODEX_WEBSOCKETS) reclaimOldestIdleSocket();
   const gateLease = websocketGate.tryAcquire();
   if (!gateLease) return null;
   let socket: ServerWebSocket<WsData> | undefined;

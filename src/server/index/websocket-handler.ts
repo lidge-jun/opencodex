@@ -230,6 +230,9 @@ export function createWebsocketHandler(
         }
         if (frame.type === "response.inject" || frame.type === "response.steer" || (frame.type === "response.create" && ws.data.nativeControl)) {
           try {
+            // Remote Link sockets never carry native control (design T4 1.1); the link wrapper has
+            // already re-checked this frame's authorization before it reached the shared handler.
+            if (ws.data.nativeControlDisabled && frame.type !== "response.create") throw new NativeSteeringError("native_control_unavailable_on_link", "Native response control is unavailable on a Remote Link WebSocket.");
             if (frame.type === "response.inject") {
               if (!ws.data.nativeControl?.inject) throw new NativeSteeringError("injection_not_supported", "Native injection is disabled or unavailable on this route.");
               ws.data.nativeControl.inject(frame);
@@ -262,7 +265,7 @@ export function createWebsocketHandler(
         try {
           const idleMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec)
             ? Math.max(1, config.stallTimeoutSec) * 1000 : 300_000;
-          const mode = nativeResponseControlMode(frame, config);
+          const mode = ws.data.nativeControlDisabled ? undefined : nativeResponseControlMode(frame, config);
           nativeControl = mode === "injection" ? new NativeInjectionChannel(frame, idleMs, config.maxUpstreamBodyBytes)
             : mode === "steering" ? new NativeSteeringChannel(frame, idleMs, config.maxUpstreamBodyBytes) : undefined;
         } catch {

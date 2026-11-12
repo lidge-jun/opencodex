@@ -1,0 +1,333 @@
+import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
+import { formatErrorResponse } from "../../bridge";
+import { resolveResponsesApiAuth, type RequestPolicyView } from "../auth-cors";
+import { isDraining } from "../lifecycle";
+import { buildResponsesWsData, selectForwardHeaders, type LinkSocketBinding, type WsData } from "../ws-bridge";
+import { tryReserveCodexWebSocket } from "../../codex/websocket-registry";
+import type { AdmissionReservation } from "../../lib/admission";
+import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { classifyUsageClient } from "../../usage/client";
+import { LINK_WS_DISABLED_CLOSE, LINK_WS_LIMITS, LINK_WS_REVOKED_CLOSE, type LinkWebsocketLimits } from "./link-websocket-limits";
+
+/**
+ * The Responses WebSocket over a Remote Link, Home side (design T4 section 2).
+ *
+ * A link upgrade is admitted only on a relay session that link-relay-sessions.ts has just consumed
+ * and verified on the same TCP connection (S1, S4). Admission is one synchronous function; every
+ * frame the socket later receives re-runs the authorization check before the shared handler sees
+ * it (S3), so a revoked link, a rotated or removed key, or an edited links.json stops new turns at
+ * the next frame and running ones at the next sweep.
+ */
+
+/** The verified relay session an upgrade arrived on. release is the session's drain lease. */
+export interface LinkSessionGrant {
+  keyId: string;
+  linkId: string;
+  fingerprint: string;
+  release: () => void;
+}
+
+/** handled: false leaves the request on today's path (the hub-link route table refuses it with 404). */
+export type LinkUpgradeOutcome = { handled: false } | { handled: true; response: Response | undefined };
+
+type LeaseState = "reserved" | "upgrading" | "upgraded" | "released" | "closed";
+
+/**
+ * The single owner of every lease one link upgrade holds (design 2.3). Leases are released in
+ * reverse order, exactly once: by a refusal, abort, throw or failed upgrade before the socket
+ * exists, or by the socket's close callback after it does. Nothing else releases them.
+ */
+export class LinkUpgradeLeases {
+  private current: LeaseState = "reserved";
+  private readonly releases: Array<() => void>;
+
+  constructor(session: () => void) {
+    this.releases = [session];
+  }
+
+  get state(): LeaseState { return this.current; }
+
+  /** Adds a lease while admission is still deciding; after that a late lease is returned at once. */
+  add(release: () => void): void {
+    if (this.current === "reserved") this.releases.push(release);
+    else release();
+  }
+
+  upgrading(): void { if (this.current === "reserved") this.current = "upgrading"; }
+
+  upgraded(): void { if (this.current === "upgrading") this.current = "upgraded"; }
+
+  /** Refusal, abort, throw or failed upgrade. No effect once the socket owns the leases. */
+  release(): void {
+    if (this.current !== "reserved" && this.current !== "upgrading") return;
+    this.current = "released";
+    this.drain();
+  }
+
+  /** The socket's close callback. */
+  closed(): void {
+    if (this.current === "upgraded") {
+      this.current = "closed";
+      this.drain();
+    } else this.release();
+  }
+
+  private drain(): void {
+    while (this.releases.length) {
+      const release = this.releases.pop()!;
+      try { release(); } catch { /* one failed release must not keep the others */ }
+    }
+  }
+}
+
+/** Design 2.3 step 1: exactly a Codex Responses upgrade, with nothing a browser or an extension adds. */
+export function linkResponsesUpgradeShape(req: Request): boolean {
+  if (req.method !== "GET") return false;
+  let url: URL;
+  try { url = new URL(req.url); } catch { return false; }
+  if (url.pathname !== "/v1/responses" || url.search !== "") return false;
+  const headers = req.headers;
+  if (headers.get("upgrade")?.toLowerCase() !== "websocket") return false;
+  if (!(headers.get("connection") ?? "").toLowerCase().split(",").some(token => token.trim() === "upgrade")) return false;
+  if (headers.get("sec-websocket-version") !== "13" || !headers.get("sec-websocket-key")) return false;
+  return !headers.has("origin") && !headers.has("sec-websocket-protocol") && !headers.has("sec-websocket-extensions");
+}
+
+export interface LinkWebsocketTimers {
+  setInterval(callback: () => void, ms: number): unknown;
+  clearInterval(handle: unknown): void;
+}
+
+export interface LinkWebsocketGateDeps {
+  /** linkResponsesWebsocketEnabled(config), read on every upgrade and every sweep. */
+  enabled(): boolean;
+  /** The hub-link request policy (the same view serve-options admits link requests with). */
+  policy(): RequestPolicyView;
+  /**
+   * The authorization check: an uncached, fail-closed links.json read still names (linkId, keyId),
+   * and the key still has the fingerprint the session was proved with. Must not throw or await.
+   */
+  authorized(identity: { keyId: string; linkId: string; fingerprint: string }): boolean;
+  draining?: () => boolean;
+  reserveSocket?: () => AdmissionReservation<ServerWebSocket<WsData>> | null;
+  limits?: Partial<LinkWebsocketLimits>;
+  timers?: LinkWebsocketTimers;
+}
+
+const defaultTimers: LinkWebsocketTimers = {
+  setInterval(callback, ms) {
+    const handle = setInterval(callback, ms);
+    (handle as { unref?: () => void }).unref?.();
+    return handle;
+  },
+  clearInterval(handle) { clearInterval(handle as ReturnType<typeof setInterval>); },
+};
+
+function capacityRefusal(): Response {
+  return formatErrorResponse(426, "upgrade_required", "Remote Link WebSocket capacity reached; use HTTP.", { code: "link_websocket_capacity" });
+}
+
+function unauthorized(): Response {
+  return formatErrorResponse(401, "authentication_error", "opencodex API key required");
+}
+
+export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
+  const limits: LinkWebsocketLimits = { ...LINK_WS_LIMITS, ...deps.limits };
+  const timers = deps.timers ?? defaultTimers;
+  const draining = deps.draining ?? isDraining;
+  const reserveSocket = deps.reserveSocket ?? (() => tryReserveCodexWebSocket({ reclaim: false }));
+  // Admission counts open plus upgrading sockets; a lease in the bundle gives each slot back.
+  const admitted = new Map<string, number>();
+  let admittedTotal = 0;
+  let reservedBytes = 0;
+  // Open sockets, by link, for the revocation hooks and the sweep.
+  const sockets = new Map<string, Set<ServerWebSocket<WsData>>>();
+  let sweepHandle: unknown;
+  // False from last-link close() until the next bind: a session reserved before close() must not
+  // become a socket close() never sees, or the listener drain would wait on it forever.
+  let accepting = true;
+
+  const authorized = (identity: { keyId: string; linkId: string; fingerprint: string }): boolean => {
+    try { return deps.authorized(identity); } catch { return false; }
+  };
+
+  const fence = (ws: ServerWebSocket<WsData>, close: { code: number; reason: string }): void => {
+    const link = ws.data.link;
+    if (!link || link.fenced) return;
+    link.fenced = true;
+    if (ws.data.responsesActivity) ws.data.responsesActivity.closing = true;
+    try { ws.data.cancel?.(); } catch { /* the close below still ends the socket */ }
+    try { ws.close(close.code, close.reason); } catch { /* already closing */ }
+  };
+
+  const allSockets = (): ServerWebSocket<WsData>[] => [...sockets.values()].flatMap(set => [...set]);
+
+  const sweep = (): void => {
+    const on = (() => { try { return deps.enabled(); } catch { return false; } })();
+    for (const ws of allSockets()) {
+      const link = ws.data.link;
+      if (!link || link.fenced) continue;
+      if (!authorized(link)) fence(ws, LINK_WS_REVOKED_CLOSE);
+      // Interim switch-off: close. The drain of design 2.5 replaces this in the next slice.
+      else if (!on) fence(ws, LINK_WS_DISABLED_CLOSE);
+    }
+  };
+
+  const track = (ws: ServerWebSocket<WsData>, linkId: string): void => {
+    let set = sockets.get(linkId);
+    if (!set) { set = new Set(); sockets.set(linkId, set); }
+    set.add(ws);
+    if (sweepHandle === undefined) sweepHandle = timers.setInterval(sweep, limits.sweepIntervalMs);
+  };
+
+  const untrack = (ws: ServerWebSocket<WsData>, linkId: string): void => {
+    const set = sockets.get(linkId);
+    if (set?.delete(ws) && set.size === 0) sockets.delete(linkId);
+    if (sockets.size === 0 && sweepHandle !== undefined) {
+      timers.clearInterval(sweepHandle);
+      sweepHandle = undefined;
+    }
+  };
+
+  const admitSlot = (linkId: string): (() => void) | null => {
+    const perLink = admitted.get(linkId) ?? 0;
+    if (perLink >= limits.perLinkSockets || admittedTotal >= limits.totalSockets) return null;
+    admitted.set(linkId, perLink + 1);
+    admittedTotal += 1;
+    return () => {
+      const left = (admitted.get(linkId) ?? 1) - 1;
+      if (left > 0) admitted.set(linkId, left); else admitted.delete(linkId);
+      admittedTotal -= 1;
+    };
+  };
+
+  const reserveMemory = (): (() => void) | null => {
+    if (reservedBytes + limits.socketReservationBytes > limits.memoryBudgetBytes) return null;
+    reservedBytes += limits.socketReservationBytes;
+    return () => { reservedBytes -= limits.socketReservationBytes; };
+  };
+
+  return {
+    /**
+     * Called by link-relay-sessions.ts right after it consumed and verified a session, for a request
+     * that carries an Upgrade header. Synchronous: no await between the checks and server.upgrade.
+     */
+    upgrade<T>(req: Request, server: Server<T>, grant: LinkSessionGrant): LinkUpgradeOutcome {
+      if (!linkResponsesUpgradeShape(req)) return { handled: false };
+      let on = false;
+      try { on = deps.enabled(); } catch { on = false; }
+      // Off: the request keeps today's path and today's refusal, byte for byte.
+      if (!on) return { handled: false };
+      const leases = new LinkUpgradeLeases(grant.release);
+      const refuse = (response: Response): LinkUpgradeOutcome => {
+        leases.release();
+        return { handled: true, response };
+      };
+      try {
+        if (req.signal.aborted) return refuse(formatErrorResponse(426, "upgrade_required", "The upgrade request was aborted."));
+        if (!accepting || draining()) return refuse(formatErrorResponse(503, "server_error", "The Home is shutting down.", { code: "server_draining" }));
+        // S2: the credential on the upgrade is the key the relay proof was made with.
+        const admission = resolveResponsesApiAuth(req, deps.policy());
+        if (!admission || admission.kind !== "configured" || admission.keyId !== grant.keyId) return refuse(unauthorized());
+        if (!authorized(grant)) return refuse(unauthorized());
+        const memory = reserveMemory();
+        if (!memory) return refuse(capacityRefusal());
+        leases.add(memory);
+        const slot = admitSlot(grant.linkId);
+        if (!slot) return refuse(capacityRefusal());
+        leases.add(slot);
+        const socketLease = reserveSocket();
+        if (!socketLease) return refuse(capacityRefusal());
+        leases.add(() => socketLease.release());
+        const data = buildResponsesWsData(
+          selectForwardHeaders(req.headers),
+          admission,
+          socketLease,
+          sessionLaneIdFromRequest(req.headers),
+          classifyUsageClient(req.headers),
+        );
+        const binding: LinkSocketBinding = { linkId: grant.linkId, keyId: grant.keyId, fingerprint: grant.fingerprint, fenced: false, leases };
+        data.nativeControlDisabled = true;
+        data.link = binding;
+        if (req.signal.aborted) return refuse(formatErrorResponse(426, "upgrade_required", "The upgrade request was aborted."));
+        leases.upgrading();
+        if (!(server as unknown as Server<WsData>).upgrade(req, { data })) {
+          return refuse(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"));
+        }
+        leases.upgraded();
+        return { handled: true, response: undefined };
+      } catch {
+        return refuse(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"));
+      }
+    },
+
+    /** The link listener's websocket handler: the shared Responses handler behind the link checks. */
+    handler(base: WebSocketHandler<WsData>): WebSocketHandler<WsData> {
+      return {
+        ...base,
+        maxPayloadLength: limits.maxMessageBytes,
+        backpressureLimit: limits.backpressureLimitBytes,
+        closeOnBackpressureLimit: false,
+        idleTimeout: 0,
+        perMessageDeflate: false,
+        open(ws) {
+          const link = ws.data.link;
+          if (!link) { ws.close(1011, "link socket without a binding"); return; }
+          track(ws, link.linkId);
+          base.open?.(ws);
+        },
+        message(ws, raw) {
+          const link = ws.data.link;
+          if (!link || link.fenced) return;
+          // S3: every message, of any type, before the shared handler can admit a turn.
+          if (!authorized(link)) { fence(ws, LINK_WS_REVOKED_CLOSE); return; }
+          return base.message?.(ws, raw);
+        },
+        close(ws, code, reason) {
+          try {
+            base.close?.(ws, code, reason);
+          } finally {
+            const link = ws.data.link;
+            if (link) {
+              untrack(ws, link.linkId);
+              link.leases.closed();
+            }
+          }
+        },
+      };
+    },
+
+    /** The Home's own revoke path, in the same task as its commit. Returns how many were closed. */
+    closeLink(linkId: string): number {
+      const set = [...(sockets.get(linkId) ?? [])];
+      for (const ws of set) fence(ws, LINK_WS_REVOKED_CLOSE);
+      return set.length;
+    },
+
+    /** Last link removed: no new link socket, and every open one closes before the listener drains. */
+    closeAll(): number {
+      accepting = false;
+      const all = allSockets();
+      for (const ws of all) fence(ws, LINK_WS_REVOKED_CLOSE);
+      return all.length;
+    },
+
+    /** A listener bound again after close() accepts link upgrades again. */
+    accept(): void { accepting = true; },
+
+    sweep,
+
+    /** Process stop: the listener closes the sockets; only the timer is ours to clear. */
+    dispose(): void {
+      if (sweepHandle !== undefined) timers.clearInterval(sweepHandle);
+      sweepHandle = undefined;
+    },
+
+    snapshot(): { open: number; admitted: number; reservedBytes: number; sweeping: boolean } {
+      return { open: allSockets().length, admitted: admittedTotal, reservedBytes, sweeping: sweepHandle !== undefined };
+    },
+  };
+}
+
+export type LinkWebsocketGate = ReturnType<typeof createLinkWebsocketGate>;
+

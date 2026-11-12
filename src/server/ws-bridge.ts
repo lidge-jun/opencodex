@@ -77,6 +77,21 @@ export interface WsData {
   /** Turn/account ownership retained for the complete sideband socket lifetime. */
   liveTurnAdmissionLease?: AdmissionLease;
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>;
+  /** Set only on Remote Link sockets: native steering and injection are unavailable there. */
+  nativeControlDisabled?: boolean;
+  /** Present only on a Remote Link socket (src/server/index/link-websocket.ts). */
+  link?: LinkSocketBinding;
+}
+
+/** The verified identity and lease owner of one Remote Link socket; no secret is kept. */
+export interface LinkSocketBinding {
+  readonly linkId: string;
+  readonly keyId: string;
+  readonly fingerprint: string;
+  /** Set once the socket is fenced (revoked or switched off); later frames are dropped. */
+  fenced: boolean;
+  /** Releases every lease of the upgrade exactly once, from the close callback. */
+  readonly leases: { closed(): void };
 }
 
 export interface LiveSidebandUpstreamFailure {
