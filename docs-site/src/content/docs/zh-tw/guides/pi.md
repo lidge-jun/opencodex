@@ -47,6 +47,8 @@ ocx export --client pi
 
 模型 id 是代理的規範選擇器，因此路由模型顯示為 `provider/model`（`anthropic/claude-opus-5`），而原生 OpenAI slug 保持無前綴（`gpt-5.6-sol`）。`name` 後綴 — `(anthropic)`、`(native)`、`(routed)` — 正是讓來自不同上游的兩個同名模型在 Pi 的 picker 中可區分的關鍵。
 
+對於巢狀的上游模型 ID，只要執行中的代理證明原始選擇器指向同一個模型，Pi 匯出就會使用帶斜線的原始選擇器：例如，`openrouter/openrouter/free` 會選擇 OpenRouter 的 `openrouter/free` 模型，其 Fast 列為 `openrouter/openrouter/free--fast`。代理無法如此證明的模型（例如其清單尚未載入，或原始寫法已被另一個模型佔用）會保留編碼後的選擇器。自訂別名保留原有名稱。
+
 ## 放置位置
 
 Pi 的全域模型設定為：

@@ -7,6 +7,12 @@ import { observeRequestLogsForTests, requestLogEntryFromPersistedUsage, type Req
 import { normalizePersistedUsageRow, readRecentUsageEntries } from "../../src/usage/log";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { relayLinkDataRequest, HOME_INITIATED_LINK_TUNNEL } from "../../src/client/link-relay";
+import { compressLinkBody } from "../../src/client/link-request-compression";
+import { forgetLinkHomeFeaturesForTests } from "../../src/client/link-home-features";
+import { createLinkRelaySessions } from "../../src/server/index/link-relay-sessions";
+import { LINK_REQUEST_ZSTD_FEATURE } from "../../src/link/request-compression";
+import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-request-body-log-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
@@ -32,6 +38,38 @@ const body = JSON.stringify({ model: "no-such-provider/no-such-model", input: "h
 const plain = new TextEncoder().encode(body);
 
 describe("request log rows carry the request body as received (#3023)", () => {
+  test("a body a Child compressed for its Home is logged with its wire size, zstd, and its decoded size", async () => {
+    const key = `ocx_data_${"a".repeat(40)}`, keyId = "test-link-key", linkId = "lnk_0123456789abcdef";
+    const rows: RequestLogEntry[] = [];
+    const stop = observeRequestLogsForTests(row => { rows.push(row); });
+    const server = startServer(0);
+    // The Home's hub-link session hands each verified request, bytes and headers as sent, to the real data plane.
+    const sessions = createLinkRelaySessions({ fingerprints: () => [serviceApiTokenFingerprint(key)], homeFeatures: () => [LINK_REQUEST_ZSTD_FEATURE] });
+    const link = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (req, s) => sessions.dispatch(req, s, async inner =>
+      fetch(`http://127.0.0.1:${server.port}${new URL(inner.url).pathname}`, { method: "POST", headers: inner.headers, body: await inner.arrayBuffer() })) });
+    forgetLinkHomeFeaturesForTests();
+    try {
+      for (let i = 0; i < 2; i++) {
+        const response = await relayLinkDataRequest(new Request("http://127.0.0.1/v1/responses", { method: "POST", body: plain,
+          headers: { "content-type": "application/json", "content-length": String(plain.byteLength) } }),
+        { tunnelPort: link.port!, admissionKey: key, apiKeyId: keyId, linkId }, { tunnel: HOME_INITIATED_LINK_TUNNEL });
+        await response.text();
+      }
+    } finally {
+      await link.stop(true);
+      await server.stop(true);
+      stop();
+      forgetLinkHomeFeaturesForTests();
+    }
+    const compressed = await compressLinkBody(plain);
+    expect(compressed).not.toBeNull();
+    // The first body goes before the Child has heard its Home; the second is compressed.
+    expect(rows.map(row => row.requestBody)).toEqual([
+      { wireBytes: plain.byteLength, encoding: "identity", decodedBytes: plain.byteLength },
+      { wireBytes: compressed!.byteLength, encoding: "zstd", decodedBytes: plain.byteLength },
+    ]);
+  });
+
   test("identity, zstd and gzip bodies through the real data plane", async () => {
     const rows: RequestLogEntry[] = [];
     const stop = observeRequestLogsForTests(row => { rows.push(row); });

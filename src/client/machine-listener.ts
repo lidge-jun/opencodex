@@ -279,8 +279,10 @@ export function startMachineListener(
           const status = projectClientLinkChild(sidecar, deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
           // Opt-in (#3023): this Child's link as a row, with the bytes its link transport carried.
           if (url.searchParams.get("traffic") === "1" && connection.link) {
+            // One sidecar read per status read: the Home's name is needed only when there is none,
+            // and then only from the Home's published settings.
             status.links = [projectClientLinkRow({ ...connection, link: connection.link }, sidecar, status.child, Date.now(),
-              undefined, linkHomeName(connection, sidecarOrNull))];
+              undefined, sidecar === null ? linkHomeName(connection, () => null) : null)];
             attachLinkTraffic(status, id => childLinkTraffic.snapshot(id));
           }
           return Response.json({ ...status, joinAvailable: false }, { headers: { "Cache-Control": "no-store" } });
