@@ -50,7 +50,9 @@ function collectEagerMcpTools(specs: unknown[], names: Set<string>, namespace?: 
     }
     const tool = isRecord(spec.function) ? spec.function : spec;
     if (tool.defer_loading === true || typeof tool.name !== "string") continue;
-    const name = namespace ? `${namespace}__${tool.name}` : tool.name;
+    // `functions` is the reserved unnamespaced group (as in the undeclared-tool guard and parser),
+    // so an MCP tool declared inside it keeps its own `mcp__` name.
+    const name = namespace && namespace !== "functions" ? `${namespace}__${tool.name}` : tool.name;
     if (name.startsWith("mcp__")) names.add(name);
     // Code Mode renders each enabled, non-deferred nested tool into the exec description. Codex
     // sends exec bare or, on Responses Lite, inside its `functions` namespace.
@@ -120,19 +122,20 @@ export function warnEagerCodexToolCatalog(
   options: { surface?: "responses" | "compact"; replayPrefixLength?: number; logicalRequest?: object } = {},
 ): void {
   const surface = options.surface ?? "responses";
+  const session = sessionLaneIdFromRequest(headers);
+  if (session !== undefined && warnedSessions.has(session)) {
+    // Refresh recency on every request the session sends, eager or not, so an active session is
+    // never the one evicted next. An already-warned session needs no count at all.
+    warnedSessions.delete(session);
+    warnedSessions.set(session, true);
+    return;
+  }
   // A diagnostic must never change the request it observes: any failure while counting a
   // malformed body skips the warning and lets the request continue exactly as before.
   let count: number;
   try { count = eagerCodexMcpToolCount(body, headers, surface, options.replayPrefixLength); } catch { return; }
   if (count < EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD) return;
-  const session = sessionLaneIdFromRequest(headers);
   if (session !== undefined) {
-    if (warnedSessions.has(session)) {
-      // Refresh recency: a session still sending traffic is never the one evicted next.
-      warnedSessions.delete(session);
-      warnedSessions.set(session, true);
-      return;
-    }
     while (warnedSessions.size >= WARNED_SESSION_LIMIT) {
       const oldest = warnedSessions.keys().next().value;
       if (oldest === undefined) break;

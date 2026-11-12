@@ -387,6 +387,31 @@ describe("the eager catalog count stays a bounded, side-effect-free diagnostic",
     expect(catalogWarnings()).toHaveLength(capacity + 1);
   });
 
+  test("a warned session stays resident while it sends only below-threshold traffic", () => {
+    const capacity = WARNED_SESSION_LIMIT;
+    const session = (index: number) => new Headers({ originator: "codex_cli_rs", session_id: `catalog-lru-small-${index}` });
+    const eager = { input: "hello", tools: mcpTools() };
+    const small = { input: "hello", tools: mcpTools(false, EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD - 1) };
+    for (let index = 0; index < capacity; index += 1) warnEagerCodexToolCatalog(eager, session(index));
+    // Session 0 keeps working with a smaller catalog; that traffic still refreshes its recency...
+    warnEagerCodexToolCatalog(small, session(0));
+    warnEagerCodexToolCatalog(eager, session(capacity));
+    expect(catalogWarnings()).toHaveLength(capacity + 1);
+    // ...so the next eager request from it is still deduplicated.
+    warnEagerCodexToolCatalog(eager, session(0));
+    expect(catalogWarnings()).toHaveLength(capacity + 1);
+  });
+
+  test("MCP tools declared inside the reserved functions group are counted under their own names", () => {
+    const tools = [{ type: "namespace", name: "functions", tools: Array.from({ length: EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD }, (_value, index) => ({
+      type: "function", name: `mcp__fixture__tool_${index}`, description: "Fixture tool", parameters: { type: "object", properties: {} },
+    })) }];
+    expect(eagerCodexMcpToolCount({ input: "hello", tools }, headers)).toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD);
+    // The same tools carried both inside `functions` and as a top-level group count once.
+    expect(eagerCodexMcpToolCount({ input: "hello", tools: [...tools, ...mcpTools()] }, headers))
+      .toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD);
+  });
+
   test("each sessionless logical request is warned, and one request is warned once", () => {
     const eager = { input: "hello", tools: mcpTools() };
     const anonymous = new Headers({ originator: "codex_cli_rs" });
