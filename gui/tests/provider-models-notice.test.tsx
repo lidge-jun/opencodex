@@ -6,7 +6,7 @@ import ProviderModelsNotice, { type ProviderModelsNoticeProps } from "../src/com
 import { LanguageProvider } from "../src/i18n/provider";
 import { useProviderModelsNotice } from "../src/pages/use-provider-models-notice";
 import { useProvidersFetch } from "../src/pages/use-providers-fetch";
-import { loginSettledHandler, providerModelsSettled, type OAuthStatus, type ProvidersConfig } from "../src/pages/providers-shared";
+import type { OAuthStatus, ProvidersConfig } from "../src/pages/providers-shared";
 
 const keys = ["window", "document", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let saved: Record<string, unknown>;
@@ -204,30 +204,6 @@ test("all-OFF notice has keyboard navigation, explicit actions and focus restora
   expect(closed).toBe(1);
   await act(async () => { root!.unmount(); root = null; });
   expect(win.document.activeElement).toBe(trigger);
-});
-
-test("a login only asks for a model choice when the provider has none settled", () => {
-  const provider = (entry: Partial<ProvidersConfig["providers"][string]>) => ({ port: 1, defaultProvider: "kiro", providers: { kiro: { adapter: "kiro", baseUrl: "https://x.test", ...entry } } });
-  expect(providerModelsSettled(provider({ models: ["a"] }), "kiro")).toBe(true);
-  expect(providerModelsSettled(provider({ models: ["a"], initialModelSelection: { status: "ready" } }), "kiro")).toBe(true);
-  expect(providerModelsSettled(provider({ models: [] }), "kiro")).toBe(false);
-  expect(providerModelsSettled(provider({ models: ["a"], initialModelSelection: { status: "pending" } }), "kiro")).toBe(false);
-  expect(providerModelsSettled(provider({ models: ["a"], initialModelSelection: { status: "all-off" } }), "kiro")).toBe(false);
-  expect(providerModelsSettled(provider({ models: ["a"] }), "other")).toBe(false);
-  expect(providerModelsSettled(null, "kiro")).toBe(false);
-});
-
-test("a settled login reveals accounts and opens the notice only with a choice left, reading the latest config", () => {
-  let config: ProvidersConfig | null = { port: 1, defaultProvider: "kiro", providers: { kiro: { adapter: "kiro", baseUrl: "https://x.test", models: [] } } };
-  const revealed: string[] = [];
-  const opened: Array<[string, boolean]> = [];
-  const settle = loginSettledHandler(() => config, provider => { revealed.push(provider); }, (provider, auto) => { opened.push([provider, auto]); });
-  settle("kiro");
-  // A config refresh after the handler was created: the provider now has a settled model list.
-  config = { ...config!, providers: { kiro: { adapter: "kiro", baseUrl: "https://x.test", models: ["m"] } } };
-  settle("kiro");
-  expect(revealed).toEqual(["kiro", "kiro"]);
-  expect(opened).toEqual([["kiro", false]]);
 });
 
 test("pending/error recovery and generic OAuth/re-login copy stay truthful", async () => {

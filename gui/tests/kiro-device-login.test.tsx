@@ -113,7 +113,10 @@ test("chooser starts native login, shows code and safe link, then confirms done"
   await tick();
   expect(settled).toEqual(["added"]);
   expect(host.textContent).toContain("Kiro account added");
-  expect(closed).toBe(1);
+  // Finished flows offer Close; there is nothing left to cancel.
+  const labels = [...host.querySelectorAll("button")].map(item => item.textContent?.trim());
+  expect(labels).toContain("Close");
+  expect(labels).not.toContain("Cancel");
 });
 
 test("a success carrying a warning stays open and offers Close, not Cancel", async () => {
@@ -131,7 +134,7 @@ test("IAM region starts empty and suggests AWS regions without limiting the fiel
   const region = host.querySelector<HTMLInputElement>('input[id$="-region"]')!;
   expect(region.value).toBe("");
   const options = [...host.querySelectorAll(`datalist[id="${region.getAttribute("list")}"] option`)];
-  expect(options.find(option => option.getAttribute("value") === "eu-central-1")?.getAttribute("label")).toBe("Europe (Frankfurt)");
+  expect(options.some(option => option.getAttribute("value") === "eu-central-1")).toBe(true);
   await iamInput("https://example.awsapps.com/start", "eu-west-9"); await submitIamForm();
   expect(JSON.parse(String(requests[0]!.init?.body)).region).toBe("eu-west-9");
 });

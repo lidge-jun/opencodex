@@ -29,7 +29,7 @@ export function KiroIamLoginForm({ disabled, onStart, onBack }: {
       aria-describedby={invalid ? `${id}-error` : undefined}
       onChange={event => { setRegion(event.target.value); setInvalid(false); }} />
     <datalist id={regionListId}>
-      {KIRO_IAM_REGIONS.map(item => <option key={item.id} value={item.id} label={item.name} />)}
+      {KIRO_IAM_REGIONS.map(region => <option key={region} value={region} />)}
     </datalist>
     {invalid && <p id={`${id}-error`} role="alert" className="notice-warn">{t("kiroLogin.invalidIam")}</p>}
     <div className="kiro-device-actions">

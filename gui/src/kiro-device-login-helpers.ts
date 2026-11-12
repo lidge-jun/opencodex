@@ -19,24 +19,13 @@ export interface KiroDeviceView {
 const methods = new Set<KiroDeviceMethod>(["builder-id", "google", "github", "iam-identity-center"]);
 const states = new Set<KiroDeviceState>(["pending", "select-profile", "done", "failed", "expired", "cancelled"]);
 /** Commercial AWS regions, offered as suggestions. The field stays free text so a newer region still works. */
-export const KIRO_IAM_REGIONS: readonly { id: string; name: string }[] = [
-  { id: "us-east-1", name: "US East (N. Virginia)" }, { id: "us-east-2", name: "US East (Ohio)" },
-  { id: "us-west-1", name: "US West (N. California)" }, { id: "us-west-2", name: "US West (Oregon)" },
-  { id: "af-south-1", name: "Africa (Cape Town)" }, { id: "ap-east-1", name: "Asia Pacific (Hong Kong)" },
-  { id: "ap-east-2", name: "Asia Pacific (Taipei)" }, { id: "ap-northeast-1", name: "Asia Pacific (Tokyo)" },
-  { id: "ap-northeast-2", name: "Asia Pacific (Seoul)" }, { id: "ap-northeast-3", name: "Asia Pacific (Osaka)" },
-  { id: "ap-south-1", name: "Asia Pacific (Mumbai)" }, { id: "ap-south-2", name: "Asia Pacific (Hyderabad)" },
-  { id: "ap-southeast-1", name: "Asia Pacific (Singapore)" }, { id: "ap-southeast-2", name: "Asia Pacific (Sydney)" },
-  { id: "ap-southeast-3", name: "Asia Pacific (Jakarta)" }, { id: "ap-southeast-4", name: "Asia Pacific (Melbourne)" },
-  { id: "ap-southeast-5", name: "Asia Pacific (Malaysia)" }, { id: "ap-southeast-6", name: "Asia Pacific (New Zealand)" },
-  { id: "ap-southeast-7", name: "Asia Pacific (Thailand)" }, { id: "ca-central-1", name: "Canada (Central)" },
-  { id: "ca-west-1", name: "Canada West (Calgary)" }, { id: "eu-central-1", name: "Europe (Frankfurt)" },
-  { id: "eu-central-2", name: "Europe (Zurich)" }, { id: "eu-north-1", name: "Europe (Stockholm)" },
-  { id: "eu-south-1", name: "Europe (Milan)" }, { id: "eu-south-2", name: "Europe (Spain)" },
-  { id: "eu-west-1", name: "Europe (Ireland)" }, { id: "eu-west-2", name: "Europe (London)" },
-  { id: "eu-west-3", name: "Europe (Paris)" }, { id: "il-central-1", name: "Israel (Tel Aviv)" },
-  { id: "me-central-1", name: "Middle East (UAE)" }, { id: "me-south-1", name: "Middle East (Bahrain)" },
-  { id: "mx-central-1", name: "Mexico (Central)" }, { id: "sa-east-1", name: "South America (Sao Paulo)" },
+export const KIRO_IAM_REGIONS: readonly string[] = [
+  "us-east-1", "us-east-2", "us-west-1", "us-west-2", "af-south-1", "ap-east-1", "ap-east-2",
+  "ap-northeast-1", "ap-northeast-2", "ap-northeast-3", "ap-south-1", "ap-south-2",
+  "ap-southeast-1", "ap-southeast-2", "ap-southeast-3", "ap-southeast-4", "ap-southeast-5",
+  "ap-southeast-6", "ap-southeast-7", "ca-central-1", "ca-west-1", "eu-central-1", "eu-central-2",
+  "eu-north-1", "eu-south-1", "eu-south-2", "eu-west-1", "eu-west-2", "eu-west-3", "il-central-1",
+  "me-central-1", "me-south-1", "mx-central-1", "sa-east-1",
 ];
 const AWS_REGION = /^(?:af|ap|ca|eu|il|me|mx|sa|us)-(?:central|east|north|northeast|northwest|south|southeast|southwest|west)-[1-9][0-9]?$/;
 
