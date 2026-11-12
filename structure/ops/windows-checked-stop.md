@@ -179,11 +179,30 @@ stop instead of sliding forward.
   Removal claims the same receipt, carrying Part A's record, before its child stop: Part A leaves
   the scheduler task registered, so a receipt-less POST answers `respawnable_service` (409) and
   the removal refuses with the proxy left running. The receipt is discharged only after the
-  shared restore, and a failed claim sends no child stop.
+  shared restore, and a failed claim sends no child stop. Part A `absent` says no manager is
+  registered, not that nothing serves, so removal then probes the endpoint it captured, tri-state:
+  only a definitive dead permits deleting the task, while live or unknown refuses and keeps the
+  receipt.
 - Every tracked-proxy stop takes its orphan-discovery cap from the caller
   (`TrackedProxyStopIo.orphanDiscoveryCapMs`). The checked Windows callers pass the admitted 3 s
   (`WINDOWS_STOP_CAPS.orphanDiscovery`), which is what admission priced; the omitted default stays
   the legacy 7 s so macOS and Linux timing is unchanged.
+- `ocx uninstall` (`src/cli/uninstall-stop.ts`) resolves its stop target before it claims
+  anything: the tracked pid with its own runtime endpoint, or the discovered live proxy with the
+  endpoint discovery found it on. The receipt and `stopProxy` then name the same endpoint, so a
+  stale runtime record cannot produce a receipt for a port the stop never contacted, and no target
+  means no receipt at all (a guessed obligation recovery cannot resolve is worse than none). The
+  tracked record is removed only for a stop that was proven, and the step reports a change only
+  when state changed. When Part A did not end stopped or absent the graceful POST still goes out
+  with `allowForcedFallback: false`, and that unconfirmed wait is observational: it samples the
+  port without `reclaimListenPort`'s kill eligibility, so a forbidden fallback cannot kill through
+  the reclaim path either.
+- `ocx uninstall` removes the Windows manager only after a Part A that ended stopped or absent
+  (`serviceRemovalAllowed` in `src/cli/uninstall-plan.ts`); otherwise the step records `failed` and
+  leaves the registration, as `ocx service uninstall` refuses. `uninstallServiceDetailed`
+  (`src/service/orchestration.ts`) re-reads `sc qc` `BINARY_PATH_NAME` immediately before the
+  native removal: a registration naming another installation's WinSW executable is left untouched,
+  and an unreadable one refuses and keeps install state. Non-Windows removal is unchanged.
 - `prepareServiceInstall` refuses before replacing anything on a Part A other than stopped or
   absent and stops install and switch on any Part B result other than a free port, naming the
   owner. `ocx uninstall` runs Part B as its respawn window after a stopped Part A.
