@@ -13,6 +13,7 @@ import type { LinkWsCounters } from "../../link/status-projection";
 import { resultKeysOf } from "../../codex/websocket-activity";
 import { dirname } from "node:path";
 import { createLinkTrafficBook, type LinkTrafficCounters } from "../../link/traffic";
+import { buildPeerFeatures } from "../../remote/features";
 import {
   emptyLinkStore,
   readLinkStore,
@@ -48,6 +49,8 @@ export interface LinkListenerStartContext<T> {
     enabled(): boolean;
     policy(): RequestPolicyView;
   };
+  /** The features named on every relay-auth answer; this build's served features when absent. */
+  homeFeatures?: () => readonly string[];
 }
 
 export interface LinkListenerDeps {
@@ -185,7 +188,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     }
     const requestedPort = store.listenerPort ?? 0;
     const linkWebsocket = startContext.responsesWebsocket;
-    const sessions = createLinkRelaySessions({ peers, activity, traffic, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
+    const sessions = createLinkRelaySessions({ peers, activity, traffic, homeFeatures: () => startContext?.homeFeatures?.() ?? buildPeerFeatures(), connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: fingerprintsFor,
       ...(linkWebsocket ? { upgrade: websocketGate.upgrade, websocketAdvertised: websocketEnabled } : {}),
       observeResponsesRequest: (linkId, req) => {
