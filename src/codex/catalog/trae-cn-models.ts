@@ -4,6 +4,7 @@ import {
   captureModelCacheGeneration,
   DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
+  getCachedFetchedAt,
   getPinnedCached,
   getStaleCached,
   isModelCacheGenerationCurrent,
@@ -61,7 +62,8 @@ export async function refreshTraeCnCatalogSources(
       if (!current()) return;
       if (after && gathered.outcome.state === "authoritative") {
         if (observeModelCacheRevision(name) !== gathered.contentRevision) return;
-        const release = pinCachedModels(name, gathered.models, Date.now(), captureModelCacheGeneration(name));
+        const release = pinCachedModels(name, gathered.models, getCachedFetchedAt(name) ?? Date.now(),
+          captureModelCacheGeneration(name));
         if (!release) return;
         retained.push({ name, release, contentRevision: observeModelCacheRevision(name) });
       }

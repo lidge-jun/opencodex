@@ -371,6 +371,9 @@ export async function openTraeSession(
             const timer = setTimeout(() => client.endUpdates(), 0);
             timer.unref?.();
           };
+          const drainBufferedCompletion = async (): Promise<void> => {
+            if (!completionReceived) await new Promise<void>(resolve => { setTimeout(resolve, 0); });
+          };
           void completion.then(endUpdatesAfterBatch, endUpdatesAfterBatch);
           while (true) {
             const frame = await client.nextUpdate();
@@ -380,6 +383,7 @@ export async function openTraeSession(
             try {
               promptEvents = traePromptEvents(sessionId, frame.update);
             } catch {
+              await drainBufferedCompletion();
               const usage = completionReceived ? traeUsage(receivedCompletion) : undefined;
               emit({ type: "error", message: "TRAE CN ACP ended with an invalid protocol response.",
                 code: "trae_acp_protocol_error", status: 502, errorType: "upstream_error", retryable: false,
@@ -390,9 +394,7 @@ export async function openTraeSession(
             }
             for (const event of promptEvents) {
               if (event.type === "error") {
-                if (!completionReceived) {
-                  await new Promise<void>(resolve => { setTimeout(resolve, 0); });
-                }
+                await drainBufferedCompletion();
                 const usage = completionReceived ? traeUsage(receivedCompletion) : undefined;
                 emit({ ...event, ...(usage ? { usage } : {}) });
                 client.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });

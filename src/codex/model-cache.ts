@@ -206,6 +206,11 @@ export function getStaleCached(provider: string, authorityIdentity?: string): Ca
   return entry.models;
 }
 
+/** Original fetch time for publication pins; retaining evidence must not renew its TTL. */
+export function getCachedFetchedAt(provider: string): number | null {
+  return cache.get(provider)?.fetchedAt ?? null;
+}
+
 /** A publication lease is current evidence until release, independently of the ordinary TTL. */
 export function getPinnedCached(provider: string): CatalogModel[] | null {
   const entry = cache.get(provider);
