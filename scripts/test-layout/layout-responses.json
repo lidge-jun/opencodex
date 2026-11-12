@@ -15,6 +15,7 @@
   "responses-replay-owner-storage.test.ts": "responses",
   "passthrough-headers.test.ts": "responses",
   "passthrough-abort.test.ts": "responses",
+  "codex-eager-tool-catalog.test.ts": "responses",
   "current-turn-tool-catalog-direct.test.ts": "responses",
   "current-turn-tool-catalog-namespace.test.ts": "responses",
   "responses-workflow-send-ceiling.test.ts": "responses",

@@ -51,11 +51,21 @@ function fixture(options: { blockWrite?: boolean; blockEnd?: boolean; openOutput
   };
 }
 
+// A hang guard, not a timing assertion: the runner's own deadline (25 ms in the fixture) decides
+// every outcome these tests check. A 250 ms guard raced that deadline as a second wall-clock timer,
+// and a stalled macOS CI host let the guard win (dev batch run 43063783324). The guard is now far
+// past any runner deadline here and inside Bun's default 5 s test timeout, so a real hang still
+// fails with this message; it yields one macrotask before rejecting, so a settlement queued by the
+// same timer batch is seen first.
+const SETTLE_GUARD_MS = 2_000;
+
 async function bounded<T>(promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([promise, new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("run did not settle within the test deadline")), 250);
+      timer = setTimeout(() => {
+        setImmediate(() => reject(new Error("run did not settle within the test deadline")));
+      }, SETTLE_GUARD_MS);
     })]);
   } finally { clearTimeout(timer); }
 }

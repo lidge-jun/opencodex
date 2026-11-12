@@ -7,6 +7,7 @@ import {
   clearResponseStateForTests, clearResponseStateMemoryForTests, expandPreviousResponseInput,
   rememberResponseState, previousResponseReplayFailure, runPendingResponseStatePersistForTests,
   setResponseStateByteCapForTests, flushResponseState, responseStateMetrics,
+  previousResponseReplayPrefixLength, previousResponseRestoredPrefixLength, copyPreviousResponseReplayProvenance,
 } from "../../src/responses/state";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -60,6 +61,26 @@ test("a response id cannot be overwritten by another owner", () => {
   expect(previousResponseReplayFailure(replay(ownerB))?.reason).toBe("scope_mismatch");
   expect(JSON.stringify(replay(ownerA).input)).toContain("private synthetic task");
   expect(JSON.stringify(replay(ownerA).input)).not.toContain("foreign replacement");
+});
+
+test("authorized client-carried history stays distinct from proxy-restored input", () => {
+  const output = [{ id: "msg-owned-prefix", type: "message", role: "assistant", content: "stored reply" }];
+  rememberResponseState({ input: [] }, { id: "resp-owned-prefix", output }, undefined,
+    { clientThreadId: "own-thread", replayOwnerKey: ownerA });
+  const next = { type: "message", role: "user", content: "new request" };
+  const carried = expandPreviousResponseInput({ previous_response_id: "resp-owned-prefix", input: [...output, next] },
+    "own-thread", ownerA) as Record<string, unknown>;
+  expect(carried.input).toEqual([...output, next]);
+  expect(previousResponseReplayPrefixLength(carried)).toBe(1);
+  expect(previousResponseRestoredPrefixLength(carried)).toBe(0);
+  const clone = { ...carried };
+  copyPreviousResponseReplayProvenance(carried, clone);
+  expect(previousResponseReplayPrefixLength(clone)).toBe(1);
+  expect(previousResponseRestoredPrefixLength(clone)).toBe(0);
+  const restored = expandPreviousResponseInput({ previous_response_id: "resp-owned-prefix", input: [next] },
+    "own-thread", ownerA) as Record<string, unknown>;
+  expect(restored.input).toEqual([...output, next]);
+  expect(previousResponseRestoredPrefixLength(restored)).toBe(1);
 });
 test("bound requests reject legacy entries and missing owner never authorizes replay", () => {
   remember(undefined);

@@ -158,6 +158,8 @@ ocx models provider openrouter on
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 舊版布林值，僅在較新欄位未設定時等同於 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本機執行政策。`off` 為預設；`codex-sandbox` 目前像 `off` 般 fail closed。 |
 
+對原生 Responses 而言，相同開關也涵蓋只收到生命週期事件後正常結束的 EOF。自包含請求與替換次數限制仍然適用。超出這些限制的請求不會被檢查，其串流也不會被暫扣。直接串流即使上游仍無回應，也會在 200 毫秒內收到原始回應標頭。如果重設或 EOF 發生在回傳該回應標頭之前，用戶端會收到帶有其自身狀態和回應標頭的替換回應；等待替換回應標頭的時間最多為 15 秒（若停滯逾時更短則以其為準）。彙整為 JSON 的非串流請求與組合目標在回應彙整或選定之前不會向用戶端回傳標頭，因此選擇標頭前可能等待同樣的時間。回傳回應標頭之後，是否替換取決於串流如何結束：讀取錯誤保留重設通道的既有行為，替換內文照舊發佈在原始回應標頭之後；只有生命週期事件後正常結束的 EOF 更嚴格，因為它是以另一次嘗試回答同一輪請求，替換回應必須與已提交的標頭在狀態、狀態文字、content-type 媒體類型、`openai-model` 和 `x-codex-turn-state` 上一致。易變與逐跳標頭（`date`、請求 id、`cf-ray`、`server-timing`、`x-ratelimit-*`、`openai-processing-ms`、`content-length`、`transfer-encoding`、`connection`、`keep-alive`）無需一致，因為用戶端已持有原始標頭的值，而真實上游每次嘗試都會變動這些標頭。不一致時保留原始串流及其錯誤。此後仍在檢查的直接串流會隨回應標頭收到一則 SSE keepalive 註解，此後每 15 秒再收到一則；組合預檢會在選定回應前暫扣這些註解。
+
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 
 

@@ -618,6 +618,7 @@ bindSpillQueueStore({
 // once. It records the boundary whether the proxy prepended the history or the client already
 // carried it — the boundary is the same either way, and only its provenance differs.
 const replayedInputPrefixLengths = new WeakMap<object, number>();
+const clientCarriedReplays = new WeakSet<object>(); // overlap skip: the client resent the window itself
 const replayFailures = new WeakMap<object, PreviousResponseReplayFailure>();
 let loaded = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1123,7 +1124,10 @@ export function expandPreviousResponseInput(body: unknown, clientThreadId?: stri
     return body;
   }
   const expanded = expandStoredResponseInput(request, inputItems(request.input), materialized.state);
-  if (expanded.overlap) replayOverlapSkips += 1;
+  if (expanded.overlap) {
+    replayOverlapSkips += 1;
+    clientCarriedReplays.add(expanded.body);
+  }
   if (expanded.body !== request) replayedInputPrefixLengths.set(expanded.body, expanded.prefixLength);
   return expanded.body;
 }
@@ -1139,6 +1143,11 @@ export function previousResponseReplayPrefixLength(body: unknown): number {
   return replayedInputPrefixLengths.get(body) ?? 0;
 }
 
+/** Leading items the PROXY prepended; 0 when the client resent the stored window itself (overlap skip). */
+export function previousResponseRestoredPrefixLength(body: unknown): number {
+  return body && typeof body === "object" && clientCarriedReplays.has(body) ? 0 : previousResponseReplayPrefixLength(body);
+}
+
 /** Copy proxy-private replay provenance to an internal clone with the same materialized input. */
 export function copyPreviousResponseReplayProvenance(source: unknown, target: unknown): void {
   if (!source || typeof source !== "object" || Array.isArray(source)) return;
@@ -1148,6 +1157,7 @@ export function copyPreviousResponseReplayProvenance(source: unknown, target: un
   const input = (target as { input?: unknown }).input;
   if (!Array.isArray(input) || prefixLength > input.length) return;
   replayedInputPrefixLengths.set(target, prefixLength);
+  if (clientCarriedReplays.has(source)) clientCarriedReplays.add(target);
 }
 
 /** True when this exact request could not replay because its task scope did not match. */
