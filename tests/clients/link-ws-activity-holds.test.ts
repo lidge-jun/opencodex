@@ -68,6 +68,14 @@ describe("fence and inertness", () => {
     expect(store().describe(A).unknown).toBe("crash");
   });
 
+  test("a start that cannot persist the crash evidence leaves the fence running, so the next start still sees it", () => {
+    writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"running"}');
+    const failing = store({ writeHooks: { beforeRename(_t, target) { if (target.endsWith("activity-holds.json")) throw new Error("EIO"); } } });
+    expect(failing.describe(A).unknown).toBe("crash");
+    expect(JSON.parse(readFileSync(join(dir, "ws-run-state.json"), "utf8"))).toMatchObject({ state: "running" });
+    expect(store().describe(B).unknown).toBe("crash");
+  });
+
   test("a corrupt holds file with a clean fence makes every link unknown", () => {
     writeFileSync(join(dir, "ws-run-state.json"), '{"version":1,"state":"clean"}');
     writeFileSync(join(dir, "activity-holds.json"), "{broken");
