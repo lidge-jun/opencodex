@@ -37,6 +37,8 @@ export interface LinkRouteListener {
   peerObservation?(linkId: string): import("../../link/peer-report").LinkPeerEntry;
   /** Optional: without it every link's activity reads unknown (never idle). */
   linkActivity?(linkId: string, now: number): import("../../link/child-activity").LinkActivitySnapshot;
+  /** Optional: without it a Home row's traffic reads zero since now. */
+  linkTraffic?(linkId: string): import("../../link/traffic").LinkTrafficCounters;
   /** Optional: without it only the cached pull in child-observations.json is known. */
   catalogPull?(linkId: string): import("../../link/child-catalog-freshness").CatalogPull | null;
   /** Optional: persist pulls held inside the recorder's 30 s write window (best effort). */
@@ -54,6 +56,8 @@ export interface LinkRouteState {
   childOps?: import("../../link/child-ops-engine").ChildOpsEngine;
   /** The Home catalog revision read on `?children=1`; defaults to the shared production monitor. */
   catalogRevision?: import("../../link/child-catalog-freshness").CatalogRevisionMonitor;
+  /** `?traffic=1` path resolution, cached per alias for this state's lifetime. */
+  pathResolver?: import("../../link/ssh-route").LinkPathResolver;
 }
 
 export function fail(code: string, message: string, status: number, hint?: string): Response {
