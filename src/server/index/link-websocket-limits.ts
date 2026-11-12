@@ -21,6 +21,12 @@ export interface LinkWebsocketLimits {
   memoryBudgetBytes: number;
   /** While any link socket exists, every socket's authorization is re-checked this often. */
   sweepIntervalMs: number;
+  /** An idle link socket is fenced and closed after this long (design 6.5). */
+  idleCloseMs: number;
+  /** A link socket older than this closes at its next idle moment, forcing re-authentication. */
+  maxAgeMs: number;
+  /** After the switch goes off, open sockets drain for at most this long (design 2.5). */
+  drainDeadlineMs: number;
 }
 
 export const LINK_WS_LIMITS: Readonly<LinkWebsocketLimits> = Object.freeze({
@@ -31,12 +37,19 @@ export const LINK_WS_LIMITS: Readonly<LinkWebsocketLimits> = Object.freeze({
   socketReservationBytes: 32 * MiB,
   memoryBudgetBytes: 768 * MiB,
   sweepIntervalMs: 30_000,
+  idleCloseMs: 10 * 60_000,
+  maxAgeMs: 60 * 60_000,
+  drainDeadlineMs: 60 * 60_000,
 });
 
 /** Close code for a socket whose link, key or fingerprint no longer authorizes it. */
 export const LINK_WS_REVOKED_CLOSE = { code: 4401, reason: "link revoked" } as const;
 /** Close code for a socket closed because the feature was switched off. */
 export const LINK_WS_DISABLED_CLOSE = { code: 1000, reason: "link websocket disabled" } as const;
+/** Close code for a link socket idle for idleCloseMs. */
+export const LINK_WS_IDLE_CLOSE = { code: 1000, reason: "link websocket idle" } as const;
+/** Close code for a link socket past maxAgeMs, at its next idle moment. */
+export const LINK_WS_AGE_CLOSE = { code: 1000, reason: "link websocket reauthenticate" } as const;
 
 /**
  * Release gate. The reservation above assumes the link-only bounded pump of design 6.2 (per-event

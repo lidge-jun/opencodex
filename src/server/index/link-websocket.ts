@@ -7,7 +7,10 @@ import { tryReserveCodexWebSocket } from "../../codex/websocket-registry";
 import type { AdmissionReservation } from "../../lib/admission";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { classifyUsageClient } from "../../usage/client";
-import { LINK_WS_DISABLED_CLOSE, LINK_WS_LIMITS, LINK_WS_REVOKED_CLOSE, type LinkWebsocketLimits } from "./link-websocket-limits";
+import type { LinkActivity, LinkSocketActivity } from "../../link/child-activity";
+import {
+  LINK_WS_AGE_CLOSE, LINK_WS_DISABLED_CLOSE, LINK_WS_IDLE_CLOSE, LINK_WS_LIMITS, LINK_WS_REVOKED_CLOSE, type LinkWebsocketLimits,
+} from "./link-websocket-limits";
 
 /**
  * The Responses WebSocket over a Remote Link, Home side (design T4 section 2).
@@ -112,6 +115,23 @@ export interface LinkWebsocketGateDeps {
   reserveSocket?: () => AdmissionReservation<ServerWebSocket<WsData>> | null;
   limits?: Partial<LinkWebsocketLimits>;
   timers?: LinkWebsocketTimers;
+  /** Wall clock for idle, age and the drain deadline. */
+  now?: () => number;
+  /** The per-link activity book: a busy link socket counts in flight there (design T4 section 5). */
+  activity?: LinkActivity;
+}
+
+/** What the gate keeps per open link socket. */
+interface SocketState {
+  openedAt: number;
+  /** When the socket last became idle; null while busy. */
+  idleSince: number | null;
+  /** When this socket started draining after the switch went off; null while on. */
+  drainingSince: number | null;
+  /** A create arrived while a turn ran during the drain: close once the turn ends. */
+  closeAfterTurn: boolean;
+  book: LinkSocketActivity | null;
+  unsubscribe: () => void;
 }
 
 const defaultTimers: LinkWebsocketTimers = {
@@ -135,7 +155,10 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
   const limits: LinkWebsocketLimits = { ...LINK_WS_LIMITS, ...deps.limits };
   const timers = deps.timers ?? defaultTimers;
   const draining = deps.draining ?? isDraining;
-  const reserveSocket = deps.reserveSocket ?? (() => tryReserveCodexWebSocket({ reclaim: false }));
+  // A full shared gate lets a link upgrade reclaim an idle link socket, never a local one.
+  const reserveSocket = deps.reserveSocket ?? (() => tryReserveCodexWebSocket({ reclaim: "link" }));
+  const now = deps.now ?? Date.now;
+  const states = new WeakMap<ServerWebSocket<WsData>, SocketState>();
   // Admission counts open plus upgrading sockets; a lease in the bundle gives each slot back.
   const admitted = new Map<string, number>();
   let admittedTotal = 0;
@@ -165,14 +188,75 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
 
   const allSockets = (): ServerWebSocket<WsData>[] => [...sockets.values()].flatMap(set => [...set]);
 
+  const enabledNow = (): boolean => { try { return deps.enabled(); } catch { return false; } };
+
+  /** Design 2.5: drain starts once, at the first sweep or frame that sees the switch off. */
+  const startDrain = (state: SocketState): void => {
+    if (state.drainingSince === null) state.drainingSince = now();
+  };
+
+  const pastDeadline = (state: SocketState): boolean =>
+    state.drainingSince !== null && now() - state.drainingSince >= limits.drainDeadlineMs;
+
+  /**
+   * Re-evaluated whenever the socket's activity changes, and by the sweep. A busy socket is never
+   * closed here: drain and age wait for the running turn, and idle closes need idle.
+   */
+  const settle = (ws: ServerWebSocket<WsData>, state: SocketState, fromSweep: boolean): void => {
+    const link = ws.data.link;
+    const activity = ws.data.responsesActivity;
+    if (!link || link.fenced || !activity) return;
+    if (state.drainingSince !== null) {
+      if (state.closeAfterTurn && !activity.running) { fence(ws, LINK_WS_DISABLED_CLOSE); return; }
+      if (activity.idle) { fence(ws, LINK_WS_DISABLED_CLOSE); return; }
+      if (pastDeadline(state)) {
+        if (activity.running) state.closeAfterTurn = true;
+        else fence(ws, LINK_WS_DISABLED_CLOSE);
+      }
+      return;
+    }
+    if (!activity.idle) return;
+    if (now() - state.openedAt >= limits.maxAgeMs) { fence(ws, LINK_WS_AGE_CLOSE); return; }
+    if (fromSweep && state.idleSince !== null && now() - state.idleSince >= limits.idleCloseMs) fence(ws, LINK_WS_IDLE_CLOSE);
+  };
+
+  const observe = (ws: ServerWebSocket<WsData>, state: SocketState): void => {
+    const activity = ws.data.responsesActivity;
+    if (!activity) return;
+    const idle = activity.idle;
+    if (idle && state.idleSince === null) state.idleSince = now();
+    if (!idle) state.idleSince = null;
+    state.book?.busy(!idle);
+    settle(ws, state, false);
+  };
+
+  /**
+   * The drain rule for one frame on a draining socket (design 2.5). Only a create is decided here;
+   * anything else goes to the shared handler as usual. Parses only while draining.
+   */
+  const admitWhileDraining = (ws: ServerWebSocket<WsData>, state: SocketState, raw: string | Buffer): boolean => {
+    let frame: Record<string, unknown> | null = null;
+    try { frame = JSON.parse(typeof raw === "string" ? raw : raw.toString()) as Record<string, unknown>; } catch { frame = null; }
+    if (!frame || frame.type !== "response.create") return true;
+    const activity = ws.data.responsesActivity;
+    if (!activity) { fence(ws, LINK_WS_DISABLED_CLOSE); return false; }
+    // A running turn is never cancelled by the drain: the frame is dropped and the socket closes after it.
+    if (activity.running) { state.closeAfterTurn = true; return false; }
+    if (!pastDeadline(state) && !activity.untracked && activity.returnsPending(frame.input)) return true;
+    fence(ws, LINK_WS_DISABLED_CLOSE);
+    return false;
+  };
+
   const sweep = (): void => {
-    const on = (() => { try { return deps.enabled(); } catch { return false; } })();
+    const on = enabledNow();
     for (const ws of allSockets()) {
       const link = ws.data.link;
       if (!link || link.fenced) continue;
-      if (!authorized(link)) fence(ws, LINK_WS_REVOKED_CLOSE);
-      // Interim switch-off: close. The drain of design 2.5 replaces this in the next slice.
-      else if (!on) fence(ws, LINK_WS_DISABLED_CLOSE);
+      if (!authorized(link)) { fence(ws, LINK_WS_REVOKED_CLOSE); continue; }
+      const state = states.get(ws);
+      if (!state) continue;
+      if (!on) startDrain(state);
+      settle(ws, state, true);
     }
   };
 
@@ -284,6 +368,16 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           pending.delete(link);
           track(ws, link.linkId);
           base.open?.(ws);
+          const state: SocketState = {
+            openedAt: now(), idleSince: null, drainingSince: null, closeAfterTurn: false,
+            book: deps.activity?.beginSocket(link.linkId) ?? null, unsubscribe: () => {},
+          };
+          states.set(ws, state);
+          const activity = ws.data.responsesActivity;
+          if (activity) {
+            state.unsubscribe = activity.onChange(() => observe(ws, state));
+            observe(ws, state);
+          }
           // A revoke or last-link close() that ran between the upgrade and now still applies.
           if (owed) fence(ws, owed);
           else if (!accepting) fence(ws, LINK_WS_REVOKED_CLOSE);
@@ -293,6 +387,11 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           if (!link || link.fenced) return;
           // S3: every message, of any type, before the shared handler can admit a turn.
           if (!authorized(link)) { fence(ws, LINK_WS_REVOKED_CLOSE); return; }
+          const state = states.get(ws);
+          if (state) {
+            if (!enabledNow()) startDrain(state);
+            if (state.drainingSince !== null && !admitWhileDraining(ws, state, raw)) return;
+          }
           return base.message?.(ws, raw);
         },
         close(ws, code, reason) {
@@ -300,6 +399,12 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
             base.close?.(ws, code, reason);
           } finally {
             const link = ws.data.link;
+            const state = states.get(ws);
+            if (state) {
+              state.unsubscribe();
+              state.book?.end();
+              states.delete(ws);
+            }
             if (link) {
               pending.delete(link);
               untrack(ws, link.linkId);

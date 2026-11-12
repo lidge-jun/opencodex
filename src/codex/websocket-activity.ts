@@ -27,7 +27,7 @@ function resultKey(type: string, id: string): string {
 /** Content-free activity owned by one admitted incoming Responses socket. */
 export class CodexWebSocketActivity {
   lastUsed = ++activityOrder;
-  closing = false;
+  private closingFlag = false;
   private turns = 0;
   private pendingResults = new Set<string>();
   private returnedResults = new Set<string>();
@@ -35,9 +35,54 @@ export class CodexWebSocketActivity {
   private argumentCalls = new Map<string, { type: string; result: string | null }>();
   // Unknown/oversized identities cannot safely prove that client work finished.
   private untrackedResults = false;
+  // Remote Link sockets observe their own activity; local sockets register nothing.
+  private listeners: Array<() => void> = [];
+
+  get closing(): boolean { return this.closingFlag; }
+
+  set closing(value: boolean) {
+    if (this.closingFlag === value) return;
+    this.closingFlag = value;
+    this.changed();
+  }
 
   get idle(): boolean {
     return !this.closing && this.turns === 0 && this.pendingResults.size === 0 && !this.untrackedResults;
+  }
+
+  /** A turn admitted on this socket has not finished, superseded cleanup included. */
+  get running(): boolean { return this.turns > 0; }
+
+  /** Identities overflowed or were ambiguous: completion of client work cannot be proved. */
+  get untracked(): boolean { return this.untrackedResults; }
+
+  /** Read-only: whether this input returns at least one result the socket is waiting for. */
+  returnsPending(input: unknown): boolean {
+    if (this.untrackedResults || !Array.isArray(input)) return false;
+    for (const item of input) {
+      const key = this.resultKeyOf(item);
+      if (key !== null && this.pendingResults.has(key)) return true;
+    }
+    return false;
+  }
+
+  /** Called after any change that can move idle, running or the pending set. */
+  onChange(listener: () => void): () => void {
+    this.listeners.push(listener);
+    return () => { this.listeners = this.listeners.filter(candidate => candidate !== listener); };
+  }
+
+  private changed(): void {
+    for (const listener of [...this.listeners]) {
+      try { listener(); } catch { /* an observer never breaks the socket's own bookkeeping */ }
+    }
+  }
+
+  private resultKeyOf(item: unknown): string | null {
+    if (!record(item) || typeof item.type !== "string") return null;
+    const id = item.type === "mcp_approval_response" ? item.approval_request_id : item.call_id;
+    if (typeof id !== "string" || id.length > MAX_RESULT_ID_LENGTH) return null;
+    return resultKey(item.type === "local_shell_call_output" ? "function_call_output" : item.type, id);
   }
 
   touch(): void {
@@ -48,39 +93,44 @@ export class CodexWebSocketActivity {
   beginTurn(input: unknown): () => void {
     this.turns += 1;
     this.touch();
-    this.acceptResults(input);
+    this.settleResults(input);
     // Ordinary creates start a new response even when its upstream omits response.created.
     // Prior results settle old waits, but cannot suppress new calls reusing their IDs.
     this.returnedResults.clear();
     this.argumentCalls.clear();
     let finished = false;
+    this.changed();
     return () => {
       if (finished) return;
       finished = true;
       this.turns -= 1;
       if (this.turns === 0) this.touch();
+      this.changed();
     };
   }
 
   /** Called only after admission or native control accepts the client's results. */
   acceptResults(input: unknown): void {
-    if (this.untrackedResults) return;
+    if (this.settleResults(input)) this.changed();
+  }
+
+  /** Settles returned results; true when the pending set changed. Notifies nobody. */
+  private settleResults(input: unknown): boolean {
+    if (this.untrackedResults) return false;
+    let changed = false;
     if (Array.isArray(input)) {
       for (const item of input) {
-        if (!record(item) || typeof item.type !== "string") continue;
-        const id = item.type === "mcp_approval_response" ? item.approval_request_id : item.call_id;
-        if (typeof id === "string" && id.length <= MAX_RESULT_ID_LENGTH) {
-          // Ordinary Codex shell results use function_call_output; native steering
-          // also accepts its explicit local_shell_call_output continuation stub.
-          const type = item.type === "local_shell_call_output" ? "function_call_output" : item.type;
-          const key = resultKey(type, id);
-          if (this.pendingResults.delete(key)) {
-            if (this.returnedResults.size >= MAX_PENDING_RESULTS) { this.protectUntracked(); return; }
-            else this.returnedResults.add(key);
-          }
+        // Ordinary Codex shell results use function_call_output; native steering
+        // also accepts its explicit local_shell_call_output continuation stub.
+        const key = this.resultKeyOf(item);
+        if (key !== null && this.pendingResults.delete(key)) {
+          changed = true;
+          if (this.returnedResults.size >= MAX_PENDING_RESULTS) { this.protectUntracked(); return false; }
+          else this.returnedResults.add(key);
         }
       }
     }
+    return changed;
   }
 
   /** Preserve tool waits even when the response terminal omits its output array. */
@@ -149,7 +199,7 @@ export class CodexWebSocketActivity {
   private observeResultKey(key: string): void {
     if (this.pendingResults.has(key) || this.returnedResults.has(key)) return;
     if (this.pendingResults.size >= MAX_PENDING_RESULTS) this.protectUntracked();
-    else this.pendingResults.add(key);
+    else { this.pendingResults.add(key); this.changed(); }
   }
 
   private protectUntracked(): void {
@@ -157,5 +207,6 @@ export class CodexWebSocketActivity {
     this.pendingResults.clear();
     this.returnedResults.clear();
     this.argumentCalls.clear();
+    this.changed();
   }
 }

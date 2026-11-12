@@ -362,7 +362,7 @@ describe("link socket sweep and revocation (design 2.4, 11.1-4)", () => {
     expect(clock.active()).toBe(0);
   });
 
-  test("switching the feature off closes open sockets at the next sweep (interim until the drain lands)", async () => {
+  test("switching the feature off closes an idle socket at the next sweep", async () => {
     let on = true;
     const { port, clock } = await startListener({ on: () => on });
     const { wire } = await connectAs(port);

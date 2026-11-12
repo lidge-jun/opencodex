@@ -257,7 +257,7 @@ The endpoint handles `response.create`, ignores `response.processed`, supports w
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
 
 Incoming Responses connections share a 128-socket admission limit. Only when a new local upgrade
-finds that limit full, the handler reclaims the least recently used eligible idle connection; a [Remote Link upgrade](../remote-link.md#responses-websocket-over-the-link) never reclaims one.
+finds that limit full, the handler reclaims the least recently used eligible idle connection; a [Remote Link upgrade](../remote-link.md#responses-websocket-over-the-link) may reclaim only an idle Remote Link socket.
 Message handling and turn completion refresh a monotonic use order; connection age alone
 does not choose the victim. Eligibility requires an open socket, no active turn, no pending
 client tool or approval result, no retained native steering/injection owner, and no buffered

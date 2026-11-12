@@ -5,12 +5,20 @@ export const DEFAULT_IDLE_AFTER_MS = 600_000;
 
 export interface LinkActivitySnapshot { inFlight: number; lastDataEndAt: number | null; observedSince: number }
 
+/** One Remote Link WebSocket in the book: it counts in flight while busy (design T4 section 5). */
+export interface LinkSocketActivity {
+  busy(value: boolean): void;
+  end(): void;
+}
+
 export interface LinkActivity {
   /**
    * Start one relayed model request. null = a legacy key admission without a relay session; it counts against every
    * link. The returned end is idempotent and stamps lastDataEndAt.
    */
   begin(linkId: string | null): () => void;
+  /** A link WebSocket; busy while a turn runs or client work is pending. Idempotent end. */
+  beginSocket(linkId: string): LinkSocketActivity;
   snapshot(linkId: string, now: number): LinkActivitySnapshot;
 }
 
@@ -46,6 +54,21 @@ export function createLinkActivity(deps: { now?: () => number } = {}): LinkActiv
         ended = true;
         entry.inFlight -= 1;
         entry.lastDataEndAt = now();
+      };
+    },
+    beginSocket(linkId) {
+      const entry = entryFor(linkId);
+      let counted = false;
+      let ended = false;
+      const set = (value: boolean): void => {
+        if (ended || value === counted) return;
+        counted = value;
+        entry.inFlight += value ? 1 : -1;
+        if (!value) entry.lastDataEndAt = now();
+      };
+      return {
+        busy: set,
+        end() { set(false); ended = true; },
       };
     },
     snapshot(linkId) {
