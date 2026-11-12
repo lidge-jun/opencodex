@@ -50,6 +50,8 @@ function harness(options: {
   holdStderr?: { release?: () => void };
   /** The Child's `ocx config show --json` stdout. */
   configStdout?: string;
+  /** spawnTunnel throws while this returns true (ssh missing). */
+  spawnFails?: () => boolean;
 } = {}) {
   let now = 0;
   let tick: () => void = () => {};
@@ -89,6 +91,7 @@ function harness(options: {
       return Promise.resolve(answer);
     },
     spawnTunnel(argv, tunnelOptions) {
+      if (options.spawnFails?.()) throw new Error("spawn ssh ENOENT");
       let resolveExit!: (code: number) => void;
       const exited = new Promise<number>(resolve => { resolveExit = resolve; });
       let stderr = "";
@@ -790,4 +793,34 @@ test("a granted candidate is still stopped when its proof fails for the whole bu
   expect(h.tunnels[0]!.signals).toEqual([]);
   await h.advance(1);
   expect(h.tunnels[0]!.signals).toContain("SIGTERM");
+});
+
+test("a one-route link's orphan flag left by a failed spawn is watched when the link gains routes, and the link starts once it is gone", async () => {
+  // At start the one-route reaper cannot prove the old tunnel's identity, so it flags it; ssh is
+  // missing, so no spawn clears the flag. A route edit must not leave that flag with nothing watching it.
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record()] };
+  let alive = true;
+  let sshMissing = true;
+  const h = await started({
+    store: () => current,
+    pidfile: () => ({ version: 1, linkId: LINK, pid: 4545, argv: ["ssh", "old"] }),
+    processArgv: () => alive ? ["ssh", "other"] : null, processAlive: () => alive,
+    spawnFails: () => sshMissing,
+  });
+  expect(h.tunnels).toHaveLength(0);
+  expect(h.state().orphan).toBe("orphan-unverified");
+  sshMissing = false;
+  current = { ...current, links: [record(["alpha-lan", "pen-alpha"])] };
+  await h.supervisor.reload();
+  await h.tick();
+  // Still possibly alive: nothing starts and nothing is signalled.
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+  expect(h.kills).toEqual([]);
+  alive = false;
+  await h.advance(1_000);
+  await h.tick();
+  expect(h.state().orphan).toBeUndefined();
+  // The link is in its failed spawn's backoff; its next due attempt starts the first round.
+  for (let waited = 0; waited < 61_000 && h.runs.every(run => run.kind !== "probe"); waited += 1_000) await h.advance(1_000);
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
 });
