@@ -91,6 +91,12 @@ requires a current GUI session with a Desktop-purpose grant on trusted standalon
 Trust mutations also require the exact SHA-256 fingerprint. Raw admin tokens and ordinary
 pairing alone cannot supply Desktop scope. A current automatically issued loopback session can
 receive it by exchanging a valid Desktop-purpose grant; its issuance remains loopback.
+No session mutates before that step-up succeeds, so the grant carries the consent rather than the
+session's issuance mode. Consuming it requires the current session's own origin, CSRF token and
+loopback listener, and a forwarded or proxied request is refused outright. The exchange refuses a
+remembered-admin session before it reads the body: that cookie carries the durable admin token, so
+it proves possession rather than the operator's presence at this machine. A Desktop grant never
+mints pairing, a general session or data-key disclosure authority.
 The certificate response carries request-specific `mutationAuthorized` metadata. The local
 dashboard uses `gui/src/pages/desktop-compatibility-authorization.tsx` for the Desktop grant
 exchange through `authorizeDesktop` in `gui/src/desktop-compatibility-api.ts`: POST consumes the
@@ -254,8 +260,9 @@ a failed cleanup retains ownership and reports `cleanup-required`, never a false
 
 `src/server/management/desktop-compatibility-runtime-routes.ts` provides GET status and
 current local GUI-session POST start/stop/observe/apply/launch with Desktop scope, explicit confirmation and
-separate account-wide consent for apply. No setting, login, quota, automatic startup or
-dashboard preference is changed by this API. The separate startup preference below never saves Apply.
+separate account-wide consent for apply. That session is refused until it consumes a
+Desktop-purpose grant. No setting, login, quota, automatic startup or dashboard preference is
+changed by this API. The separate startup preference below never saves Apply.
 The status CLI verb remains deferred to this integration owner.
 
 ## Dashboard controls

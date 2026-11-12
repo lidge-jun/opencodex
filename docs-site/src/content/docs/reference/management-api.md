@@ -90,7 +90,7 @@ route-specific results rather than repeating this table.
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile and its model visibility. PUT requires a valid `profile`, including when setting or clearing `visibility` (`visibility`: omit to keep, `null` to clear); a visibility-only body returns 400 | 400 missing/invalid profile, invalid or unavailable assignment, invalid visibility, or a visibility that hides every available model; 409 profile or supplied visibility changed during discovery/save |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET /api/codex/desktop-compatibility/authorization` | Return HTTP 200 with `{ ok: true, supported, authorized }`; absent Desktop scope is reported as `authorized: false` | Common management-boundary errors only; missing Desktop scope is not a route-specific 403 |
-| `POST /api/codex/desktop-compatibility/authorization` | Consume `{ grant }` from `ocx gui pair --desktop` for the existing standalone local session, for at most five minutes; return HTTP 200 with `{ ok: true, authorized: true }` | 400 `invalid_json` or `invalid_request`; 403 `desktop_authorization_required` for a refused exchange, including ordinary/remote pairing codes |
+| `POST /api/codex/desktop-compatibility/authorization` | Consume `{ grant }` from `ocx gui pair --desktop` for the existing standalone local session, for at most five minutes; return HTTP 200 with `{ ok: true, authorized: true }` | 400 `invalid_json` or `invalid_request`; 403 `desktop_authorization_required` for a refused exchange, including ordinary/remote pairing codes and remembered dashboard sessions |
 | `GET, POST /api/codex/desktop-compatibility/certificate` | Inspect or explicitly prepare Windows compatibility certificate trust | 403 `desktop_authorization_required` for POST; 409 stale, busy, or incomplete state |
 | `GET, POST /api/codex/desktop-compatibility/runtime` | Inspect or explicitly start, stop, launch, or run a bounded native compatibility trial | 403 `desktop_authorization_required` for POST; 409 unsupported build, untrusted certificate, or incomplete state |
 | `GET, POST /api/codex/desktop-compatibility/settings` | Read or save the next-start observation preference with its current revision | 403 `desktop_authorization_required` for POST; 409 stale, invalid, or unconfirmed configuration |
@@ -1006,8 +1006,12 @@ POST accepts `action: "prepare" | "trust" | "remove-trust" | "renew"` and `confi
 Trust actions also require the exact uppercase SHA-256 `fingerprint` returned by status.
 These mutations require a current GUI session with [Desktop authorization](#desktop-authorization)
 on trusted standalone loopback ingress. An admin token or a session without Desktop scope receives
-403 `desktop_authorization_required`. They are intended for a local confirmation flow, not unattended
-certificate enrollment.
+403 `desktop_authorization_required`. No session mutates before that step-up succeeds: an
+automatically issued loopback session is a valid subject for the grant exchange, but it is refused
+here until it consumes one, so the grant carries the consent rather than the session's issuance
+mode. The exchange itself refuses a remembered dashboard session before it reads the body, because
+that cookie proves the durable admin token rather than the operator's presence at this machine.
+These actions are intended for a local confirmation flow, not unattended certificate enrollment.
 
 Prepare stores a constrained 30-day authority with a Windows CurrentUser-DPAPI-protected private key.
 Subsequent preparations reuse it. Trust actions never create missing state or silently replace an
@@ -1028,16 +1032,20 @@ CurrentUser protection does not isolate secrets from other processes running as 
 ## Experimental Windows compatibility runtime
 
 `GET /api/codex/desktop-compatibility/runtime` is an inert status read. POST requires a current
-local GUI session with [Desktop authorization](#desktop-authorization) and `{ action, confirmed: true }`, where action is `start`, `stop`,
-`observe`, `launch`, or `apply`. Only `apply` additionally requires `accountWideConsent: true`.
+local GUI session with [Desktop authorization](#desktop-authorization) — that session is refused
+until it consumes a Desktop-purpose grant — and `{ action, confirmed: true }`, where action is
+`start`, `stop`, `observe`, `launch`, or `apply`. Only `apply` additionally requires
+`accountWideConsent: true`.
 The endpoint is experimental. The dashboard exposes it under **Codex Set → Desktop compatibility**;
 the **Resume observation when OpenCodex starts** toggle saves the optional
 `desktopCompatibility.startOnProxyStart` preference. OpenCodex managed client mode does not offer these
 local controls or forward them to the shared hub.
 Open the dashboard at the configured loopback origin and complete the
-[Desktop grant exchange](#desktop-authorization). Controls stay disabled until Desktop scope on
-the existing session is verified; the exchange itself changes neither certificate trust, runtime
-state nor the auto-start preference.
+[Desktop grant exchange](#desktop-authorization) with the panel's
+`ocx gui pair --desktop --origin "<dashboard-origin>"` command. The code is a Desktop-purpose
+grant: it adds Desktop scope to the current browser session for at most five minutes and does not
+create a general pairing session. Controls stay disabled until that scope is verified; neither the
+grant nor the exchange changes certificate trust, runtime state or the auto-start preference.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
 ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.

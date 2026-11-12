@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { handleDesktopCompatibilityRoutes } from "../../src/server/management/desktop-compatibility-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { DesktopCertificateService } from "../../src/codex/desktop-compatibility/certificate-service";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
-import { createManagementSessionControl, requireManagementAuth, managementPrincipal, type ManagementAuthState } from "../../src/server/management-auth";
+import { createManagementSessionControl, requireManagementAuth, managementPrincipal, managementSessionIssuance,
+  type ManagementAuthState } from "../../src/server/management-auth";
 import { consumeGuiPairingGrant, createGuiPairingGrant, issueGuiSession, type GuiSessionBootstrap } from "../../src/server/gui-session";
 
 const url = new URL("http://127.0.0.1:10100/api/codex/desktop-compatibility/certificate");
@@ -133,7 +135,9 @@ function desktopBoundary(origin = "http://localhost:10100") {
   }
   async function dispatch(req: Request, trusted = true) {
     const refused = requireManagementAuth(req, state, config); if (refused) return refused;
-    return (await handleManagementAPI(req, new URL(req.url), config, deps, managementPrincipal(req, state, config)!, control, { trustedLoopback: trusted }))!;
+    // Mirror the real dispatcher: it always supplies the resolved issuance alongside ingress.
+    return (await handleManagementAPI(req, new URL(req.url), config, deps, managementPrincipal(req, state, config)!, control,
+      { trustedLoopback: trusted, guiSessionIssuance: managementSessionIssuance(req, state) }))!;
   }
   async function authorize() {
     const grant = createGuiPairingGrant(origin, config, state, Date.now(), true);
@@ -161,6 +165,57 @@ test("every Desktop POST fails closed for bootstrap/admin/forged/remote sessions
   expect(io.calls).toEqual(["prepare", "trust", "remove-trust", "renew", "start", "stop", "observe", "launch", "apply", "settings"]);
   expect(io.control.isPaired(io.request("certificate"), io.config)).toBe(false);
   expect(io.control.canRevealDataKeys!(io.request("certificate"), io.config)).toBe(false);
+});
+
+test("the Desktop authorization exchange refuses raw tokens, remembered sessions, forged CSRF/origin, proxied ingress and replay", async () => {
+  const io = desktopBoundary(), origin = "http://localhost:10100";
+  const digest = (grant: string) => createHash("sha256").update(grant).digest("base64url");
+  const post = (session: GuiSessionBootstrap, body: object, extra: Record<string, string> = {}) =>
+    io.request("authorization", body, { "x-opencodex-api-key": session.token,
+      "x-opencodex-gui-origin": session.browserOrigin, "x-opencodex-csrf-token": session.csrfToken, ...extra });
+  // Every refusal must also leave the grant unspent, or a prober could burn the operator's consent.
+  async function refused(expected: number, headers: HeadersInit, token: string, trusted = true) {
+    const grant = createGuiPairingGrant(origin, io.config, io.state, Date.now(), true).grant;
+    const request = new Request(origin + "/api/codex/desktop-compatibility/authorization", { method: "POST",
+      headers: { host: "localhost:10100", Origin: origin, "content-type": "application/json", "x-opencodex-api-key": token, ...headers },
+      body: JSON.stringify({ grant }) });
+    expect((await io.dispatch(request, trusted)).status).toBe(expected);
+    expect(io.state.pairingGrants.has(digest(grant))).toBe(true);
+  }
+  // A raw admin token is not a GUI session, so it cannot spend an operator grant.
+  await refused(403, {}, io.state.token);
+  // A remembered-admin session proves the durable admin token, not the operator's presence at
+  // this machine. The handler refuses it before reading the body, so the differential below
+  // also proves the refusal is issuance-driven rather than a port, origin or body mismatch.
+  const durable = issueGuiSession(io.request("certificate"), io.config, io.state)!;
+  io.state.sessions.set(durable.token, { ...io.state.sessions.get(durable.token)!, issuance: "remembered-admin" });
+  await refused(403, { "x-opencodex-gui-origin": origin, "x-opencodex-csrf-token": durable.csrfToken }, durable.token);
+  // That refusal happens before the body is read, which is the part a downstream record check
+  // would not give: an unparseable body would otherwise answer 400 and reveal the route's
+  // parsing to a credential that is not allowed to reach it at all.
+  const malformed = new Request(origin + "/api/codex/desktop-compatibility/authorization", { method: "POST",
+    headers: { host: "localhost:10100", Origin: origin, "content-type": "application/json", "x-opencodex-api-key": durable.token,
+      "x-opencodex-gui-origin": origin, "x-opencodex-csrf-token": durable.csrfToken }, body: "{not json" });
+  expect((await io.dispatch(malformed)).status).toBe(403);
+  io.state.sessions.set(durable.token, { ...io.state.sessions.get(durable.token)!, issuance: "loopback" });
+  expect((await io.dispatch(post(durable, { grant: createGuiPairingGrant(origin, io.config, io.state, Date.now(), true).grant }))).status).toBe(200);
+  io.state.sessions.delete(durable.token);
+  // The current browser session must prove itself: CSRF and Origin are both required.
+  await refused(401, { "x-opencodex-gui-origin": origin, "x-opencodex-csrf-token": "wrong" }, io.bootstrap.token);
+  await refused(401, { Origin: "http://127.0.0.1:10100", "x-opencodex-gui-origin": origin,
+    "x-opencodex-csrf-token": io.bootstrap.csrfToken }, io.bootstrap.token);
+  // A forwarded or untrusted-ingress request is refused even with a live loopback session.
+  await refused(403, { Forwarded: "for=127.0.0.1", "x-opencodex-gui-origin": origin,
+    "x-opencodex-csrf-token": io.bootstrap.csrfToken }, io.bootstrap.token);
+  await refused(403, { "x-opencodex-gui-origin": origin, "x-opencodex-csrf-token": io.bootstrap.csrfToken }, io.bootstrap.token, false);
+  // One use: the first success spends the grant, and a replayed exchange holds no authority.
+  const once = createGuiPairingGrant(origin, io.config, io.state, Date.now(), true).grant;
+  expect((await io.dispatch(post(io.bootstrap, { grant: once }))).status).toBe(200);
+  expect(io.state.pairingGrants.has(digest(once))).toBe(false);
+  expect((await io.dispatch(post(io.bootstrap, { grant: once }))).status).toBe(403);
+  // Replay neither re-mints the grant nor reaches a service call.
+  expect(io.state.pairingGrants.has(digest(once))).toBe(false);
+  expect(io.calls).toEqual([]);
 });
 
 test("Desktop grants are purpose/origin bound, one use, and cannot mint a general pairing session", async () => {

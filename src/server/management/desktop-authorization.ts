@@ -2,6 +2,7 @@ import { desktopGuiOrigin, hasDesktopForwardingHeaders } from "../../lib/desktop
 import { DESKTOP_AUTHORIZATION_PATH } from "../gui-desktop-authorization";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+import { hasHumanDashboardSession } from "./consent-session";
 import type { ManagementContext } from "./context";
 
 function localDesktopBrowser(ctx: ManagementContext): boolean {
@@ -24,7 +25,11 @@ export async function handleDesktopAuthorization(ctx: ManagementContext): Promis
   if (ctx.req.method === "GET") return jsonResponse({ ok: true,
     supported: localDesktopBrowser(ctx), authorized: requireDesktopAuthorization(ctx) === null });
   if (ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
-  if (!localDesktopBrowser(ctx) || !ctx.sessionControl?.isCurrent(ctx.req, ctx.config)) return jsonResponse({ error: "desktop_authorization_required" }, 403);
+  // A remembered-admin session is the durable admin token in a cookie: it proves possession,
+  // not that the operator is at this machine. Refuse it here, before the body is read, so the
+  // step-up is closed to it by issuance rather than by a downstream record comparison.
+  if (!localDesktopBrowser(ctx) || !hasHumanDashboardSession(ctx)
+    || !ctx.sessionControl?.isCurrent(ctx.req, ctx.config)) return jsonResponse({ error: "desktop_authorization_required" }, 403);
   let body: unknown;
   try { body = await readManagementJsonBody(ctx.req); }
   catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid_json" }, 400); }
