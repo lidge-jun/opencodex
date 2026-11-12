@@ -76,12 +76,15 @@ test("the CLI decoder accepts route fields and still rejects malformed ones", ()
 });
 
 
-test("a row with both the route fields and the traffic block decodes with both", () => {
+test("a row with the route fields, the traffic block and the transport block decodes with all three", () => {
   const document = JSON.parse(JSON.stringify(attachLinkRoutes(project(), supervisorStates)));
   const traffic = { since: "2026-11-12T00:00:00.000Z", epoch: "0123456789abcdef", generation: 3, requests: 1, incomplete: 0, toHomeBytes: 5, fromHomeBytes: 6,
     toHomeSource: "relayed", toHomeUncounted: 0, untrackedRequests: 0 };
+  const ws = { open: 1, upgrades: 2, refused: { cap: 1 }, closes: { idle: 1 }, holds: 0 };
   document.links[1].traffic = traffic;
+  document.links[1].ws = ws;
   const decoded = validateStatus(document);
   expect(decoded.links[1]!.route?.name).toBe("two-lan");
   expect(decoded.links[1]!.traffic).toEqual(traffic);
+  expect(decoded.links[1]!.ws).toEqual(ws);
 });
