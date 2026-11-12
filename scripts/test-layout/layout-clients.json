@@ -84,6 +84,7 @@
   "link-route-supervisor.test.ts": "clients",
   "link-routes-status.test.ts": "clients",
   "link-routes-openssh.test.ts": "clients",
+  "link-route-proof-relay.test.ts": "clients",
   "desktop-3p-guard.test.ts": "clients",
   "desktop-3p-removal.test.ts": "clients",
   "desktop-3p.test.ts": "clients",
