@@ -1072,7 +1072,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
-        provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
+        provider.googleMode === "vertex" && (parsed.modelId === "gemini-4-argon" || parsed.modelId === "gemini-4-carbon"),
         isCloudCodeAssist && /^claude-/i.test(routedModelId),
       );
       lastInjectedCallIds = [...replayedCallIds];

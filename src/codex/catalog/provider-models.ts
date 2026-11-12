@@ -100,7 +100,7 @@ import {
   type ProviderModelsApiItem,
   type ResolvedProviderModelDiscovery,
 } from "../../providers/model-discovery";
-import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
+import { extractGoogleNativeModelItems, resolveObservedVertexDiscoveryToken } from "../../providers/google-vertex-model-discovery";
 import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
@@ -144,6 +144,7 @@ export interface ProviderModelsResult {
 }
 export const refreshingModelsAuthResolver: ModelsAuthResolver = { kind: "refreshing" };
 
+/** Build a synchronous non-refreshing credential resolver from a captured auth-store buffer. */
 export function observedModelsAuthResolver(
   authStoreBuffer: Uint8Array | null,
   outcomes: CatalogGatherProviderAuthOutcome[],
@@ -153,7 +154,12 @@ export function observedModelsAuthResolver(
     resolve(name, provider) {
       if (provider.authMode === "forward") return { apiKey: undefined, observed: true };
       if (provider.authMode !== "oauth") {
-        return { apiKey: resolveProviderApiKey(provider.apiKey), observed: true };
+        return {
+          apiKey: effectiveGoogleMode(name, provider) === "vertex"
+            ? resolveObservedVertexDiscoveryToken(provider)
+            : resolveProviderApiKey(provider.apiKey),
+          observed: true,
+        };
       }
 
       const observation: OAuthActiveTokenObservation = mayResolveModelsOAuth(name, provider)
@@ -681,6 +687,9 @@ export async function fetchProviderModelsWithAuth(
       "degraded",
     );
   }
+  if (effectiveGoogleMode(name, prov) === "vertex" && !apiKey) {
+    return observed(withConfiguredRetention(withVertexDefaultSeed(configured)), "degraded");
+  }
   // The captured request predates any refresh, so a refreshing gather rebuilds it
   // from the auth it resolved: the token and its origin, together.
   const request = resolveAuth.kind === "refreshing" && name !== "anthropic2"
@@ -844,14 +853,10 @@ export async function fetchProviderModelsWithAuth(
       markProviderDiscoveryOk(name, live.length);
       return observed(withConfiguredRetention(azureMetadata ? live : forCache, { warnDrops: true }), "authoritative");
     }
-    const googleAiStudio = effectiveGoogleMode(name, prov) === "ai-studio"
-      ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
-      : undefined;
-    // Native /v1beta/models wins; a google row served by an OpenAI-compatible
+    const googleNative = extractGoogleNativeModelItems(effectiveGoogleMode(name, prov), bounded.value, discovery.maxModels);
+    // Native Google discovery wins; a google row served by an OpenAI-compatible
     // gateway keeps the generic data[] / top-level-array contract.
-    const extracted = googleAiStudio?.ok
-      ? googleAiStudio
-      : extractProviderModelItems(bounded.value, discovery);
+    const extracted = googleNative ?? extractProviderModelItems(bounded.value, discovery);
     if (!extracted.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       const diagnostic: Record<ModelDiscoveryResponseFailure, string> = {

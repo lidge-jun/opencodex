@@ -208,4 +208,60 @@ describe("Vertex catalog configuration", () => {
       'Provider model discovery for "vertex-throw" threw TypeError [urlClass=vertex-aiplatform, fallback=configured]',
     );
   });
+
+  test("discovers Vertex publisherModels including gemini-4-carbon with full capabilities and filters non-chat SKUs", async () => {
+    let seenUrl = "";
+    let seenApiKeyHeader = "";
+    globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      seenUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const headers = new Headers(init?.headers);
+      seenApiKeyHeader = headers.get("x-goog-api-key") ?? "";
+      return Promise.resolve(Response.json({
+        publisherModels: [
+          { name: "publishers/google/models/gemini-4-carbon", versionId: "default", launchStage: "GA" },
+          { name: "publishers/google/models/gemini-4-argon", versionId: "default", launchStage: "GA" },
+          { name: "publishers/google/models/gemini-embedding-2", versionId: "default", launchStage: "GA" },
+          { name: "publishers/google/models/gemini-2.5-flash-tts", versionId: "default", launchStage: "GA" },
+          { name: "publishers/google/models/gemini-live-2.5-flash", versionId: "default", launchStage: "GA" },
+          { name: "publishers/google/models/imagen-4.0-generate-001", versionId: "001", launchStage: "GA" },
+        ],
+      }));
+    }) as typeof fetch;
+
+    const config: OcxConfig = {
+      providers: {
+        google: {
+          adapter: "google",
+          googleMode: "vertex",
+          baseUrl: "https://aiplatform.googleapis.com",
+          project: "demo-vertex-project",
+          location: "global",
+          apiKey: "vertex-api-key",
+          liveModels: true,
+        },
+      },
+    };
+    const rows = await gatherRoutedModels(config);
+    expect(seenUrl).toBe("https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=300");
+    expect(seenApiKeyHeader).toBe("vertex-api-key");
+
+    const carbon = rows.find(row => row.provider === "google" && row.id === "gemini-4-carbon");
+    expect(carbon).toMatchObject({
+      provider: "google",
+      id: "gemini-4-carbon",
+      contextWindow: 1_048_576,
+      maxOutputTokens: 65_536,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "medium", "high"],
+    });
+    expect(rows.some(row => row.id === "gemini-4-argon")).toBe(true);
+    for (const excluded of [
+      "gemini-embedding-2",
+      "gemini-2.5-flash-tts",
+      "gemini-live-2.5-flash",
+      "imagen-4.0-generate-001",
+    ]) {
+      expect(rows.some(row => row.id === excluded)).toBe(false);
+    }
+  });
 });

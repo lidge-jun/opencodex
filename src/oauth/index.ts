@@ -61,6 +61,7 @@ import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { preservableApiKeyPool } from "./api-key-pool-preserve";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
 import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
+import { buildVertexModelsDiscoveryRequest, resolveVertexDiscoveryToken } from "../providers/google-vertex-model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
@@ -1139,6 +1140,7 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
       return undefined;
     }
   }
+  if (effectiveGoogleMode(name, prov) === "vertex") return resolveVertexDiscoveryToken(prov);
   return resolveProviderApiKey(prov.apiKey);
 }
 
@@ -1174,6 +1176,7 @@ export interface ModelsRequestObservedAuth {
   readonly oauthApiBaseUrl?: string;
 }
 
+/** Build the provider-specific live model-discovery HTTP request (method, URL, and headers). */
 export function buildModelsRequest(
   prov: OcxProviderConfig,
   apiKey: string | undefined,
@@ -1227,11 +1230,13 @@ export function buildModelsRequest(
       headers,
     });
   }
+  if (effectiveGoogleMode(providerName, effectiveProvider) === "vertex") {
+    return guarded(buildVertexModelsDiscoveryRequest(effectiveProvider, apiKey, headers, discoveryUrl));
+  }
   if (effectiveGoogleMode(providerName, effectiveProvider) === "ai-studio") {
     // Generative Language API: API key goes in x-goog-api-key (never Authorization: Bearer),
     // models live under /v1beta (v1 misses preview models), and pageSize maxes at 1000 —
-    // enough to list everything without a pageToken loop. Vertex/antigravity keep the
-    // generic branch (they fall back to their static model lists).
+    // enough to list everything without a pageToken loop.
     if (apiKey) headers["x-goog-api-key"] = apiKey;
     return guarded({ url: discoveryUrl(`${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`), headers });
   }

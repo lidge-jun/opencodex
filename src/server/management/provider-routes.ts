@@ -71,7 +71,7 @@ import {
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
-import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
+import { extractGoogleNativeModelItems } from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
@@ -897,6 +897,7 @@ function providerRoutingQuota(config: OcxConfig, name: string, now: number): Pro
   return { state, updatedAt: quota.updatedAt, validUntil };
 }
 
+/** Handle management API endpoints for provider CRUD, connectivity probes, and quota inspection. */
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -1671,7 +1672,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       ? await getModelsOAuthAccessSnapshot(name, prov).catch(() => undefined)
       : undefined;
     const apiKey = prov.authMode === "oauth" ? snapshot?.accessToken : await resolveModelsAuthToken(name, prov);
-    if (prov.authMode === "oauth" && !apiKey) {
+    if ((prov.authMode === "oauth" || effectiveGoogleMode(name, prov) === "vertex") && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
     if (prov.adapter === "zed") return (await import("./zed-provider-probe")).probeZedProvider(prov, apiKey, snapshot?.providerUserId);
@@ -1787,17 +1788,15 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
         ? bounded.value as Record<string, unknown>
         : undefined;
-      const isAiStudio = effectiveGoogleMode(name, prov) === "ai-studio";
-      const googleAiStudio = !ccaModels && isAiStudio
-        ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
+      const googleNative = !ccaModels
+        ? extractGoogleNativeModelItems(effectiveGoogleMode(name, prov), bounded.value, discovery.maxModels)
         : undefined;
       const extracted = ccaModels
         ? undefined
-        : googleAiStudio?.ok
-        ? googleAiStudio
-        : Array.isArray(bounded.value) || Array.isArray(record?.data)
-        ? extractProviderModelItems(bounded.value, discovery)
-        : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);
+        : googleNative
+        ?? (Array.isArray(bounded.value) || Array.isArray(record?.data)
+          ? extractProviderModelItems(bounded.value, discovery)
+          : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]));
       if (extracted && !extracted.ok) {
         return jsonResponse({
           ok: false,
