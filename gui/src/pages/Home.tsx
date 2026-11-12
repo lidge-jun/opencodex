@@ -8,6 +8,7 @@ import { recentFailures, type HomeLogRow } from "./home-failures";
 import { startupChecklistStep } from "../startup-health-ui";
 import { useStartupChecklist } from "../hooks/useStartupChecklist";
 import { TelemetryProfileCard } from "../components/telemetry-profile-card";
+import { readManagementHealth } from "../lib/proxy-health";
 
 /*
  * Design system v2 landing page. It answers the two questions people open the dashboard
@@ -23,7 +24,6 @@ interface HomeProps {
   reloadingCodex: boolean;
 }
 
-interface Health { version?: string; uptime?: number }
 interface UsageDay { requests?: number; totalTokens?: number }
 interface UsageBody { summary?: { requests?: number; totalTokens?: number }; days?: UsageDay[] }
 interface ConfigBody { providers?: Record<string, unknown> }
@@ -43,8 +43,9 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const number = new Intl.NumberFormat(locale);
   const compact = new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 });
 
+  // The authenticated management health route: a hub's management ingress denies /healthz (#8506).
   const health = useKeyedClientResource(`home-health:${apiBase}`, [apiBase],
-    signal => getJson<Health>(`${apiBase}/healthz`, signal), { pollMs: 30_000 });
+    signal => readManagementHealth(apiBase, "/api/system/health", signal), { pollMs: 30_000 });
   const usage = useKeyedClientResource(`home-usage:${apiBase}`, [apiBase],
     signal => getJson<UsageBody>(`${apiBase}/api/usage?range=7d`, signal), { pollMs: 60_000 });
   const config = useKeyedClientResource(`home-config:${apiBase}`, [apiBase],
@@ -67,7 +68,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const providerCount = Object.keys(config.data?.providers ?? {}).length;
   const requests7d = usage.data?.summary?.requests ?? 0;
   const tokens7d = usage.data?.summary?.totalTokens ?? 0;
-  const uptime = health.data?.uptime ?? 0;
+  const uptime = health.data?.uptime ?? null;
   const autostart = startupChecklistStep(startup.data);
 
   const steps = [
@@ -110,7 +111,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
 
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label={t("shellV2.tileVersion")} value={health.data?.version ? `v${health.data.version}` : "—"} />
-        <Stat label={t("shellV2.tileUptime")} value={online ? t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) }) : "—"} />
+        <Stat label={t("shellV2.tileUptime")} value={online && uptime !== null ? t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) }) : "—"} />
         <Stat label={t("shellV2.tileRequests")} value={number.format(requests7d)} />
         <Stat label={t("shellV2.tileTokens")} value={compact.format(tokens7d)} />
       </section>

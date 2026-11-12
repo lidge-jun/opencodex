@@ -480,6 +480,9 @@ an earlier file prefix from 7-day, 30-day, or all-history totals. `managementUsa
 accepted for compatibility with bounded legacy readers, but changing it no longer expands or reduces
 the history summarized by this endpoint.
 
+Cold ledger scans yield between records so health checks and other local requests can continue
+while a large usage report is calculated. A single record is processed atomically.
+
 Pass both `since` and `until` to select an inclusive custom interval. Each accepts integer Unix
 epoch **milliseconds**, or a full ISO datetime with an explicit timezone. Invalid dates, negative
 or out-of-range values, reversed bounds, and a single bound are rejected. Custom bounds override
@@ -605,15 +608,19 @@ can still fail when a recorded session has no surviving rollout file.
 | `PUT /api/model-settings` | Edit one routed model's capability axes in place | 400 missing provider/modelId, unknown or native/combo provider, malformed field, unknown field, non-exact model id, or an invalid default effort for the resulting ladder; 500 when the config could not be saved (live config left unchanged) |
 
 `PUT /api/model-settings` takes `{ provider, modelId }` plus any of `contextWindow`,
-`inputModalities`, `reasoningEfforts`, and `defaultReasoningEffort`. It writes the
+`inputModalities`, `responsesCustomTools`, `reasoningEfforts`, and `defaultReasoningEffort`. It writes the
 provider-level per-model maps the runtime already reads (`modelContextWindows`,
-`modelCapabilities.<modelId>.inputModalities`, `modelReasoningEfforts`,
+`modelCapabilities.<modelId>.inputModalities`, `modelCapabilities.<modelId>.responsesCustomTools`, `modelReasoningEfforts`,
 `modelDefaultReasoningEfforts`), so an edited row keeps its discovery provenance instead of
 being replaced by a custom model. `inputModalities` accepts `text`, `image`, and `audio`;
-`reasoningEfforts` must be a subset of the efforts the runtime knows. Unknown request fields
+`responsesCustomTools` accepts a boolean or `null` to inherit the provider setting. The dashboard has no control for it: its model settings Restore clears the context window, modalities and reasoning settings but leaves `responsesCustomTools`, so clear it with `responsesCustomTools: null` or `ocx models set <provider/model> --reset`, which clears every axis including this one. `reasoningEfforts` must be a subset of the efforts the runtime knows. Unknown request fields
 are rejected by name. `modelId` must be exact, without surrounding whitespace, control
 characters, excessive length, or a reserved object-property name. `contextWindow` must be
 `null` or a positive safe integer.
+
+When `responsesCustomTools` is `false`, native Responses compaction also lowers custom-tool
+history. History that cannot be lowered safely returns HTTP 400 with `invalid_request_error`
+before sending anything upstream.
 
 Every field is optional, and `null` **clears** the declaration rather than writing a default,
 which hands the fact back to the registry, the catalog, and the provider. An empty
@@ -623,7 +630,7 @@ Clearing `inputModalities` also removes the exact legacy `modelInputModalities` 
 model, so a restore cannot leave an older declaration in force; family keys shared with other
 models stay. An emptied per-model map is removed instead of left as `{}`. A request that changes nothing
 answers `changed: false` with the stored state. The receipt also reports `saved` (whether this
-request published config), `hasOverrides` (whether any of the four axes remains stored), and
+request published config), `hasOverrides` (whether any editable axis remains stored), and
 `catalogRefresh` (`committed`, `skipped`, or `failed`). These fields distinguish a no-op with
 stored declarations from a model with nothing to restore. A changed request persists atomically;
 an unpublished save failure leaves the live config unchanged. After publication the server
@@ -728,6 +735,12 @@ API page. The CLI drives these routes with `ocx api protocols`, `ocx api explain
 ([Protocol paths](/guides/protocol-paths/#rollout-switches)); see
 [API surfaces](/reference/configuration/server/#api-surfaces-apisurfaces) for how the Messages
 setting interacts with `claudeCode.enabled` across upgrades and downgrades.
+
+### Health during local credential updates
+
+When an asynchronous native-profile update waits for another local process to release the
+credential-publication lock, `/healthz` can still answer. The update keeps its existing 10-second
+lock-acquisition deadline and starts writing only after it owns the lock.
 
 ### Home identity and the served-by header
 

@@ -67,6 +67,16 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON."],
   },
   {
+    command: ["link","diagnostics"],
+    summary: "Read this computer's bounded Remote Link diagnostics file.",
+    routes: [],
+    flags: [{"name":"--limit","value":"number","summary":"Newest records to show, 1-1000; default 200."},{"name":"--since","value":"string","summary":"Only records at or after this ISO time or epoch-millisecond timestamp."},{"name":"--json","value":"boolean","summary":"Emit the ocx.link.diagnostics/1 document as JSON."}],
+    mutates: false,
+    json: "envelope",
+    usage: "ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]",
+    details: ["Reads <configDir>/link/diagnostics.jsonl and its backup diagnostics.jsonl.1 directly, oldest first, without the proxy or a management route. Never creates, hardens or writes a file, and skips the Codex-shim repair preflight.","Reads only regular files (never through a symlink, FIFO or symlinked link directory), at most the newest 256 KiB of each. Every line is re-checked against the writer's allowlist: tunnel and relay event/outcome/state words, generated UUIDs, numbers and timestamps. Lines that fail are counted in skipped, never printed.","Exit 0 including when nothing is recorded yet, which prints the file path. The dashboard reads the same records through GET /api/link/diagnostics."],
+  },
+  {
     command: ["link","revoke"],
     summary: "Revoke a link credential and remove its link record.",
     routes: [{"method":"DELETE","path":"/api/link/{id}"}],
@@ -153,7 +163,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--context-window","value":"string","summary":"Context window in tokens; 0 or - clears the override."},{"name":"--modalities","value":"string","summary":"Comma-separated text,image,audio; - clears the override."},{"name":"--reasoning-efforts","value":"string","summary":"Comma-separated ladder; \"\" for no reasoning, - to inherit."},{"name":"--default-reasoning-effort","value":"string","summary":"Ladder member a request inherits when it omits one; - to inherit."},{"name":"--reset","value":"boolean","summary":"Clear every override on this model; cannot be combined with the options above."},{"name":"--json","value":"boolean","summary":"Emit the saved state as JSON."}],
     mutates: true,
     json: "envelope",
-    details: ["Only routed provider/model selectors are supported. At least one option or --reset is required.","Context 0 or - and modalities/default effort - clear to null; reasoning efforts - restores inheritance while an empty string stores an empty ladder.","--reset clears all four overrides with null and cannot be combined with other settings. A saved-but-catalog-refresh-failed receipt must not be mistaken for an unsaved change."],
+    details: ["Only routed provider/model selectors are supported. At least one option or --reset is required.","Context 0 or - and modalities/default effort - clear to null; reasoning efforts - restores inheritance while an empty string stores an empty ladder.","--reset clears every override (including the API-only responsesCustomTools) with null and cannot be combined with other settings. A saved-but-catalog-refresh-failed receipt must not be mistaken for an unsaved change."],
     usage: "ocx models set <provider/model> [--context-window <tokens|0|->] [--modalities <text,image,audio|->] [--reasoning-efforts <levels|->] [--default-reasoning-effort <level|->] [--reset] [--json]",
   },
   {

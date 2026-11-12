@@ -11,6 +11,7 @@ import { AccountCreditsToggle, CreditsOnBadge } from "./CodexCreditSpend";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
+import { weeklyWindowConflictText } from "../codex-weekly-conflict";
 import { AccountMore, AccountRow, AccountSetting } from "./v2-accounts/account-row";
 import { InlineBanner } from "./v2-accounts/surface";
 import CodexCreditsRow from "./CodexCreditsRow";
@@ -106,6 +107,7 @@ export function CodexAccountPoolCards({
         const planExcluded = a.selectionExcludedReason === "plan_excluded";
         const showReauth = Boolean(a.needsReauth) || oauthHealthShowsReauth(healthStatus);
         const inCooldown = oauthHealthIsCooldown(healthStatus);
+        const weeklyConflictNote = weeklyWindowConflictText(a.weeklyQuotaConflicts, t, locale);
         const validationPending = a.health?.reason === "validation_pending";
         const healthLabel = formatOAuthHealthLabel(t, a.health);
         const healthSummary = formatOAuthHealthSummary(t, "codex", a.id, a.health);
@@ -274,6 +276,7 @@ export function CodexAccountPoolCards({
                   pending={a.quota == null && (loading || !showCredits)}
                   afterWeekly={showCredits && !loading ? <CodexCreditsRow credits={a.credits} t={t} locale={locale} /> : undefined}
                 />
+                {weeklyConflictNote && <div className="card-sub text-warning" role="note">{weeklyConflictNote}</div>}
               </div>
             )}
           </AccountRow>

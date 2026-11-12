@@ -39,10 +39,27 @@ match. `src/usage/ledger-scanner.ts` supplies both halves: `scanUsageLedgerCoope
 row offset during ingest, and `readUsageLedgerRowsAtOffsets` re-reads only the selected rows under the
 same identity, row-ceiling and torn-suffix rules. The first filtered query after the index is missing
 or invalid pays one cooperative full ingest; appends ingest only new bytes, and every later filter
-reuses the projection. A replaced, truncated or same-size rewritten ledger rebuilds it, a write
+reuses the projection. Candidate offsets are selected and consumed in bounded keyset pages, with a
+timer yield between pages; each page rechecks the published generation before it is read, so broad
+filters neither retain the complete offset set nor monopolize the event loop. A replaced, truncated
+or same-size rewritten ledger rebuilds it, a write
 observed during a row read re-verifies the selected bytes before publishing them, and a recorded
 offset that no longer frames a complete row drops the projection instead of serving a partial
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
+
+Each candidate page is one keyset statement per branch, and every branch index is ordered
+`(generation, <equality prefix>, byte_offset, ...)` so its own `ORDER BY byte_offset LIMIT` is
+served by the index walk. This is why the window filter uses `idx_usage_rows_window` rather than a
+timestamp-ordered index, why a lone provider or model pages from
+`idx_usage_attr_{provider,model}_offset`, and why the Codex roster is expanded one label per branch
+instead of `client IN (...)`: each of those alternatives would otherwise force SQLite to sort the
+whole match set on every page, which made a deep page cost seconds on a large ledger -- more than the
+streaming scan the projection exists to replace. The pager keeps one fetch cursor and one surplus
+buffer per branch, so merging the branch heads returns one ascending, de-duplicated page bounded by
+`CANDIDATE_PAGE_SIZE` while each candidate is fetched about once; a branch that fetched past what
+the merge needed carries that surplus into the next page instead of reading it again.
+`tests/usage/usage-filter-paging.test.ts` asserts that no paged branch plan carries a temp B-tree,
+and pins branch-cursor order, the page bound, and the corrupt-projection rebuild.
 
 The index keeps its `-wal` and `-shm` sidecars after the last connection closes
 (`SQLITE_FCNTL_PERSIST_WAL` on every connection that can write, set only once the file classified
@@ -82,8 +99,9 @@ writer's own publish fails the fence and retries, and a reader only ever sees on
 generation. A
 crash before publish leaves the previously published generation complete. An append writes into the
 published generation and publishes its cursor, digest, counts and span in the same transaction,
-fenced on the cursor so a stale append cannot regress it. Readers take meta and the candidate
-select in one read transaction and reject a generation that changed under them. A published
+fenced on the cursor so a stale append cannot regress it. Each candidate page re-reads meta and
+selects inside its own short read transaction, and a generation or schema change aborts the read --
+the per-page recheck described with the paging contract above. A published
 generation that claims rows it no longer holds is rebuilt rather than served as a complete zero, in
 both the active and the passive read.
 
@@ -113,10 +131,21 @@ existing file that classified as this projection, once they appear; a file at th
 not this projection is never registered or modified. A passive management read opens an existing
 projection read-only, requires this projection's full table set rather than a coincidental meta
 table, and only uses it when it is current for the exact ledger revision; otherwise it streams,
-and it never creates, writes or registers anything. Any other index-side failure -- unwritable home,
-full disk, contention, a corrupt or foreign file -- falls back to the authoritative streaming scan
+and it never creates, writes or registers anything. The passive read makes a single attempt and
+degrades to the streaming scan on any error; it does not retry. Only the active index read
+(`readUsageFilterCandidates`) retries contention on three short delays (85 ms, plus SQLite's
+250 ms busy timeout per attempt) before streaming, and runs a
+foreign or unsafe open and a rebuild-required read through three short delays before degrading.
+Any other
+index-side failure -- unwritable home,
+full disk, a corrupt file -- falls back to the authoritative streaming scan
 instead of failing a request the scan can answer; a failure to read `usage.jsonl` itself is
-propagated. A nonselective filter (`client=all`, `device=all`, no provider/model/key) still reads
+propagated. A `UsageFilterIndexPageError` from a `src/usage/filter-index.ts` page read clears the
+retained filtered aggregate, then retries the authoritative streaming scan under
+`withFilterIndexRetry` (`MAX_FILTER_INDEX_ATTEMPTS` attempts) in
+`src/server/management/usage-aggregate-cache.ts`: only a concurrent ledger replacement or an
+aggregation-input change is retried, the unusable index is never re-entered, and unrelated ledger
+I/O failures still propagate. A nonselective filter (`client=all`, `device=all`, no provider/model/key) still reads
 every row in its window; `candidateRows` counts the rows selected and normalized for that call and
 `scope` says whether that is the whole candidate set or only the appended suffix, not how many SQL
 index entries were examined. `tests/usage/usage-filter-index.test.ts` asserts candidate counts against the whole

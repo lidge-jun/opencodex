@@ -109,6 +109,8 @@ ocx disconnect   # or ~/.cache/opencodex/bin/ocx-child detach on a lightweight C
 
 To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disconnects the client tunnel and revokes the link on Home over SSH. If Home revocation fails, it prints: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
+On a full OpenCodex Child, `ocx disconnect` also restarts a client runtime that is still running, so the Child is serving standalone OpenCodex when the command returns. If that restart does not complete, the command exits non-zero and prints advice for the state it observed: `ocx restart` on the Child when the same runtime still serves the old connection; `ocx service restart` when a service that cannot be shown to relaunch the runtime refused the restart; and inspection with `ocx status` and `ocx connect status` when a new connection is in use, the client state cannot be read, or a different or unknown runtime answers. A client runtime whose connection was removed accepts `ocx restart` when its owner can relaunch it: the OpenCodex desktop app, or a background service that is enabled and running, starts the standalone replacement, so the same command works over SSH with nobody at the Child's screen. A service that cannot be shown to relaunch it (for example a unit started by hand while disabled) keeps the runtime and the command says to run `ocx service restart`. A runtime that carries only `OCX_SERVICE=1` (a service installed before 2.49, or a proxy started by `ocx claude`, `ocx codex` or `ocx opencode`) is not changed by this: `ocx disconnect` does not restart it, and `ocx restart` refuses while its service is viable, as before. The same holds for a client runtime started by an OpenCodex version before this change: `ocx disconnect` restarts a runtime only after it has been restarted once on the new version (an update's own restart, the desktop app restarting it, `ocx service restart`, or `ocx restart`).
+
 ## Troubleshooting
 
 When a step fails, the dashboard shows the reason and, when SSH reported one, a short sanitized hint from its last non-empty error line under the message. Remote-shell errors can appear there even when the remote shell emits non-UTF-8 text; OpenCodex removes terminal controls, link keys and URL queries and limits the hint's length.
@@ -124,6 +126,8 @@ When a step fails, the dashboard shows the reason and, when SSH reported one, a 
 
 A relay-generated `503` includes a server-generated `x-opencodex-link-request-id`. Use it to correlate a failure with local evidence under the Child's OpenCodex configuration home: `link/diagnostics.jsonl` and one rotated backup, `link/diagnostics.jsonl.1`. Each file is capped at 256 KiB, with private permissions (directory 0700 and files 0600 on POSIX; private ACLs on Windows). Records contain only fixed event/outcome/state categories, generated correlation IDs, numeric timing/generation/attempt metadata and timestamps, never secrets, request bodies, headers, URLs, account identifiers or raw errors. Each event/outcome pair is limited to one record per second; the next record includes a count of suppressed events, so an absent record does not prove an absent failure. A backward wall-clock adjustment starts a new rate-limit window, including when the writer queue is full, and preserves the suppression count. An asynchronous writer keeps at most 56 pending records, counts overflow as suppression, and yields while Windows ACL work runs. Logging is best effort and cannot change whether a request is admitted. Graceful signal shutdown and standalone recycling wait up to one second for queued diagnostics before exiting; stalled storage, forced termination and power loss can still lose records.
 
+To read them, run `ocx link diagnostics` on that computer, or open **Diagnostics** at the bottom of the `#remote` dashboard page there. Both show the newest records, oldest file first, with the time, event, outcome, state change, attempt and tunnel port of each. `--limit <n>` (1–1000, default 200) and `--since <iso-time|epoch-ms>` narrow the list, and `--json` prints the `ocx.link.diagnostics/1` document. The command reads the files directly: it needs no running proxy, creates and changes nothing, and prints the file path with **No Remote Link diagnostics recorded yet** when neither file exists. Both views check each line against the same fixed categories the writer uses: a line that does not match is never displayed and is counted as skipped (`skipped` in `--json`). A file that is a symlink, is not a regular file, or sits under a symlinked link directory is not read at all; the views say so, and `--json` reports it in `files` with state `refused`. The dashboard section uses the same authority as link status, and a Child's dashboard shows the Child's own records.
+
 `owner_lookup` records refused ownership checks; routine successful checks are silent. `owner_lookup.elapsedMs` measures the owner lookup itself. For `auth_timeout`, `relay_retry` and `relay_failure` report the actual transport-attempt duration in `elapsedMs` (normally about five seconds). A `relay_recovered` event with outcome `recovered` is emitted only after a retry receives an upstream response with `upstream.ok` (HTTP 2xx); it does not prove the streamed body completed. Rate limiting makes request-ID correlation sampled evidence, not a guaranteed trace of every failed request.
 
 The Home writes the same kind of file under its own configuration home for the tunnels it runs. Each change of a Home-initiated tunnel's state is a `tunnel_transition` record with `previousState`, `state`, the cause as `outcome` (`auth`, `hostkey`, `forward`, `remote_forward_conflict`, `timeout`, `network`, `unknown`, `spawn_failed` or `listener_unavailable`; `connected`, `spawned` or `stopped` when nothing failed), the `attempt` count since the link was last connected, the link's `tunnelPort` and, when a retry is scheduled, `retryAfterMs`. A retry of a failed link that fails again is recorded too, so an outage leaves one record per attempt. The same rate limit applies, across all links.
@@ -131,6 +135,24 @@ The Home writes the same kind of file under its own configuration home for the t
 Before sending data, OpenCodex allows one shared preflight retry for either an owner-lookup deadline or a specifically identified five-second authentication deadline. The retry obtains fresh owner proof where required and a fresh physical socket, then authenticates that socket before sending the link credential or body. It does not reuse cached owner approval, bypass security checks, restart SSH or OpenCodex, or replay a dispatched request body. The two-second owner-lookup and five-second authentication deadlines are unchanged for each attempt; other failures do not qualify for this preflight retry.
 
 This can recover these transient deadline paths and helps diagnose future failures. It does not establish the historical cause of [#7297](https://github.com/lidge-jun/opencodex/issues/7297).
+
+### Capture SSH diagnostics
+
+When a tunnel keeps failing and the cause in `ocx link status --json` does not explain it, OpenCodex can record what SSH itself reports for a short time. Capture is off by default, and only someone working on the machine whose tunnel you want to inspect can turn it on:
+
+```bash
+ocx link capture start            # 15 minutes; --minutes accepts 1 to 60
+ocx link capture status
+ocx link capture stop
+```
+
+Run it on the Home to capture the tunnels it runs to its Children, or on a Child to capture the tunnel that Child started to its Home. The command needs no running OpenCodex and no admin token. Nothing a Home syncs, and no dashboard or remote request, can start a capture. Running `start` again while a window is open moves its end time and keeps writing to the same file.
+
+While the window is open, the next SSH attempt of each tunnel runs with `LogLevel=DEBUG1` instead of `LogLevel=ERROR`. A tunnel that is already connected keeps its level until it reconnects; on the Home, `ocx link reconnect --link-id <id>` starts a new attempt right away. After `stop`, or when the window ends, nothing more is stored and the next attempt runs with `LogLevel=ERROR` again. Request admission is unchanged, and the extra lines SSH prints at the higher level are kept out of the failure cause that `ocx link status` reports. One exception: a line OpenCodex does not recognize still counts toward that cause, and SSH shows a server's login banner only at the higher level. During a window, a banner containing words such as "Permission denied" can therefore change the reported cause and, with it, the retry delay.
+
+Records go to `link/ssh-capture/ssh-<start time>.jsonl` under the OpenCodex configuration home, one JSON object per line with the time, the tunnel (`home` or `child`), the link ID, the SSH level, a fixed event name and the line text. Before anything is written, each line is matched against a list of known OpenSSH message shapes. Host names, addresses, user names, ports, file paths, keys and fingerprints, proxy commands, environment values and messages from the SSH server become placeholders such as `<host>` and `<port>`. Algorithm and authentication method names are kept only when they are standard OpenSSH names. A line that matches no known shape is stored only as `unrecognized` with a count, never its text. The link ID is OpenCodex's own random identifier; it is kept so you can tell tunnels apart.
+
+Each window writes one file of at most 1 MiB, and a `capture_truncated` record ends a full one. A file is deleted 72 hours after its last write, and at most four files are kept, so `start` deletes the oldest beyond that. Deletion runs when OpenCodex starts, when a tunnel starts, on every `ocx link capture` command, and in a running OpenCodex as soon as a file's 72 hours pass, including files an earlier OpenCodex process wrote. A file whose 72 hours pass while OpenCodex is not running is deleted at the next start or capture command. `stop` leaves the files in place so you can share them; delete them yourself once you no longer need them. The directory is private to your user (directory 0700 and files 0600 on macOS and Linux, a private ACL on Windows), and OpenCodex never writes or reads through a symbolic link there.
 
 ## Security
 
@@ -144,6 +166,7 @@ ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
+ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ocx link check (--link-id <id> | --all) [--no-wait] [--json]
@@ -151,6 +174,10 @@ ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
 ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
 ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
 ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
+ocx link capture start [--minutes <1-60>] [--json]
+ocx link capture stop [--json]
+ocx link capture status [--json]
+ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]
 ```
 
 `ocx link status` needs the local admin token on a listener that only this machine can reach. When the public listener is bound to a non-loopback address, for example a Hub on `0.0.0.0`, no TCP listener qualifies: the hub management listener is reached through Tailscale Serve, so it refuses the raw admin token for link routes. On macOS and Linux the proxy therefore also opens a private Unix socket, `<OPENCODEX_HOME>/run/control-<port>.sock`, in a directory only your user can enter, and `ocx link status` uses it automatically. The socket answers only `GET /api/link/status` and still requires the admin token. Windows and runtimes older than this change keep the TCP path, where the read returns `403` on such a Hub.
@@ -191,7 +218,7 @@ The version a Child reports is its own claim, bound to its link key. OpenCodex u
 
 - `runningVersion` is the version the Child reported over the link. `installedVersion`, `installKind` and `update` (`route`, `reason`, `observedAt`) come from the last `ocx link check` and stay `null` until one ran. `versionSkew` compares the installed version, or the running one, with the Home's: `same`, `behind`, `ahead` or `unknown`. It is always `unknown` for an `ocx-child` Child.
 - `catalog.state` is `current` when the catalog the Child last downloaded from the Home is the Home's current one, `behind` when the Home's catalog changed since, and `unknown` before the first download. The Home compares the catalog's content, not file times, so restoring an older catalog file also reads `behind`. A download proves only that the Child fetched the catalog, not that it applied it; the check `ocx link add` runs at enrollment counts as a download.
-- `activity.idle` is `true` when no relayed model request has run on that link for 10 minutes. `inFlight` counts the requests running now. Token counting, catalog and readiness reads do not count, and a request from a Child older than connection-bound relay authentication counts against every link.
+- `activity.idle` is `true` when no relayed model request has run on that link for the policy's idle period (10 minutes by default; see `ocx link policy --idle-after-minutes` below). `inFlight` counts the requests running now. Token counting, catalog and readiness reads do not count, and a request from a Child older than connection-bound relay authentication counts against every link.
 - `activeJob` names an operation running on that link, and `lastOperation` the last one that finished. `codex` is `null` for now.
 
 `ocx link check --link-id <id>` (repeatable) or `ocx link check --all` asks Children for their install facts. For each Home-initiated Child the Home runs the Child's `ocx update --plan` over the link's SSH connection, which computes an update plan and changes nothing; each call has a 60-second budget and three run at a time. A Child older than 2.97.0 does not have that command: the item reads `owner-action` with reason `legacy-ocx`, and the Home learns the version from one more read-only SSH call on macOS and Linux, or from the version the Child reported over the link on Windows. On an npm or pnpm Child without a recorded serving install, the command runs through the `ocx` launcher, so the launcher's usual startup bookkeeping runs first, as it does for every `ocx sync` the Home sends there. Links a Child started from its own dashboard and `ocx-child` Children are reported without SSH. The command waits for the job and prints it as JSON (`--no-wait` prints it at once); it exits 0 when every Child answered, 6 when a Child is busy, offline, too old or not checkable, 1 on a failure, 4 for an unknown link or a Home too old for this command, and 5 when another operation is running on that link or the Home has no links.
@@ -210,6 +237,34 @@ The Home does not restart Codex on a Child while it is relaying a model request 
 The commands exit 0 when every Child succeeded or was already up to date (with `--no-wait`, 0 only means the job was accepted; it may still be running. The printed job carries a `jobId`; read the result with `GET /api/link/children/jobs/<jobId>` on the Home, using the admin token on loopback. Finished jobs stay readable for one hour, at most 32 of them, and are lost when the Home restarts, so read the result promptly), 6 when a Child needs attention (busy, offline, refused, an owner action, unsupported, a skipped restart, or an update that was kept but whose follow-up sync failed; run `ocx link sync` for that link), 1 on a failure or an unconfirmed result (check the Child again with `ocx link check` before retrying), 4 for an unknown link or a Home without these commands, and 5 when another operation is running on that link, the only link named was started from the Child, the Home has no links, or the command ran on a Child; the error message names which. The CLI needs a Home bound to loopback; on any other Home these commands are refused (exit 1), and the dashboard has no controls for them.
 
 Do not link a machine you do not own: the Home runs commands there with your SSH key.
+
+### Automatic catalog fan-out and the Child policy
+
+Catalog fan-out is on by default. When the Home's catalog changes (the catalog auto-refresh reports a change, or a check every 5 minutes notices a dashboard or management edit), the Home waits 60 seconds for edits to settle (at most 5 minutes after the first change). Then, with no action from you, it opens a background SSH session to each eligible Child and runs the same pinned `ocx sync --expect-link` that `ocx link sync` runs, without a Codex restart unless you enable one (`childCodexRestart`, below). A Child is eligible when the Home started its link, its tunnel is connected, no other operation runs on it, and the last sync this Home ran there predates the change; a Child that only downloaded the catalog still counts as behind. A Child that is relaying model requests is synced only when its Codex settings already match the Home's and its OpenCodex client runtime has restarted since those settings were applied, because otherwise the sync restarts that runtime; otherwise it is synced once it is idle. A failed sync is retried after 5 minutes, doubling up to 6 hours, and a Child older than 2.93.0 is not retried until it reports another version. These jobs look like any other job, with `trigger: "auto"`. A Home with no links runs none of this.
+
+The fan-out fixes the Child's catalog file. A Codex app-server already running on the Child keeps the list it loaded until it restarts: use `ocx link restart-codex --link-id <id> --yes` or `ocx sync --restart-children`, or let the Home restart app-servers with `ocx link policy --child-codex-restart app-server-when-idle`, which it does only on a Child that is still idle when its sync runs. That setting applies to the next automatic sync; a Child whose catalog is already current gets no sync and so no restart, so restart that Child yourself.
+
+The policy lives in `<configDir>/link/child-policy.json` on the Home, never in `config.json`:
+
+| Setting | Default | Values |
+|---|---|---|
+| `catalogFanout` | `auto` | `auto`, `manual` |
+| `childCodexRestart` | `never` | `never`, `app-server-when-idle` |
+| `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
+| `idleAfterMs` | `600000` (10 minutes) | 1 to 60 minutes |
+
+This release stores `updates` but starts no automatic update yet; `notify` and `auto-when-idle` take effect when the automatic update sweep ships.
+
+`updates` defaults to keeping idle Children on the Home's version automatically. Automatic updates are not active in this release; the setting is stored now, so an opt-out with `ocx link policy --updates notify` or `--updates off` holds when they arrive. `idleAfterMs` is how long a Child must go without a relayed model request to count as idle; it also decides `activity.idle` in `ocx link status`.
+
+```text
+ocx link policy                                    # read the policy
+ocx link policy --catalog-fanout manual            # turn automatic catalog fan-out off
+ocx link policy --child-codex-restart app-server-when-idle
+ocx link policy --updates off --idle-after-minutes 20 --json
+```
+
+`GET` and `PUT /api/link/children/policy` read and change the same settings (the admin token on loopback, or a dashboard session); a `PUT` sends only the settings it changes. If the file is damaged or holds an unknown value, automatic catalog fan-out and updates are off, and `ocx link policy` says so. Saving clears the warning but keeps every setting you do not name off, so turn them back on explicitly, for example `ocx link policy --catalog-fanout auto --updates auto-when-idle`. The Home never rewrites the file on its own.
 
 ### Standalone pairing authorization
 
@@ -252,6 +307,8 @@ A Windows x64 Child needs OpenSSH Server, Windows PowerShell and either standalo
 
 Run `ocx link cleanup` on Home to inspect recorded Child platforms without changing them. Current Home releases disconnect Windows Children through PowerShell. If a remote disconnect fails, resolve the reported shell or installation error and retry; **Remove here only** remains an explicit recovery action that can leave the Child needing a local disconnect.
 
-Restart waits for running turns and may take several minutes. Success requires the restarted Child to serve the client role and relay a fresh complete catalog to this Home. SSH setup has a bounded allowance derived from measured latency; relay verification starts after restart with its own 15-second window. Errors name the failing phase. If an error reports residual Child configuration, run `ocx disconnect` and `ocx restart` on that Child before retrying. Home cleanup alone does not restore Child configuration. A CLI timeout reports an uncertain outcome; inspect Home `ocx link status` and Child `ocx connect status` first.
+Restart waits for running turns and may take several minutes. Success requires the restarted Child to serve the client role and relay a fresh complete catalog to this Home. SSH setup has a bounded allowance derived from measured latency; relay verification starts after restart with its own 15-second window. Errors name the failing phase and end with the error code. If an error reports residual Child configuration, run `ocx disconnect` and `ocx restart` on that Child before retrying. Home cleanup alone does not restore Child configuration. A CLI timeout reports an uncertain outcome; inspect Home `ocx link status` and Child `ocx connect status` first.
+
+A `Child restart preflight` failure (`child_restart_unsupported`) names what the Child is and the Child command that fixes it. Typical causes are a Child still linked to a Home (run `ocx disconnect`, then `ocx restart`), a Child still serving a client runtime (`ocx restart`), a Hub (`ocx hub disable`), a runtime without restart support (update OpenCodex), and a runtime answering on a port other than its configured one (`ocx restart`).
 
 On a Home-initiated Child, `ocx link status` reports role `child`, link identity and tunnel port from its saved connection even though its Home-side link store is empty. Locally unobserved tunnel state is `idle`. `ocx status` calls the peer a Remote Link Home. When Home runs in Hub mode, status reads its supported projection through the local Child relay. A standalone Home reports that it does not publish Hub state. Child-initiated tunnel identity comes from its valid sidecar; unreadable evidence does not claim a direction.

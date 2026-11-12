@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 38.
+Declared capabilities: 43.
 
 ### `ocx link probe`
 
@@ -104,6 +104,26 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the K16 status payload as JSON. |
 
 - Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON.
+
+### `ocx link diagnostics`
+
+Usage: `ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]`
+
+Read this computer's bounded Remote Link diagnostics file.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--limit` | number | Newest records to show, 1-1000; default 200. |
+| `--since` | string | Only records at or after this ISO time or epoch-millisecond timestamp. |
+| `--json` | boolean | Emit the ocx.link.diagnostics/1 document as JSON. |
+
+- Reads <configDir>/link/diagnostics.jsonl and its backup diagnostics.jsonl.1 directly, oldest first, without the proxy or a management route. Never creates, hardens or writes a file, and skips the Codex-shim repair preflight.
+- Reads only regular files (never through a symlink, FIFO or symlinked link directory), at most the newest 256 KiB of each. Every line is re-checked against the writer's allowlist: tunnel and relay event/outcome/state words, generated UUIDs, numbers and timestamps. Lines that fail are counted in skipped, never printed.
+- Exit 0 including when nothing is recorded yet, which prints the file path. The dashboard reads the same records through GET /api/link/diagnostics.
 
 ### `ocx link revoke`
 
@@ -776,3 +796,77 @@ State-changing: yes. JSON mode: `payload`.
 
 - A pinned sync, then a second pinned sync with the restart flag; works on full Children from 2.93.0. app-server scope leaves the Codex desktop app's own app-server running. While a relayed model request for that Child is in flight nothing is sent and the item is busy (restart-skipped:link-active).
 - Refused on Windows Children (unsupported windows-restart) and reported unsupported for ocx-child. The codex scope needs a logged-in GUI session on the Child; its outcome is requested, not confirmed. Exit codes as for ocx link update.
+
+### `ocx link capture start`
+
+Usage: `ocx link capture start [--minutes <1-60>] [--json]`
+
+Open a short window in which this machine's link tunnels log sanitized SSH diagnostics.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--minutes` | number | Window length, 15 by default and 60 at most; starting again while open moves the expiry. |
+| `--json` | boolean | Emit the capture status as JSON. |
+
+- A local file operation under <OPENCODEX_HOME>/link/ssh-capture/ on a Home or a Child; it needs no running proxy and no admin token, and no sync, management route or remote input can start it. While the window is open, the next ssh attempt of each Home (-R) or Child (-L) tunnel runs with LogLevel=DEBUG1; an already connected tunnel keeps its level until it reconnects.
+- Every stderr line passes an allowlist of OpenSSH line shapes before it is stored: host names, addresses, users, ports, paths, keys, fingerprints, commands and server messages become fixed placeholders and an unknown line is stored only as the category unrecognized. One file per window, at most 1 MiB, deleted 72 h after its last write; at most four files are kept, the oldest deleted first. Admission is unchanged and lines ssh prints only above LogLevel=ERROR are kept out of the failure classification; an unrecognized line such as a server banner still counts and can change the reported cause.
+
+### `ocx link capture stop`
+
+Usage: `ocx link capture stop [--json]`
+
+Close the SSH capture window; capture files stay until their retention passes.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the capture status as JSON. |
+
+- Removes only the control file, so nothing more is stored and the next tunnel attempt runs ssh with LogLevel=ERROR again. Capture files are kept for sharing and deleted 72 h after their last write; status and later starts apply that retention.
+
+### `ocx link capture status`
+
+Usage: `ocx link capture status [--json]`
+
+Show whether SSH capture is on, its expiry and the retained capture files.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the capture status as JSON. |
+
+- Reads the local capture directory. It also applies retention: capture files 72 h past their last write and an expired control file are deleted, and the count is reported as removed.
+
+### `ocx link policy`
+
+Usage: `ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]`
+
+Read or change how this Home keeps its Children current.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/link/children/policy` |
+| PUT | `/api/link/children/policy` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--updates` | string | off, notify, or auto-when-idle (default). |
+| `--catalog-fanout` | string | auto (default) or manual. |
+| `--child-codex-restart` | string | never (default) or app-server-when-idle. |
+| `--idle-after-minutes` | number | Minutes without a relayed model request before a Child counts as idle; default 10. |
+| `--json` | boolean | Emit {policy, warning} as JSON. |
+
+- Without flags it reads the policy; with flags it changes only those knobs. Stored in <configDir>/link/child-policy.json on the Home, never in config.json. An invalid file turns automatic catalog fan-out and updates off; saving merges onto that, so pass --catalog-fanout auto and an --updates mode to turn them back on.
+- --updates stores the update mode only; this release starts no automatic update (notify and auto-when-idle take effect when the automatic update sweep ships). Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it.

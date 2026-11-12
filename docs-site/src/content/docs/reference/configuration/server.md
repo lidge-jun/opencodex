@@ -851,6 +851,15 @@ provider-qualified model with its own credentials and quota only when `sourceMod
 or matches the incoming model. A list containing only `provider/*` entries does not cover a bare
 native compaction model.
 
+When `model` names a combo, a compaction whose targets are all cooling fails fast with
+`combo_unavailable`, and the message names the earliest recovery, for example `(retry in ~2m)`.
+A refusal from a cooling local Codex Pool account cools its combo target only for the short combo
+backoff, so the target returns once that account recovers. To let a dedicated compaction combo try
+its cooled targets again without waiting out a long upstream `Retry-After`, enable that combo's
+opt-in [all-cooled recovery](/guides/combos/#retry-all-cooled-targets-opt-in), for example
+`{"cooldownReprobe": {"enabled": true, "intervalMs": 300000}}`. Recovery stays demand-driven and
+keeps account quota and admission checks; it cannot make an exhausted account serve.
+
 OpenCodex changes only requests with explicit `request_kind: "compaction"` metadata whose
 `compaction.trigger` is one of the values you listed, sent to `/v1/responses/compact` or to
 `/v1/responses` with a `compaction_trigger` input item. With `codexClientCompaction` enabled,

@@ -25,9 +25,12 @@ function carriesTranslatableWords(value: string): boolean {
 }
 
 const INTENTIONAL_ENGLISH = new Set<TKey>([
+  "remoteLinkDiagnostics.colPort", // "Port" is the same word in French (a network port column).
   "usageV2.remoteLink", // Remote Link is the product name.
   "nav.claude", // Product name.
   "nav.codexSet", // Product name: the sidebar row reads "Codex" in every locale.
+  "codexCliUpdate.tab", // Product name: the Codex CLI tab reads "Codex CLI" in every locale.
+  "codexCliUpdate.provNpmGlobal", // "npm (global)": the tool name plus a word French spells the same.
   "kiroLogin.iam", // AWS product name, retained in the original spelling.
   // The vendor name, and the Pool 2 label that de and pt also keep: "pool" is the French UI term here.
   "sidecar.poolA",

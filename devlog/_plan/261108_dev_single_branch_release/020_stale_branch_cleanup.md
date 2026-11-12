@@ -44,9 +44,10 @@ the PR-only security boundary, the `status` default-branch semantics, stacked
 PR support, or the no-`dev`-push / no-PR-macOS-Windows CI policy.
 
 `ci.yml` is edited only in comments. Because the release evidence policy pins
-its blob, the final fingerprint entry is appended (history preserved), which
-also repairs the pre-existing drift from `28b38f9150` (that commit changed
-`ci.yml` without appending a policy entry).
+its blob, a new final fingerprint entry for this unit's `ci.yml` revision is
+appended (history preserved). It does not repair earlier drift: `28b38f9150`
+changed `ci.yml` without appending a policy entry, but #8377 had already pinned
+that revision (`4d1d82f1`) on `dev` before this unit merged.
 
 ## Verification
 
@@ -81,8 +82,9 @@ Consequences: the deleted branch pushes are gone rather than retargeted, so no
 `react-doctor.yml` loses its per-push health-score trend scan, and
 `service-lifecycle.yml` now fans out on `dev`-based pull requests only, exactly
 as it already excluded stacked-child bases. The release-evidence policy gains a
-new final fingerprint entry (earlier entries untouched), which also repairs the
-pre-existing `ci.yml` drift at `28b38f9150`.
+new final fingerprint entry for this unit's `ci.yml` (earlier entries
+untouched). The earlier `ci.yml` drift at `28b38f9150` was repaired separately
+by #8377.
 
 The `docs-site` build was run on this tree: 641 pages, 93,177 internal links
 checked, Pagefind index built.

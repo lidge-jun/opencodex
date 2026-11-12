@@ -962,6 +962,13 @@ The command reports success even when no cooldown is active, with `cleared: fals
 an Anthropic cooldown also advances the account generation so an older in-flight quota probe cannot
 restore the cleared state or publish stale quota-derived eligibility afterward.
 
+An Anthropic 429 quota cooldown that names its rejected usage windows also lifts on its own. For
+enabled OAuth instances, the proxy re-reads the account's usage on its background sweep (about once a
+minute, backing off to every ten minutes while the window stays spent) and returns the account to
+selection as soon as every rejected window shows headroom, for example after a reset spent in the
+Claude app or a plan upgrade. A 429 that carries only `Retry-After`, with no window to re-read, keeps
+its cooldown until that deadline. `clear-cooldown` remains the manual override for both.
+
 ### `ocx account refresh <provider> [--json]`
 
 For the Codex pool, use `ocx account refresh openai [--json]`. It force-refreshes account quotas and
@@ -1417,6 +1424,14 @@ headroom, and a credits-only response cannot clear a request cooldown. The defau
 hard lock remains a separate local policy and is not lifted by the credits switch.
 
 `ocx account history openai <pool-account-id> [--limit 1-200] [--json]` reads stored observations without contacting the provider. The output separates actual observation time, WHAM or response-header source, window family and usage percentage. At most 200 observations per account are retained for 30 days, with global storage bounds.
+
+When the same pool account keeps reporting two different seven-day windows (for example 100% used
+with a reset in a few hours, then 24% used with a reset next week), the account row carries
+`weeklyQuotaConflicts` with each window's usage, reset, source and last observation time. The
+QUOTA column of `ocx account list openai --quota` adds `(weekly windows conflict)`, and the
+dashboard card explains that the reset it shows may not restore the full allowance. OpenCodex does
+not pick either window and does not change account selection, hard locks or credit use because of
+it. The warning clears once the earlier reset time has passed.
 
 Ordinary token refresh preserves history. Reauthentication, removal or account replacement retires the old publication. Native main and probes performed before a login is published are not included. Missing history means insufficient observations, not zero usage. This command does not spend quota. Effective estimates, when supported by observations, carry the limitations below.
 

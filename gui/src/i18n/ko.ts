@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +134,8 @@ export const ko: Record<TKey, string> = {
   "workflowBudget.saved": "워크플로 한도를 저장했습니다.",
   ...desktopCompatibilityCopy("ko"),
   ...shellV2Copy("ko"),
+  ...codexCliUpdateCopy("ko"),
+  ...remoteLinkDiagnosticsCopy("ko"),
   ...modelsV2Copy("ko"),
   ...accountsV2Copy("ko"),
   ...subagentsV2Copy("ko"),
@@ -285,6 +289,8 @@ export const ko: Record<TKey, string> = {
   "advisor.modelsEmpty": "선택할 모델이 없습니다. 공급자와 모델을 활성화한 뒤 다시 시도하세요.",
   "advisor.effort": "추론 강도",
   "advisor.policy": "정책",
+  "advisor.questionOnly": "워커의 질문만 전송",
+  "advisor.questionOnlyNote": "워커의 질문(최대 2000자를 유지하며, 초과하면 잘림 안내 추가)과 고정된 자문 지침만 전송합니다. 대화 기록, 도구 결과, 작업 맥락은 자동으로 첨부하지 않습니다. 워커가 필요한 배경을 질문에 포함해야 합니다. 자동 자문은 일시 중지되며 기존 횟수 제한은 유지됩니다.",
   "advisor.policy.manual": "수동 — Worker가 요청할 때만",
   "advisor.policy.preflight": "Preflight — 방향 증거가 생기면 자동 상담 시도",
   "advisor.policy.adaptive": "적응형 — 초기 탐색 및 수정 실패 시 상담",
@@ -2176,6 +2182,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI 공급자 프리셋을 불러오지 못했습니다.",
   "codexAuth.openaiPresetUnavailable": "OpenAI 공급자 프리셋을 사용할 수 없습니다.",
   "codexAuth.openProviders": "프로바이더 열기",
+  "codexAuth.changeAccountMode": "계정 모드 변경",
   "codexAuth.add": "추가",
   "codexAuth.credits": "크레딧",
   "codexAuth.creditsRemaining": "남음",
@@ -2433,6 +2440,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.needsReauth": "재로그인",
   "codexAuth.reauthenticate": "재인증",
   "codexAuth.tokenExpired": "토큰 만료 — 이 계정을 다시 인증하세요",
+  "codexAuth.weeklyConflict": "주간 사용 기간이 두 개로 보고되었습니다: {first}, {second}. 위의 초기화 시각에 전체 한도가 복구되지 않을 수 있습니다.",
   "codexAuth.mainTokenExpired": "토큰 만료 — 아래 디바이스 코드 또는 Codex 앱 로그인으로 다시 로그인하세요",
   "codexAuth.mainReauthSucceeded": "로그인됨",
   "codexAuth.mainReauthFailed": "다시 로그인 실패",

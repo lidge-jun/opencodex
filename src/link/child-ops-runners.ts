@@ -106,11 +106,16 @@ export async function pinnedSync(record: LinkRecord, platform: Platform, restart
  * sequence lives in sync-then-restart.ts, shared with ocx sync --restart-children.
  */
 async function syncWithRestart(record: LinkRecord, platform: Platform, requested: ChildRestart,
-  env: ChildOpsEnv): Promise<{ sync: SyncResult; restart?: RestartReport; restartUnknown?: true }> {
+  env: ChildOpsEnv, idleGate?: { idleAtStart: boolean }): Promise<{ sync: SyncResult; restart?: RestartReport; restartUnknown?: true }> {
   const { sync, restart, restartUnknown } = await syncThenRestart({ requested, platform, childKind: record.childKind,
     runPinned: next => runPinnedSync(record, platform, next, env),
-    // linkBusy's rule: unknown (null) counts as in flight.
-    readActivity: async () => env.activity(record.id) });
+    // linkBusy's rule: unknown (null) counts as in flight. An automatic restart (050 Revision 6) also needs the idle
+    // window, both when its item started and just before the restart goes out; a link short of it reads as active.
+    readActivity: async () => {
+      const activity = env.activity(record.id);
+      if (!idleGate || activity === null) return activity;
+      return idleGate.idleAtStart && activity.idle ? activity : { inFlight: Math.max(1, activity.inFlight) };
+    } });
   return { sync, ...(restart ? { restart } : {}), ...(restartUnknown ? { restartUnknown } : {}) };
 }
 
@@ -146,11 +151,13 @@ export const runSyncItem: ItemRunner = async (record, job, env) => {
   // 4529522063: the scheduler checked idle and the settings digest when it queued the job; the item may have waited
   // behind other Children since. Re-ask at item start; a no answer is busy with no SSH, retried at the next poll.
   if (job.trigger === "auto" && env.autoSyncAllowed?.(record.id) === false) return { state: "busy", reason: "link-active" };
+  // 050 Revision 6: an automatic job's restart was chosen for an idle link; it stands only if the link is still idle now.
+  const idleGate = job.trigger === "auto" && job.restart !== "none" ? { idleAtStart: env.activity(record.id)?.idle === true } : undefined;
   const offline = unreachable(record, env);
   if (offline) return offline;
   const platform = await platformOf(record, env);
   if (typeof platform !== "string") return platform;
-  const { sync, restart, restartUnknown } = await syncWithRestart(record, platform, job.restart, env);
+  const { sync, restart, restartUnknown } = await syncWithRestart(record, platform, job.restart, env, idleGate);
   if (restartUnknown) return { state: "uncertain", reason: RESTART_RESULT_UNKNOWN, sync, restart };
   const outcome = syncOutcome(sync);
   if (restart) outcome.restart = restart;
