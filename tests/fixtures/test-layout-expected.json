@@ -1695,6 +1695,7 @@
   "link-activity-holds-routes.test.ts": "server",
   "link-ws-activity-holds-operator.test.ts": "clients",
   "cli-link-activity.test.ts": "cli",
+  "link-child-ops-ignore-activity.test.ts": "clients",
   "link-websocket-drain.test.ts": "server",
   "link-websocket-pump.test.ts": "server",
   "link-websocket-rss.test.ts": "e2e-style",

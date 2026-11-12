@@ -88,17 +88,18 @@ export function childOpsEnvFor(ctx: ManagementContext, state: LinkRouteState, id
   };
 }
 
-export interface ParsedOperation { op: ChildOp; linkIds: string[] | "all"; restart: ChildRestart }
+export interface ParsedOperation { op: ChildOp; linkIds: string[] | "all"; restart: ChildRestart; ignoreActivity?: true }
 
 /**
  * Exactly {op, linkIds, restart?}. A2 / M8: any request that carries a restart (sync with restart, or restart-codex,
  * whose restart defaults to app-server) must name its links; "all" is accepted only when restart is "none".
  * Scope (audit r2 R6): this rule binds this API route and the ocx link verbs only; ocx sync --restart-children (040)
  * and the automatic restart policy (050) select links themselves and apply the same run-time activity check.
- * No body can set trigger: the route always submits manual operations.
+ * No body can set trigger: the route always submits manual operations. ignoreActivity (D8, the operator's explicit
+ * restart past activity) is accepted only as true, on a request with a restart and exactly one link id.
  */
 export function parseOperation(body: unknown): ParsedOperation | null {
-  if (!isRecord(body) || Object.keys(body).some(key => key !== "op" && key !== "linkIds" && key !== "restart")) return null;
+  if (!isRecord(body) || Object.keys(body).some(key => key !== "op" && key !== "linkIds" && key !== "restart" && key !== "ignoreActivity")) return null;
   if (!(CHILD_OPS as readonly unknown[]).includes(body.op)) return null;
   const op = body.op as ChildOp;
   if (body.restart !== undefined && body.restart !== "app-server" && body.restart !== "codex") return null;
@@ -111,7 +112,8 @@ export function parseOperation(body: unknown): ParsedOperation | null {
   else if (Array.isArray(ids) && ids.length >= 1 && ids.length <= MAX_LINK_IDS
     && ids.every(id => typeof id === "string" && LINK_ID.test(id)) && new Set(ids).size === ids.length) linkIds = [...ids as string[]];
   else return null;
-  return { op, linkIds, restart };
+  if (body.ignoreActivity !== undefined && (body.ignoreActivity !== true || restart === "none" || linkIds === "all" || linkIds.length !== 1)) return null;
+  return { op, linkIds, restart, ...(body.ignoreActivity === true ? { ignoreActivity: true as const } : {}) };
 }
 
 function refusal(code: SubmitRefusal): Response {

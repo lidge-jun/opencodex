@@ -40,8 +40,8 @@ export type LinkChildVerb = "update" | "sync" | "restart-codex";
 export const LINK_CHILD_OPS_USAGE = [
   "  ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]",
   "  ocx link sync (--link-id <id> | --all) [--no-wait] [--json]",
-  "  ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]",
-  "  ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]",
+  "  ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--ignore-activity] [--no-wait] [--json]",
+  "  ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--ignore-activity] [--no-wait] [--json]",
   "  ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]",
   "  ocx link activity clear --link-id <id> [--json]",
 ] as const;
@@ -94,6 +94,7 @@ export function validateChildJob(value: unknown): ChildJob {
   return {
     schema: "ocx.link.child-job/1", jobId, op: text(value.op, "op") as ChildJob["op"], trigger: text(value.trigger, "trigger") as ChildJob["trigger"],
     restart: text(value.restart, "restart") as ChildJob["restart"], state: text(value.state, "state") as ChildJob["state"],
+    ...(value.ignoreActivity === undefined ? {} : { ignoreActivity: value.ignoreActivity === true ? true as const : fail("ignoreActivity") }),
     createdAt: text(value.createdAt, "createdAt"), finishedAt: nullableText(value.finishedAt, "finishedAt"), items,
   };
 }
@@ -160,7 +161,7 @@ function childOpsRefusal(error: unknown, op: ChildOp | null): never {
 }
 
 /** POST one operation, then wait for it unless told not to; prints the job document and returns the verdict exit. */
-async function submitChildJob(body: { op: ChildOp; linkIds: string[] | "all"; restart?: "app-server" | "codex" }, wait: boolean,
+async function submitChildJob(body: { op: ChildOp; linkIds: string[] | "all"; restart?: "app-server" | "codex"; ignoreActivity?: true }, wait: boolean,
   deps: LinkCheckDeps, request: LinkRequest): Promise<number> {
   let job: ChildJob;
   try {
@@ -198,11 +199,13 @@ export async function runLinkCheck(args: string[], deps: LinkCheckDeps, request:
 }
 
 export function parseChildOpArgs(verb: LinkChildVerb, args: string[], usage: string):
-  { body: { op: LinkChildVerb; linkIds: string[] | "all"; restart?: "app-server" | "codex" }; wait: boolean } {
+  { body: { op: LinkChildVerb; linkIds: string[] | "all"; restart?: "app-server" | "codex"; ignoreActivity?: true }; wait: boolean } {
   takeJsonFlag(args);
   const noWait = takeFlag(args, "--no-wait");
   const all = takeFlag(args, "--all");
   const yes = takeFlag(args, "--yes");
+  // D8: the operator's explicit restart past activity; it ends running work on that Child.
+  const ignoreActivity = takeFlag(args, "--ignore-activity");
   // Repeatable like ocx link check; a restart needs exactly one.
   const linkIds: string[] = [];
   for (let id = takeOption(args, "--link-id"); id !== undefined; id = takeOption(args, "--link-id")) {
@@ -231,7 +234,8 @@ export function parseChildOpArgs(verb: LinkChildVerb, args: string[], usage: str
   if (restart !== undefined && (all || linkIds.length !== 1)) throw new CliUsageError(`${verb} with a restart needs exactly one --link-id; --all is refused`, usage);
   if (restart === "codex" && !yes) throw new CliUsageError("--restart-codex quits the Child's Codex app and ends its turns; pass --yes", usage);
   if (yes && restart === undefined && verb !== "update") throw new CliUsageError("--yes only confirms a restart or an update", usage);
-  return { body: { op: verb, linkIds: all ? "all" : linkIds, ...(restart ? { restart } : {}) }, wait: !noWait };
+  if (ignoreActivity && restart === undefined) throw new CliUsageError("--ignore-activity applies only to a restart of one --link-id", usage);
+  return { body: { op: verb, linkIds: all ? "all" : linkIds, ...(restart ? { restart } : {}), ...(ignoreActivity ? { ignoreActivity: true as const } : {}) }, wait: !noWait };
 }
 
 /** `ocx link update|sync|restart-codex`: one job over the link's pinned SSH trust; prints it and returns the verdict exit. */

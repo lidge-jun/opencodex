@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { runLinkCommand, type LinkCliDeps } from "../../src/cli/link";
-import { RUNTIME_ROLE_CLIENT_MESSAGE } from "../../src/cli/link-child-ops";
+import { RUNTIME_ROLE_CLIENT_MESSAGE, parseChildOpArgs, validateChildJob } from "../../src/cli/link-child-ops";
+import { CliUsageError } from "../../src/cli/runtime-api";
 import { validateChildOps } from "../../src/cli/link-status-child";
 
 // Lane T5d3a: `ocx link activity clear` and the holds a status row carries (owner decision D8).
@@ -82,5 +83,33 @@ describe("status: a row's child.holds", () => {
   test("a wrong type is rejected", () => {
     expect(() => validateChildOps(child({ holds: { holds: "many", unknown: null } }), 0)).toThrow("child holds");
     expect(() => validateChildOps(child({ holds: { holds: [], unknown: 3 } }), 0)).toThrow("child holds.unknown");
+  });
+});
+describe("--ignore-activity (T5d3b)", () => {
+  test("a restart on one link sends ignoreActivity: true", () => {
+    expect(parseChildOpArgs("sync", ["--link-id", LINK, "--restart-app-server-only", "--ignore-activity"], "usage").body)
+      .toEqual({ op: "sync", linkIds: [LINK], restart: "app-server", ignoreActivity: true });
+    expect(parseChildOpArgs("restart-codex", ["--link-id", LINK, "--yes", "--ignore-activity"], "usage").body)
+      .toEqual({ op: "restart-codex", linkIds: [LINK], restart: "app-server", ignoreActivity: true });
+  });
+
+  test.each([
+    ["sync", ["--link-id", LINK, "--ignore-activity"]],
+    ["sync", ["--all", "--restart-app-server-only", "--ignore-activity"]],
+    ["update", ["--link-id", LINK, "--yes", "--ignore-activity"]],
+  ] as const)("%s %p without a single-link restart is a usage error", (verb, args) => {
+    expect(() => parseChildOpArgs(verb, [...args], "usage")).toThrow(CliUsageError);
+  });
+
+  test("without the flag the body is unchanged", () => {
+    expect(parseChildOpArgs("sync", ["--link-id", LINK, "--restart-app-server-only"], "usage").body).toEqual({ op: "sync", linkIds: [LINK], restart: "app-server" });
+  });
+
+  test("the job document keeps ignoreActivity only when the Home set it", () => {
+    const doc = { schema: "ocx.link.child-job/1", jobId: "ljob_0123456789abcdef", op: "sync", trigger: "manual", restart: "app-server", state: "done",
+      createdAt: "2026-11-12T00:00:00.000Z", finishedAt: "2026-11-12T00:00:01.000Z", items: [] };
+    expect(validateChildJob({ ...doc, ignoreActivity: true }).ignoreActivity).toBe(true);
+    expect(validateChildJob(doc)).not.toHaveProperty("ignoreActivity");
+    expect(() => validateChildJob({ ...doc, ignoreActivity: "yes" })).toThrow("job ignoreActivity");
   });
 });

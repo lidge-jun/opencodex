@@ -748,7 +748,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx link sync`
 
-Usage: `ocx link sync (--link-id <id> | --all) [--no-wait] [--json] | ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]`
+Usage: `ocx link sync (--link-id <id> | --all) [--no-wait] [--json] | ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--ignore-activity] [--no-wait] [--json]`
 
 Run the pinned catalog and settings sync on Home-initiated Children.
 
@@ -766,16 +766,18 @@ State-changing: yes. JSON mode: `payload`.
 | `--restart-app-server-only` | boolean | Also restart the Child's Codex app-servers after the sync writes. |
 | `--restart-codex` | boolean | Also quit and relaunch the Child's Codex desktop app; ends live turns. |
 | `--yes` | boolean | Confirms --restart-codex. |
+| `--ignore-activity` | boolean | Restart even while the Child is busy or held; ends its running work (operator override, never automatic). |
 | `--no-wait` | boolean | Print the queued job and return. |
 | `--json` | boolean | Emit the ocx.link.child-job/1 document (always JSON). |
 
 - The same sync --expect-link the ocx sync fan-out runs, gated at 2.93.0. Restart flags are refused on Windows and ignored by ocx-child; the item reports restart unsupported.
 - A restart needs one --link-id (--all is refused) and --restart-codex needs --yes. The sync runs first; the restart then goes out as a second pinned sync and is withheld (restart skipped, reason restart-skipped:link-active) while a relayed model request for that Child is in flight. A restarting call whose result is unknown ends uncertain (restart-result-unknown).
+- --ignore-activity restarts past that check and past held link WebSocket activity (ocx link status, child.holds); the job records ignoreActivity: true and the Home logs the link id and its in-flight count. Platform and Child-kind refusals still apply, and no automatic path sets it.
 - Exit codes as for ocx link update; a withheld or unconfirmed restart exits 6 or 1.
 
 ### `ocx link restart-codex`
 
-Usage: `ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]`
+Usage: `ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--ignore-activity] [--no-wait] [--json]`
 
 Restart Codex on one Home-initiated Child so it reloads the catalog.
 
@@ -791,10 +793,11 @@ State-changing: yes. JSON mode: `payload`.
 | `--link-id` | string | Home-initiated link. |
 | `--scope` | string | app-server (default) or codex (also relaunches the desktop app). |
 | `--yes` | boolean | Confirms that running Codex turns on the Child end. |
+| `--ignore-activity` | boolean | Restart even while the Child is busy or held; ends its running work (operator override, never automatic). |
 | `--no-wait` | boolean | Print the queued job and return. |
 | `--json` | boolean | Emit the ocx.link.child-job/1 document (always JSON). |
 
-- A pinned sync, then a second pinned sync with the restart flag; works on full Children from 2.93.0. app-server scope leaves the Codex desktop app's own app-server running. While a relayed model request for that Child is in flight nothing is sent and the item is busy (restart-skipped:link-active).
+- A pinned sync, then a second pinned sync with the restart flag; works on full Children from 2.93.0. app-server scope leaves the Codex desktop app's own app-server running. While a relayed model request for that Child is in flight nothing is sent and the item is busy (restart-skipped:link-active), unless --ignore-activity overrides that check.
 - Refused on Windows Children (unsupported windows-restart) and reported unsupported for ocx-child. The codex scope needs a logged-in GUI session on the Child; its outcome is requested, not confirmed. Exit codes as for ocx link update.
 
 ### `ocx link capture start`
