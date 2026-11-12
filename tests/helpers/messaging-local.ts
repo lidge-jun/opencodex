@@ -22,7 +22,7 @@ export function localFixtureThread(id = LOCAL_TARGET, name: string | null = "rec
 }
 
 /** Strict, isolated Unix fixture: unknown/lifecycle RPCs fail rather than receive a fake success. */
-export function localMessagingFixture(handler?: (call: LocalCall) => unknown | Promise<unknown>) {
+export function localMessagingFixture(handler?: (call: LocalCall) => unknown | Promise<unknown>, options: { allowResume?: boolean } = {}) {
   // Unix-only fixture. The wrapped runner nests TMPDIR sandboxes, making the
   // canonical control-socket suffix too long for native clients. A short unique
   // root retains explicit ownership/cleanup and the repository stale-root marker.
@@ -53,7 +53,7 @@ export function localMessagingFixture(handler?: (call: LocalCall) => unknown | P
           const call: LocalCall = { id: raw.id, method: raw.method, params: raw.params ?? {} };
           calls.push(call);
           if (call.method === "initialized" && raw.id === undefined) { ws.data.initialized = true; return; }
-          const allowed = ["initialize", "thread/loaded/list", "thread/read", "thread/queue/add"];
+          const allowed = ["initialize", "thread/loaded/list", "thread/read", "thread/queue/add", ...(options.allowResume ? ["configRequirements/read", "permissionProfile/list"] : [])];
           if (!allowed.includes(call.method) || (call.method !== "initialize" && !ws.data.initialized)) {
             failures.push(call.method);
             ws.send(JSON.stringify({ id: raw.id, error: { code: -32601, message: "Unexpected fixture RPC" } }));
@@ -63,6 +63,8 @@ export function localMessagingFixture(handler?: (call: LocalCall) => unknown | P
           if (result === NO_REPLY) return;
           if (result === undefined) {
             if (call.method === "initialize") result = { userAgent: "fixture", platformFamily: "unix", platformOs: "linux", codexHome };
+            else if (call.method === "configRequirements/read") result = {requirements:null};
+            else if (call.method === "permissionProfile/list") result = {data:[{id:":read-only",allowed:true}],nextCursor:null};
             else if (call.method === "thread/loaded/list") result = { data: [LOCAL_TARGET], nextCursor: null };
             else if (call.method === "thread/read") result = { thread: localFixtureThread(String(call.params.threadId)) };
             else result = { queuedSubmission: { id: "fixture-submission", input: call.params.input, clientUserMessageId: call.params.clientUserMessageId } };
