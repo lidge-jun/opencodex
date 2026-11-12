@@ -106,7 +106,7 @@ Home üzerinde her Remote Link satırı, Home'un o Child hakkında son öğrendi
 
 - Child'ın sürümü ve yanında `Behind Home (<home version>)`, `Same version as Home` veya `Newer than Home`, ayrıca güncelleme uygulanabiliyorsa `Update available: <home version>`. Kendi panosundan başlatılan bir Child sürümünü sürüm farkı rozeti olmadan gösterir ve `ocx-child` bir Child her zaman `unknown` okur.
 - kurulum türü (`Desktop app`, `GOAT`, `Source checkout`) veya bu sürüm adlandırmıyorsa ham belirteç eş aralıklı yazıyla.
-- `Catalog current` veya `Catalog out of date`, Child'daki Codex hâlâ daha eski bir katalog tutuyorsa `Codex restart needed (<n>)` ve orada app-server çalışmıyorsa `Codex not running`.
+- `Catalog current` veya `Catalog out of date`. `Codex restart needed (<n>)` ve `Codex not running` rozetleri ancak Child kendi Codex durumunu bildirdikten sonra görünür; bu bildirimi daha sonraki bir sürüm ekleyecek. Henüz bunu gönderen bir Child sürümü olmadığı için bu iki rozet bugün görünmez.
 - son işlemi `Last <operation>: <state>` olarak, nedeni eş aralıklı yazıyla; bir iş bağlantıyı tutarken de çalışanı.
 
 Home o Child'ı kendisi güncelleyemediğinde satır bunun yerine ne yapılacağını söyler: o Child'daki OpenCodex Desktop'ta Check for Updates kullanın, elle güncelleyin, `mise` üzerinden güncelleyin veya GOAT yapsın. Bilinmeyen bir neden tahmin edilmiş bir cümle yerine belirteç olarak yazılır.

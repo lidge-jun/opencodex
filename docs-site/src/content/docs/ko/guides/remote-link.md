@@ -106,7 +106,7 @@ Home에서는 모든 Remote Link 행에 Home이 그 Child에 대해 마지막으
 
 - Child의 버전과 그 옆의 `Behind Home (<home version>)`, `Same version as Home`, `Newer than Home`, 그리고 업데이트를 적용할 수 있을 때의 `Update available: <home version>`. Child가 자체 대시보드에서 시작한 링크라면 버전만 표시되고 버전 차이 배지는 없으며, `ocx-child` Child는 항상 `unknown`으로 표시됩니다.
 - 설치 종류(`Desktop app`, `GOAT`, `Source checkout`), 또는 이 릴리스에서 이름을 붙이지 않는 토큰은 고정폭 글꼴로 표시됩니다.
-- `Catalog current` 또는 `Catalog out of date`, Child의 Codex가 아직 이전 카탈로그를 들고 있으면 `Codex restart needed (<n>)`, app-server가 떠 있지 않으면 `Codex not running`.
+- `Catalog current` 또는 `Catalog out of date`. `Codex restart needed (<n>)`와 `Codex not running` 배지는 Child가 자신의 Codex 상태를 보고한 뒤에만 표시되며, 그 보고는 이후 릴리스에서 추가됩니다. 아직 이를 보내는 Child 릴리스가 없으므로 지금은 이 두 배지가 나타나지 않습니다.
 - 마지막 작업을 `Last <operation>: <state>`로 표시하고 그 사유는 고정폭으로 표시하며, 작업이 링크를 점유하는 동안에는 실행 중인 작업을 표시합니다.
 
 Home이 그 Child를 직접 업데이트할 수 없으면 행에 대신 무엇을 해야 하는지 표시됩니다. 그 Child의 OpenCodex Desktop에서 Check for Updates를 사용하거나, 직접 업데이트하거나, `mise`를 통해 업데이트하거나, GOAT가 처리하도록 두십시오. 알 수 없는 사유는 추측한 문장 대신 토큰으로 표시됩니다.

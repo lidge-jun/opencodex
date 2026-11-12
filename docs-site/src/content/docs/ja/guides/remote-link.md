@@ -106,7 +106,7 @@ Home では、Remote Link の各行に Home がその Child について最後�
 
 - Child のバージョンと、その横の `Behind Home (<home version>)`、`Same version as Home`、`Newer than Home`。更新を適用できる場合は `Update available: <home version>` も付きます。Child 自身のダッシュボードから開始したリンクはバージョンのみを表示し、バージョン差のバッジは付きません。`ocx-child` の Child は常に `unknown` と表示されます。
 - インストール種別（`Desktop app`、`GOAT`、`Source checkout`）。このリリースで名前のない種類は等幅のトークンで表示されます。
-- `Catalog current` または `Catalog out of date`、Child の Codex がまだ古いカタログを保持している場合は `Codex restart needed (<n>)`、app-server が起動していない場合は `Codex not running`。
+- `Catalog current` または `Catalog out of date`。`Codex restart needed (<n>)` と `Codex not running` は、Child が自身の Codex 状態を報告して初めて表示されます。その報告は今後のリリースで追加されるため、まだ送信する Child はなく、現在この 2 つのバッジは表示されません。
 - 最後の操作を `Last <operation>: <state>` として理由を等幅で示し、ジョブがリンクを占有している間は実行中の操作を示します。
 
 Home がその Child を自分で更新できない場合、行には代わりに何をすべきかが表示されます。その Child の OpenCodex Desktop で Check for Updates を使う、手動で更新する、`mise` 経由で更新する、または GOAT に任せる、のいずれかです。不明な理由は推測した文ではなくトークンとして表示されます。

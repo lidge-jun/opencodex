@@ -106,7 +106,7 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 
 - версию Child и рядом `Behind Home (<home version>)`, `Same version as Home` или `Newer than Home`, а также `Update available: <home version>`, когда обновление можно применить. Child, ссылку которого начали с его собственной панели, показывает версию без значка расхождения, а Child `ocx-child` всегда показывает `unknown`.
 - тип установки (`Desktop app`, `GOAT`, `Source checkout`) или необработанный токен моноширинным шрифтом, если этот выпуск его не называет.
-- `Catalog current` или `Catalog out of date`, `Codex restart needed (<n>)`, когда Codex на Child всё ещё держит более старый каталог, и `Codex not running`, когда app-server там не запущен.
+- `Catalog current` или `Catalog out of date`. Значки `Codex restart needed (<n>)` и `Codex not running` появляются только после того, как Child сообщит состояние своего Codex; это добавит более поздний выпуск. Пока ни один выпущенный Child его не присылает, поэтому сегодня эти два значка не отображаются.
 - последнюю операцию в виде `Last <operation>: <state>` с причиной моноширинным шрифтом, а пока задание занимает связь — выполняющуюся.
 
 Когда Home не может обновить этот Child сам, строка говорит, что делать вместо этого: воспользоваться Check for Updates в OpenCodex Desktop на этом Child, обновить вручную, через `mise` или дать это сделать GOAT. Неизвестная причина выводится как токен, а не как выдуманная фраза.

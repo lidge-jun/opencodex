@@ -106,7 +106,7 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 
 - 子机版本，以及旁边的 `Behind Home (<home version>)`、`Same version as Home` 或 `Newer than Home`；可以应用更新时还会显示 `Update available: <home version>`。从子机自身仪表盘启动的链接只显示版本，没有版本差异徽标；`ocx-child` 子机始终显示 `unknown`。
 - 安装类型（`Desktop app`、`GOAT`、`Source checkout`），本版本未命名的类型以等宽字体显示原始标记。
-- `Catalog current` 或 `Catalog out of date`；子机上的 Codex 仍持有较旧目录时显示 `Codex restart needed (<n>)`，没有运行 app-server 时显示 `Codex not running`。
+- `Catalog current` 或 `Catalog out of date`。`Codex restart needed (<n>)` 与 `Codex not running` 徽章只有在 Child 报告其 Codex 状态后才会出现，该报告将由后续版本加入；目前还没有 Child 版本会发送它，因此这两个徽章现在还不会显示。
 - 上一次操作，显示为 `Last <operation>: <state>`，原因以等宽字体显示；任务占用该链接期间显示正在运行的操作。
 
 当 Home 无法自行更新该子机时，该行会说明应改做什么：在该子机的 OpenCodex Desktop 中使用 Check for Updates、手动更新、通过 `mise` 更新，或交给 GOAT 处理。未知原因会以标记显示，而不是猜测的句子。

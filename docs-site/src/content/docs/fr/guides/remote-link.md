@@ -106,7 +106,7 @@ Sur le Home, chaque ligne Remote Link porte ce que le Home a appris en dernier s
 
 - la version de l'enfant, avec `Behind Home (<home version>)`, `Same version as Home` ou `Newer than Home` à côté, et `Update available: <home version>` quand une mise à jour peut être appliquée. Un enfant lancé depuis son propre tableau de bord affiche sa version sans badge d'écart, et un enfant `ocx-child` affiche toujours `unknown`.
 - le type d'installation (`Desktop app`, `GOAT`, `Source checkout`), ou le jeton brut en police à chasse fixe quand cette version ne le nomme pas.
-- `Catalog current` ou `Catalog out of date`, `Codex restart needed (<n>)` quand le Codex de l'enfant détient encore un catalogue plus ancien, et `Codex not running` quand aucun app-server n'y tourne.
+- `Catalog current` ou `Catalog out of date`. `Codex restart needed (<n>)` et `Codex not running` n'apparaissent qu'une fois que l'enfant signale l'état de son Codex, ce qu'ajoutera une version ultérieure ; aucun enfant publié ne l'envoie encore, donc ces deux badges ne s'affichent pas aujourd'hui.
 - la dernière opération, sous la forme `Last <operation>: <state>` avec sa raison en police à chasse fixe, et celle en cours tant qu'une tâche occupe le lien.
 
 Quand le Home ne peut pas mettre cet enfant à jour lui-même, la ligne indique quoi faire à la place : utiliser Check for Updates dans OpenCodex Desktop sur cet enfant, mettre à jour à la main, via `mise`, ou laisser GOAT s'en charger. Une raison inconnue s'affiche comme un jeton, jamais comme une phrase devinée.

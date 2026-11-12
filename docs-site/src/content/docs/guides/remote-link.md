@@ -242,7 +242,7 @@ On a Home, every Remote Link row carries what the Home last learned about that C
 
 - the Child's version, with `Behind Home (<home version>)`, `Same version as Home` or `Newer than Home` beside it, plus `Update available: <home version>` when an update can be applied. A Child started from its own dashboard shows its version without a skew badge, and an `ocx-child` Child always reads `unknown`.
 - the install kind (`Desktop app`, `GOAT`, `Source checkout`), or the raw token in monospace when this release does not name it.
-- `Catalog current` or `Catalog out of date`, `Codex restart needed (<n>)` when Codex on the Child still holds an older catalog, and `Codex not running` when it has no app-server up.
+- `Catalog current` or `Catalog out of date`. `Codex restart needed (<n>)` and `Codex not running` appear only once the Child reports its Codex state, which a later release adds; no released Child sends it yet, so those two badges do not appear today.
 - the last operation, as `Last <operation>: <state>` with its reason in monospace, and the running one while a job holds the link.
 
 When the Home cannot update that Child itself, the row says what to do instead: use Check for Updates in OpenCodex Desktop there, update by hand, through `mise`, or let GOAT do it. An unknown reason prints as a token rather than a guessed sentence.

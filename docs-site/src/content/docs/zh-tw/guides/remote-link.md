@@ -106,7 +106,7 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 
 - Child 的版本，以及旁邊的 `Behind Home (<home version>)`、`Same version as Home` 或 `Newer than Home`；可以套用更新時還會顯示 `Update available: <home version>`。從 Child 自身儀表板開始的連結只顯示版本，沒有版本差異徽章；`ocx-child` Child 一律顯示 `unknown`。
 - 安裝類型（`Desktop app`、`GOAT`、`Source checkout`），本版本未命名的類型以等寬字型顯示原始權杖。
-- `Catalog current` 或 `Catalog out of date`；Child 上的 Codex 仍持有較舊目錄時顯示 `Codex restart needed (<n>)`，沒有執行 app-server 時顯示 `Codex not running`。
+- `Catalog current` 或 `Catalog out of date`。`Codex restart needed (<n>)` 與 `Codex not running` 徽章只有在 Child 回報其 Codex 狀態後才會出現，該回報將由後續版本加入；目前還沒有 Child 版本會傳送它，因此這兩個徽章現在還不會顯示。
 - 上一次操作，顯示為 `Last <operation>: <state>`，原因以等寬字型顯示；工作佔用該連結期間則顯示正在執行的操作。
 
 當 Home 無法自行更新該 Child 時，該列會說明應該改做什麼：在該 Child 的 OpenCodex Desktop 中使用 Check for Updates、手動更新、透過 `mise` 更新，或交給 GOAT 處理。未知原因會以權杖顯示，而不是猜測的句子。
