@@ -2,7 +2,7 @@ import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode, isTerminalRefusalCode } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
-import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
+import { isAnthropicBillingFailure, isAnthropicExtraUsageFailure } from "../providers/anthropic-billing-refusal";
 import { hasConflictingReasoningEffortCode } from "../providers/reasoning-metadata";
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import type { OcxComboTarget } from "../types";
@@ -1273,6 +1273,7 @@ function decideComboFailure(
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, rawCode)) return "hop";
   if (isAnthropicBillingFailure(status, message, rawCode)) return "hop";
+  if (isAnthropicExtraUsageFailure(status, message, rawCode)) return "hop";
   // Kiro's body validator rejects the request for the identity it was routed under. The account
   // layer rotates logins first; this is the no-alternate case, so the next combo target is the
   // only remaining chance to serve the turn. Only a caller that knows the failed target is a Kiro
