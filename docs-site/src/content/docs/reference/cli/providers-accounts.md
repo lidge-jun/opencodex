@@ -324,8 +324,14 @@ A Claude account that belongs to several organizations can be added once per org
 organization has its own subscription and limits, so it becomes its own pool account instead of
 replacing the first. Logging in to an organization that already has an account refreshes that
 account. Reauthenticating an account into a different organization is refused; add it as a new
-login instead. Accounts saved before this release learn their organization on their next token
-refresh.
+login instead.
+
+A separate account needs proof of both organizations. Claude reports a grant's organization at
+login and on token refresh, but only when that report succeeds is it recorded. An existing account
+with no recorded organization (for example, one saved before this release) is checked through its
+own token when you log in; if that token has expired or the check fails, the new login replaces
+that account, as earlier releases did. Before adding another organization, make sure the existing
+account is signed in and its token is current, for example by sending it one request.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned
