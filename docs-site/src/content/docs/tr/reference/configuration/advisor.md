@@ -98,7 +98,7 @@ Danışman fail-open davranır: gönderilmiş bir danışma başarısız olursa 
 ## PR1 sınırlamaları
 
 - Yerel OpenAI passthrough turları (ChatGPT havuzu worker'ları) sentetik aracı almaz; danışman desteği yönlendirilen (çevrilen) sağlayıcıları kapsar. Preflight danışması run-turn bağdaştırıcılarına uygulanır; araç uygulanmaz.
-- Çevrilen `/v1/messages` istekleri (örneğin çevrilen bir sağlayıcıya yönlendirilen Claude Code), `/v1/responses` ve `/v1/chat/completions` gibi sentetik aracı ve preflight danışmasını alır. Aynı `policy` ve bağlam paylaşımı onayı kuralları geçerlidir ve ayarlar güncel yapılandırmadan okunur; bu yüzden onayın geri alınması, henüz gönderilmemiş devam eden isteklerin danışmalarını engeller. Gönderilmiş bir danışmayı iptal etmez ve proxy'den ayrılmış bağlamı geri almaz.
+- Çevrilen `/v1/messages` istekleri (örneğin çevrilen bir sağlayıcıya yönlendirilen Claude Code), `/v1/responses` ve `/v1/chat/completions` gibi sentetik aracı ve preflight danışmasını alır. Aynı `policy` ve bağlam paylaşımı onayı kuralları geçerlidir ve ayarlar güncel yapılandırmadan okunur; bu yüzden onayın geri alınması, devam eden isteklerin henüz gönderilmemiş bir danışma başlatmasını engeller. Gönderilmiş bir danışmayı iptal etmez ve proxy'den ayrılmış bağlamı geri almaz.
 - Anlamsal takılma algılama, tamamlanma incelemesi, yükseltme katmanları, çoklu danışman veya oylama yoktur.
 - Preflight tekilleştirme defteri süreç içindedir; proxy yeniden başlatıldıktan sonra devam eden bir görev bir preflight danışması daha alabilir.
 
