@@ -50,6 +50,7 @@ import {
   providerRelativeSendPathConfigError,
   isValidCreditPriceUsd,
 } from "./leaf-validators";
+import { MAX_CREDIT_PRICE_USD } from "../../usage/credit-billing";
 import { isValidProviderName, hasOwnProvider } from "../provider-name";
 import {
   apiKeyTransportConfigError,
@@ -815,7 +816,7 @@ export const configSchema = z.object({
       ctx.addIssue({
         code: "custom",
         path: ["providers", redactSecretString(name), "creditPriceUsd"],
-        message: "creditPriceUsd must be a finite number greater than or equal to 0",
+        message: `creditPriceUsd must be a finite number between 0 and ${MAX_CREDIT_PRICE_USD}`,
       });
     }
     const defaultMaxOutputError = positiveIntegerConfigError(

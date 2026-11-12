@@ -71,6 +71,13 @@
 .log-detail-card .log-detail-grid { gap: 7px 16px; font-size: 13px; }
 .log-detail-card .log-detail-grid > .muted { color: var(--ocx-fg-muted); }
 .log-detail-card .log-detail-grid > .mono { font-size: 12.5px; color: var(--ocx-fg); }
+/* The billing basis reads as a sentence ("1.95 credits x $0.04 per credit"), so it keeps a
+   readable measure and wraps rather than truncating the multiplier. */
+.log-detail-card .log-detail-grid > .log-detail-credit-billing {
+  font-size: 12.5px;
+  color: var(--ocx-fg);
+  overflow-wrap: anywhere;
+}
 .log-detail-card .log-detail-notes,
 .log-detail-card .log-detail-notes-line { color: var(--ocx-fg-muted); font-size: 12px; }
 .log-detail-card .log-detail-attempts-wrap {

@@ -57,7 +57,8 @@ import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustom
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { creditChargeUnrepresentable, estimateComboCost, estimateRequestCost, resolveMatchedPrice, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { costTokensWithinBound } from "../../usage/credit-billing";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { usageModelPriceOptions } from "../../usage/model-identity";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
@@ -84,7 +85,12 @@ export type MetricUnavailableReason =
   | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable"
-  | "ttft_missing" | "decode_window_too_short";
+  | "ttft_missing" | "decode_window_too_short"
+  // The row is credit-priced, but `providerCredits x creditPriceUsd` cannot be represented (an
+  // out-of-bound price or credit count, or an overflowing product). It is deliberately not
+  // `price_unmatched`-with-a-token-estimate: falling back would report a different amount than
+  // the credit basis the operator configured.
+  | "credit_cost_unrepresentable";
 
 export type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
@@ -183,21 +189,48 @@ export function decodeTokPerSecondResult(
   return { kind: "value", value, estimated: true, timingBasis: "legacy-post-visible-output" };
 }
 
+/**
+ * True when the row would otherwise be priced but its credit charge cannot be represented. A row
+ * with no resolved token price is unpriced for the ordinary reason, so the price lookup has to
+ * succeed before the credit failure is the explanation.
+ */
+function isCreditCostUnrepresentable(entry: MetricSource): boolean {
+  if (entry.attempts?.length) {
+    return entry.attempts.some(attempt => !!attempt.usage
+      && creditChargeUnrepresentable(attempt.provider, attempt.usage)
+      && !!resolveMatchedPrice(attempt.provider, attempt.model, undefined, undefined, usageModelPriceOptions(entry, attempt)));
+  }
+  return !!entry.usage
+    && creditChargeUnrepresentable(entry.provider, entry.usage)
+    && !!resolveMatchedPrice(entry.provider, entry.model, undefined, undefined, usageModelPriceOptions(entry, entry));
+}
+
 export function unavailableCostReason(entry: MetricSource): MetricUnavailableReason {
   // Normalizer-first classification: the landed normalizer recovers legacy
   // cachedInputTokens=read+write rows via retry, so a raw read+write>input
   // pre-check would misclassify recoverable rows (020 audit blocker #2).
   if (!entry.usage && !entry.attempts?.length) return "usage_missing";
   if (entry.usageStatus === "unsupported") return "usage_unsupported";
-  if (entry.attempts?.length) return "combo_attempt_unavailable";
+  // A Combo is unpriced when ANY attempt is, and the generic reason covers every other cause.
+  // An attempt whose credit charge cannot be represented is a different fact: the operator set a
+  // credit price and the row cannot honor it, so the parent names that instead of implying an
+  // ordinary missing price somewhere in the attempt list.
+  if (entry.attempts?.length) {
+    return isCreditCostUnrepresentable(entry) ? "credit_cost_unrepresentable" : "combo_attempt_unavailable";
+  }
   if (!entry.usage) return "usage_missing";
-  if (!normalizeCostTokens(entry.usage)) {
+  if (isCreditCostUnrepresentable(entry)) return "credit_cost_unrepresentable";
+  const tokens = normalizeCostTokens(entry.usage);
+  if (!tokens) {
     const effectiveRead = entry.usage.cacheReadInputTokens ?? entry.usage.cachedInputTokens ?? 0;
     const effectiveWrite = entry.usage.cacheCreationInputTokens ?? 0;
     const finite = [entry.usage.inputTokens, entry.usage.outputTokens, effectiveRead, effectiveWrite]
       .every(v => Number.isFinite(v) && v >= 0);
     return finite ? "invalid_cache_breakdown" : "invalid_usage";
   }
+  // A finite but absurd token count normalizes fine and then overflows the estimate. Calling that
+  // "price unmatched" would send an operator to the price table for a number no price can fix.
+  if (!costTokensWithinBound(tokens)) return "invalid_usage";
   return "price_unmatched";
 }
 

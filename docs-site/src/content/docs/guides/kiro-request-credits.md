@@ -44,10 +44,37 @@ With a price set, the estimate for a metered row follows these rules:
   model, is one such row — so a price does not by itself make every Kiro row priced.
 - Without the key, every cost stays the token estimate.
 
-The value must be a finite number of 0 or more. The management boundary rejects anything else, and
-a hand edit that fails that rule is dropped on load with a warning naming the provider, so the rest
-of the provider entry still loads. As with model prices, the price is applied when an estimate is
-computed, so editing it re-estimates already-logged rows on the next refresh.
+A credit-billed row has no token allocation to show. The estimate records its billing basis
+instead: the request-log detail panel labels the section **Estimated cost** rather than API
+list-price equivalent, prints **Credit-priced total** with the charge as
+`<credits> credits × <price> per credit`, and omits the four token component rows, which would
+otherwise read as `$0.0000` each beside a nonzero total. A Combo whose attempts were not all
+billed the same way — one credit attempt beside a token-priced one, or two credit prices — reports
+**Combined total (per-attempt basis)** and marks the split as mixed, because summing the credits
+would produce a number that matches no price. Each attempt still states the charge and price it
+actually incurred. The management API exposes the same decision as an optional `billing` object on
+the cost estimate; clients that do not read it are unaffected.
+
+### Bounds and unrepresentable values
+
+`creditPriceUsd` must be **between 0 and 1,000,000**. The management boundary rejects anything else,
+and a hand edit that fails that rule is dropped on load with a warning naming the provider, so the
+rest of the provider entry still loads. As with model prices, the price is applied when an estimate
+is computed, so editing it re-estimates already-logged rows on the next refresh.
+
+Credits are bounded too — a single attempt may report at most 1,000,000,000 of them — and one
+token bucket of a priced row at most 1,000,000,000,000 tokens. Both bounds are far outside any real
+plan: the priciest published credit plans are cents per credit, and a single response reports a few
+thousand credits. They exist because bounding the price alone does not keep the product
+representable: `1e308 x 1e308` is `Infinity`, and `JSON.stringify` writes that as `null`.
+
+When a row **is** credit-priced but its credit count or price cannot produce a representable
+amount — an out-of-bound or non-finite reading, or an overflowing product — its cost is reported as
+unavailable with the reason `credit_cost_unrepresentable`, rather than falling back to the token
+estimate. A fallback would report a different amount than the credit basis you configured, which is
+exactly what the price is meant to replace. A finite but absurd token count on a token-priced row
+is classified as `invalid_usage` for the same reason: no price can repair that number, and saying
+"price unmatched" would point at the price table.
 
 This is an estimate only. The price is never sent upstream, and it does not change provider
 billing, account selection, or quotas.

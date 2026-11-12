@@ -1059,7 +1059,7 @@
       "path": "pricing.md",
       "tier": 5,
       "title": "Model Price Overrides",
-      "scope": "User price policies, prompt-length rate selection, persistence and estimate cache invalidation.",
+      "scope": "User price policies, prompt-length rate selection, credit-billing bounds and provenance, persistence and estimate cache invalidation.",
       "documents": [
         "src/config/live-reconcile.ts",
         "src/cli/models-runtime.ts",
@@ -1067,6 +1067,7 @@
         "src/config/schema/leaf-validators.ts",
         "src/server/management/model-routes.ts",
         "src/usage/cost.ts",
+        "src/usage/credit-billing.ts",
         "src/usage/user-cost-overlays.ts",
         "src/usage/user-cost-validation.ts",
         "gui/src/components/ModelPriceDialog.tsx"

@@ -436,6 +436,117 @@ describe("GET /api/logs snapshot polling", () => {
 });
 
 /**
+ * #8452 — a credit-billed row was served as `{input:0,output:0,...,total:X}`, which the Logs
+ * detail panel rendered as four token component charges of $0.0000 beside a nonzero total.
+ * The DTO now names the billing basis so no client has to infer an allocation the proxy never had.
+ */
+describe("GET /api/logs credit-billed cost", () => {
+  const creditConfig = {
+    port: 0,
+    defaultProvider: "kiro",
+    providers: { kiro: { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", creditPriceUsd: 0.04 } },
+  } as unknown as OcxConfig;
+  const kiroUsage = { inputTokens: 600_000, outputTokens: 400, providerCredits: 1.95, estimated: true };
+
+  afterEach(() => refreshUserCostOverlays(config));
+
+  test("a credit row serves credits and price, never a fabricated token split", async () => {
+    refreshUserCostOverlays(creditConfig);
+    addRequestLog(baseEntry({ provider: "kiro", model: "claude-opus-5.5", usageStatus: "estimated", usage: kiroUsage }));
+    const [dto] = await readLogs();
+    const cost = dto!.displayMetrics.cost;
+    expect(cost.kind).toBe("value");
+    expect(cost.estimate.billing).toEqual({ source: "provider-credits", providerCredits: 1.95, creditPriceUsd: 0.04 });
+    expect(cost.estimate.cost.total).toBeCloseTo(1.95 * 0.04, 9);
+  });
+
+  test("a mixed combo serves its per-attempt basis and a mixed parent marker", async () => {
+    refreshUserCostOverlays(creditConfig);
+    addRequestLog(baseEntry({
+      provider: "combo", model: "combo/mixed", usage: { inputTokens: 601_000, outputTokens: 500 },
+      attempts: [
+        { ordinal: 1, provider: "kiro", model: "claude-opus-5.5", adapter: "kiro", status: 200, durationMs: 900, sendCount: 1, recoveryKinds: [], usageStatus: "estimated", usage: kiroUsage },
+        { ordinal: 2, provider: "anthropic", model: "claude-3-haiku-20240307", adapter: "anthropic", status: 200, durationMs: 900, sendCount: 1, recoveryKinds: [], usageStatus: "reported", usage: { inputTokens: 1_000, outputTokens: 100 } },
+      ],
+    }));
+    const [dto] = await readLogs();
+    expect(dto!.displayMetrics.cost.kind).toBe("value");
+    expect(dto!.displayMetrics.cost.estimate.billing).toEqual({ source: "mixed" });
+    expect(dto!.attempts[0].displayMetrics.cost.estimate.billing).toEqual({ source: "provider-credits", providerCredits: 1.95, creditPriceUsd: 0.04 });
+    expect(dto!.attempts[1].displayMetrics.cost.estimate.billing).toBeUndefined();
+  });
+
+  test("an unrepresentable credit charge is unavailable, not a token estimate", async () => {
+    refreshUserCostOverlays(creditConfig);
+    addRequestLog(baseEntry({
+      provider: "kiro", model: "claude-opus-5.5", usageStatus: "estimated",
+      usage: { inputTokens: 1_000, outputTokens: 10, providerCredits: Number.MAX_VALUE, estimated: true },
+    }));
+    const [dto] = await readLogs();
+    expect(dto!.displayMetrics.cost).toEqual({ kind: "unavailable", reason: "credit_cost_unrepresentable" });
+  });
+
+  test("a corrupt token count on a token-priced row is unavailable, not null-bearing JSON", async () => {
+    addRequestLog(baseEntry({
+      provider: "anthropic", model: "claude-opus-5-5", usageStatus: "reported",
+      usage: { inputTokens: 1e308, outputTokens: 1e308 },
+    }));
+    const [dto] = await readLogs();
+    expect(dto!.displayMetrics.cost).toEqual({ kind: "unavailable", reason: "invalid_usage" });
+  });
+
+  test("a mixed-price combo names per-attempt credit charges and a mixed parent", async () => {
+    refreshUserCostOverlays({
+      port: 0,
+      defaultProvider: "kiro",
+      providers: {
+        kiro: { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", creditPriceUsd: 0.04 },
+        "kiro-alt": { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", creditPriceUsd: 0.02 },
+      },
+    } as unknown as OcxConfig);
+    addRequestLog(baseEntry({
+      provider: "combo", model: "combo/mixed", usage: { inputTokens: 1_200_000, outputTokens: 800 },
+      attempts: [
+        { ordinal: 1, provider: "kiro", model: "claude-opus-5.5", adapter: "kiro", status: 200, durationMs: 900, sendCount: 1, recoveryKinds: [], usageStatus: "estimated", usage: kiroUsage },
+        { ordinal: 2, provider: "kiro-alt", model: "claude-opus-5.5", adapter: "kiro", status: 200, durationMs: 900, sendCount: 1, recoveryKinds: [], usageStatus: "estimated", usage: kiroUsage },
+      ],
+    }));
+    const [dto] = await readLogs();
+    expect(dto!.displayMetrics.cost.kind).toBe("value");
+    expect(dto!.displayMetrics.cost.estimate.billing).toEqual({ source: "mixed" });
+    expect(dto!.attempts.map(attempt => attempt.displayMetrics.cost)).toEqual([
+      expect.objectContaining({ kind: "value", estimate: expect.objectContaining({ billing: { source: "provider-credits", providerCredits: 1.95, creditPriceUsd: 0.04 } }) }),
+      expect.objectContaining({ kind: "value", estimate: expect.objectContaining({ billing: { source: "provider-credits", providerCredits: 1.95, creditPriceUsd: 0.02 } }) }),
+    ]);
+  });
+
+  test("a combo parent names an unrepresentable credit attempt instead of a generic missing price", async () => {
+    refreshUserCostOverlays(creditConfig);
+    addRequestLog(baseEntry({
+      provider: "combo", model: "combo/oversized", usage: { inputTokens: 601_000, outputTokens: 500 },
+      attempts: [
+        { ordinal: 1, provider: "kiro", model: "claude-opus-5.5", adapter: "kiro", status: 200, durationMs: 900, sendCount: 1, recoveryKinds: [], usageStatus: "estimated", usage: kiroUsage },
+        { ordinal: 2, provider: "kiro", model: "claude-opus-5.5", adapter: "kiro", status: 200, durationMs: 900, sendCount: 1, recoveryKinds: [], usageStatus: "estimated", usage: { inputTokens: 1_000, outputTokens: 10, providerCredits: Number.MAX_VALUE, estimated: true } },
+      ],
+    }));
+    const [dto] = await readLogs();
+    // The combo total is unavailable because one attempt is; the reason must point at the credit
+    // price the operator set rather than at an ordinary unmatched price.
+    expect(dto!.displayMetrics.cost).toEqual({ kind: "unavailable", reason: "credit_cost_unrepresentable" });
+    expect(dto!.attempts[1].displayMetrics.cost).toEqual({ kind: "unavailable", reason: "credit_cost_unrepresentable" });
+  });
+
+  test("an oversized configured price is rejected before it can price anything", async () => {
+    const { configSchema } = await import("../../src/config/schema/config-schema");
+    const parsed = configSchema.safeParse({
+      port: 0,
+      providers: { kiro: { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", creditPriceUsd: 1e308 } },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+/**
  * #4057: the account label was persisted on the row and on every attempt long before anything
  * could read it back. `requestLogDto` carries it only because it spreads the entry — the sibling
  * projection `requestLogEntryFromPersistedUsage` rebuilds field by field and warns in its own

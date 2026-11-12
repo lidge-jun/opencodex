@@ -313,6 +313,27 @@ the client window after edits, eviction, query changes or restart. Invalid curso
 for older servers. This reduces response bytes for stable windows; server projection remains bounded
 by the current window size.
 
+A successful `/api/logs` (and request-history) `displayMetrics.cost.estimate` may carry an optional
+`billing` object naming how the row was charged, so a client never has to infer an allocation the
+proxy does not have:
+
+- `{ "source": "provider-credits", "providerCredits": <number>, "creditPriceUsd": <number> }` — the
+  total is `providerCredits x creditPriceUsd` and the four token component fields are placeholders,
+  not a split. Every attempt that shares one credit price reports this; a refused row with no
+  credits reports zero credits rather than a token estimate.
+- `{ "source": "mixed" }` — the attempts were not all billed the same way (a credit attempt beside a
+  token-priced one, or two credit prices), so only the per-attempt estimates have a split; the
+  parent total is still their sum.
+
+Absent `billing` means the row was priced from tokens, which is what every older row and every
+non-credit provider reports; clients must keep rendering the token component breakdown in that
+case. A credit-priced row whose credit count or price cannot produce a representable amount is
+`{ "kind": "unavailable", "reason": "credit_cost_unrepresentable" }`, not a token estimate; a Combo
+with one such attempt reports the same reason on the parent rather than the generic
+`combo_attempt_unavailable`. A token-priced row whose token count overflows the estimate is
+`invalid_usage`. See
+[Kiro request credits](/guides/kiro-request-credits/#bounds-and-unrepresentable-values).
+
 Successful `/api/logs` `displayMetrics.decodeTokPerSecond` values carry
 `timingBasis: "generation-window" | "legacy-post-visible-output"` alongside `kind`, `value`
 and `estimated: true`; attempt values identify their own window. Unavailable results keep their

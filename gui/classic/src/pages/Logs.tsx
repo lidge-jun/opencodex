@@ -25,7 +25,7 @@ import { speedLabel } from "./logs-speed-label";
 import { decodeRateLabelKeys } from "./logs-decode-rate";
 import { failureAttributionLabels, failureDetailLabel, failureSummary, upstreamConditionLabel } from "./logs-failure-summary";
 import "./logs-decode-rate.css";
-import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
+import { formatCredits, formatEstimatedUsd, formatEstimatedUsdValue, formatUsdPrecise, summarizeEstimatedCosts, type CostBilling } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
 import type { LogSurface } from "./logs-surface-filter";
 import {
@@ -70,7 +70,8 @@ type MetricUnavailableReason =
   | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable"
-  | "ttft_missing" | "decode_window_too_short";
+  | "ttft_missing" | "decode_window_too_short"
+  | "credit_cost_unrepresentable";
 
 type CostEstimateReason =
   | "usage_estimated"
@@ -105,7 +106,8 @@ type CostResult =
       estimated: boolean;
       priorityLowerBound?: boolean;
       price?: MatchedPriceInfo;
-      attempts?: Array<{ ordinal: number; price: MatchedPriceInfo }>;
+      billing?: CostBilling;
+      attempts?: Array<{ ordinal: number; price: MatchedPriceInfo; billing?: CostBilling }>;
     };
     estimateReasons: CostEstimateReason[];
   }
@@ -327,6 +329,7 @@ const METRIC_REASON_KEYS = {
   combo_attempt_unavailable: "logs.detail.reason.combo_attempt_unavailable",
   ttft_missing: "logs.detail.reason.ttft_missing",
   decode_window_too_short: "logs.detail.reason.decode_window_too_short",
+  credit_cost_unrepresentable: "logs.detail.reason.credit_cost_unrepresentable",
 } as const satisfies Record<MetricUnavailableReason, string>;
 
 const ESTIMATE_REASON_KEYS = {
@@ -1186,16 +1189,51 @@ function LogDetailDialog({
         </section>
 
         <section className="log-detail-section" aria-labelledby="log-detail-cost">
-          <h4 id="log-detail-cost" className="log-detail-section-title">{t("logs.detail.section.cost")}</h4>
+          <h4 id="log-detail-cost" className="log-detail-section-title">{
+            // A credit-priced or mixed total is not a list-price equivalent, and a heading that
+            // says it is would contradict the basis printed under it.
+            cost?.kind === "value" && cost.estimate.billing
+              ? t("logs.detail.section.costBilled")
+              : t("logs.detail.section.cost")
+          }</h4>
           <p className="log-detail-notes-line muted">{t("usage.cost.disclaimer")}</p>
           {cost?.kind === "value" ? (
             <>
               <div className="log-detail-grid">
-                <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.total, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.input, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheRead, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheWrite, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.output, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                <span className="muted">
+                  {cost.estimate.billing?.source === "provider-credits"
+                    ? t("logs.detail.creditTotal")
+                    : cost.estimate.billing?.source === "mixed"
+                      ? t("logs.detail.mixedTotal")
+                      : t("logs.detail.costTotal")}
+                </span>
+                <span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.total, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                {/* A credit-billed row has no token allocation. Its four component fields are
+                    zero placeholders, so rendering them prints "$0.0000" four times beside a
+                    nonzero total — the misleading zeros #8452 removed from the current dashboard. */}
+                {cost.estimate.billing?.source === "provider-credits" ? (
+                  <>
+                    <span className="muted">{t("logs.detail.creditBasis")}</span>
+                    <span>
+                      {t("logs.detail.creditCharge", {
+                        credits: formatCredits(cost.estimate.billing.providerCredits, localeCode),
+                        price: formatUsdPrecise(cost.estimate.billing.creditPriceUsd),
+                      })}
+                    </span>
+                  </>
+                ) : cost.estimate.billing?.source === "mixed" ? (
+                  <>
+                    <span className="muted">{t("logs.detail.creditBasis")}</span>
+                    <span>{t("logs.detail.creditMixed")}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.input, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                    <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheRead, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                    <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheWrite, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                    <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.output, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                  </>
+                )}
                 {cost.estimate.price && (
                   <>
                     <span className="muted">{t("logs.detail.matchedKey")}</span>
