@@ -9,8 +9,10 @@
  *   proxyStillLiveAfterStop after a Part A stopped; the receipt is completed only after the
  *   restore ran, and kept for recovery otherwise.
  * - uninstall / remove: Part A before the task is deleted (a looping wrapper used to
- *   outlive its task, #764), refusing on anything but stopped/absent, then the tracked
- *   proxy stop and Part B.
+ *   outlive its task, #764), refusing on anything but stopped/absent, then a receipt that
+ *   carries Part A's record before the tracked proxy stop (Part A leaves the task
+ *   registered, so a receipt-less POST answers 409 respawnable_service), then Part B. The
+ *   receipt is kept until the caller's restore succeeds.
  */
 import { clearPendingTeardown, claimPendingTeardown } from "../config/pending-teardown";
 import { readRuntimePort } from "../config/process-state";
@@ -111,23 +113,47 @@ export function completeWindowsServiceStopReceipt(nonce: string | undefined, cle
   if (!clear(nonce)) console.warn("⚠️  The deferred-teardown receipt could not be removed; the next 'ocx stop' will finish it.");
 }
 
-/** ocx service uninstall / remove: stop and confirm before the task is deleted. */
-export async function windowsServiceRemovalStop(io: Pick<WindowsServiceStopCommandIo, "stopTracked"> = {}): Promise<boolean> {
+/**
+ * ocx service uninstall / remove: stop and confirm before the task is deleted.
+ *
+ * Part A leaves the scheduler task registered, so a receipt-less POST still answers
+ * `respawnable_service` (409) and the uninstall then refuses with the proxy left running.
+ * The receipt is therefore claimed with Part A's record before the child stop, exactly as
+ * `ocx service stop` does, and kept until the caller's restore succeeds.
+ */
+export async function windowsServiceRemovalStop(
+  io: Pick<WindowsServiceStopCommandIo, "stopTracked" | "ownsSharedTeardown" | "claim"> = {},
+): Promise<{ ok: boolean; nonce?: string }> {
   const port = windowsServiceStopPort();
   const partA = await runWindowsServiceStopPartA({ admission: windowsStopAdmission({ orphanDiscovery: true }) });
   if (partA.outcome !== "stopped" && partA.outcome !== "absent") {
     console.error("❌ Service uninstall refused: the Windows service could not be proven stopped (" + partA.outcome + "), so the task was not deleted.");
     console.error("   " + describeWindowsPartA(partA));
-    return false;
+    return { ok: false };
   }
-  await (io.stopTracked ?? stopTrackedProxyForServiceCommand)({ skipPortWait: partA.outcome === "stopped" });
-  if (partA.outcome !== "stopped") return true;
+  let nonce: string | undefined;
+  if ((io.ownsSharedTeardown ?? ownsSharedTeardownByDefault)()) {
+    const { endpoint, source } = receiptEndpoint();
+    try {
+      nonce = (io.claim ?? claimPendingTeardown)(endpoint, source, process.pid, undefined, windowsPartARecord(partA)).nonce;
+    } catch (error) {
+      console.error("❌ Service uninstall could not record its deferred-teardown receipt: " + (error instanceof Error ? error.message : String(error)));
+      console.error("   The proxy was left running: stopping it without the receipt would let it tear down client config while the task can still relaunch it.");
+      return { ok: false };
+    }
+  }
+  await (io.stopTracked ?? stopTrackedProxyForServiceCommand)({
+    ...(nonce ? { deferSharedTeardownNonce: nonce } : {}),
+    skipPortWait: partA.outcome === "stopped",
+  });
+  if (partA.outcome !== "stopped") return withNonce(nonce);
   const partB = await confirmWindowsServiceStop({ port, remainingMs: windowsStopRemainingMs() });
-  if (partB.outcome === "freed") return true;
+  if (partB.outcome === "freed") return withNonce(nonce);
   if (partB.outcome === "port-held-by-foreign") {
     console.warn("⚠️  " + describeWindowsPartB(partB));
-    return true;
+    return withNonce(nonce);
   }
   console.error("❌ Service uninstall refused: " + describeWindowsPartB(partB) + " The task was not deleted.");
-  return false;
+  console.error("   The teardown receipt is kept so a later stop can finish it.");
+  return { ok: false };
 }

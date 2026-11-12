@@ -170,13 +170,72 @@ describe("ocx service uninstall / remove on Windows", () => {
     for (const outcome of ALL_PART_A_FAILURES) {
       let child = 0;
       setWindowsServiceStopHooksForTests({ partA: async () => partAResult(outcome) });
-      expect(await windowsServiceRemovalStop({ stopTracked: async () => { child++; return "stopped"; } })).toBe(false);
+      expect((await windowsServiceRemovalStop({ stopTracked: async () => { child++; return "stopped"; } })).ok).toBe(false);
       expect(child).toBe(0);
     }
     for (const [outcome, ok] of [["freed", true], ["port-held-by-foreign", true], ["survived", false], ["unknown", false]] as const) {
       setWindowsServiceStopHooksForTests({ partA: async () => partAResult("stopped"), partB: async () => partBResult(outcome) });
-      expect(await windowsServiceRemovalStop({ stopTracked: async () => "stopped" })).toBe(ok);
+      expect((await windowsServiceRemovalStop({ stopTracked: async () => "stopped" })).ok).toBe(ok);
     }
+  });
+
+  test("claims a receipt carrying the Part A record before the POST, so the route does not answer 409", async () => {
+    // Deleting the registration leaves the scheduler task's receipt-less POST answering
+    // respawnable_service, which fails the uninstall. `ocx service stop` already claims;
+    // removal has to do the same, and keep the receipt until the restore succeeds.
+    const steps: string[] = [];
+    let claimed: unknown;
+    setWindowsServiceStopHooksForTests({
+      partA: async () => { steps.push("partA"); return partAResult("stopped"); },
+      partB: async () => { steps.push("partB"); return partBResult("freed"); },
+    });
+    const result = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => true,
+      claim: (_endpoint, _source, _owner, _handover, partA) => { steps.push("claim"); claimed = partA; return { nonce: "r1" } as never; },
+      stopTracked: async io => { steps.push("child:" + io?.deferSharedTeardownNonce + ":" + io?.skipPortWait); return "stopped"; },
+    });
+    expect(steps).toEqual(["partA", "claim", "child:r1:true", "partB"]);
+    expect(claimed).toEqual(RECORD);
+    expect(result).toEqual({ ok: true, nonce: "r1" });
+    // Keep until the restore runs: only the caller's completion clears it.
+    const cleared: string[] = [];
+    completeWindowsServiceStopReceipt(result.nonce, nonce => { cleared.push(nonce); return true; });
+    expect(cleared).toEqual(["r1"]);
+  });
+
+  test("a claim failure sends no undeferred child stop", async () => {
+    const steps: string[] = [];
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("stopped") });
+    const result = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => true,
+      claim: () => { throw new Error("disk full"); },
+      stopTracked: async () => { steps.push("child"); return "stopped"; },
+    });
+    expect(result.ok).toBe(false);
+    expect(steps).toEqual([]);
+  });
+
+  test("a failed Part B keeps the receipt for recovery", async () => {
+    const steps: string[] = [];
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("stopped"), partB: async () => partBResult("survived") });
+    const result = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => true, claim: () => ({ nonce: "r2" }) as never,
+      stopTracked: async io => { steps.push("child:" + io?.deferSharedTeardownNonce); return "stopped"; },
+    });
+    expect(result).toEqual({ ok: false });
+    expect(steps).toEqual(["child:r2"]);
+  });
+
+  test("the not-owned teardown path is unchanged: no receipt, an ordinary child stop", async () => {
+    const children: unknown[] = [];
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("stopped"), partB: async () => partBResult("freed") });
+    const result = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => false,
+      claim: () => { throw new Error("must not claim"); },
+      stopTracked: async io => { children.push(io); return "stopped"; },
+    });
+    expect(result).toEqual({ ok: true });
+    expect(children).toEqual([{ skipPortWait: true }]);
   });
 });
 

@@ -477,9 +477,14 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     case "uninstall":
     case "remove":
       assertServiceEnvironmentMatchesInstall();
+      // #7771: the removal's receipt is claimed before the child stop and discharged only
+      // after the shared restore below, exactly like `ocx service stop`.
+      let windowsRemovalReceipt: string | undefined;
       if (process.platform === "win32") {
         // #7771: a task deleted under a live `:loop` wrapper leaves it relaunching the proxy.
-        if (!await windowsServiceRemovalStop()) process.exit(1);
+        const removal = await windowsServiceRemovalStop();
+        if (!removal.ok) process.exit(1);
+        windowsRemovalReceipt = removal.nonce;
       } else {
         try { ops.stop(); } catch (err) {
           console.warn(`⚠️  Service stop failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -508,6 +513,8 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
           console.error(`⚠️  ${grok.message}`);
           process.exitCode = 1;
         }
+        // The shared teardown ran; only then is the receipt's obligation discharged.
+        if (restore.success && grok.ok) completeWindowsServiceStopReceipt(windowsRemovalReceipt);
       }
       removeServiceInstallState();
       const tokenCleanup = removeServiceTokenAfterUninstall();
