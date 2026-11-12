@@ -58,12 +58,15 @@ async function mount(props: Partial<React.ComponentProps<typeof RemoteLink>> = {
 }
 
 test("current translated link errors remain implemented across route and enrollment owners", async () => {
-  const source = (await Promise.all(["link-routes", "link-enrollment", "link-route-state"].map(name =>
+  // Child operations answer their own refusals through a `switch (code) { case "x": return fail(code, ...) }`
+  // block instead of `fail("x", ...)` calls, so the second pattern counts that switch.
+  const source = (await Promise.all(["link-routes", "link-enrollment", "link-route-state", "link-child-ops-routes"].map(name =>
     Bun.file(`../src/server/management/${name}.ts`).text()))).join("\n");
   // DELETE --purge forwards the code purgeDisconnectRemote chose, so its literals count as route codes.
   const purgeSource = await Bun.file("../src/link/remote-plant.ts").text();
   const fromRoutes = [
     ...[...source.matchAll(/(?:fail\(|remoteFailure\([^,\n]+,\s*)"([a-z_]+)"/g)].map(match => match[1]),
+    ...[...source.matchAll(/case "([a-z_]+)": return fail\(code/g)].map(match => match[1]),
     ...[...purgeSource.matchAll(/\bcode: "([a-z_]+)"/g)].map(match => match[1]),
   ].filter((value, index, all) => all.indexOf(value) === index).sort();
   // New phase errors use generic text. These two old-server translations remain compatible

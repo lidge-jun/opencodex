@@ -132,7 +132,7 @@ describe("ocx link status ws block (T5e2, design 9.3)", () => {
     let code: number;
     try { code = await runLinkCommand(["status", "--json"], d.value); } finally { console.log = log; }
     expect(code).toBe(0);
-    expect(d.calls[0]!.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1");
+    expect(d.calls[0]!.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1&traffic=1");
     expect(JSON.parse(stdout[0]!).links[0].ws).toEqual(row.ws);
   });
 });

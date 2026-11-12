@@ -8,6 +8,7 @@ import {
 import { parseLinkPeerReport, type LinkPeerObservations } from "../../link/peer-report";
 import { linkActivityCounts, type LinkActivity } from "../../link/child-activity";
 import type { LinkSessionGrant, LinkUpgradeOutcome } from "./link-websocket";
+import type { LinkTrafficBook } from "../../link/traffic";
 
 /** A 200 `GET /v1/catalog` whose body the Child read to the end (wp2 catalog freshness). */
 export interface LinkCatalogServed { linkId: string | null; keyId: string | null; etag: string }
@@ -54,6 +55,12 @@ export interface LinkRelaySessionOptions {
    * handler answered below 400, so a request refused before or after reading its body releases nothing.
    */
   observeResponsesRequest?: (linkId: string, req: Request) => ((accepted: boolean) => void) | void;
+  /**
+   * Per-link body bytes of verified relay-session requests (#3023), owned by the listener lifecycle.
+   * The response side is counted as it streams; the request side is its declared Content-Length,
+   * because wrapping the native request would lose the identity Bun's requestIP/timeout need.
+   */
+  traffic?: LinkTrafficBook;
 }
 
 /** One book per bound listener. A pending proof reserves the bind before the data request arrives. */
@@ -174,10 +181,16 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
       if (sessionLink !== null && req.method === "POST" && url.pathname === "/v1/responses") {
         try { decideObservation = options.observeResponsesRequest?.(sessionLink, req) ?? undefined; } catch { /* observation never blocks the request */ }
       }
+      const flow = sessionLink !== null ? options.traffic?.begin(sessionLink) : undefined;
+      if (flow) {
+        const declared = req.headers.get("content-length");
+        if (declared !== null && /^\d+$/.test(declared.trim())) flow.toHome(Number(declared.trim()));
+        else if (req.body !== null) flow.uncounted();
+      }
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
       // An abort before headers also decides a pending body observation (not accepted) and drops its unclaimed turn token.
-      const beforeHeadersAbort = () => { decideObservation?.(false); release(); };
+      const beforeHeadersAbort = () => { decideObservation?.(false); flow?.end(false); release(); };
       req.signal.addEventListener("abort", beforeHeadersAbort, { once: true });
       if (req.signal.aborted) beforeHeadersAbort();
       try {
@@ -185,7 +198,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         decideObservation?.(response.status < 400 && !req.signal.aborted);
         req.signal.removeEventListener("abort", beforeHeadersAbort);
         if (countsActivity && sessionLink === null && response.status < 400 && !req.signal.aborted) beginActivity();
-        if (!response.body || req.method === "HEAD") { release(); return response; }
+        if (!response.body || req.method === "HEAD") { flow?.end(true); release(); return response; }
         const reader = response.body.getReader();
         const catalogHash = options.catalogServed && req.method === "GET" && url.pathname === "/v1/catalog" && url.search === ""
           && response.status === 200 ? createHash("sha256") : null;
@@ -209,6 +222,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         };
         const cancel = async (reason?: unknown) => {
           cancelled = true;
+          flow?.end(false);
           try { await reader.cancel(reason); } finally { finish(); }
         };
         const aborted = () => { void cancel(req.signal.reason).catch(() => {}); };
@@ -218,14 +232,14 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           async pull(controller) {
             try {
               const next = await reader.read();
-              if (next.done) { finish(); controller.close(); if (!cancelled) reportCatalog(); }
-              else { catalogHash?.update(next.value); controller.enqueue(next.value); }
-            } catch (error) { finish(); controller.error(error); }
+              if (next.done) { flow?.end(!cancelled); finish(); controller.close(); if (!cancelled) reportCatalog(); }
+              else { catalogHash?.update(next.value); flow?.fromHome(next.value.byteLength); controller.enqueue(next.value); }
+            } catch (error) { flow?.end(false); finish(); controller.error(error); }
           },
           cancel,
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-      } catch (error) { decideObservation?.(false); req.signal.removeEventListener("abort", beforeHeadersAbort); release(); throw error; }
+      } catch (error) { decideObservation?.(false); req.signal.removeEventListener("abort", beforeHeadersAbort); flow?.end(false); release(); throw error; }
     },
   };
 }

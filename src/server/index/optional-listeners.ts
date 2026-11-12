@@ -61,6 +61,7 @@ export interface OptionalListenerSet<T> {
   clearLinkHolds(linkId: string): import("../../link/ws-activity-holds").ClearHoldsResult;
   /** The link's live WebSocket counters (design 9.3). */
   linkTransport(linkId: string): import("../../link/status-projection").LinkWsCounters;
+  linkTraffic(linkId: string): import("../../link/traffic").LinkTrafficCounters;
   /** The last relayed catalog pull of a link in this process; null before start or before any pull. */
   catalogPull(linkId: string): CatalogPull | null;
   /** Write every catalog pull still held in memory; a failed write is logged and kept for the next attempt. */
@@ -181,6 +182,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
     linkHolds: linkId => linkListener.linkHolds(linkId),
     clearLinkHolds: linkId => linkListener.clearLinkHolds(linkId),
     linkTransport: linkId => linkListener.linkTransport(linkId),
+    linkTraffic: linkId => linkListener.linkTraffic(linkId),
     catalogPull: linkId => catalogPulls?.pulled(linkId) ?? null,
     flushCatalogPulls: () => { catalogPulls?.flush(); },
     status: () => linkListener.status(),

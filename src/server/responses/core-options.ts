@@ -37,6 +37,8 @@ export interface ConsumedComboFailure {
   malformedResponseFormat?: boolean;
   /** Complete bounded-envelope OpenRouter opaque-400 verdict captured before display truncation. */
   openRouterOpaque400?: boolean;
+  /** Complete bounded-envelope provider moderation verdict captured before display truncation. */
+  providerModerationRefusal?: boolean;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
   /**

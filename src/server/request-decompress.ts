@@ -3,6 +3,7 @@ import { gunzipSync, inflateRawSync, inflateSync, zstdDecompressSync } from "nod
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { updateInboundBodyReservation } from "./inbound-body-budget";
 import { serializedJsonByteLength } from "./json-serialized-bytes";
+import { recordRequestBodyFacts } from "./request-body-facts";
 
 /**
  * Request-body decompression for the /v1/responses data plane.
@@ -325,6 +326,7 @@ export async function readBoundedJsonRequestBody(
   let releaseText: (() => void) | undefined;
   try {
     const decoded = decodeRequestBody(raw, encoding, maxBytes);
+    recordRequestBodyFacts(req, raw.byteLength, encoding, decoded.byteLength);
     releaseDecoded = decoded === raw ? undefined : budget?.observeAcceptedRequestCopy(decoded.byteLength);
     const text = new TextDecoder().decode(decoded);
     // Count UTF-8 without allocating another request-sized byte array for diagnostics.

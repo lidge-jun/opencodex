@@ -45,6 +45,8 @@ export interface LinkRouteListener {
   linkHolds?(linkId: string): import("../../link/ws-activity-holds").LinkHoldsSummary | null;
   /** Optional: the operator's clear of one link's activity holds (D8). */
   clearLinkHolds?(linkId: string): import("../../link/ws-activity-holds").ClearHoldsResult;
+  /** Optional: without it a Home row's traffic reads zero since now. */
+  linkTraffic?(linkId: string): import("../../link/traffic").LinkTrafficCounters;
   /** Optional: without it only the cached pull in child-observations.json is known. */
   catalogPull?(linkId: string): import("../../link/child-catalog-freshness").CatalogPull | null;
   /** Optional: persist pulls held inside the recorder's 30 s write window (best effort). */

@@ -168,4 +168,45 @@ describe("through a real Home's management routes (T5e2-R1-01, -02)", () => {
     expect(after.child).not.toHaveProperty("holds");
     expect(after.ws?.holds).toBe(0);
   });
+
+  test("the traffic book counts relayed HTTP requests and none of a link WebSocket's turn (#3023 counters unchanged)", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ocx-link-ws-traffic-home-"));
+    process.env.OPENCODEX_HOME = dir;
+    codexHome = installIsolatedCodexHome("ocx-link-ws-traffic-codex-");
+    writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify({ models: [] }));
+    writeLinkStore(linkStorePath(), { version: 1, listenerPort: null, links: [{ id: LINK, alias: "tc", direction: "client-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: KEY_ID, createdAt: "2026-11-12T00:00:00.000Z" }] as LinkStore["links"] });
+    const { saveConfig } = await import("../../src/config");
+    saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "fixture", websockets: true, linkResponsesWebsocket: true, codexAutoStart: false, clientIntegrations: { codex: false },
+      providers: { fixture: { adapter: "openai-responses", baseUrl: "http://127.0.0.1:9/v1", authMode: "key", apiKey: "fixture-upstream-key", allowPrivateNetwork: true, models: ["fixture"] } },
+      apiKeys: [{ id: KEY_ID, name: KEY_ID, key: SECRET, createdAt: "2026-11-12T00:00:00.000Z" }] } as OcxConfig);
+    const { startServer } = await import("../../src/server");
+    server = startServer(0) as unknown as Server<unknown>;
+    const admin = readFileSync(join(dir, "admin-api-token"), "utf8").trim();
+    type TrafficRow = { traffic?: { requests: number; toHomeBytes: number; fromHomeBytes: number; toHomeUncounted: number }; ws?: { upgrades: number } };
+    const row = async () => ((await (await fetch(new URL("/api/link/status?transport=1&traffic=1", server!.url), { headers: { "x-opencodex-api-key": admin } })).json()) as { links: TrafficRow[] }).links[0]!;
+    const port = JSON.parse(readFileSync(linkStorePath(), "utf8")).listenerPort as number;
+    const fingerprint = serviceApiTokenFingerprint(SECRET);
+
+    // One full turn over a link WebSocket (the upstream refuses, so the turn ends in an error frame).
+    const ws = await LinkWireClient.open(port);
+    clients.push(ws);
+    const session = await ws.challenge({ keyId: KEY_ID, linkId: LINK, fingerprint });
+    expect((await ws.upgrade({ nonce: session.nonce, bearer: SECRET })).status).toBe(101);
+    ws.sendJson({ type: "response.create", model: "fixture/fixture", input: [{ role: "user", content: [{ type: "input_text", text: "count me not" }] }] });
+    const seen = await ws.until(message => message.type === "text" && ["error", "response.failed", "response.completed", "response.incomplete"].includes(String((JSON.parse(message.data) as { type?: unknown }).type)));
+    expect(seen.at(-1)?.type).toBe("text");
+    const afterSocket = await row();
+    expect(afterSocket.ws?.upgrades).toBe(1);
+    expect(afterSocket.traffic).toMatchObject({ requests: 0, toHomeBytes: 0, fromHomeBytes: 0, toHomeUncounted: 0 });
+
+    // Control: a relayed HTTP request on the same link is counted, so the zero above is not an unwired book.
+    const http = await LinkWireClient.open(port);
+    clients.push(http);
+    const relay = await http.challenge({ keyId: KEY_ID, linkId: LINK, fingerprint });
+    const body = JSON.stringify({ model: "fixture/fixture", input: "count me", stream: false });
+    http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", authorization: "Bearer " + SECRET, "x-opencodex-link-session": relay.nonce }, body);
+    await http.readHead();
+    expect((await row()).traffic).toMatchObject({ requests: 1, toHomeBytes: Buffer.byteLength(body) });
+  });
+
 });

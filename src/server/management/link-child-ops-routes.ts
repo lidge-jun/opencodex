@@ -4,7 +4,7 @@ import { createCatalogRevisionMonitor, type CatalogRevisionMonitor } from "../..
 import { observeChild } from "../../link/child-observe";
 import { patchChildObservation, readChildObservations, updateChildObservations } from "../../link/child-observations";
 import { sharedChildOpsEngine, type ChildOpsEngine, type SubmitRefusal, type SubmitResult } from "../../link/child-ops-engine";
-import { CHILD_OPS, type ChildOp, type ChildOpsEnv, type ChildRestart } from "../../link/child-ops-types";
+import { CHILD_OPS, CHILD_OPS_MAX_LINK_IDS, type ChildOp, type ChildOpsEnv, type ChildRestart } from "../../link/child-ops-types";
 import { requireRemotePlatform } from "../../link/remote-platform";
 import { inspectRemoteChildRuntime } from "../../link/remote-plant";
 import { attachLinkChildOps, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
@@ -17,7 +17,7 @@ import { auth, fail, isRecord, knownHostsFile, readStoreFor, runnerFor, type Lin
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const JOB_ID = /^ljob_[0-9a-f]{16}$/;
-const MAX_LINK_IDS = 64;
+const MAX_LINK_IDS = CHILD_OPS_MAX_LINK_IDS;
 const JOB_PATH = /^\/api\/link\/children\/jobs\/([^/]+)$/;
 const NO_STORE = { "cache-control": "no-store" };
 

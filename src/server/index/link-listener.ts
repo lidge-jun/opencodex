@@ -12,6 +12,7 @@ import { createActivityHolds, type ClearHoldsResult, type LinkHoldsSummary } fro
 import type { LinkWsCounters } from "../../link/status-projection";
 import { resultKeysOf } from "../../codex/websocket-activity";
 import { dirname } from "node:path";
+import { createLinkTrafficBook, type LinkTrafficCounters } from "../../link/traffic";
 import {
   emptyLinkStore,
   readLinkStore,
@@ -90,6 +91,8 @@ export interface LinkListenerLifecycle<T> {
   clearLinkHolds(linkId: string): ClearHoldsResult;
   /** Resolves once relayed requests already seen have been checked against activity holds. */
   activityHoldsSettled(): Promise<void>;
+  /** Body bytes each link carried since this lifecycle started (#3023); zeros before any traffic. */
+  linkTraffic(linkId: string): LinkTrafficCounters;
   /** A Child read a whole 200 `GET /v1/catalog` body through the relay. */
   onCatalogServed(listener: (served: LinkCatalogServed) => void): () => void;
   status(): LinkListenerStatus;
@@ -132,6 +135,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const activity = createLinkActivity({ held: linkId => holds.count(linkId) });
   // Relayed requests being checked against holds; tests and shutdown can wait for them.
   const holdObservations = new Set<Promise<void>>();
+  const traffic = createLinkTrafficBook("content-length");
 
   const setStatus = (state: LinkListenerStatus["state"], port: number | null, reason: string | null): void => {
     lifecycleStatus = { state, port, reason };
@@ -181,7 +185,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     }
     const requestedPort = store.listenerPort ?? 0;
     const linkWebsocket = startContext.responsesWebsocket;
-    const sessions = createLinkRelaySessions({ peers, activity, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
+    const sessions = createLinkRelaySessions({ peers, activity, traffic, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: fingerprintsFor,
       ...(linkWebsocket ? { upgrade: websocketGate.upgrade, websocketAdvertised: websocketEnabled } : {}),
       observeResponsesRequest: (linkId, req) => {
@@ -346,6 +350,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     linkHolds: linkId => holds.summary(linkId),
     clearLinkHolds: linkId => holds.clear(linkId),
     async activityHoldsSettled() { await Promise.all([...holdObservations]); },
+    linkTraffic: linkId => traffic.snapshot(linkId),
     onCatalogServed(listener) {
       catalogServedListeners.add(listener);
       return () => { catalogServedListeners.delete(listener); };
