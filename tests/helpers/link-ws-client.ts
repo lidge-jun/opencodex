@@ -126,7 +126,7 @@ export class LinkWireClient {
   }
 
   /** Sends one HTTP request with a body on this connection without reading the answer. */
-  sendRequest(requestLine: string, headers: Record<string, string>, body: string): void {
+  sendRequest(requestLine: string, headers: Record<string, string>, body: string | Uint8Array): void {
     this.write(requestLine, { ...headers, "content-length": String(Buffer.byteLength(body)) });
     this.socket.write(body);
   }

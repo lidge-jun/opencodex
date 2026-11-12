@@ -14,6 +14,7 @@ import { resultKeysOf } from "../../codex/websocket-activity";
 import { dirname } from "node:path";
 import { createLinkTrafficBook, type LinkTrafficCounters } from "../../link/traffic";
 import { buildPeerFeatures } from "../../remote/features";
+import { decodeRequestBody } from "../request-decompress";
 import {
   emptyLinkStore,
   readLinkStore,
@@ -222,7 +223,11 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
         if (holds.releasable(linkId)) {
           const decision = new Promise<boolean>(resolve => { decide = resolve; });
           // The copy is read alongside the request, but released only if the handler accepted it.
-          const parsed = req.clone().json().catch(() => null);
+          // A Child may send the body coded (#8594); the copy is decoded through the handlers' bounded reader, and a body
+          // that does not decode releases nothing.
+          const encoding = req.headers.get("content-encoding");
+          const parsed = req.clone().arrayBuffer()
+            .then(raw => JSON.parse(new TextDecoder().decode(decodeRequestBody(new Uint8Array(raw), encoding))) as unknown).catch(() => null);
           const observation = Promise.all([parsed, decision]).then(([body, accepted]) => {
             if (!accepted || !body || typeof body !== "object") return;
             holds.observe(linkId, threadHashOf(body), resultKeysOf((body as Record<string, unknown>).input), beganAt);
