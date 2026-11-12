@@ -1,4 +1,5 @@
 import { remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../src/link/remote-probe";
+import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -1202,6 +1203,13 @@ test("apply refuses when the confirmed key is no longer the one trusted for its 
     expect(shaped.h.store.links).toEqual([]);
     expect(shaped.h.config.apiKeys).toEqual([]);
   }
+  // Another link's line recorded hashed by an older release is another host's line: apply passes.
+  const salt = Buffer.alloc(20, 5);
+  const otherHashed = "|1|" + salt.toString("base64") + "|" + createHmac("sha1", salt).update("beta").digest("base64") + " ssh-ed25519 KEYbeta";
+  const older = await scenario(() => writeFileSync(knownHosts, "home ssh-ed25519 KEYhome\n" + otherHashed + "\n"));
+  await older.confirm("home");
+  expect((await older.apply("home"))?.status).toBe(202);
+  expect(older.h.store.links.map(link => link.alias)).toEqual(["home"]);
   // The same key confirmed again under another spelling still trusts exactly that key.
   const respelled = await scenario(() => writeFileSync(knownHosts, "HOME ssh-ed25519 KEYhome\n"));
   await respelled.confirm("home");

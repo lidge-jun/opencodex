@@ -362,7 +362,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
         return await failed(created === "exists"
           ? fail("link_exists", "A link for this alias already exists.", 409)
           : created === "trust_file_unexpected"
-            ? fail("trust_file_unexpected", "The link known_hosts file has a hashed, pattern, host-list or marker line; remove it, then probe and confirm the host again.", 409)
+            ? fail("trust_file_unexpected", "The link known_hosts file has a pattern, host-list, marker or malformed line; remove that line, then probe and confirm the host again.", 409)
             : fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409));
       }
       await state.listener.ensureStarted();

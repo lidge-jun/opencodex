@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -287,4 +288,14 @@ test("an edit stored but not applied by the running supervisor is an explicit er
   // The store holds the edit, so a restart applies it.
   expect(routesOf(h)).toEqual(["alpha-lan", "pen-alpha"]);
   expect(h.events).toEqual(["store", "reload"]);
+});
+
+test("a link whose pin an older release recorded hashed still proves and stores a new route, over the hashed line", async () => {
+  // Releases before HashKnownHosts=no copied the probe's line hashed on Homes whose ssh_config hashes.
+  const salt = Buffer.alloc(20, 5);
+  const hashed = "|1|" + salt.toString("base64") + "|" + createHmac("sha1", salt).update("pen-alpha").digest("base64") + " ssh-ed25519 " + KEY;
+  const h = harness({ knownHosts: hashed + "\nbeta-host ssh-ed25519 " + OTHER_KEY + "\n" });
+  const response = await h.edit({ op: "add", route: "alpha-lan" });
+  expect(response).toEqual({ status: 200, body: { linkId: LINK, pin: "pen-alpha", routes: ["alpha-lan", "pen-alpha"] } });
+  expect(h.probes[0]!.knownHostsText).toBe(hashed + "\n");
 });

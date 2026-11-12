@@ -173,6 +173,23 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
     expect(checkRouteTrust(text, "pin-alias", keyFingerprint(pinnedKey!))).toEqual({ ok: false, code: "pin_mismatch" });
   }, 60_000);
 
+  test("OpenSSH lowercases HostKeyAlias before it hashes it: a hashed line matches the lowercased alias only", async () => {
+    const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
+    const hashed = (name: string) => {
+      const salt = randomBytes(20);
+      return "|1|" + salt.toString("base64") + "|" + createHmac("sha1", salt).update(name).digest("base64");
+    };
+    const runner = createSshRunner();
+    const probe = async (alias: string, hashedName: string) => {
+      const file = join(dir, "known_hosts-hashed-" + alias + "-" + hashedName);
+      writeFileSync(file, hashed(hashedName) + " " + type + " " + pinnedKey!.trim() + "\n");
+      const result = await runner.run(withConfig(buildRouteProbeArgv({ alias, destination: "route-a", knownHostsFile: file })), { timeoutMs: 20_000 });
+      return result.code;
+    };
+    expect({ lowerLine: await probe("PIN-ALIAS", "pin-alias"), exactLine: await probe("PIN-ALIAS", "PIN-ALIAS"), plain: await probe("pin-alias", "pin-alias") })
+      .toEqual({ lowerLine: 0, exactLine: 255, plain: 0 });
+  }, 60_000);
+
   test("OpenSSH accepts another key from a wildcard, host list or hashed line beside the confirmed one; apply's check refuses each", async () => {
     const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
     const [otherType, otherKey] = readFileSync(join(dir, "hk-other.pub"), "utf8").split(" ");
@@ -186,7 +203,8 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
       writeFileSync(file, text);
       const other = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-b", knownHostsFile: file })), { timeoutMs: 20_000 });
       expect({ label, code: other.code, stdout: other.stdout.trim() }).toEqual({ label, code: 0, stdout: "ocx-link-probe" });
-      expect({ label, trust: confirmedLineTrust(text, "pin-alias", confirmed) }).toEqual({ label, trust: "trust_file_unexpected" });
+      // A hashed line for the alias is a second key for it; a pattern or list cannot be ruled out at all.
+      expect({ label, trust: confirmedLineTrust(text, "pin-alias", confirmed) }).toEqual({ label, trust: label === "hashed" ? "key_changed" : "trust_file_unexpected" });
     }
   }, 60_000);
 });

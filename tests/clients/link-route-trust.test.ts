@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { checkRouteTrust, confirmedLineTrust, keyFingerprint, withoutAliasLines } from "../../src/link/route-trust";
 
 const KEY_A = Buffer.from("ssh-ed25519 pinned key blob for the test").toString("base64");
@@ -53,4 +53,33 @@ test("apply trusts the confirmed line only when it is the one line OpenSSH can u
   expect(confirmedLineTrust(confirmed + "\nHOME ssh-ed25519 " + KEY_B + "\n", "home", confirmed)).toBe("key_changed");
   expect(confirmedLineTrust("home ssh-ed25519 " + KEY_B + "\n", "home", confirmed)).toBe("key_changed");
   expect(confirmedLineTrust("", "home", confirmed)).toBe("key_changed");
+});
+
+function hashedHost(name: string, salt = Buffer.alloc(20, 7)): string {
+  return "|1|" + salt.toString("base64") + "|" + createHmac("sha1", salt).update(name).digest("base64");
+}
+
+test("a hashed line written by an older release counts for the alias it hashes, lowercased as OpenSSH does", () => {
+  // Releases before HashKnownHosts=no recorded the probe's line hashed on Homes whose ssh_config hashes.
+  const pin = hashedHost("pen-alpha") + " ssh-ed25519 " + KEY_A;
+  expect(checkRouteTrust(pin + "\n", "pen-alpha", FP_A)).toEqual({ ok: true, line: pin });
+  expect(checkRouteTrust(pin + "\n", "Pen-Alpha", FP_A)).toEqual({ ok: true, line: pin });
+  // Another link's hashed line is another host's line.
+  const other = hashedHost("beta-host", Buffer.alloc(20, 9)) + " ssh-ed25519 " + KEY_B;
+  expect(checkRouteTrust(other + "\npen-alpha ssh-ed25519 " + KEY_A + "\n", "pen-alpha", FP_A)).toEqual({ ok: true, line: "pen-alpha ssh-ed25519 " + KEY_A });
+  expect(confirmedLineTrust(other + "\nhome ssh-ed25519 " + KEY_A + "\n", "home", "home ssh-ed25519 " + KEY_A)).toBe("trusted");
+  // A hashed line for the alias beside a plain one is a second key OpenSSH would accept.
+  const extra = hashedHost("pen-alpha", Buffer.alloc(20, 3)) + " ssh-ed25519 " + KEY_B;
+  expect(checkRouteTrust("pen-alpha ssh-ed25519 " + KEY_A + "\n" + extra + "\n", "pen-alpha", FP_A)).toEqual({ ok: false, code: "pin_mismatch" });
+  expect(confirmedLineTrust("home ssh-ed25519 " + KEY_A + "\n" + hashedHost("home") + " ssh-ed25519 " + KEY_B + "\n", "home", "home ssh-ed25519 " + KEY_A)).toBe("key_changed");
+  // A line hashed from another spelling never matches: OpenSSH hashes the lowercased alias.
+  expect(checkRouteTrust(hashedHost("PEN-ALPHA") + " ssh-ed25519 " + KEY_B + "\npen-alpha ssh-ed25519 " + KEY_A + "\n", "pen-alpha", FP_A).ok).toBe(true);
+  // A malformed hashed field still fails the whole file.
+  expect(checkRouteTrust("|1|c2FsdA==|aGFzaA== ssh-ed25519 " + KEY_B + "\npen-alpha ssh-ed25519 " + KEY_A + "\n", "pen-alpha", FP_A)).toEqual({ ok: false, code: "trust_file_unexpected" });
+});
+
+test("removing an alias's lines also removes a hashed line for it, and keeps another host's", () => {
+  const mine = hashedHost("pen-alpha") + " ssh-ed25519 " + KEY_A;
+  const theirs = hashedHost("beta-host", Buffer.alloc(20, 9)) + " ssh-ed25519 " + KEY_B;
+  expect(withoutAliasLines(mine + "\n" + theirs + "\n", "PEN-ALPHA")).toEqual([theirs]);
 });
