@@ -390,6 +390,9 @@ export async function openTraeSession(
             }
             for (const event of promptEvents) {
               if (event.type === "error") {
+                if (!completionReceived) {
+                  await new Promise<void>(resolve => { setTimeout(resolve, 0); });
+                }
                 const usage = completionReceived ? traeUsage(receivedCompletion) : undefined;
                 emit({ ...event, ...(usage ? { usage } : {}) });
                 client.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
