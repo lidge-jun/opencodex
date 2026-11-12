@@ -14,7 +14,7 @@ import { SshRunnerError, boundHint, sshFailureHint, sshRunnerErrorHint, type Ssh
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
-import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
+import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
 const PROBE_TTL_MS = 5 * 60_000;
@@ -243,15 +243,24 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     // A key issued for a record that has not passed the locked alias and trust checks. Until then a
     // failure revokes only the key: compensation, which may store its record, is for a validated one.
     let unvalidatedKeyId: string | undefined;
+    // The alias and trust checks a new record must pass under the mutation lock, both when it is
+    // first written and when compensation would store it again: no other Home-initiated link owns
+    // the alias in any case, and the live known_hosts still trusts exactly the confirmed key.
+    const linkCheck = (current: LinkStore, self?: string): "exists" | ConfirmedLineTrust => {
+      const wanted = alias.toLowerCase();
+      if (current.links.some(link => link.id !== self && link.alias.toLowerCase() === wanted && link.direction === "hub-initiated")) return "exists";
+      return confirmedLineTrust(knownHostsFile(ctx), alias, confirmed.knownHostLine);
+    };
     let ephemeralChild = confirmed.runtimeKind === "ephemeral", plantedFreshBinary = false, purgeRollbackFailed = false, remoteMayBeConnected = false, phase = "remote_port";
     const failed = async (response: Response): Promise<Response> => {
-      let compensation = record ? await compensateNewLink(ctx, state, record) : null;
+      const own = record;
+      let compensation = own ? await compensateNewLink(ctx, state, own, current => linkCheck(current, own.id) === "trusted") : null;
       if (!record && unvalidatedKeyId !== undefined) {
         const keyId = unvalidatedKeyId;
         unvalidatedKeyId = undefined;
         if (!revokeKeyIdempotent(ctx, keyId)) {
           console.warn("[link] apply failed before storing the link; its issued key could not be revoked");
-          compensation = fail("key_cleanup_failed", "The link was not created, but its issued key could not be revoked; revoke the leftover link key under API keys.", 500);
+          compensation = keyCleanupFailed();
         }
       }
       if (plantedFreshBinary) {
@@ -337,13 +346,12 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       // case, and the live known_hosts must still trust exactly the confirmed key for it (another
       // confirmation, under any spelling, may have replaced it since this one). Only a record that
       // passed both becomes `record`, the one compensation handles; any earlier failure, an
-      // exception included, leaves it unset and revokes the key alone.
+      // exception included, leaves it unset and revokes the key alone. A write that throws leaves
+      // its outcome unknown: compensation re-runs the same checks before it would store the record.
       const created = withConfigMutationLockSync((): "written" | "exists" | ConfirmedLineTrust => {
         const current = readStoreFor(ctx);
-        const wanted = alias.toLowerCase();
-        if (current.links.some(link => link.alias.toLowerCase() === wanted && link.direction === "hub-initiated")) return "exists";
-        const trust = confirmedLineTrust(knownHostsFile(ctx), alias, confirmed.knownHostLine);
-        if (trust !== "trusted") return trust;
+        const check = linkCheck(current);
+        if (check !== "trusted") return check;
         record = candidate;
         unvalidatedKeyId = undefined;
         writeStoreFor(ctx, { ...current, links: [...current.links, candidate] });

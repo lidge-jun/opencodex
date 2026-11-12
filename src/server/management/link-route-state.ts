@@ -184,19 +184,36 @@ export function compensationFailure(ctx: ManagementContext, state: LinkRouteStat
   return fail("compensation_failed", "The link compensation could not be completed.", 500);
 }
 
-export async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number]): Promise<Response | null> {
+/** A link that was never stored, or not restored, whose issued key could not be revoked. */
+export function keyCleanupFailed(): Response {
+  return fail("key_cleanup_failed", "The link was not created, but its issued key could not be revoked; revoke the leftover link key under API keys.", 500);
+}
+
+/**
+ * Undo a new link. When its key will not revoke, the record is kept (stored again if absent) so the
+ * leftover key stays attached to a visible link. `stillValid` guards that re-insert: it runs inside
+ * the same lock as the write, and a record that no longer passes it (its alias or pin changed while
+ * this waited) is never stored; the key is reported instead (`key_cleanup_failed`).
+ */
+export async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number], stillValid?: (current: LinkStore) => boolean): Promise<Response | null> {
   const revoked = revokeKeyIdempotent(ctx, record.apiKeyId);
   if (!revoked) {
     try { await state.supervisor.stopLink(record.id); } catch { /* retain the record and failure marker */ }
+    let rejected = false;
     try {
       withConfigMutationLockSync(() => {
         const current = readStoreFor(ctx);
         if (!current.links.some(link => link.id === record.id)) {
+          if (stillValid && !stillValid(current)) { rejected = true; return; }
           writeStoreFor(ctx, { ...current, links: [...current.links, record] });
         }
       });
     } catch {
       // The in-memory marker still makes the residual visible when persistence is unavailable.
+    }
+    if (rejected) {
+      console.warn("[link] new link no longer valid after a failed store write; its issued key could not be revoked");
+      return keyCleanupFailed();
     }
     return compensationFailure(ctx, state, record, "revoke");
   }
