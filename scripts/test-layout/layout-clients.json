@@ -166,6 +166,7 @@
   "link-ports.test.ts": "clients",
   "link-supervisor.test.ts": "clients",
   "link-status-projection.test.ts": "clients",
+  "link-traffic.test.ts": "clients",
   "link-admission-wait.test.ts": "clients",
   "link-fingerprint.test.ts": "clients",
   "link-compensation.test.ts": "clients",
