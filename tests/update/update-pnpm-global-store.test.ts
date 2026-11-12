@@ -190,6 +190,23 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     }
   });
 
+  test("a NODE_PATH entry spelled inside the store whose link leaves it is refused", () => {
+    const layout = globalStoreLayout(root);
+    const outside = join(root, "outside-modules");
+    mkdirSync(join(outside, "foreign"), { recursive: true });
+    const inStore = join(layout.store, "links", "node-path-escape");
+    link(outside, inStore);
+    const original = process.env.NODE_PATH;
+    try {
+      process.env.NODE_PATH = inStore;
+      const result = verifyPnpmInstallTree(layout.exposed, "1.0.0", layout.store, layout.globalRoot);
+      expect(result.ok).toBe(false);
+      expect(result.failures).toContain("pnpm global dependency lookup root is outside the selected store");
+    } finally {
+      if (original === undefined) delete process.env.NODE_PATH; else process.env.NODE_PATH = original;
+    }
+  });
+
   test("on Windows a pnpm home or store path with cmd.exe metacharacters is refused before it reaches pnpm", () => {
     for (const name of ["a&calc", "p%USERPROFILE%", "b^c", "q!x"]) {
       const layout = globalStoreLayout(join(root, name));
