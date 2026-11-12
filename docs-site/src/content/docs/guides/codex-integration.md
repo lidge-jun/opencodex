@@ -1170,8 +1170,10 @@ an app updater can omit the managed connection argument. Save drafts, close Code
 After a Codex update, the runtime checks the changed package identity before emitting a
 correction, not before every usage response; a non-200 or otherwise correction-ineligible
 response can leave an active trial in place until a periodic check or an eligible usage
-response. A proof-verified newer build can then be observed again with fresh consent;
-reinstalling the certificate does not make an unverifiable package supported.
+response. The identity change clears both the prior exhaustion observation and trial consent.
+Even for a proof-verified newer build, wait for a new eligible original response that establishes
+exhaustion before giving fresh consent; Apply remains unavailable until that observation arrives.
+Reinstalling the certificate does not make an unverifiable package supported.
 
 The panel can also report the last completed build check as diagnostic metadata: the package
 version serving as the natively assessed baseline, the package version observed at that check,
