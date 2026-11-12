@@ -83,6 +83,8 @@ export interface CodexAccountEntry {
   creditsAfterLimit?: boolean;
   hasCredential: boolean;
   quota: AccountQuota | null;
+  /** Live weekly windows this account reported in contradiction (#8574); display only. */
+  weeklyQuotaConflicts?: unknown;
   /** Display-only observation; never used for account selection. */
   credits?: CodexCredits;
   quotaAutoRefresh: {

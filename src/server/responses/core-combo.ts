@@ -62,10 +62,12 @@ import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
 import {
   expandPreviousResponseInput,
+  previousResponseRestoredPrefixLength,
   previousResponseReplayFailure,
   previousResponseProviderState,
 } from "../../responses/state";
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
+import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
@@ -474,6 +476,16 @@ export async function executeComboResponses(
   }
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
     return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
+  }
+  // The combo ladder owns the whole logical request, so the catalog diagnostic is counted here for
+  // combo-routed turns; children run as concrete selections and would otherwise never report it.
+  // Counting after the replay expansion keeps restored history out of the tally.
+  if ((options.inboundWire ?? "responses") === "responses") {
+    warnEagerCodexToolCatalog(body, req.headers, {
+      surface: eagerCodexToolCatalogSurface(body, options.compactionRecoveryKind),
+      replayPrefixLength: previousResponseRestoredPrefixLength(body),
+      logicalRequest: logCtx,
+    });
   }
   const comboReplaySnapshot = {
     sourceBody: body,
