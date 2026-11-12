@@ -181,29 +181,43 @@ describe("ocx service uninstall / remove on Windows", () => {
     }
   });
 
-  test("an absent Part A is not proof the proxy is down: a live endpoint still refuses removal", async () => {
+  test("an absent Part A asks the endpoint itself: only a definitive down permits removal", async () => {
     // Part A "absent" only says no manager is registered. `findLiveProxy` can return null
-    // when its discovery cap runs out while the endpoint is live, so removal / the shared
-    // restore must ask the endpoint itself before deleting the task. No respawn hold is
-    // needed — nothing can relaunch it — but the answer still has to be definitive.
-    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent") });
-    const survivors: unknown[] = [];
-    const refused = await windowsServiceRemovalStop({
-      ownsSharedTeardown: () => false,
-      stopTracked: async () => "none",
-      survivor: async io => { survivors.push(io); return { port: 10100 }; },
-    });
-    expect(refused.ok).toBe(false);
-    // The hold would be meaningless here; asking for it would spend 7 s for nothing.
-    expect(survivors).toEqual([{ canRespawn: false }]);
+    // when its discovery cap runs out while the endpoint is live, so removal must ask the
+    // endpoint itself before deleting the task — and a probe that could not answer
+    // (timeout, transport failure) is not the answer "nothing is serving". Only the
+    // tri-state "dead" admits removal; "live" and "unknown" refuse and keep the receipt.
+    for (const [answer, ok] of [["dead", true], ["live", false], ["unknown", false]] as const) {
+      setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent") });
+      const probed: { port: number }[] = [];
+      const result = await windowsServiceRemovalStop({
+        ownsSharedTeardown: () => false,
+        stopTracked: async () => "none",
+        endpointLiveness: async endpoint => { probed.push(endpoint); return answer; },
+      });
+      expect(result.ok).toBe(ok);
+      expect(probed.length).toBe(1);
+      expect(probed[0]!.port).toBeGreaterThan(0);
+    }
+  });
 
+  test("an unreadable absent-Part-A probe refuses and keeps the receipt", async () => {
+    // The old branch read `proxyStillLiveAfterStop`'s null — its answer for a timed-out or
+    // failed probe — as success and deleted the task, and a claimed receipt was reported
+    // as discharged by the caller.
     setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent") });
-    const absent = await windowsServiceRemovalStop({
-      ownsSharedTeardown: () => false,
+    let claimed = 0;
+    let probed = 0;
+    const result = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => true,
+      claim: () => { claimed++; return { nonce: "r3" } as never; },
       stopTracked: async () => "none",
-      survivor: async () => null,
+      endpointLiveness: async () => { probed++; throw new Error("probe timed out"); },
     });
-    expect(absent).toEqual({ ok: true });
+    expect(claimed).toBe(1);
+    // The endpoint is what has to answer; a survivor probe's null never stood in for it.
+    expect(probed).toBe(1);
+    expect(result).toEqual({ ok: false });
   });
 
   test("claims a receipt carrying the Part A record before the POST, so the route does not answer 409", async () => {

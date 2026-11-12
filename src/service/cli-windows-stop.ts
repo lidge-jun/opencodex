@@ -18,6 +18,7 @@ import { clearPendingTeardown, claimPendingTeardown } from "../config/pending-te
 import { readRuntimePort } from "../config/process-state";
 import { loadConfig } from "../config";
 import { readClientConnectionState } from "../client/state";
+import { probeEndpointLiveness, type EndpointLiveness } from "../server/proxy-liveness";
 import { proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand } from "./orchestration";
 import {
   confirmWindowsServiceStop,
@@ -36,6 +37,11 @@ export interface WindowsServiceStopCommandIo {
   claim?: typeof claimPendingTeardown;
   stopTracked?: typeof stopTrackedProxyForServiceCommand;
   survivor?: typeof proxyStillLiveAfterStop;
+  /**
+   * Tri-state probe of the endpoint the removal stop targeted. Only a definitive "dead"
+   * permits deleting the task; "live" and "unknown" refuse and keep the receipt.
+   */
+  endpointLiveness?: (endpoint: { hostname: string; port: number }) => Promise<EndpointLiveness>;
 }
 
 function receiptEndpoint(): { endpoint: { hostname: string; port: number }; source: "exact" | "guessed" } {
@@ -124,9 +130,12 @@ export function completeWindowsServiceStopReceipt(nonce: string | undefined, cle
  * `ocx service stop` does, and kept until the caller's restore succeeds.
  */
 export async function windowsServiceRemovalStop(
-  io: Pick<WindowsServiceStopCommandIo, "stopTracked" | "ownsSharedTeardown" | "claim" | "survivor"> = {},
+  io: Pick<WindowsServiceStopCommandIo, "stopTracked" | "ownsSharedTeardown" | "claim" | "endpointLiveness"> = {},
 ): Promise<{ ok: boolean; nonce?: string }> {
   const port = windowsServiceStopPort();
+  // Resolved once: the receipt and the absent-Part-A probe must name the same address, or
+  // the proof would be about an endpoint the stop never contacted.
+  const { endpoint, source } = receiptEndpoint();
   const partA = await runWindowsServiceStopPartA({ admission: windowsStopAdmission({ orphanDiscovery: true }) });
   if (partA.outcome !== "stopped" && partA.outcome !== "absent") {
     console.error("❌ Service uninstall refused: the Windows service could not be proven stopped (" + partA.outcome + "), so the task was not deleted.");
@@ -135,7 +144,6 @@ export async function windowsServiceRemovalStop(
   }
   let nonce: string | undefined;
   if ((io.ownsSharedTeardown ?? ownsSharedTeardownByDefault)()) {
-    const { endpoint, source } = receiptEndpoint();
     try {
       nonce = (io.claim ?? claimPendingTeardown)(endpoint, source, process.pid, undefined, windowsPartARecord(partA)).nonce;
     } catch (error) {
@@ -152,11 +160,16 @@ export async function windowsServiceRemovalStop(
   if (partA.outcome === "absent") {
     // "absent" says no manager is registered, not that nothing is serving. `findLiveProxy`
     // inside the tracked stop can return null when its discovery cap runs out while the
-    // endpoint is live, so ask the endpoint itself before the task is deleted. No respawn
-    // hold: with no manager there is nothing to relaunch the proxy.
-    const survivor = await (io.survivor ?? proxyStillLiveAfterStop)({ canRespawn: false });
-    if (!survivor) return withNonce(nonce);
-    console.error("❌ Service uninstall refused: a proxy is still listening on port " + survivor.port + ".");
+    // endpoint is live, and `proxyStillLiveAfterStop` returns that same null for a probe
+    // that timed out or failed — which the old branch read as success. Ask the endpoint
+    // itself, tri-state, and delete the task only on a definitive "dead". No respawn hold:
+    // with no manager there is nothing to relaunch the proxy.
+    const liveness = await (io.endpointLiveness ?? probeEndpointLiveness)(endpoint)
+      .catch((): EndpointLiveness => "unknown");
+    if (liveness === "dead") return withNonce(nonce);
+    console.error(liveness === "live"
+      ? "❌ Service uninstall refused: a proxy is still listening on port " + endpoint.port + "."
+      : "❌ Service uninstall refused: the endpoint on port " + endpoint.port + " could not be confirmed down.");
     console.error("   The task was not deleted. Stop that proxy, then re-run 'ocx service uninstall'.");
     return { ok: false };
   }

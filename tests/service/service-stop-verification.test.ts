@@ -174,22 +174,25 @@ describe("orphan discovery is capped by the caller, not hard-coded (#7771)", () 
     const { partAResult } = await import("../helpers/windows-stop-caller-fixtures");
     setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent") });
     try {
-      // The survivor probe is injected: both callers fall through to the real
-      // proxyStillLiveAfterStop, which on Windows spends its full 7 s window before
-      // answering, and this test is about the discovery budget, not about that wait.
+      // The endpoint probes are injected: both callers would otherwise fall through to
+      // the real ones, which on Windows spend their full window before answering, and this
+      // test is about the discovery budget, not about that wait.
       const survivors: unknown[] = [];
+      const probed: unknown[] = [];
       for (const run of [windowsServiceStopBeforeRestore, windowsServiceRemovalStop]) {
         const seen: unknown[] = [];
         await run({
           ownsSharedTeardown: () => false,
           stopTracked: async io => { seen.push(io); return "stopped"; },
           survivor: async io => { survivors.push(io ?? "no-args"); return null; },
+          endpointLiveness: async endpoint => { probed.push(endpoint); return "dead"; },
         });
         expect(seen).toEqual([{ skipPortWait: false, orphanDiscoveryCapMs: 3_000 }]);
       }
-      // Both callers consulted the injection rather than the real 7 s probe, and the
-      // removal path asks for no respawn hold because nothing there can relaunch the proxy.
-      expect(survivors).toEqual(["no-args", { canRespawn: false }]);
+      // The stop path consulted its survivor injection; the removal path asked the
+      // tri-state endpoint probe instead, because a null survivor is not proof of absence.
+      expect(survivors).toEqual(["no-args"]);
+      expect(probed.length).toBe(1);
     } finally {
       setWindowsServiceStopHooksForTests(null);
     }
