@@ -366,7 +366,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         // the watched processes; the link stays blocked until every one of them is gone.
         for (const watched of watch.processes) delete watched.signal;
         watch.file = fileIdentity(file);
-        if (!watch.processes.some(watched => watched.pid === file.pid)) {
+        // Identity is pid, argv and start time together: a replacement that reuses an old pid is a new process.
+        if (!watch.processes.some(watched => watched.pid === file.pid && sameArgv(watched.argv, file.argv) && watched.startTime === file.startTime)) {
           watch.processes.push({ pid: file.pid, argv: file.argv, ...(file.startTime === undefined ? {} : { startTime: file.startTime }) });
         }
       }

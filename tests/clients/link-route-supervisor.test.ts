@@ -720,3 +720,29 @@ test("after a pidfile replacement the link stays blocked until the original and 
   await h.tick();
   expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
 });
+
+test("a replacement pidfile that reuses the original pid with another start time keeps the link blocked while it lives", async () => {
+  const oldArgv = ["ssh", "-N", "old"];
+  const newArgv = ["ssh", "-N", "new"];
+  let file: Pidfile = { version: 1, linkId: LINK, pid: 4242, argv: oldArgv, startTime: 777 };
+  // Which process pid 4242 names right now: the original, then (after it exits) the replacement.
+  let holder: "old" | "new" | "none" = "old";
+  const h = await started({
+    pidfile: () => file,
+    processArgv: () => holder === "old" ? oldArgv : holder === "new" ? newArgv : null,
+    processStart: () => holder === "old" ? 777 : holder === "new" ? 999 : null,
+    processAlive: () => holder !== "none",
+  });
+  expect(h.kills).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  holder = "new";
+  file = { version: 1, linkId: LINK, pid: 4242, argv: newArgv, startTime: 999 };
+  await h.advance(1_000);
+  await h.advance(5_000);
+  expect(h.kills).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  expect(h.removed).toEqual([]);
+  expect(h.state().orphan).toBe("orphan-unverified");
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+  holder = "none";
+  await h.advance(1_000);
+  expect(h.state().orphan).toBeUndefined();
+});
