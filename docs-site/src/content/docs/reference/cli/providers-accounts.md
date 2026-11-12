@@ -1114,9 +1114,13 @@ walk away to another device.
 browser, polls once per provider interval, and finishes on its own with nothing to paste. The
 deadline comes from xAI's `expires_in` on that authorization response, so treat the window as
 provider-issued rather than fixed, bounded to 30 minutes and to a poll no faster than once a
-second; an expired grant is reported, not retried. `kimi`, `nous`, and `github-copilot` accept the
-flag as a no-op because their only login is already a device flow; a provider with no device grant
-rejects it. A device login has nothing to paste, so `--device` with `--code` is refused.
+second; an expired grant is reported, not retried. If xAI answers a poll with `429` or a `5xx`,
+its `Retry-After` sets that one wait instead of the interval, still inside the grant deadline. A
+redirect on either device request is refused rather than followed, and fails the login at once
+as an authentication failure instead of being retried as a network or code problem. `kimi`,
+`nous`, and `github-copilot` accept the flag as a no-op because their only login is already a
+device flow; a provider with no device grant rejects it. A device login has nothing to paste, so
+`--device` with `--code` is refused.
 
 The dashboard does not expose a provider's device grant this way. On the add-account modal the
 **"Don't open a browser on the proxy machine"** checkbox only stops the proxy from launching a

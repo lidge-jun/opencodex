@@ -129,7 +129,11 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   127.0.0.1:56121 callback. It shows the `accounts.x.ai` verification URL and user code, polls
   the token endpoint once per provider interval, keeps polling
   through `authorization_pending`, timeouts, network failures, 429 and 5xx, and ends on denial,
-  expiry or cancellation. It never imports the local Grok CLI token. `ocx login xai --headless`,
+  expiry or cancellation. A retryable response's `Retry-After` (delta-seconds or HTTP-date, parsed
+  by the same helper the refresh path uses) raises that one wait above the interval, floored at the
+  interval and bounded by the grant deadline, so the client honours the server's throttle without
+  polling past expiry or handing an oversized delay to a timer. It never imports the local Grok CLI
+  token. `ocx login xai --headless`,
   `ocx account login xai --device` and `POST /api/oauth/login` with `device: true` select it
   (`supportsDeviceLoginMode` in `src/oauth/index.ts`).
   Both poll bounds come from the authorization response, so both are clamped before they reach a
@@ -143,8 +147,20 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   poll use `redirect: "error"`: a 307/308 preserves the method and body, so the client id and the
   bearer-equivalent `device_code` must not follow a hop to a host `validateXaiEndpoint` never
   approved. Discovery already refuses a non-x.ai endpoint, so a redirect here can only be a
-  downgrade. The inherited browser-callback, code-exchange and refresh requests keep the runtime's
-  default redirect policy. Regression coverage: `tests/providers/xai/xai-device-login.test.ts`.
+  downgrade. That refusal is deterministic and terminal: `fetch` throws instead of returning, and
+  both runtime shapes are recognized — Bun's `TypeError` with `code: "UnexpectedRedirect"` and
+  Node/undici's `TypeError("fetch failed")` whose cause is `Error("unexpected redirect")` — so the
+  poll fails after one request as `XaiRedirectRefusedError` rather than being retried as a network
+  failure until the grant reports `expired_token`. The refusal carries a fixed message and no cause,
+  because Bun's text embeds the URL and the poll body carries the `device_code`. The CLI reports it
+  as `oauth_authentication_failed`, not `network_error`, on both CLI surfaces: the callback
+  reporter (`src/oauth/login-cli-errors.ts`) and the headless device branch of
+  `src/oauth/login-cli.ts`, which otherwise classifies through `classifyLoginCodeError` and would
+  call it `invalid_or_expired_code`. A plain `TypeError` and a real connection
+  failure carry neither marker and stay retriable. The inherited browser-callback, code-exchange
+  and refresh requests keep the runtime's default redirect policy. Regression coverage:
+  `tests/providers/xai/xai-device-login.test.ts`, `tests/oauth/oauth-login-cli-errors.test.ts`,
+  `tests/oauth/oauth-code-login.test.ts`.
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
   exchange plus a short global store-write lock + async mutation funnel around every
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist

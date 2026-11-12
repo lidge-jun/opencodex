@@ -714,6 +714,38 @@ describe("OAuth code-display login", () => {
     expect(listCodeLoginProviders()).toContain("xai");
   });
 
+  // A refused redirect on the device grant is a definitive server answer, and the CLI surface that
+  // runs that grant reports it through `classifyLoginCodeError`, not the callback reporter. That
+  // classifier sees no HTTP status and would fall through to `invalid_or_expired_code`, sending the
+  // operator to try another code against a client that will refuse the same redirect again.
+  test("a refused xAI redirect in the headless device login is reported as an auth failure", async () => {
+    const { handleLogin } = await import("../../src/oauth/login-cli");
+    const { XaiRedirectRefusedError } = await import("../../src/oauth/xai");
+    const url = "https://auth.x.ai/oauth2/token?device_code=secret-device-code";
+    let stderr = "";
+    const errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => { stderr += args.join(" "); });
+    const exitSpy = spyOn(process, "exit").mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
+    try {
+      await expect(handleLogin("xai", {
+        openUrl: async () => { throw new Error("must not launch"); },
+        ask: async () => "",
+        runLogin: async () => {
+          const error = new XaiRedirectRefusedError();
+          // The runtime's own redirect TypeError embeds the URL: nothing of it may reach stderr.
+          Object.defineProperty(error, "cause", { value: new TypeError(`UnexpectedRedirect fetching "${url}"`) });
+          throw error;
+        },
+      }, { codeMode: true })).rejects.toThrow("exit 1");
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+    expect(stderr).toContain("(oauth_authentication_failed)");
+    expect(stderr).not.toContain("invalid_or_expired_code");
+    expect(stderr).not.toContain("secret-device-code");
+    expect(stderr).not.toContain("UnexpectedRedirect");
+  });
+
   // The headless device path prints provider-supplied instructions quoting the user code. A bidi
   // override or a zero-width character in that text can reorder or hide the line the operator is
   // reading, and C0/C1 escaping alone never covered it (#8436 review).

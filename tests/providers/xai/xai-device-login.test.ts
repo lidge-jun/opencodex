@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { loginXaiDevice, XaiTokenRequestError } from "../../../src/oauth/xai";
+import { loginXaiDevice, XaiRedirectRefusedError, XaiTokenRequestError } from "../../../src/oauth/xai";
 
 const DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
 const DEVICE = "https://auth.x.ai/oauth2/device/code";
@@ -301,6 +301,228 @@ describe("xAI device login", () => {
     }) as typeof fetch;
     await loginXaiDevice({}, { sleep: async () => {} });
     expect(redirects).toEqual(["error"]);
+  });
+
+  // ---- a refused redirect must end the login, not expire it ---------------------------------
+  //
+  // `postXaiToken` asks for `redirect: "error"`, so `fetch` throws instead of returning a
+  // response. That throw used to land in the generic network branch: the poll was retried every
+  // interval until the grant ran out, then reported `expired_token` — a wrong cause, a delayed
+  // failure, and extra requests carrying the `device_code`. The fix classifies the runtime's own
+  // redirect error as a deterministic refusal.
+
+  /**
+   * The error the running JavaScript runtime really throws for `redirect: "error"`.
+   *
+   * Built from a live loopback server rather than a hand-written object, so the detector is
+   * tested against the shape this runtime produces instead of the shape this file assumes.
+   */
+  async function realRedirectRefusal(): Promise<Error> {
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch: () => new Response(null, { status: 307, headers: { location: "https://auth.x.ai/oauth2/token" } }),
+    });
+    try {
+      await fetch(`http://127.0.0.1:${server.port}/redirect`, { method: "POST", redirect: "error", body: "x=1" });
+      throw new Error("fixture server did not redirect");
+    } catch (error) {
+      return error as Error;
+    } finally {
+      await server.stop(true);
+    }
+  }
+
+  /** A stubbed fetch that rejects the token poll with `failure` instead of answering it. */
+  function mockRefusingPoll(failure: () => Error): Call[] {
+    const calls = mockXai(boundedDevice({ expires_in: 900, interval: 5 }), []);
+    const mocked = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === TOKEN) {
+        calls.push({ url, body: Object.fromEntries(new URLSearchParams(String(init?.body ?? ""))) });
+        throw failure();
+      }
+      return mocked(input, init);
+    }) as typeof fetch;
+    return calls;
+  }
+
+  test("a redirect on the token poll ends the login after one request, with no wait and no secret text", async () => {
+    const refusal = await realRedirectRefusal();
+    const f = clockFixture();
+    try {
+      const calls = mockRefusingPoll(() => refusal);
+      const error = await loginXaiDevice({ onAuth: () => {} }, { sleep: f.sleep }).catch(e => e);
+      expect(error).toBeInstanceOf(XaiRedirectRefusedError);
+      // One poll, then the failure. The old branch slept one interval and polled again per tick
+      // until `expires_in` elapsed, which is what made this look like a broken network.
+      expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
+      expect(f.waits).toEqual([5_000]);
+      const text = [
+        String(error?.message ?? ""),
+        String(error?.cause ?? ""),
+        JSON.stringify(error),
+        (error as Error).stack ?? "",
+      ].join("\n");
+      for (const secret of [TOKEN, "dev-1", "ABCD", refusal.message]) expect(text).not.toContain(secret);
+    } finally {
+      f.clock.mockRestore();
+    }
+  });
+
+  test("the Node/undici redirect shape is refused, and a real connection failure still retries", async () => {
+    // Shape observed from a real Node fetch with `redirect: "error"` (node v26): the top error is
+    // `TypeError("fetch failed")` and undici puts `Error("unexpected redirect")` on its cause. Bun
+    // reports the same condition as `TypeError` with `code: "UnexpectedRedirect"` (captured above).
+    const undiciRefusal = new TypeError("fetch failed", { cause: new Error("unexpected redirect") });
+    const calls = mockRefusingPoll(() => undiciRefusal);
+    await expect(loginXaiDevice({}, { sleep: async () => {} })).rejects.toBeInstanceOf(XaiRedirectRefusedError);
+    expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
+
+    // A connection failure is also a TypeError, sometimes with `fetch failed` on top. It must stay
+    // retriable: this is the branch the fix must not swallow.
+    const refusedConnection = new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED 127.0.0.1:443") });
+    const retryCalls = mockXai(boundedDevice({ expires_in: 900, interval: 5 }), []);
+    const mocked = globalThis.fetch;
+    let polls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== TOKEN) return mocked(input, init);
+      polls++;
+      if (polls === 1) throw refusedConnection;
+      return granted();
+    }) as typeof fetch;
+    const f = clockFixture();
+    try {
+      expect(await loginXaiDevice({}, { sleep: f.sleep })).toMatchObject({ access: "access" });
+    } finally {
+      f.clock.mockRestore();
+    }
+    // Two polls, one interval apart: the first failure was retried, not classified.
+    expect(polls).toBe(2);
+    expect(f.waits).toEqual([5_000, 5_000]);
+    expect(retryCalls.some(c => c.url === DEVICE)).toBe(true);
+  });
+
+  test("a redirect on the device authorization request is refused before the first poll", async () => {
+    const refusal = await realRedirectRefusal();
+    const calls = mockXai(boundedDevice({ expires_in: 900, interval: 5 }), [granted()]);
+    const mocked = globalThis.fetch;
+    const deviceRequests: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === DEVICE) {
+        deviceRequests.push(String(input));
+        throw refusal;
+      }
+      return mocked(input, init);
+    }) as typeof fetch;
+    await expect(loginXaiDevice({})).rejects.toBeInstanceOf(XaiRedirectRefusedError);
+    expect(deviceRequests).toEqual([DEVICE]);
+    // The failure precedes authorization, so no token poll was ever issued.
+    expect(calls.filter(c => c.url === TOKEN)).toHaveLength(0);
+  });
+
+  // ---- 429 Retry-After on a device poll ------------------------------------------------------
+  // `postXaiToken` is called with `maxAttempts: 1` here, so its own Retry-After path never runs.
+  // The outer loop owns the schedule, and it must honour the server's throttle rather than
+  // re-polling on the client interval; it is still bounded by the grant deadline.
+  const throttled = (retryAfter: string) => new Response("", { status: 429, headers: { "retry-after": retryAfter } });
+
+  test("a 429 Retry-After delay beyond the poll interval is honored", async () => {
+    const f = clockFixture();
+    try {
+      mockXai(boundedDevice({ expires_in: 900, interval: 5 }), [throttled("30"), granted()]);
+      expect(await loginXaiDevice({}, { sleep: f.sleep })).toMatchObject({ access: "access" });
+      // 30s from the header, not the 5s interval: earlier would re-poll inside the throttle.
+      expect(f.waits).toEqual([5_000, 30_000]);
+    } finally {
+      f.clock.mockRestore();
+    }
+  });
+
+  test("a 5xx Retry-After shares the throttle path rather than only the interval", async () => {
+    const f = clockFixture();
+    try {
+      // A 503 is retried too; the server's throttle on it must not be dropped just because the
+      // status is not 429. Both share one branch, and this case pins that.
+      mockXai(boundedDevice({ expires_in: 900, interval: 5 }), [
+        new Response("", { status: 503, headers: { "retry-after": "20" } }), granted(),
+      ]);
+      expect(await loginXaiDevice({}, { sleep: f.sleep })).toMatchObject({ access: "access" });
+      expect(f.waits).toEqual([5_000, 20_000]);
+    } finally {
+      f.clock.mockRestore();
+    }
+  });
+
+  test("a 429 Retry-After HTTP-date is honored", async () => {
+    const f = clockFixture();
+    try {
+      // Relative to the loop's own clock, which the fixture advances.
+      const date = () => new Date(f.now.peek() + 45_000).toUTCString();
+      const calls = mockXai(boundedDevice({ expires_in: 900, interval: 5 }), []);
+      const mocked = globalThis.fetch;
+      let polls = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) !== TOKEN) return mocked(input, init);
+        polls++;
+        return polls === 1 ? new Response("", { status: 429, headers: { "retry-after": date() } }) : granted();
+      }) as typeof fetch;
+      expect(await loginXaiDevice({}, { sleep: f.sleep })).toMatchObject({ access: "access" });
+      expect(calls.length).toBeGreaterThan(0);
+      expect(f.waits).toEqual([5_000, 45_000]);
+    } finally {
+      f.clock.mockRestore();
+    }
+  });
+
+  test("a malformed or oversized Retry-After cannot shrink the wait, overflow a timer, or hot-loop", async () => {
+    // Malformed: the header is ignored and the client interval still applies.
+    const malformed = clockFixture();
+    try {
+      mockXai(boundedDevice({ expires_in: 12, interval: 5 }), [throttled("soon"), granted()]);
+      await loginXaiDevice({}, { sleep: malformed.sleep });
+      expect(malformed.waits).toEqual([5_000, 5_000]);
+    } finally {
+      malformed.clock.mockRestore();
+    }
+    // Oversized: 100,000s would overflow `setTimeout` into a next-tick fire. It is bounded by the
+    // grant lifetime, so the login waits out the grant and expires instead of polling hot.
+    const oversized = clockFixture();
+    try {
+      mockXai(boundedDevice({ expires_in: 60, interval: 5 }), [throttled("100000")]);
+      const error = await loginXaiDevice({}, { sleep: oversized.sleep }).catch(e => e);
+      expect(error.oauthError).toBe("expired_token");
+      expect(oversized.waits).toEqual([5_000, 55_000]);
+      expect(oversized.waits.every(ms => ms <= 2 ** 31 - 1)).toBe(true);
+    } finally {
+      oversized.clock.mockRestore();
+    }
+  });
+
+  test("a Retry-After past the grant deadline ends the login instead of polling after it", async () => {
+    const f = clockFixture();
+    try {
+      const calls = mockXai(boundedDevice({ expires_in: 60, interval: 5 }), [throttled("120")]);
+      const error = await loginXaiDevice({}, { sleep: f.sleep }).catch(e => e);
+      expect(error.oauthError).toBe("expired_token");
+      // One poll; the throttle outlives the grant, so there is nothing left to wait for.
+      expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
+      expect(f.waits).toEqual([5_000, 55_000]);
+    } finally {
+      f.clock.mockRestore();
+    }
+  });
+
+  test("cancellation during a Retry-After wait rejects without another poll", async () => {
+    const cancel = new AbortController();
+    const calls = mockXai(boundedDevice({ expires_in: 900, interval: 5 }), [throttled("120")]);
+    const sleeps: number[] = [];
+    const error = await loginXaiDevice({ signal: cancel.signal }, {
+      sleep: async ms => { sleeps.push(ms); if (sleeps.length > 1) { cancel.abort(); throw cancel.signal.reason; } },
+    }).catch(e => e);
+    expect(error).toBeDefined();
+    expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
+    expect(sleeps).toEqual([5_000, 120_000]);
   });
 
   test("an issuer without device authorization, or a verification URL off x.ai, is refused", async () => {
