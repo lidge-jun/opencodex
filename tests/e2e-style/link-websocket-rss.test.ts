@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,8 @@ import { repoPath } from "../helpers/repo-root";
 // of the Home process stays within n link socket reservations (the 768 MiB budget at n = 24).
 // The peak is the kernel's high-water mark (VmHWM, reset after the idle reading) on Linux 4.0 or later;
 // elsewhere the Home samples RSS on its own event loop, may miss a short peak, and reports "sampled".
+// Any OCX_LINK_WS_RSS_* setting besides the opt-in turns the run into a diagnostic: it prints its numbers and
+// never reports an acceptance.
 
 const ENABLED = process.env.OCX_LINK_WS_RSS_ACCEPTANCE === "1";
 const SOCKETS = Number(process.env.OCX_LINK_WS_RSS_SOCKETS ?? LINK_WS_LIMITS.totalSockets);
@@ -29,6 +31,18 @@ const MAX_CHUNK = Number(process.env.OCX_LINK_WS_RSS_MAX_CHUNK ?? 16 * MiB);
 // Diagnostics only: "http" sends the same stalled load through the HTTP link relay instead, to
 // compare what the Home holds for a slow reader on today's transport.
 const TRANSPORT = process.env.OCX_LINK_WS_RSS_TRANSPORT === "http" ? "http" : "websocket";
+// Diagnostics only: "hold" makes every upstream stream stop after HOLD_BYTES (about four events), so the Home's fetch cannot
+// read further ahead of a stalled reader; HEAP=1 asks the Home for a heap breakdown at the stall.
+const UPSTREAM_HOLD = process.env.OCX_LINK_WS_RSS_UPSTREAM === "hold";
+const HEAP = process.env.OCX_LINK_WS_RSS_HEAP === "1";
+const HOLD_BYTES = 16 * MiB;
+// Only the canonical load (all sockets, no diagnostic setting) may report an acceptance; anything else runs as a
+// diagnostic that prints its numbers and never asserts the budget.
+const DIAGNOSTIC_SETTINGS = ["OCX_LINK_WS_RSS_SOCKETS", "OCX_LINK_WS_RSS_INPUT_BYTES", "OCX_LINK_WS_RSS_MAX_CHUNK",
+  "OCX_LINK_WS_RSS_TRANSPORT", "OCX_LINK_WS_RSS_UPSTREAM", "OCX_LINK_WS_RSS_HEAP"].filter(name => process.env[name] !== undefined);
+const CANONICAL = DIAGNOSTIC_SETTINGS.length === 0;
+// A child process runs the Home: the bound is this file's default, not a per-test timeout.
+setDefaultTimeout(600_000);
 
 function eventsText(count: number): string {
   const delta = "x".repeat(EVENT_BYTES - 200);
@@ -37,8 +51,10 @@ function eventsText(count: number): string {
     + 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}\n\n';
 }
 
-describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in release gate: OCX_LINK_WS_RSS_ACCEPTANCE=1)", () => {
-  test("peak RSS minus idle RSS of the Home stays within the link socket reservations", async () => {
+interface LoadResult { method: string; idle: number; peak: number; delta: number }
+
+/** One stalled load against a Home in its own process; prints its numbers and returns the peak reading. */
+async function runLoad(): Promise<LoadResult> {
     expect(SOCKETS).toBeGreaterThan(0);
     expect(SOCKETS).toBeLessThanOrEqual(LINK_WS_LIMITS.totalSockets);
     const root = mkdtempSync(join(tmpdir(), "ocx-link-ws-rss-"));
@@ -48,10 +64,12 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
     const signals = Array.from({ length: SOCKETS + 1 }, () => {
       let stalled!: () => void;
       let gone!: () => void;
+      let heldAt!: () => void;
       return {
         reachedStall: new Promise<void>(resolve => { stalled = resolve; }),
         cancelled: new Promise<void>(resolve => { gone = resolve; }),
-        stalled: () => stalled(), gone: () => gone(),
+        reachedHold: new Promise<void>(resolve => { heldAt = resolve; }),
+        stalled: () => stalled(), gone: () => gone(), held: () => heldAt(),
       };
     });
     let requests = 0;
@@ -71,6 +89,8 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
         return new Response(new ReadableStream<Uint8Array>({
           pull(controller) {
             if (offset >= body.byteLength) { controller.close(); signal.gone(); return; }
+            // A held stream (not the warm-up) supplies nothing more after the stall point, until it is cancelled.
+            if (UPSTREAM_HOLD && stream > 0 && offset >= HOLD_BYTES) { signal.held(); return new Promise<void>(() => {}); }
             const size = Math.min(MAX_CHUNK, CHUNK_PLAN[pulls % CHUNK_PLAN.length]!);
             const chunk = body.subarray(offset, Math.min(body.byteLength, offset + size));
             offset += chunk.byteLength;
@@ -147,8 +167,11 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
         const finished = Promise.all(signals.slice(1).map(signal => signal.cancelled)).then(() => "finished" as const);
         // A load that completes before every pump waits never reached the condition being measured.
         expect(await Promise.race([announced, finished])).toBe("stalled");
-      } else await Promise.all(signals.slice(1).map(signal => signal.reachedStall));
+      } else await Promise.all(signals.slice(1).map(signal => UPSTREAM_HOLD ? signal.reachedHold : signal.reachedStall));
+      // With a held upstream both transports also wait until every stream has supplied all it will.
+      if (UPSTREAM_HOLD && TRANSPORT === "websocket") await Promise.all(signals.slice(1).map(signal => signal.reachedHold));
       const enqueuedAtStallMiB = delivered.slice(1).map(bytes => Math.round(bytes / MiB));
+      if (HEAP) { child.stdin.write("heap\n"); child.stdin.flush(); console.log(JSON.stringify(await nextLine())); }
       // Cut every socket in a seeded random order, at different points of its stalled stream.
       let seed = 7;
       const order = clients.map((client, index) => ({ client, key: (seed = (seed * 48271) % 2147483647) + index }));
@@ -164,10 +187,7 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
       const delta = peak - idle;
       const budget = SOCKETS * LINK_WS_LIMITS.socketReservationBytes;
       console.log(JSON.stringify({ method, transport: TRANSPORT, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
-      // Only a kernel high-water mark, reset after the idle reading and read back, can satisfy the gate.
-      expect(method).toBe("kernel-vmhwm");
-      expect(Number.isFinite(peak) && peak >= idle).toBe(true);
-      expect(delta).toBeLessThanOrEqual(budget);
+      return { method, idle, peak, delta };
     } finally {
       for (const client of clients) client.destroy();
       try { child.stdin.write("stop\n"); child.stdin.flush(); child.stdin.end(); } catch { /* already gone */ }
@@ -175,6 +195,23 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in 
       await upstream.stop(true);
       removeTreeWithRetry(root);
     }
-  }, 600_000);
+}
+
+describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in release gate: OCX_LINK_WS_RSS_ACCEPTANCE=1)", () => {
+  test.skipIf(!CANONICAL)("acceptance: peak RSS minus idle RSS of the Home stays within the link socket reservations"
+    + (CANONICAL ? "" : " [skipped: diagnostic settings present (" + DIAGNOSTIC_SETTINGS.join(", ") + "); only the canonical load reports an acceptance]"), async () => {
+    const result = await runLoad();
+    // Only a kernel high-water mark, reset after the idle reading and read back, can satisfy the gate.
+    expect(result.method).toBe("kernel-vmhwm");
+    expect(Number.isFinite(result.peak) && result.peak >= result.idle).toBe(true);
+    expect(result.delta).toBeLessThanOrEqual(SOCKETS * LINK_WS_LIMITS.socketReservationBytes);
+  });
+
+  test.skipIf(CANONICAL)("diagnostic run, never an acceptance: " + (CANONICAL ? "none requested" : DIAGNOSTIC_SETTINGS.join(", ")), async () => {
+    const result = await runLoad();
+    // The numbers are printed by runLoad; a diagnostic only checks that the peak was really measured.
+    expect(result.method).toBe("kernel-vmhwm");
+    expect(Number.isFinite(result.peak) && result.peak >= result.idle).toBe(true);
+  });
 });
 
