@@ -125,32 +125,50 @@ describe("xAI device login", () => {
   });
 
   test("a stalled poll is cut off at the grant deadline", async () => {
-    // `AbortSignal.timeout` is a real timer, so this case spends real time on purpose: the per-poll
-    // abort is the thing under test, and faking it would test the fake. 1.5 seconds total.
+    // A poll that never answers must still end on the grant deadline. The per-poll signal carries
+    // the time left in the grant, so the deadline is a budget handed to `AbortSignal.timeout`, not
+    // a wall-clock wait: this case stubs the timer and aborts the poll's own signal, so it proves
+    // the deadline arithmetic and the abort path without spending real time.
     //
     // The interval is floored at 1s, so the grant must outlive that floor for a poll to be issued
     // at all; a sub-second `expires_in` ends the loop before the first request and would let this
     // pass without ever exercising the abort.
-    mockXai({ device_code: "d", user_code: "u", verification_uri: "https://accounts.x.ai/oauth2/device", expires_in: 1.5, interval: 1 }, []);
-    const mocked = globalThis.fetch;
-    let tokens = 0;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) !== TOKEN) return mocked(input, init);
-      tokens++;
-      // Never answers: only the per-poll abort can settle it, and that signal carries the time
-      // left in the grant, so the promise rejects at the deadline, not at the 30s fetch timeout.
-      return await new Promise<Response>((_, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
-      });
-    }) as typeof fetch;
-    const started = Date.now();
-    const error = await loginXaiDevice({}).catch(e => e);
-    const elapsed = Date.now() - started;
-    expect(error.oauthError).toBe("expired_token");
-    expect(tokens).toBe(1);
-    // One 1s interval, then the poll is aborted with the 500ms the grant had left.
-    expect(elapsed).toBeGreaterThanOrEqual(1_400);
-    expect(elapsed).toBeLessThan(5_000);
+    const f = clockFixture();
+    const pollDeadline = new AbortController();
+    const budgets: number[] = [];
+    // Every timeout is a controlled signal: a real one would make this case wait for the 30s
+    // request budget that nothing here is testing.
+    const timeout = spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+      budgets.push(ms);
+      return pollDeadline.signal;
+    });
+    try {
+      mockXai(boundedDevice({ expires_in: 1.5, interval: 1 }), []);
+      const mocked = globalThis.fetch;
+      let tokens = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) !== TOKEN) return mocked(input, init);
+        tokens++;
+        // Never answers: only the per-poll abort can settle it. The controller fires as soon as the
+        // request is in flight, so the rejection is the deadline's, not a fetch timeout's.
+        return await new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+          pollDeadline.abort(new DOMException("fixture grant deadline", "TimeoutError"));
+        });
+      }) as typeof fetch;
+      const error = await loginXaiDevice({}, { sleep: f.sleep }).catch(e => e);
+      expect(error.oauthError).toBe("expired_token");
+      // One request, then the grant ran out: no retry after the deadline.
+      expect(tokens).toBe(1);
+      // The settled interval, then the 500ms the grant had left — never a full second past the
+      // deadline, and never a retry on the leftover.
+      expect(f.waits).toEqual([1_000, 500]);
+      // The poll's own budget is what is left in the grant, not the 30s request budget.
+      expect(budgets).toContain(500);
+    } finally {
+      timeout.mockRestore();
+      f.clock.mockRestore();
+    }
   });
 
   test("an unapproved code expires at the provider's deadline", async () => {

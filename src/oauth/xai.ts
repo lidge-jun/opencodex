@@ -359,8 +359,11 @@ const XAI_DEVICE_DEFAULT_INTERVAL_S = 5;
  * next tick, which is exactly a hot loop against the auth endpoint; a `0`/negative/fractional
  * `interval` floors to ~1 ms for the same effect. So the interval is clamped into
  * [MIN, TTL] and the grant lifetime into (0, MAX_TTL]. RFC 8628 §3.2 says the issuer supplies
- * `interval` and `expires_in`; the ceilings below are conservative readings of that, and the grant
- * can no longer outlive a plausible human approval at another machine.
+ * `interval` and `expires_in`, but sets no ceiling on either, so the values below are this client's
+ * policy rather than an RFC rule: a grant that outlives a plausible human approval at another
+ * machine is not worth holding a login open for. A grant the issuer would still honour past the
+ * ceiling ends here and reports `expired_token`, which is the same outcome as a real expiry from
+ * the caller's side.
  */
 const XAI_DEVICE_MIN_INTERVAL_MS = 1_000;
 const XAI_DEVICE_MAX_TTL_S = 30 * 60;
