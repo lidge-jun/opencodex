@@ -988,6 +988,162 @@ function isResponseFormatCapabilityRefusal(
   return false;
 }
 
+/**
+ * Codes, types and params an unoffered-tool-call refusal may carry. The reported carrier uses
+ * `type: "upstream_error"` with `code: null` -- an aggregator re-wrapping the model backend's
+ * 400 -- while request-validation spellings stay accepted because gateways disagree on which
+ * they emit. Anything outside these closed sets fails closed.
+ */
+const UNOFFERED_TOOL_CALL_CODES = new Set(["", "invalid_request_error", "invalid_argument", "upstream_error"]);
+const UNOFFERED_TOOL_CALL_TYPES = new Set(["", "invalid_request_error", "upstream_error", "ai_apicallerror"]);
+const UNOFFERED_TOOL_CALL_PARAMS = new Set(["tools", "tool_choice"]);
+/**
+ * The provider's own verdict sentences for target-local model failures, each anchored so a
+ * validation message that merely quotes or reflects one cannot impersonate the verdict -- the
+ * same failure mode moderation-refusal matching guards against. Both observed carriers arrive
+ * as `type: "upstream_error"` with `code: null` behind aggregator re-wraps.
+ */
+const UNOFFERED_TOOL_CALL_MESSAGES = [
+  /^the model called a function that was not offered in tools\.?$/i,
+  /^the model returned an unexpected parser control marker; no output was published\.?$/i,
+] as const;
+/** Sibling records that could smuggle a competing verdict this classifier does not inspect. */
+const UNOFFERED_TOOL_CALL_CARRIERS = ["response", "last_error", "details", "detail", "errors"] as const;
+
+function isUnofferedToolCallVerdict(text: string): boolean {
+  const value = text.trim().replace(/^Provider error \d{3}: /, "").trim();
+  return UNOFFERED_TOOL_CALL_MESSAGES.some(pattern => pattern.test(value));
+}
+
+/**
+ * A root message that carries its own envelope prefix is peeled and its contents must still
+ * support the verdict: `Provider error 400: Invalid value for tools` contradicts a nested
+ * refusal even though the prefix itself is recognized.
+ */
+function isUnofferedToolCallCarrierVerdict(text: string): boolean {
+  let value = text.trim();
+  for (let depth = 0; depth < 3; depth += 1) {
+    const proxyPrefix = /^Provider error \d{3}: /.exec(value);
+    if (proxyPrefix) {
+      value = value.slice(proxyPrefix[0].length).trim();
+      continue;
+    }
+    if (value.startsWith("data:") && !value.includes("\n")) {
+      value = value.slice("data:".length).trim();
+      continue;
+    }
+    break;
+  }
+  return isUnofferedToolCallVerdict(value);
+}
+
+function hasUnofferedToolCallCarrierPrefix(text: string): boolean {
+  return /^Provider error \d{3}: /.test(text) || (text.startsWith("data:") && !text.includes("\n"));
+}
+
+function unofferedToolCallRecordShape(record: Record<string, unknown>): boolean {
+  if (record.code !== undefined && record.code !== null && typeof record.code !== "string" && typeof record.code !== "number") return false;
+  if (record.type !== undefined && record.type !== null && typeof record.type !== "string") return false;
+  if (record.param !== undefined && record.param !== null) {
+    if (typeof record.param === "string") {
+      if (!UNOFFERED_TOOL_CALL_PARAMS.has(record.param.trim().toLowerCase())) return false;
+    } else if (typeof record.param === "object" && !Array.isArray(record.param)) {
+      // An AI-SDK gateway wraps the verdict in an error object under `param`; accept it only
+      // when a nested string field independently carries the same anchored verdict, so the
+      // object cannot smuggle a different claim.
+      const nested = record.param as Record<string, unknown>;
+      const diagnostics = [nested.error, nested.message].filter((v) => v !== undefined && v !== null);
+      if (diagnostics.length === 0) return false;
+      for (const diagnostic of diagnostics) {
+        if (typeof diagnostic !== "string" || !isUnofferedToolCallVerdict(diagnostic)) return false;
+      }
+    } else {
+      return false;
+    }
+  }
+  if (!UNOFFERED_TOOL_CALL_CODES.has(normalizedFailureCode(record.code as string | number | undefined))) return false;
+  if (!UNOFFERED_TOOL_CALL_TYPES.has(normalizedFailureCode(record.type as string | undefined))) return false;
+  for (const carrier of UNOFFERED_TOOL_CALL_CARRIERS) {
+    if (record[carrier] !== undefined && record[carrier] !== null) return false;
+  }
+  return true;
+}
+
+/**
+ * A target-local model verdict -- an unoffered tool call, or output the transport could not
+ * publish -- is evidence a later combo target may not repeat: the provider answered, the
+ * request fit, and the failure arrives before any output commits, so advancing is replay-safe.
+ *
+ * The envelope is bounded like its siblings: a depth budget, one `Provider error NNN:` or
+ * single-line `data:` unwrap per level, closed code/type/param sets, and fail-closed treatment
+ * of any record carrying a competing diagnostic carrier or a contradicting root message.
+ * Bare verdict text is also a carrier: a chat gateway can surface the sentence with no JSON
+ * envelope at all.
+ */
+export function isUnofferedToolCallRefusal(
+  status: number,
+  message: string,
+  code?: string | number | null,
+): boolean {
+  if (status !== 400 || message.length > 16_384) return false;
+  if (code !== undefined && code !== null && typeof code !== "string" && typeof code !== "number") return false;
+  if (!UNOFFERED_TOOL_CALL_CODES.has(normalizedFailureCode(code))) return false;
+  let text = message.trim();
+  for (let depth = 0; depth < 4; depth += 1) {
+    const proxyPrefix = /^Provider error \d{3}: /.exec(text);
+    if (proxyPrefix) text = text.slice(proxyPrefix[0].length).trim();
+    if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      return isUnofferedToolCallVerdict(text);
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const root = payload as Record<string, unknown>;
+    if (!unofferedToolCallRecordShape(root)) return false;
+    const error = root.error;
+    // A nested verdict must agree with the root's own message. When the root carries no error
+    // record its message IS the payload carrier and is validated by the flat path below.
+    if (error !== undefined && error !== null
+      && typeof root.message === "string" && root.message.trim() !== ""
+      && !isUnofferedToolCallCarrierVerdict(root.message)) return false;
+    if (error === undefined || error === null) {
+      if (typeof root.message !== "string") return false;
+      if (hasUnofferedToolCallCarrierPrefix(root.message.trim())) {
+        text = root.message.trim();
+        continue;
+      }
+      return isUnofferedToolCallVerdict(root.message);
+    }
+    if (typeof error === "string") {
+      if (hasUnofferedToolCallCarrierPrefix(error.trim())) {
+        text = error.trim();
+        continue;
+      }
+      return isUnofferedToolCallVerdict(error);
+    }
+    if (typeof error !== "object" || Array.isArray(error)) return false;
+    const record = error as Record<string, unknown>;
+    if (!unofferedToolCallRecordShape(record)) return false;
+    if (record.error !== undefined && record.error !== null) {
+      if (typeof record.error !== "string") return false;
+      if (record.error.trim() !== "" && !isUnofferedToolCallVerdict(record.error)) return false;
+    }
+    if (root.param !== undefined && root.param !== null && record.param !== undefined && record.param !== null
+      && String(root.param).trim().toLowerCase() !== String(record.param).trim().toLowerCase()) return false;
+    if (typeof record.message !== "string") return false;
+    const inner = record.message.trim();
+    if (hasUnofferedToolCallCarrierPrefix(inner)) {
+      // Our own wrapper, re-wrapped by a downstream hop. Peel it and look again, within budget.
+      text = inner;
+      continue;
+    }
+    return isUnofferedToolCallVerdict(record.message);
+  }
+  return false;
+}
+
 /** Return the narrowest cooldown scope supported by this target's failure evidence. */
 export function comboFailureCooldownScope(
   status: number,
@@ -996,6 +1152,7 @@ export function comboFailureCooldownScope(
     code?: string | number | null;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
+    unofferedToolCallRefusal?: boolean;
   },
 ): ComboFailureCooldownScope {
   const rawCode = typeof options?.code === "number" ? String(options.code) : options?.code;
@@ -1015,6 +1172,13 @@ export function comboFailureCooldownScope(
     // A capability gap says the target is healthy and the request did not fit it, which is the
     // same reason every other entry here refuses to cool a target.
     || isResponseFormatCapabilityRefusal(status, message, rawCode)
+    // The provider answered and its model simply called a function it was never offered: the
+    // request fit and the target is healthy, so this must not cool it either. A caller that
+    // classified the intact bounded body supplies the verdict directly; the display-truncated
+    // text here would fail the envelope parse on a long body.
+    || (options?.unofferedToolCallRefusal !== undefined
+      ? options.unofferedToolCallRefusal
+      : isUnofferedToolCallRefusal(status, message, rawCode))
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, rawCode)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
@@ -1158,6 +1322,7 @@ export function comboFailureDecision(
     verifiedPlanRefusal?: boolean;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
+    unofferedToolCallRefusal?: boolean;
   },
 ): ComboFailureDecision {
   const rootRawCode = typeof options?.rootCode === "number" ? String(options.rootCode) : options?.rootCode;
@@ -1184,6 +1349,7 @@ function decideComboFailure(
     verifiedPlanRefusal?: boolean;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
+    unofferedToolCallRefusal?: boolean;
   },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
@@ -1272,6 +1438,14 @@ function decideComboFailure(
   // reaches that list and returns terminal before anything can ask whether the next target
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, rawCode)) return "hop";
+  // A model that calls a function the request never offered hallucinated the call: target-local
+  // behavior on a healthy target, arriving as a pre-output 400. Must precede the generic
+  // invalid_request_error stop, which is where this envelope ended the chain. A caller that
+  // classified the intact bounded body supplies the verdict directly; the display-truncated
+  // text here would fail the envelope parse on a long body.
+  if (options?.unofferedToolCallRefusal !== undefined
+    ? options.unofferedToolCallRefusal
+    : isUnofferedToolCallRefusal(status, message, rawCode)) return "hop";
   if (isAnthropicBillingFailure(status, message, rawCode)) return "hop";
   // Kiro's body validator rejects the request for the identity it was routed under. The account
   // layer rotates logins first; this is the no-alternate case, so the next combo target is the

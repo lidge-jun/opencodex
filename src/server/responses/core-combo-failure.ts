@@ -8,6 +8,7 @@ import {
   codexAccountModelRefusalHardStopCode,
   isMalformedResponseFormatRequest,
   isOpenRouterOpaque400Envelope,
+  isUnofferedToolCallRefusal,
   upstreamEnvelopeRootCode,
   type CodexAccountModelRefusal,
 } from "../../combos/failover";
@@ -66,6 +67,7 @@ export async function consumeComboFailure(
   let codexModelRefusal: CodexAccountModelRefusal | undefined;
   let malformedResponseFormat: boolean | undefined;
   let openRouterOpaque400: boolean | undefined;
+  let unofferedToolCallRefusal: boolean | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
   let upstreamRootCode: string | undefined;
@@ -106,6 +108,9 @@ export async function consumeComboFailure(
         codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
         malformedResponseFormat = isMalformedResponseFormatRequest(response.status, body.text);
         openRouterOpaque400 = isOpenRouterOpaque400Envelope(body.text);
+        // The intact bounded body, not the 500-char display prefix: a long refusal envelope
+        // would fail the classifier's JSON parse on truncated text and stop the combo.
+        unofferedToolCallRefusal = isUnofferedToolCallRefusal(response.status, body.text);
       }
       // Status-independent: the nested record is what normalization selects, so a root verdict
       // beside it has to be captured here or the conflict rule never sees it.
@@ -189,6 +194,7 @@ export async function consumeComboFailure(
     ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
     ...(malformedResponseFormat !== undefined ? { malformedResponseFormat } : {}),
     ...(openRouterOpaque400 !== undefined ? { openRouterOpaque400 } : {}),
+    ...(unofferedToolCallRefusal !== undefined ? { unofferedToolCallRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
     // A rewritten identity (policy, replay refusal) is the whole verdict; the root's own code
     // would only re-open a decision that rewrite already settled.
