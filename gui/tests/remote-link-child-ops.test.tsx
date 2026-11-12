@@ -304,10 +304,12 @@ test("the GUI copy of the per-request link cap equals the route's, and groups ar
   expect(chunkLinkIds(ids(65)).map(group => group.length)).toEqual([33, 32]);
   expect(chunkLinkIds(ids(129)).map(group => group.length)).toEqual([43, 43, 43]);
   expect(chunkLinkIds([])).toEqual([]);
-  for (const count of [1, 63, 65, 128, 200, 1000]) {
+  for (const count of [1, 63, 65, 128, 200, 1000, 4033, 4097, 10_000]) {
     const groups = chunkLinkIds(ids(count));
     expect(groups.flat()).toEqual(ids(count));
     expect(groups.every(group => group.length <= CHILD_OPS_MAX_LINK_IDS && (count === 1 || group.length > 1))).toBe(true);
+    const sizes = groups.map(group => group.length);
+    expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
   }
 });
 

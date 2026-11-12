@@ -297,7 +297,7 @@ Disconnect (:544) becomes `disabled={busy !== null || row.child?.activeJob != nu
 
 Between the list heading and the `<ul>` (:500-526), when `status?.role === "home" && statusRows.some(row => row.child)`:
 ```tsx
-<ChildBulkBar apiBase={apiBase} rows={statusRows} onJob={trackJob} onError={setActionError} />
+<ChildBulkBar apiBase={apiBase} rows={statusRows} onJob={trackJob} onError={setActionError} onRun={setChildOpBusy} />
 {childJobs.map(job => <ChildJobProgress key={job.jobId} apiBase={apiBase} job={job} onDone={() => finishJob(job.jobId)} />)}
 ```
 The policy panel sits with the other panels below the list, immediately before `FallbackPanel` (`:569`):
@@ -445,7 +445,8 @@ remembered; there is no policy coupling (deviation 3).
 
 ```tsx
 export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWire[];
-  onJob(job: ChildJobView): void; onError(error: LinkActionErrorView | null): void }): ReactElement | null {
+  onJob(job: ChildJobView): void; onError(error: LinkActionErrorView | null): void;
+  onRun(running: { linkId: "all"; op: ChildOp } | null): void }): ReactElement | null {
   const t = useT();
   const [confirming, setConfirming] = useState<null | "all">(null);
   const operable = props.rows.filter(row => rowOperable(row.direction, row.child ?? null));
@@ -480,7 +481,7 @@ Both bulk actions post explicit link ids, never `"all"` (Revision 7, #8581 revie
 every stored link and runs a pinned sync before it decides currency, so a link outside the confirmation could be
 reached. Check all names the operable rows; Update all names exactly the updatable rows its confirmation counts, and
 is offered only when at least one row is updatable. The route accepts at most 64 ids per body (`MAX_LINK_IDS`), so
-`run` posts one job per group of 64 at once (`chunkLinkIds`, `Promise.allSettled`); each accepted group is tracked as its own job and the first refusal shows its error.
+`run` posts one job per even group of at most 64 at once (`chunkLinkIds`, `Promise.allSettled`); each accepted group is tracked as its own job and the first refusal shows its error.
 
 ```tsx
 export function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJobView; missing: boolean } {
@@ -916,8 +917,9 @@ Audit verdict GO-WITH-FIXES (blockers 3). All findings accepted; binding on the 
 
 Bulk actions post explicit ids, never `"all"`; the code sample, test 6 and acceptance item 5 above now say so. The
 operations route caps a body at 64 ids (`MAX_LINK_IDS`) while a Home's link count is unbounded, so Check all and Update
-all split their list with `chunkLinkIds` into even groups of at most 64 (65 ids go out as 33 + 32, so no one-id tail
-turns a held link into a whole-request 409) and post one job per group at once; each accepted group is tracked as its own job and the first
+all split their list with `chunkLinkIds` into the fewest groups of at most 64 whose sizes differ by at most one (65 ids go out as 33 + 32,
+and 4033 as one group of 64 and 63 of 63), so no one-id tail
+turns a held link into a whole-request 409 and post one job per group at once; each accepted group is tracked as its own job and the first
 refusal shows its error (react-doctor async-await-in-loop rules out a sequential loop). Test: "bulk actions split more than 64 Children into requests the server accepts" (65 rows, two
 requests of 33 and 32 for each action); the cap is pinned to `CHILD_OPS_MAX_LINK_IDS` in `src/link/child-ops-types.ts` by a
 parity test. Submits carry a 30 s deadline (`CHILD_OPERATION_POST_TIMEOUT_MS`) and job polls a 15 s deadline each (`CHILD_JOB_POLL_TIMEOUT_MS`, CodeRabbit

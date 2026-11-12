@@ -160,14 +160,20 @@ export const CHILD_JOB_POLL_MS = 2_000;
 /** The operations route refuses a body naming more links than this (`CHILD_OPS_MAX_LINK_IDS` in src/link/child-ops-types.ts;
  *  gui/tests/remote-link-child-ops.test.tsx pins the copy). */
 export const CHILD_OPERATION_MAX_LINK_IDS = 64;
-/** Splits a bulk target list into request-sized groups of even size; a Home's link count is unbounded. Even groups
- *  never leave a one-id tail, which the route would treat as a single-link request (a held link answers 409 for the
- *  whole request instead of a `busy` item). */
+/** Splits a bulk target list into the fewest groups of at most `size` ids, with sizes differing by at most one; a
+ *  Home's link count is unbounded. Even groups never leave a one-id tail for a list longer than one, which the route
+ *  would treat as a single-link request (a held link answers 409 for the whole request instead of a `busy` item). */
 export function chunkLinkIds(ids: readonly string[], size = CHILD_OPERATION_MAX_LINK_IDS): string[][] {
   const groups = Math.ceil(ids.length / size);
-  const each = groups > 0 ? Math.ceil(ids.length / groups) : size;
+  const base = groups > 0 ? Math.floor(ids.length / groups) : 0;
+  const larger = groups > 0 ? ids.length % groups : 0;     // the first `larger` groups take one extra id
   const chunks: string[][] = [];
-  for (let start = 0; start < ids.length; start += each) chunks.push(ids.slice(start, start + each));
+  let start = 0;
+  for (let index = 0; index < groups; index += 1) {
+    const length = base + (index < larger ? 1 : 0);
+    chunks.push(ids.slice(start, start + length));
+    start += length;
+  }
   return chunks;
 }
 /** One job poll may take this long; a GET that never settles would otherwise stop every later poll. */
