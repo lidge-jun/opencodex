@@ -2,7 +2,11 @@ import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 import { isUntypedBareUpstreamError } from "../bare-upstream-error";
 
-/** Mask the selected outbound credential even when upstream echoes only its raw value. */
+/**
+ * Mask the selected outbound credential even when upstream echoes only its raw value. A secret
+ * containing a quote, backslash or control character appears JSON-escaped inside an SSE payload,
+ * so the escaped spelling is masked too.
+ */
 export function createOutboundCredentialMask(outboundHeaders: Record<string, string>): (text: string) => string {
   const knownSecrets = Object.entries(outboundHeaders)
     .filter(([name]) => SENSITIVE_KEY_PATTERN.test(name))
@@ -10,7 +14,9 @@ export function createOutboundCredentialMask(outboundHeaders: Record<string, str
       const credential = /^(?:authorization|proxy-authorization)$/i.test(name)
         ? value.replace(/^\S+\s+/, "")
         : value;
-      return credential ? [credential] : [];
+      if (!credential) return [];
+      const escaped = JSON.stringify(credential).slice(1, -1);
+      return escaped === credential ? [credential] : [credential, escaped];
     })
     .sort((a, b) => b.length - a.length);
   return (text) => knownSecrets.reduce((safe, secret) => safe.replaceAll(secret, REDACTED_SECRET), text);
@@ -27,7 +33,8 @@ export function createTerminalErrorRedactionBlockRewrite(
       if (typeof entry === "string") return maskCredential(entry);
       if (Array.isArray(entry)) return entry.map(maskKnown);
       if (entry && typeof entry === "object") {
-        return Object.fromEntries(Object.entries(entry).map(([key, item]) => [key, maskKnown(item)]));
+        // A key is upstream text too: a rewritten terminal copies extra root fields verbatim.
+        return Object.fromEntries(Object.entries(entry).map(([key, item]) => [maskCredential(key), maskKnown(item)]));
       }
       return entry;
     };

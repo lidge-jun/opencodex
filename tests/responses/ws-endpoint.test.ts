@@ -67,6 +67,27 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(messages[0].response.error.message).toContain("[REDACTED]");
     expect(messages[0].response.error.message).not.toContain(secret);
   });
+  test.each(["tee", "eager"] as const)("%s never returns a quoted selected credential through an object key", async mode => {
+    const secret = 'fixture"keyed\\credential';
+    const headers = { authorization: `Bearer ${secret}` };
+    const maskCredential = createOutboundCredentialMask(headers);
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+    const source = sseStream([`data: ${JSON.stringify({ [secret]: "kept", nested: { [secret]: 1 }, error: { code: "cyber_policy", message: "blocked" } })}\n\n`]);
+    const body = mode === "tee"
+      ? relaySseWithFailedTail(relaySseWithBlockRewrite(source, rewrite, createTranslatorBudget()), new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(source, new AbortController(), {
+        inspectChunk() {}, finishInspection() {}, sawTerminal: () => false, onSynthetic() {}, onClientCancel() {}, onDone() {}, rewriteBlocks: rewrite,
+      }, { maskCredential });
+    const { ws, sent } = mockWs();
+    await pumpResponsesSseToWebSocket(ws, body);
+    const messages = sent.map(frame => JSON.parse(frame) as Record<string, unknown>);
+    expect(messages.map(frame => frame.type)).toEqual(["response.failed"]);
+    // Parsed, so an escaped spelling in the wire text cannot hide the secret from this check.
+    const keys = (value: unknown): string[] => value && typeof value === "object"
+      ? Object.entries(value).flatMap(([key, item]) => [key, ...keys(item)]) : [];
+    expect(keys(messages).some(key => key.includes(secret))).toBe(false);
+    expect(sent.join("\n")).not.toContain(JSON.stringify(secret).slice(1, -1));
+  });
   test("server config declares explicit websocket idle timeout policy", () => {
     // src/server/index.ts is a facade now. The idle-timeout constant moved to the
     // live-sideband leaf, the handler body to the websocket-handler leaf, and the wiring
