@@ -1,6 +1,6 @@
 import { attachLinkTraffic, type LinkStatusDto } from "../../link/status-projection";
 import { childLinkTraffic, createLinkTrafficBook } from "../../link/traffic";
-import { resolveLinkPathFromConfig, type LinkPathConfigDeps } from "../../link/ssh-route";
+import { createLinkPathReader, type LinkPathConfigDeps } from "../../link/ssh-route";
 import type { LinkRouteState } from "./link-route-state";
 
 /**
@@ -11,8 +11,9 @@ import type { LinkRouteState } from "./link-route-state";
 export async function attachLinkTrafficForState(dto: LinkStatusDto, state: LinkRouteState, pathConfig: LinkPathConfigDeps = {}): Promise<LinkStatusDto> {
   const home = dto.role === "home";
   const empty = createLinkTrafficBook(home ? "content-length" : "relayed");
+  const readPath = createLinkPathReader(pathConfig);
   return attachLinkTraffic(dto, {
     traffic: linkId => home ? state.listener.linkTraffic?.(linkId) ?? empty.snapshot(linkId) : childLinkTraffic.snapshot(linkId),
-    resolvePath: async alias => ({ via: resolveLinkPathFromConfig(alias, pathConfig) }),
+    resolvePath: async alias => ({ via: readPath(alias) }),
   });
 }

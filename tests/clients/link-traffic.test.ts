@@ -219,6 +219,14 @@ describe("traffic book eviction and buffered bodies (#3023 final review)", () =>
     expect(book.snapshot("lnk_0000000000000001")).toMatchObject({ since: new Date(clock).toISOString(), requests: 1, toHomeBytes: 3 });
   });
 
+  test("a burst of more links than the bound in flight at once trims back to the bound as they finish", () => {
+    const book = createLinkTrafficBook("relayed");
+    const flows = Array.from({ length: MAX_LINKS + 100 }, (_, i) => book.begin(`lnk_${(i + 1).toString(16).padStart(16, "0")}`));
+    expect(book.linkCount()).toBe(MAX_LINKS + 100);
+    for (const flow of flows) flow.end(true);
+    expect(book.linkCount()).toBe(MAX_LINKS);
+  });
+
   test("a buffered body counts only once the socket took it", async () => {
     const answered = gate();
     // Bun sends response headers with the first body chunk, so the Home answers with one event at once.
