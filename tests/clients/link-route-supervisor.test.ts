@@ -762,3 +762,32 @@ test("a Child whose config output is over 64 KiB still proves readiness and conn
   expect(h.state().state.kind).toBe("connected");
   expect(h.state().routes?.route?.name).toBe("alpha-lan");
 });
+
+test("the readiness budget runs from the grant: a slow route granted late still has the full budget to prove", async () => {
+  // A relay route to a slow Child can spend much of 30 s before its listener is granted.
+  let clock: () => number = () => 0;
+  const h = await started({ catalog: (_route, _proofId, admit) => {
+    if (clock() < 32_000) return ok(JSON.stringify({ models: [] }) + "\n200");
+    admit();
+    return ok(JSON.stringify({ models: [] }) + "\n200");
+  } });
+  clock = h.now;
+  await h.advance(25_000);
+  await h.grant();
+  await h.tick();
+  expect(h.state().state.kind).toBe("connecting");
+  for (let at = 25_000; at < 34_000; at += 1_000) await h.advance(1_000);
+  expect(h.state().state.kind).toBe("connected");
+  expect(h.tunnels).toHaveLength(1);
+  expect(h.tunnels[0]!.signals).toEqual([]);
+});
+
+test("a granted candidate is still stopped when its proof fails for the whole budget after the grant", async () => {
+  const h = await started({ catalog: () => ok(JSON.stringify({ models: [] }) + "\n200") });
+  await h.advance(5_000);
+  await h.grant();
+  await h.advance(READY_PROOF_MS - 1);
+  expect(h.tunnels[0]!.signals).toEqual([]);
+  await h.advance(1);
+  expect(h.tunnels[0]!.signals).toContain("SIGTERM");
+});
