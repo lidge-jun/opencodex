@@ -138,6 +138,18 @@ function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
   throw new Error("pnpm package symlink chain is too long");
 }
 
+/** True when an existing component of this absolute spelling is a symbolic link (or junction). */
+function spellingHasLinkComponent(path) {
+  const absolute = resolve(path);
+  const { root } = parse(absolute);
+  let current = root;
+  for (const part of absolute.slice(root.length).split(sep).filter(Boolean)) {
+    current = join(current, part);
+    if (lstatSync(current).isSymbolicLink()) return true;
+  }
+  return false;
+}
+
 /**
  * Whether any spelling of this package passes through pnpm store links. This only classifies which
  * proof the updater must obtain; it never accepts a package. An unreadable chain throws.
@@ -550,6 +562,14 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store, global
     return { ok: false, failures: ["pnpm global links are outside the selected store"] };
   }
   if (globalLinks) {
+    // Hop roots are only as narrow as their spelling: a link component in the lexical store or global
+    // group would make its target, and any relay below it, count as inside.
+    for (const root of [lexicalStore, globalRoot]) {
+      // A missing group authorizes nothing (see below), so only an existing spelling is inspected.
+      if (!root || !existsSync(root)) continue;
+      try { if (spellingHasLinkComponent(root)) return { ok: false, failures: ["pnpm store or global group path has a symbolic link component"] }; }
+      catch { return { ok: false, failures: ["pnpm store or global group path could not be resolved"] }; }
+    }
     // Every hop from the reported spelling to the package must stay inside the selected global group
     // or the selected store; a relay elsewhere cannot vouch for a link that later returns to the store.
     // A group that cannot be resolved authorizes nothing: the path must then start inside the store.

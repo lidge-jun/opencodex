@@ -55,7 +55,7 @@ test.skipIf(process.platform === "win32")("GUI active launcher verification runs
     const globalDir = join(home, "global"), globalRoot = join(globalDir, "v11"), globalBinDir = join(home, "bin");
     const store = join(home, "custom", "v11"), group = join(store, "links", "pkg", "node_modules");
     const packagePath = join(group, "@bitkyc08", "opencodex"), launcher = join(packagePath, "bin", "ocx.mjs");
-    for (const dir of [globalBinDir, join(packagePath, "bin"), join(group, "bun", "bin"), join(group, "zod")]) mkdirSync(dir, { recursive: true });
+    for (const dir of [globalBinDir, globalRoot, join(packagePath, "bin"), join(group, "bun", "bin"), join(group, "zod")]) mkdirSync(dir, { recursive: true });
     writeFileSync(join(packagePath, "package.json"), JSON.stringify({ version: "2.0.0", dependencies: { bun: "1", zod: "1" } }));
     writeFileSync(launcher, "x".repeat(1024));
     writeFileSync(join(group, "bun", "package.json"), "{}");

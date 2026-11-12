@@ -145,8 +145,12 @@ const ownerFor = (version = "1.0.0"): PnpmGlobalOwner => ({
   globalBinDir: "/pnpm/owner/bin",
 });
 /** A pnpm 11/12 global virtual-store owner bound to the fixture store. */
+const fixtureGlobalRoot = join(fixtureHome, "global", "v11");
+mkdirSync(fixtureGlobalRoot, { recursive: true });
 const storeOwnerFor = (): PnpmGlobalOwner => ({
   ...ownerFor(),
+  globalDir: join(fixtureHome, "global"),
+  globalRoot: fixtureGlobalRoot,
   packagePath: storePackagePath("1.0.0"),
   globalStore: true,
   store: realpathSync(fixtureStore), storePath: fixtureStore,
@@ -163,6 +167,7 @@ describe("pnpm global owner binding", () => {
       const packagePath = join(store, "links", "@bitkyc08", "opencodex", "1.0.0", "h", "node_modules", "@bitkyc08", "opencodex");
       mkdirSync(packagePath, { recursive: true });
       mkdirSync(globalBinDir, { recursive: true });
+      mkdirSync(globalRoot, { recursive: true });
       const calls: string[][] = [];
       const run = (_command: string, args: readonly string[]): PnpmRunResult => {
         calls.push([...args]);

@@ -500,7 +500,7 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.ok).toBe(false);
   });
 
-  test("accepts a dependency link through the selected store's pinned lexical alias", () => {
+  test("refuses a lexical store spelling that is a symbolic link, even when links use it", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const store = realpathSync(join(root, "pnpm", "store", "v11")), alias = join(root, "store-alias");
     symlinkSync(store, alias, "dir");
@@ -508,7 +508,9 @@ describe("#4202 install-tree dependency ownership", () => {
     rmSync(link); symlinkSync(join(alias, relative(store, target)), link, "dir");
     const bun = join(realpathSync(exposed), "..", "..", "bun"), bunTarget = realpathSync(bun);
     rmSync(bun); symlinkSync(bunTarget, bun, "dir");
-    expect(verifyPnpmInstallTree(exposed, "2.0.0", store, exposingGroup(exposed), alias)).toEqual({ ok: true, failures: [] });
+    // A linked spelling would let its target, and any relay beneath it, count as inside the store.
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", store, exposingGroup(exposed), alias))
+      .toEqual({ ok: false, failures: ["pnpm store or global group path has a symbolic link component"] });
   });
 
   test("refuses a dangling package-local dependency link despite a valid group link", () => {
@@ -898,6 +900,7 @@ describe("#4202 install-tree dependency ownership", () => {
     writeDependency(join(group, "bun"), "bun"); writeDependency(join(group, "zod"), "zod");
     expect(verifyPnpmInstallTree(packageDir, "2.0.0", store)).toEqual({ ok: true, failures: [] });
     const globalRoot = join(root, "global", "v11"), configured = join(store, "custom-links");
+    mkdirSync(globalRoot, { recursive: true });
     const owner = resolveOwnerWithStoreProof({ packageName: PKG, packagePath: packageDir, commandPaths: [join(root, "pnpm")],
       runPnpm: (_command, args) => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: packageDir } } }]) };

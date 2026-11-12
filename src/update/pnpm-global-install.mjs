@@ -326,7 +326,8 @@ export function pnpmHomeAnchor(env = process.env, platform = process.platform) {
   else if (value("HOME")) {
     anchor = platform === "darwin" ? join(value("HOME"), "Library", "pnpm") : join(value("HOME"), ".local", "share", "pnpm");
   }
-  return anchor && isAbsolutePath(anchor, platform) ? anchor : null;
+  // A control character could split a cmd.exe command line on Windows; such a home is never trusted.
+  return anchor && isAbsolutePath(anchor, platform) && !/[\u0000-\u001f\u007f]/.test(anchor) ? anchor : null;
 }
 
 /** True when any existing component of the anchor is a symbolic link (or junction); throws when missing. */
@@ -383,6 +384,12 @@ function readPnpmStore(runPnpm, owner, platform, env = process.env) {
       && /^v\d+$/.test(pathBasename(lines[0], platform))) storePath = lines[0];
   } catch { /* refused below */ }
   if (!storePath) return { ok: false, reason: "pnpm store path is not one absolute versioned path" };
+  // A link inside the store spelling would widen the root every later hop is confined to.
+  try {
+    if (pathHasLinkComponent(storePath)) return { ok: false, reason: "pnpm store path has a symbolic link component" };
+  } catch {
+    return { ok: false, reason: "pnpm store path could not be resolved" };
+  }
   let store;
   try {
     store = realpathSync.native(storePath);
@@ -486,6 +493,10 @@ export function readPnpmGlobalPackage(
   if (globalStore) {
     storeResult = readPnpmStore(runPnpm, constraints.owner, platform, constraints.env);
     if (!storeResult.ok) return storeResult;
+    // The global group is the other hop root; a link in its spelling would widen it the same way.
+    try {
+      if (!rootPath || pathHasLinkComponent(rootPath)) return { ok: false, reason: "pnpm global group has a symbolic link component" };
+    } catch { return { ok: false, reason: "pnpm global group could not be resolved" }; }
     try {
       if (!isPackageInGlobalStore(packagePath, storeResult.store)) return { ok: false, reason: "pnpm global-store package is outside the selected store" };
     } catch { return { ok: false, reason: "pnpm active package path could not be resolved" }; }

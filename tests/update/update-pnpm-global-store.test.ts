@@ -247,7 +247,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global-store package is outside the selected store" });
   });
 
-  test("lexical or canonical store drift after discovery refuses before pnpm add", () => {
+  test("a store spelling that gains a symbolic link after discovery refuses before pnpm add", () => {
     const layout = globalStoreLayout(root);
     const resolved = resolveOwner(layout);
     if (!resolved.ok) throw new Error(resolved.reason);
@@ -256,12 +256,12 @@ describe("pnpm global virtual-store owner (#8183)", () => {
       owner: resolved.owner, runPnpm: args => layout.run(args), verifyShims: okShims,
     });
 
-    // Same canonical store, different spelling.
+    // Same canonical store, different spelling through a link.
     const alias = join(root, "store-alias");
     link(dirname(layout.store), alias);
     layout.storeOutput = () => join(alias, "v11");
     layout.calls.length = 0;
-    expect(update()).toMatchObject({ ok: false, phase: "preflight", error: "pnpm configured store changed" });
+    expect(update()).toMatchObject({ ok: false, phase: "preflight", error: "pnpm store path has a symbolic link component" });
     expect(layout.calls.some(args => args[0] === "add")).toBe(false);
 
     // Same spelling, different canonical store.
@@ -276,7 +276,27 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(runPnpmGlobalUpdate({
       packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest",
       owner: resolvedAgain.owner, runPnpm: args => layout.run(args), verifyShims: okShims,
-    })).toMatchObject({ ok: false, phase: "preflight", error: "pnpm configured store changed" });
+    })).toMatchObject({ ok: false, phase: "preflight", error: "pnpm store path has a symbolic link component" });
     expect(layout.calls.some(args => args[0] === "add")).toBe(false);
+  });
+
+  test("a symbolic link in the store or global group spelling refuses discovery (relay through a linked root)", () => {
+    // store/v11 -> elsewhere: a relay under the target would count as inside a canonicalized root.
+    const layout = globalStoreLayout(root);
+    const moved = join(root, "moved-store");
+    writeInstance(join(moved, "v11"), "1.0.0");
+    rmSync(join(layout.home, "store"), { recursive: true, force: true });
+    link(moved, join(layout.home, "store"));
+    unlinkSync(layout.exposed);
+    link(join(moved, "v11", "links", "@bitkyc08", "opencodex", "1.0.0", "h100", "node_modules", "@bitkyc08", "opencodex"), layout.exposed);
+    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm store path has a symbolic link component" });
+
+    const other = globalStoreLayout(join(root, "group-case"));
+    const realGroup = join(root, "group-case", "real-global-v11");
+    mkdirSync(dirname(realGroup), { recursive: true });
+    const { renameSync } = require("node:fs") as typeof import("node:fs");
+    renameSync(other.globalRoot, realGroup);
+    link(realGroup, other.globalRoot);
+    expect(resolveOwner(other)).toEqual({ ok: false, reason: "pnpm global group has a symbolic link component" });
   });
 });
