@@ -309,3 +309,44 @@ describe("link-only reclaim (design 6.4)", () => {
   });
 });
 
+describe("restore of refused results across overlapping turns (T5d1-R5-01)", () => {
+  test("an older turn settling late never restores a result a newer turn returned successfully", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.restoreRefusedResults = true;
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_ab"));
+    const inputA = toolResult("call_ab");
+    const finishA = activity.beginTurn(inputA);
+    const inputB = toolResult("call_ab");
+    const finishB = activity.beginTurn(inputB);
+    activity.notifyAccepted(inputB);
+    finishB();
+    finishA();
+    expect(activity.pendingKeys()).toEqual([]);
+    expect(activity.idle).toBe(true);
+  });
+
+  test("an older turn that finished before the newer one was accepted does not leave the returned result pending", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.restoreRefusedResults = true;
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_mid"));
+    const finishA = activity.beginTurn(toolResult("call_mid"));
+    const inputB = toolResult("call_mid");
+    const finishB = activity.beginTurn(inputB);
+    finishA();
+    activity.notifyAccepted(inputB);
+    finishB();
+    expect(activity.pendingKeys()).toEqual([]);
+    expect(activity.idle).toBe(true);
+  });
+
+  test("an older turn that was refused, with no newer acceptance, still restores", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.restoreRefusedResults = true;
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_r"));
+    activity.beginTurn(toolResult("call_r"))();
+    expect(activity.pendingKeys()).toHaveLength(1);
+  });
+});

@@ -112,6 +112,17 @@ export class CodexWebSocketActivity {
   notifyAccepted(input: unknown): void {
     const record = this.turnRecords.get(input);
     if (record) record.accepted = true;
+    // Results this turn returned are settled for good: an older turn still finishing (superseded,
+    // refused) must not put them back.
+    // Only sockets that restore refused results (Remote Link) need this; local sockets settled at admission.
+    const returned = new Set(this.restoreRefusedResults ? resultKeysOf(input) : []);
+    if (returned.size) for (const other of this.turnRecords.values()) other.settled = other.settled.filter(key => !returned.has(key));
+    // An older turn may already have restored one of them before this acceptance: settle it again.
+    let changed = false;
+    for (const key of returned) {
+      if (this.pendingResults.delete(key)) { this.returnedResults.add(key); changed = true; }
+    }
+    if (changed) this.changed();
     for (const listener of [...this.acceptedListeners]) {
       try { listener(input); } catch { /* an observer never breaks the socket's own bookkeeping */ }
     }
