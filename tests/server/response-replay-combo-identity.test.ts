@@ -85,3 +85,54 @@ for (const padded of [true, false]) {
     }
   });
 }
+
+// The merge of dev's Remote Link observation with this PR's replay owner key left one ordering
+// guarantee unproven: a continuation refused for ownership must never reach the link observer, so a
+// foreign caller cannot even leave a capture for the returned turn. Both halves are asserted, so the
+// refusal test cannot pass by observing nothing at all.
+test("a refused replay owner never reaches the link observer, while the owner does", async () => {
+  const config: OcxConfig = {
+    defaultProvider: "primary",
+    providers: { primary: { adapter: "openai-chat", authMode: "key", apiKey: "synthetic-provider",
+      baseUrl: "https://fixture.invalid/v1", models: ["model"] } },
+    apiKeys: [{ id: "a", key: "synthetic-a" }, { id: "b", key: "synthetic-b" }],
+    combos: { fan: { strategy: "failover", targets: [{ provider: "primary", model: "model" }] } },
+  };
+  rememberResponseState({ input: "stored-input" }, { id: "resp_owned", output: [], status: "completed" },
+    undefined, { clientThreadId: "own-b", replayOwnerKey: responseReplayOwnerKey(
+      contextPrincipalIdOf(resolveDataPlaneAdmissionSecret("synthetic-b", config)!), "own-b") });
+  const run = async (apiKey: string, thread: string) => {
+    const observed: unknown[] = [];
+    let failed = 0;
+    const body = { model: "combo/fan", input: "continue", stream: false, previous_response_id: "resp_owned" };
+    const req = new Request("http://localhost/v1/responses", { method: "POST", headers: {
+      "content-type": "application/json", "thread-id": thread, "x-opencodex-api-key": apiKey,
+    }, body: JSON.stringify(body) });
+    const translatorBudget = createTranslatorBudget();
+    try {
+      const response = await executeComboResponses(req, body, "fan", config, { model: "", provider: "" },
+        { admission: resolveDataPlaneAdmissionSecret(apiKey, config)!, translatorBudget, linkTurn: {
+          expanded() { observed.push("expanded"); },
+          expansionFailed() { failed += 1; },
+          terminal() {},
+          logFields() { return { transport: "link", first: false } as never; },
+        } }, {
+          async handleResponses() { return Response.json({ id: "resp-next", object: "response", status: "completed", output: [] }); },
+          async handleComboResponses() { throw new Error("Unexpected nested combo"); },
+        });
+      return { status: response.status, observed, failed };
+    } finally {
+      translatorBudget.dispose();
+    }
+  };
+  // A different caller on the same thread is refused before any observation or upstream dispatch.
+  const foreign = await run("synthetic-a", "own-b");
+  expect(foreign.status).toBe(400);
+  expect(foreign.observed).toEqual([]);
+  expect(foreign.failed).toBe(1);
+  // The owner advances, so the assertions above describe a real refusal rather than a dead fixture.
+  const owner = await run("synthetic-b", "own-b");
+  expect(owner.status).toBe(200);
+  expect(owner.observed).toEqual(["expanded"]);
+  expect(owner.failed).toBe(0);
+});
