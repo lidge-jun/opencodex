@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { checkRouteTrust, confirmedLineTrustedIn, keyFingerprint, withoutAliasLines } from "../../src/link/route-trust";
+import { checkRouteTrust, confirmedLineTrust, keyFingerprint, withoutAliasLines } from "../../src/link/route-trust";
 
 const KEY_A = Buffer.from("ssh-ed25519 pinned key blob for the test").toString("base64");
 const KEY_B = Buffer.from("ssh-ed25519 another key blob for the test").toString("base64");
@@ -43,12 +43,14 @@ test("removing an alias's lines ignores case and keeps every other line", () => 
 
 test("apply trusts the confirmed line only when it is the one line OpenSSH can use for the alias", () => {
   const confirmed = "home ssh-ed25519 " + KEY_A;
-  expect(confirmedLineTrustedIn(confirmed + "\nbeta-host ssh-ed25519 " + KEY_B + "\n", "home", confirmed)).toBe(true);
+  expect(confirmedLineTrust(confirmed + "\nbeta-host ssh-ed25519 " + KEY_B + "\n", "home", confirmed)).toBe("trusted");
   // Another spelling written by a later confirmation of the same key.
-  expect(confirmedLineTrustedIn("HOME ssh-ed25519 " + KEY_A + "\n", "home", confirmed)).toBe(true);
-  for (const extra of ["* ssh-ed25519 " + KEY_B, "home,other ssh-ed25519 " + KEY_B, "|1|c2FsdA==|aGFzaA== ssh-ed25519 " + KEY_B, "HOME ssh-ed25519 " + KEY_B, "@cert-authority * ssh-ed25519 " + KEY_B]) {
-    expect(confirmedLineTrustedIn(confirmed + "\n" + extra + "\n", "home", confirmed)).toBe(false);
+  expect(confirmedLineTrust("HOME ssh-ed25519 " + KEY_A + "\n", "home", confirmed)).toBe("trusted");
+  // Shapes OpenCodex never writes, even naming another host: this check cannot rule them out.
+  for (const extra of ["* ssh-ed25519 " + KEY_B, "home,other ssh-ed25519 " + KEY_B, "beta,gamma ssh-ed25519 " + KEY_B, "|1|c2FsdA==|aGFzaA== ssh-ed25519 " + KEY_B, "@cert-authority * ssh-ed25519 " + KEY_B]) {
+    expect(confirmedLineTrust(confirmed + "\n" + extra + "\n", "home", confirmed)).toBe("trust_file_unexpected");
   }
-  expect(confirmedLineTrustedIn("home ssh-ed25519 " + KEY_B + "\n", "home", confirmed)).toBe(false);
-  expect(confirmedLineTrustedIn("", "home", confirmed)).toBe(false);
+  expect(confirmedLineTrust(confirmed + "\nHOME ssh-ed25519 " + KEY_B + "\n", "home", confirmed)).toBe("key_changed");
+  expect(confirmedLineTrust("home ssh-ed25519 " + KEY_B + "\n", "home", confirmed)).toBe("key_changed");
+  expect(confirmedLineTrust("", "home", confirmed)).toBe("key_changed");
 });

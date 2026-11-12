@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { buildRouteProbeArgv, buildTunnelArgv } from "../../src/link/ssh-argv";
 import { createSshRunner, type SshChild } from "../../src/link/ssh-runner";
 import { composeGrantTap, routeOutcomeOfStderr } from "../../src/link/route-select";
-import { checkRouteTrust, confirmedLineTrustedIn, keyFingerprint } from "../../src/link/route-trust";
+import { checkRouteTrust, confirmedLineTrust, keyFingerprint } from "../../src/link/route-trust";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -186,7 +186,7 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
       writeFileSync(file, text);
       const other = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-b", knownHostsFile: file })), { timeoutMs: 20_000 });
       expect({ label, code: other.code, stdout: other.stdout.trim() }).toEqual({ label, code: 0, stdout: "ocx-link-probe" });
-      expect({ label, trusted: confirmedLineTrustedIn(text, "pin-alias", confirmed) }).toEqual({ label, trusted: false });
+      expect({ label, trust: confirmedLineTrust(text, "pin-alias", confirmed) }).toEqual({ label, trust: "trust_file_unexpected" });
     }
   }, 60_000);
 });

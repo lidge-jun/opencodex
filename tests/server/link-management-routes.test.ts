@@ -1189,14 +1189,18 @@ test("apply refuses when the confirmed key is no longer the one trusted for its 
   expect((await changed!.json() as { error: { code: string } }).error.code).toBe("host_key_changed");
   expect(during.h.store.links).toEqual([]);
   // Another line OpenSSH could match for the alias (a wildcard, a host list, a hashed entry) beside the
-  // confirmed one: the confirmed line alone no longer decides the key.
-  for (const extra of ["* ssh-ed25519 KEYother", "home,elsewhere ssh-ed25519 KEYother", "|1|c2FsdA==|aGFzaA== ssh-ed25519 KEYother"]) {
+  // confirmed one, or such a line naming an unrelated host: OpenCodex never writes these shapes and the
+  // check cannot rule them out, so apply refuses with its own actionable code.
+  for (const extra of ["* ssh-ed25519 KEYother", "home,elsewhere ssh-ed25519 KEYother", "|1|c2FsdA==|aGFzaA== ssh-ed25519 KEYother", "beta,gamma ssh-ed25519 KEYother"]) {
     const shaped = await scenario(() => writeFileSync(knownHosts, readFileSync(knownHosts, "utf8") + extra + "\n"));
     await shaped.confirm("home");
     const response = await shaped.apply("home");
     expect(response?.status).toBe(409);
-    expect((await response!.json() as { error: { code: string } }).error.code).toBe("host_key_changed");
+    const body = await response!.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("trust_file_unexpected");
+    expect(body.error.message).toContain("remove it");
     expect(shaped.h.store.links).toEqual([]);
+    expect(shaped.h.config.apiKeys).toEqual([]);
   }
   // The same key confirmed again under another spelling still trusts exactly that key.
   const respelled = await scenario(() => writeFileSync(knownHosts, "HOME ssh-ed25519 KEYhome\n"));
@@ -1208,10 +1212,13 @@ test("apply refuses when the confirmed key is no longer the one trusted for its 
 test("a refused apply whose key will not revoke stores no link and starts nothing", async () => {
   temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-refused-revoke-"));
   const knownHosts = join(temp, "known_hosts");
+  let throwOnRead = false;
   const cases: Array<[string, (h: ReturnType<typeof harness>) => void]> = [
     ["host_key_changed", () => writeFileSync(knownHosts, "home ssh-ed25519 KEYother\n")],
     // A Home-initiated link for another spelling of the alias appears while apply runs.
     ["link_exists", h => h.deps.writeLinkStore!({ ...h.store, links: [{ id: "lnk_00000000000000aa", alias: "HOME", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-other", createdAt: "2026-09-25T00:00:00.000Z" }] })],
+    // The locked section throws before validating (its store read fails once; cleanup can read again).
+    ["exception", () => { throwOnRead = true; }],
   ];
   for (const [refusal, mutate] of cases) {
     const h = harness();
@@ -1219,6 +1226,10 @@ test("a refused apply whose key will not revoke stores no link and starts nothin
     const deps = {
       ...h.deps,
       revokeApiKey: () => false,
+      readLinkStore: () => {
+        if (throwOnRead) { throwOnRead = false; throw new Error("store read failed"); }
+        return h.deps.readLinkStore!();
+      },
       sshRunner: {
         ...base,
         async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {

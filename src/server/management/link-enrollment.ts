@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { assertSshAlias, buildExecArgv, buildFingerprintArgv, buildProbeArgv, REMOTE_COMMAND_NOT_FOUND, remoteOcxArgv } from "../../link/ssh-argv";
 import { plantUnavailableGuidance, resolveChildBinarySource } from "../../link/child-binary-source";
 import { parseFingerprintLine } from "../../link/fingerprint";
-import { confirmedLineTrustedIn } from "../../link/route-trust";
+import { confirmedLineTrust as confirmedLineTrustIn, type ConfirmedLineTrust } from "../../link/route-trust";
 import { isDetachedEphemeralChildConfig } from "../../link/ephemeral-child";
 import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
 import { requireRemotePlatform } from "../../link/remote-platform";
@@ -201,10 +201,10 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
   });
 }
 
-function confirmedLineTrusted(path: string, alias: string, line: string): boolean {
+function confirmedLineTrust(path: string, alias: string, line: string): ConfirmedLineTrust {
   let text = "";
-  try { text = readFileSync(path, "utf8"); } catch { return false; }
-  return confirmedLineTrustedIn(text, alias, line);
+  try { text = readFileSync(path, "utf8"); } catch { return "key_changed"; }
+  return confirmedLineTrustIn(text, alias, line);
 }
 
 function linkPinConflict(): Response {
@@ -240,9 +240,20 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     let remotePlatform: "posix" | "windows";
     const ocx = (args: readonly string[]) => remoteOcxArgv(args, remotePlatform);
     let record: LinkStore["links"][number] | undefined, input: Uint8Array | undefined;
+    // A key issued for a record that has not passed the locked alias and trust checks. Until then a
+    // failure revokes only the key: compensation, which may store its record, is for a validated one.
+    let unvalidatedKeyId: string | undefined;
     let ephemeralChild = confirmed.runtimeKind === "ephemeral", plantedFreshBinary = false, purgeRollbackFailed = false, remoteMayBeConnected = false, phase = "remote_port";
     const failed = async (response: Response): Promise<Response> => {
-      const compensation = record ? await compensateNewLink(ctx, state, record) : null;
+      let compensation = record ? await compensateNewLink(ctx, state, record) : null;
+      if (!record && unvalidatedKeyId !== undefined) {
+        const keyId = unvalidatedKeyId;
+        unvalidatedKeyId = undefined;
+        if (!revokeKeyIdempotent(ctx, keyId)) {
+          console.warn("[link] apply failed before storing the link; its issued key could not be revoked");
+          compensation = fail("key_cleanup_failed", "The link was not created, but its issued key could not be revoked; revoke the leftover link key under API keys.", 500);
+        }
+      }
       if (plantedFreshBinary) {
         plantedFreshBinary = false;
         try {
@@ -320,30 +331,31 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       state.confirmedHosts?.delete(alias);
       phase = "home_setup";
       const id = newLinkId(), issued = issueKey(ctx, "link:" + alias);
-      record = { id, alias, direction: "hub-initiated", hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date(now()).toISOString(), remotePlatform, childKind: ephemeralChild ? "ephemeral" : "full" };
+      unvalidatedKeyId = issued.id;
+      const candidate: LinkStore["links"][number] = { id, alias, direction: "hub-initiated", hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date(now()).toISOString(), remotePlatform, childKind: ephemeralChild ? "ephemeral" : "full" };
       // Under the same lock as the store write: no Home-initiated link may own this alias in any
-      // case, and the live known_hosts must still trust exactly the confirmed line for it (another
-      // confirmation, under any spelling, may have replaced it since this one).
-      const created = withConfigMutationLockSync((): "written" | "exists" | "key_changed" => {
+      // case, and the live known_hosts must still trust exactly the confirmed key for it (another
+      // confirmation, under any spelling, may have replaced it since this one). Only a record that
+      // passed both becomes `record`, the one compensation handles; any earlier failure, an
+      // exception included, leaves it unset and revokes the key alone.
+      const created = withConfigMutationLockSync((): "written" | "exists" | ConfirmedLineTrust => {
         const current = readStoreFor(ctx);
         const wanted = alias.toLowerCase();
         if (current.links.some(link => link.alias.toLowerCase() === wanted && link.direction === "hub-initiated")) return "exists";
-        if (!confirmedLineTrusted(knownHostsFile(ctx), alias, confirmed.knownHostLine)) return "key_changed";
-        writeStoreFor(ctx, { ...current, links: [...current.links, record!] });
+        const trust = confirmedLineTrust(knownHostsFile(ctx), alias, confirmed.knownHostLine);
+        if (trust !== "trusted") return trust;
+        record = candidate;
+        unvalidatedKeyId = undefined;
+        writeStoreFor(ctx, { ...current, links: [...current.links, candidate] });
         return "written";
       });
       if (created !== "written") {
-        // The record failed identity validation and was never stored, so compensation must not store
-        // it either: drop it and revoke its key here. A key that will not revoke stays listed under
-        // API keys; say so instead of keeping the link it belonged to.
-        record = undefined;
-        if (!revokeKeyIdempotent(ctx, issued.id)) {
-          console.warn("[link] apply refused before storing the link; its issued key could not be revoked");
-          return await failed(fail("key_cleanup_failed", "The link was not created, but its issued key could not be revoked; revoke the leftover link key under API keys.", 500));
-        }
+        // The record failed validation and was never stored; failed() revokes its key alone.
         return await failed(created === "exists"
           ? fail("link_exists", "A link for this alias already exists.", 409)
-          : fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409));
+          : created === "trust_file_unexpected"
+            ? fail("trust_file_unexpected", "The link known_hosts file has a hashed, pattern, host-list or marker line; remove it, then probe and confirm the host again.", 409)
+            : fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409));
       }
       await state.listener.ensureStarted();
       if (state.listener.status().state !== "listening") return await failed(fail("listener_unavailable", "The link listener is unavailable.", 503));

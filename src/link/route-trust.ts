@@ -58,15 +58,20 @@ export function withoutAliasLines(text: string, alias: string): string[] {
   return text.split(/\r?\n/).filter(line => line && hostField(line).toLowerCase() !== wanted && !line.startsWith(alias + ","));
 }
 
+export type ConfirmedLineTrust = "trusted" | "trust_file_unexpected" | "key_changed";
+
 /**
- * Does the file still trust exactly the line a confirmation wrote for alias? It must pass the same
- * whole-file check as a route edit, and its one line for the alias must be the confirmed line. The
- * probe computed the confirmed fingerprint from that very line (ssh-keygen -l), so the line carries it.
+ * Does the file still trust exactly the key a confirmation wrote for alias? It must pass the same
+ * whole-file check as a route edit (`trust_file_unexpected` otherwise: OpenCodex writes this file
+ * only with plain one-alias lines, so another shape is a hand edit this check cannot rule out), and
+ * its one line for the alias must carry the confirmed key (`key_changed` otherwise). The probe
+ * computed the confirmed fingerprint from that very line (ssh-keygen -l), so the line carries it.
  */
-export function confirmedLineTrustedIn(text: string, alias: string, confirmedLine: string): boolean {
+export function confirmedLineTrust(text: string, alias: string, confirmedLine: string): ConfirmedLineTrust {
+  const found = aliasTrustLine(text, alias);
+  if (!found.ok) return found.code === "trust_file_unexpected" ? "trust_file_unexpected" : "key_changed";
   // The host field may be another spelling of the alias (putKnownHost replaces every case variant);
   // the key type and key are what OpenSSH will accept.
-  const found = aliasTrustLine(text, alias);
-  return found.ok && found.line.split(/\s+/).slice(1, 3).join(" ") === confirmedLine.trim().split(/\s+/).slice(1, 3).join(" ");
+  return found.line.split(/\s+/).slice(1, 3).join(" ") === confirmedLine.trim().split(/\s+/).slice(1, 3).join(" ") ? "trusted" : "key_changed";
 }
 
