@@ -14,6 +14,18 @@ const VERIFIED_GLOBAL_STORE_MAJORS = new Set([11, 12]);
 /** Characters cmd.exe re-parses after quoting (same set as the npm cache preflight). */
 const WINDOWS_CMD_METACHARACTERS = /["%!^&|<>]/;
 
+/**
+ * On Windows pnpm.cmd re-parses its arguments in cmd.exe after quoting, so a global-store owner whose
+ * pnpm home, global directory or global bin directory carries one of these characters is refused
+ * before any owner-pinned pnpm command receives them (the npm cache preflight refuses the same set).
+ */
+function windowsCmdPathRefusal(owner, env, platform) {
+  if (platform !== "win32") return null;
+  const paths = [owner?.homeAnchor ?? pnpmHomeAnchor(env, platform), owner?.globalDir, owner?.globalBinDir];
+  return paths.some(path => WINDOWS_CMD_METACHARACTERS.test(String(path ?? "")))
+    ? { ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" } : null;
+}
+
 function outputText(value) {
   if (typeof value === "string") return value;
   if (value instanceof Uint8Array) return new TextDecoder().decode(value);
@@ -377,6 +389,8 @@ function isStoreProofFailure(reason) {
  * The lexical path and its canonical target are pinned separately and both must stay unchanged.
  */
 function readPnpmStore(runPnpm, owner, platform, env = process.env) {
+  const unsafe = windowsCmdPathRefusal(owner, env, platform);
+  if (unsafe) return unsafe;
   let pnpmVersion;
   try {
     const result = runPnpm(["--version"], true);
@@ -390,11 +404,6 @@ function readPnpmStore(runPnpm, owner, platform, env = process.env) {
 
   const homeAnchor = owner?.homeAnchor ?? pnpmHomeAnchor(env, platform);
   if (!homeAnchor) return { ok: false, reason: "pnpm home could not be determined" };
-  // On Windows pnpm.cmd re-parses its arguments in cmd.exe after quoting; these characters cannot be
-  // neutralized there (the npm cache preflight refuses the same set), so such paths are refused.
-  if (platform === "win32" && [homeAnchor, owner?.globalDir, owner?.globalBinDir].some(path => WINDOWS_CMD_METACHARACTERS.test(String(path ?? "")))) {
-    return { ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" };
-  }
   try {
     const refusal = spellingRefusal(homeAnchor, "pnpm home");
     if (refusal) return { ok: false, reason: refusal };
@@ -482,6 +491,10 @@ export function readPnpmGlobalPackage(
   const expectedGlobalDir = constraints.expectedGlobalDir ?? constraints.owner?.globalDir;
   const expectedGlobalRoot = constraints.expectedGlobalRoot ?? constraints.owner?.globalRoot;
   const globalBinDir = constraints.globalBinDir ?? constraints.owner?.globalBinDir;
+  if (constraints.owner?.globalStore === true) {
+    const unsafe = windowsCmdPathRefusal(constraints.owner, constraints.env, platform);
+    if (unsafe) return unsafe;
+  }
   let result;
   try {
     result = runPnpm(ownerGlobalArgs(["list", "-g", "--depth=0", "--json", packageName], constraints.owner), true);

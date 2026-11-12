@@ -395,7 +395,9 @@ function inspectGlobalLookupRoots(store, escaped, storeAlias = store) {
       let real;
       // A dangling entry supplies nothing, like a missing one.
       try { real = realpathSync(root); } catch (error) { if (error?.code === "ENOENT" || error?.code === "ENOTDIR") continue; throw error; }
-      if (!inside(real, store)) continue;
+      // Only a root whose own spelling lies in the store is part of it; an outside link into the store is
+      // the user's environment, like any other outside entry.
+      if (!inside(real, store) || !(inside(root, store) || (storeAlias && inside(root, resolve(storeAlias))))) continue;
       resolveStoreLinkChain(root, store, storeAlias);
     } catch { escaped.add("pnpm global dependency lookup root could not be resolved"); continue; }
     inspectPnpmMetadata(root, store, escaped, "global dependency lookup", storeAlias);

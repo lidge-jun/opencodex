@@ -177,6 +177,19 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     }
   });
 
+  test("a NODE_PATH link outside the store that points into it is skipped like any outside entry", () => {
+    const layout = globalStoreLayout(root);
+    const outsideLink = join(root, "node-path-link");
+    link(join(layout.store, "links"), outsideLink);
+    const original = process.env.NODE_PATH;
+    try {
+      process.env.NODE_PATH = outsideLink;
+      expect(resolveOwner(layout)).toMatchObject({ ok: true, owner: { globalStore: true } });
+    } finally {
+      if (original === undefined) delete process.env.NODE_PATH; else process.env.NODE_PATH = original;
+    }
+  });
+
   test("on Windows a pnpm home or store path with cmd.exe metacharacters is refused before it reaches pnpm", () => {
     for (const name of ["a&calc", "p%USERPROFILE%", "b^c", "q!x"]) {
       const layout = globalStoreLayout(join(root, name));
@@ -185,6 +198,8 @@ describe("pnpm global virtual-store owner (#8183)", () => {
         runPnpm: (_command, args) => layout.run(args), env: layout.env, platform: "win32",
       })).toEqual({ ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" });
       expect(storeCalls(layout)).toEqual([]);
+      // No owner-pinned pnpm argv (list --global-dir=..., --version, store path) may carry the character.
+      expect(layout.calls.filter(args => args.some(arg => /["%!^&|<>]/.test(arg)))).toEqual([]);
     }
     // The printed store path is checked too, before it can become --store-dir.
     const layout = globalStoreLayout(join(root, "plain"));
