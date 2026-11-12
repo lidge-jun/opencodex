@@ -1286,7 +1286,6 @@ describe("provider moderation refusal", () => {
       "The response was refused by moderation.",
       "Prompt was blocked by moderation.",
       "Input was flagged by moderation.",
-      "Request was filtered due to the prompt triggering content management policy.",
     ];
     for (const phrase of phrases) {
       const body = JSON.stringify({ error: { message: phrase } });
@@ -1732,5 +1731,48 @@ describe("provider moderation refusal: type-only verdicts, nested escapes and cy
     const message = JSON.stringify({ error: { code: "content_filter", message: "The input was refused by moderation. Request blocked by the upstream cybersecurity policy." } });
     expect(isProviderModerationRefusal(400, message, "content_filter")).toBe(false);
     expect(comboFailureDecision(400, message, { code: "content_filter" })).toBe("stop");
+  });
+});
+
+describe("provider moderation refusal: any spelling of a verdict, terminal prose, closing-only quotes", () => {
+  const verdict = "The input was refused by moderation. Categories: harassment.";
+  const carriers: Array<[string, (code: string) => Record<string, unknown>]> = [
+    ["details", code => ({ error: { message: verdict, details: { code } } })],
+    ["last_error", code => ({ error: { message: verdict }, last_error: { code } })],
+    ["metadata", code => ({ error: { message: verdict, metadata: { code } } })],
+    ["innererror", code => ({ error: { code: "content_filter", message: verdict, innererror: { code } } })],
+    ["response.error", code => ({ response: { error: { code, message: verdict } } })],
+  ];
+  for (const hard of ["content-policy-violation", "client-cancelled", "context length exceeded", "bio.policy", "upstream-no-response"]) {
+    for (const [carrier, build] of carriers) {
+      test("a " + hard + " code in " + carrier + " stops", async () => {
+        const raw = JSON.stringify(build(hard));
+        const failure = await consumeComboFailure(new Response(raw, { status: 400 }));
+        const options = { code: failure.upstreamCode, rootCode: failure.upstreamRootCode, providerModerationRefusal: failure.providerModerationRefusal };
+        expect(comboFailureDecision(400, failure.classificationText, options)).toBe("stop");
+        expect(isProviderModerationRefusal(400, raw)).toBe(false);
+      });
+    }
+  }
+
+  test("terminal prose beside a moderation verdict stops", () => {
+    for (const tail of ["The upstream refused this request.", "client closed request", "You exceeded your current quota, please check your plan."]) {
+      const message = verdict + " " + tail;
+      expect({ tail, hop: isProviderModerationRefusal(400, message) }).toEqual({ tail, hop: false });
+      expect(comboFailureCooldownScope(400, message)).not.toBe("none");
+    }
+  });
+
+  test("a closing-only delimiter still quotes an echoed value", () => {
+    for (const [open, close] of [["\u201d", "\u201d"], ["\u00bb", "\u00bb"], ["\u2019", "\u2019"], ["\u300d", "\u300d"]]) {
+      const message = "Invalid value: " + open + "blocked by moderation" + close + " for field mode";
+      expect({ open, hop: isProviderModerationRefusal(400, message) }).toEqual({ open, hop: false });
+    }
+  });
+
+  test("content-management-policy prose needs the content_filter code", () => {
+    const message = JSON.stringify({ error: { message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy." } });
+    expect(isProviderModerationRefusal(400, message)).toBe(false);
+    expect(isProviderModerationRefusal(400, message, "content_filter")).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { parseResetCooldownMs } from "../codex/routing";
-import { CYBER_POLICY_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
+import { CYBER_POLICY_FALLBACK_MESSAGE, TERMINAL_REFUSAL_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
@@ -1019,6 +1019,8 @@ const QUOTE_PAIRS: Record<string, string> = {
   "\"": "\"", "`": "`",
   "\u201c": "\u201d", "\u201e": "\u201c", "\u2018": "\u2019", "\u201a": "\u2018", "\u00ab": "\u00bb", "\u2039": "\u203a",
   "\u300c": "\u300d", "\u300e": "\u300f", "\u3010": "\u3011", "\u301d": "\u301e", "\uff02": "\uff02", "\u2033": "\u2033", "\u2036": "\u2036",
+  // A closing character used as an opener (\u201dvalue\u201d, \u00bbvalue\u00bb) still quotes.
+  "\u201d": "\u201d", "\u2019": "\u2019", "\u00bb": "\u00bb", "\u203a": "\u203a", "\u300d": "\u300d", "\u300f": "\u300f",
 };
 
 /** The classification text the combo path bounds a body to (src/server/responses/core-errors.ts). */
@@ -1071,7 +1073,7 @@ function unquotedProse(text: string): string {
       i += 2;
       continue;
     }
-    const close = ch === "'" ? (isInWordApostrophe(text, i) ? undefined : "'") : QUOTE_PAIRS[ch];
+    const close = isInWordApostrophe(text, i) ? undefined : ch === "'" ? "'" : QUOTE_PAIRS[ch];
     if (close !== undefined) {
       // A doubled delimiter ("" or '') opens a span the same doubled delimiter closes.
       closer = close === ch && text[i + 1] === ch ? ch + ch : close;
@@ -1090,7 +1092,6 @@ const MODERATION_REFUSAL_VERDICT_PHRASES = [
   "refused by moderation",
   "blocked by moderation",
   "flagged by moderation",
-  "content management policy",
 ];
 
 /**
@@ -1099,7 +1100,16 @@ const MODERATION_REFUSAL_VERDICT_PHRASES = [
  * carries both is not evidence that another target may serve the request.
  */
 const HARD_STOP_TOKEN =
-  /\b(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|content_policy_violation|context_length_exceeded|client_closed_request|client_cancelled|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)\b/i;
+  /(?<![a-z0-9])(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|content_policy_violation|context_length_exceeded|client_closed_request|client_cancelled|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)(?![a-z0-9])/i;
+
+/**
+ * Whether any hard-refusal token appears in any spelling: JSON escapes decoded, and hyphens,
+ * dots and whitespace folded to underscores ("content-policy-violation", "client closed request").
+ * Underscores count as separators, so a token nested in a longer identifier still matches.
+ */
+function namesHardStopToken(text: string): boolean {
+  return HARD_STOP_TOKEN.test(withJsonEscapesDecoded(text).replace(/[-.\s]+/g, "_"));
+}
 
 /** JSON \\uXXXX escapes decoded, so an escaped nested code cannot slip past {@link HARD_STOP_TOKEN}. */
 function withJsonEscapesDecoded(text: string): string {
@@ -1156,9 +1166,15 @@ export function isProviderModerationRefusal(
   if (!moderationCodeAllowsHop(status, normalizedCode)) return false;
   // Hard refusals anywhere in the body outrank a moderation verdict, including nested codes,
   // serialized wrappers and safety copy. The terminal refusal path owns those bodies.
-  if (message && (HARD_STOP_TOKEN.test(withJsonEscapesDecoded(message)) || isHardPolicyOrOriginRefusal(message)
+  // Beyond the explicit refusal checks, the shared classifier must see nothing more specific than a
+  // generic invalid request: a body it maps to quota, cancellation or any other verdict is not a
+  // target-local moderation refusal, whatever prose sits beside it.
+  const lower = message.toLowerCase();
+  if (message && (namesHardStopToken(message) || isHardPolicyOrOriginRefusal(message)
     || safetyRefusalCodeFromMessage(message) !== undefined || isCyberPolicyMessage(message)
-    || message.toLowerCase().includes(CYBER_POLICY_FALLBACK_MESSAGE.toLowerCase()))) {
+    || lower.includes(CYBER_POLICY_FALLBACK_MESSAGE.toLowerCase())
+    || lower.includes(TERMINAL_REFUSAL_FALLBACK_MESSAGE.toLowerCase())
+    || classifyError(status, "upstream_error", message).code !== "invalid_request_error")) {
     return false;
   }
   if (!message) {
