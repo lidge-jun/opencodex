@@ -32,7 +32,7 @@ import { speedLabel } from "./logs-speed-label";
 import { decodeRateLabelKeys } from "./logs-decode-rate";
 import { failureAttributionLabels, failureDetailLabel, failureSummary, upstreamConditionLabel } from "./logs-failure-summary";
 import "./logs-decode-rate.css";
-import { formatCredits, formatEstimatedUsd, formatEstimatedUsdValue, formatUsdPrecise, summarizeEstimatedCosts, type CostBilling } from "./logs-cost-format";
+import { effectivePriorityLowerBound, estimateReasonsForBilling, formatCredits, formatEstimatedUsd, formatEstimatedUsdValue, formatUsdPrecise, summarizeEstimatedCosts, type CostBilling, type CostEstimateReason as BillingEstimateReason } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
 import {
   sanitizeLogEntryRouteDecision,
@@ -79,12 +79,8 @@ type MetricUnavailableReason =
   | "ttft_missing" | "decode_window_too_short"
   | "credit_cost_unrepresentable";
 
-type CostEstimateReason =
-  | "usage_estimated"
-  | "cache_detail_missing"
-  | "expected_price_overlay"
-  | "provider_cost_overlay"
-  | "priority_lower_bound";
+/** The proxy's reason vocabulary; the shared formatter owns the billing-basis filter. */
+type CostEstimateReason = BillingEstimateReason;
 
 type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
@@ -1099,6 +1095,12 @@ function LogDetailDialog({
   const reasoningWire = reasoningWireLabel(detail);
   const detailFailure = failureAttributionLabels(detail, t);
   const summary = failureSummary(detail, detailInfo, t);
+  // A row seeded by an older build or served by an older proxy can still carry token-price
+  // reasons beside a credit basis. Filter them at the one place that renders them, so the list
+  // never contradicts the basis printed above it.
+  const billedReasons = cost?.kind === "value"
+    ? estimateReasonsForBilling(cost.estimateReasons, cost.estimate)
+    : [];
 
   const copyRequestId = async () => {
     if (!detail.requestId) return;
@@ -1282,7 +1284,7 @@ function LogDetailDialog({
                       ? t("logs.detail.mixedTotal")
                       : t("logs.detail.costTotal")}
                 </span>
-                <span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.total, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                <span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.total, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
                 {cost.estimate.billing?.source === "provider-credits" ? (
                   <>
                     <span className="muted">{t("logs.detail.creditBasis")}</span>
@@ -1300,13 +1302,18 @@ function LogDetailDialog({
                   </>
                 ) : (
                   <>
-                    <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.input, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                    <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheRead, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                    <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheWrite, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                    <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.output, t, localeTag, cost.estimate.priorityLowerBound)}</span>
+                    <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.input, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
+                    <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheRead, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
+                    <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheWrite, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
+                    <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.output, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
                   </>
                 )}
-                {cost.estimate.price && (
+                {/* Token price provenance belongs to the amount that price produced. A credit
+                    charge is `credits x price`, and the token key is still resolved on the way
+                    in only to decide whether the row falls back to it — printing it here named a
+                    rate the total never used. The per-attempt table below still names each
+                    token-priced leg's own key. */}
+                {cost.estimate.price && !cost.estimate.billing && (
                   <>
                     <span className="muted">{t("logs.detail.matchedKey")}</span>
                     <span className="mono log-detail-break">{cost.estimate.price.jawcodeProvider ?? cost.estimate.price.provider}/{cost.estimate.price.modelId}</span>
@@ -1315,9 +1322,9 @@ function LogDetailDialog({
                   </>
                 )}
               </div>
-              {cost.estimateReasons.length > 0 && (
+              {billedReasons.length > 0 && (
                 <ul className="log-detail-notes">
-                  {cost.estimateReasons.map(reason => <li key={reason}>{t(estimateReasonKey(reason))}</li>)}
+                  {billedReasons.map(reason => <li key={reason}>{t(estimateReasonKey(reason))}</li>)}
                 </ul>
               )}
             </>
@@ -1349,7 +1356,11 @@ function LogDetailDialog({
                   const decodeRate = attempt.displayMetrics?.decodeTokPerSecond;
                   const decodeRateLabels = decodeRateLabelKeys(decodeRate?.kind === "value" ? decodeRate : {});
                   const attemptReasoningWire = reasoningWireLabel(attempt);
-                  const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;
+                  // A credit-billed attempt has no token allocation, so its resolved token key
+                  // explains nothing about the amount; only a token-priced leg names one.
+                  const matched = attemptCost?.kind === "value" && !attemptCost.estimate.billing
+                    ? attemptCost.estimate.price
+                    : undefined;
                   const attemptFailure = failureAttributionLabels(attempt, t);
                   // The derived cause leads, because it is the one value in this row that says
                   // WHY in a vocabulary an operator can act on. `errorCode` stays behind it

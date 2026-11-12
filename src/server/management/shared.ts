@@ -241,18 +241,41 @@ export function costResult(entry: MetricSource): CostResult {
     ? estimateComboCost(entry.attempts.map(attempt => ({ ...attempt, ...usageModelPriceOptions(entry, attempt) })), undefined, tier)
     : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier, ...usageModelPriceOptions(entry, entry) });
   if (!estimate) return { kind: "unavailable", reason: unavailableCostReason(entry) };
+  // Provenance follows the basis that produced the amount. A credit charge is
+  // `providerCredits x creditPriceUsd`; the token rates were resolved only to decide whether the
+  // row falls back to them, so anything derived from those rates — a cache-detail caveat, a price
+  // overlay, a Priority floor — describes a price nobody was charged. A `mixed` combo asks the
+  // same question per attempt: only its token-priced legs may contribute token provenance, and
+  // the parent's usage is a synthesized sum that priced nothing.
+  const creditOnly = estimate.billing?.source === "provider-credits";
+  // `estimateComboCost` walks the attempts in order and fails closed on any unpriced leg, so the
+  // estimate roster lines up with the stored one and the persisted cache provenance stays reachable.
+  const tokenPricedLegs = estimate.billing?.source === "mixed"
+    ? (estimate.attempts ?? [])
+      .map((attempt, index) => ({ attempt, source: entry.attempts?.[index] }))
+      .filter(leg => leg.attempt.billing === undefined)
+    : undefined;
+  // A cost estimate is qualified by cache detail it can TRUST. A detail object that exists only
+  // because a strict client requires the field carries no cache reading, so it qualifies the
+  // estimate exactly as a missing one does — reading it as a measured zero prices the request
+  // as an uncached send that nothing observed.
+  const cacheDetailMissing = creditOnly
+    ? false
+    : tokenPricedLegs
+      ? tokenPricedLegs.some(leg =>
+        cacheObservationFromUsage(leg.source?.usage, leg.source?.cacheProvenance ?? entry.cacheProvenance).provenance !== "observed")
+      : !!entry.usage && cacheObservationFromUsage(entry.usage, entry.cacheProvenance).provenance !== "observed";
+  const priceSources = creditOnly
+    ? []
+    : tokenPricedLegs
+      ? tokenPricedLegs.map(leg => leg.attempt.price.source)
+      : [estimate.price?.source, ...(estimate.attempts?.map(attempt => attempt.price.source) ?? [])];
   const estimateReasons = [
+    // The row's own usage reading still qualifies a credit charge: the credits came from it.
     entry.usageStatus === "estimated" || entry.usage?.estimated ? "usage_estimated" as const : undefined,
-    // A cost estimate is qualified by cache detail it can TRUST. A detail object that exists only
-    // because a strict client requires the field carries no cache reading, so it qualifies the
-    // estimate exactly as a missing one does — reading it as a measured zero prices the request
-    // as an uncached send that nothing observed.
-    entry.usage && cacheObservationFromUsage(entry.usage, entry.cacheProvenance).provenance !== "observed"
-      ? "cache_detail_missing" as const : undefined,
-    estimate.price?.source === "expected" || estimate.attempts?.some(a => a.price.source === "expected")
-      ? "expected_price_overlay" as const : undefined,
-    estimate.price?.source === "user" || estimate.attempts?.some(a => a.price.source === "user")
-      ? "provider_cost_overlay" as const : undefined,
+    cacheDetailMissing ? "cache_detail_missing" as const : undefined,
+    priceSources.includes("expected") ? "expected_price_overlay" as const : undefined,
+    priceSources.includes("user") ? "provider_cost_overlay" as const : undefined,
     estimate.priorityLowerBound ? "priority_lower_bound" as const : undefined,
   ].filter((reason): reason is CostEstimateReason => reason !== undefined);
   return { kind: "value", estimate, estimateReasons };

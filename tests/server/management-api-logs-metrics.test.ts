@@ -753,3 +753,163 @@ describe("estimated decode rate (#4038)", () => {
     expect([...source.matchAll(/includeDecodeRate: false/g)]).toHaveLength(calls.length);
   });
 });
+
+/**
+ * #8452 review — billing basis versus estimate provenance.
+ *
+ * `costResult` derived its `estimateReasons` from the row and from `estimate.price`, but a credit
+ * charge never used that price. The result was a credit total carrying `cache_detail_missing`,
+ * `expected_price_overlay` and `priority_lower_bound`, and the Logs detail panel printed
+ * `>= credits x price` for an amount that is exact. These cases drive the production DTO with
+ * `estimate.price` populated the way the estimator populates it, so the test fails on the reason
+ * list the panel actually renders rather than on a hand-built estimate.
+ */
+describe("GET /api/logs credit billing provenance", () => {
+  const xaiCreditConfig = {
+    port: 0,
+    defaultProvider: "xai",
+    providers: { xai: { adapter: "openai", baseUrl: "https://api.x.ai", authMode: "apiKey", creditPriceUsd: 0.04 } },
+  } as unknown as OcxConfig;
+  const tierOutcome = {
+    canonical: "priority", wireKind: "service-tier", wireValue: "priority",
+    fastOutcome: "applied", confirmation: "confirmed", responseServiceTier: "priority",
+  } as const;
+  // Over the 200k long-context threshold, which is what makes the token path a Priority floor.
+  const creditUsage = { inputTokens: 300_000, outputTokens: 1_000, providerCredits: 2, estimated: true };
+  const tokenUsage = { inputTokens: 300_000, outputTokens: 1_000 };
+
+  afterEach(() => refreshUserCostOverlays(config));
+
+  const attempt = (overrides: Record<string, unknown>) => ({
+    ordinal: 1, provider: "xai", model: "grok-4.7", adapter: "openai", status: 200, durationMs: 900,
+    sendCount: 1, recoveryKinds: [], usageStatus: "estimated", tierOutcome, ...overrides,
+  });
+
+  test("a pure credit row keeps no token-only provenance or lower bound", async () => {
+    refreshUserCostOverlays(xaiCreditConfig);
+    addRequestLog(baseEntry({
+      provider: "xai", model: "grok-4.7", usageStatus: "estimated", usage: creditUsage, tierOutcome,
+    }));
+    const [dto] = await readLogs();
+    const cost = dto!.displayMetrics.cost;
+    expect(cost.kind).toBe("value");
+    expect(cost.estimate.billing).toEqual({ source: "provider-credits", providerCredits: 2, creditPriceUsd: 0.04 });
+    expect(cost.estimate.cost.total).toBeCloseTo(0.08, 9);
+    expect(cost.estimate.priorityLowerBound).toBeUndefined();
+    // `usage_estimated` is a statement about the row's own usage reading, and it is still true.
+    expect(cost.estimateReasons).toContain("usage_estimated");
+    // The rest were derived from a token price the charge never used.
+    expect(cost.estimateReasons).not.toContain("cache_detail_missing");
+    expect(cost.estimateReasons).not.toContain("expected_price_overlay");
+    expect(cost.estimateReasons).not.toContain("priority_lower_bound");
+  });
+
+  test("a token row keeps every reason its own price produced", async () => {
+    refreshUserCostOverlays(xaiCreditConfig);
+    addRequestLog(baseEntry({
+      provider: "xai", model: "grok-4.7", usageStatus: "reported", usage: tokenUsage, tierOutcome,
+    }));
+    const [dto] = await readLogs();
+    const cost = dto!.displayMetrics.cost;
+    expect(cost.kind).toBe("value");
+    expect(cost.estimate.billing).toBeUndefined();
+    expect(cost.estimate.priorityLowerBound).toBe(true);
+    expect(cost.estimateReasons).toEqual(expect.arrayContaining([
+      "cache_detail_missing", "expected_price_overlay", "priority_lower_bound",
+    ]));
+  });
+
+  test("a mixed combo keeps the token leg's uncertainty and drops the credit leg's phantom lower bound", async () => {
+    refreshUserCostOverlays(xaiCreditConfig);
+    addRequestLog(baseEntry({
+      provider: "combo", model: "combo/mixed", usageStatus: "estimated",
+      usage: { inputTokens: 600_000, outputTokens: 2_000 },
+      attempts: [
+        attempt({ ordinal: 1, usage: creditUsage }),
+        attempt({ ordinal: 2, usageStatus: "reported", usage: tokenUsage }),
+      ],
+    }));
+    const [dto] = await readLogs();
+    const cost = dto!.displayMetrics.cost;
+    expect(cost.kind).toBe("value");
+    expect(cost.estimate.billing).toEqual({ source: "mixed" });
+    // The credit attempt is an exact charge; the token attempt is still a floor, so the SUM is
+    // not a floor either. Printing `>=` over the total would be a claim about the whole row.
+    expect(cost.estimate.priorityLowerBound).toBeUndefined();
+    expect(cost.estimateReasons).not.toContain("priority_lower_bound");
+    // Per-attempt provenance survives: the token leg still has its price and lower bound.
+    const attempts = dto!.attempts as Array<Record<string, any>>;
+    expect(attempts[0].displayMetrics.cost.estimate.billing).toEqual({ source: "provider-credits", providerCredits: 2, creditPriceUsd: 0.04 });
+    expect(attempts[0].displayMetrics.cost.estimate.priorityLowerBound).toBeUndefined();
+    expect(attempts[1].displayMetrics.cost.estimate.billing).toBeUndefined();
+    expect(attempts[1].displayMetrics.cost.estimate.priorityLowerBound).toBe(true);
+    // A token leg's cache reading is genuinely missing, so that reason still applies to the row.
+    expect(cost.estimateReasons).toContain("cache_detail_missing");
+    expect(cost.estimateReasons).toContain("expected_price_overlay");
+  });
+
+  test("a token row under the same overlay does name it", async () => {
+    // The mirror of the case below: suppression must be about the billing basis, not about the
+    // reason. A token-priced row really was priced by that overlay.
+    refreshUserCostOverlays({
+      port: 0,
+      providers: {
+        xai: {
+          adapter: "openai", baseUrl: "https://api.x.ai", authMode: "apiKey", creditPriceUsd: 0.04,
+          modelCosts: { "grok-4.7": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } },
+        },
+      },
+    } as unknown as OcxConfig);
+    addRequestLog(baseEntry({
+      provider: "xai", model: "grok-4.7", usageStatus: "reported", usage: tokenUsage, tierOutcome,
+    }));
+    const [dto] = await readLogs();
+    const cost = dto!.displayMetrics.cost;
+    expect(cost.kind).toBe("value");
+    expect(cost.estimate.billing).toBeUndefined();
+    expect(cost.estimateReasons).toContain("provider_cost_overlay");
+    expect(cost.estimateReasons).toContain("priority_lower_bound");
+  });
+
+  test("a provider price overlay is token provenance, so a credit charge does not claim it", async () => {
+    // `provider_cost_overlay` says the amount came from `providers.<name>.modelCosts`. A credit
+    // charge resolved those rates on the way in and then billed `credits x price` instead, so
+    // naming the overlay would point an operator at a setting that did not produce the total.
+    refreshUserCostOverlays({
+      port: 0,
+      providers: {
+        xai: {
+          adapter: "openai", baseUrl: "https://api.x.ai", authMode: "apiKey", creditPriceUsd: 0.04,
+          modelCosts: { "grok-4.7": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } },
+        },
+      },
+    } as unknown as OcxConfig);
+    addRequestLog(baseEntry({
+      provider: "xai", model: "grok-4.7", usageStatus: "estimated", usage: creditUsage, tierOutcome,
+    }));
+    const [dto] = await readLogs();
+    const cost = dto!.displayMetrics.cost;
+    expect(cost.kind).toBe("value");
+    expect(cost.estimate.billing).toEqual({ source: "provider-credits", providerCredits: 2, creditPriceUsd: 0.04 });
+    expect(cost.estimateReasons).not.toContain("provider_cost_overlay");
+  });
+
+  test("an all-credit combo keeps no lower bound even though every attempt was Priority", async () => {
+    refreshUserCostOverlays(xaiCreditConfig);
+    addRequestLog(baseEntry({
+      provider: "combo", model: "combo/credit", usageStatus: "estimated",
+      usage: { inputTokens: 600_000, outputTokens: 2_000, providerCredits: 3 },
+      attempts: [
+        attempt({ ordinal: 1, usage: creditUsage }),
+        attempt({ ordinal: 2, usage: { ...creditUsage, providerCredits: 1 } }),
+      ],
+    }));
+    const [dto] = await readLogs();
+    const cost = dto!.displayMetrics.cost;
+    expect(cost.kind).toBe("value");
+    expect(cost.estimate.billing).toEqual({ source: "provider-credits", providerCredits: 3, creditPriceUsd: 0.04 });
+    expect(cost.estimate.priorityLowerBound).toBeUndefined();
+    expect(cost.estimateReasons).not.toContain("priority_lower_bound");
+    expect(cost.estimateReasons).not.toContain("cache_detail_missing");
+  });
+});

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { estimateAttemptCost, estimateComboCost, estimateRequestCost } from "../../src/usage/cost";
+import { estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext } from "../../src/usage/cost";
 import { MAX_CREDIT_PRICE_USD, MAX_PROVIDER_CREDITS } from "../../src/usage/credit-billing";
 import { activeCreditPrices, refreshUserCostOverlays, userCostOverlayVersion } from "../../src/usage/user-cost-overlays";
 import { sanitizeCreditPriceForLoad } from "../../src/config/load-degrade";
@@ -327,5 +327,96 @@ describe("credit price bounds", () => {
 
     expect(parsed.providers.kiro).toEqual({ adapter: "kiro" });
     expect(warnings).toHaveLength(1);
+  });
+});
+
+/**
+ * A credit charge is `providerCredits x creditPriceUsd`. The token rates were resolved on the way
+ * in — they have to be, because a provider with no credit reading falls back to them — but they did
+ * not produce the amount. A `priorityLowerBound` claims the displayed number is a floor under an
+ * unavailable Priority price, and a credit charge is not that: it is exact for the configured
+ * price. The marker must therefore never reach a credit-billed estimate, or the Logs page prints
+ * `>=` over a number that has no missing rate behind it.
+ */
+describe("credit billing does not inherit token-rate lower bounds", () => {
+  // grok-4.7 prices over 200k input at the published long-context band, and a confirmed Priority
+  // tier at that length is the case that sets `priorityLowerBound` on the token path.
+  const grokConfig = (creditPriceUsd?: number): OcxConfig => ({
+    port: 0,
+    providers: {
+      xai: { adapter: "openai", baseUrl: "https://api.x.ai", authMode: "apiKey", ...(creditPriceUsd === undefined ? {} : { creditPriceUsd }) },
+    },
+  } as unknown as OcxConfig);
+  const tierOutcome = {
+    canonical: "priority",
+    wireKind: "service-tier",
+    wireValue: "priority",
+    fastOutcome: "applied",
+    confirmation: "confirmed",
+    responseServiceTier: "priority",
+  } as const;
+  const longPriority = { inputTokens: 300_000, outputTokens: 1_000, providerCredits: 2, estimated: true };
+  const longToken = { inputTokens: 300_000, outputTokens: 1_000 };
+
+  afterEach(() => refreshUserCostOverlays(grokConfig()));
+
+  test("a token-priced Priority row keeps its documented lower bound", () => {
+    refreshUserCostOverlays(grokConfig());
+    const estimate = estimateRequestCost({
+      provider: "xai", model: "grok-4.7", usage: longToken, usageStatus: "reported",
+      // The row-shaped context `costResult` builds; the raw outcome alone does not carry the
+      // resolved tier the long-context rule reads.
+      serviceTier: serviceTierContext({ tierOutcome }),
+    });
+
+    expect(estimate?.billing).toBeUndefined();
+    expect(estimate?.priorityLowerBound).toBe(true);
+  });
+
+  test("the same row billed from credits claims no lower bound", () => {
+    refreshUserCostOverlays(grokConfig(0.04));
+    const estimate = estimateRequestCost({
+      provider: "xai", model: "grok-4.7", usage: longPriority, usageStatus: "estimated",
+      serviceTier: serviceTierContext({ tierOutcome }),
+    });
+
+    expect(estimate?.billing).toEqual({ source: "provider-credits", providerCredits: 2, creditPriceUsd: 0.04 });
+    expect(estimate?.cost.total).toBeCloseTo(0.08, 9);
+    expect(estimate?.priorityLowerBound).toBeUndefined();
+  });
+
+  test("a credit attempt claims no lower bound either", () => {
+    refreshUserCostOverlays(grokConfig(0.04));
+    const estimate = estimateAttemptCost({
+      ordinal: 1, provider: "xai", model: "grok-4.7", usage: longPriority, usageStatus: "estimated",
+      tierOutcome,
+    });
+
+    expect(estimate?.billing).toEqual({ source: "provider-credits", providerCredits: 2, creditPriceUsd: 0.04 });
+    expect(estimate?.priorityLowerBound).toBeUndefined();
+  });
+
+  test("a combo of credit attempts never aggregates into a lower bound", () => {
+    refreshUserCostOverlays(grokConfig(0.04));
+    const combo = estimateComboCost([
+      { ordinal: 1, provider: "xai", model: "grok-4.7", usage: longPriority, usageStatus: "estimated", tierOutcome },
+      { ordinal: 2, provider: "xai", model: "grok-4.7", usage: { ...longPriority, providerCredits: 1 }, usageStatus: "estimated", tierOutcome },
+    ]);
+
+    expect(combo?.billing).toEqual({ source: "provider-credits", providerCredits: 3, creditPriceUsd: 0.04 });
+    expect(combo?.priorityLowerBound).toBeUndefined();
+  });
+
+  test("a mixed combo does not turn a credit leg into a lower bound", () => {
+    refreshUserCostOverlays(grokConfig(0.04));
+    const combo = estimateComboCost([
+      { ordinal: 1, provider: "xai", model: "grok-4.7", usage: longPriority, usageStatus: "estimated", tierOutcome },
+      { ordinal: 2, provider: "xai", model: "grok-4.7", usage: longToken, usageStatus: "reported", tierOutcome },
+    ]);
+
+    expect(combo?.billing).toEqual({ source: "mixed" });
+    // The token leg is genuinely a floor; the credit leg is an exact charge, so the SUM is not.
+    expect(combo?.attempts?.[1]?.priorityLowerBound).toBe(true);
+    expect(combo?.priorityLowerBound).toBeUndefined();
   });
 });
