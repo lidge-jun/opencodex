@@ -61,6 +61,8 @@ export interface LinkSupervisor {
 }
 
 interface OrphanWatch {
+  /** The link record instance it belongs to; a removed, replaced or one-route record retires it. */
+  instance: string;
   pid: number;
   argv: readonly string[];
   startTime?: number;
@@ -317,7 +319,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
    */
   const reapMultiRouteOrphan = (record: LinkRecord, pidfile: Pidfile): void => {
     const path = pidfilePath(record.id);
-    const watch = { pid: pidfile.pid, argv: pidfile.argv, ...(pidfile.startTime === undefined ? {} : { startTime: pidfile.startTime }) };
+    const watch: OrphanWatch = { instance: recordInstance(record, store.listenerPort), pid: pidfile.pid, argv: pidfile.argv, ...(pidfile.startTime === undefined ? {} : { startTime: pidfile.startTime }) };
     if (orphanState(watch) === "gone") { removePidfile(path); return; }
     orphanUnverified.add(record.id);
     const identity = platform === "linux" && pidfile.startTime !== undefined ? processIdentity(pidfile.pid, pidfile.argv, pidfile.startTime) : "unreadable";
@@ -336,13 +338,27 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     return processAlive(watch.pid) === false ? "gone" : "there";
   };
 
+  /** The watched pidfile is still exactly the one the watch was made from. */
+  const samePidfile = (linkId: string, watch: OrphanWatch): boolean => {
+    const current = readPidfile(pidfilePath(linkId));
+    return current !== null && current.linkId === linkId && current.pid === watch.pid && sameArgv(current.argv, watch.argv)
+      && current.startTime === watch.startTime;
+  };
+
+  /** A watch belongs to one record instance; it never acts for a removed, replaced or one-route link. */
+  const watchCurrent = (linkId: string, watch: OrphanWatch): boolean => {
+    const record = store.links.find(link => link.id === linkId);
+    return record !== undefined && rounds.isMultiRoute(record) && recordInstance(record, store.listenerPort) === watch.instance;
+  };
+
   const tickOrphanWatches = (current: number): void => {
     for (const [linkId, watch] of [...orphanWatches]) {
+      if (!watchCurrent(linkId, watch)) { orphanWatches.delete(linkId); continue; }
       if (orphanState(watch) === "gone") {
         orphanWatches.delete(linkId);
         orphanUnverified.delete(linkId);
         const path = pidfilePath(linkId);
-        if (readPidfile(path)?.pid === watch.pid) removePidfile(path);
+        if (samePidfile(linkId, watch)) removePidfile(path);
         // The link was waiting for this: start its first round now.
         const record = store.links.find(link => link.id === linkId);
         if (record && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
@@ -667,9 +683,11 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           }
           routesEdited.push(record);
         }
-        // Nothing of a changed or removed link's old round may advance while the stops below await.
-        for (const linkId of changed) rounds.cancel(linkId);
-        for (const linkId of recordInstances.keys()) if (!nextInstances.has(linkId)) rounds.cancel(linkId);
+        // Nothing of a changed or removed link's old round may advance while the stops below await,
+        // and no orphan watch acts for a record instance that is gone or no longer has several routes.
+        for (const linkId of changed) { rounds.cancel(linkId); orphanWatches.delete(linkId); }
+        for (const linkId of recordInstances.keys()) if (!nextInstances.has(linkId)) { rounds.cancel(linkId); orphanWatches.delete(linkId); }
+        for (const record of nextStore.links) if (!rounds.isMultiRoute(record)) orphanWatches.delete(record.id);
         store = nextStore;
         if (routesEdited.some(record => rounds.isMultiRoute(record))) rounds.recheckClient();
         for (const record of routesEdited) if (rounds.isMultiRoute(record)) rounds.routesChanged(record);

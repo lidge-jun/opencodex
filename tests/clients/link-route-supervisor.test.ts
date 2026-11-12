@@ -626,3 +626,37 @@ test("a proof admitted in time whose answer settles after its deadline, before t
   expect(h.state().state.kind).not.toBe("connected");
   expect(h.state().routes?.route).toBeNull();
 });
+
+test.each(["removed", "replaced", "now one-route"] as const)("an orphan watch whose link was %s sends no further signal and touches no pidfile", async change => {
+  const other = "lnk_fedcba9876543210";
+  const argv = ["ssh", "-N", "old"];
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"]), record(["beta-lan", "pen-alpha"], other, 19004)] };
+  const h = await started({
+    store: () => current,
+    pidfile: { version: 1, linkId: LINK, pid: 4242, argv, startTime: 777 },
+    processArgv: () => argv, processStart: () => 777, processAlive: () => true,
+  });
+  expect(h.kills).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  const second = current.links[1]!;
+  current = {
+    ...current,
+    links: change === "removed" ? [second]
+      : change === "replaced" ? [record(["alpha-lan", "pen-alpha"], LINK, 19006), second]
+      : [record(undefined, LINK), second],
+  };
+  await h.supervisor.reload();
+  await h.advance(2_000);
+  await h.advance(2_000);
+  expect(h.kills).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  expect(h.removed).toEqual([]);
+});
+
+test("a probe that succeeds after its deadline, before the tick, is a timeout of that route", async () => {
+  let finishProbe!: (result: SshRunResult) => void;
+  const h = await started({ probe: route => route === "alpha-lan" ? new Promise<SshRunResult>(resolve => { finishProbe = resolve; }) : ok("ocx-link-probe\n") });
+  h.skip(ROUTE_PROBE_MS);
+  finishProbe(ok("ocx-link-probe\n"));
+  await flush();
+  expect(h.state().routes?.routes[0]?.lastOutcome?.class).toBe("transient");
+  expect(h.tunnels.map(tunnel => tunnel.argv.at(-1))).toEqual(["pen-alpha"]);
+});

@@ -210,7 +210,9 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     }
     void host.runner.run(argv, { timeoutMs: ROUTE_PROBE_MS, signal: abort.signal }).then(result => {
       if (!current(linkId, round) || round.phase !== phase) return;
-      if (result.code === 0 && result.stdout.trim() === "ocx-link-probe") {
+      // Past its deadline on the supervisor clock, a result is a timeout even if the tick has not run yet.
+      const inTime = host.now() < phase.startedAt + ROUTE_PROBE_MS;
+      if (inTime && result.code === 0 && result.stdout.trim() === "ocx-link-probe") {
         const book = link.books.get(route);
         if (book) book.probeFailures = 0;
         if (host.busy()) {
