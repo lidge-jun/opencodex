@@ -166,24 +166,44 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
       serviceRemoval: "removed" as const,
       respawnWindowVerified: false,
     };
-    expect(sharedTeardownAuthorized(base)).toBe(true);
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent" })).toBe(true);
-    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "absent" })).toBe(true);
-    // Removing the registration does not prove an already-running wrapper died; killing it
-    // is best-effort (#764), so the restart window has to be polled first.
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable" })).toBe(false);
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable", respawnWindowVerified: true })).toBe(true);
-    // A manager that refused to stop, or one we could not read, may still be running.
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "failed" })).toBe(false);
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "state-unknown" })).toBe(false);
-    // The step itself threw: we know nothing.
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: null })).toBe(false);
-    // A proxy that could not be PROVEN down — a live orphan with no pid, or an endpoint
-    // that would not answer — blocks it. A findLiveProxy miss is not proof.
-    expect(sharedTeardownAuthorized({ ...base, proxyProvenDown: false })).toBe(false);
-    // A removal that failed used to look like absence on darwin and linux.
-    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "failed" })).toBe(false);
-    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: null })).toBe(false);
+    // The platform is explicit in every expectation below. It is an input to the rule, not
+    // an ambient fact: a clean Windows stop is Part B of the checked stop (#7771) and owes a
+    // verified restart window, while a clean stop elsewhere owes nothing more. Asserting on
+    // the default platform made this test's verdict depend on the machine it ran on.
+    for (const platform of ["linux", "darwin"] as const) {
+      expect(sharedTeardownAuthorized(base, platform)).toBe(true);
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent" }, platform)).toBe(true);
+      expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "absent" }, platform)).toBe(true);
+      // Removing the registration does not prove an already-running wrapper died; killing it
+      // is best-effort (#764), so the restart window has to be polled first.
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable" }, platform)).toBe(false);
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable", respawnWindowVerified: true }, platform)).toBe(true);
+      // A manager that refused to stop, or one we could not read, may still be running.
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "failed" }, platform)).toBe(false);
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "state-unknown" }, platform)).toBe(false);
+      // The step itself threw: we know nothing.
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: null }, platform)).toBe(false);
+      // A proxy that could not be PROVEN down — a live orphan with no pid, or an endpoint
+      // that would not answer — blocks it. A findLiveProxy miss is not proof.
+      expect(sharedTeardownAuthorized({ ...base, proxyProvenDown: false }, platform)).toBe(false);
+      // A removal that failed used to look like absence on darwin and linux.
+      expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "failed" }, platform)).toBe(false);
+      expect(sharedTeardownAuthorized({ ...base, serviceRemoval: null }, platform)).toBe(false);
+    }
+    // On Windows a clean stop is only half the proof: Part B has to have shown the port free
+    // and no wrapper back. Without that window the same input is refused.
+    expect(sharedTeardownAuthorized(base, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, respawnWindowVerified: true }, "win32")).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent" }, "win32")).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent", respawnWindowVerified: true }, "win32")).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable" }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable", respawnWindowVerified: true }, "win32")).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "failed" }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "state-unknown" }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: null }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, proxyProvenDown: false, respawnWindowVerified: true }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "failed", respawnWindowVerified: true }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: null, respawnWindowVerified: true }, "win32")).toBe(false);
   });
 
   test("a removal failure is distinguishable from nothing being installed", async () => {
