@@ -84,6 +84,8 @@ hard byte cap. Per-body limits, parsing, compression, and reader error envelopes
 normalization, UTF-8 counting without encoded copies, release after malformed or optional empty input,
 and serialized-length parity with `JSON.stringify` including nesting it cannot walk.
 
+An encoded request body's decoded size is bounded by its ratio as well as by the inbound limit (#3023): `decodeRequestBody` passes zlib a `maxOutputLength` of max(8 MiB, 200 x its wire bytes), never above the inbound limit (`compressedBodyDecodeLimit`), so inflation stops there and memory and time are bounded by it. The concurrent inbound budget reserves wire bytes, and a 2 KiB zstd frame inflates to 64 MiB, so before this bound a few tiny requests could allocate the budget many times over. A body past the ratio bound fails with `CompressionRatioExceededError`, a `DecompressedBodyTooLargeError` (413 on every route that maps one) whose message names the compression-bomb guard and does not advise raising `maxInboundBodyBytes`. A body that decodes to 8 MiB or less is never refused for its ratio. The bound applies to every encoded body, a local Codex's own zstd included. `tests/usage/request-decompress-ratio.test.ts` covers zstd and gzip bombs, the floor, an ordinary body above it, the unchanged absolute limit and the data-plane 413.
+
 The final native ChatGPT Responses HTTP send in `src/server/responses/fetch-helpers.ts` encodes JSON
 strings of at least 1 MiB as a UTF-8 buffer for Bun upload compatibility. This is a transport copy,
 not a counting allocation or retained continuation. Existing body admission limits still apply;
