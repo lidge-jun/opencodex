@@ -1,5 +1,5 @@
 import { parseResetCooldownMs } from "../codex/routing";
-import { CYBER_POLICY_FALLBACK_MESSAGE, TERMINAL_REFUSAL_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
+import { CYBER_POLICY_FALLBACK_MESSAGE, TERMINAL_REFUSAL_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isSubscriptionGateMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
@@ -1028,6 +1028,8 @@ const MODERATION_EVIDENCE_LIMIT = 500;
 
 /** Structured codes that can stand beside a moderation verdict without being evidence of their own. */
 const MODERATION_COMPATIBLE_CODES = new Set(["moderation_refusal", "content_filter", "invalid_request_error", "400", "422"]);
+/** Error types that carry no verdict of their own (the gateway SDK wrapper type included). */
+const MODERATION_COMPATIBLE_TYPES = new Set(["error", "invalid_request_error", "ai_apicallerror", "moderation_error", "content_filter"]);
 
 /**
  * A moderation phrase echoed inside quotes is a reflected parameter value (Invalid enum value
@@ -1111,8 +1113,12 @@ const HARD_STOP_TOKEN =
  * Underscores count as separators, so a token nested in a longer identifier still matches.
  */
 function namesHardStopToken(text: string): boolean {
-  // A raw JSON body spells whitespace as \n, \t or \r; fold those escapes as well.
-  return HARD_STOP_TOKEN.test(withJsonEscapesDecoded(text).replace(/\\[ntr]/g, "_").replace(/[-.\s]+/g, "_"));
+  // A raw JSON body spells whitespace as \n, \t or \r; fold those escapes as well, split camel
+  // humps (contentPolicyViolation) and treat slashes like the other separators.
+  return HARD_STOP_TOKEN.test(withJsonEscapesDecoded(text)
+    .replace(/\\[ntr]/g, "_")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-.\s/]+/g, "_"));
 }
 
 /** JSON \\uXXXX escapes decoded, so an escaped nested code cannot slip past {@link HARD_STOP_TOKEN}. */
@@ -1157,7 +1163,11 @@ function moderationCodeAllowsHop(status: number, normalizedCode: string): boolea
  * failure reader, the stream preflight) passes its whole-body verdict; the structured code of
  * this decision can still veto it. Without one, the possibly truncated message decides.
  */
-function providerModerationHop(status: number, message: string, rawCode: string | null | undefined, wholeBody?: boolean): boolean {
+function providerModerationHop(
+  status: number, message: string, rawCode: string | null | undefined, wholeBody?: boolean, malformedResponseFormat?: boolean,
+): boolean {
+  // A malformed response_format diagnostic the reader saw in the whole body stays terminal.
+  if (malformedResponseFormat === true) return false;
   if (wholeBody === undefined) return isProviderModerationRefusal(status, message, rawCode);
   return wholeBody && moderationCodeAllowsHop(status, normalizedFailureCode(rawCode));
 }
@@ -1181,6 +1191,10 @@ export function isProviderModerationRefusal(
     || safetyRefusalCodeFromMessage(message) !== undefined || isCyberPolicyMessage(message)
     || lower.includes(CYBER_POLICY_FALLBACK_MESSAGE.toLowerCase())
     || lower.includes(TERMINAL_REFUSAL_FALLBACK_MESSAGE.toLowerCase())
+    // Diagnostics dev keeps terminal although the classifier files them as generic invalid
+    // requests: a malformed response_format schema and subscription-gate wording.
+    || isMalformedResponseFormatRequest(status, message)
+    || isSubscriptionGateMessage(lower)
     // Classified as a 400: the moderation hop covers 422 too, and classifyError maps an untyped
     // 422 to upstream_error rather than invalid_request_error.
     || classifyError(400, "upstream_error", message).code !== "invalid_request_error")) {
@@ -1259,6 +1273,11 @@ export function isProviderModerationRefusal(
 
     const rootCode = normalizedFailureCode(typeof rec.code === "string" ? rec.code : undefined);
     const errCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
+    // A verdict stated only as a type is evidence too; only the generic error types may stand
+    // beside a moderation verdict.
+    for (const t of [rec.type, e.type]) {
+      if (typeof t === "string" && t.trim() !== "" && !MODERATION_COMPATIBLE_TYPES.has(normalizedFailureCode(t))) return false;
+    }
     for (const c of [rootCode, errCode]) {
       if (
         isCyberPolicyCode(c)
@@ -1353,7 +1372,7 @@ export function comboFailureCooldownScope(
   if (PROVIDER_SCOPED_FAILURE_CODES.has(code)) return "provider";
   // A moderation verdict is target-local, but only after quota and credential evidence had its
   // say: a refusing key beside moderation prose still cools its provider.
-  if (providerModerationHop(status, message, rawCode, options?.providerModerationRefusal)) return "none";
+  if (providerModerationHop(status, message, rawCode, options?.providerModerationRefusal, options?.malformedResponseFormat)) return "none";
   // OpenRouter's opaque numeric-code wrapper may be target-specific (for example a gateway
   // rejecting a model's translated payload). It may advance the combo, but says nothing about
   // target health and must not quarantine the target.
@@ -1609,7 +1628,7 @@ function decideComboFailure(
   // reaches that list and returns terminal before anything can ask whether the next target
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, rawCode)) return "hop";
-  if (providerModerationHop(status, message, rawCode, options?.providerModerationRefusal)) return "hop";
+  if (providerModerationHop(status, message, rawCode, options?.providerModerationRefusal, options?.malformedResponseFormat)) return "hop";
   if (isAnthropicBillingFailure(status, message, rawCode)) return "hop";
   // Kiro's body validator rejects the request for the identity it was routed under. The account
   // layer rotates logins first; this is the no-alternate case, so the next combo target is the

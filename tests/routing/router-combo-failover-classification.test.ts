@@ -1809,3 +1809,39 @@ describe("provider moderation refusal: escaped whitespace, 422, rate-limit codes
     }
   });
 });
+
+describe("provider moderation refusal: diagnostics dev keeps terminal and verdict types", () => {
+  const verdict = "The input was refused by moderation. Categories: harassment.";
+  test("a malformed response_format diagnostic beside a moderation verdict stops", async () => {
+    for (const raw of [
+      JSON.stringify({ error: { code: "content_filter", message: verdict, detail: "Invalid schema for response_format 'reply': 'type' is a required property." } }),
+      verdict + " response_format.json_schema.schema must be a valid JSON schema.",
+    ]) {
+      const failure = await consumeComboFailure(new Response(raw, { status: 400 }));
+      const options = { code: failure.upstreamCode, rootCode: failure.upstreamRootCode, providerModerationRefusal: failure.providerModerationRefusal, malformedResponseFormat: failure.malformedResponseFormat };
+      expect(comboFailureDecision(400, failure.classificationText, options)).toBe("stop");
+      expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal, malformedResponseFormat: failure.malformedResponseFormat })).not.toBe("none");
+    }
+  });
+
+  test("subscription-gate wording beside a moderation verdict stops", () => {
+    const message = verdict + " This model requires a subscription.";
+    expect(isProviderModerationRefusal(400, message)).toBe(false);
+    expect(comboFailureDecision(400, message)).toBe("stop");
+  });
+
+  test("camelCase and slashed spellings of a hard code stop", () => {
+    for (const hard of ["contentPolicyViolation", "clientClosedRequest", "content/policy/violation", "upstreamNoResponse"]) {
+      const message = JSON.stringify({ error: { message: verdict, details: { code: hard } } });
+      expect({ hard, hop: isProviderModerationRefusal(400, message) }).toEqual({ hard, hop: false });
+    }
+  });
+
+  test("a verdict stated only as an error type stops", () => {
+    for (const type of ["previous_response_not_found", "tool_catalog_too_large", "input_admission_refused", "invalid_parameter"]) {
+      const message = JSON.stringify({ error: { message: verdict, type } });
+      expect({ type, hop: isProviderModerationRefusal(400, message) }).toEqual({ type, hop: false });
+      expect(comboFailureDecision(400, message)).toBe("stop");
+    }
+  });
+});
