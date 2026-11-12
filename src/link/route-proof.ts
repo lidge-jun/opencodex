@@ -14,6 +14,18 @@ export function isRouteProofId(value: unknown): value is string {
   return typeof value === "string" && PROOF_ID.test(value);
 }
 
+/**
+ * The hub-link admission's side of a proof: read LINK_ROUTE_PROOF_HEADER and take it off the request,
+ * so nothing handling the request afterwards sees it. A header that cannot be removed is not
+ * reported. The id itself is validated by the registry (admit).
+ */
+export function takeRouteProof(req: Request): string | undefined {
+  const proof = req.headers.get(LINK_ROUTE_PROOF_HEADER) ?? undefined;
+  if (proof === undefined) return undefined;
+  try { req.headers.delete(LINK_ROUTE_PROOF_HEADER); } catch { return undefined; }
+  return proof;
+}
+
 export interface RouteProofEntry {
   linkId: string;
   apiKeyId: string;

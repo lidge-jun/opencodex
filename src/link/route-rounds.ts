@@ -431,6 +431,11 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
         return;
       }
       if (now >= phase.spawnedAt + READY_PROOF_MS) {
+        // Unlike a one-route tunnel, which reads connected after its 5 s grace and is never stopped
+        // for lacking proof, a candidate with no proof by now is stopped: a granted forward whose
+        // relay cannot authenticate or serve looks the same as a slow one, and keeping it would
+        // starve the next route forever. A request already on it fails toward its caller, as on
+        // any reconnect; once a route is proven it is never stopped for lack of later proofs.
         stopCandidate(linkId, phase, phase.grantedAt === undefined ? "grant_unobserved" : "readiness");
         return;
       }

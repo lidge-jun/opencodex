@@ -44,8 +44,11 @@ const RECOVERABILITY: readonly RouteOutcomeClass[] = ["hostkey", "auth", "forwar
 
 /**
  * The single class a multi-route link reports to the reducer: the most recoverable latest outcome
- * over every route, cooling ones included. A route never tried in this outage counts as transient.
- * Only a link whose every route refused the pinned key is terminal.
+ * over every route, cooling ones included. A route's outcome is the last failure it recorded and
+ * stays until that route is tried again or proven, so a route still resting after a host-key
+ * refusal (up to 10 minutes) counts as hostkey however old that refusal is. A route never tried
+ * counts as transient. Only a link whose every route's latest outcome refused the pinned key is
+ * terminal.
  */
 export function aggregateRouteClass(outcomes: readonly (RouteOutcomeClass | null)[]): StderrClass {
   if (outcomes.length === 0) return "network";
