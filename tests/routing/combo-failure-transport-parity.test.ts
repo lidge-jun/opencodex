@@ -204,3 +204,52 @@ test("a native refusal frame that states its own non-400 status keeps the record
     expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).not.toBe("none");
   }
 });
+
+describe("vetoed moderation bodies agree across transports", () => {
+  const loopOf = async (response: Response) => {
+    const failure = await consumeComboFailure(response);
+    const options = {
+      code: failure.upstreamCode, rootCode: failure.upstreamRootCode,
+      malformedResponseFormat: failure.malformedResponseFormat, openRouterOpaque400: failure.openRouterOpaque400,
+      providerModerationRefusal: failure.providerModerationRefusal,
+    };
+    return {
+      decision: comboFailureDecision(failure.response.status, failure.classificationText, options),
+      scope: comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal }),
+    };
+  };
+
+  test("a response.failed frame whose whole body vetoes moderation does not hop after the rebuilt envelope", async () => {
+    let checked = 0;
+    const error = { code: "content_filter", message: "The input was refused by moderation." };
+    for (const frame of [
+      { type: "response.failed", response: { status: "failed", error: { ...error, innererror: { code: "cyber_policy" } } } },
+      { type: "response.failed", code: "context_length_exceeded", response: { status: "failed", error } },
+      { type: "response.failed", response: { status: "failed", error: { ...error, metadata: { code: "cyber_policy" } } } },
+    ]) {
+      const ctx: RequestLogContext = { ...logCtx(), terminalHttpStatus: 400 };
+      const result = await preflightComboStreamResponse(new Response(
+        "data: " + JSON.stringify(frame) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+      ), ctx);
+      if (result.kind !== "failed") continue;
+      checked += 1;
+      expect({ frame: JSON.stringify(frame).slice(0, 60), ...(await loopOf(result.response)) })
+        .toEqual({ frame: JSON.stringify(frame).slice(0, 60), decision: "stop", scope: "target" });
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  test("a native frame that states 429 in any spelling is never a moderation hop", async () => {
+    const prelude = 'event: message_start\ndata: {"type":"message_start","message":{"content":[],"usage":{"input_tokens":5,"output_tokens":0}}}\n\n';
+    const record = { type: "invalid_request_error", code: "content_filter", message: "Filtered" };
+    for (const framed of [{ status: 429 }, { status: "429" }, { status_code: 429 }, { http_status: 429 }]) {
+      const event = { type: "error", ...framed, error: record };
+      const result = await preflightNativeMessagesResponse(new Response(
+        prelude + "event: error\ndata: " + JSON.stringify(event) + "\n\n", { headers: { "content-type": "text/event-stream" } },
+      ), { model: "fixture", provider: "anth" }, createTestTranslatorBudget());
+      if (result.kind !== "failed") continue;
+      const outcome = await loopOf(result.response);
+      expect({ framed, scope: outcome.scope }).not.toEqual({ framed, scope: "none" });
+    }
+  });
+});

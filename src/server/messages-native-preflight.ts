@@ -1,6 +1,7 @@
 import { comboFailureDecision } from "../combos";
 import { isProviderModerationRefusal } from "../combos/failover";
 import { attachComboFailureEvidence } from "../lib/client-error-body";
+import { explicitErrorEventStatus } from "./responses/combo-stream-preflight";
 import { httpStatusFromTerminalError } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { sseFieldValue } from "../lib/sse-decoder";
@@ -98,25 +99,24 @@ export async function preflightNativeMessagesResponse(
       } else if (payload.type === "error" && isRec(payload.error)) {
         const error = payload.error;
         const wholeEvent = JSON.stringify(payload);
-        // A structured moderation verdict on the whole event is a request-level refusal, whatever
-        // status the terminal mapping infers for its code; judge it like the HTTP reader does.
-        const moderation = isProviderModerationRefusal(400, wholeEvent, undefined, true);
+        // A status the event states for itself (any spelling the responses preflight reads) is
+        // evidence of its own: a framed 429 or 503 is never read as a moderation refusal.
+        const framed = explicitErrorEventStatus(payload);
+        const framedAllowsModeration = framed === undefined || framed === 400 || framed === 422;
+        // Otherwise a structured moderation verdict on the whole event is a request-level refusal,
+        // whatever status the terminal mapping infers for its code; judge it like the HTTP reader.
+        const moderation = framedAllowsModeration && isProviderModerationRefusal(400, wholeEvent, undefined, true);
         const mapped = httpStatusFromTerminalError({ type: typeof error.type === "string" ? error.type : undefined,
           code: typeof error.code === "string" ? error.code : undefined,
           message: typeof error.message === "string" ? error.message : undefined }) ?? 502;
-        // Only an event that states no status of its own (or states 400/422) is read as that 400:
-        // a frame that says 429 or 503 keeps the record mapping, as dev did.
-        const framed = typeof payload.status === "number" ? payload.status
-          : typeof error.status === "number" ? error.status : undefined;
-        const status = moderation && mapped !== 400 && mapped !== 422
-          && (framed === undefined || framed === 400 || framed === 422) ? 400 : mapped;
+        const status = moderation && mapped !== 400 && mapped !== 422 ? 400 : mapped;
         if (logCtx.terminalSource !== "synthetic" && logCtx.errorCode !== UNDECLARED_TOOL_CALL_ERROR_CODE
           && comboFailureDecision(status, typeof error.message === "string" ? error.message : "", {
           code: typeof error.code === "string" ? error.code : undefined,
           rootCode: typeof payload.code === "string" ? payload.code : undefined,
           // The whole event, as the HTTP and stream readers judge it, so transports cannot disagree.
           providerModerationRefusal: status === 400 || status === 422
-            ? isProviderModerationRefusal(status, wholeEvent, undefined, true) : undefined,
+            ? framedAllowsModeration && isProviderModerationRefusal(status, wholeEvent, undefined, true) : undefined,
         }) === "hop") {
           failure = error; failureStatus = status;
           failureEvidence = moderation && (status === 400 || status === 422) ? wholeEvent : undefined;

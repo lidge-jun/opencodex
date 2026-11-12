@@ -66,15 +66,18 @@ const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
   "upstream_stall_timeout",
 ]);
 
-function bareErrorStatus(payload: unknown): number | undefined {
+/**
+ * The HTTP status an error event states for itself (`status`, `status_code` or `http_status`,
+ * numeric or a three-digit string, on the event or its error record), or undefined.
+ */
+export function explicitErrorEventStatus(payload: unknown): number | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const event = payload as Record<string, unknown>;
-  if (event.type !== "error") return undefined;
   const nested = event.error;
   const error = nested && typeof nested === "object" && !Array.isArray(nested)
     ? nested as Record<string, unknown>
     : event;
-  const explicitStatus = [
+  return [
     event.status,
     event.status_code,
     event.http_status,
@@ -88,6 +91,17 @@ function bareErrorStatus(payload: unknown): number | undefined {
         ? Number(value)
         : undefined)
     .find(value => value !== undefined && value >= 400 && value <= 599);
+}
+
+function bareErrorStatus(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const event = payload as Record<string, unknown>;
+  if (event.type !== "error") return undefined;
+  const nested = event.error;
+  const error = nested && typeof nested === "object" && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : event;
+  const explicitStatus = explicitErrorEventStatus(payload);
   const rawCode = error.code ?? event.code;
   const code = typeof rawCode === "string"
     ? rawCode
@@ -532,11 +546,16 @@ export async function preflightComboStreamResponse(
         && !outputCommitted && retryableTerminalPayload) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
         const failed = failedTerminalResponse(response, retryableTerminalPayload, logCtx);
-        // The rebuilt envelope keeps only the record; a moderation verdict judged on the whole frame
-        // (a root code, an innererror) must reach the combo loop's classification intact.
-        if ((failed.status === 400 || failed.status === 422)
-          && isProviderModerationRefusal(failed.status, JSON.stringify(retryableTerminalPayload), undefined, true)) {
-          attachComboFailureEvidence(failed, JSON.stringify(retryableTerminalPayload));
+        // The rebuilt envelope keeps only the record. When either the whole frame or that slim
+        // envelope reads as a moderation verdict, the combo loop must judge the whole frame: a
+        // verdict needs the evidence the envelope dropped (a root code, an innererror), and a veto
+        // the envelope dropped (a root verdict, a nested hard code) must not turn into a hop.
+        if (failed.status === 400 || failed.status === 422) {
+          const whole = JSON.stringify(retryableTerminalPayload);
+          if (isProviderModerationRefusal(failed.status, whole, undefined, true)
+            || isProviderModerationRefusal(failed.status, await failed.clone().text(), undefined, true)) {
+            attachComboFailureEvidence(failed, whole);
+          }
         }
         return { kind: "failed", response: failed,
           ...(failed.status === 400
