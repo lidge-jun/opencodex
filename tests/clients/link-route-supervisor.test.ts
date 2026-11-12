@@ -38,7 +38,7 @@ function harness(options: {
   probe?: (route: string, attempt: number) => Answer;
   catalog?: (route: string, proofId: string, admit: () => void) => Answer;
   health?: Answer;
-  pidfile?: Pidfile | null;
+  pidfile?: Pidfile | null | (() => Pidfile | null);
   processArgv?: (pid: number) => readonly string[] | null;
   processStart?: (pid: number) => number | null;
   store?: () => LinkStore;
@@ -114,7 +114,7 @@ function harness(options: {
     now: () => now,
     random: () => 0.5,
     platform: "linux",
-    readPidfile: () => options.pidfile ?? null, writePidfile: options.writePidfile ?? (() => {}), removePidfile: path => { removed.push(path); },
+    readPidfile: () => (typeof options.pidfile === "function" ? options.pidfile() : options.pidfile) ?? null, writePidfile: options.writePidfile ?? (() => {}), removePidfile: path => { removed.push(path); },
     readProcessArgv: options.processArgv ?? (() => null),
     readProcessStartTime: options.processStart ?? (() => null),
     processAlive: options.processAlive ?? (pid => (options.processArgv?.(pid) ?? null) !== null),
@@ -659,4 +659,37 @@ test("a probe that succeeds after its deadline, before the tick, is a timeout of
   await flush();
   expect(h.state().routes?.routes[0]?.lastOutcome?.class).toBe("transient");
   expect(h.tunnels.map(tunnel => tunnel.argv.at(-1))).toEqual(["pen-alpha"]);
+});
+
+test.each(["before the old process exits", "before the pending SIGKILL"] as const)("a pidfile replaced %s is never acted on by the old watch: no signal, no removal, the link stays blocked", async moment => {
+  const oldArgv = ["ssh", "-N", "old"];
+  let file: Pidfile = { version: 1, linkId: LINK, pid: 4242, argv: oldArgv, startTime: 777 };
+  let oldAlive = true;
+  const h = await started({
+    pidfile: () => file,
+    processArgv: pid => pid === 4242 ? (oldAlive ? oldArgv : null) : ["ssh", "-N", "new"],
+    processStart: pid => pid === 4242 ? (oldAlive ? 777 : null) : 888,
+    processAlive: pid => pid === 4242 ? oldAlive : true,
+  });
+  expect(h.kills).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  file = { version: 1, linkId: LINK, pid: 5555, argv: ["ssh", "-N", "new"], startTime: 888 };
+  if (moment === "before the old process exits") oldAlive = false;
+  await h.advance(2_000);
+  await h.advance(2_000);
+  expect(h.kills).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  expect(h.removed).toEqual([]);
+  expect(h.state().orphan).toBe("orphan-unverified");
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+});
+
+test.each([
+  ["host key", "Host key verification failed."],
+  ["auth", "alice@alpha-lan: Permission denied (publickey)."],
+] as const)("a late %s failure is a timeout of that route, never its class", async (_label, stderr) => {
+  let finishProbe!: (result: SshRunResult) => void;
+  const h = await started({ probe: route => route === "alpha-lan" ? new Promise<SshRunResult>(resolve => { finishProbe = resolve; }) : ok("ocx-link-probe\n") });
+  h.skip(ROUTE_PROBE_MS);
+  finishProbe(refused(stderr));
+  await flush();
+  expect(h.state().routes?.routes[0]?.lastOutcome?.class).toBe("transient");
 });

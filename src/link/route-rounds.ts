@@ -224,7 +224,8 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
         }
         return;
       }
-      fail(link, route, result.code === 0 ? "transient" : routeOutcomeOfStderr(result.stderr), "probe");
+      // A late answer is a timeout whatever it says: a late host-key or auth message never decides the route.
+      fail(link, route, !inTime || result.code === 0 ? "transient" : routeOutcomeOfStderr(result.stderr), "probe");
       next(linkId, link, round);
     }, () => {
       if (!current(linkId, round) || round.phase !== phase) return;

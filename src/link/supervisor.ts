@@ -354,11 +354,20 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const tickOrphanWatches = (current: number): void => {
     for (const [linkId, watch] of [...orphanWatches]) {
       if (!watchCurrent(linkId, watch)) { orphanWatches.delete(linkId); continue; }
+      const file = readPidfile(pidfilePath(linkId));
+      if (file !== null && !samePidfile(linkId, watch)) {
+        // Another owner replaced the pidfile: the old watch acts no more, and the replacement is only
+        // watched (never signalled) while the link stays blocked.
+        orphanWatches.set(linkId, {
+          instance: watch.instance, pid: file.pid, argv: file.argv,
+          ...(file.startTime === undefined ? {} : { startTime: file.startTime }),
+        });
+        continue;
+      }
       if (orphanState(watch) === "gone") {
         orphanWatches.delete(linkId);
         orphanUnverified.delete(linkId);
-        const path = pidfilePath(linkId);
-        if (samePidfile(linkId, watch)) removePidfile(path);
+        if (file !== null) removePidfile(pidfilePath(linkId));
         // The link was waiting for this: start its first round now.
         const record = store.links.find(link => link.id === linkId);
         if (record && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
@@ -366,7 +375,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       }
       const signal = watch.signal;
       if (!signal || watch.startTime === undefined) continue;
-      if (processIdentity(watch.pid, watch.argv, watch.startTime) !== "same") {
+      if (file === null || processIdentity(watch.pid, watch.argv, watch.startTime) !== "same") {
         // Cannot tell it is ours any more: no further signal; the watch goes on.
         delete watch.signal;
       } else if (!signal.killed && current - signal.at >= 2_000) {
