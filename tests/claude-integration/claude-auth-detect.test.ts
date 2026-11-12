@@ -9,10 +9,11 @@ import {
   defaultAuthDetectDeps,
   ownAdmissionTokens,
   detectClaudeAuth,
-  probeClaudeKeychain,
+  resolveClaudeKeychainPresence,
   type AuthDetectDeps,
   type AuthPresence,
 } from "../../src/claude/auth-detect";
+import { claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
 
 /**
  * The safety contract: `unknown` must never collapse into `absent`, because that is
@@ -138,48 +139,53 @@ test("the default claude.json reader stays inside the overridden profile", () =>
   expect(defaultAuthDetectDeps({ HOME: dir }).readClaudeJson()?.oauthAccount).toBeDefined();
 });
 
-// The keychain probe must be metadata-only: -g and -w print password material.
-// OBSERVED behaviour, not source shape — an assertion that slices this file passes
-// trivially if the args are built dynamically, renamed, or moved, and this is the
-// unit's top security invariant.
-test("the default keychain probe never asks for secret material", () => {
-  const calls: string[][] = [];
-  const spy = spyOn(childProcess, "spawnSync").mockImplementation(((file: string, args: string[]) => {
-    calls.push([file, ...args]);
-    return { status: 44, signal: null, error: undefined, stdout: null, stderr: null, output: [], pid: 0 };
-  }) as never);
+// The Keychain source is resolved once, asynchronously, by the caller (#8161). Detection itself
+// never spawns: a synchronous `security` child can only be bounded by killing it.
+test("the default keychain source is the caller's pre-resolved presence and never spawns", () => {
+  const spawned: string[] = [];
+  const spies = (["spawn", "spawnSync", "execFileSync", "execSync"] as const).map(name =>
+    spyOn(childProcess, name).mockImplementation(((file: string) => { spawned.push(`${name}:${file}`); throw new Error("no spawn"); }) as never));
   try {
-    expect(defaultAuthDetectDeps({}).keychainProbe()).toBe(process.platform === "darwin" ? "absent" : "absent");
-    if (process.platform !== "darwin") return; // non-Darwin short-circuits before spawning
-    expect(calls).toHaveLength(1);
-    const [file, ...args] = calls[0]!;
-    expect(file).toBe("security");
-    expect(args).toEqual(["find-generic-password", "-s", "Claude Code-credentials"]);
-    // -w prints the password, -g prints it to stderr. Neither may ever appear.
-    expect(args).not.toContain("-w");
-    expect(args).not.toContain("-g");
+    // Unresolved on macOS is unknown, which maps to subscription and never to proxy.
+    expect(defaultAuthDetectDeps({}).keychainProbe()).toBe(process.platform === "darwin" ? "unknown" : "absent");
+    for (const presence of ["present", "absent", "unknown"] as const) {
+      expect(defaultAuthDetectDeps({}, [], presence).keychainProbe()).toBe(presence);
+    }
+    expect(detectClaudeAuth({ ...defaultAuthDetectDeps({}, [], "unknown"), readClaudeJson: () => undefined, credentialsFileExists: () => false }).presence).toBe("unknown");
+    expect(spawned).toEqual([]);
   } finally {
-    spy.mockRestore();
+    for (const spy of spies) spy.mockRestore();
   }
 });
 
-// The probe's stdio must stay fully ignored: -g writes to stderr, so a captured pipe
-// would put secret material in our process even with correct args.
-test("the default keychain probe captures no output streams", () => {
-  let options: { stdio?: unknown } | undefined;
-  const spy = spyOn(childProcess, "spawnSync").mockImplementation(((_f: string, _a: string[], o: { stdio?: unknown }) => {
-    options = o;
-    return { status: 44, signal: null, error: undefined, stdout: null, stderr: null, output: [], pid: 0 };
-  }) as never);
-  try {
-    defaultAuthDetectDeps({}).keychainProbe();
-    if (process.platform !== "darwin") return;
-    expect(options?.stdio).toEqual(["ignore", "ignore", "ignore"]);
-  } finally {
-    spy.mockRestore();
+test("resolveClaudeKeychainPresence answers from the shared Keychain reader's async probe", async () => {
+  for (const presence of ["present", "absent", "unknown"] as const) {
+    const probe = spyOn(claudeKeychainReader, "probe").mockResolvedValue(presence);
+    try {
+      expect(await resolveClaudeKeychainPresence()).toBe(presence);
+      expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      probe.mockRestore();
+    }
   }
 });
 
+
+test("a manual authMode never probes the Keychain, and auto still does", async () => {
+  const probe = spyOn(claudeKeychainReader, "probe").mockResolvedValue("present");
+  try {
+    for (const mode of ["proxy", "subscription"]) {
+      // Detection is discarded for a pinned mode, so no wait and no unlock prompt for it.
+      expect(await resolveClaudeKeychainPresence(mode)).toBe(process.platform === "darwin" ? "unknown" : "absent");
+    }
+    expect(probe).toHaveBeenCalledTimes(0);
+    expect(await resolveClaudeKeychainPresence("auto")).toBe("present");
+    expect(await resolveClaudeKeychainPresence(undefined)).toBe("present");
+    expect(probe).toHaveBeenCalledTimes(2);
+  } finally {
+    probe.mockRestore();
+  }
+});
 test("defaultAuthDetectDeps binds env to the caller-supplied environment", () => {
   const real = defaultAuthDetectDeps({ ANTHROPIC_API_KEY: "sk-ant-from-base" });
   expect(real.env().ANTHROPIC_API_KEY).toBe("sk-ant-from-base");
@@ -226,25 +232,4 @@ test("opencodex's own admission key is not counted as user auth", () => {
 test("ownAdmissionTokens reads configured admission keys", () => {
   expect(ownAdmissionTokens({ apiKeys: [{ key: "a" }, { key: "b" }] })).toEqual(["a", "b"]);
   expect(ownAdmissionTokens({})).toEqual([]);
-});
-
-test("the metadata probe shares the Keychain reader's admission and backoff (#8161)", () => {
-  let blocked = false;
-  let timeouts = 0;
-  const reader = { syncReadBlocked: () => blocked, noteSyncTimeout: () => { timeouts += 1; } };
-  let runs = 0;
-  const run = (result: { status: number | null; signal: string | null; error?: Error }) => () => { runs += 1; return result; };
-  expect(probeClaudeKeychain("linux", reader, run({ status: 0, signal: null }))).toBe("absent");
-  expect(probeClaudeKeychain("darwin", reader, run({ status: 0, signal: null }))).toBe("present");
-  expect(probeClaudeKeychain("darwin", reader, run({ status: 44, signal: null }))).toBe("absent");
-  expect(probeClaudeKeychain("darwin", reader, run({ status: 1, signal: null }))).toBe("unknown");
-  expect(runs).toBe(3);
-  // A timed-out probe is unknown, never absent, and starts the shared backoff.
-  const timedOut = Object.assign(new Error("spawnSync security ETIMEDOUT"), { code: "ETIMEDOUT" });
-  expect(probeClaudeKeychain("darwin", reader, run({ status: null, signal: "SIGTERM", error: timedOut }))).toBe("unknown");
-  expect(timeouts).toBe(1);
-  // While a read is blocked or backing off, the probe answers unknown without spawning.
-  blocked = true;
-  expect(probeClaudeKeychain("darwin", reader, run({ status: 0, signal: null }))).toBe("unknown");
-  expect(runs).toBe(4);
 });

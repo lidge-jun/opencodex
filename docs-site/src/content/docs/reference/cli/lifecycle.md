@@ -837,6 +837,29 @@ On macOS, launchd instead uses the package-local Bun and CLI paths selected duri
 repair. This prevents a mutable PATH shim from receiving the service API token and configured proxy
 environment on a later restart. After upgrading a version-manager installation, run
 `ocx service repair` to refresh those paths before restarting the service.
+
+The macOS agent uses launchd's `Interactive` resource policy because Codex and dashboard requests
+depend on its responsiveness. This avoids the default daemon CPU and I/O throttling under load.
+After upgrading an existing installation, `ocx service repair` applies this policy as well.
+
+If launchd refuses the changed definition and its state can be checked, repair reports failure
+and attempts to restore the previous definition; a job still serving the expected command is left
+running with the previous plist back on disk. A matching command alone cannot confirm the new policy.
+If the initial launchd probe cannot check state, repair refuses before writing a new plist or backup.
+If state becomes uncheckable after bootstrap, repair keeps the new plist and any backup without another eviction:
+a refused bootstrap throws, while an accepted bootstrap reports an unverified reload with a warning.
+Inspect the job with `launchctl print gui/$(id -u)/com.opencodex.proxy` before retrying repair.
+An unconfirmed definition remains pending across repairs, including after a token change. Registration
+is retried only when the initial launchd probe is checkable; a GUI login session may be required.
+Repair preserves any original backup successfully created until bootstrap is accepted and the probe
+confirms the matching job. Backup creation is best-effort; a fresh installation has no prior definition.
+Identical disk bytes and command alone cannot make a pending repair a no-op. Fresh installation
+removes orphaned recovery files, and full uninstall removes them even when the plist is absent.
+Fresh-install recovery cleanup, pending-marker removal and uninstall cleanup ignore only already-missing
+files; another error in these steps reports failure without deleting install state. After a verified
+repair has written install state, removing the `.prev` backup is best-effort; failure there does not
+change the repair's reported success.
+
 Launchd restarts the proxy after a crash or failed restart handoff, but leaves it stopped when
 the service deliberately exits cleanly because the desktop app owns the runtime. Run
 `ocx service repair` once to apply this behavior to a service installed by an older version.
@@ -1410,6 +1433,14 @@ These commands start one job on the Home for Home-initiated Children and print i
 | 5 | another operation holds the link, the only link named was started from the Child, the Home has no links, or the command ran on a Child; the error message names which |
 
 The wait does not count time an item spends queued behind another job. Removing a link while a job holds it answers `409 link_operation_in_progress`.
+
+## Child policy from the Home
+
+```text
+ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]
+```
+
+`ocx link policy` starts no job and prints no `ocx.link.child-job/1` document. It reads the Home's Child policy and, with flags, changes only the settings named: `--catalog-fanout auto|manual`, `--child-codex-restart never|app-server-when-idle`, `--updates off|notify|auto-when-idle` and `--idle-after-minutes <1-60>`. It prints one line per setting, or `{policy, warning}` with `--json`; `warning` is `policy-file-invalid` when the file is damaged, and automatic catalog fan-out and updates stay off; a save keeps every setting it does not name off, so pass `--catalog-fanout auto` and an `--updates` mode to turn them back on. Catalog fan-out is on by default: after a Home catalog change the Home syncs eligible Children over SSH on its own. See [Automatic catalog fan-out and the Child policy](/guides/remote-link/#automatic-catalog-fan-out-and-the-child-policy). Exit codes: 0 on success, 2 for invalid arguments, 4 for a Home without this command, 5 for a conflict answer (`runtime_role_client` from a runtime that is a Child), and 1 for a Home not bound to loopback, an invalid answer, or a run on a Remote Link Child, which refuses the request before sending it.
 
 ## Remote Link SSH capture
 

@@ -11,7 +11,7 @@ import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
-import { LINK_CHILD_OPS_USAGE, runLinkCheck, runLinkChildOp } from "./link-child-ops";
+import { LINK_CHILD_OPS_USAGE, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
 import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
 import { validateChildOps, type LinkChildOpsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
@@ -56,7 +56,8 @@ Cleanup reports each Child's platform with disconnect guidance; it changes nothi
 Diagnostics reads this computer's bounded link diagnostics file directly; it contacts no proxy and writes nothing.
 Check reads each Home-initiated Child's installed version and update route; it changes no install.
 Update, sync and restart-codex run on the Child over the link's SSH trust and wait for the job unless --no-wait.
-Capture opens a short, local window in which this machine's link tunnels log sanitized SSH diagnostics.`;
+Capture opens a short, local window in which this machine's link tunnels log sanitized SSH diagnostics.
+Policy reads or changes how this Home keeps its Children current; without flags it only reads.`;
 
 /**
  * What `ocx link status` prints: the runtime's status DTO itself, so a field the server adds (like
@@ -418,7 +419,8 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "check") verdictExit = await runLinkCheck(args, deps, linkRequest, LINK_USAGE);
     else if (command === "update" || command === "sync" || command === "restart-codex") verdictExit = await runLinkChildOp(command, args, deps, linkRequest, LINK_USAGE);
     else if (command === "capture") await runLinkCapture(args, deps, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, cleanup, check, update, sync, restart-codex, capture", LINK_USAGE);
+    else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, cleanup, check, update, sync, restart-codex, capture, policy", LINK_USAGE);
   });
   return code === 0 ? verdictExit : code;
 }

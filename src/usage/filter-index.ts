@@ -97,7 +97,10 @@ const SQLITE_BUSY_TIMEOUT_MS = 250;
 const RETAINED_WAL_LIMIT_BYTES = 4 * 1024 * 1024;
 const BATCH_BUSY_RETRIES = 3;
 const BATCH_BUSY_RETRY_MS = 5;
-const BUSY_RETRY_DELAYS_MS = [10, 25, 50, 100, 200, 400, 800, 1_600, 3_200] as const;
+// Contention is retried briefly and then degrades to the streaming read, which answers the same
+// request from the ledger. A longer wait only holds a dashboard request (and, through SQLite's
+// synchronous busy timeout, the event loop) behind another writer.
+const BUSY_RETRY_DELAYS_MS = [10, 25, 50] as const;
 // A rebuild-required error resolves as soon as the competing publish settles, so it retries on
 // the original short schedule instead of parking behind the long busy backoff.
 const REBUILD_RETRY_DELAYS_MS = [10, 25, 50] as const;
@@ -1570,9 +1573,9 @@ export async function readUsageFilterCandidates(
         continue;
       }
       if (isBusyError(error)) {
-        // Contention, including a peer still creating the projection, is waited out rather than
-        // read as a foreign file. The bound is the BUSY_RETRY_DELAYS_MS sum (about 6.4 s) plus up
-        // to ten busy timeouts before the request falls back to the streaming read.
+        // Contention, including a peer still creating the projection, is waited out briefly rather
+        // than read as a foreign file. The bound is the BUSY_RETRY_DELAYS_MS sum (85 ms) plus up to
+        // four busy timeouts before the request falls back to the streaming read.
         const delay = BUSY_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
         testHooks?.beforeBusyRetry?.({ dbPath: path, attempt });
