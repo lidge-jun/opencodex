@@ -398,7 +398,7 @@
   "apply-patch-envelope.test.ts": "responses", "artifacts-prune.test.ts": "images",
   "artifacts-ssrf.test.ts": "images", "aside-client.test.ts": "providers",
   "aside-profile-identity.test.ts": "clients", "aside-profile-paths.test.ts": "clients",
-  "aside-profile-sync-owner.test.ts": "clients", "aside-profiles-routes.test.ts": "server",
+  "aside-profile-sync-owner.test.ts": "clients", "pi-sync-owner.test.ts": "clients", "aside-profiles-routes.test.ts": "server",
   "aside-profiles.test.ts": "clients", "assert-mergeable-review.test.ts": "ci-workflows",
   "audio-client.test.ts": "server", "audio-dictation.test.ts": "server",
   "audio-transcriptions.test.ts": "server", "auto-compact-budget.test.ts": "providers",

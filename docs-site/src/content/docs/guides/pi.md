@@ -59,6 +59,8 @@ running proxy proves that it reaches the same model: for example, `openrouter/op
 selects OpenRouter's `openrouter/free` model, and its Fast row is `openrouter/openrouter/free--fast`.
 A model the proxy cannot prove that way, such as one its inventory has not loaded yet or one whose
 raw spelling another model already owns, keeps its encoded selector. Custom aliases keep their names.
+When the running proxy uses Codex Direct mode, native OpenAI models are left out of Pi's export:
+Direct mode forwards each caller's own OpenAI credential, and Pi sends a placeholder key.
 
 ## Where it goes
 

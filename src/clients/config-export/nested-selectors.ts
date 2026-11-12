@@ -9,8 +9,10 @@ import type { OcxConfig } from "../../types";
  * A routed row whose upstream ID contains a slash is keyed by its encoded slug
  * (`openrouter/openrouter-free` for `openrouter/free`). That key routes only while the router's
  * inventory can decode it, so the raw `provider/upstream-id` spelling is offered when it is proven:
- * `config` is the serving proxy's own admitted configuration (the shared management row loader is
- * the only production caller), the raw selector reaches the same concrete provider, model and
+ * `config` is the admitted configuration of the process that builds the roster. Only Pi reads
+ * these candidates, and every Pi document is built inside the serving proxy: `ocx export` reads
+ * `/api/client-config`, and `ocx sync` refreshes Pi through `/api/client-integrations/pi/sync`,
+ * so the CLI's saved configuration never proves a selector Pi writes. The raw selector reaches the same concrete provider, model and
  * account as the encoded key, and so does its Fast row, and no other row of the full roster claims
  * it. A cold inventory, a self-namespaced model that would win the raw spelling, a policy or combo
  * result, or a collision leaves the row without a candidate, and the encoded key stays.

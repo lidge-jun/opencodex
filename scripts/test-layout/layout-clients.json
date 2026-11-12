@@ -47,6 +47,7 @@
   "aside-profile-identity.test.ts": "clients",
   "aside-profile-paths.test.ts": "clients",
   "aside-profile-sync-owner.test.ts": "clients",
+  "pi-sync-owner.test.ts": "clients",
   "aside-profiles.test.ts": "clients",
   "aside-profiles-catalog-refresh.test.ts": "clients",
   "client-catalog-compatibility.test.ts": "clients",
