@@ -56,9 +56,11 @@ function turnHandler() {
     open(ws) { ws.data.admissionLease?.bind(ws); },
     message(ws, raw) {
       const frame = JSON.parse(String(raw)) as Record<string, unknown>;
-      // Like the shared handler: a warmup or a refused admission never begins a turn.
+      // Like the shared handler: a warmup or a refused admission never begins a turn, and an admitted
+      // turn whose pipeline answered ok is reported as accepted (websocket-handler.ts notifyAccepted).
       if (frame.type !== "response.create" || frame.generate === false || refuseAdmission.value) return;
       finishes.push(ws.data.responsesActivity!.beginTurn(frame.input));
+      ws.data.responsesActivity!.notifyAccepted(frame.input);
     },
     close(ws) { ws.data.admissionLease?.release(); },
   };

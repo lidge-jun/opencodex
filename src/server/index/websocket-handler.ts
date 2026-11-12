@@ -384,6 +384,8 @@ export function createWebsocketHandler(
               logCtx.causeHint = "transport-ambiguous";
               logCtx.terminalSource = "synthetic";
             }
+            // Remote Link holds release only for a turn every admission accepted (link-websocket.ts).
+            if (response.ok) ws.data.responsesActivity?.notifyAccepted(frame.input);
             const observeLog = nativeControl?.relayActive
               ? createNativeSteeringLogObserver(logCtx, () => recordFirstOutput(logCtx, start))
               : (payload: string) => inspectResponseLogSsePayload(logCtx, payload);

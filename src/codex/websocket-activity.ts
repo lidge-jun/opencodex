@@ -92,10 +92,20 @@ export class CodexWebSocketActivity {
     return () => { this.listeners = this.listeners.filter(candidate => candidate !== listener); };
   }
 
-  /** Called with a create's input once the shared handler admitted it as a turn (never for a warmup or refusal). */
+  /**
+   * Called with a turn's input once the shared handler got a successful response for it, after turn,
+   * workflow and pipeline admission (notifyAccepted). Never for a warmup or any refusal.
+   */
   onAccepted(listener: (input: unknown) => void): () => void {
     this.acceptedListeners.push(listener);
     return () => { this.acceptedListeners = this.acceptedListeners.filter(candidate => candidate !== listener); };
+  }
+
+  /** The shared handler's turn was accepted by every admission and the pipeline answered ok. */
+  notifyAccepted(input: unknown): void {
+    for (const listener of [...this.acceptedListeners]) {
+      try { listener(input); } catch { /* an observer never breaks the socket's own bookkeeping */ }
+    }
   }
 
   private changed(): void {
@@ -115,9 +125,6 @@ export class CodexWebSocketActivity {
     this.turns += 1;
     this.touch();
     this.settleResults(input);
-    for (const listener of [...this.acceptedListeners]) {
-      try { listener(input); } catch { /* an observer never breaks the socket's own bookkeeping */ }
-    }
     // Ordinary creates start a new response even when its upstream omits response.created.
     // Prior results settle old waits, but cannot suppress new calls reusing their IDs.
     this.returnedResults.clear();

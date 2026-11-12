@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, utimesSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHmac } from "node:crypto";
@@ -13,6 +13,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient, frameType, type WireMessage } from "../helpers/link-ws-client";
 import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 import * as nativeControl from "../../src/server/responses/native-response-control";
+import * as workflow from "../../src/server/workflow-refusal";
 
 const originalMode = nativeControl.nativeResponseControlMode;
 
@@ -39,6 +40,9 @@ let codexHome: IsolatedCodexHome | null = null;
 let server: { stop(closeActiveConnections?: boolean): Promise<void>; url: URL } | null = null;
 let upstream: ReturnType<typeof Bun.serve> | null = null;
 let upstreamRequests: Array<{ headers: Array<[string, string]>; body: string }> = [];
+// Which SSE body the fixture upstream answers with; a test may vary it per request.
+let upstreamBody: () => string = () => COMPLETED;
+let upstreamStatus: () => number = () => 200;
 const clients: LinkWireClient[] = [];
 
 const COMPLETED = [
@@ -121,12 +125,16 @@ beforeEach(() => {
   codexHome = installIsolatedCodexHome("ocx-link-ws-codex-");
   writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify({ models: [{ slug: "fixture/fixture" }] }));
   upstreamRequests = [];
+  upstreamBody = () => COMPLETED;
+  upstreamStatus = () => 200;
   upstream = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(req) {
       upstreamRequests.push({ headers: [...req.headers.entries()], body: await req.text() });
-      return new Response(COMPLETED, { headers: { "content-type": "text/event-stream" } });
+      const status = upstreamStatus();
+      if (status !== 200) return Response.json({ error: { type: "server_error", message: "fixture upstream failure" } }, { status });
+      return new Response(upstreamBody(), { headers: { "content-type": "text/event-stream" } });
     },
   });
 });
@@ -316,6 +324,51 @@ describe("link Responses WebSocket switched on", () => {
     }
   });
 
+  test("with the real shared handler, a workflow refusal keeps a hold and an admitted turn releases it (T5d1-R3-01)", async () => {
+    const callTurn = [
+      'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_tool","status":"in_progress","output":[]}}\n\n',
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_tool","status":"completed","output":[{"type":"function_call","id":"fc_hold","call_id":"call_hold","name":"shell","arguments":"{}","status":"completed"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n',
+    ].join("");
+    upstreamBody = () => (upstreamRequests.length === 1 ? callTurn : COMPLETED);
+    const port = await startHome();
+    const holdsPath = join(testHome, "link", "activity-holds.json");
+    const holdsOf = () => (JSON.parse(readFileSync(holdsPath, "utf8")) as { links: Record<string, { holds: unknown[] }> }).links[LINK_A]?.holds.length ?? 0;
+    const holdsChanged = () => new Promise<void>(resolve => {
+      const watcher = watch(join(testHome, "link"), (_event, name) => { if (name === "activity-holds.json") { watcher.close(); resolve(); } });
+    });
+    const first = await client(port);
+    const session = await first.challenge(identityA);
+    expect((await first.upgrade({ nonce: session.nonce, bearer: KEY_A, headers: { "thread-id": "thread-hold" } })).status).toBe(101);
+    await runTurn(first);
+    const written = holdsChanged();
+    first.destroy();
+    await written;
+    expect(holdsOf()).toBe(1);
+
+    const second = await client(port);
+    const next = await second.challenge(identityA);
+    expect((await second.upgrade({ nonce: next.nonce, bearer: KEY_A, headers: { "thread-id": "thread-hold" } })).status).toBe(101);
+    const returned = { ...create([{ type: "function_call_output", call_id: "call_hold", output: "done" }]) };
+    const refuse = spyOn(workflow, "admitHttpWorkflowTurn").mockImplementation(() => ({ admitted: false, reason: "workflow-sends-exhausted", rootId: "" }));
+    try {
+      second.sendJson(returned);
+      const refused = await second.nextMessage();
+      expect(frameType(refused)).toBe("error");
+    } finally { refuse.mockRestore(); }
+    expect(holdsOf()).toBe(1);
+    // A turn the pipeline answers with an error (here the upstream refuses it) does not release it either.
+    upstreamStatus = () => 400;
+    second.sendJson(returned);
+    const failed = await second.until(message => frameType(message) === "error" || frameType(message) === "response.failed");
+    expect(failed.map(frameType).some(type => type === "error" || type === "response.failed")).toBe(true);
+    upstreamStatus = () => 200;
+    expect(holdsOf()).toBe(1);
+    const released = holdsChanged();
+    await runTurn(second, returned);
+    await released;
+    expect(holdsOf()).toBe(0);
+  });
+
   test("a revoked socket's inject is refused by the authorization check, not answered (11.1-5a)", async () => {
     const port = await startHome({ codexNativeInjection: true });
     const wire = await openSocket(port);
@@ -339,4 +392,3 @@ describe("link Responses WebSocket switched on", () => {
     expect(["close", "eof"]).toContain(after.type);
   });
 });
-
