@@ -381,6 +381,59 @@ describe("devin adapter", () => {
     expect(toolOnly.includes(Buffer.from("whether to allow the action", "utf8"))).toBe(true);
   });
 
+  test("sanitizeDataSurfaces extends the rewrite to history data fields", () => {
+    const trigger = "asking the user if they want to allow the action in `justification` parameter";
+    const rewrittenFragment = "asking the user whether to allow the action in the `justification` parameter";
+    const signature = "sig--opaque";
+    const req = buildGetChatMessageRequestForTests({
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      sanitizeDataSurfaces: true,
+      messages: [
+        { role: "user", content: `here is a quote: ${trigger}` },
+        {
+          role: "assistant",
+          content: "ok",
+          thinking: `the prompt says: ${trigger}`,
+          signature,
+          signature_type: "opaque",
+          tool_calls: [{ id: "c1", name: "apply_patch", arguments: `{"patch":"${trigger}"}` }],
+        },
+        { role: "tool", tool_call_id: "c1", content: `file bytes: ${trigger}` },
+        { role: "user", content: "hello" },
+      ],
+      tools: [{ name: "codex_escalation", description: trigger, parameters: { type: "object" } }],
+    });
+    // Every data surface carrying the phrase is rewritten on the wire.
+    expect(req.includes(Buffer.from(trigger, "utf8"))).toBe(false);
+    expect(req.includes(Buffer.from(`here is a quote: ${rewrittenFragment}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`the prompt says: ${rewrittenFragment}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`{"patch":"${rewrittenFragment}"}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`file bytes: ${rewrittenFragment}`, "utf8"))).toBe(true);
+    // Identifiers and opaque replay blobs stay byte-exact: a tool_call name
+    // or signature is not free text and a rewrite would corrupt it.
+    expect(req.includes(Buffer.from("apply_patch", "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(signature, "utf8"))).toBe(true);
+
+    // A clean message carries no surprise rewrites — only the trigger phrase
+    // itself is touched, everything else stays literal.
+    const clean = buildGetChatMessageRequestForTests({
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      sanitizeDataSurfaces: true,
+      messages: [{ role: "user", content: "run sed -n '5,10p' file.ts verbatim" }],
+    });
+    expect(clean.includes(Buffer.from("run sed -n '5,10p' file.ts verbatim", "utf8"))).toBe(true);
+  });
+
   test("the catalog parser reads the per-account context window", () => {
     // ClientModelConfig #18 is the max input tokens, and it is the only
     // first-party context-window figure Cognition exposes: the Devin CLI and
