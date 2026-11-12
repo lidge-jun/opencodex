@@ -48,6 +48,7 @@ export interface OptionalListenerSet<T> {
   notifyAuthenticatedCatalog(apiKeyId: string, routeProofId?: string): void;
   peerObservation(linkId: string): import("../../link/peer-report").LinkPeerEntry;
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
+  linkTraffic(linkId: string): import("../../link/traffic").LinkTrafficCounters;
   /** The last relayed catalog pull of a link in this process; null before start or before any pull. */
   catalogPull(linkId: string): CatalogPull | null;
   /** Write every catalog pull still held in memory; a failed write is logged and kept for the next attempt. */
@@ -169,6 +170,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
     notifyAuthenticatedCatalog: (apiKeyId, routeProofId) => linkListener.notifyAuthenticatedCatalog(apiKeyId, routeProofId),
     peerObservation: linkId => linkListener.peerObservation(linkId),
     linkActivity: (linkId, now) => linkListener.linkActivity(linkId, now),
+    linkTraffic: linkId => linkListener.linkTraffic(linkId),
     catalogPull: linkId => catalogPulls?.pulled(linkId) ?? null,
     flushCatalogPulls: () => { catalogPulls?.flush(); },
     status: () => linkListener.status(),
