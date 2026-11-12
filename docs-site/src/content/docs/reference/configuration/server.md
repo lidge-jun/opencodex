@@ -36,6 +36,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | `nativeReasoningRetention?` | `{ modelSwitch?: boolean; accountSwitch?: boolean }` | both `false` | Permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT backend. Account retention is experimental. See [Native reasoning retention](#native-reasoning-retention). |
 | `workflowBudget?` | `{ maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number }` | `8` / `256` / `64` | Per-task fan-out ceilings: turns running at once, upstream sends per 10-minute window, and distinct subagent threads per window. Omitted fields keep the built-in value. See [Workflow limits](#workflow-limits). |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
+| `dashboardTrustedProxy?` | `{ origin: string; proxyAddresses: string[]; trustHeaders?: ("x-forwarded-host" \| "x-forwarded-proto")[] }` | unset | Standalone only, opt-in: lets **Remember this device** work through one TLS-terminating reverse proxy. `origin` is one exact `https://` origin, `proxyAddresses` are the proxy's exact IP addresses (no ranges or wildcards), and `trustHeaders` reads the browser host from `X-Forwarded-Host` and/or requires `X-Forwarded-Proto: https` (default: `Host` only). Ignored on a loopback bind or a Hub. See [Remember behind a reverse proxy](/guides/web-dashboard/#remember-behind-a-reverse-proxy). |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` data-plane admission credentials on non-loopback binds. They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
 | `usageLedgerMaxBytes?` | `number` | unset | Opt-in ceiling in bytes for `usage.jsonl`. Absent means the request history grows without limit, which stays the default. See [usage history size](#usage-history-size). |
@@ -849,6 +850,15 @@ the thread itself runs elsewhere. Naming `"auto"` here points the compaction at 
 provider-qualified model with its own credentials and quota only when `sourceModels` is omitted
 or matches the incoming model. A list containing only `provider/*` entries does not cover a bare
 native compaction model.
+
+When `model` names a combo, a compaction whose targets are all cooling fails fast with
+`combo_unavailable`, and the message names the earliest recovery, for example `(retry in ~2m)`.
+A refusal from a cooling local Codex Pool account cools its combo target only for the short combo
+backoff, so the target returns once that account recovers. To let a dedicated compaction combo try
+its cooled targets again without waiting out a long upstream `Retry-After`, enable that combo's
+opt-in [all-cooled recovery](/guides/combos/#retry-all-cooled-targets-opt-in), for example
+`{"cooldownReprobe": {"enabled": true, "intervalMs": 300000}}`. Recovery stays demand-driven and
+keeps account quota and admission checks; it cannot make an exhausted account serve.
 
 OpenCodex changes only requests with explicit `request_kind: "compaction"` metadata whose
 `compaction.trigger` is one of the values you listed, sent to `/v1/responses/compact` or to

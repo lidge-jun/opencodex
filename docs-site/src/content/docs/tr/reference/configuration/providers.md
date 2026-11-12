@@ -197,6 +197,8 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor eski boolean değeri, yalnızca daha yeni alan ayarlanmadığında `nativeLocalExec: "on"` değerine eşdeğerdir. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor yerel yürütme politikası. `off` varsayılandır; `codex-sandbox` şu anda `off` gibi kapalı olarak başarısız olur. |
 
+Yerel Responses için aynı tercih, yalnızca yaşam döngüsü olaylarından sonra gelen normal EOF durumunu da kapsar. Kendi kendine yeterli istek ve değiştirme sınırları geçerlidir. Bu sınırların dışındaki istekler denetlenmez, bu yüzden akışları bekletilmez. Doğrudan akış, üst sunucu henüz sessiz olsa bile orijinal yanıt başlığını 200 milisaniye içinde alır. Sıfırlama veya EOF bu başlık döndürülmeden önce olursa istemci yedek yanıtı kendi durumu ve başlıklarıyla alır; yedek yanıtın başlığı en fazla 15 saniye ya da daha kısaysa takılma zaman aşımı kadar beklenir. JSON olarak toplanan akışsız istekler ve combo hedefleri, istemcileri yanıt toplanana veya seçilene kadar başlık almadığı için başlık seçmeden önce aynı süre bekleyebilir. Başlık döndürüldükten sonra yedeğin neyle eşleşmesi gerektiği akışın nasıl bittiğine bağlıdır: okuma hatası sıfırlama yolunun mevcut davranışını korur ve yedek gövde her zamanki gibi orijinal başlığın arkasında yayımlanır; yalnızca yaşam döngüsü olaylarından sonra gelen temiz EOF daha katıdır, çünkü aynı turu yanıtlayan farklı bir denemedir ve yedek, taahhüt edilmiş başlıkla durum, durum metni, content-type ortam türü, `openai-model` ve `x-codex-turn-state` üzerinde anlaşmalıdır. Değişken ve atlama bazlı başlıkların (`date`, istek kimlikleri, `cf-ray`, `server-timing`, `x-ratelimit-*`, `openai-processing-ms`, `content-length`, `transfer-encoding`, `connection`, `keep-alive`) eşleşmesi gerekmez; istemci orijinal başlığın değerlerini zaten taşır ve gerçek bir kaynak bunları her denemede değiştirir. Uyuşmazlıkta orijinal akış ve hatası korunur. Bundan sonra hâlâ denetlenen doğrudan akışlar başlıkla birlikte ve ardından her 15 saniyede bir SSE keepalive yorumu alır; combo ön denetimi bir yanıt seçene kadar bu yorumları tutar.
+
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 
 
@@ -210,17 +212,17 @@ yapılandırılır.
 
 ### Bir sağlayıcı kaydı neleri korur
 
-Var olan bir sağlayıcının adıyla gönderilen `POST /api/providers`, saklanan satırı istekten oluşturulan bir satırla değiştirir. Panodaki ekleme/düzenleme formu her alanı gönderemez; bu yüzden kayıt, isteğin atladığı bazı saklanan alanları korur. Bunlardan on üçü belirli bir üst kaynağın nasıl davrandığını kaydeder: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`.
+Var olan bir sağlayıcının adıyla gönderilen `POST /api/providers`, saklanan satırı istekten oluşturulan bir satırla değiştirir. Panodaki ekleme/düzenleme formu her alanı gönderemez; bu yüzden kayıt, isteğin atladığı bazı saklanan alanları korur. Bunlardan on dördü belirli bir üst kaynağın nasıl davrandığını kaydeder: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`, `forwardAdvisorTool`.
 
-| Kayıt | On üç ayar | Saklanan `apiKeyPool` |
+| Kayıt | On dört ayar | Saklanan `apiKeyPool` |
 | --- | --- | --- |
 | Aynı hedef, alan atlanmış | Saklanan değer korunur, açık bir `[]` veya `false` dahil | Korunur |
 | Yeni hedef, alan atlanmış | Korunmaz; yeni hedef için kayıt defteri varsayılanları uygulanabilir | Korunmaz |
 | Alan istekte gönderilmiş | İsteğin değeri | İsteğin değeri |
 
-Hedef; bağdaştırıcı, temel URL (şema ve ana makine büyük/küçük harf gözetmeden karşılaştırılır, sondaki eğik çizgiler yok sayılır) ve istek bir tane belirtiyorsa kimlik doğrulama modudur. Bir sağlayıcıyı başka bir hedefe taşımak, önceki üst kaynağı tanımlayan on üç ayarı ve o kaynak için verilmiş anahtar havuzunu bırakır. Bir kayıt, eski satırın geri kalanını yenisiyle asla birleştirmez.
+Hedef; bağdaştırıcı, temel URL (şema ve ana makine büyük/küçük harf gözetmeden karşılaştırılır, sondaki eğik çizgiler yok sayılır) ve istek bir tane belirtiyorsa kimlik doğrulama modudur. Bir sağlayıcıyı başka bir hedefe taşımak, önceki üst kaynağı tanımlayan on dört ayarı ve o kaynak için verilmiş anahtar havuzunu bırakır. Bir kayıt, eski satırın geri kalanını yenisiyle asla birleştirmez.
 
-`PATCH /api/providers?name=<provider>` yalnızca adını verdiği alanları değiştirir ve hedef ne olursa olsun diğer tüm saklanan alanları korur. On üç ayarın hepsini kabul eder; `null` birini temizler. İki akıl yürütme listesinde boş dizi silinmez, açık bir vazgeçme olarak saklanır.
+`PATCH /api/providers?name=<provider>` yalnızca adını verdiği alanları değiştirir ve hedef ne olursa olsun diğer tüm saklanan alanları korur. On dört ayarın hepsini kabul eder; `null` birini temizler. İki akıl yürütme listesinde boş dizi silinmez, açık bir vazgeçme olarak saklanır.
 
 ## Sağlayıcı teşhis giden güvenliği
 

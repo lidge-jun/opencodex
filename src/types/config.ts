@@ -581,7 +581,8 @@ export interface OcxConfig {
   defaultProvider: string;
   /** Persisted state for newly discovered provider models (#2464). Absent keeps legacy "on" behavior. */
   modelDiscovery?: {
-    newModelPolicy?: "on" | "off";
+    /** `admit` appends arrivals to custom provider selections (#8236); default `on`. */
+    newModelPolicy?: "on" | "off" | "admit";
     knownModels?: Record<string, {
       ids: string[];
       removed: string[];
@@ -589,7 +590,14 @@ export interface OcxConfig {
       /** Consecutive successful discoveries in which an active id was absent. */
       missing?: Record<string, number>;
     }>;
-    recentArrivals?: Record<string, Array<{ id: string; at: string }>>;
+    recentArrivals?: Record<string, Array<{
+      id: string;
+      at: string;
+      /** Appended to the provider's custom selection by the `admit` policy. */
+      admitted?: boolean;
+      /** Whether the `off` policy disabled it; absent on rows recorded before #8236. */
+      disabledByPolicy?: boolean;
+    }>>;
   };
   /** Enable the shipped model alias patterns for providers without an override. */
   defaultModelAliases?: boolean;
@@ -1412,6 +1420,19 @@ export interface OcxConfig {
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
   /**
+   * #8338, opt-in, standalone only: the one reverse proxy a dashboard may sit behind and still
+   * remember devices. `origin` is the exact https origin the browser uses; `proxyAddresses` are
+   * the proxy hop's own IP addresses as this process observes them (never a range); and
+   * `trustHeaders` names the forwarded headers that carry the browser's host and scheme (default:
+   * Host only, scheme from `origin`). Absent, Remember stays direct HTTPS or loopback only. Parsed by
+   * src/config/dashboard-trusted-proxy.ts; enforced in managementRequestOrigin (src/server/auth-cors.ts).
+   */
+  dashboardTrustedProxy?: {
+    origin: string;
+    proxyAddresses: string[];
+    trustHeaders?: Array<"x-forwarded-host" | "x-forwarded-proto">;
+  };
+  /**
    * OCX-11 fallback off: refuse model or provider fallback per scope, and record per-device local
    * fallback permission. Absent keeps every chain as it was. See src/routing/fallback-policy.ts.
    */
@@ -1746,6 +1767,8 @@ export interface OcxAdvisorConfig {
    * or a tool result after the latest user message).
    */
   policy?: "manual" | "preflight" | "adaptive";
+  /** question-only sends only the worker's explicit question and disables automatic consultations. */
+  contextMode?: "context" | "question-only";
   /** Adaptive task consultation attempts (manual + automatic). Integer 1–3, default 3. */
   maxConsultationsPerTask?: number;
   /** Advisor fetch timeout (ms). Default 120000. */
@@ -1826,6 +1849,13 @@ export interface OcxCodexPoolConfig {
   startIdleWindows?: boolean;
   /** Enable process-local affinity for caller-owned credentials; defaults off. */
   requestOwnedAffinity?: boolean;
+  /**
+   * Pool-only policy (#7410); defaults off. When true, automatic Pool resolution serves only
+   * registered, eligible non-main accounts: no ordered or preserved native main, no caller-main
+   * fallback, and a manual main pin is not honoured. An exhausted allowed pool refuses. Explicit
+   * account selectors (including `__main__` and Reserve) and Direct mode stay outside the policy.
+   */
+  poolOnly?: boolean;
   /**
    * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
    * account. Absent or empty means no policy.

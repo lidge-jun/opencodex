@@ -165,9 +165,14 @@ describe("Antigravity User-Agent selection", () => {
     expect(ANTIGRAVITY_REQUEST_UA).toBe(IDE_UA);
   });
 
-  test("only Argon wire ids take the CLI UA", () => {
-    for (const wire of ["gemini-4-argon", "gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"]) {
-      expect(antigravityUserAgentForWireModel(wire)).toBe(CLI_UA);
+  test("only Gemini 4 codename wire ids take the CLI UA", () => {
+    // Verified 2026-11-11 against live CCA: the CLI discovery list is the IDE list plus exactly
+    // the Argon and Carbon tiers, and gemini-4-carbon-medium 404s under the IDE UA while
+    // answering 200 under the CLI UA, the same split as Argon.
+    for (const codename of ["argon", "carbon"]) {
+      for (const suffix of ["", "-low", "-medium", "-high"]) {
+        expect(antigravityUserAgentForWireModel(`gemini-4-${codename}${suffix}`)).toBe(CLI_UA);
+      }
     }
     for (const wire of [
       "gemini-3.7-flash-tiered",
@@ -181,10 +186,23 @@ describe("Antigravity User-Agent selection", () => {
       // Near misses must not widen the CLI gate.
       "gemini-4-argon-max",
       "gemini-4-argon-tiered",
-      "gemini-4-argonaut",
+      "gemini-4-carbon-max",
+      "gemini-4",
+      "gemini-4-",
+      "gemini-4.1-pro-high",
+      "gemini-40-argon-high",
       "x-gemini-4-argon-high",
+      "x-gemini-4-carbon-high",
     ]) {
       expect(antigravityUserAgentForWireModel(wire)).toBe(IDE_UA);
+    }
+  });
+
+  test("a Carbon inference request carries the CLI UA", async () => {
+    for (const wire of ["gemini-4-carbon-low", "gemini-4-carbon-medium", "gemini-4-carbon-high"]) {
+      const { req, env } = await built(wire);
+      expect(env.model).toBe(wire);
+      expect(req.headers["User-Agent"]).toBe(CLI_UA);
     }
   });
 

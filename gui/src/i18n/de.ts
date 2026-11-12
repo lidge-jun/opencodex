@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -133,6 +135,8 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
   ...shellV2Copy("de"),
+  ...codexCliUpdateCopy("de"),
+  ...remoteLinkDiagnosticsCopy("de"),
   ...modelsV2Copy("de"),
   ...accountsV2Copy("de"),
   ...subagentsV2Copy("de"),
@@ -285,6 +289,8 @@ export const de: Record<TKey, string> = {
   "advisor.modelsEmpty": "Keine auswählbaren Modelle. Anbieter und Modell aktivieren und erneut versuchen.",
   "advisor.effort": "Denkintensität",
   "advisor.policy": "Richtlinie",
+  "advisor.questionOnly": "Nur die Frage des Workers senden",
+  "advisor.questionOnlyNote": "Gesendet werden nur die Frage des Workers (bis zu 2000 Zeichen; bei Kürzung mit einem Hinweis) und eine feste Berateranweisung. Verlauf, Werkzeugergebnisse und Aufgabenkontext werden nicht angehängt. Der Worker muss nötige Hintergrundinformationen ergänzen. Automatische Beratungen pausieren; bestehende Limits gelten weiter.",
   "advisor.policy.manual": "Manuell — nur wenn der Worker fragt",
   "advisor.policy.preflight": "Preflight — automatischer Konsultationsversuch, sobald Orientierungsbelege vorliegen",
   "advisor.policy.adaptive": "Adaptiv — Orientierung und fehlgeschlagene Reparaturen",
@@ -2132,6 +2138,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI-Anbieter-Preset konnte nicht geladen werden.",
   "codexAuth.openaiPresetUnavailable": "OpenAI-Anbieter-Preset ist nicht verfügbar.",
   "codexAuth.openProviders": "Anbieter öffnen",
+  "codexAuth.changeAccountMode": "Kontomodus ändern",
   "codexAuth.add": "Hinzufügen",
   "codexAuth.credits": "Credits",
   "codexAuth.creditsRemaining": "verbleibend",
@@ -2389,6 +2396,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.needsReauth": "Erneut anmelden",
   "codexAuth.reauthenticate": "Erneut anmelden",
   "codexAuth.tokenExpired": "Token abgelaufen — dieses Konto erneut authentifizieren",
+  "codexAuth.weeklyConflict": "Es wurden zwei Wochenfenster gemeldet: {first} und {second}. Der Reset oben stellt das Kontingent möglicherweise nicht vollständig wieder her.",
   "codexAuth.mainTokenExpired": "Token abgelaufen — unten mit Gerätecode oder über Codex-App-Login erneut anmelden",
   "codexAuth.mainReauthSucceeded": "Angemeldet",
   "codexAuth.mainReauthFailed": "Anmeldung fehlgeschlagen",
@@ -3115,6 +3123,7 @@ export const de: Record<TKey, string> = {
   "pws.currentAccountUsage": "Nutzung des aktuellen Kontos",
   "pws.quotaUnsupported": "Für dieses Konto ist keine Kontingentabfrage verfügbar.",
   "pws.quotaUnobserved": "Noch keine Nutzungsdaten beobachtet.",
+  "pws.quotaLastRead": "Zuletzt gelesen",
   "pws.quotaCheckCompleted": "Kontingentprüfung abgeschlossen",
   "pws.modelBreakdown": "Modellaufschlüsselung",
   "pws.col.model": "Modell",
@@ -3866,7 +3875,7 @@ export const de: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "Provider-Tabellen können vorhandene Threads mit openai-Kennung in manchen mobilen Remote-Listen ausblenden. Der Verlauf wird nicht gelöscht. Der Remote-Client muss alle Provider auflisten; dieser Schalter korrigiert dessen Filter nicht.",
   "models.newPolicyGlobal": "Neue Modelle zunächst deaktivieren", "models.newPolicyProvider": "Richtlinie für neue Modelle",
   "models.fastProvider": "Fast-Modus", "models.fastProviderHint": "Verbraucht Nutzungsguthaben zum doppelten Preis", "models.fastEnabled": "Fast-Modus an", "models.fastDisabled": "Fast-Modus aus", "models.fastSaveFailed": "Fast-Modus konnte nicht gespeichert werden",
-  "models.newPolicy_inherit": "Übernehmen", "models.newPolicy_off": "Aus", "models.newPolicy_on": "An", "models.newBadge": "NEU", "models.newCount": "{count} neu, aus",
+  "models.newPolicy_inherit": "Übernehmen", "models.newPolicy_off": "Aus", "models.newPolicy_on": "An", "models.newPolicy_admit": "Aufnehmen", "models.newBadge": "NEU", "models.newCount": "{count} neu, aus",
   "models.aliases": "Aliase",
   "models.aliasesTable": "Alias-Tabelle",
   "models.aliasPrompt": "Anbieter-Alias (leer lassen zum Entfernen)",

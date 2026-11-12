@@ -65,7 +65,7 @@ function inflated(argv: string[]): string {
   return inflateRawSync(Buffer.from(Array.from(packed, ch => ch.charCodeAt(0) - 256))).toString("utf8");
 }
 const planArgv = () => remoteUpdatePlanArgv("2.100.0", "posix");
-const applyArgv = (planToken = TOKEN) => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken, notAfter: 1_900_000_000_000 }, "posix");
+const applyArgv = (planToken = TOKEN) => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken, notAfter: 1_900_000_000_000, viaLauncher: false }, "posix");
 
 describe("update gate on fake executables", () => {
   posix("update gate never sends update to 2.96.0", () => {
@@ -241,8 +241,16 @@ describe("Windows scripts", () => {
     expect(() => remotePinnedSyncArgv(LINK, "windows", { restart: "codex" })).toThrow(new LinkSshArgumentError("unsupported:windows-restart"));
     expect(() => remotePinnedSyncArgv(LINK, "windows", { restart: "app-server" })).toThrow(new LinkSshArgumentError("unsupported:windows-restart"));
     expect(() => remoteGatedOcxArgv({ minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: true, reportClock: false,
-      args: ["update", "--yes", "--json", "--version", "2.100.0"] }, "windows")).toThrow(new LinkSshArgumentError("unsupported:windows-apply"));
+      launcher: "none", args: ["update", "--yes", "--json", "--version", "2.100.0"] }, "windows")).toThrow(new LinkSshArgumentError("unsupported:windows-apply"));
     expect(remotePinnedSyncArgv(LINK, "windows")[0]).toBe("powershell.exe");
+  });
+
+  test("a Windows update without --plan is refused whatever its other flags (Revision 5, item d)", () => {
+    const gate = { minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: true, reportClock: false, launcher: "none" } as const;
+    expect(() => remoteGatedOcxArgv({ ...gate, args: ["update", "--json", "--version", "2.100.0"] }, "windows")).toThrow(new LinkSshArgumentError("unsupported:windows-apply"));
+    expect(() => remoteGatedOcxArgv({ ...gate, args: ["update", "--plan", "--yes", "--json"] }, "windows")).toThrow(new LinkSshArgumentError("unsupported:windows-apply"));
+    expect(remoteUpdatePlanArgv("2.100.0", "windows")[0]).toBe("powershell.exe");
+    expect(remoteGatedOcxArgv({ ...gate, args: ["update", "--json", "--version", "2.100.0"] }, "posix")[0]).toBe("sh");
   });
 
   test("the Windows sync script keeps its gate and also disables the handoff", () => {
@@ -254,7 +262,8 @@ describe("Windows scripts", () => {
   });
 
   test("Windows apply is refused in the builder", () => {
-    expect(() => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 1 }, "windows")).toThrow(new LinkSshArgumentError("unsupported:windows-apply"));
+    expect(() => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 1, viaLauncher: false }, "windows")).toThrow(new LinkSshArgumentError("unsupported:windows-apply"));
+    expect(() => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 1, viaLauncher: true }, "windows")).toThrow(new LinkSshArgumentError("unsupported:windows-apply"));
   });
 });
 
@@ -264,21 +273,29 @@ describe("builders validate input", () => {
     ["bad restart", () => remotePinnedSyncArgv(LINK, "posix", { restart: "all" as never })],
     ["bad Home version", () => remoteUpdatePlanArgv("2.100", "posix")],
     ["long Home version", () => remoteUpdatePlanArgv("2.100.0-" + "a".repeat(130), "posix")],
-    ["bad plan token", () => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: "short", notAfter: 1 }, "posix")],
-    ["bad deadline", () => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 1.5 }, "posix")],
-    ["zero deadline", () => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 0 }, "posix")],
-    ["NUL argument", () => remoteGatedOcxArgv({ minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: false, reportClock: false, args: ["a\0b"] })],
-    ["unknown minimum", () => remoteGatedOcxArgv({ minVersion: "2.0.0" as never, lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: false, reportClock: false, args: ["x"] })],
-    ["unknown marker", () => remoteGatedOcxArgv({ minVersion: "2.97.0", lacksMarker: "x'; rm -rf /" as never, acceptEphemeral: false, reportEntry: false, reportClock: false, args: ["x"] })],
-    ["no arguments", () => remoteGatedOcxArgv({ minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: false, reportClock: false, args: [] })],
+    ["bad plan token", () => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: "short", notAfter: 1, viaLauncher: false }, "posix")],
+    ["bad deadline", () => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 1.5, viaLauncher: false }, "posix")],
+    ["zero deadline", () => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 0, viaLauncher: false }, "posix")],
+    ["non-boolean launcher route", () => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 1, viaLauncher: "yes" as never }, "posix")],
+    ["NUL argument", () => remoteGatedOcxArgv({ minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: false, reportClock: false, launcher: "none", args: ["a\0b"] })],
+    ["unknown minimum", () => remoteGatedOcxArgv({ minVersion: "2.0.0" as never, lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: false, reportClock: false, launcher: "none", args: ["x"] })],
+    ["unknown marker", () => remoteGatedOcxArgv({ minVersion: "2.97.0", lacksMarker: "x'; rm -rf /" as never, acceptEphemeral: false, reportEntry: false, reportClock: false, launcher: "none", args: ["x"] })],
+    ["no arguments", () => remoteGatedOcxArgv({ minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: false, reportClock: false, launcher: "none", args: [] })],
+    ["unknown launcher", () => remoteGatedOcxArgv({ minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: false, reportClock: false, launcher: "x; rm -rf /" as never, args: ["x"] })],
   ])("%s throws LinkSshArgumentError", (_name, build) => {
     expect(build).toThrow(LinkSshArgumentError);
   });
 
+  test("an invalid launcher is reported after the version, marker and argument checks", () => {
+    const bad = { minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: false, reportClock: false } as const;
+    expect(() => remoteGatedOcxArgv({ ...bad, launcher: "x" as never, args: ["x"] })).toThrow(new LinkSshArgumentError("invalid gated ocx launcher"));
+    expect(() => remoteGatedOcxArgv({ ...bad, launcher: "x" as never, args: [] })).toThrow(new LinkSshArgumentError("invalid gated ocx arguments"));
+  });
+
   test("a plan token starting with - is not passed to --expect-plan", () => {
-    const dashed = remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: "-" + TOKEN, notAfter: 5 }, "posix");
+    const dashed = remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: "-" + TOKEN, notAfter: 5, viaLauncher: false }, "posix");
     expect(dashed.slice(4)).toEqual(["update", "--yes", "--json", "--version", "2.100.0", "--not-after", "5"]);
-    const plain = remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 5 }, "posix");
+    const plain = remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken: TOKEN, notAfter: 5, viaLauncher: false }, "posix");
     expect(plain.slice(4)).toEqual(["update", "--yes", "--json", "--version", "2.100.0", "--expect-plan", TOKEN, "--not-after", "5"]);
   });
 });
@@ -294,6 +311,7 @@ describe("framing", () => {
     [121, "ocx-fanout:child-ocx-lacks-expect-link\n", { kind: "refused", reason: "child-ocx-lacks-expect-link" }],
     [121, "ocx-fanout:child-ocx-version-unknown\n", { kind: "refused", reason: "child-ocx-version-unknown" }],
     [121, "ocx-fanout:child-ocx-ephemeral\n", { kind: "refused", reason: "child-ocx-ephemeral" }],
+    [121, "ocx-fanout:selected:2.98.0\nocx-fanout:entry:pair\nocx-fanout:child-node-unavailable\n", { kind: "refused", reason: "child-node-unavailable" }],
     [121, "something else\n", { kind: "refused", reason: "child-gate-failed" }],
   ] as const)("exit %d with %j", (code, stderr, expected) => {
     expect(readGatedFraming({ code, stdout: "", stderr })).toEqual(expected);
@@ -301,8 +319,11 @@ describe("framing", () => {
 
   test("selection, entry and clock are read once", () => {
     expect(ran("login noise\nocx-fanout:selected:2.97.0\nocx-fanout:entry:pair\nocx-fanout:child-now:1900000000000\n", "motd\nocx-fanout:stdout-begin\n{\"a\":1}\n"))
-      .toEqual({ kind: "ran", code: 0, selectedVersion: "2.97.0", entry: "pair", childNowMs: 1_900_000_000_000, payload: "{\"a\":1}", lastStderrLine: "ocx-fanout:child-now:1900000000000" });
-    expect(ran("ocx-fanout:selected:2.97.0\n")).toMatchObject({ kind: "ran", entry: null, childNowMs: null });
+      .toEqual({ kind: "ran", code: 0, selectedVersion: "2.97.0", entry: "pair", childNowMs: 1_900_000_000_000, launcher: null, payload: "{\"a\":1}", lastStderrLine: "ocx-fanout:child-now:1900000000000" });
+    expect(ran("ocx-fanout:selected:2.97.0\n")).toMatchObject({ kind: "ran", entry: null, childNowMs: null, launcher: null });
+    for (const value of ["available", "unavailable", "exec"] as const) {
+      expect(ran("ocx-fanout:selected:2.97.0\nocx-fanout:entry:pair\nocx-fanout:launcher:" + value + "\n")).toMatchObject({ kind: "ran", launcher: value });
+    }
   });
 
   test.each([
@@ -313,6 +334,8 @@ describe("framing", () => {
     ["two clock markers", "ocx-fanout:selected:2.97.0\nocx-fanout:child-now:1900000000000\nocx-fanout:child-now:1900000000001\n", "ocx-fanout:stdout-begin\n"],
     ["a 17-digit clock", "ocx-fanout:selected:2.97.0\nocx-fanout:child-now:19000000000000000\n", "ocx-fanout:stdout-begin\n"],
     ["a non-numeric clock", "ocx-fanout:selected:2.97.0\nocx-fanout:child-now:soon\n", "ocx-fanout:stdout-begin\n"],
+    ["two launcher lines", "ocx-fanout:selected:2.97.0\nocx-fanout:launcher:available\nocx-fanout:launcher:exec\n", "ocx-fanout:stdout-begin\n"],
+    ["an unknown launcher line", "ocx-fanout:selected:2.97.0\nocx-fanout:launcher:maybe\n", "ocx-fanout:stdout-begin\n"],
     ["an invalid selected version", "ocx-fanout:selected:2.97\n", "ocx-fanout:stdout-begin\n"],
   ])("%s is invalid", (_name, stderr, stdout) => {
     expect(readGatedFraming({ code: 0, stdout, stderr })).toEqual({ kind: "invalid" });
@@ -331,6 +354,8 @@ describe("framing", () => {
     expect(classifyUpdateApply({ code: 127, stdout: "", stderr: "" })).toEqual({ state: "failed", reason: "child-ocx-not-found", suppressTarget: false, reobserve: false });
     expect(classifyUpdateApply({ code: 121, stdout: "", stderr: "ocx-fanout:child-ocx-lacks-orchestrated-update\n" })).toEqual({ state: "owner-action", reason: "legacy-ocx", suppressTarget: false, reobserve: false });
     expect(classifyUpdateApply({ code: 121, stdout: "", stderr: "ocx-fanout:child-ocx-ephemeral\n" })).toEqual({ state: "unsupported", reason: "ephemeral", suppressTarget: false, reobserve: false });
+    expect(classifyUpdateApply({ code: 121, stdout: "", stderr: "ocx-fanout:selected:2.98.0\nocx-fanout:entry:pair\nocx-fanout:child-node-unavailable\n" }))
+      .toEqual({ state: "owner-action", reason: "launcher-node-missing", suppressTarget: false, reobserve: false });
     expect(classifyUpdateApply({ code: 0, stdout: "x", stderr: "ocx-fanout:selected:2.97.0\nocx-fanout:selected:2.97.0\n" })).toEqual({ state: "uncertain", reason: "child-output-invalid", suppressTarget: false, reobserve: true });
   });
 

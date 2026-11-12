@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,8 @@ import type { ClientLinkState } from "../../src/client/link-state";
 import type { SshChild, SshRunner } from "../../src/link/ssh-runner";
 import { buildTunnelArgv } from "../../src/link/ssh-argv";
 import { relayLinkDataRequest } from "../../src/client/link-relay";
+import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
+import { FAILED_AFTER_MS } from "../../src/link/tunnel-state";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -1327,7 +1329,8 @@ test("a stop triggered by failure diagnostics leaves admission closed", async ()
   let stopping: Promise<void> | undefined;
   const h = supervisorHarness({
     inspectLoopbackListener: async () => ({ kind: result, elapsedMs: 1 }),
-    diagnostic: () => { stopping = h.supervisor.stop(); },
+    // Tunnel transitions reach the same sink (#7297); this case is about the owner-lookup refusal.
+    diagnostic: record => { if (record.event === "owner_lookup") stopping = h.supervisor.stop(); },
   });
   try {
     await h.start();
@@ -1388,4 +1391,87 @@ test("a supervisor rebuilt by a restart rollback in the same process never repea
   expect(seen[0]).toEqual(expect.any(String));
   expect(seen[1]).toEqual(expect.any(String));
   expect(seen[1]).not.toBe(seen[0]);
+});
+
+describe("Child tunnel transitions in the diagnostics file (#7297)", () => {
+  const ALLOWED = new Set(["event", "outcome", "state", "previousState", "attempt", "tunnelPort", "retryAfterMs"]);
+  const transitions = (records: LinkDiagnosticRecord[]) => records.filter(record => record.event === "tunnel_transition");
+
+  test("spawn, connect, a classified exit and stop each leave one fixed-cause record", async () => {
+    const records: LinkDiagnosticRecord[] = [];
+    const h = supervisorHarness({ diagnostic: record => { records.push(record); } });
+    try {
+      await h.start();
+      expect(h.state()).toBe("connecting");
+      await h.step();
+      expect(h.state()).toBe("connected");
+      h.ssh.live()[0]!.exit(255, HOST_KEY_CHANGED);
+      await h.settle();
+    } finally { await h.close(); }
+    const seen = transitions(records);
+    expect(seen.map(record => [record.previousState, record.state, record.outcome])).toEqual([
+      ["idle", "connecting", "spawned"],
+      ["connecting", "connected", "connected"],
+      [seen[2]!.previousState, seen[2]!.state, "hostkey"],
+      [seen[3]!.previousState, "idle", "stopped"],
+    ]);
+    expect(seen[2]!.previousState).toBe("connected");
+    expect(seen[0]!.attempt).toBe(1);
+    expect(seen[1]!.attempt).toBe(0);
+    // The port survives stop, which clears the live port before the transition is recorded.
+    for (const record of seen) expect(record.tunnelPort).toBe(sidecar().tunnelPort);
+    // Fixed metadata only: no argv, stderr, alias or link id ever reaches the sink.
+    for (const record of seen) for (const key of Object.keys(record)) expect(ALLOWED.has(key)).toBe(true);
+  });
+
+  test("a link that stays down past the outage limit records timeout", async () => {
+    // ssh stays up but the keyed probe never succeeds (the Home is down): the tick that fails the
+    // link at FAILED_AFTER_MS must say timeout, as the Home does, not fall back to spawned.
+    const records: LinkDiagnosticRecord[] = [];
+    const h = supervisorHarness({ diagnostic: record => { records.push(record); } });
+    h.view.readyz = "refused";
+    try {
+      await h.start();
+      expect(h.state()).toBe("connecting");
+      await h.step(FAILED_AFTER_MS);
+      expect(h.state()).toBe("failed");
+    } finally { await h.close(); }
+    expect(transitions(records).find(record => record.state === "failed")).toMatchObject({
+      outcome: "timeout", previousState: "connecting", state: "failed",
+    });
+  });
+
+  test("a spawn that cannot start records spawn_failed", async () => {
+    const records: LinkDiagnosticRecord[] = [];
+    const h = supervisorHarness({
+      diagnostic: record => { records.push(record); },
+      runner: { async run() { return { code: 0, stdout: "", stderr: "" }; }, spawnTunnel() { throw new Error("ssh missing"); } },
+      warn: () => {},
+    });
+    try { await h.start(); } finally { await h.close(); }
+    expect(transitions(records)[0]).toMatchObject({ outcome: "spawn_failed", previousState: "idle", state: "failed" });
+  });
+
+  test("a sink that stops the supervisor on a transition never interrupts that transition", async () => {
+    let stopping: Promise<void> | undefined;
+    const h = supervisorHarness({
+      diagnostic: record => { if (record.event === "tunnel_transition" && record.outcome === "spawned") stopping = h.supervisor.stop(); },
+    });
+    try {
+      await h.start();
+      expect(stopping).toBeDefined();
+      await stopping;
+      expect(h.state()).toBe("idle");
+      expect(h.ssh.live()).toEqual([]);
+    } finally { await stopping; await h.close(); }
+  });
+
+  test("a throwing sink never changes the tunnel lifecycle", async () => {
+    const h = supervisorHarness({ diagnostic: () => { throw new Error("disk full"); } });
+    try {
+      await h.start();
+      await h.step();
+      expect(h.state()).toBe("connected");
+    } finally { await h.close(); }
+  });
 });

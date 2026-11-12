@@ -187,6 +187,8 @@ selector，而不是分配一个新名称。
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本地执行策略。`off` 是默认值；`codex-sandbox` 目前会像 `off` 一样失败关闭。 |
 
+对于原生 Responses，同一开关也涵盖仅收到生命周期事件后正常结束的 EOF。自包含请求和替换次数限制仍然适用。超出这些限制的请求不会被检查，其流也不会被暂扣。直接流即使上游仍无响应，也会在 200 毫秒内收到原始响应头。如果重置或 EOF 发生在返回该响应头之前，客户端会收到带有其自身状态和响应头的替换响应；等待替换响应头的时间最多为 15 秒（若停滞超时更短则以其为准）。汇总为 JSON 的非流式请求和组合目标在响应汇总或选定之前不会向客户端返回响应头，因此选择响应头前可能等待同样的时间。返回响应头之后，是否替换取决于流如何结束：读取错误保留重置通道的既有行为，替换正文照旧发布在原始响应头之后；只有生命周期事件后正常结束的 EOF 更严格，因为它是以另一次尝试回答同一轮请求，替换响应必须与已提交的响应头在状态、状态文本、content-type 媒体类型、`openai-model` 和 `x-codex-turn-state` 上一致。易变和逐跳标头（`date`、请求 id、`cf-ray`、`server-timing`、`x-ratelimit-*`、`openai-processing-ms`、`content-length`、`transfer-encoding`、`connection`、`keep-alive`）无需一致，因为客户端已经持有原始响应头的值，而真实上游每次尝试都会变动这些标头。不一致时保留原始流及其错误。此后仍在检查的直接流会随响应头收到一条 SSE keepalive 注释，此后每 15 秒再收到一条；组合预检会在选定响应前暂扣这些注释。
+
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 
 
@@ -196,17 +198,17 @@ API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者�
 
 ### 保存提供方时会保留什么
 
-用已有提供方的名称调用 `POST /api/providers`，会用根据请求构建的行替换已存储的行。仪表板的添加/编辑表单无法发送所有字段，因此保存时会保留请求省略的部分已存储字段。其中十三个记录的是某个上游的行为：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`。
+用已有提供方的名称调用 `POST /api/providers`，会用根据请求构建的行替换已存储的行。仪表板的添加/编辑表单无法发送所有字段，因此保存时会保留请求省略的部分已存储字段。其中十四个记录的是某个上游的行为：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`, `forwardAdvisorTool`。
 
-| 保存 | 十三项设置 | 已存储的 `apiKeyPool` |
+| 保存 | 十四项设置 | 已存储的 `apiKeyPool` |
 | --- | --- | --- |
 | 目的地相同，字段省略 | 保留已存储的值，包括显式的 `[]` 或 `false` | 保留 |
 | 新目的地，字段省略 | 不保留；可能套用新目的地的注册表默认值 | 不保留 |
 | 请求中发送了该字段 | 请求中的值 | 请求中的值 |
 
-目的地指适配器、base URL（协议与主机名比较时不区分大小写，忽略末尾斜杠），以及请求中指定了时的认证模式。把提供方移到其他目的地时，描述旧上游的十三项设置和为旧上游签发的密钥池都不会带过去。保存从不把旧行的其余部分合并进新行。
+目的地指适配器、base URL（协议与主机名比较时不区分大小写，忽略末尾斜杠），以及请求中指定了时的认证模式。把提供方移到其他目的地时，描述旧上游的十四项设置和为旧上游签发的密钥池都不会带过去。保存从不把旧行的其余部分合并进新行。
 
-`PATCH /api/providers?name=<provider>` 只修改它指定的字段，无论目的地如何都保留其他所有已存储字段。它接受全部十三项设置，`null` 表示清除。对于两个推理列表，空数组会作为显式退出选项保存，而不会被删除。
+`PATCH /api/providers?name=<provider>` 只修改它指定的字段，无论目的地如何都保留其他所有已存储字段。它接受全部十四项设置，`null` 表示清除。对于两个推理列表，空数组会作为显式退出选项保存，而不会被删除。
 
 ### 响应服务等级的可信度
 

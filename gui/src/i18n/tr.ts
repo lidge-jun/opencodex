@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -133,6 +135,8 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
   ...shellV2Copy("tr"),
+  ...codexCliUpdateCopy("tr"),
+  ...remoteLinkDiagnosticsCopy("tr"),
   ...modelsV2Copy("tr"),
   ...accountsV2Copy("tr"),
   ...subagentsV2Copy("tr"),
@@ -285,6 +289,8 @@ export const tr: Record<TKey, string> = {
   "advisor.modelsEmpty": "Seçilebilir model yok. Sağlayıcıyı ve modeli etkinleştirip yeniden deneyin.",
   "advisor.effort": "Muhakeme düzeyi",
   "advisor.policy": "Politika",
+  "advisor.questionOnly": "Yalnızca çalışanın sorusunu gönder",
+  "advisor.questionOnlyNote": "Yalnızca çalışanın sorusu (en fazla 2000 karakter korunur; daha uzunsa kırpma bildirimi eklenir) ve sabit danışman talimatı gönderilir. Geçmiş, araç sonuçları ve görev bağlamı eklenmez. Çalışan gerekli arka planı soruya eklemelidir. Otomatik danışmalar duraklatılır; mevcut çağrı sınırları geçerlidir.",
   "advisor.policy.manual": "Manuel — yalnızca worker istediğinde",
   "advisor.policy.preflight": "Preflight — yönelim kanıtı oluşunca otomatik danışma denemesi",
   "advisor.policy.adaptive": "Uyarlanabilir — başlangıç ve başarısız onarım danışmaları",
@@ -1952,6 +1958,7 @@ export const tr: Record<TKey, string> = {
   "pws.currentAccountUsage": "Geçerli hesabın kullanımı",
   "pws.quotaUnsupported": "Bu hesap için kota sorgulama desteklenmiyor.",
   "pws.quotaUnobserved": "Henüz kullanım gözlemi yok.",
+  "pws.quotaLastRead": "Son okuma",
   "pws.quotaCheckCompleted": "Kota kontrolü tamamlandı",
   "pws.modelBreakdown": "Model dağılımı",
   "pws.col.model": "Model",
@@ -2732,6 +2739,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Ayar yüklenemedi.",
   "codexAuth.openaiPresetUnavailable": "Ayar kullanılamıyor.",
   "codexAuth.openProviders": "Sağlayıcıları Aç",
+  "codexAuth.changeAccountMode": "Hesap modunu değiştir",
   "codexAuth.add": "Ekle",
   "codexAuth.credits": "Kredi",
   "codexAuth.creditsRemaining": "kalan",
@@ -2981,6 +2989,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.needsReauth": "Tekrar Giriş Yap",
   "codexAuth.reauthenticate": "Yeniden Doğrula",
   "codexAuth.tokenExpired": "Jeton süresi doldu — hesabı yeniden doğrulayın",
+  "codexAuth.weeklyConflict": "İki haftalık pencere bildirildi: {first} ve {second}. Yukarıdaki sıfırlama tüm kotayı geri getirmeyebilir.",
   "codexAuth.mainTokenExpired": "Belirteç süresi doldu — aşağıdan cihaz koduyla veya Codex App girişiyle yeniden giriş yapın",
   "codexAuth.mainReauthSucceeded": "Giriş yapıldı",
   "codexAuth.mainReauthFailed": "Yeniden giriş başarısız",
@@ -3889,7 +3898,7 @@ export const tr: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "Sağlayıcı tablosuyla yönlendirme, mevcut openai etiketli konuşmaları bazı mobil uzak listelerde gizleyebilir. Geçmiş silinmez. Uzak istemci tüm sağlayıcıları listelemelidir; bu anahtar istemcinin filtresini düzeltmez.",
   "models.newPolicyGlobal": "Yeni modeller devre dışı başlasın", "models.newPolicyProvider": "Yeni model ilkesi",
   "models.fastProvider": "Fast modu", "models.fastProviderHint": "Kullanım kredilerini 2 kat fiyatla harcar", "models.fastEnabled": "Fast modu açık", "models.fastDisabled": "Fast modu kapalı", "models.fastSaveFailed": "Fast modu kaydedilemedi",
-  "models.newPolicy_inherit": "Devral", "models.newPolicy_off": "Kapalı", "models.newPolicy_on": "Açık", "models.newBadge": "YENİ", "models.newCount": "{count} yeni, kapalı",
+  "models.newPolicy_inherit": "Devral", "models.newPolicy_off": "Kapalı", "models.newPolicy_on": "Açık", "models.newPolicy_admit": "Seçime ekle", "models.newBadge": "YENİ", "models.newCount": "{count} yeni, kapalı",
   "models.aliases": "Takma adlar",
   "models.aliasesTable": "Takma ad tablosu",
   "models.aliasPrompt": "Sağlayıcı takma adı (temizlemek için boş bırakın)",

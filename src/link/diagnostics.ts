@@ -37,9 +37,13 @@ const STATES = new Set<TunnelState["kind"]>(["idle", "connecting", "connected", 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_BYTES = 256 * 1024;
 
-/** Copy only bounded enum, UUID and numeric fields; unknown fields never reach disk. */
-function metadata(record: LinkDiagnosticRecord): LinkDiagnosticRecord | null {
-  if (!record) return null;
+/**
+ * Copy only bounded enum, UUID and numeric fields; unknown fields never reach disk. The reader
+ * (`diagnostics-read.ts`) applies the same function to every line it parses, so a tampered file
+ * cannot put anything on a terminal or dashboard that this allowlist would not have written.
+ */
+export function linkDiagnosticMetadata(record: LinkDiagnosticRecord): LinkDiagnosticRecord | null {
+  if (!record || typeof record !== "object") return null;
   const { event, outcome, state, previousState } = record;
   if (!EVENTS.has(event) || !OUTCOMES.has(outcome)) return null;
   const result: LinkDiagnosticRecord = { event, outcome };
@@ -143,7 +147,7 @@ export function createLinkDiagnosticSink(
   };
   const sink: LinkDiagnosticSink = record => {
     try {
-      const safe = metadata(record);
+      const safe = linkDiagnosticMetadata(record);
       if (!safe) return;
       const at = now();
       if (!Number.isSafeInteger(at) || at < 0) return;

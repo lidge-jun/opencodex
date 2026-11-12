@@ -340,6 +340,13 @@ The positive browser test must use a real signed-in Tailscale session; a bare `c
 identity headers needed for automatic session issuance. Pairing remains the fallback when the HTTPS
 frontend cannot provide trustworthy Tailscale identity.
 
+**Remember this device** works on this management origin: the hub's management listener is the
+trusted ingress, so a dashboard opened at `hub.managementPublicOrigin` can remember a device. A
+standalone instance behind its own TLS-terminating proxy has no such listener; it can remember devices
+only after you set `dashboardTrustedProxy` (see
+[Remember behind a reverse proxy](/guides/web-dashboard/#remember-behind-a-reverse-proxy)). A hub
+ignores that setting.
+
 ### Giving the data listener TLS
 
 The Serve mapping above publishes the **management** ingress only. That ingress never serves
@@ -737,6 +744,27 @@ container recreation using an isolated Compose project with throwaway credential
 both named volumes and a synthetic catalog survive replacement. This check does not validate a
 real provider account, OAuth callback, custom mount migration, or every CPU architecture; perform
 the authenticated routed-response check above for your deployment.
+
+### Restarts after an unclean exit
+
+A container runs the proxy as PID 1 on every start. After an unclean exit (an OOM kill, a crash, a
+node failure) the state volume can still hold `ocx.pid` and `runtime-port.json` naming PID 1, and
+the next start has to decide whether that owner is gone. It recovers on its own when the record was
+written by the same container in an earlier run, by an OpenCodex version that records where its
+owner runs: a Kubernetes container restarted inside its pod while the node stays up, or the same
+Docker or Podman container started again (`docker restart`, a restart policy, including after a
+host reboot) when its writable layer has a random id, as with Docker's `overlay2` storage driver
+and Podman. Docker's containerd image store numbers its layers instead, so a restart there refuses.
+
+Every other case refuses with `Proxy ownership is unverified; startup refused`, because the old
+owner could still be serving the same volume from another container: a replacement Kubernetes pod,
+a recreated Compose container, a pod that comes back after a node reboot, another node, or a record
+written by an older version (the first restart after an upgrade). Confirm that nothing else serves this state directory, then move
+`runtime-port.json` and `ocx.pid` aside once and start again. Run a single writer per state
+volume: a Kubernetes `Deployment` that shares a volume should use `strategy: Recreate` (or
+`maxSurge: 0`) so the old pod stops before the new one starts. Do not share one state volume between
+processes in one network namespace (host networking, sidecars, several WSL distros), between
+sandboxes restored from one VM snapshot, or between machines with the same host name.
 
 ## Rollback
 

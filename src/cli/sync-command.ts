@@ -10,13 +10,23 @@ import { readLinkStore } from "../link/store";
 import { linkKnownHostsPath, linkStorePath } from "../link/paths";
 import { buildExecArgv, remotePinnedSyncArgv } from "../link/ssh-argv";
 import { requireRemotePlatformFramed } from "../link/remote-platform";
+import { pinnedSyncRanNothing, syncThenRestart, type PinnedRun } from "../link/sync-then-restart";
+import type { ChildRestart } from "../link/child-ops-types";
 import { FanoutProcessError, fanoutSshRunner, runFanoutProcess } from "./sync-fanout-process";
 import { readHomeLinkStatus } from "./sync-link-status";
-import { classifySyncResult, fanoutExitCode, renderFanoutHuman, renderFanoutJson, runHomeFanout, REMOTE_LINK_SYNC_MESSAGE, STALE_REMOTE_CATALOG_MESSAGE, type HomeResult } from "./sync-fanout";
+import { classifySyncResult, fanoutExitCode, renderFanoutHuman, renderFanoutJson, restartNote, runHomeFanout, REMOTE_LINK_SYNC_MESSAGE, STALE_REMOTE_CATALOG_MESSAGE, type ChildResult, type HomeResult } from "./sync-fanout";
 
 export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
     const flags = parseSyncFanoutFlags(deps.args.slice(1));
     if (!flags.ok) { console.error(flags.message); return 2; }
+    if (flags.children) {
+      // D16: an unknown id is a usage error before the Home sync changes anything.
+      let known: Set<string>;
+      try { known = new Set(readLinkStore(linkStorePath()).links.map(link => link.id)); }
+      catch { console.error("--child cannot be checked: the Remote Link store could not be read."); return 2; }
+      const unknown = flags.children.find(id => !known.has(id));
+      if (unknown) { console.error(`--child ${unknown} is not a link on this Home (see ocx link status).`); return 2; }
+    }
     const originalLog = console.log;
     if (flags.json) console.log = (...args: unknown[]) => console.error(...args);
     let applicable = false, catalogCurrent = false;
@@ -80,8 +90,13 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
           console.error("The Home's Codex settings were applied, but the apply record could not be written; the client runtime was not restarted. Run 'ocx sync' again.");
           process.exitCode = 1;
         }
+        if (result.journalHandoverFailed) {
+          console.error("Codex routing was applied, but the Codex journal could not be handed to this connection (the Codex config was busy or changed, or the journal belongs to an earlier connection), so the client runtime was not restarted: the next OpenCodex restart could restore native routing. Run 'ocx sync' again; if it repeats, run 'ocx sync --restart-codex' after that restart.");
+          process.exitCode = 1;
+        }
         // OCX-6: a link Child's runtime must have started after the apply it serves under.
-        if (link && result.appliedRecord) {
+        // Not after a failed handover: that restart is the one that would undo this routing.
+        if (link && result.appliedRecord && !result.journalHandoverFailed) {
           const { applyRestartMessage, restartRuntimeAfterApply } = await import("./link-apply-restart");
           const { sameClientConnectionOwner } = await import("../client/state");
           const applied = result.connection;
@@ -206,8 +221,9 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
     if (code !== 0) state = "failed";
     const document = await runHomeFanout({
       home: { state, exit: code }, catalogCurrent, localOnly: flags.localOnly, applicable,
+      selected: flags.children === null ? null : new Set(flags.children), restartChildren: flags.restartChildren,
       readStore: () => readLinkStore(linkStorePath()), readLinkStatus: () => readHomeLinkStatus(),
-      runChild: async (link, deadline) => {
+      runChild: async (link, deadline, options) => {
         const runner = fanoutSshRunner(deadline);
         let platform: "posix" | "windows";
         try { platform = link.remotePlatform ?? await requireRemotePlatformFramed(runner, link.alias, linkKnownHostsPath()); }
@@ -215,15 +231,27 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
           if (error instanceof FanoutProcessError && (error.reason === "deadline-exceeded" || error.reason === "termination-unconfirmed")) return { state: "timed-out", reason: error.reason, exit: null };
           return { state: "failed", reason: "platform-probe-failed", exit: null };
         }
-        try {
-          const result = await runFanoutProcess(buildExecArgv({ alias: link.alias, knownHostsFile: linkKnownHostsPath(), argv: remotePinnedSyncArgv(link.id, platform) }), { timeoutMs: Math.max(0, deadline - Date.now()) });
-          // Pick the public fields: a verdict key that ocx.sync.fanout/1 does not define never reaches the document.
-          const { state, reason } = classifySyncResult(result);
-          return { state, reason, exit: result.code };
-        } catch (error) {
-          if (error instanceof FanoutProcessError) return { state: error.reason === "deadline-exceeded" || error.reason === "termination-unconfirmed" ? "timed-out" : "failed", reason: error.reason, exit: null };
-          throw error;
-        }
+        type Run = { state: ChildResult["state"]; reason: string | null; exit: number | null; executable?: "ocx-child" };
+        const runPinned = async (restart: ChildRestart): Promise<PinnedRun<Run>> => {
+          // Revision 6: with the shared deadline spent before the restarting sync, nothing is sent to the Child.
+          if (restart !== "none" && deadline - Date.now() <= 0) return { sync: { state: "timed-out", reason: "deadline-exceeded", exit: null }, notRun: true };
+          try {
+            const result = await runFanoutProcess(buildExecArgv({ alias: link.alias, knownHostsFile: linkKnownHostsPath(),
+              argv: remotePinnedSyncArgv(link.id, platform, restart === "none" ? {} : { restart }) }), { timeoutMs: Math.max(0, deadline - Date.now()) });
+            const verdict = classifySyncResult(result, { expectSelectedKind: restart !== "none" });
+            return { sync: { ...verdict, exit: result.code }, notRun: pinnedSyncRanNothing(verdict, result) };
+          } catch (error) {
+            if (!(error instanceof FanoutProcessError)) throw error;
+            const timedOut = error.reason === "deadline-exceeded" || error.reason === "termination-unconfirmed";
+            return { sync: { state: timedOut ? "timed-out" : "failed", reason: error.reason, exit: null }, notRun: error.reason === "ssh-spawn-failed" };
+          }
+        };
+        const done = await syncThenRestart({ requested: options.restart ?? "none", platform, childKind: link.childKind,
+          runPinned, readActivity: options.readActivity });
+        // Pick the public fields: executable, withheld and second never reach ocx.sync.fanout/1.
+        const note = restartNote(done);
+        return note === null ? { state: done.sync.state, reason: done.sync.reason, exit: done.sync.exit }
+          : { state: "synced", reason: note, exit: done.sync.exit };
       },
     });
     if (flags.json) originalLog(renderFanoutJson(document));

@@ -2,7 +2,7 @@ import { accessSync, constants, readFileSync, writeFileSync, unlinkSync, mkdirSy
 import { delimiter, join } from "node:path";
 import { getConfigDir } from "../config";
 import { claudeTierDisplayName, claudeToolSearchEnv, isClaudeTierLabelSlot, resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
-import { PROXY_MARKER, defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens, type AuthDetectDeps } from "../claude/auth-detect";
+import { PROXY_MARKER, defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens, resolveClaudeKeychainPresence, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
 import { ANTHROPIC_PARENT_ENV_SLOTS, trustedNodeLauncherContext, type AnthropicParentEnvSlot } from "../cli/launcher-context";
 import type { OcxConfig } from "../types";
@@ -28,6 +28,16 @@ export type SystemEnvDeps = {
 };
 
 /**
+ * Resolve the Keychain source once, asynchronously, so the synchronous marker decision below
+ * never spawns `security` itself (#8161). A caller-supplied probe (a test seam) is kept as is.
+ */
+export async function withResolvedKeychainPresence(deps: SystemEnvDeps, authMode?: string): Promise<SystemEnvDeps> {
+  if (deps.authDetect?.keychainProbe) return deps;
+  const presence = await resolveClaudeKeychainPresence(authMode);
+  return { ...deps, authDetect: { ...deps.authDetect, keychainProbe: () => presence } };
+}
+
+/**
  * Bun may synthesize Anthropic variables from a project `.env` before this module runs.
  * Only values recorded by the plain-Node launcher are trusted as parent exports. Direct
  * Bun/service launches have no proof-bound slot list, so they fail closed and let the
@@ -51,6 +61,7 @@ function systemEnvAnthropicEnv(
 export function systemEnvMarkerMode(config: OcxConfig, deps: SystemEnvDeps = {}): "proxy" | "subscription" {
   const env = systemEnvAnthropicEnv(process.env, deps.preBunAnthropicSlots);
   const ownTokens = ownAdmissionTokens(config);
+  // Without a resolved Keychain source this reads `unknown` on macOS: subscription, never proxy.
   return resolveClaudeAuthMode(config, detectClaudeAuth({
     ...defaultAuthDetectDeps(env, ownTokens),
     ...(deps.authDetect ?? {}),

@@ -57,6 +57,16 @@ let clientFanout: CatalogChangedClientFanout | null = null;
 export function setCatalogAutoRefreshClientFanout(fanout: CatalogChangedClientFanout | null): void {
   clientFanout = fanout;
 }
+/**
+ * Notified after a tick committed a changed catalog. Owned by the link Child-ops scheduler, which registers only while
+ * this Home has links, so a Home without links pays one null check. Synchronous and fire-and-forget: the scheduler
+ * debounces and does its own work later.
+ */
+export type CatalogChangedLinkFanout = () => void;
+let linkFanout: CatalogChangedLinkFanout | null = null;
+export function setCatalogAutoRefreshLinkFanout(fanout: CatalogChangedLinkFanout | null): void {
+  linkFanout = fanout;
+}
 
 /** Read only a regular file, with a byte limit even if it grows after the stat. */
 function readBoundedRegularFile(path: string, maxBytes: number): string | null {
@@ -262,6 +272,7 @@ async function tick(): Promise<void> {
     if (entryGeneration !== generation) return;
     recordCatalogAutoRefreshOutcome(outcome.catalogRefresh, outcome.changed, reloadRequired);
     if (outcome.changed) {
+      try { linkFanout?.(); } catch { /* the scheduler's 5-minute poll catches the change */ }
       // Privacy scan: no provider names, model ids, paths, or account identifiers.
       console.info(reloadRequired
         ? "[catalog-auto-refresh] served model set changed; running Codex sessions keep the old list until restarted (ocx sync --restart-codex)"

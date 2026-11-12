@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { runLinkCommand } from "../../src/cli/link";
-import { NO_ELIGIBLE_LINKS_MESSAGE, OLD_HOME_MESSAGE, RUNTIME_ROLE_CLIENT_MESSAGE, validateChildJob } from "../../src/cli/link-child-ops";
+import { LOOPBACK_REQUIRED_MESSAGE, NO_ELIGIBLE_LINKS_MESSAGE, OLD_HOME_MESSAGE, RUNTIME_ROLE_CLIENT_MESSAGE, validateChildJob } from "../../src/cli/link-child-ops";
 import type { LinkCheckDeps } from "../../src/cli/link-child-ops";
 
 const LINK = "lnk_0123456789abcdef";
@@ -104,6 +104,25 @@ describe("ocx link check", () => {
     expect(JSON.parse(result.stdout[0]!).state).toBe("running");
     // ceil(1/3) × 120 s + 30 s = 150 s: three 60 s waits, then the deadline check fails.
     expect(d.calls).toHaveLength(4);
+  });
+
+  test("a check queued behind another job past wp2's 150 s budget still waits for its item", async () => {
+    let clock = 0;
+    let polls = 0;
+    const d = deps(call => {
+      if (call.method === "POST") return { status: 202, body: { job: job("queued", [{ state: "queued" }]) } };
+      polls += 1;
+      return { body: { job: polls < 6 ? job("running", [{ state: "queued" }]) : polls < 7 ? job("running", [{ state: "running" }]) : job("done", [{ state: "succeeded", finishedAt: "2026-11-11T00:10:00.000Z" }]) } };
+    }, { now: () => clock, sleep: async () => { clock += 60_000; } });
+    const result = await run(["--link-id", LINK], d);
+    expect(result.code).toBe(0);
+    expect(clock).toBeGreaterThan(150_000);
+  });
+
+  test("a Home not bound to loopback: 403 names the dashboard and exits 1", async () => {
+    const result = await run(["--all"], deps(() => ({ status: 403, body: { error: { code: "admin_loopback_required", message: "x" } } })));
+    expect(result.code).toBe(1);
+    expect(result.stderr[0]).toBe(`Error: ${LOOPBACK_REQUIRED_MESSAGE}`);
   });
 
   test("old Home 404 message", async () => {

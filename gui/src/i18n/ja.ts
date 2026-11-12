@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +134,8 @@ export const ja: Record<TKey, string> = {
   "workflowBudget.saved": "ワークフロー上限を保存しました。",
   ...desktopCompatibilityCopy("ja"),
   ...shellV2Copy("ja"),
+  ...codexCliUpdateCopy("ja"),
+  ...remoteLinkDiagnosticsCopy("ja"),
   ...modelsV2Copy("ja"),
   ...accountsV2Copy("ja"),
   ...subagentsV2Copy("ja"),
@@ -285,6 +289,8 @@ export const ja: Record<TKey, string> = {
   "advisor.modelsEmpty": "選択できるモデルがありません。プロバイダーとモデルを有効にして再試行してください。",
   "advisor.effort": "推論強度",
   "advisor.policy": "ポリシー",
+  "advisor.questionOnly": "ワーカーの質問のみ送信",
+  "advisor.questionOnlyNote": "ワーカーの質問（最大2000文字を保持し、超過時は切り詰め通知を追加）と固定のアドバイザー指示のみを送信します。会話履歴、ツール結果、タスクの文脈は自動添付されません。必要な背景情報はワーカーが質問に含めます。自動相談は停止し、既存の回数制限は引き続き適用されます。",
   "advisor.policy.manual": "手動 — Worker が要求したときのみ",
   "advisor.policy.preflight": "Preflight — 方向性の証拠が出たら自動相談を試みる",
   "advisor.policy.adaptive": "適応型 — 初期調査と修正失敗時に相談",
@@ -2603,6 +2609,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI プロバイダーのプリセットを読み込めませんでした。",
   "codexAuth.openaiPresetUnavailable": "OpenAI プロバイダーのプリセットを利用できません。",
   "codexAuth.openProviders": "プロバイダーを開く",
+  "codexAuth.changeAccountMode": "アカウントモードを変更",
   "codexAuth.add": "追加",
   "codexAuth.credits": "クレジット",
   "codexAuth.creditsRemaining": "残り",
@@ -2862,6 +2869,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.needsReauth": "再ログイン",
   "codexAuth.reauthenticate": "再認証",
   "codexAuth.tokenExpired": "トークンが期限切れ — このアカウントを再認証してください",
+  "codexAuth.weeklyConflict": "週間ウィンドウが2つ報告されています: {first}、{second}。上のリセットで上限がすべて戻るとは限りません。",
   "codexAuth.mainTokenExpired": "トークンの有効期限切れ — 下のデバイスコードまたは Codex アプリログインで再ログインしてください",
   "codexAuth.mainReauthSucceeded": "サインインしました",
   "codexAuth.mainReauthFailed": "再ログインに失敗しました",
@@ -3786,6 +3794,7 @@ export const ja: Record<TKey, string> = {
   "pws.currentAccountUsage": "現在のアカウントの使用量",
   "pws.quotaUnsupported": "このアカウントは割り当て量の照会に対応していません。",
   "pws.quotaUnobserved": "使用量はまだ観測されていません。",
+  "pws.quotaLastRead": "最終読み取り",
   "pws.quotaCheckCompleted": "割り当て量の確認が完了しました",
   "pws.modelBreakdown": "Model breakdown",
   "pws.col.model": "Model",
@@ -3888,7 +3897,7 @@ export const ja: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "プロバイダーテーブル方式では、一部のモバイルリモート一覧で既存の openai タグ付きスレッドが表示されない場合があります。履歴は削除されていません。リモートクライアントは全プロバイダーを一覧取得する必要があり、このスイッチはそのフィルターを修正しません。",
   "models.newPolicyGlobal": "新しいモデルを無効で追加", "models.newPolicyProvider": "新しいモデルのポリシー",
   "models.fastProvider": "Fast モード", "models.fastProviderHint": "使用クレジットを 2 倍の料金で消費します", "models.fastEnabled": "Fast モードをオンにしました", "models.fastDisabled": "Fast モードをオフにしました", "models.fastSaveFailed": "Fast モードを保存できませんでした",
-  "models.newPolicy_inherit": "継承", "models.newPolicy_off": "オフ", "models.newPolicy_on": "オン", "models.newBadge": "新着", "models.newCount": "新着 {count} 件、オフ",
+  "models.newPolicy_inherit": "継承", "models.newPolicy_off": "オフ", "models.newPolicy_on": "オン", "models.newPolicy_admit": "選択に追加", "models.newBadge": "新着", "models.newCount": "新着 {count} 件、オフ",
   "models.aliases": "エイリアス",
   "models.aliasesTable": "エイリアス一覧",
   "models.aliasPrompt": "プロバイダーのエイリアス（空にすると解除）",

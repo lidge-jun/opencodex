@@ -21,6 +21,7 @@ import { clientLinkTunnelStatus } from "../../client/link-tunnel";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
+import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
 
@@ -203,6 +204,16 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   const current = readStoreFor(ctx);
   const record = current.links.find(link => link.id === id);
   if (!record) return fail("link_not_found", "The link was not found.", 404);
+  // A queued or running job would keep opening SSH sessions to a Child this removal disconnects, so removal takes the
+  // link's job admission lock before its first teardown await and holds it to the end: a job submitted meanwhile gets
+  // 409 (single link) or a busy item, and a link a job already holds is refused here, before anything is stopped.
+  const { childOpsEngineFor } = await import("./link-child-ops-routes");
+  const releaseLink = childOpsEngineFor(state).reserve(id);
+  if (!releaseLink) return fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409);
+  try { return await removeReserved(ctx, state, id, record); } finally { releaseLink(); }
+}
+
+async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id: string, record: LinkStore["links"][number]): Promise<Response> {
   const body = await readManagementJsonBodyOr(ctx.req, {});
   const payload = body === null ? {} : body;
   if (!isRecord(payload)
@@ -281,6 +292,14 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     const state = suppliedState ?? stateFor(ctx);
     if (!state) return fail("link_unavailable", "The link lifecycle is unavailable.", 503);
     return handleJoin(ctx, state);
+  }
+  // A file read that needs no link lifecycle, so a runtime whose link supervisor is unavailable
+  // still shows what its tunnels recorded. Same authority as GET /api/link/status. A connected
+  // Child serves the same read from src/client/machine-listener.ts.
+  if (url.pathname === "/api/link/diagnostics" && req.method === "GET") {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    return linkDiagnosticsResponse(url);
   }
   const state = suppliedState ?? stateFor(ctx);
   if (!state) return fail("link_unavailable", "The link lifecycle is unavailable.", 503);

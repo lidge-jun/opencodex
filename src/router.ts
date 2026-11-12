@@ -600,7 +600,7 @@ function routeModelInternal(
       const decoded = decodeRoutedModelIdOrThrow(requestedModel, known);
       const nativeModel = known.includes(decoded)
         ? decoded
-        : resolveModelAlias(config, prov, known, requestedModel)
+        : resolveModelAlias(config, prov, known, requestedModel, provName)
           // Last resort for direct requests while the live roster is cold: display-name keys are
           // operator-declared native ids, consulted only here so they never claim aliases or shadow
           // known or retained ids. Concrete policy/combo/redirect targets (bypassCombos) keep the
@@ -672,7 +672,7 @@ function routeModelInternal(
   const aliasMatches: Array<{ provider: string; model: string; qualified: string }> = [];
   for (const [provName, prov] of activeProviderEntries(config)) {
     const known = knownModelIdsForProvider(provName, prov, config);
-    const native = resolveModelAlias(config, prov, known, modelId);
+    const native = resolveModelAlias(config, prov, known, modelId, provName);
     if (native) aliasMatches.push({
       provider: provName,
       model: native,

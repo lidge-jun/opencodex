@@ -185,6 +185,8 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 `codex-sandbox` は現在、`off` と同様にフェールクローズされます。 |
 
+ネイティブ Responses では、ライフサイクルイベントだけを受信して正常 EOF で終了した場合にも同じオプトインが適用されます。自己完結したリクエストと置換回数の制限は変わりません。これらの制限外のリクエストは検査されず、ストリームが保留されることはありません。直接ストリームは、上流がまだ無応答でも 200 ミリ秒以内に元の応答ヘッダーを受け取ります。そのヘッダーを返す前にリセットまたは EOF が起きた場合、置換応答のヘッダーを最大 15 秒（ストールタイムアウトの方が短い場合はその時間）待ち、クライアントは置換応答をそのステータスとヘッダーのまま受け取ります。JSON に収集する非ストリーミングリクエストとコンボのターゲットは、応答の収集または選択までクライアントにヘッダーが返らないため、ヘッダーの選択を同じ時間まで待つことがあります。ヘッダーを返した後の置換可否は、ストリームがどう終了したかで決まります。読み取りエラーではリセット経路の既存動作をそのまま維持し、置換本文を元のヘッダーの後ろに公開します。ライフサイクルイベントだけを受信して正常 EOF で終了した場合は同じターンへの別の試行なので、より厳格です。置換応答はコミット済みのヘッダーとステータス、ステータステキスト、content-type メディアタイプ、`openai-model`、`x-codex-turn-state` で一致しなければなりません。変動するヘッダーとホップバイホップヘッダー(`date`、リクエスト id、`cf-ray`、`server-timing`、`x-ratelimit-*`、`openai-processing-ms`、`content-length`、`transfer-encoding`、`connection`、`keep-alive`)は一致不要です。クライアントはすでに元のヘッダーの値を持っており、実際の上流は試行ごとにこれらを変えるためです。不一致の場合は元のストリームとそのエラーを保持します。その後も検査中の直接ストリームにはヘッダーとともに SSE keepalive コメントが送られ、その後は 15 秒ごとに送られます。コンボのプリフライトは応答を選択するまでこれらのコメントを保留します。
+
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 
 
@@ -194,17 +196,17 @@ API キープロバイダーは、リテラルキーまたは環境参照を保�
 
 ### プロバイダーの保存で保持されるもの
 
-既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 13 個は、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`。
+既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 14 個は、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`, `forwardAdvisorTool`。
 
-| 保存 | 13 個の設定 | 保存済みの `apiKeyPool` |
+| 保存 | 14 個の設定 | 保存済みの `apiKeyPool` |
 | --- | --- | --- |
 | 同じ宛先、フィールド省略 | 保存済みの値を保持（明示的な `[]` や `false` を含む） | 保持 |
 | 新しい宛先、フィールド省略 | 保持しない。新しい宛先のレジストリ既定値が適用されることがあります | 保持しない |
 | リクエストでフィールドを送信 | リクエストの値 | リクエストの値 |
 
-宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 13 個の設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
+宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 14 個の設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
 
-`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。13 個の設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
+`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。14 個の設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
 
 ## プロバイダーによるアウトバウンドの安全性診断
 

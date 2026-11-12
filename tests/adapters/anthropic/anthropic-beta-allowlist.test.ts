@@ -159,15 +159,24 @@ describe("context management (#7042)", () => {
       tools: [{ name: "lookup", input_schema: { type: "object" } }, { type: "web_search_20250305", name: "web_search" }],
       context_management: { edits: [{ type: "clear_tool_uses_20250919", exclude_tools: ["lookup", "web_search", "undeclared"] }] },
     };
+    // A generic OAuth caller gets the field only from the operator header; its client tools are prefixed.
     const oauth = buildAnthropicMessagesPassthroughRequest(
-      provider({ authMode: "oauth", apiKey: "fixture-oauth-access" }), "claude-wire", managed, undefined,
-      { callerAnthropicBeta: CONTEXT_MANAGEMENT_BETA, clientIdentity: observed },
+      provider({ authMode: "oauth", apiKey: "fixture-oauth-access", headers: { "anthropic-beta": CONTEXT_MANAGEMENT_BETA } }),
+      "claude-wire", managed,
     );
     const wireTool = (oauth.wireBody.tools as Array<{ name: string }>)[0]!.name;
     expect(wireTool).not.toBe("lookup");
     expect(oauth.wireBody.context_management).toEqual({
       edits: [{ type: "clear_tool_uses_20250919", exclude_tools: [wireTool, "web_search", "undeclared"] }],
     });
+    // An observed Claude Code client keeps its tool names, so its edits are forwarded as sent.
+    const native = buildAnthropicMessagesPassthroughRequest(
+      provider({ authMode: "oauth", apiKey: "fixture-oauth-access" }), "claude-wire", managed, undefined,
+      { callerAnthropicBeta: CONTEXT_MANAGEMENT_BETA, clientIdentity: observed },
+    );
+    expect((native.wireBody.tools as Array<{ name: string }>)[0]!.name).toBe("lookup");
+    expect(native.wireBody.context_management).toBe(managed.context_management);
+    expect(native.oauthToolNames?.size ?? 0).toBe(0);
     // The caller's body is never mutated.
     expect(managed.context_management.edits[0]!.exclude_tools).toEqual(["lookup", "web_search", "undeclared"]);
     const key = buildAnthropicMessagesPassthroughRequest(provider(), "claude-wire", managed, undefined,
