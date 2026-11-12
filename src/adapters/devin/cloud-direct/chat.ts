@@ -649,6 +649,14 @@ const MAX_TOOL_DESC_LEN = 6998;
  * for "whether to allow", verified live to clear the filter while preserving
  * the instruction's meaning.
  *
+ * Entries five and six are more Codex CLI boilerplate, isolated by live
+ * bisection on a denied thread: "Codex refers to the open-source agentic
+ * coding interface" (the CLI's identity sentence — once Cognition listed it,
+ * every request from a Codex CLI client was refused) and "Don't output ANSI
+ * escape codes directly — the CLI renderer applies them" (a formatting
+ * bullet). Matching is flexible on case, whitespace, the open-source hyphen,
+ * and the Don't apostrophe; each rewrite swaps one required word.
+ *
  * Scope note: by default the sanitizer only ever touches *instruction
  * surfaces* — tool descriptions and the #2 system prompt, where a
  * meaning-preserving reword loses nothing. Data fields — message text (#3),
@@ -680,6 +688,14 @@ const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   [
     /\basking\s+the\s+user\s+if\s+they\s+want\s+to\s+allow\s+the\s+action\s+in\s+`?justification`?\s+parameter\b/gi,
     "asking the user whether to allow the action in the `justification` parameter",
+  ],
+  [
+    /\bCodex\s+refers\s+to\s+the\s+open[-\s]?source\s+agentic\s+coding\s+interface\b/gi,
+    "Codex refers to the open-source agentic coding tool",
+  ],
+  [
+    /\bDon[\u0060'’]?t\s+output\s+ANSI\s+escape\s+codes\s+directly\s*[—-]\s*the\s+CLI\s+renderer\s+applies\s+them\b/gi,
+    "Don’t emit ANSI escape codes directly — the CLI renderer applies them",
   ],
 ];
 

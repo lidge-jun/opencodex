@@ -381,6 +381,35 @@ describe("devin adapter", () => {
     expect(toolOnly.includes(Buffer.from("whether to allow the action", "utf8"))).toBe(true);
   });
 
+  test("rewrites the Codex CLI identity phrase and the ANSI renderer clause", () => {
+    const identity = "Codex refers to the open-source agentic coding tool";
+    expect(sanitizeTextForCognitionForTests(
+      "Within this context, Codex refers to the open-source agentic coding tool (not the old Codex language model built by OpenAI).",
+    )).toBe(
+      "Within this context, Codex refers to the open-source agentic coding tool (not the old Codex language model built by OpenAI).",
+    );
+    expect(sanitizeTextForCognitionForTests(identity.toLowerCase()))
+      .toContain("agentic coding tool");
+    expect(sanitizeTextForCognitionForTests(identity.replace("open-source", "open source")))
+      .toContain("agentic coding tool");
+    const identityNearMiss = "Codex refers to the open-source agentic coding";
+    expect(sanitizeTextForCognitionForTests(identityNearMiss)).toBe(identityNearMiss);
+    const unrelated = "refers to the open-source agentic coding tool";
+    expect(sanitizeTextForCognitionForTests(unrelated)).toBe(unrelated);
+
+    const ansi = "Don’t output ANSI escape codes directly — the CLI renderer applies them";
+    expect(sanitizeTextForCognitionForTests("- " + ansi + "."))
+      .toBe("- Don’t emit ANSI escape codes directly — the CLI renderer applies them.");
+    expect(sanitizeTextForCognitionForTests(ansi.toUpperCase()))
+      .toContain("emit ANSI escape codes");
+    expect(sanitizeTextForCognitionForTests(ansi.replace("’", "\u0060")))
+      .toContain("emit ANSI escape codes");
+    const ansiPrefix = "Don’t output ANSI escape codes directly";
+    expect(sanitizeTextForCognitionForTests(ansiPrefix)).toBe(ansiPrefix);
+    const ansiTail = "ANSI escape codes directly — the CLI renderer applies them";
+    expect(sanitizeTextForCognitionForTests(ansiTail)).toBe(ansiTail);
+  });
+
   test("sanitizeDataSurfaces extends the rewrite to history data fields", () => {
     const trigger = "asking the user if they want to allow the action in `justification` parameter";
     const rewrittenFragment = "asking the user whether to allow the action in the `justification` parameter";
