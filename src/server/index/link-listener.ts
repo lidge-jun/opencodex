@@ -201,7 +201,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
           let resent: StoredMark[] = [];
           let threadHash: string | null = null;
           token = registerLinkTurnToken({
-            expanded(body) { threadHash = threadHashOf(body); resent = marksResent(holds, linkId, threadHash, body); },
+            expanded(body, chain) { threadHash = threadHashOf(body); resent = chain === "unexpanded" ? [] : marksResent(holds, linkId, threadHash, body); },
             expansionFailed() { resent = []; },
             terminal(status, source) { if (resent.length && threadHash && upstreamCompleted(status, source)) holds.releaseMarks(linkId, threadHash, resent); },
             ...(logging ? { logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, header?.trim() ?? "", body) }) } : {}),

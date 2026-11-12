@@ -343,3 +343,21 @@ describe("T5g: a socket's accepted turn settles only holds older than the turn (
     expect(h.count()).toBe(1);
   });
 });
+describe("T5g: an unexpanded continuation is a delta, never a fingerprint (final review area b, finding 2)", () => {
+  test("a turn cut on an unexpanded continuation leaves an unknown mark", () => {
+    const h = harness();
+    const s = h.open();
+    const turn = s.create(body("u-1"));
+    turn.observer!.expanded(body("u-1"), "unexpanded");
+    s.close();
+    expect(h.marks()).toEqual({ fingerprinted: 0, unknown: 1 });
+  });
+
+  test("an unexpanded request with the same delta never releases a fingerprinted mark", () => {
+    const h = cut(harness());
+    const retry = h.open().create(body("u-1"));
+    retry.observer!.expanded(body("u-1"), "unexpanded");
+    retry.observer!.terminal("completed", "upstream");
+    expect(h.marks().fingerprinted).toBe(1);
+  });
+});

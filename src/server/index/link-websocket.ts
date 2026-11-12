@@ -528,7 +528,9 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
               let resent: StoredMark[] = [];
               const own = (value: FingerprintMark | "unknown" | "done"): void => { if (state.captures.has(turnId)) state.captures.set(turnId, value); };
               return {
-                expanded(body) {
+                expanded(body, chain) {
+                  // A delta left for the upstream proves nothing about the full input: unknown, and no match.
+                  if (chain === "unexpanded") { own("unknown"); resent = []; return; }
                   own(fingerprintCapture(holds, body));
                   resent = marksResent(holds, linkId, state.threadHash ?? null, body);
                 },

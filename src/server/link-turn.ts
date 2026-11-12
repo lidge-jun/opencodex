@@ -18,8 +18,11 @@ import type { LinkContinuationReason, LinkRequestLogCarrier, LinkTransport } fro
 export interface LinkTurnLogFields { transport: LinkTransport; first: boolean; threadRef?: string; turnRef?: string }
 
 export interface LinkTurnObserver {
-  /** The request body after continuation expansion succeeded. */
-  expanded(body: unknown): void;
+  /**
+   * The request body after continuation expansion. chain "unexpanded" means previous_response_id was
+   * left for the upstream: the body is only a delta, so it is never a fingerprint and never matches one.
+   */
+  expanded(body: unknown, chain?: LinkTurnChain): void;
   /** Expansion failed (continuation miss); a capture cannot be made. */
   expansionFailed(): void;
   /** The turn's final request log: its terminal status, and "synthetic" when the proxy made it. */
@@ -92,7 +95,7 @@ export function observeLinkTurnExpansion(explicit: LinkTurnObserver | undefined,
   describe(observer, logCtx, body, chain === "none"
     ? (first: boolean) => ({ continuation: "full" as const, reason: first ? "first" as const : "client" as const })
     : { continuation: "chained" });
-  try { observer.expanded(body); } catch { /* an observer never breaks the turn */ }
+  try { observer.expanded(body, chain); } catch { /* an observer never breaks the turn */ }
 }
 
 /** Continuation expansion failed: a miss with the replay failure's reason. */
