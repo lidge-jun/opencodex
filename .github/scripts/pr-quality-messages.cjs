@@ -274,17 +274,7 @@ function buildFailureSections(failures, { pr, allowedBases, defaultBase }) {
       "",
       `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target one of ${allowedBases.map(inlineCode).join(" or ")}.`,
       "",
-      `@${pr.user.login} Please retarget this PR to ${inlineCode(defaultBase)}. All contributions go to ${inlineCode(defaultBase)}; \`main\` receives only release promotions. See our [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details. Thanks! 🙏`
-    );
-  }
-
-  if (failures.some(failure => failure.code === "wrong_ancestry")) {
-    sections.push(
-      "⚠️ **Wrong branch ancestry**",
-      "",
-      `This pull request targets ${inlineCode(pr.base.ref)}, but its head appears to sit on the current ${inlineCode("main")} tip while being far behind ${inlineCode(pr.base.ref)}.`,
-      "",
-      `@${pr.user.login} Rebase onto the current ${inlineCode(pr.base.ref)} branch instead of opening from ${inlineCode("main")}. That keeps already-released commits out of the integration branch.`
+      `@${pr.user.login} Please retarget this PR to ${inlineCode(defaultBase)}. All contributions go to ${inlineCode(defaultBase)}. See our [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details. Thanks! 🙏`
     );
   }
 
@@ -321,9 +311,6 @@ function failureSummary(failures, { pr }) {
     .map(failure => {
       if (failure.code === "wrong_base") {
         return `wrong base (${pr.base.ref})`;
-      }
-      if (failure.code === "wrong_ancestry") {
-        return "wrong ancestry";
       }
       if (failure.code === "bad_description") {
         return `bad description (${failure.reason})`;

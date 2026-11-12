@@ -133,6 +133,20 @@
 }
 .pwi-settings-sticky-bar-actions { display: flex; gap: 8px; margin-left: auto; }
 
+.pwi-settings-target { color: var(--muted); font-size: var(--text-caption); }
+
+.pwi-settings-conflict {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px; border: 1px solid var(--amber); border-radius: var(--radius-xs);
+  background: var(--amber-soft); color: var(--text);
+}
+.pwi-settings-conflict p { margin: 0; font-size: var(--text-label); line-height: 1.45; }
+.pwi-settings-conflict .pwi-settings-sticky-bar-actions { margin-left: 0; }
+.pwi-settings-conflict-fields ul {
+  margin: 6px 0 0; padding-left: 18px; font-size: var(--text-caption); line-height: 1.5;
+}
+.pwi-settings-conflict-fields code { overflow-wrap: anywhere; }
+
 .pwi-settings-msg {
   font-size: var(--text-label); padding: 6px 10px; border-radius: var(--radius-xs);
   line-height: 1.4;
@@ -182,6 +196,7 @@
 .pwi-json-panel-desc {
   font-size: var(--text-caption); color: var(--muted); line-height: 1.4;
 }
+.pwi-json-panel-target { font-size: var(--text-caption); color: var(--muted); }
 .pwi-json-textarea {
   width: 100%; min-height: 180px; padding: 10px 12px;
   font-family: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Menlo, monospace;

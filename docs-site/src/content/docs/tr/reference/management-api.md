@@ -103,11 +103,11 @@ Doğrulanamayan kullanım HTTP 502, `error.code: "attempt_unresolved"` ve geçer
 Claude kullanım sıfırlamaları **Providers > Anthropic > Accounts** üzerinden aynı
 şekilde çalışır. Oturum açmış her hesap satırında kalan sıfırlamaları gösteren
 bir bilet rozeti bulunur; iletişim kutusu ikinci bir onaydan sonra bir sıfırlama
-kullanır. Sıfırlama, haftalık sıfırlama gününü değiştirmeden 5 saatlik ve
-haftalık limitleri yeniler. Bir talep zamanında yanıt vermezse iletişim kutusu
+kullanır. Her sıfırlama hakkının kendi son kullanma tarihi ve sıfırladığı limitler olduğundan iletişim kutusu hangisinin kullanılacağını seçtirir: şu anda kullanılabilen ve ilk sona eren hak önceden seçilir, şu anda kullanılamayan haklar gerekçeleriyle birlikte devre dışı gösterilir ve onay adımı o `grantId` gönderilmeden önce seçilen hakkın adını, son kullanma tarihini ve sıfırladığı limitleri gösterir. Sunucu seçilen hakkı yeniden denetler ve kullanılamayan bir hakkı `409 grant_not_usable` ile reddeder. Sıfırlama, haftalık sıfırlama gününü değiştirmeden o hakkın sıfırladığı limitleri (genellikle 5 saatlik ve
+haftalık limitleri) yeniler. Bir talep zamanında yanıt vermezse iletişim kutusu
 `operationId` değerini korur ve on dakika boyunca aynı kimlikle yeniden deneme
 olanağı sunar; Claude Code istemcisi de bu şekilde toparlanır. Bu süre içinde
-aynı sıfırlama hakkı için yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
+o hesapta hangi sıfırlama hakkı için olursa olsun yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
 panelinden kullanılabilir: tek başına yönetici belirteci `403 session_required`
 yanıtını alır.
 
@@ -304,6 +304,7 @@ Güvenilir ilk model listesi hazır olana kadar `/api/selected-models` ve `/api/
 | `GET, POST, DELETE /api/providers/keys` | Maskelenmiş sağlayıcı anahtarlarını listeleyin, bir tane ekleyin/etkinleştirin veya kaldırın | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/active` | Bir sağlayıcının etkin anahtarını seçin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/alias` | Bir sağlayıcı anahtarı takma adını ayarlayın veya temizleyin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
+| `PUT /api/providers/keys/pause` | Bir sağlayıcı API anahtarını duraklatın veya sürdürün. Body `{ name, id, paused }`; etkin anahtar duraklatıldığında halka sırasına göre bir sonraki kullanılabilir anahtar seçilir. Başarılı yanıtta sonuç `activeAccountId` (veya `null`) ve `activeAccountChanged` yer alır. | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `GET, POST, PATCH, DELETE /api/keys` | Veri düzlemi kabul anahtarlarını listeleyin, oluşturun, düzenleyin veya silin | 400 geçersiz gövde/kimlik; 404 anahtar eksik |
 | `PUT /api/oauth/accounts/affinity-reset` | Hesap gerektirmeden provider konuşma bağlantılarının sıfırlanmasını doğrulayın. Body `{ provider }`; başarı: `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 

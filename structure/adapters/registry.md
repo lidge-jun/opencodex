@@ -36,7 +36,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   `provider add` warns before creating one.
 - `claude-cli` inherits the `codebuddy` contract. Claude Code speaks the same stream-json
   protocol this repository already parses for CodeBuddy and Qoder, so the wire is inherited and the
-  family module (`src/adapters/claude-cli/`) supplies only its own arguments and child environment.
+  family module (`src/adapters/claude-cli/`) supplies its arguments, child environment and stable
+  replay. Native image blocks remain with their labelled message, including tool-result images;
+  the shared `src/adapters/coding-agent/protocol.ts` owns base64/URL image encoding.
   That profile is the first credentialless one: it omits `tokenEnv`, the CLI reads the operator's
   own Claude Code sign-in, and the turn neither requires nor injects an API key. The proxy-safety
   controls are set per invocation, through CLI arguments and the child environment, and

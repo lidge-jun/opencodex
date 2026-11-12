@@ -45,8 +45,13 @@ describe("CI review lanes", () => {
       };
       const trigger = workflow.on?.pull_request ?? {};
       if (expectedKeys.includes("branches")) {
+        // `main` was deleted and `dev` is the only integration line. A PR base
+        // filter can only name integration lines, so the list is exactly
+        // `dev` — stacked child PRs are still covered because their base is a
+        // parent PR head, which no allowlist could enumerate and which this
+        // workflow did not cover before either.
         const branches = (trigger.branches as string[] | undefined) ?? [];
-        expect([...branches].sort()).toEqual(["dev", "main"]);
+        expect([...branches].sort()).toEqual(["dev"]);
       }
 
       // Narrowing a default is a mutation that deletes nothing. Omitting
@@ -63,11 +68,7 @@ describe("CI review lanes", () => {
       }
     }
 
-    // The push trigger is pinned to the release lines. main and preview MUST
-    // stay because release.yml requires a successful push-event run for the
-    // exact release SHA and states that a pull-request run does not qualify.
-    // dev is deliberately absent (CI policy): cross-platform legs run on dev
-    // only by manual workflow_dispatch.
+    // Cross-platform evidence is requested manually on dev, never by push.
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       on?: {
         push?: { branches?: string[]; paths?: string[] };
@@ -75,8 +76,30 @@ describe("CI review lanes", () => {
       };
       jobs?: Record<string, Record<string, unknown> | undefined>;
     };
-    expect([...(ci.on?.push?.branches ?? [])].sort())
-      .toEqual(["main", "preview"]);
+    expect(ci.on?.push).toBeUndefined();
+
+    // Workflows that used to run on the deleted `main`/`preview` branches shed
+    // those pushes instead of retargeting them. A `dev` push trigger is
+    // explicitly forbidden by the CI policy and would also turn a per-merge
+    // event into the expensive path this repository deliberately keeps manual.
+    for (const relPath of [
+      ".github/workflows/codex-queue-helpers.yml",
+      ".github/workflows/issue-quality-tests.yml",
+      ".github/workflows/cleanup-orphaned-workflows.yml",
+      ".github/workflows/react-doctor.yml",
+    ]) {
+      const workflow = Bun.YAML.parse(await readText(relPath)) as {
+        on?: Record<string, unknown> & {
+          push?: { branches?: string[]; paths?: string[] };
+        };
+      };
+      expect(workflow.on?.push, `${relPath} must not push on a deleted branch`).toBeUndefined();
+      // The remaining useful coverage must survive the removal.
+      const triggerNames = Object.keys(workflow.on ?? {});
+      expect(triggerNames.length, `${relPath} must keep a trigger`).toBeGreaterThan(0);
+      expect(triggerNames.includes("pull_request") || triggerNames.includes("schedule"),
+        `${relPath} must keep PR or scheduled coverage`).toBe(true);
+    }
 
     // The PR trigger must carry NO base-branch filter, and the two triggers
     // differ on purpose. GitHub matches `branches:` against the BASE ref, so
@@ -95,10 +118,8 @@ describe("CI review lanes", () => {
     expect(ci.on?.pull_request?.branches).toBeUndefined();
     expect(ci.on?.pull_request?.paths).toBeUndefined();
 
-    // The push trigger and pull-request `changes` job share one expensive-CI
-    // allowlist. PRs always create the workflow and aggregate check; this list
-    // decides whether the costly jobs run. Pin the entire list on both paths,
-    // including every script and workflow used by repository automation.
+    // PRs always create the workflow and aggregate check; this list decides
+    // whether the costly Ubuntu jobs run.
     const ciPaths = [
       ".dockerignore",
       ".gitattributes",
@@ -125,8 +146,6 @@ describe("CI review lanes", () => {
       "tests/**",
       "tsconfig.json",
     ];
-    expect([...(ci.on?.push?.paths ?? [])].sort()).toEqual(ciPaths);
-
     const filterStep = (ci.jobs?.changes as {
       steps?: { with?: Record<string, string> }[];
     })?.steps?.find(step => step.with?.filters);
@@ -152,7 +171,7 @@ describe("CI review lanes", () => {
     expect(changesJob?.outputs?.ci).toBe("${{ steps.scope.outputs.ci }}");
     expect(scopeStep?.id).toBe("scope");
     expect(scopeStep?.shell).toBe("bash");
-    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.ci }}");
+    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.ci }}");
     expect(scopeStep?.run).not.toContain("${{");
     expect(scopeStep?.run).toContain('case "$CI_SCOPE" in');
     expect(scopeStep?.run).toContain("true|false)");
@@ -194,7 +213,7 @@ describe("CI review lanes", () => {
     }
     const macosControlIf = ci.jobs?.["macos-control"] as { needs?: string; if?: string } | undefined;
     expect(macosControlIf?.needs).toBe("changes");
-    expect(macosControlIf?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlIf?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'macos-control'");
   });
 
   test("manual release-gates keeps ordinary jobs and skips only diagnostic suites", async () => {
@@ -216,8 +235,10 @@ describe("CI review lanes", () => {
       ["pull_request", "", false, false],
       ["push", "release-gates", false, false],
       ["pull_request", "release-gates", false, false],
-      ["workflow_dispatch", "", true, true],
-      ["workflow_dispatch", "all", true, true],
+      // lane=all is the release evidence run; the unsharded control would only
+      // repeat the macOS shards on one worker, so it waits for its own lane.
+      ["workflow_dispatch", "", true, false],
+      ["workflow_dispatch", "all", true, false],
       ["workflow_dispatch", "macos-control", false, true],
       ["workflow_dispatch", "release-gates", false, false],
       // Diagnostic-only lanes stay off ordinary release-gates; unknown lanes
@@ -269,7 +290,7 @@ describe("CI review lanes", () => {
     expect(enabled("macos-control", "schedule", "", "false", "false", "false")).toBe(true);
     expect(ci.jobs["select-windows-runner"]!.if).toBeUndefined();
     expect(ci.jobs["platform-windows"]!.needs).toEqual(["changes", "select-windows-runner"]);
-    expect(ci.jobs.ci!.if).toBe("always()");
+    expect(ci.jobs.ci!.if).toBe("always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim')");
     expect(ci.jobs.ci!.needs).toEqual(expect.arrayContaining([
       "changes", "select-windows-runner",
       "test", "platform-macos", "gates", "storage-policy", "api-usage",
@@ -363,7 +384,7 @@ describe("Windows and nightly CI contracts", () => {
         env?: Record<string, string>; with?: Record<string, unknown>;
       }> }>;
     };
-    expect(ci.on.schedule).toEqual([{ cron: "17 18 * * *" }]);
+    expect(ci.on.schedule).toBeUndefined();
     const changes = ci.jobs.changes!;
     expect(changes.outputs?.windows).toBe("${{ steps.windows.outputs.windows }}");
     expect(changes.outputs?.checkout_ref).toBe("${{ steps.nightly.outputs.checkout_ref }}");
@@ -385,15 +406,22 @@ describe("Windows and nightly CI contracts", () => {
     expect(windows?.run).toBe("bash scripts/ci/windows-sensitive-diff.sh");
     expect(windows?.run).not.toContain("${{");
     let checkouts = 0;
+    let diagnosticCheckouts = 0;
     for (const [name, job] of Object.entries(ci.jobs)) {
       if (name === "changes") continue;
       for (const step of job.steps ?? []) {
         if (!step.uses?.startsWith("actions/checkout@")) continue;
+        if (name === "windows-native-claim") {
+          expect(step.with?.ref, `${name} checkout`).toBe("${{ github.sha }}");
+          diagnosticCheckouts += 1;
+          continue;
+        }
         expect(step.with?.ref, `${name} checkout`).toBe("${{ needs.changes.outputs.checkout_ref }}");
         checkouts += 1;
       }
     }
     expect(checkouts).toBe(18);
+    expect(diagnosticCheckouts).toBe(1);
   });
 
   test.skipIf(process.platform === "win32" || !Bun.which("jq"))("aggregate never requests Windows on a pull request and requests both diagnostic jobs nightly", async () => {
@@ -420,7 +448,9 @@ describe("Windows and nightly CI contracts", () => {
       ["pull_request", "", "false", "not-requested", "not-requested"],
       ["pull_request", "", undefined, "not-requested", "not-requested"],
       ["push", "", "true", "not-requested", "not-requested"],
-      ["workflow_dispatch", "all", "false", "requested", "requested"],
+      ["workflow_dispatch", "all", "false", "requested", "not-requested"],
+      ["workflow_dispatch", "", "false", "requested", "not-requested"],
+      ["workflow_dispatch", "macos-control", "false", "not-requested", "requested"],
       ["workflow_dispatch", "release-gates", "true", "not-requested", "not-requested"],
     ] as const) {
       const env: Record<string, string> = {

@@ -178,7 +178,7 @@ describe("native Anthropic image input reaches client documents", () => {
     const expectedInputs = models
       .map(model => ({ id: model.namespaced, input: ["text", "image"] }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-    const expectedFastInputs = ["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]
+    const expectedFastInputs = ["claude-fable-5-2", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]
       .map(model => ({ id: `${provider}/${model}--fast`, input: ["text", "image"] }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     const expectImageInputs = (rows: Array<{ id: string; input: string[] }>) => {

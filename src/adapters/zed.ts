@@ -48,6 +48,9 @@ function delegateProvider(provider: OcxProviderConfig, zedProvider: ZedProvider)
     apiKey: "zed-delegate-placeholder",
     models: undefined,
     liveModels: false,
+    // The anthropic delegate names api.anthropic.com only to borrow its body builder; the wire goes
+    // to Zed, which is not the first-party host the Advisor server tool defaults to (#8448).
+    forwardAdvisorTool: false,
   };
   if (zedProvider === "anthropic") {
     return { ...common, adapter: "anthropic", baseUrl: "https://api.anthropic.com" };

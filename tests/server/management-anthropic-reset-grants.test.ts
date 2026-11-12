@@ -185,6 +185,38 @@ describe("POST /api/anthropic/reset-grants/consume", () => {
     expect(up.claims).toEqual([]);
   });
 
+  test("the dashboard's chosen grant is gated and claimed by its own id, not the first grant", async () => {
+    // The picker can send any listed grant; the server re-reads and gates that exact id.
+    const SECOND = "spring-bonus-20261101";
+    const second = { ...grantBlock().grants[0], id: SECOND, label: "Spring bonus", ends_at: "2026-10-01T16:00:00+00:00" };
+    const up = upstream();
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], { ...second, paused: true }] }) });
+    expect(await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP }))
+      .toMatchObject({ status: 409, json: { error: { code: "grant_not_usable", reason: "paused" } } });
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], { ...second, resets_left: 0 }] }) });
+    expect((await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP })).json.error.reason).toBe("exhausted");
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], { ...second, usable_now: false }] }) });
+    expect((await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP })).json.error.reason).toBe("not_usable");
+    expect((await consume(deps(up), { accountId: "acct-1", grantId: "not-listed", operationId: OP })).json.error.reason).toBe("unknown_grant");
+    expect(up.claims).toEqual([]);
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], second] }) });
+    const spent = await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP });
+    expect(spent).toMatchObject({ status: 200, json: { code: "reset", grantId: SECOND } });
+    expect(up.claims.map(claim => claim.body.grant_id)).toEqual([SECOND]);
+  });
+
+  test("after an unknown outcome on one grant, a new spend on another grant of the account is refused", async () => {
+    const SECOND = "spring-bonus-20261101";
+    const up = upstream();
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], { ...grantBlock().grants[0], id: SECOND }] }) });
+    up.claim = () => { throw new TypeError("connection reset"); };
+    expect((await consume(deps(up))).json.error.code).toBe("unknown_outcome");
+    up.claim = () => Response.json({ result: "reset", resets_left: 0, cleared: ["five_hour", "seven_day"] });
+    expect(await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP2 }))
+      .toMatchObject({ status: 409, json: { error: { code: "unresolved_prior_operation", pendingOperationId: OP } } });
+    expect(up.claims.map(claim => claim.body.grant_id)).toEqual([GRANT]);
+  });
+
   test("a spend posts once with the operation id as request id and then replays", async () => {
     const up = upstream();
     const first = await consume(deps(up));

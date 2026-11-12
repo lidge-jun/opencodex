@@ -1,4 +1,5 @@
 import { resolveProviderApiKey } from "./key-store";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "./api-key-pause";
 import { createOpenAiSidecarCreditGuard } from "./openai-sidecar-credit";
 import {
   CodexPoolAuthenticationError,
@@ -57,6 +58,7 @@ export interface OpenAiImagesProviderSelection {
     provider: OcxProviderConfig;
     apiKey: string;
   };
+  paused?: boolean;
   error?: string;
 }
 
@@ -288,7 +290,7 @@ export async function resolveFirstUsableOpenAiSidecar(
   return undefined;
 }
 
-export function selectOpenAiImagesProvider(config: OcxConfig): OpenAiImagesProviderSelection {
+export function selectOpenAiImagesProvider(config: OcxConfig, allowPausedActiveRecovery = false): OpenAiImagesProviderSelection {
   const selection: OpenAiImagesProviderSelection = {
     forwardCandidates: listOpenAiForwardSidecarCandidates(config),
   };
@@ -300,6 +302,14 @@ export function selectOpenAiImagesProvider(config: OcxConfig): OpenAiImagesProvi
     && provider.authMode !== "forward"
     && provider.baseUrl.replace(/\/+$/, "") === "https://api.openai.com/v1"
   ) {
+    const canRecover = allowPausedActiveRecovery && provider.apiKeyPool?.some(entry => !entry.disabled);
+    if (isProviderApiKeyPaused(provider) && !canRecover) {
+      if (allowPausedActiveRecovery) {
+        selection.paused = true;
+        selection.error = new ProviderApiKeyPausedError().message;
+      }
+      return selection;
+    }
     const apiKey = resolveProviderApiKey(provider.apiKey)?.trim();
     if (apiKey) selection.keyed = { providerName: OPENAI_API_PROVIDER_ID, provider, apiKey };
   }
@@ -309,7 +319,7 @@ export function selectOpenAiImagesProvider(config: OcxConfig): OpenAiImagesProvi
 /** Resolve an explicit custom Images provider, otherwise preserve the existing OpenAI fallback. */
 export function selectImagesProvider(config: OcxConfig): OpenAiImagesProviderSelection {
   const configuredProvider = config.images?.provider;
-  if (configuredProvider === undefined) return selectOpenAiImagesProvider(config);
+  if (configuredProvider === undefined) return selectOpenAiImagesProvider(config, true);
   if (typeof configuredProvider !== "string" || !configuredProvider.trim()) {
     return { forwardCandidates: [], error: "images.provider must be a nonblank provider name" };
   }
@@ -336,6 +346,9 @@ export function selectImagesProvider(config: OcxConfig): OpenAiImagesProviderSel
       forwardCandidates: [],
       error: `images.provider "${providerName}" must be an API-key openai-responses provider`,
     };
+  }
+  if (provider.apiKeyPool?.length && provider.apiKeyPool.every(entry => entry.disabled === true)) {
+    return { forwardCandidates: [], paused: true, error: new ProviderApiKeyPausedError().message };
   }
 
   const apiKey = resolveProviderApiKey(provider.apiKey)?.trim();

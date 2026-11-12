@@ -206,7 +206,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 ### `ocx account resume`
 
-Usage: `ocx account resume <provider> <account-id|alias|main> [--json]`
+Usage: `ocx account resume <provider> <account-id|alias|main> [--if-healthy] [--json]`
 
 Return a paused account to a Codex, Anthropic, generic OAuth or API-key pool.
 
@@ -223,6 +223,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--if-healthy` | boolean | Resume only after a fresh account-bound health read succeeds; Codex and Anthropic pools. |
 | `--json` | boolean | Emit the resume result as JSON. |
 
 ### `ocx account pause-exhausted`

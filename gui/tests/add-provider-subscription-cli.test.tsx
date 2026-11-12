@@ -16,6 +16,7 @@ import { selectValue } from "./helpers/custom-select";
 const PRESETS = [
   { id: "claude-cli", label: "Claude Code CLI (subscription)", adapter: "claude-cli", baseUrl: "https://api.anthropic.com", auth: "key", keyOptional: true, defaultModel: "claude-sonnet-5", note: "Runs Claude subscription traffic through the official CLI." },
   { id: "keyless", label: "Keyless Free", adapter: "openai-chat", baseUrl: "https://api.example.com/v1", auth: "key", keyOptional: true },
+  { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", auth: "key", defaultModel: "gemini-3-pro" },
 ];
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -150,4 +151,48 @@ test("a keyless free row keeps the free-tier box and no subscription warning", a
   await act(async () => { row.click(); });
   expect(warning()).toBeNull();
   expect(win.document.body.textContent).toContain("Free tier");
+});
+
+test("Vertex accepts ADC project and location without a dummy API key", async () => {
+  await mount("paid");
+  const row = [...win.document.querySelectorAll(".provider-catalog-row-wrap > button")]
+    .find(el => (el.textContent ?? "").includes("Google Vertex AI")) as unknown as HTMLButtonElement;
+  await act(async () => { row.click(); });
+  const inputFor = (label: string) => [...win.document.querySelectorAll("label")]
+    .find(element => element.textContent?.includes(label))?.querySelector("input") as unknown as HTMLInputElement;
+  const project = inputFor("Project ID");
+  const location = inputFor("Location");
+  expect(project).toBeDefined();
+  expect(location).toBeDefined();
+  expect(location.getAttribute("aria-label")).toBe("Location (optional)");
+  expect(win.document.body.textContent).toContain("Application Default Credentials");
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;
+    setter.call(project, "demo-project"); project.dispatchEvent(new win.Event("input", { bubbles: true }));
+    setter.call(location, "us-central1"); location.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+  const addButton = [...win.document.querySelectorAll("button.btn-primary")]
+    .find(el => el.textContent === "Add provider") as unknown as HTMLButtonElement;
+  await act(async () => { addButton.click(); await new Promise(r => setTimeout(r, 20)); });
+  expect(posted).toHaveLength(1);
+  expect(posted[0]?.provider).toMatchObject({ googleMode: "vertex", project: "demo-project", location: "us-central1", liveModels: false });
+  expect(posted[0]?.provider).not.toHaveProperty("apiKey");
+});
+
+test("Vertex API-key express setup leaves the optional project unset", async () => {
+  await mount("paid");
+  const row = [...win.document.querySelectorAll(".provider-catalog-row-wrap > button")]
+    .find(el => (el.textContent ?? "").includes("Google Vertex AI")) as unknown as HTMLButtonElement;
+  await act(async () => { row.click(); });
+  const input = win.document.querySelector('input[type="password"]') as unknown as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, "fixture-key");
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+  const add = [...win.document.querySelectorAll("button.btn-primary")]
+    .find(el => el.textContent === "Add provider") as unknown as HTMLButtonElement;
+  await act(async () => { add.click(); await new Promise(r => setTimeout(r, 20)); });
+  expect(posted[0]?.provider).toMatchObject({ googleMode: "vertex", apiKey: "fixture-key" });
+  expect(posted[0]?.provider).not.toHaveProperty("project");
+  expect(posted[0]?.provider).not.toHaveProperty("location");
 });

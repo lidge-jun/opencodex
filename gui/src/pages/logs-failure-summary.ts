@@ -157,7 +157,9 @@ export function failureDetailLabel(value: unknown, t: TFn): string | undefined {
   const detail = boundedFailureDetail(value);
   if (!detail) return undefined;
   if (detail.code === "provider_error") {
-    const label = detail.type ? t("logs.failureDetail.providerErrorTyped", { type: detail.type }) : t(FAILURE_DETAIL_KEYS.provider_error);
+    const typed = detail.type ? t("logs.failureDetail.providerErrorTyped", { type: detail.type }) : t(FAILURE_DETAIL_KEYS.provider_error);
+    // The provider's closed finishReason is a machine token, appended like the validation pairs.
+    const label = detail.finishReason ? `${typed} [finishReason: ${detail.finishReason}]` : typed;
     return detail.validation ? `${label}: ${detail.validation.map(issue => `${issue.field} [${issue.type}]`).join("; ")}` : label;
   }
   if (detail.code === "header_timeout" && detail.value !== undefined) {

@@ -96,11 +96,11 @@ Deep links (`gui/src/protocol-deep-links.ts`) carry their target in the hash que
 and drops elsewhere. Each plan candidate links to `#providers?provider=<name>` (`gui/src/pages/providers-deep-link.ts` selects that provider and opens its Settings tab, and drops
 the query once another provider is chosen) and to `#models/compatibility?inbound=…&upstream=…`; a traced Logs row links to the compatibility pair it took. Each chip of the header quota strip
 (`gui/src/components/quota-summary-bar/QuotaSummaryBar.tsx`, one scrolling row with « / » paging) links to `#providers?provider=<name>&tab=accounts`, which opens that provider's
-Accounts tab through `revealProviderAccounts` instead; following the same link again re-dispatches `hashchange` so it re-applies. A transparent hit area above the fixed quota popover spans both its width and the visible chip width and bridges their measured gap, keeping details open during pointer travel. The popover is a named group with an account-management link; its text-only quota table describes the chip; focus stays open between its chip and link, and Escape restores focus to the chip. When no native Muse report exists, `gui/src/muse-limit-observation.ts` derives a `meta-muse:rate-limit-observation` row only if the active account's latest-started retained matching request is an explicit quota refusal (it selects by start timestamp across server-bounded history, not finalization order; local management reads only; a native report always wins); the strip drops that observation at its named reset time without waiting for another successful poll, and `gui/tests/muse-limit-expiry.test.tsx` covers expiry and native-report retention. Links push history, the matrix replaces
+Accounts tab through `revealProviderAccounts` instead; following the same link again re-dispatches `hashchange` so it re-applies. The Codex Auth mode badge and its Direct-mode help link (`gui/src/pages/codex-set-multiauth.tsx`) open `#providers?provider=openai&focus=account-mode` (#8501): the hook carries the `field` with the Settings focus, `ProviderDetails` hands `ProviderSettings` a pending token that a fresh mount still honors, and the form scrolls to and focuses the `pws-codex-account-mode` Select (or its field while the trigger is disabled). The badge only navigates; changing the mode stays the Select's confirmed choice. `tab=accounts` wins over `focus`, and choosing another provider drops the whole query. A transparent hit area above the fixed quota popover spans both its width and the visible chip width and bridges their measured gap, keeping details open during pointer travel. The popover is a named group with an account-management link; its text-only quota table describes the chip; focus stays open between its chip and link, and Escape restores focus to the chip. When no native Muse report exists, `gui/src/muse-limit-observation.ts` derives a `meta-muse:rate-limit-observation` row only if the active account's latest-started retained matching request is an explicit quota refusal (it selects by start timestamp across server-bounded history, not finalization order; local management reads only; a native report always wins); the strip drops that observation at its named reset time without waiting for another successful poll, and `gui/tests/muse-limit-expiry.test.tsx` covers expiry and native-report retention. Links push history, the matrix replaces
 the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
 so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
 `gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
-`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS. `gui/src/quota-summary.ts` selects fixed windows by semantic label and promotes critical credits over a noncritical preferred window; a critical preferred window retains priority. `gui/tests/quota-summary.test.ts` covers precedence and provider-label collisions.
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS. `gui/src/quota-summary.ts` selects fixed windows by semantic label and promotes critical credits over a noncritical preferred window; a critical preferred window retains priority. For a positive WorkBuddy credit total it derives the unavailable share from remaining credits, including frozen amounts, with neutral severity, nearest-whole-percent display and no partial expiry presented as a balance reset. `gui/tests/quota-summary.test.ts` covers this projection, precedence and provider-label collisions. Dashboard health probes (`gui/src/lib/proxy-health.ts`, #8506): Home and the self-update reload check read the authenticated `/api/system/health` on the shared base, and the sidebar reads `machineHealthPath` on the machine base: `/healthz` only for a connected Child (`targets.connected || isConnectedRuntime()`), whose machine listener admits nothing else, and `/api/system/health` everywhere else, because a Remote Hub's management ingress denies `/healthz`. `readManagementHealth` counts a 401/403 as reachable with unknown version, so a public standalone before its token prompt or a hub before pairing does not read as Offline. `gui/tests/management-health-probe.test.ts`, `gui/tests/home-management-health.test.tsx` and `gui/tests/dashboard-contracts.test.ts` cover the rule.
 
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
@@ -122,7 +122,7 @@ The sidebar exposes eight rows (`gui/src/nav-groups.ts` `NAV_GROUPS`), in order:
 
 | Surface | Shape |
 | --- | --- |
-| Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). |
+| Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). Settings and the raw JSON editor keep unsaved drafts in memory per logical dashboard target (`gui/src/provider-workspace/target-drafts.ts`, keyed by hub origin plus link id in link mode because a relay apiBase is shared across re-pairs; API-key rotation is not a target change and labels show only the origin): switching targets parks the draft and shows the new target's saved values, a save only ever writes to the target that started it (the form owns the capture and passes it through the typed update callback; a remove or mode confirmation keeps the capture from when it opened), and a changed saved baseline requires an explicit keep-draft or use-saved choice. JSON keep-draft merges only the user delta into the latest config and reports same-field, deletion and rename conflicts; Settings patches only changed fields. App discovery coalesces session/focus/mismatch refreshes into one in-flight read, so a relay re-pair updates identity and session readiness without remounting the draft owner. An embedded surface that supplies its own `apiBase` uses that base only while no topology has been discovered; a configured relay always wins, and a relay capability string this dashboard does not recognize reads as legacy. Nothing is persisted to browser storage. |
 | API keys | Key table plus per-key detail (`gui/src/components/apikeys-workspace/`). The list payload carries masked prefixes only; each row deletes in place behind a two-step confirm, and clicking a key fetches the full value from `POST /api/keys/reveal`, which requires a current pairing or trusted Tailscale-identity session and answers `no-store`; automatic loopback sessions and raw admin tokens cannot reveal stored values, and a refusal there answers with the pairing surface — on the same-origin standalone transport the local pairing form, elsewhere the explanation alone — and requires a fresh reveal click after pairing. Displayed secrets and copy feedback are cleared on shared-session loss, pairing, inactive/hidden views, or a target change; stale asynchronous completions cannot restore them. |
 | Storage | Rail plus cleanup and trash detail (`gui/src/components/storage-workspace/`). |
 | Subagents | Featured-roster selection workspace (`gui/src/components/subagents-workspace/`). |
@@ -165,7 +165,7 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 `OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
 through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
 is a measured value. Separate attempts add credits when usage is merged. The field is independent
-of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`. Client labels follow the [attribution contract](usage-client-attribution.md).
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The shared heuristic in `src/lib/token-estimate.ts` counts supplementary Han surrogate pairs as two CJK code units alongside its existing BMP buckets; model ratios and context-window caps stay unchanged. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`. Client labels follow the [attribution contract](usage-client-attribution.md).
 
 ### Upstream key account attribution
 
@@ -192,7 +192,7 @@ observations separate from token or API-equivalent cost totals.
 
 Custom usage windows are immutable bounds on the streaming accumulator, applied before attribution and daily
 aggregation. The filtered cache includes both inclusive millisecond bounds in its identity and retains the existing ledger revision, overlay-version and timezone checks.
-At most four distinct filtered scans may run concurrently; identical requests share one scan and excess distinct
+At most four distinct filtered reads may run concurrently; identical requests share one flight and excess distinct
 work fails closed. Preset warming never consumes custom summaries.
 The response retains its preset range discriminator for compatibility and explicitly marks
 `customWindow`, `since`, and `until`; the chart uses the window's local calendar days with
@@ -234,7 +234,7 @@ never active-key mutation or the provider-wide cache. Response projection rechec
 and exposes only quota/availability fields, not its internal identity guard. Passive observations
 retain their original timestamp and never trigger inference or token renewal. Unsupported,
 unobserved, failed and measured-zero readings remain distinct; multiple keys are not summed
-because they may share one upstream balance.
+because they may share one upstream balance. Unknown readings carry the closed `quotaUnknownReason` from `src/providers/quota-types.ts` (`no_balance_source`, `passive_not_observed`, `read_failed`, `not_read`, `not_reported` for a successful read the provider reported as empty), and key probe rows carry `quotaReadAt` from the per-key cache entry's read time, omitted when no read happened. Both fields are additive: older clients ignore them and the CLI drops reasons it does not know, so an unknown balance is never projected as zero (#8397).
 
 Provider details use one account-quota reading renderer for Overview, Usage and Accounts/API
 keys. Current-account usage sits below usage statistics; a known-mode active row is authoritative
@@ -340,9 +340,9 @@ normalized per-request rows after a response. File identity changes, shrinkage, 
 changes, pricing-overlay changes, and local-time-zone changes force a cold rebuild. Ordinary growth
 is treated as an append: the scanner verifies the previous LF and its trailing 64 KiB digest, then
 folds only the suffix into a cloned accumulator and publishes it after validation. Concurrent callers
-share that work. Cold rebuilds scan the whole ledger in fixed-size chunks and yield between bounded
-batches, so memory stays bounded and unrelated management requests remain serviceable even for a
-large existing log. The first read is proportional to ledger size; later refreshes hash the bounded retained window once and parse only the appended suffix, rather than rescanning the whole ledger.
+share that work. Cold rebuilds and append scans read fixed-size chunks, yield between chunks after a full
+chunk or 1,000 rows, and yield between rows once 8 ms have passed, including within the final chunk, then recheck cancellation. This keeps costly normalization and
+aggregation cooperative; one row remains atomic. The first read is proportional to ledger size; later refreshes hash the bounded retained window once and parse only the appended suffix, rather than rescanning the whole ledger. `tests/usage/usage-ledger-scanner.test.ts` covers slow-row scheduling and cancellation.
 The Dashboard polls its 30-day usage independently once per minute, separate from five-second state polls.
 An unchanged retained snapshot reuses its verified region digest only for identical bounds; appends or trimming hash the returned region, preserving same-inode rewrite detection.
 > Decision record: [ADR-0102](decisions/ADR-0102-incremental-stream-accounting.md)
@@ -353,7 +353,7 @@ An oversized row is skipped inside the scanner bound without shortening identiti
 64 KiB checkpoint followed by file growth is intentionally outside the incremental detector's
 contract: validating arbitrary historical rewrites on every refresh would require rereading the
 whole prefix. Replace or truncate the file, or restart the proxy, after manually changing historical
-rows so the next request performs a cold rebuild.
+rows so the next request performs a cold rebuild. The candidate index shares that contract and is stricter about it: any same-size metadata movement rebuilds it.
 
 The wire fields `historyTruncated`, `truncatedPrefixBytes`, `entriesTruncated`, and `entriesDropped`
 remain in the response for compatibility with older GUI and CLI clients. A successful whole-ledger
@@ -395,15 +395,15 @@ once it exceeds 200) with the upstream content-type, body kind (`sse / json / ot
 body sample, and the extracted usage. Off by default; the hot path is guarded so production stays
 untouched.
 
-For diagnosing cache-read instability without capturing content, set `OPENCODEX_CACHE_DEBUG=1`
-before start. `src/usage/cache-diagnostic.ts` then writes one record per finalized request to
-`~/.opencodex/cache-debug.jsonl` (same `0o600` file, same 200-to-100 rolling bound) holding only
-presence booleans, counts, closed enums, the raw upstream cache counter before defaulting, and
-process-local HMAC equality tags for the prompt-cache key, allowlisted session headers, the account
-log label, and ordered instruction/tool/message blocks (capped at 128 per section, first divergent
-section/index only). The signing key is created at process start and never persisted, so tags
-compare values within one proxy process and never become a durable correlation key; no prompt
-text, tool name, raw identifier, or header value is recorded. Off by default.
+For content-free cache-read diagnostics, `OPENCODEX_CACHE_DEBUG=1` enables `src/usage/cache-diagnostic.ts`; otherwise hooks return before body/header inspection, hashing or file access. Its live `enabled()` hook remains registered. Every observed on/off transition (the gate is evaluated on each diagnostic call, so an idle process keeps its history until the next call) starts a new retention epoch: continuation history and pending drafts are cleared, and a draft from an earlier epoch is neither compared nor written (`tests/usage/cache-diagnostic.test.ts`).
+It writes one finalized request to `~/.opencodex/cache-debug.jsonl` (mode `0o600`, 200-to-100 rolling lines), preserving raw cache-counter evidence.
+Process-local HMAC tags cover prompt keys, explicit account labels and ordered instructions/tools/messages; no prompt, tool name or raw identifier is retained, and keys never persist.
+Session-header tags cover `session_id`, `session-id`, `thread-id` and `x-session-id`, sharing a value domain but not merging header identities; an unobserved side is omitted. `accountAffinity` uses read-only `codexConversationIdentity` and states `derived-key-not-binding`; neither a key nor a route label proves a binding.
+`prefix.comparison` compares observed sides; `continuation` compares their previous finalization under the complete nonempty inbound session-header set, authenticated admission principal, protocol, model and config directory. `src/server/responses/request-prepare.ts` carries the admission identity through the request-log hook; only its private diagnostic HMAC is retained, never serialized or reconstructed from bridge headers.
+Provider changes preserve correlation; prompt-key and explicit account-label changes are separate. Synthesized outbound headers and prompt keys never replace missing inbound identity.
+Comparisons distinguish first/equal/message-tail append/different/truncated/uncomparable; instructions and tools grow before messages, while system/developer input rows retain wire order.
+Missing or unsupported observations are uncomparable. Missing admission identity, including unauthenticated loopback, disables cross-request history while preserving per-request comparisons. Sections retain 128 tags and never claim equality across hidden tails; history evicts beyond 512 entries.
+These are parsed hook projections in completion order, not exact network bytes or proof of cache reuse; `tests/usage/cache-diagnostic.test.ts`, `tests/usage/cache-diagnostic-hook-compat.test.ts` and `tests/usage/cache-diagnostic-caller-isolation.test.ts` pin the contract.
 
 ## Z.ai quota destination ownership
 
@@ -497,7 +497,7 @@ The existing dashboard file-client maps include Cline CLI and reuse its committe
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates. The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples. Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; in the default `decide` mode an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 Dashboard overview polling observes authorization failures independently of stalled or rejected peer requests, cancels remaining child requests after a decisive result, and exposes resource-level deadline failures without rewriting them as authentication failures.
@@ -536,19 +536,19 @@ write when an existing baseline is forgotten: `src/quota/reset-observer.ts` runs
 (`src/server/background-lifecycle.ts`) whose tick is a no-op until the section is enabled, so
 enabling it takes effect without a restart.
 
-- `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list,
-  and `src/quota/reset-detector.ts` compares two consecutive observations of a window and emits at
-  most one reset event, classified as scheduled or surprise.
-- `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification. It
-  never throws into the quota write that triggered it. `src/codex/quota.ts` and
-  `src/providers/quota.ts` reach it only through a lazy import, because both are statically
-  reachable from `src/server/responses/core.ts` and a static edge would load the subsystem into
-  every install.
-- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger. The observer claims a
-  reset there before dispatch, so a reset is attempted at most once, across restarts and racing
-  observers; a failed delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or
-  a local command; each sink is best-effort and isolated from the other.
-- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 minutes, floor 10). Without it,
+- `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list, and
+  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies it. The selection of those Mistral windows lives in `src/providers/quota-mistral-budget.ts`, not under `src/quota/`, because `src/providers/quota.ts` imports it statically on the core path.
+- `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification, and it
+  never throws into the quota write that triggered it. `src/codex/quota.ts` and `src/providers/quota.ts`
+  reach it only through a lazy import, because both are statically reachable from `src/server/responses/core.ts`.
+  A probe-bound report may carry a private credential digest (`keyReportCredentialIds` in
+  `src/providers/quota/report-cache.ts`); only opted-in producers (today Mistral) bind it, reset identity
+  uses it instead of `apiKeyPoolEntryId`, and cached rows re-validate against the current credential and
+  destination; passive reads use literal or environment keys without publishing evidence and withhold keychain-backed rows. Others keep identity byte for byte.
+- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger; the observer claims a reset there
+  before dispatch, so each reset is attempted at most once across restarts and racing observers, and a failed
+  delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or local command, each best-effort and isolated.
+- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 min, floor 10). Without it,
   quota reports are fetched only when the dashboard or CLI asks, and an overnight reset goes
   unobserved. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
   `pollSeconds: 0` observes live traffic only.
@@ -569,7 +569,7 @@ re-validated on read; the Logs list shows it as a text badge, the detail dialog 
 `src/server/request-log-filter.ts` owns the `/api/logs` query filters including `protocolMode`; its single-pass query applies provider, conversation, model, account, protocol mode and status before `tail`, then reports the pre-pagination count alongside the offset/limit page. `src/server/request-log-filter.ts` accepts the full provider/model label shown by `ocx logs` and bare model IDs, including IDs containing slashes. Qualified failover matches bind provider/model from the same attempt; matching occurs before the row cap and pagination.
 [Protocol Paths](data-planes/protocol-paths.md) owns its derivation.
 
-Conversation searches in the dashboard, `/api/logs` and `ocx logs filter --conversation` accept `codex://threads/<id>` links up to 512 characters, including query/fragment metadata, trailing slashes and surrounding whitespace. The server matcher in `src/server/request-log-conversation.ts` and its browser mirror in `gui/src/log-conversation-id.ts` try both the extracted single-segment id and the original trimmed query, preserving raw-id and whole-literal-URI digest matching. The prefix is case-insensitive; the id retains its case. Malformed or longer links remain plain queries subject to the existing 4096-character digest-input bound. Persistence is unchanged.
+Conversation searches in the dashboard, `/api/logs` and `ocx logs filter --conversation` accept `codex://threads/<id>` links up to 512 characters, including query/fragment metadata, trailing slashes and surrounding whitespace. The server matcher in `src/server/request-log-conversation.ts` and its browser mirror in `gui/src/log-conversation-id.ts` try both the extracted single-segment id and the original trimmed query, preserving raw-id and whole-literal-URI digest matching. The prefix is case-insensitive; the id retains its case. Malformed or longer links remain plain queries subject to the existing 4096-character digest-input bound. A pasted Claude Code `metadata.user_id` adds one more candidate, the JSON object without its per-turn `tk` (`claudeSessionUserId`), because the Messages inbound stores the session under that form; any turn's `user_id` therefore finds the whole session, and the raw candidate still matches rows logged before `tk` was stripped. A query over 4096 characters is not parsed, and `conversationIdFromClaudeMetadata` skips a `user_id` over that bound before parsing, while the inbound cache key still drops `tk` at any length. Persistence is unchanged.
 Rows may also carry `genStartMs` and `lastOutputMs`, an observed request-relative pair recorded by `src/server/request-log-generation-window.ts` from the Responses and Anthropic SSE taps: the first output item or content block (reasoning included) to the last output delta. They are proxy observation times, not provider-internal token timing, and `src/usage/log.ts` keeps them only as a pair of nonnegative finite values with `lastOutputMs >= genStartMs`. `decodeTokPerSecondResult` in `src/server/management/shared.ts` prefers that window when the pair is valid and otherwise falls back to the post-TTFT window (`durationMs - firstOutputMs`); both keep the one-second minimum, the `ttft_missing` / `decode_window_too_short` unavailable reasons and `estimated: true`, so a short measured window is still an estimate rather than a provider decode benchmark. The end-to-end tok/s column is unchanged, attempts carry no generation window of their own, and the request-history view does not present one. Successful decode DTOs additionally expose `timingBasis: "generation-window" | "legacy-post-visible-output"`, derived at read time only. Logs labels the method “Generation window” or “After visible output” in the list and attempt table and uses “Output rate during generation (est.)” or “Output rate after first visible output (est.)” in request details. Missing or unfamiliar bases show “Timing unknown” and “Output rate (est.; timing method unknown)” in details rather than inferring a method. The detail grid shows a full-width muted caption explaining the method only when the decode rate is available. Both numerators include reported reasoning output tokens, so the two estimates are not directly comparable. Historical JSONL and end-to-end rates are unchanged.
 
 Request-history selectors longer than 130 characters persist as a prefix plus a digest of the complete

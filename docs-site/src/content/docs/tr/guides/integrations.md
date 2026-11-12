@@ -27,7 +27,7 @@ Windows'ta mutlak yol gerektiren geçersiz kılmalar bir sürücü harfi (`C:\Us
 | omo | `~/.omo/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | kapatıp yeniden başlattıktan sonra | yalnızca loopback |
 | Kilo | `~/.config/kilo` altında ilk bulunan `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` veya `config.json` (`XDG_CONFIG_HOME` bu dizini taşır; hiçbiri yoksa `kilo.jsonc` oluşturulur) | JSONC | yeni oturumlarda | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (Windows’ta varsayılan ana dizin kullanılırken: `HOME ?? USERPROFILE` değerini yalnızca boş veya sırf boşluklardan oluşmayan mutlak bir Windows yoluysa kullanır, aksi halde `homedir()` kullanılır; ayrıca verilen ana dizin korunur; sonuna `.commandcode\providers.json` eklenir) | JSON | Command Code'un sonraki başlatılmasında | yok — anahtarsız geri döngü (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (Windows’ta varsayılan ana dizin kullanılırken: `HOME ?? USERPROFILE` değerini yalnızca boş veya sırf boşluklardan oluşmayan mutlak bir Windows yoluysa kullanır, aksi halde `homedir()` kullanılır; ayrıca verilen ana dizin korunur; sonuna `.commandcode\providers.json` eklenir) | JSON | Command Code'un sonraki başlatılmasında | yok — anahtarsız geri döngü (`apiKey: false`); masaüstü uygulaması kendi oturum açmasını gerektirir ve opencodex `auth.json` dosyasına hiçbir zaman yazmaz |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows'ta) | JSON | dosya değişince hemen | anahtarsız geri döngü |
 
 Desteklenen akıl yürütme düzeylerine sahip GJC modelleri, GJC'nin düzey seçimi sunabilmesi için `reasoning: true`, `thinking.levels` ve `compat.supportsReasoningEffort` alanlarını dışa aktarır. Yerel Codex modelleri, katalogda belirtilmese bile standart düzeylerini alır. Bilinen düzeyi olmayan modellerde bu alanlar bulunmaz. `none` düzey göndermez ve `ultra` gönderimde `max` düzeyine dönüşür; bu yüzden seçeneklerde yer almazlar. Model seçeneklerini güncellemek için entegrasyonu yenileyin.
@@ -181,11 +181,14 @@ bir Aside profilinde onaylama, yönetilen belge değişmese bile profilin eşitl
 
 Dosya siz inceledikten sonra değişirse yazma işlemi eski plan nedeniyle reddedilir. İletişim kutusu
 eski planı güncel planla değiştirir ve yeniden açıkça onaylamanızı ister; yazma işlemini hiçbir zaman
-otomatik olarak yeniden denemez. Önizleme geçici olarak kullanılamıyorsa sayfayı normal şekilde
-yenileyin ve işlemi yeniden başlatın.
+otomatik olarak yeniden denemez. Önizleme henüz model kataloğu yüklenmediğini bildirirse
+iletişim kutusu açık kalır ve **Kataloğu yükle ve yeniden dene** seçeneğini sunar: entegrasyon listesini
+yeniden okur ve planı tekrar ister.
 
 Aside, aynı önizleme ve onay akışını bir defada seçili tek bir profil için kullanır. **Tüm profilleri
-eşitle** ayrı bir toplu işlem olarak kalır ve tek bir birleşik önizlemeye bağlı değildir.
+eşitle** ayrı bir toplu işlem olarak kalır ve tek bir birleşik önizlemeye bağlı değildir. Bir plan yalnızca bir profilin dosyasını
+anlatır; bu yüzden çakışmadaki Aside genel bakış kartı **Profil seç** sunar ve blok o profilin
+sayfasında değiştirilir.
 
 ## Dürüstçe ne beklenmeli?
 

@@ -49,6 +49,7 @@ import {
 } from "./journal";
 import { HISTORY_RELABEL_STANDS_DOWN } from "./history-provider";
 import { formatApplyHistoryFailure } from "./inject/history-failure";
+import { passiveCodexVersion } from "./inject/paginated-openai-compat";
 import {
   deriveCodexHistoryOperation,
   resolveCodexHistoryJobTarget,
@@ -298,6 +299,7 @@ async function injectCodexConfigImpl(
     routingTarget,
     catalogPathOption: options.catalogPath,
     journalReadOnly: !!options.beforeClientWrite,
+    codexVersion: passiveCodexVersion(),
   };
   const admittedPlan = deriveCodexInjectionPlan(rawContent, planContext);
   if (admittedPlan.kind === "refused") {
