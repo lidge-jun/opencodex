@@ -1181,8 +1181,6 @@ function captureUpstreamErrorParsed(
       && reason.trim()) {
       logCtx.terminalIncompleteReason = reason.trim();
     }
-    // Bare upstream errors are captured with their status by captureUpstreamTerminalDiagnostics,
-    // which keeps the winning verdict's copy; a later losing frame must not overwrite it.
     if (logCtx.upstreamError) return;
     const message = upstreamErrorMessageFromPayload(parsed);
     if (typeof message === "string" && message.trim()) {
