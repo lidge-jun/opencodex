@@ -11,6 +11,7 @@ import type { LinkDiagnosticRecord, LinkDiagnosticSink } from "../link/diagnosti
 import { linkRouteAllowed } from "../link/routes";
 import { isLinkPort } from "../link/ports";
 import { resolveInboundBodyLimitBytes } from "../server/request-decompress";
+import type { LinkTrafficBook } from "../link/traffic";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
@@ -87,6 +88,8 @@ export interface LinkRelayDeps {
    * authenticated management relay passes the read-only management table (#6957).
    */
   routeAllowed?: (url: URL, req: Request) => boolean;
+  /** Where the link transport counts the bodies it carries; this process's Child book by default. */
+  traffic?: LinkTrafficBook;
 }
 
 export const LINK_RELAY_RETRY_AFTER_SECONDS = 1;
@@ -466,7 +469,7 @@ export async function relayLinkDataRequest(
         signal: relayAbort.signal,
         ...(body ? { body, duplex: "half" } : {}),
       };
-      upstream = await (deps.fetchImpl ? deps.fetchImpl(destination, init) : fetchBoundLinkRelay(target, destination, init));
+      upstream = await (deps.fetchImpl ? deps.fetchImpl(destination, init) : fetchBoundLinkRelay(target, destination, init, { traffic: deps.traffic }));
     } catch (error) {
       if (error instanceof LinkRelayAuthenticationError) {
         return await tunnelUnavailable("auth_failed", error.message);

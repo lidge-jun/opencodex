@@ -11,6 +11,7 @@ import { catalogVerdict, type CatalogPull, type CatalogRevision, type CatalogSta
 import type { ChildObservation, ChildOp, ChildOperationSummary } from "./child-observations";
 import type { InstallKind, UpdateRoute } from "./child-update-contract";
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
+import type { LinkTrafficCounters } from "./traffic";
 
 export type LinkWireState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
 
@@ -32,6 +33,8 @@ export interface LinkStatusDto {
     tunnel?: LinkTunnelDiagnostics;
     /** Home rows on request (`?children=1`): versions, update route, catalog freshness, activity and operations. */
     child?: LinkChildOpsStatus;
+    /** On request (`?traffic=1`): body bytes this machine relayed or served for the link since `since`. */
+    traffic?: LinkTrafficCounters;
   }>;
   child: null | {
     alias: string;
@@ -77,6 +80,12 @@ export function attachLinkTunnelDiagnostics(dto: LinkStatusDto, supervisorStates
       lastFailure: history?.lastFailure ? { cause: history.lastFailure.cause, at: iso(history.lastFailure.at) } : null,
     };
   }
+  return dto;
+}
+
+/** Add `traffic` to every row (#3023). A Home counts in its hub-link listener, a Child in its link transport. */
+export function attachLinkTraffic(dto: LinkStatusDto, traffic: (linkId: string) => LinkTrafficCounters): LinkStatusDto {
+  for (const link of dto.links) link.traffic = traffic(link.id);
   return dto;
 }
 

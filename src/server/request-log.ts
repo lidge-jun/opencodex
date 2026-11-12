@@ -95,6 +95,7 @@ import {
 } from "../usage/jev-stats";
 import { generationWindowFields, recordGenerationEvent } from "./request-log-generation-window";
 import type { RequestMetricsRecorder } from "./request-metrics";
+import { requestBodyField, requestBodyLogField, type RequestBodyEntryField, type RequestBodyLogContext } from "./request-body-facts";
 import type {
   CacheDiagnosticDraft,
   CacheDiagnosticFinalFacts,
@@ -118,7 +119,7 @@ export function cacheDiagnosticsObserving(): boolean {
   return cacheDiagnosticHooks()?.enabled() === true;
 }
 
-export interface RequestLogContext extends UpstreamErrorDiagnostics {
+export interface RequestLogContext extends UpstreamErrorDiagnostics, RequestBodyLogContext {
   model: string;
   provider: string;
   client?: UsageClient;
@@ -308,7 +309,7 @@ export function rebindCacheDiagnosticBody(
   cacheDiagnosticHooks()?.rebind(body, draft);
 }
 
-export interface RequestLogEntry extends UpstreamErrorDiagnostics {
+export interface RequestLogEntry extends UpstreamErrorDiagnostics, RequestBodyEntryField {
   requestId: string;
   client?: UsageClient;
   /** The logical request this row belongs to (#4546); absent on rows written without a budget. */
@@ -506,7 +507,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
     ...(entry.genStartMs !== undefined ? { genStartMs: entry.genStartMs } : {}),
     ...(entry.lastOutputMs !== undefined ? { lastOutputMs: entry.lastOutputMs } : {}),
-    ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
+    ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}), ...requestBodyField(entry.requestBody),
     ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
     ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
       ? { accountLogLabel: entry.accountLogLabel }
@@ -706,7 +707,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       // reaches usage.jsonl — which is where the per-key rollup reads from.
       ...(entry.apiKeyId ? { apiKeyId: entry.apiKeyId } : {}),
       ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
-      ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}),
+      ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}), ...requestBodyField(entry.requestBody),
       ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
         ? { accountLogLabel: entry.accountLogLabel }
         : {}),
@@ -1168,8 +1169,7 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
 function captureUpstreamErrorParsed(
   logCtx: RequestLogContext,
   text: string,
-  parsed: unknown | undefined,
-  untypedSse = false,
+  parsed: unknown | undefined, untypedSse = false,
 ): void {
   if (parsed !== undefined && parsed !== null) {
     const json = parsed as UpstreamErrorPayload;
@@ -1585,7 +1585,7 @@ function writeFinalRequestLog(
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     ...(logCtx.apiKeyId ? { apiKeyId: logCtx.apiKeyId } : {}),
     ...(logCtx.admissionKind ? { admissionKind: logCtx.admissionKind } : {}),
-    ...(logCtx.inboundProtocol ? { inboundProtocol: logCtx.inboundProtocol } : {}),
+    ...(logCtx.inboundProtocol ? { inboundProtocol: logCtx.inboundProtocol } : {}), ...requestBodyLogField(logCtx),
     ...(logCtx.localTerminalReason
       ? { localTerminalReason: sanitizeLogMetadataString(logCtx.localTerminalReason) }
       : {}),
