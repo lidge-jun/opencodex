@@ -153,6 +153,18 @@ describe("switch-off drain (design 2.5, 11.1-5)", () => {
     expect(h.base.delivered).toHaveLength(1);
   });
 
+  test("a create dropped during a turn closes the socket after that turn even when it leaves a tool pending", () => {
+    const h = harness();
+    const s = h.open();
+    s.send(create());
+    h.switchOff();
+    s.send(create("second"));
+    s.activity().observePayload(toolCall("call_a"));
+    h.base.finishes[0]!();
+    expect(s.activity().running).toBe(false);
+    expect(s.closes).toEqual([[1000, "link websocket disabled"]]);
+  });
+
   test("a new conversation, or a socket with untracked results, is fenced and not admitted", () => {
     const fresh = harness();
     const a = fresh.open();
