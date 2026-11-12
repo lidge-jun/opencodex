@@ -1141,9 +1141,13 @@ that every Codex build or exhausted-account state can recover its composer.
 On a standalone local dashboard, first run the command shown in the panel, for example
 `ocx gui pair --desktop --origin http://localhost:10100`, on the proxy computer and paste
 its secret one-use code. Install the CLI first if `ocx` is unavailable. A private-home
-permission refusal must be resolved before a code can be issued. This authorizes Desktop
-actions for at most five minutes in the current session; it does not change Remote Link or
-key-disclosure permissions. Hub and connected-client Desktop writes are unsupported.
+permission refusal must be resolved before a code can be issued. An ordinary pairing code or
+an already paired dashboard alone does not authorize Desktop actions. The panel exchanges the
+Desktop code for scope on the existing session, then reads `/authorization` to verify it;
+it does not create or replace the browser session. This authorizes Desktop actions for at most
+five minutes in that session; it does not change Remote Link or key-disclosure permissions.
+See [Desktop authorization](/reference/management-api/#desktop-authorization) for the API contract.
+Hub and connected-client Desktop writes are unsupported.
 After expiry or logout, reload the local dashboard and authorize again. The panel refreshes
 status, fingerprint and settings revision; select the desired action and consent again.
 It never replays an earlier POST. Certificate expiry or unknown trust does not prevent this

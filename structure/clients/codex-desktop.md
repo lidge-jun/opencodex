@@ -88,24 +88,29 @@ in-process, and the helper's cmdlet-free script on every platform.
 `/api/codex/desktop-compatibility/certificate` setup endpoint. GET is read-only public metadata and OS-trust inspection;
 it does not decrypt a key, create a file, acquire a lease or register trust. POST
 requires a current GUI session with a Desktop-purpose grant on trusted standalone loopback ingress and explicit confirmation.
-Trust mutations also require the exact SHA-256 fingerprint. Raw admin tokens cannot
-substitute the pairing ceremony, and automatically issued loopback sessions cannot mutate trust.
+Trust mutations also require the exact SHA-256 fingerprint. Raw admin tokens and ordinary
+pairing alone cannot supply Desktop scope. A current automatically issued loopback session can
+receive it by exchanging a valid Desktop-purpose grant; its issuance remains loopback.
 The certificate response carries request-specific `mutationAuthorized` metadata. The local
 dashboard uses `gui/src/pages/desktop-compatibility-authorization.tsx` for the Desktop grant
-exchange, validates that authority through a read-only certificate request, and commits the
-session before refreshing or enabling actions. Pairing never submits a certificate/runtime
-mutation or changes auto-start.
+exchange through `authorizeDesktop` in `gui/src/desktop-compatibility-api.ts`: POST consumes the
+grant on `/api/codex/desktop-compatibility/authorization`, then GET on that same endpoint verifies
+Desktop scope. The existing browser session and credentials are retained before refreshing status
+and enabling actions. Authorization never submits a certificate/runtime mutation or changes auto-start.
 Machine-session changes discard pending consent and disable actions until fresh authority is read.
 The startup-setting child synchronously aborts its own in-flight operation on a machine-session
 change and rejects late completions by generation. An interrupted preference operation stays
 uncertain until a fresh settings GET, independently of refreshed certificate authorization.
 `gui/tests/desktop-compatibility-panel.test.tsx` and
 `tests/server/management-desktop-compatibility-routes.test.ts` cover the UI and real
-loopback-versus-paired session boundary.
+Desktop grant boundary for both loopback-issued and locally paired sessions.
 
 `ocx gui pair --desktop --origin <dashboard-origin>` uses the attested runtime and private-home
 one-use intent through a separately signed pairing path. `/api/codex/desktop-compatibility/authorization`
-consumes that purpose only for the existing current browser session; GET reports its Desktop scope.
+consumes that purpose only for the existing current browser session. After common management admission,
+GET returns HTTP 200 with `ok: true`, `supported` and `authorized`, including absent or unsupported
+Desktop scope. POST returns HTTP 200 with `ok: true`, `authorized: true` on success, 400 for malformed
+JSON/body shape, or 403 `desktop_authorization_required` for a refused grant exchange.
 The scope expires after at most five minutes without renewal and disappears with session revocation,
 eviction, restart or an observed role/listener change. It changes neither pairing issuance nor key
 disclosure authority. Certificate, runtime and startup-setting POSTs revalidate it before reading
@@ -248,7 +253,7 @@ registration occurs only after successful startup. Cleanup stops owned listeners
 a failed cleanup retains ownership and reports `cleanup-required`, never a false `off` state.
 
 `src/server/management/desktop-compatibility-runtime-routes.ts` provides GET status and
-operator-paired local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
+current local GUI-session POST start/stop/observe/apply/launch with Desktop scope, explicit confirmation and
 separate account-wide consent for apply. No setting, login, quota, automatic startup or
 dashboard preference is changed by this API. The separate startup preference below never saves Apply.
 The status CLI verb remains deferred to this integration owner.
