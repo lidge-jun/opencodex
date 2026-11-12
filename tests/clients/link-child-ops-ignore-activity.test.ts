@@ -121,6 +121,7 @@ describe("route body", () => {
       { op: "sync", linkIds: "all", restart: "app-server", ignoreActivity: true },
       { op: "sync", linkIds: [LINK, OTHER], restart: "app-server", ignoreActivity: true },
       { op: "update", linkIds: [LINK], ignoreActivity: true },
+      { op: "update", linkIds: [LINK], restart: "app-server", ignoreActivity: true },
       { op: "observe", linkIds: [LINK], ignoreActivity: true },
       { op: "sync", linkIds: [LINK], restart: "app-server", ignoreActivity: false },
       { op: "sync", linkIds: [LINK], restart: "app-server", ignoreActivity: "yes" },

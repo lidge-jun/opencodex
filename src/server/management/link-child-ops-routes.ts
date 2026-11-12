@@ -96,7 +96,8 @@ export interface ParsedOperation { op: ChildOp; linkIds: string[] | "all"; resta
  * Scope (audit r2 R6): this rule binds this API route and the ocx link verbs only; ocx sync --restart-children (040)
  * and the automatic restart policy (050) select links themselves and apply the same run-time activity check.
  * No body can set trigger: the route always submits manual operations. ignoreActivity (D8, the operator's explicit
- * restart past activity) is accepted only as true, on a request with a restart and exactly one link id.
+ * restart past activity) is accepted only as true, on a sync or restart-codex request with a restart and exactly one
+ * link id; an update's own restart keeps the activity gate, so the flag is refused there.
  */
 export function parseOperation(body: unknown): ParsedOperation | null {
   if (!isRecord(body) || Object.keys(body).some(key => key !== "op" && key !== "linkIds" && key !== "restart" && key !== "ignoreActivity")) return null;
@@ -112,7 +113,8 @@ export function parseOperation(body: unknown): ParsedOperation | null {
   else if (Array.isArray(ids) && ids.length >= 1 && ids.length <= MAX_LINK_IDS
     && ids.every(id => typeof id === "string" && LINK_ID.test(id)) && new Set(ids).size === ids.length) linkIds = [...ids as string[]];
   else return null;
-  if (body.ignoreActivity !== undefined && (body.ignoreActivity !== true || restart === "none" || linkIds === "all" || linkIds.length !== 1)) return null;
+  if (body.ignoreActivity !== undefined && (body.ignoreActivity !== true || (op !== "sync" && op !== "restart-codex") || restart === "none"
+    || linkIds === "all" || linkIds.length !== 1)) return null;
   return { op, linkIds, restart, ...(body.ignoreActivity === true ? { ignoreActivity: true as const } : {}) };
 }
 
