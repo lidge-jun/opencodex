@@ -5,16 +5,17 @@
 <h3 align="center">一個本機閘道，連接你的 AI 程式開發工具與模型。</h3>
 <p align="center"><b>在 Codex、Claude Code、Claude Desktop 和 Grok Build 中使用你選擇的模型，<br>並透過受管理的設定連接 OpenCode、Pi、Qoder、WorkBuddy、Kilo、Cline、T3 Code 等工具。</b><br>
 <a href="https://opencodex.me/zh-tw/reference/client-support/">查看所有支援的工具 →</a></p>
+<p align="center">GOAT 的一部分：在任意模型、任意機器上執行你的程式碼代理 → <a href="https://trygoat.ai">trygoat.ai</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="在 X 上關注 @claudeebum"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm 版本"></a>
-  <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="授權"></a>
+  <a href="https://github.com/lidge-jun/opencodex/blob/dev/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="授權"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="Node 版本">
 </p>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start
 ```
 
@@ -80,14 +81,14 @@ Sol 主導會話，並呼叫 Kimi K3 子代理。
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <b>繁體中文</b> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/zh-tw/"><b>完整文件 →</b></a>
 </p>
 
-opencodex 是連接程式開發工具與模型供應商的輕量級本機閘道。它接收 Responses、Chat Completions 和 Anthropic Messages API 請求，並轉換成供應商使用的協定；在用戶端、模型和供應商支援的情況下，傳遞串流、工具呼叫、推理和影像。你可以在 Codex、Claude Code、Claude Desktop、Grok Build 及[用戶端支援頁面](https://opencodex.me/zh-tw/reference/client-support/)列出的工具中使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 等供應商。它也能管理 Codex 驗證用的 **ChatGPT 帳號池**：新增帳號並在儀表板重新整理配額，新工作階段會自動路由至用量最低的健康帳號，既有對話則保持綁定原始帳號。
+opencodex 是連接程式開發工具與模型供應商的輕量級本機閘道。它接收 Responses、Chat Completions 和 Anthropic Messages API 請求，並轉換成供應商使用的協定；在用戶端、模型和供應商支援的情況下，傳遞串流、工具呼叫、推理和影像。你可以在 Codex、Claude Code、Claude Desktop、Grok Build 及[用戶端支援頁面](https://opencodex.me/zh-tw/reference/client-support/)列出的工具中使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 等供應商。
 
 ## 快速開始
 
 ### 個人安裝（CLI）
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+；Bun 執行環境會自動打包
+npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18+；Bun 執行環境會自動打包
 ocx start                         # 代理 + 儀表板位於 localhost:10100
 ```
 
@@ -136,15 +137,6 @@ WidgetKit 擴充套件，可顯示代理狀態、今日用量與供應商配額�
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) 列出所有寫入磁碟的內容。
 
 </details>
-
-### ChatGPT 帳號池
-
-opencodex 也能為 Codex 認證管理 **ChatGPT 帳號池**。新增多個 ChatGPT / Codex 帳號，
-在儀表板重新整理 5 小時／每週／30 天配額。在配額路由下，新會話可使用
-使用量最低的健康帳號；round-robin 與 fill-first 則各自套用自己的策略。既有 Codex
-執行緒通常會維持對啟動帳號的親和性，因此長時間的 SSH、tmux 或
-行動裝置連線的會話不會在對話中途跳帳號——但配額重新評估、failover、
-帳號排除、親和性到期，或 401/403 與 429 復原，仍可能重新綁定。當其中一個帳號——通常是你的 Codex Desktop 登入——只應在其他帳號用盡後才被用到時，請為帳號設定選取順序。
 
 ### 贊助
 
@@ -204,7 +196,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:
@@ -249,7 +241,7 @@ bun run src/cli/index.ts start
 <summary>給 agent 使用</summary>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start     # 或 `ocx service`
 ocx init      # 互動式設定：寫入 ~/.opencodex/config.json 並接上 Codex
 ```
@@ -280,16 +272,6 @@ Bun，Windows 也不需要 WSL。若 npm 攔截了打包執行環境的安裝腳
 
 - **在 Codex、Claude Code、Claude Desktop 與 Grok Build 使用任何 LLM** — 開箱即用 40+ 供應商，
   各自保留原生 UI。
-- **池化 ChatGPT 帳號** — 執行緒親和性、依配額自動切換、冷卻與
-  fail-closed 認證處理。
-
-  > **供應商政策說明：** 帳號池只用來做路由與營運韌性；它不保證
-  > 能避開供應商的速率限制、執法、停權或其他帳號
-  > 處置。OpenCodex 不贊成用額外帳號規避供應商限制，也不贊成
-  > 在人與人之間共用帳號憑證。你有責任遵守各
-  > 供應商的現行條款。見
-  > [Codex Auth 帳號池指南](https://opencodex.me/zh-tw/guides/web-dashboard/)
-  > 與 [OpenAI 現行使用條款](https://openai.com/policies/terms-of-use/)。
 - **Combo** — 一個虛擬模型 id，可在供應商之間 failover 或加權 round-robin。見
   [combo 指南](https://opencodex.me/zh-tw/guides/combos/)。
 - **任何模型上的子代理** — 讓路由模型出現在 Codex 的子代理選擇器，含 v1/v2
@@ -429,6 +411,30 @@ npm uninstall -g @bitkyc08/opencodex
 `OPENCODEX_API_AUTH_TOKEN` 代理會拒絕啟動，每個用戶端請求都必須以
 `x-opencodex-api-key` 帶上它。細節：[設定參考](https://opencodex.me/zh-tw/reference/configuration/)。
 
+## 進階用法
+
+給進階使用者的自架選項。啟用前請先查看各供應商的條款。
+
+### ChatGPT 帳號池
+
+opencodex 也能為 Codex 認證管理 **ChatGPT 帳號池**。新增多個 ChatGPT / Codex 帳號，
+在儀表板重新整理 5 小時／每週／30 天配額。在配額路由下，新會話可使用
+使用量最低的健康帳號；round-robin 與 fill-first 則各自套用自己的策略。既有 Codex
+執行緒通常會維持對啟動帳號的親和性，因此長時間的 SSH、tmux 或
+行動裝置連線的會話不會在對話中途跳帳號——但配額重新評估、failover、
+帳號排除、親和性到期，或 401/403 與 429 復原，仍可能重新綁定。當其中一個帳號——通常是你的 Codex Desktop 登入——只應在其他帳號用盡後才被用到時，請為帳號設定選取順序。
+
+- **池化 ChatGPT 帳號** — 執行緒親和性、依配額自動切換、冷卻與
+  fail-closed 認證處理。
+
+  > **供應商政策說明：** 帳號池只用來做路由與營運韌性；它不保證
+  > 能避開供應商的速率限制、執法、停權或其他帳號
+  > 處置。OpenCodex 不贊成用額外帳號規避供應商限制，也不贊成
+  > 在人與人之間共用帳號憑證。你有責任遵守各
+  > 供應商的現行條款。見
+  > [Codex Auth 帳號池指南](https://opencodex.me/zh-tw/guides/web-dashboard/)
+  > 與 [OpenAI 現行使用條款](https://openai.com/policies/terms-of-use/)。
+
 ## 文件
 
 公開文件——安裝、供應商、路由、combo、子代理、sidecar、整合，以及
@@ -470,7 +476,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 - Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
 - Approvers: [lidge-jun](https://github.com/lidge-jun)
-- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+- Privacy: opencodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, release channel, platform, install channel, provider kind, coarse model family, active minutes and request, token and error counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer ("Send anonymous usage statistics", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Only project-wide aggregates of this anonymous data are public. A separate public leaderboard profile is off unless you connect one yourself (dashboard Home or ocx telemetry profile connect); it shares only a chosen handle, display name and colour and your daily request, token and model-family totals, never your anonymous telemetry ID, and disconnecting deletes it. Everything else goes only to the providers and services you configure. See the [telemetry guide](https://opencodex.me/zh-tw/guides/telemetry/).
 
 ## 免責聲明
 

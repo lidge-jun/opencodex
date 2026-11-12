@@ -226,6 +226,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "logs.cost.lowerBound",
   // A token count ("200k") reads the same in every locale; the 1M choice carries the translated "default".
   "claude.contextAccounting200k",
+  // GOAT is a product name, and Taiwan readers know it by that name; the badge is a chip beside the
+  // translated install-kind label, so translating it would name a product nobody would recognize.
+  "remoteLink.child.kind.goat",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {

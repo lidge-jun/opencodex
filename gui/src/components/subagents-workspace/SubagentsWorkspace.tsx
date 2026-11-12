@@ -1,32 +1,39 @@
 /**
  * SubagentsWorkspace — a single stacked column for the Subagents tab: the featured roster
- * (reorder; every edit saves itself), the model picker, then the delegation settings.
+ * (reorder; every edit saves itself), the model picker, then the settings.
  *
  * The previous rail layout listed the featured models twice — once as a rail group, once in
  * the main pane — which read as a rendering bug rather than two views of one thing. There is
  * also nothing here that needs two panes: picking a model is one toggle, and the per-model
  * detail pane carried no information the row did not already show.
  *
+ * The roster reads like an editable plan (React Bits `agent-plan-2`): numbered rows with bare
+ * move and remove icons, and the slots still free shown as empty rows, so "how many more can I
+ * add" needs no counting. The picker is a filterable table (`data-table-1`) whose add button
+ * turns into the selected (inverse) state once a model is in the order.
+ *
  * The sticky strip is the same `SectionTabs` the Logs and Usage tabs use: every section stays
  * in the document and scrolling still works: the strip only jumps to one and reports where
  * you are.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   IconArrowDown,
   IconArrowUp,
   IconBot,
   IconCheck,
-  IconInfo,
   IconPlus,
+  IconSearch,
   IconX,
 } from "../../icons";
 import { useT } from "../../i18n/shared";
 import { Trans } from "../../i18n/provider";
-import { Tooltip } from "../../ui";
 import { modelLabel } from "../../model-display";
 import { SectionTabs } from "../section-tabs";
 import { sectionAnchorId } from "../../section-anchors";
+import { cn } from "@/lib/utils";
+import { CountPill, Frame, FrameBody, HelpTip } from "../v2-subagents/frame";
+import { iconButton, stepIndicator } from "../v2-subagents/frame-classes";
 import SubagentDelegationSection from "./SubagentDelegationSection";
 import type { DelegationPatch, DelegationModelOption, UltraModePatch, UltraModeState } from "../../pages/use-subagent-delegation";
 
@@ -58,6 +65,8 @@ export interface SubagentsWorkspaceProps {
     ultraLoadFailed: boolean;
     onUltraModeRetry: () => void;
   };
+  /** Further settings panels (Claude Code pin, workflow limits) under the delegation panel. */
+  settingsExtra?: ReactNode;
 }
 
 export const FEATURED_MAX = 5;
@@ -70,12 +79,14 @@ export default function SubagentsWorkspace({
   onMove,
   fallback, fallbackPollMs, fallbackBusy, onFallbackChange, onFallbackPollMsChange, onFallbackSave,
   delegation,
+  settingsExtra,
 }: SubagentsWorkspaceProps) {
   const t = useT();
   const [query, setQuery] = useState("");
 
   const chosenSet = useMemo(() => new Set(chosen), [chosen]);
   const full = chosen.length >= FEATURED_MAX;
+  const freeSlots = Math.max(0, FEATURED_MAX - chosen.length);
 
   const availableFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -91,139 +102,143 @@ export default function SubagentsWorkspace({
   return (
     <div className="subagents-workspace-shell">
       <SectionTabs scope="subagents" items={tabs} ariaLabel={t("sub.sections")} />
-      <div className="subagents-workspace-root">
-        <section
+      <div className="subagents-workspace-root flex flex-col gap-4">
+        <Frame
           id={sectionAnchorId("subagents", "featured")}
           className="subagents-workspace-section"
-          aria-label={t("sub.featured")}
-        >
-          <div className="swi-featured-head">
-            <h2 className="swi-featured-title">{t("sub.featured")}</h2>
-            <span className="swi-featured-count">{chosen.length}/{FEATURED_MAX}</span>
+          headClassName="swi-featured-head"
+          title={<span className="swi-featured-title">{t("sub.featured")}</span>}
+          meta={<>
+            <CountPill><span className="swi-featured-count">{chosen.length}/{FEATURED_MAX}</span></CountPill>
             {/* One-time teaching ("this order is the picker order") rides on a focusable
-                info button beside the counter instead of a paragraph above the list. */}
-            <Tooltip content={<Trans k="sub.orderHint" cmd="spawn_agent" />} side="bottom" maxWidth={380}>
-              <IconInfo width={14} height={14} aria-hidden="true" />
-              <span className="sr-only">{t("sub.orderHintAria")}</span>
-            </Tooltip>
-          </div>
+                "?" beside the counter instead of a paragraph above the list. */}
+            <HelpTip label={t("sub.orderHintAria")}><Trans k="sub.orderHint" cmd="spawn_agent" /></HelpTip>
+          </>}
+          lede={t("subagentsV2.featuredLede")}
+        >
+          <FrameBody as="ol">
+            {chosen.map((m, i) => (
+              <li key={m} className="swi-featured-row flex min-h-11 min-w-0 items-center gap-3 py-1.5 pr-2 pl-3 transition-colors hover:bg-surface/60">
+                <span className={cn(stepIndicator, "bg-surface text-fg ring-line-strong")}>{i + 1}</span>
+                <span className="swi-featured-name min-w-0 flex-1 truncate font-mono text-[13px] text-fg">{modelLabel(m)}</span>
+                <span className="swi-featured-actions flex shrink-0 items-center gap-0.5">
+                  <button
+                    type="button"
+                    className={iconButton}
+                    onClick={() => onMove(i, -1)}
+                    disabled={i === 0}
+                    aria-label={t("sub.moveUp", { m })}
+                  >
+                    <IconArrowUp />
+                  </button>
+                  <button
+                    type="button"
+                    className={iconButton}
+                    onClick={() => onMove(i, 1)}
+                    disabled={i === chosen.length - 1}
+                    aria-label={t("sub.moveDown", { m })}
+                  >
+                    <IconArrowDown />
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(iconButton, "hover:bg-danger-soft hover:text-danger")}
+                    onClick={() => onToggle(m)}
+                    aria-label={t("sub.removeAria", { m })}
+                  >
+                    <IconX />
+                  </button>
+                </span>
+              </li>
+            ))}
+            {Array.from({ length: freeSlots }, (_, k) => (
+              <li key={`free-${k}`} className="flex min-h-11 min-w-0 items-center gap-3 py-1.5 pr-2 pl-3 text-[13px] text-fg-subtle">
+                <span className={cn(stepIndicator, "border border-dashed border-line-strong text-fg-subtle ring-0")} aria-hidden="true">{chosen.length + k + 1}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {chosen.length === 0 && k === 0 ? t("sub.noneSelected") : t("subagentsV2.emptySlot")}
+                </span>
+              </li>
+            ))}
+          </FrameBody>
+        </Frame>
 
-          {chosen.length === 0 ? (
-            <div className="swi-featured-empty">{t("sub.noneSelected")}</div>
-          ) : (
-            <div className="swi-featured-list">
-              {chosen.map((m, i) => (
-                <div key={m} className="swi-featured-row">
-                  <span className="swi-featured-pos">{i + 1}</span>
-                  <span className="swi-featured-name">{modelLabel(m)}</span>
-                  <span className="swi-featured-actions">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon btn-sm"
-                      onClick={() => onMove(i, -1)}
-                      disabled={i === 0}
-                      aria-label={t("sub.moveUp", { m })}
-                    >
-                      <IconArrowUp />
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon btn-sm"
-                      onClick={() => onMove(i, 1)}
-                      disabled={i === chosen.length - 1}
-                      aria-label={t("sub.moveDown", { m })}
-                    >
-                      <IconArrowDown />
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon btn-sm"
-                      onClick={() => onToggle(m)}
-                      aria-label={t("sub.removeAria", { m })}
-                      style={{ color: "var(--red)" }}
-                    >
-                      <IconX />
-                    </button>
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-        </section>
-
-        <section
+        <Frame
           id={sectionAnchorId("subagents", "models")}
           className="subagents-workspace-section"
-          aria-label={t("sub.models")}
-        >
-          <div className="swi-featured-head">
-            <h2 className="swi-featured-title">{t("sub.models")}</h2>
-            <span className="swi-featured-count">{availableFiltered.length}</span>
-          </div>
-          <div className="swi-picker-box">
-            <div className="subagents-workspace-rail-search">
+          title={t("sub.workspace.allModels")}
+          meta={<CountPill>{availableFiltered.length}</CountPill>}
+          lede={full ? t("sub.workspace.featuredFull") : t("subagentsV2.modelsLede", { max: FEATURED_MAX })}
+          actions={
+            <label className="relative flex w-full items-center sm:w-72">
+              <IconSearch className="pointer-events-none absolute left-2.5 size-4 text-fg-subtle" aria-hidden="true" />
               <input
-                className="input"
+                className="input w-full pl-8"
+                type="search"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 placeholder={t("sub.search")}
                 aria-label={t("sub.search")}
               />
-            </div>
-            <div className="subagents-workspace-rail-list">
-              {availableFiltered.length === 0 ? (
-                <span className="subagents-workspace-rail-empty">{t("sub.noModels")}</span>
-              ) : (
-                availableFiltered.map(m => {
-                  const isFeatured = chosenSet.has(m);
-                  const priority = isFeatured ? chosen.indexOf(m) + 1 : null;
-                  // A featured row can always be removed; only adding is blocked when full.
-                  const blocked = !isFeatured && full;
-                  return (
-                    <div
-                      key={m}
-                      className={`subagents-workspace-rail-row${isFeatured ? " subagents-workspace-rail-row--selected" : ""}`}
-                    >
-                      <span className="subagents-workspace-rail-row-main">
-                        <span className="swi-rail-priority">{priority ?? ""}</span>
-                        <IconBot className="swi-rail-icon" aria-hidden="true" />
-                        <span className="subagents-workspace-rail-name">{modelLabel(m)}</span>
+            </label>
+          }
+        >
+          <FrameBody as="ul" className="max-h-[min(30rem,60vh)] overflow-y-auto">
+            {availableFiltered.length === 0 ? (
+              <li className="px-4 py-6 text-center text-[13px] text-fg-muted">{t("sub.noModels")}</li>
+            ) : (
+              availableFiltered.map(m => {
+                const isFeatured = chosenSet.has(m);
+                const priority = isFeatured ? chosen.indexOf(m) + 1 : null;
+                // A featured row can always be removed; only adding is blocked when full.
+                const blocked = !isFeatured && full;
+                return (
+                  <li key={m} className="flex min-h-11 min-w-0 items-center gap-3 py-1.5 pr-2 pl-3.5">
+                    <IconBot className="size-4 shrink-0 text-fg-subtle" aria-hidden="true" />
+                    <span className={cn("min-w-0 flex-1 truncate font-mono text-[13px]", isFeatured ? "text-fg" : "text-fg-muted")}>
+                      {modelLabel(m)}
+                    </span>
+                    {priority !== null && (
+                      <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-fg-muted tabular-nums">
+                        {t("subagentsV2.rank", { n: priority })}
                       </span>
-                      <button
-                        type="button"
-                        className={`subagents-workspace-rail-toggle${isFeatured ? " subagents-workspace-rail-toggle--on" : ""}${blocked ? " subagents-workspace-rail-toggle--disabled" : ""}`}
-                        onClick={() => { if (!blocked) onToggle(m); }}
-                        disabled={blocked}
-                        aria-pressed={isFeatured}
-                        aria-label={isFeatured
-                          ? t("sub.workspace.removeFromFeatured", { m })
-                          : t("sub.workspace.addToFeatured", { m })}
-                        title={isFeatured
-                          ? t("sub.workspace.removeFromFeatured", { m })
-                          : full ? t("sub.workspace.featuredFull") : t("sub.workspace.addToFeatured", { m })}
-                      >
-                        {isFeatured
-                          ? <IconCheck style={{ width: 14, height: 14 }} />
-                          : <IconPlus style={{ width: 14, height: 14 }} />}
-                      </button>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </section>
+                    )}
+                    <button
+                      type="button"
+                      className={cn(
+                        "ui-v2 inline-flex h-[var(--ocx-control-h-sm)] shrink-0 cursor-pointer items-center gap-1 rounded-[8px] px-2.5 text-[12px] font-medium transition-colors",
+                        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight [&_svg]:size-3.5",
+                        "disabled:cursor-not-allowed disabled:opacity-40",
+                        isFeatured
+                          ? "bg-accent text-on-accent hover:opacity-85"
+                          : "text-fg-muted ring-1 ring-inset ring-line-strong hover:bg-surface-2 hover:text-fg",
+                      )}
+                      onClick={() => { if (!blocked) onToggle(m); }}
+                      disabled={blocked}
+                      aria-pressed={isFeatured}
+                      aria-label={isFeatured
+                        ? t("sub.workspace.removeFromFeatured", { m })
+                        : t("sub.workspace.addToFeatured", { m })}
+                      title={isFeatured
+                        ? t("sub.workspace.removeFromFeatured", { m })
+                        : full ? t("sub.workspace.featuredFull") : t("sub.workspace.addToFeatured", { m })}
+                    >
+                      {isFeatured ? <IconCheck aria-hidden="true" /> : <IconPlus aria-hidden="true" />}
+                      {isFeatured ? t("subagentsV2.added") : t("subagentsV2.add")}
+                    </button>
+                  </li>
+                );
+              })
+            )}
+          </FrameBody>
+        </Frame>
 
         <section
           id={sectionAnchorId("subagents", "settings")}
-          className="subagents-workspace-section"
+          className="subagents-workspace-section flex flex-col gap-4"
           aria-label={t("sub.settings")}
         >
-          <div className="swi-featured-head">
-            <h2 className="swi-featured-title">{t("sub.settings")}</h2>
-          </div>
           <SubagentDelegationSection
+            id={sectionAnchorId("subagents", "delegation")}
             apiBase={delegation.apiBase}
             model={delegation.model}
             effort={delegation.effort}
@@ -246,6 +261,7 @@ export default function SubagentsWorkspace({
             onFallbackPollMsChange={onFallbackPollMsChange}
             onFallbackSave={onFallbackSave}
           />
+          {settingsExtra}
         </section>
       </div>
     </div>

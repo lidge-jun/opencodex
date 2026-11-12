@@ -340,6 +340,13 @@ The positive browser test must use a real signed-in Tailscale session; a bare `c
 identity headers needed for automatic session issuance. Pairing remains the fallback when the HTTPS
 frontend cannot provide trustworthy Tailscale identity.
 
+**Remember this device** works on this management origin: the hub's management listener is the
+trusted ingress, so a dashboard opened at `hub.managementPublicOrigin` can remember a device. A
+standalone instance behind its own TLS-terminating proxy has no such listener; it can remember devices
+only after you set `dashboardTrustedProxy` (see
+[Remember behind a reverse proxy](/guides/web-dashboard/#remember-behind-a-reverse-proxy)). A hub
+ignores that setting.
+
 ### Giving the data listener TLS
 
 The Serve mapping above publishes the **management** ingress only. That ingress never serves
@@ -482,6 +489,11 @@ above already sets it. A whole-array set replaces the array, so when the hub alr
 run the line `invite` prints — it carries the existing ones plus the new origin. `ocx config get
 corsAllowOrigins` shows what is there now.
 
+`invite` picks the origin from the config file, but a running hub checks it against the config it
+is running with: `hub.managementPublicOrigin` is applied only at start, and a `corsAllowOrigins` edit
+may not reach the running hub until it restarts. After changing either, restart the hub before
+inviting; `ocx config set` prints a reminder for both keys and for `hub.managementIngress`.
+
 `ocx hub invite --json` emits `{ code, expiresAt, dataUrl, managementUrl, command }` with `expiresAt`
 as ISO 8601. The code is a secret: single-use, five-minute lifetime, rate-limited at the hub, and not
 to be persisted, logged, or pasted into an issue. `--clients codex,claude` picks which client configs
@@ -523,6 +535,14 @@ healthy one.
 `ocx service start`, both still work and the error path names the first one as a fallback. Neither is
 the recommended route any more.
 
+Either verb also recovers a job you booted out by hand. `launchctl bootout` returns before the
+process exits, and while the old process drains `launchctl print` already reports the job absent —
+so an immediate re-bootstrap can still fail with `Bootstrap failed: 5`. The recovery round waits
+between a bounded number of attempts instead of retrying once, so
+`launchctl bootout gui/$(id -u)/com.opencodex.proxy` followed by a single `ocx service restart` or
+`ocx service repair` serves on the first call. A teardown that never finishes still reaches the
+diagnostic error rather than hanging.
+
 Linux and Windows never had this gap: `ocx service restart` there ends in `systemctl --user restart`
 and a stop-then-start of the scheduled task respectively, whichever verb asked.
 
@@ -560,8 +580,8 @@ input checks.
 ## Docker Compose
 
 opencodex does not publish an official container image. The repository does maintain a source-build
-[`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/main/Dockerfile),
-[`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/main/compose.yaml), and a narrow
+[`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/dev/Dockerfile),
+[`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/dev/compose.yaml), and a narrow
 `.dockerignore`. The build pins the multi-platform Bun 1.4.4 image index by digest, runs the proxy as
 the non-root `bun` user, keeps the root filesystem read-only, drops Linux capabilities, and publishes
 only the data listener on the host's `127.0.0.1:10100` by default. The foreground process uses
@@ -651,7 +671,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:
@@ -725,6 +745,27 @@ both named volumes and a synthetic catalog survive replacement. This check does 
 real provider account, OAuth callback, custom mount migration, or every CPU architecture; perform
 the authenticated routed-response check above for your deployment.
 
+### Restarts after an unclean exit
+
+A container runs the proxy as PID 1 on every start. After an unclean exit (an OOM kill, a crash, a
+node failure) the state volume can still hold `ocx.pid` and `runtime-port.json` naming PID 1, and
+the next start has to decide whether that owner is gone. It recovers on its own when the record was
+written by the same container in an earlier run, by an OpenCodex version that records where its
+owner runs: a Kubernetes container restarted inside its pod while the node stays up, or the same
+Docker or Podman container started again (`docker restart`, a restart policy, including after a
+host reboot) when its writable layer has a random id, as with Docker's `overlay2` storage driver
+and Podman. Docker's containerd image store numbers its layers instead, so a restart there refuses.
+
+Every other case refuses with `Proxy ownership is unverified; startup refused`, because the old
+owner could still be serving the same volume from another container: a replacement Kubernetes pod,
+a recreated Compose container, a pod that comes back after a node reboot, another node, or a record
+written by an older version (the first restart after an upgrade). Confirm that nothing else serves this state directory, then move
+`runtime-port.json` and `ocx.pid` aside once and start again. Run a single writer per state
+volume: a Kubernetes `Deployment` that shares a volume should use `strategy: Recreate` (or
+`maxSurge: 0`) so the old pod stops before the new one starts. Do not share one state volume between
+processes in one network namespace (host networking, sidecars, several WSL distros), between
+sandboxes restored from one VM snapshot, or between machines with the same host name.
+
 ## Rollback
 
 Inspect existing Serve mappings before changing them. `tailscale serve reset` removes every mapping
@@ -760,6 +801,12 @@ For a service rollback, stop the branch service and repair the prior release aga
   loopback browser origin, so an origin-bound grant could never match. Nothing was minted. Run the
   `ocx config set corsAllowOrigins` line the error prints, with the joining machine's proxy port.
   See [Inviting another machine](#inviting-another-machine).
+- **`ocx hub invite` says `Minting a pairing code failed (origin-refused)`:** the running hub refused
+  the browser origin the invite names. It admits only the `hub.managementPublicOrigin` and
+  `corsAllowOrigins` it is running with, which can predate a recent `ocx config set`. Restart the hub
+  (the error prints the restart command for this install) and invite again. `(rate-limited)` means
+  the hub is limiting new codes (eight a minute, and a cap on unused ones); wait for earlier codes to
+  be used or expire (five minutes), then invite again. `(rejected)` is any other refusal.
 - **`ocx hub invite` says the advertised data origin would be this machine's own loopback:** the
   bind is loopback-only or a wildcard and `hub.dataPublicOrigin` is unset, so there is no address
   to advertise and nothing guesses a tailnet or LAN one. Nothing was minted. Set

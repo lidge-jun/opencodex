@@ -7,6 +7,7 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests, invalidateClientResource } from "../src/client-resource";
 import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../src/session-list-cache";
 import { parseComboList } from "../src/combo-workspace-data";
+import { chooseOption, selectOptionValues, selectTrigger, selectValue } from "./helpers/custom-select";
 
 const API_BASE = "http://localhost";
 const CACHE_KEY = `ocx.combos.workspace.v2:${API_BASE}`;
@@ -115,19 +116,15 @@ function imageSwitch(scope: ParentNode = container) {
 }
 function expectImages(supported: boolean, scope: ParentNode = container) {
   expect(imageSwitch(scope).disabled).toBe(!supported);
-  expect(imageSwitch(scope).getAttribute("aria-pressed")).toBe(String(supported));
+  expect(imageSwitch(scope).getAttribute("aria-checked")).toBe(String(supported));
 }
-function effortValues(selector = "#cwi-effort") {
-  const control = container.querySelector<HTMLSelectElement>(selector);
-  expect(control).not.toBeNull();
-  return [...control!.options].map(option => option.value);
+/** The effort picker's option values (the app's Select, opened and closed to read them). */
+async function effortValues(selector = "#cwi-effort") {
+  return selectOptionValues(selectTrigger(container, selector));
 }
+const MODEL = '[role="combobox"][aria-label="Model"]';
 async function chooseProvider(provider: string, scope: ParentNode = container) {
-  const control = scope.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!;
-  await act(async () => {
-    control.value = provider;
-    control.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+  await chooseOption(selectTrigger(scope, '[role="combobox"][aria-label="Provider"]'), provider);
 }
 
 test("a disabled image-capable target enables the Image switch and stays visible in its selected row", async () => {
@@ -135,8 +132,8 @@ test("a disabled image-capable target enables the Image switch and stays visible
   await mount();
   await openDetail();
   expectImages(true);
-  expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("hidden");
-  expect(effortValues()).toEqual(["", "low", "high"]);
+  expect(selectValue(selectTrigger(container, MODEL))).toBe("hidden");
+  expect(await effortValues()).toEqual(["", "low", "high"]);
 });
 
 // Text-capable members are covered by the Vision Sidecar, so they keep images on.
@@ -177,7 +174,7 @@ for (const provider of ["vision", "text"]) {
     // The text row is sidecar-eligible, so both resolve to an enabled Image switch;
     // the provider still decides which reasoning ladder applies.
     expectImages(true);
-    expect(effortValues()).toEqual(provider === "vision" ? ["", "low", "high"] : ["", "high", "xhigh"]);
+    expect(await effortValues()).toEqual(provider === "vision" ? ["", "low", "high"] : ["", "high", "xhigh"]);
   });
 }
 
@@ -185,7 +182,7 @@ test("disabled targets contribute their differing reasoning ladders to the inter
   mockCatalog([hiddenImage, { ...textModel, disabled: true }], [target(hiddenImage), target(textModel)]);
   await mount();
   await openDetail();
-  expect(effortValues()).toEqual(["", "high"]);
+  expect(await effortValues()).toEqual(["", "high"]);
 });
 
 for (const mode of ["strict", "adaptive"] as const) {
@@ -194,10 +191,10 @@ for (const mode of ["strict", "adaptive"] as const) {
       [target(hiddenImage), target(textModel)], { reasoningEffortMode: mode });
     await mount();
     await openDetail();
-    expect(effortValues()).toEqual(mode === "strict" ? [""] : ["", "low", "high"]);
+    expect(await effortValues()).toEqual(mode === "strict" ? [""] : ["", "low", "high"]);
     const adaptive = container.querySelector<HTMLButtonElement>('button[aria-label="Adaptive reasoning ladder"]')!;
     await act(async () => { adaptive.click(); });
-    expect(effortValues()).toEqual(mode === "strict" ? ["", "low", "high"] : [""]);
+    expect(await effortValues()).toEqual(mode === "strict" ? ["", "low", "high"] : [""]);
   });
 }
 
@@ -213,18 +210,15 @@ test("hidden models including the provider default appear once in new and existi
   mockCatalog([hiddenImage, { ...hiddenImage, id: "visible", disabled: false }], [target(hiddenImage)], {}, { vision: "hidden" });
   await mount();
   await openDetail();
-  expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("hidden");
+  expect(selectValue(selectTrigger(container, MODEL))).toBe("hidden");
   await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Add combo"]')!.click(); });
   const dialog = container.querySelector("dialog")!;
   await chooseProvider("vision", dialog);
-  const options = [...dialog.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.options].map(option => option.value);
+  const options = await selectOptionValues(selectTrigger(dialog, MODEL));
   expect(options).toEqual(["", "hidden", "visible"]);
-  const model = dialog.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!;
-  await act(async () => {
-    model.value = "hidden";
-    model.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
-  expect(model.value).toBe("hidden");
+  const model = selectTrigger(dialog, MODEL);
+  await chooseOption(model, "hidden");
+  expect(selectValue(model)).toBe("hidden");
   expectImages(true, dialog);
 });
 
@@ -239,7 +233,7 @@ test("all-hidden catalogs remain selectable and old filtered caches are ignored"
   await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Add combo"]')!.click(); });
   const dialog = container.querySelector("dialog")!;
   await chooseProvider("vision", dialog);
-  expect([...dialog.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.options].map(option => option.value))
+  expect(await selectOptionValues(selectTrigger(dialog, MODEL)))
     .toEqual(["", "hidden", "other"]);
 });
 
@@ -257,12 +251,9 @@ test("editing can select and save a hidden model without changing its visibility
   }) as typeof fetch;
   await mount();
   await openDetail();
-  const model = container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!;
-  expect([...model.options].map(option => option.value)).toEqual(["", "hidden", "visible"]);
-  await act(async () => {
-    model.value = "hidden";
-    model.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+  const model = selectTrigger(container, MODEL);
+  expect(await selectOptionValues(model)).toEqual(["", "hidden", "visible"]);
+  await chooseOption(model, "hidden");
   const save = container.querySelector<HTMLButtonElement>("#cwi-edit-save")!;
   expect(save.disabled).toBe(false);
   await act(async () => { save.click(); });
@@ -287,7 +278,7 @@ test("a default missing from the catalog still gets a picker placeholder", async
   await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Add combo"]')!.click(); });
   const dialog = container.querySelector("dialog")!;
   await chooseProvider("lagged", dialog);
-  expect([...dialog.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.options].map(option => option.value)).toEqual(["", "missing-default"]);
+  expect(await selectOptionValues(selectTrigger(dialog, MODEL))).toEqual(["", "missing-default"]);
   expectImages(false, dialog);
 });
 
@@ -317,7 +308,7 @@ test("cache remount and live revalidation preserve hidden-target capabilities", 
   await act(async () => { release(); });
   expect(container.querySelector(".combos-workspace-shell-body")!.getAttribute("aria-busy")).toBe("false");
   expectImages(true);
-  expect(effortValues()).toEqual(["", "low", "high"]);
+  expect(await effortValues()).toEqual(["", "low", "high"]);
 });
 
 test("an older cache entry without capabilityModels uses its models metadata", async () => {
@@ -329,7 +320,7 @@ test("an older cache entry without capabilityModels uses its models metadata", a
   await mount(false);
   await openDetail();
   expectImages(true);
-  expect(effortValues()).toEqual(["", "low", "high"]);
+  expect(await effortValues()).toEqual(["", "low", "high"]);
 });
 
 test("the add panel retains image and effort metadata after a selected model becomes disabled", async () => {
@@ -340,13 +331,13 @@ test("the add panel retains image and effort metadata after a selected model bec
   const dialog = container.querySelector("dialog")!;
   await chooseProvider("vision", dialog);
   expectImages(true, dialog);
-  expect(effortValues("#cwi-new-effort")).toEqual(["", "low", "high"]);
+  expect(await effortValues("#cwi-new-effort")).toEqual(["", "low", "high"]);
   row.disabled = true;
   row.reasoningEfforts = [];
   await act(async () => { invalidateClientResource(CACHE_KEY); });
   expectImages(true, dialog);
-  expect(effortValues("#cwi-new-effort")).toEqual([""]);
-  expect(dialog.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("hidden");
+  expect(await effortValues("#cwi-new-effort")).toEqual([""]);
+  expect(selectValue(selectTrigger(dialog, MODEL))).toBe("hidden");
   await act(async () => { dialog.querySelector<HTMLButtonElement>('button[aria-label="Adaptive reasoning ladder"]')!.click(); });
-  expect(effortValues("#cwi-new-effort")).toEqual(["", "low", "medium", "high", "xhigh", "max", "ultra"]);
+  expect(await effortValues("#cwi-new-effort")).toEqual(["", "low", "medium", "high", "xhigh", "max", "ultra"]);
 });

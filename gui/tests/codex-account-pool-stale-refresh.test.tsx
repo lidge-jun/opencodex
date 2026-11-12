@@ -275,3 +275,43 @@ test("a cold failure shows its own error instead of the stale banner", async () 
   expect(staleBanner()).toBeNull();
   expect(host.textContent).toContain(en["codexAuth.loadFailed"]);
 });
+
+test("a logical target change clears old rows before the new load settles", async () => {
+  const apiBase = `target-switch-${Date.now()}`;
+  let releaseB!: () => void;
+  let accountReads = 0;
+  let puts = 0;
+  const bGate = new Promise<void>(resolve => { releaseB = resolve; });
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("/api/codex-auth/active") && init?.method === "PUT") puts += 1;
+    if (url.includes("/api/codex-auth/accounts")) {
+      accountReads += 1;
+      if (accountReads === 1) return Response.json({ accounts: [row("a", "a@example.test")], activeAccountId: "a" });
+      await bGate;
+      return Response.json({ accounts: [row("b", "b@example.test")], activeAccountId: "b" });
+    }
+    if (url.includes("/api/codex-auth/active")) return Response.json({ activeCodexAccountId: "a" });
+    if (url.includes("/api/usage")) return Response.json({ providers: [], models: [] });
+    return Response.json({});
+  }) as typeof fetch;
+  const seen: { current: CodexAccountPoolController | null } = { current: null };
+  function Probe({ targetKey }: { targetKey: string }) {
+    const controller = useCodexAccountPool(apiBase, true, targetKey);
+    useLayoutEffect(() => { seen.current = controller; }, [controller]);
+    return null;
+  }
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => { root = createRoot(host); root.render(<Probe targetKey="a" />); });
+  await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+  expect(seen.current!.accounts.map(account => account.id)).toEqual(["a"]);
+
+  await act(async () => { root!.render(<Probe targetKey="b" />); });
+  expect(seen.current!.accounts).toEqual([]);
+  expect(seen.current!.loadState).toBe("loading");
+  await act(async () => { releaseB(); await new Promise(r => setTimeout(r, 30)); });
+  expect(seen.current!.accounts.map(account => account.id)).toEqual(["b"]);
+  const stale = await seen.current!.switchAccount(null, { expectedPinnedAccountId: "a" });
+  expect(stale).toEqual({ ok: false, reason: "pin_changed" });
+  expect(puts).toBe(0);
+});

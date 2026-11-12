@@ -8,7 +8,7 @@ import { AUTH_MATRIX } from "../../src/server/auth-cors";
 import { clearApiKeyUsageCacheForTests, readApiKeyUsageRollup, rollupApiKeyUsage } from "../../src/server/management/api-key-usage";
 import { resetUsageAggregateCacheForTests } from "../../src/server/management/usage-aggregate-cache";
 import * as usageLedgerScannerModule from "../../src/usage/ledger-scanner";
-import { normalizeUsageEntryForTest, usageLogPath, type PersistedUsageEntry } from "../../src/usage/log";
+import { appendUsageEntry, normalizeUsageEntryForTest, usageLogPath, type PersistedUsageEntry } from "../../src/usage/log";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -70,6 +70,100 @@ afterEach(() => {
 });
 
 describe("attribution reaches usage.jsonl", () => {
+  test("data and raw admin keys cannot read dashboard-only device inventory", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      for (const [token, status] of [["ocx_data_attributionone", 401], [ADMIN_TOKEN, 403]] as const) {
+        const response = await fetch(new URL("/api/usage/devices", server.url), {
+          headers: { "x-opencodex-api-key": token },
+        });
+        expect(response.status).toBe(status);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("unconfigured-key reports require a dashboard session", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      for (const [token, status] of [["ocx_data_attributionone", 401], [ADMIN_TOKEN, 403]] as const) {
+        const response = await fetch(new URL("/api/usage?client=all&device=unconfigured", server.url), {
+          headers: { "x-opencodex-api-key": token },
+        });
+        expect(response.status).toBe(status);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("usage source filters reject ambiguous requests and echo the selected scope", async () => {
+    saveConfig(remoteConfig());
+    const now = Date.now();
+    const base = { timestamp: now, provider: "openai", model: "gpt-test", status: 200,
+      durationMs: 1, usageStatus: "unreported" as const };
+    appendUsageEntry({ ...base, requestId: "old" });
+    appendUsageEntry({ ...base, requestId: "keyed", client: "codex_cli", apiKeyId: "key-one" });
+    appendUsageEntry({ ...base, requestId: "unknown", client: "unknown" });
+    const server = startServer(0);
+    const get = (query: string) => fetch(new URL(`/api/usage?${query}`, server.url), {
+      headers: { "x-opencodex-api-key": ADMIN_TOKEN },
+    });
+    try {
+      const response = await get("range=7d&surface=all&client=codex&device=no-key");
+      expect(response.status).toBe(200);
+      const body = await response.json() as { summary: { requests: number }; sourceFilter: unknown; legacyUnclassifiedRequests: number };
+      expect(body.summary.requests).toBe(1);
+      expect(body.legacyUnclassifiedRequests).toBe(1);
+      expect(body.sourceFilter).toEqual({ client: "codex", device: { kind: "no-key" } });
+      for (const query of ["client=codex", "client=codex&device=no-key&apiKeyId=key-one",
+        "client=codex&device=all&surface=claude", "client=codex&device=all&jev=1",
+        "client=codex&device=all&failures=1", "client=codex&client=all&device=all"]) {
+        expect((await get(query)).status).toBe(400);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("records only the classified inbound client on the request row", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      await fetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-opencodex-api-key": "ocx_data_attributionone",
+          originator: "codex_cli_rs", "user-agent": "private-client-marker" },
+        body: JSON.stringify({ model: "test/gpt-test", messages: [{ role: "user", content: "hello" }] }),
+      });
+      expect(usageRows().at(-1)?.client).toBe("codex_cli");
+      expect(readFileSync(usageLogPath(), "utf8")).not.toContain("private-client-marker");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("records established Claude and OpenCode user agents as app enums", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      for (const userAgent of ["claude-cli/2.1.282 (external, cli)",
+        "claude-cli/2.1.282 (external, claude-desktop)", "opencode/1.2.3 runtime/bun"]) {
+        await fetch(new URL("/v1/chat/completions", server.url), {
+          method: "POST", headers: { "content-type": "application/json", "x-opencodex-api-key": "ocx_data_attributionone", "user-agent": userAgent },
+          body: JSON.stringify({ model: "test/gpt-test", messages: [{ role: "user", content: "hello" }] }),
+        });
+      }
+      expect(usageRows().slice(-3).map(row => row.client)).toEqual(["claude_code", "claude_desktop", "opencode"]);
+      expect(readFileSync(usageLogPath(), "utf8")).not.toContain("runtime/bun");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("traffic before, during, and after rotation stays in one apiKeyId bucket", async () => {
     saveConfig(remoteConfig());
     const server = startServer(0);
@@ -268,7 +362,7 @@ describe("attribution reaches usage.jsonl", () => {
       const before = usageRows().length;
       const settled = await new Promise<boolean>(resolve => {
         const socket = new WebSocket(target, {
-          headers: { "X-OpenCodex-API-Key": "ocx_data_attributiontwo" },
+          headers: { "X-OpenCodex-API-Key": "ocx_data_attributiontwo", originator: "Codex Desktop" },
         } as unknown as string[]);
         const done = (v: boolean) => { clearTimeout(timer); try { socket.close(); } catch { /* gone */ } resolve(v); };
         socket.addEventListener("open", () => {
@@ -286,6 +380,7 @@ describe("attribution reaches usage.jsonl", () => {
       const added = rows.at(-1)!;
       expect(added.apiKeyId).toBe("key-two");
       expect(added.inboundProtocol).toBe("responses");
+      expect(added.client).toBe("codex_desktop");
     } finally {
       await server.stop(true);
     }

@@ -1,9 +1,8 @@
 name: Enforce issue quality
 
-# Issue events always load this workflow from the repository DEFAULT branch
-# (currently `main`), not from `dev`. Landing here on `dev` alone does not
-# change live issue-quality behavior until the change is also on that default
-# branch.
+# Issue events always load this workflow from the repository DEFAULT branch,
+# which is `dev`. A change lands on the live issue-quality gate as soon as it is
+# on `dev`.
 on:
   issues:
     types:

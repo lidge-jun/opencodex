@@ -697,7 +697,7 @@ describe("connect transaction and offline disconnect", () => {
       expect(run.parsed.calls).toEqual([]);
       expect(run.parsed.artifacts).toEqual({ token: false, catalog: false, credentialZeroed: true });
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
   test("commits key id/state last, zeroes authority, and disconnects with the hub offline", () => {
     const run = runTransactionScenario("success");
     try {
@@ -774,7 +774,7 @@ describe("connect transaction and offline disconnect", () => {
         expect(run.configBytes).not.toContain("issued-id");
         expect(`${run.parsed.error} ${run.stderr}`).not.toContain(`ocx_data_${"d".repeat(40)}`);
       } finally { run.cleanup(); }
-    });
+    }, SPAWN_BUDGET_MS);
   }
 });
 
@@ -902,7 +902,7 @@ describe("connected sync and disconnect conflicts", () => {
       expect(run.parsed.state.kind).toBe("connected");
       expect(run.parsed.tokenExists).toBe(true);
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("hub 503 keeps and applies the last-known-good catalog as stale", () => {
     const run = runConnectedStateScenario("sync-503");
@@ -912,7 +912,7 @@ describe("connected sync and disconnect conflicts", () => {
       expect(run.parsed.result).toMatchObject({ stale: true, catalogWritten: false, injected: false });
       expect(run.parsed.state.kind).toBe("connected");
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("journal ownership conflict preserves every artifact and connected state", () => {
     const run = runConnectedStateScenario("disconnect-conflict");
@@ -924,7 +924,7 @@ describe("connected sync and disconnect conflicts", () => {
       expect(run.parsed.tokenExists).toBe(true);
       expect(run.parsed.journalExists).toBe(true);
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("a journal left owned by the proxy process does not strand the connection", () => {
     // Connecting after `ocx start` is the normal path, not an edge case: routing is already
@@ -941,7 +941,7 @@ describe("connected sync and disconnect conflicts", () => {
       expect(run.parsed.state.kind).toBe("disconnected");
       expect(run.parsed.journalExists).toBe(false);
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
 });
 
 describe("recoverable connected key rotation", () => {
@@ -1032,7 +1032,7 @@ describe("recoverable connected key rotation", () => {
     } finally {
       removeTreeWithRetry(opencodexHome);
     }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("status removes a .prev orphan only when no rotation marker exists", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-client-orphan-"));
@@ -1190,7 +1190,9 @@ function runDesktopLifecycleScenario(mode: string) {
     await (async () => {
       let result = null, error = null, second = null, statusInside = null, statusOutside = null, cliRotation = null;
       const credential = new TextEncoder().encode("ocx_admin_fixture");
-      const deps = { fetchImpl, lifecycleLockDeps: lockDeps };
+      // No local Codex runtime, as on CI: otherwise sync execs whatever codex CLI the host has
+      // (seconds on a workstation) to read its effort ladder, which no case here asserts on.
+      const deps = { fetchImpl, lifecycleLockDeps: lockDeps, catalogCompatibility: { supportedEfforts: () => null } };
       try {
         if (mode.startsWith("disconnect")) {
           let journalSpy;
@@ -1342,6 +1344,9 @@ function runDesktopLifecycleScenario(mode: string) {
 }
 
 describe("Desktop copy coherence across client lifecycle", () => {
+  // Each case runs its scenario in a real `bun test` child, bounded by spawnSync at INTERNAL_DEADLINE_MS.
+  // Under Bun's 5 s default the case gave up first: a loaded `test changed` run timed out
+  // `status-receipt` at 5010 ms while its child was still inside its own 15 s deadline (#8041).
   // The first generated lifecycle fixture pays the full client lifecycle module graph load.
   // Warm the same relative require prologue before the fixture's 15-second child deadline.
   beforeAll(async () => {
@@ -1356,7 +1361,7 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.pending || r.backupPresent || r.persistedOutcome).toBe(false);
     expect(r.foreignPreserved && r.baselineUnchanged && r.credentialZeroed).toBe(true);
     if (r.commits > 0) expect(r.desktopBeforeCommit).toBe(true);
-  });
+  }, SPAWN_BUDGET_MS);
   test.each(["recover-backup", "same-old"])("%s returns rolled_back without a false commit", mode => {
     const r = runDesktopLifecycleScenario(mode);
     expect(r.error).toBeNull();
@@ -1366,28 +1371,28 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.tokenIsOld && r.desktopIsOld).toBe(true);
     expect(r.pending || r.backupPresent || r.persistedOutcome).toBe(false);
     expect(r.baselineUnchanged && r.credentialZeroed).toBe(true);
-  });
+  }, SPAWN_BUDGET_MS);
   test("normal failed candidate rolls both local copies back before returning failure", () => {
     const r = runDesktopLifecycleScenario("rollback");
     expect(r.error).not.toBeNull();
     expect(r.commits).toBe(0);
     expect(r.tokenIsOld && r.desktopIsOld).toBe(true);
     expect(r.pending || r.backupPresent).toBe(false);
-  });
+  }, SPAWN_BUDGET_MS);
   test.each(["same-old-abort-failure", "recover-neither", "recover-probe-error"])("%s preserves recovery evidence", mode => {
     const r = runDesktopLifecycleScenario(mode);
     expect(r.result).toBeNull();
     expect(r.error).not.toBeNull();
     expect(r.commits).toBe(0);
     expect(r.pending && r.backupPresent && r.credentialZeroed).toBe(true);
-  });
+  }, SPAWN_BUDGET_MS);
   test("CLI reports a recovered rollback honestly", () => {
     const r = runDesktopLifecycleScenario("recover-backup-cli");
     expect(r.cliRotation.exitCode).toBe(0);
     expect(r.cliRotation.value.rotation).toBe("rolled_back");
     expect(r.cliRotation.revokedClaim).toBe(false);
     expect(r.desktopIsOld && r.tokenIsOld).toBe(true);
-  });
+  }, SPAWN_BUDGET_MS);
   test.each(["disconnect", "disconnect-foreign", "disconnect-resume", "disconnect-after-clear"])("%s restores projection and retries idempotently", mode => {
     const r = runDesktopLifecycleScenario(mode);
     expect(r.error).toBeNull();
@@ -1396,26 +1401,26 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.receiptPhase).toBe("complete");
     expect(r.second.tokenRemoved).toBe(false);
     if (mode === "disconnect-foreign") expect(r.userAddedPreserved).toBe(true);
-  });
+  }, SPAWN_BUDGET_MS);
   test("legacy current-hub profile disconnects via labeled standard fallback", () => {
     const r = runDesktopLifecycleScenario("disconnect-legacy");
     expect(r.error).toBeNull();
     expect(r.result.desktopRestoration).toBe("standard_fallback");
     expect(r.desktopHasKey).toBe(false);
     expect(r.tokenAbsent && r.foreignPreserved).toBe(true);
-  });
+  }, SPAWN_BUDGET_MS);
   test("protected Desktop edits block destructive disconnect", () => {
     const r = runDesktopLifecycleScenario("disconnect-protected");
     expect(r.error).not.toBeNull();
     expect(r.tokenIsOld && r.desktopIsOld).toBe(true);
     expect(r.stateKind).toBe("connected");
-  });
+  }, SPAWN_BUDGET_MS);
   test("post-await sync cannot overwrite a prepared disconnect", () => {
     const r = runDesktopLifecycleScenario("sync-claim");
     expect(r.error).toBe("client_disconnect_pending");
     expect(r.catalogUnchanged).toBe(true);
     expect(r.receiptPhase).toBe("prepared");
-  });
+  }, SPAWN_BUDGET_MS);
   test("disconnect expectedOwner refuses a newly connected owner before claiming or deleting state", () => {
     const r = runDesktopLifecycleScenario("disconnect-expected-owner");
     expect(r.result).toBeNull();
@@ -1423,30 +1428,30 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.stateKind).toBe("connected");
     expect(r.tokenIsNew && r.catalogUnchanged).toBe(true);
     expect(r.receiptPhase).toBe("absent");
-  });
+  }, SPAWN_BUDGET_MS);
   test("disconnect claims its receipt before Codex-only restoration outside L", () => {
     const r = runDesktopLifecycleScenario("disconnect-order");
     expect(r.error).toBeNull();
     expect(r.codexSawPrepared && r.codexOutsideL).toBe(true);
     expect(r.receiptPhase).toBe("complete");
-  });
+  }, SPAWN_BUDGET_MS);
   test("sync CAS preserves a newer token generation and leaves catalog bytes unchanged", () => {
     const r = runDesktopLifecycleScenario("sync-generation-change");
     expect(r.error).toBe("client_connection_changed");
     expect(r.tokenIsNew && r.catalogUnchanged).toBe(true);
-  });
+  }, SPAWN_BUDGET_MS);
   test("full-owner clear cannot delete a newer connection with the same key id", () => {
     const r = runDesktopLifecycleScenario("clear-owner-change");
     expect(r.result).toBe("conflict");
     expect(r.stateKind).toBe("connected");
     expect(r.tokenIsOld).toBe(true);
-  });
+  }, SPAWN_BUDGET_MS);
   test("sync supplies the read-only guard at the actual injection seam", () => {
     const r = runDesktopLifecycleScenario("sync-queued-guard");
     expect(r.guardSeen).toBe(true);
     expect(r.writesAfterGuard).toBe(0);
     expect(r.error).toBe("client_disconnect_pending");
-  });
+  }, SPAWN_BUDGET_MS);
   test.each(["status-lock", "status-receipt"])("%s cannot discard another operation's backup", mode => {
     const r = runDesktopLifecycleScenario(mode);
     expect(r.error).toBeNull();
@@ -1454,7 +1459,7 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.statusInside.backupPresent).toBe(true);
     expect(r.statusOutside.kind).toBe(mode === "status-lock" ? "orphan-cleaned" : "recovery-required");
     expect(r.backupPresent).toBe(mode === "status-receipt");
-  });
+  }, SPAWN_BUDGET_MS);
 });
 
 describe("a sibling instance never connects, syncs or disconnects the shared Codex home", () => {

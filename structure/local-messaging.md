@@ -29,8 +29,9 @@ Only the validated real address is connected; no helper or reconnect is used.
 `src/messaging/rpc.ts` initializes one connection with experimental API capability
 and sends initialized before metadata requests. Its explicit request whitelist
 contains initialize, loaded-session pagination, metadata-only thread reads and
-one text-only `thread/queue/add`. It cannot create/resume a session, start/steer a
-turn or grant permission. A thread read returns only ID, name and status,
+one text-only `thread/queue/add`. Default local/send and remote-peer connections
+cannot resume a session, start/steer a turn or grant permission. A separate explicit
+MCP factory grants resume preflight only as described below; it cannot send thread/resume. A thread read returns only ID, name and status,
 excluding history, preview and working directory.
 
 Responses must match the requested ID and bounded shape. RPC errors are sanitized.
@@ -161,8 +162,8 @@ proxy ensure or fallback into the existing sessions/send command occurs. Windows
 is refused. `src/messaging/mcp-queue-server.ts` is activated only by this command,
 exposes stdio tools, and allocates no helper at import or initialization time.
 
-`src/messaging/mcp-queue-tools.ts` exposes only `codex_threads` and
-`codex_queue_message`. The first returns one bounded page of stored metadata and
+`src/messaging/mcp-queue-tools.ts` exposes `codex_threads` and
+`codex_queue_message` by default. The first returns one bounded page of stored metadata and
 a cursor, excluding preview, history and cwd. It explicitly reports that live
 state is unverified. The second validates an exact UUID and at most 16 KiB of
 text including a fixed peer-context label; NUL/empty text is refused. Sender
@@ -173,7 +174,8 @@ These tools do not share the loaded-only admission contract above.
 existing `src/codex/exec-boundary.ts` validates actual execution, including
 macOS bundle trust. Helpers use only app-server stdio and an explicit existing
 Codex home; inherited CODEX_THREAD_ID is removed. After initialize/initialized,
-the only allowed method is thread/list or thread/queue/add. No lifecycle or
+the default methods are thread/list and thread/queue/add.
+Explicit reply-read activation additionally admits the three read methods below. No lifecycle or
 login RPC is issued. The queue request carries a generated clientUserMessageId;
 only a matching correlated receipt becomes queued. Rejection before/at a valid
 error is not_sent. Uncertain outcomes after write are unknown without replay.
@@ -194,3 +196,143 @@ exercises the actual CLI/MCP handshake, inert initialization, the four-helper
 bound and disconnect cleanup. The fixtures use disposable native helpers, not
 real accounts. They prove queue contracts rather than app consumption, goal
 behavior, model obedience or cross-platform native interoperability.
+
+
+## Explicit stored reply reads
+
+`src/cli/message-mcp-command.ts` accepts a single optional --allow-reply-read flag.
+The existing four path arguments preserve the default two-tool surface. The host
+registers codex_read_reply only with this explicit content-read opt-in; the tool
+and RPC owner also refuse read calls without it. This broadens disclosure to stored
+agent text within the selected local-user home, not per-thread authorization.
+Client IDs and cursors are not credentials or delegated permission.
+
+`src/messaging/mcp-reply-tools.ts` searches one descending page of 50 persisted
+items for the exact clientMessageId. Omitted or null user client IDs are unrelated
+messages; malformed non-null IDs still fail validation. Absence is not_observed with a position-scoped
+reachedHistoryEnd flag, never proof of non-delivery. Multiple matches in that page
+are ambiguous and expose no text. A match identifies a turn; one ascending page
+of its final_answer agent messages is projected with IDs and turn association.
+Omitted or null agent phases are accepted but never projected as final text;
+unsupported non-null phases and non-string agent text remain invalid.
+All final texts in the turn are eligible, including text preceding a later input;
+the association is always same_turn_not_exclusive. User bodies, reasoning, command
+outputs, citations and extra native fields are excluded. A shared 16 KiB UTF-8 text
+budget marks truncation per item; item cursors do not recover omitted text bytes.
+
+`src/messaging/mcp-reply-cursor.ts` bounds and canonically decodes caller-owned
+positions bound to thread and client IDs. A search cursor continues item search;
+a reply cursor identifies a turn/user item and native continuation. Cursors are
+forgeable position data, never authority: every reply continuation re-reads that
+user item through thread/items/read and checks item ID, turn and client correlation.
+Other reads use thread/items/list and thread/turns/list. All methods are explicitly
+allowed by the RPC owner; no lifecycle or queue mutation is added by reading.
+
+The latest 50 notLoaded turn summaries provide turnStatus when found, otherwise
+unverified. This is a stored observation, not global recipient liveness or goal
+completion. A refresh cursor rescans the matched turn so an item finalized later
+can be observed. The caller revisits pages and updates/deduplicates stable item IDs;
+OpenCodex adds no persistent read state, subscriptions or background timers.
+
+Each complete read shares one 20-second MessageBudget across at most three
+sequential invocation-owned helpers, each retaining 12-second RPC and 1 MiB output
+bounds. Native read rejection/unsupported methods, malformed data, invalid positions
+and cancellation are unavailable, not empty success. No raw native error reaches
+MCP output. Legacy stores have no unbounded includeTurns fallback.
+
+`tests/codex-integration/messaging-mcp-replies.test.ts` covers correlation, projection,
+position scoping/revalidation, late finalization, missing/ambiguous inputs, page and
+UTF-8 limits, inherited budget/cancellation and failure privacy. The deadline regression
+waits for the second helper request barrier before firing the captured outer timer;
+helper startup speed does not determine its result. Cursor repetition coverage
+rejects immediate repeats, not arbitrary multi-page cycles. The actual CLI
+opt-in handshake is exercised by `tests/cli/cli-message-mcp.test.ts`; existing inert
+activation and default-tool tests remain in force. Offline helpers prove protocol
+contracts, not native app processing, goal behavior or cross-client registration.
+
+## Bounded stored reply waits
+
+`src/messaging/mcp-reply-wait.ts` composes the existing stored read under one
+caller-owned waitMs budget (integer 1..20000, default 20000). The host exposes
+codex_wait_reply only with --allow-reply-read and shares its four pending slots.
+Each wait holds its slot until completion; four waits can make send/metadata
+calls return busy for up to 20 seconds of waiting plus helper termination time. Admission refuses rather than queues,
+and the tool description documents that no send slot is reserved.
+One wait attempts at most three snapshots, with a cancellable two-second pause
+between them and at most nine sequential owned helpers. It adds no RPC method,
+persistent state, background poll, lifecycle control or automatic delivery.
+The wait composes stored reads independently of resume capability. Execution of
+an unloaded recipient belongs to its native client/owner; no resume grant is
+needed to read already stored replies or call this bounded wait.
+
+Existing final text returns immediately, ambiguity returns without text, and a
+required next page returns to the caller. Other snapshots refresh the matched
+turn or repeat the supplied search position. Stored turnStatus is not live
+execution authority and never causes an early terminal decision. A deadline or
+attempt limit preserves the last successful observation with its age, measured from that snapshot's start; a deadline
+before any observation is unavailable. A snapshot is successful only when every
+read behind it completed before the deadline: helper cleanup that outlives the
+deadline keeps such a snapshot, while a snapshot whose reads completed late is
+expired even if its data looks valid and cannot be authorized by an earlier
+timely snapshot. Read failures remain unavailable and
+parent cancellation takes precedence over a stale success. Owned pause timers
+and helpers are cancelled on disconnect. Same-turn association and pagination,
+UTF-8 truncation and cursor revalidation retain the read owner's contract.
+
+`tests/codex-integration/messaging-mcp-wait.test.ts` exercises immediate, late and
+absent final text, stored terminal summaries, pagination, ambiguity, invalid input,
+read failures and inherited deadlines/cancellation. The CLI test checks exposure
+and invocation; imports remain inert. These fixtures do not prove client wake-up.
+
+## Explicit existing-server resume
+
+This pending capability is execution-blocked. `src/messaging/mcp-resume-tools.ts`
+exposes codex_resume_thread only with --allow-resume, --resume-socket and
+--resume-permissions together. It performs bounded preflight, never native resume.
+Default hosts and queue/read tools gain no lifecycle access. Initialization/import
+creates no connection or server.
+
+`src/messaging/rpc.ts` uses connectForResume only on an existing trusted local Unix
+socket reporting the configured canonical Codex home. Default connect/attach and
+remote-peer connections have no resume-preflight grant. An exact normalized UUID
+is read with includeTurns false. An observed idle/active target returns already_loaded;
+systemError refuses. Private paths/history/native errors are not returned.
+
+`src/messaging/resume-permissions.ts` retains preflight validation: the configured
+profile is a bounded opaque host value, not a tool argument; configRequirements/read
+must report requirements null, and one permissionProfile/list page in the private
+target cwd must contain the allowed ID. The page is bounded to 50 entries and checks
+IDs, duplicates, allowed flags and cursors. Unverified/managed/unsupported contexts
+and unavailable profiles refuse before execution.
+
+Even after successful permission verification, an unloaded target returns
+not_resumed with resume_atomicity_unsupported. No thread/resume RPC exists in the
+client method allowlist. A repeated metadata read or this MCP host's per-UUID lock
+cannot enforce an atomic not-loaded condition against another native client.
+Codex rust-v0.166.0 thread_resume_inner / resume_running_thread checks pending unload
+and serializes resume, but collect_resume_override_mismatches treats a supplied
+permissions field as a mismatch. For a directly addressable, unsubscribed, idle,
+non-running cache entry it can shut down the loaded thread and cold-resume under
+that explicit profile. The later branch ignores overrides only when the cached
+thread was not replaced. Therefore this version does not guarantee that a thread
+loaded after preflight is left alone; native conditional resume is required before
+execution can be re-enabled. This dependency was checked in the tagged native
+source and reproduced with disposable native 0.166.0 / offline model fixtures.
+It is not safe to infer the guarantee from a version label or a post-write
+activePermissionProfile acknowledgement. No capability or request field for an
+unimplemented future native API is invented here.
+
+The tool's current observations do not prove processing/completion;
+executionVerified remains false. No new session, message, turn/start, steer, model,
+approval or permission-change request is sent. The host refuses same-thread overlap before charging shared four-operation admission;
+duplicate refusals consume no slot. Closing checks still apply, and every reserved
+thread key is released when its call settles, including admission refusal. A 20-second budget covers connection
+and preflight, with ten-second RPC / 1 MiB frame limits. Cancellation closes only
+the owned connection, never the shared server or target turn. Approval requests
+are not answered. The tool stays read-only while execution is blocked.
+
+`tests/codex-integration/messaging-mcp-resume.test.ts` covers the fail-closed path,
+peer-load window, host/home/state/UUID and permission preflight checks, default
+refusal and cancellation before execution. The local fixture rejects thread/resume
+even in preflight mode. `tests/cli/cli-message-mcp-resume.test.ts` covers sequential
+option parsing, inert registration, explicit refusal, overlap/admission and cleanup.

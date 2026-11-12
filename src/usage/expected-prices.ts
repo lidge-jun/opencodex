@@ -141,6 +141,10 @@ const CLAUDE_OPUS_46: Cost4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite
 // (0.25) on Fable 5.1 — NOT the 0.1x (1.00) that Fable 5 and every other family use;
 // the pricing page footnote calls this out explicitly. Verified 2026-09-02.
 const CLAUDE_FABLE_51: Cost4 = { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 };
+// Claude Fable 5.2 (claude-fable-5-2, released 2026-11-09): 8 / 40, 5m cache write 10.00, and the
+// same 0.025x cache-hit footnote as Fable 5.1 (0.20). Fast mode is exactly 2x (16 / 80) and is
+// priced through PRIORITY_PRICING_RULES below. Verified 2026-11-10.
+const CLAUDE_FABLE_52: Cost4 = { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 };
 // Opus 5 was first priced from the maintainer's confirmation that it matched Opus 4.6. The
 // pricing page now lists it at that same 5 / 25 / 0.50 / 6.25 tuple (re-verified 2026-09-23).
 const CLAUDE_OPUS_5 = CLAUDE_OPUS_46;
@@ -157,6 +161,8 @@ const CLAUDE_HAIKU_55: Cost4 = { input: 0.1, output: 0.5, cacheRead: 0.01, cache
 const ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing (official; 5m cache-write tier)";
 const CLAUDE_OPUS_5_SOURCE = `anthropic official Claude Opus 5 ${ANTHROPIC_PRICING}`;
 const CLAUDE_OPUS_55_SOURCE = `anthropic official Claude Opus 5.5 ${ANTHROPIC_PRICING}; cache hit = 0.05x base input`;
+const CLAUDE_FABLE_52_SOURCE = `anthropic official Claude Fable 5.2 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`;
+const CURSOR_FABLE_52_PRICING = "https://cursor.com/docs/models/claude-fable-5-2 (same list rate as Anthropic: 8 / 40, cache write 10, cache read 0.20)";
 const CLAUDE_SONNET_55_SOURCE = `anthropic official Claude Sonnet 5.5 ${ANTHROPIC_PRICING}; cache hit = 0.05x base input (2026-10-08 cut)`;
 const CLAUDE_HAIKU_55_SOURCE = `anthropic official Claude Haiku 5.5 ${ANTHROPIC_PRICING}; >100K prompt prices every token category at 5x`;
 const CURSOR_HAIKU_55_PRICING = "https://cursor.com/docs/models/claude-haiku-5-5 (same base and >100K rates as Anthropic)";
@@ -303,6 +309,7 @@ const DEVIN_KIMI_K3: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite:
 const DEVIN_KIMI_K27: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 };
 const DEVIN_GROK: Cost4 = { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 };
 const DEVIN_PRICING = "https://docs.devin.ai/desktop/models (official modelCostData table, 2026-09-13; list rates for self-serve overage / enterprise ACU conversion on a subscription surface)";
+const DEVIN_FABLE_52_SOURCE = "https://docs.devin.ai/desktop/models (Claude Fable 5.2 listed at 8 / 40, cache read 0.20, cache write 10, 2026-11-10; uid claude-fable-5-2-<effort>, seed collapses to the base)";
 const DEVIN_SWE2_NOTE = "list rate; $0 self-serve through 2026-10-08 and 75%-off enterprise through 2026-12-31 are time-boxed promos, not baked in";
 
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
@@ -326,6 +333,15 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "anthropic-apikey", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
   // Cursor canonicalizes every Fable 5.1 spelling onto this sole overlay row.
   { provider: "cursor", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input; vendor list price applied to the Cursor surface`, verifiedAt: "2026-09-02", status: "verified-derived" },
+  // Fable 5.2 also has a generated jawcode row; these overlays cover pooled OAuth labels the same
+  // way the Fable 5.1 rows do. Cursor canonicalizes the bare and thinking spellings onto its row.
+  { provider: "anthropic", modelId: "claude-fable-5-2", cost4: CLAUDE_FABLE_52, source: CLAUDE_FABLE_52_SOURCE, verifiedAt: "2026-11-10", status: "verified" },
+  { provider: "anthropic-apikey", modelId: "claude-fable-5-2", cost4: CLAUDE_FABLE_52, source: CLAUDE_FABLE_52_SOURCE, verifiedAt: "2026-11-10", status: "verified" },
+  { provider: "cursor", modelId: "claude-fable-5-2", cost4: CLAUDE_FABLE_52, source: CURSOR_FABLE_52_PRICING, verifiedAt: "2026-11-10", status: "verified" },
+  // Kilo and Vercel are not generated bundles, and the vendor fallback cannot map these two ids
+  // onto claude-fable-5-2: Kilo's latest alias now serves 5.2, and Vercel lists the 2x fast tuple.
+  { provider: "kilo", modelId: "~anthropic/claude-fable-latest", cost4: CLAUDE_FABLE_52, source: "https://api.kilo.ai/api/openrouter/models (alias listed at the Fable 5.2 rate, 2026-11-10)", verifiedAt: "2026-11-10", status: "verified" },
+  { provider: "vercel-ai-gateway", modelId: "anthropic/claude-fable-5.2-fast", cost4: { input: 16, output: 80, cacheRead: 0.4, cacheWrite: 20 }, source: "https://ai-gateway.vercel.sh/v1/models (Fable 5.2 fast row, 2x list)", verifiedAt: "2026-11-10", status: "verified" },
   // claude-opus-5 is exposed by three providers but absent from the jawcode bundle, so
   // cost resolution returned null and the Logs `~$` column rendered an em dash. The
   // model-level vendor fallback only searches jawcode metadata, never overlays, so one
@@ -566,6 +582,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "devin-cli", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "claude-opus-5-5", cost4: CLAUDE_OPUS_55, source: `derived: live Devin catalog lists claude-opus-5-5 but Devin's modelCostData table does not yet; Anthropic list price shown as estimate ${ANTHROPIC_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "devin-cli", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "claude-fable-5-2", cost4: CLAUDE_FABLE_52, source: DEVIN_FABLE_52_SOURCE, verifiedAt: "2026-11-10", status: "verified-derived" },
   { provider: "devin-cli", modelId: "claude-sonnet-5-5", cost4: CLAUDE_SONNET_55, source: DEVIN_SONNET_55_SOURCE, verifiedAt: "2026-10-08", status: "verified-derived" },
   { provider: "devin-cli", modelId: "claude-sonnet-5", cost4: DEVIN_SONNET_5, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "glm-5-3", cost4: GLM_53, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
@@ -587,6 +604,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "devin", modelId: "claude-opus-4-8", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "claude-opus-5-5", cost4: CLAUDE_OPUS_55, source: `derived: live Devin catalog lists claude-opus-5-5 but Devin's modelCostData table does not yet; Anthropic list price shown as estimate ${ANTHROPIC_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "devin", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "claude-fable-5-2", cost4: CLAUDE_FABLE_52, source: DEVIN_FABLE_52_SOURCE, verifiedAt: "2026-11-10", status: "verified-derived" },
   { provider: "devin", modelId: "claude-sonnet-5-5", cost4: CLAUDE_SONNET_55, source: DEVIN_SONNET_55_SOURCE, verifiedAt: "2026-10-08", status: "verified-derived" },
   { provider: "devin", modelId: "claude-sonnet-5", cost4: DEVIN_SONNET_5, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "glm-5-2", cost4: GLM_52, source: `enterprise list column (self-serve shows an unannounced 0 promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
@@ -724,13 +742,13 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
   })),
   // Claude Code subscription fast draws usage credits at API fast rates, so OAuth is included.
   ...["anthropic", "anthropic-apikey"].flatMap(provider =>
-    ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"].map((modelId): PriorityPricingRule => ({
+    ["claude-fable-5-2", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"].map((modelId): PriorityPricingRule => ({
       provider,
       modelId,
       multiplier: 2,
       requiresResponseConfirmation: true,
       source: ANTHROPIC_FAST_PRICING,
-      verifiedAt: "2026-09-23",
+      verifiedAt: modelId === "claude-fable-5-2" ? "2026-11-10" : "2026-09-23",
     })),
   ),
   ...[

@@ -2,12 +2,13 @@
 // security boundary or completeness proof. Runtime mutation guards enforce authority.
 import { orchestratedChildReview } from "./update-review-orchestrated-child";
 import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
 import { mergeStaticImports } from "./update-review-table";
 
 const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
   "bin/ocx.mjs": [
     // Pre-mutation mutex admission and session/argument verification.
-    'import { acquireSyncGuard } from "../src/update/sync-update-mutex.mjs";',
+    'import { acquireSyncGuard, staleUpdateMarkerHint } from "../src/update/sync-update-mutex.mjs";',
     'import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../src/update/orchestrated-arguments.mjs";',
     'import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";',
     'import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";',
@@ -19,6 +20,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { probeSpawn, probeSpawnSync } from \"../src/update/mutation-guard.mjs\";",
     "import { createSupervisionLatch, inspectDesktopSupervision } from \"../src/service/desktop-supervision.mjs\";",
     "import { planDesktopCliHandoff, runDesktopCliHandoff } from \"../src/lib/desktop-cli-handoff.mjs\";",
+    "import { forwardLauncherSignals } from \"../src/lib/launcher-signal-forwarding.mjs\";",
     "import { desktopCliRecordPath } from \"../src/lib/desktop-cli-record.mjs\";",
     "import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from \"../src/update/stop-contract.mjs\";",
     "import { probeProxyLiveness } from \"../src/update/proxy-liveness-probe.mjs\";",
@@ -68,6 +70,11 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
   ],
   "src/update/check-types.ts": [],
   "src/update/codex-cli-update-launch-policy.mjs": [],
+  "src/update/config-preflight.ts": [
+    // Read-only config descriptor inspection and passive raw diagnostics; warnings are discarded, no backup is written.
+    'import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";',
+    'import { configDiagnosticsFromRaw } from "../config/diagnostics";'
+  ],
   "src/update/desktop-badge.ts": [
     "import { defaultUpdateTag } from \"./index\";"
   ],
@@ -94,6 +101,8 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     'import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";',
     'import { runPosixInstallerSync } from "./posix-install-supervisor.mjs";',
     'import { runWindowsInstallerSync } from "./npm-install.mjs";',
+    // Formatting only: recovery guidance for a refusal by a witnessless update marker (#8524).
+    'import { staleUpdateMarkerHint } from "./sync-update-mutex.mjs";',
     'import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";',
     "import { guardedRun, guardedSpawn, guardedSpawnSync } from \"./mutation-guard.mjs\";",
     "import { probeSpawn, probeSpawnSync } from \"./mutation-guard.mjs\";",
@@ -106,7 +115,8 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { existsSync, readFileSync, readdirSync } from \"node:fs\";",
     "import { fileURLToPath } from \"node:url\";",
     "import { dirname, join, resolve } from \"node:path\";",
-    "import { getConfigDir, loadConfig } from \"../config\";",
+    "import { getConfigDir, getConfigPath, loadConfig } from \"../config\";",
+    'import { runConfigPreflight } from "./config-preflight";',
     "import { readPid, readRuntimePort, getRuntimePortPath } from \"../config/process-state\";",
     "import { pendingTeardownOutstanding } from \"../config/pending-teardown\";",
     "import { planUpdateRuntimeHandling, planStoppedRuntimeRecovery, inspectPackageRuntimeLiveness } from \"./runtime-ownership.mjs\";",
@@ -228,11 +238,27 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     // Package supervisor dispatch is guarded; arguments are materialized before authorization.
     'import { guardedSpawn, guardedSpawnSync, materializeMutationData } from "./mutation-guard.mjs";',
     "import { dirname, join, win32 } from \"node:path\";",
-    "import { fileURLToPath } from \"node:url\";"
+    "import { fileURLToPath } from \"node:url\";",
+    // Windows installer witness publication before the supervisor request (#8524).
+    'import { publishWindowsInstallerPid } from "./windows-installer-marker.mjs";',
+    // Refuses the Windows supervisor test seam outside a test process.
+    'import { isTestHomeGuardArmed } from "./test-home-guard.mjs";'
   ],
   "src/update/npm-invocation.mjs": [
     "import { existsSync, realpathSync } from \"node:fs\";",
     "import { win32 } from \"node:path\";"
+  ],
+  "src/update/windows-installer-marker.mjs": [
+    // Unique temp name for the marker publication.
+    'import { randomUUID } from "node:crypto";',
+    // Marker publication: replaces only a marker awaiting an installer.
+    'import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";',
+    // Read-only home derivation for the test-home guard.
+    'import { dirname } from "node:path";',
+    // Signal-zero liveness of an earlier recorded supervisor.
+    'import { probeProcessAlive } from "./mutation-guard.mjs";',
+    // Refuses the real home under test.
+    'import { assertNotRealHomeUnderTest } from "./test-home-guard.mjs";',
   ],
   // Supervisor entry: its reviewed caller launches it through the package-guarded spawn; it runs only what its stdin caller supplies.
   "src/update/posix-install-supervisor-entry.mjs": [
@@ -256,7 +282,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     // Pre-mutation home creation and read-only marker inspection.
     'import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";',
     // Read-only construction of admission and marker paths.
-    'import { dirname, join } from "node:path";',
+    'import { dirname, join, posix, win32 } from "node:path";',
     // Pre-mutation admission lease and read-only lease inspection.
     'import { acquireOwnershipMutationLease, inspectOwnershipMutationLease, ownershipMutationLeasePath } from "../service/ownership-mutation-lease.mjs";',
     // Read-only construction of ownership lease paths.
@@ -359,7 +385,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { dirname, isAbsolute } from \"node:path\";"
   ]
 };
-export const updateStaticImports = mergeStaticImports(baseStaticImports, orchestratedEntryReview.staticImports, orchestratedChildReview.staticImports);
+export const updateStaticImports = mergeStaticImports(baseStaticImports, orchestratedEntryReview.staticImports, orchestratedChildReview.staticImports, signedSupplyReview.staticImports);
 const baseDeferredImports: readonly string[] = [
   // Read-only identity verification before the child enters mutation.
   'src/update/index.ts:runUpdate:session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect, notAfter: child.notAfter, verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) })',
@@ -379,7 +405,7 @@ const baseDeferredImports: readonly string[] = [
   "src/update/job-update-tray.ts:defaultWorkerTrayHandoff:{ getWindowsTrayStatus, guardedStartWindowsTray, guardedStopWindowsTray } = await import(\"./guarded-tray-ops\")",
   "src/update/job.ts:restartAfterUpdate:{ serviceReinstallArgs } = await import(\"../service\")"
 ];
-export const updateDeferredImports: readonly string[] = [...baseDeferredImports, ...orchestratedEntryReview.deferredImports, ...orchestratedChildReview.deferredImports];
+export const updateDeferredImports: readonly string[] = [...baseDeferredImports, ...orchestratedEntryReview.deferredImports, ...orchestratedChildReview.deferredImports, ...signedSupplyReview.deferredImports];
 // Existing trusted wrapper internals: each complete expression is reviewed.
 // Import permission does not grant a wrapper arbitrary loader/global access.
 export const updateBoundaryRootSites = new Map([

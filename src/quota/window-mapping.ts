@@ -27,6 +27,7 @@ type ProviderLikeQuota = {
   monthlyPercent?: number;
   monthlyResetAt?: number;
   customWindows?: ReadonlyArray<{ label: string; percent: number; resetAt?: number; modelId?: string }>;
+  unknownBudgetWindows?: ReadonlyArray<{ label: string; resetAt?: number }>;
 };
 
 function window(

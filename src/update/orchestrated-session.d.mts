@@ -26,7 +26,7 @@ export declare function createOrchestratedChildSession(options: {
   pid?: number;
   verifyIdentity: () => boolean | Promise<boolean>;
 }): {
-  start(): { ok: true } | { ok: false; error: "sync-in-progress" | "update-in-flight" };
+  start(): { ok: true } | { ok: false; error: "sync-in-progress" | "update-in-flight"; staleMarker?: true };
   finishPreflight(): void;
   enterMutation(): Promise<{ ok: true } | { ok: false; error: "sync-in-progress" | "update-in-flight" | "deadline-passed" | "plan-changed" }>;
   noteUntrackedInstaller(): void;

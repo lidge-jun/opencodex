@@ -4,16 +4,20 @@ import { act, createRef, useEffect, useRef } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import KiroDeviceLoginDialog from "../src/components/KiroDeviceLoginDialog";
+import { kiroVerificationLink } from "../src/kiro-device-login-helpers";
 import { useKiroDeviceLogin } from "../src/components/use-kiro-device-login";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import type { ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 import { en } from "../src/i18n/en";
+import { chooseOption, selectTrigger } from "./helpers/custom-select";
 import { interpolate, type TFn } from "../src/i18n/shared";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import {
   finalizeKiroDeviceFlow, readKiroDeviceStatus, subscribeKiroDeviceFinal,
 } from "../src/kiro-device-login-finalizer";
+import { captureApiTarget, configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
@@ -109,6 +113,40 @@ test("chooser starts native login, shows code and safe link, then confirms done"
   await tick();
   expect(settled).toEqual(["added"]);
   expect(host.textContent).toContain("Kiro account added");
+  // Finished flows offer Close; there is nothing left to cancel.
+  const labels = [...host.querySelectorAll("button")].map(item => item.textContent?.trim());
+  expect(labels).toContain("Close");
+  expect(labels).not.toContain("Cancel");
+});
+
+test("a success carrying a warning stays open and offers Close, not Cancel", async () => {
+  responder = async url => url.endsWith("/api/oauth/login") ? json(view("pending")) : json(view("done", { warning: "duplicate_profile_arn" }));
+  await mountDialog(); await start(); await tick();
+  expect(closed).toBe(0);
+  expect(host.textContent).toContain("already in the account list");
+  const labels = [...host.querySelectorAll("button")].map(item => item.textContent?.trim());
+  expect(labels).toContain("Close");
+  expect(labels).not.toContain("Cancel");
+});
+
+test("IAM region starts empty and suggests AWS regions without limiting the field to them", async () => {
+  await mountDialog(); await click("AWS IAM Identity Center");
+  const region = host.querySelector<HTMLInputElement>('input[id$="-region"]')!;
+  expect(region.value).toBe("");
+  const options = [...host.querySelectorAll(`datalist[id="${region.getAttribute("list")}"] option`)];
+  expect(options.some(option => option.getAttribute("value") === "eu-central-1")).toBe(true);
+  await iamInput("https://example.awsapps.com/start", "eu-west-9"); await submitIamForm();
+  expect(JSON.parse(String(requests[0]!.init?.body)).region).toBe("eu-west-9");
+});
+
+test("an Identity Center access portal is a link only on an IAM flow", async () => {
+  const portal = "https://d-1234567890.awsapps.com/start/#/device?user_code=ABCD-1234";
+  responder = async url => url.endsWith("/api/oauth/login") ? json(view("pending", { method: "iam-identity-center", verificationUriComplete: portal })) : json(view("cancelled"));
+  await mountDialog(); await click("AWS IAM Identity Center"); await iamInput(); await submitIamForm();
+  expect(host.querySelector(`a[href="${portal}"]`)).not.toBeNull();
+  expect(host.textContent).not.toContain("Unexpected verification host");
+  expect(kiroVerificationLink(portal)).toBeNull();
+  expect(kiroVerificationLink("https://d-1234567890.awsapps.com/other", "iam-identity-center")).toBeNull();
 });
 
 test("IAM collects portal and region before starting and accepts regional AWS verification links", async () => {
@@ -170,8 +208,7 @@ test("IAM profile selection sends the server-offered ARN and completes only once
   await mountDialog(); await click("AWS IAM Identity Center"); await iamInput(); await submitIamForm(); await tick();
   expect(host.textContent).toContain("Choose a Kiro profile");
   expect(settled).toEqual([]);
-  const select = host.querySelector("select")!;
-  await act(async () => { select.value = profiles[1]!.arn; select.dispatchEvent(new win.Event("change", { bubbles: true })); });
+  await chooseOption(selectTrigger(host, "[role=combobox]"), profiles[1]!.arn);
   await submitIamForm();
   const posts = requests.filter(request => request.url.endsWith("/api/oauth/login"));
   expect(JSON.parse(String(posts[1]!.init?.body))).toEqual({ provider: "kiro", flowId, profileArn: profiles[1]!.arn });
@@ -510,6 +547,30 @@ test("an already-expired finalizer cancels its inherited read without polling", 
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(bodyCancelled).toBe(1);
   expect(requests.filter(r => r.url.includes("/api/oauth/status?"))).toHaveLength(1);
+});
+
+test("a stale Kiro capture ends the poll without requesting the new target", async () => {
+  const relay = (origin: string) => {
+    const base = standaloneApiTargets("");
+    return {
+      ...base,
+      connected: true,
+      shared: { ...base.shared, baseUrl: "/api/machine/hub-relay", serverOrigin: origin, transport: "relay" as const },
+      apiKeyId: "fixture-key",
+      relayTargetCheck: "expected-target-v1" as const,
+    };
+  };
+  configureApiTargets(relay("hub-a"));
+  const capture = captureApiTarget("shared");
+  configureApiTargets(relay("hub-b"));
+  try {
+    const outcome = await finalizeKiroDeviceFlow("/api/machine/hub-relay", flowId, Date.now() + 10_000, undefined, capture);
+    expect(outcome).toBe("ended");
+    // The old flow is not forwarded to the new hub.
+    expect(requests).toEqual([]);
+  } finally {
+    configureApiTargets(standaloneApiTargets(""));
+  }
 });
 
 test("closing aborts the pending timer and never dispatches a hook status fetch", async () => {

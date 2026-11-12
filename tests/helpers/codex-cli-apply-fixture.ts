@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { createNpmConfigIsolation, isolatedNpmTarget } from "../../src/codex/cli-update-plan";
 import { fixtureArtifact, fixtureArtifactSet } from "./codex-cli-apply-artifact";
 import type { CodexCliApplyResult } from "../../src/codex/cli-update-apply";
+import { helperPath } from "./repo-root";
 
 /** Admission waits must also observe an early refusal/rejection. Otherwise a
  * diagnostic failure before install/fetch entry becomes a misleading timeout.
@@ -100,6 +101,9 @@ export function createCodexCliApplyFixture(root: string, platform: NodeJS.Platfo
   ]));
   if (process.platform !== "win32") {
     writeFixtureNpmWrapper(fakeBin, node, realNpm, metadata, packs, trace);
+    // A private cwd makes this preload local to the published-launcher fixtures.
+    writeFileSync(join(root, "bunfig.toml"), `preload = [${JSON.stringify(helperPath("codex-cli-process-scan-preload.ts"))}]\n`);
+    writeFileSync(join(root, "process-scan-state.json"), JSON.stringify({ scans: ["empty", "empty", "empty"] }));
   }
   const launcher = process.platform === "win32" ? join(prefix, "codex.cmd") : join(prefix, "bin", "codex");
   const env = { ...process.env, HOME: home, TMPDIR: temporaryRoot, OPENCODEX_HOME: join(home, "ocx"),

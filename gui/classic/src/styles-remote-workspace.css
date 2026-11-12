@@ -1,0 +1,142 @@
+.remote-workspace-page .page-head { align-items: flex-start; }
+.remote-workspace-page .page-sub { margin-bottom: 0; }
+.remote-workspace-grid { display: grid; grid-template-columns: minmax(280px, .82fr) minmax(420px, 1.35fr); gap: 14px; align-items: start; }
+.remote-workspace-column { display: grid; gap: 14px; min-width: 0; }
+.remote-panel-head { display: flex; align-items: flex-start; gap: 12px; }
+.remote-panel-head h3, .remote-section-title h3 { margin: 0; font-size: var(--text-section); }
+.remote-panel-head p { margin: 3px 0 0; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); }
+.remote-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; border-radius: var(--radius-sm); color: var(--accent); background: var(--accent-soft); }
+.remote-icon svg { width: 18px; height: 18px; }
+.remote-pair-card { display: grid; gap: 14px; }
+.remote-pair-card > .btn { justify-self: start; }
+.remote-pairing-result { display: grid; gap: 7px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+.remote-pairing-code { font-family: var(--font-code); font-size: clamp(21px, 3vw, 28px); font-weight: 700; letter-spacing: .11em; color: var(--text); }
+.remote-expiry { margin: -3px 0 4px; color: var(--muted); font-size: var(--text-caption); }
+.remote-pairing-result pre { max-width: 100%; margin: 0; padding: 11px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); font-size: var(--text-caption); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.remote-section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.remote-section-title > span { color: var(--muted); font-size: var(--text-label); }
+.remote-section-title svg { width: 18px; height: 18px; color: var(--muted); }
+.remote-section-title small { display: block; margin-top: 3px; color: var(--muted); font-size: var(--text-caption); }
+.remote-device-list { display: grid; gap: 6px; }
+.remote-device { display: flex; width: 100%; min-width: 0; align-items: center; gap: 4px; padding: 3px; border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--raised); color: var(--text); }
+.remote-device:hover { background: var(--raised-hover); }
+.remote-device.selected { border-color: var(--accent-ring); background: var(--accent-soft); }
+.remote-device-main { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; padding: 7px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.remote-device-main:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -1px; border-radius: var(--radius-xs); }
+.remote-online-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--faint); box-shadow: 0 0 0 3px color-mix(in srgb, var(--faint) 14%, transparent); }
+.remote-online-dot.online { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 14%, transparent); }
+.remote-device-copy { display: grid; flex: 1; min-width: 0; }
+.remote-device-copy strong, .remote-device-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-device-copy small { margin-top: 2px; color: var(--muted); font-size: var(--text-caption); }
+.remote-revoke { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: var(--radius-xs); color: var(--muted); }
+.remote-revoke:hover, .remote-revoke:focus-visible { color: var(--red); background: var(--red-soft); outline: none; }
+.remote-revoke svg { width: 15px; height: 15px; }
+.remote-empty { margin: 12px 0 0; color: var(--muted); font-size: var(--text-label); text-align: center; }
+.remote-empty--console { display: grid; min-height: 260px; place-items: center; margin: 0; }
+.remote-launch-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.remote-launch-fields label { min-width: 0; }
+.remote-launch-fields .select { width: 100%; }
+.remote-execution-map { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.remote-execution-map > span { display: grid; gap: 2px; min-width: 0; padding: 9px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--raised); color: var(--muted); font-size: var(--text-caption); }
+.remote-execution-map strong { overflow: hidden; color: var(--text); font-size: var(--text-control); text-overflow: ellipsis; white-space: nowrap; }
+.remote-runtime-reason { margin: 10px 0 0; color: var(--red); font-size: var(--text-caption); line-height: var(--leading-body); }
+.remote-launch-panel > .notice { margin-top: 10px; }
+.remote-start { width: 100%; margin-top: 12px; }
+.remote-console-panel { min-height: 440px; }
+.remote-status { padding: 4px 8px; border-radius: var(--radius-pill); background: var(--raised); color: var(--muted); font-size: var(--text-caption); font-weight: var(--weight-semibold); white-space: nowrap; }
+.remote-status--ready { color: var(--green); background: color-mix(in srgb, var(--green) 11%, transparent); }
+.remote-status--running, .remote-status--starting { color: var(--accent); background: var(--accent-soft); }
+.remote-status--failed { color: var(--red); background: var(--red-soft); }
+.remote-status--waiting_for_executor { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.remote-events { display: flex; min-height: 240px; max-height: min(48vh, 520px); flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); content-visibility: auto; }
+.remote-console-panel > .notice { margin-top: 10px; }
+.remote-event { max-width: 88%; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--raised); }
+.remote-event > span { color: var(--muted); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+.remote-event > p { margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-control); line-height: var(--leading-body); }
+.remote-event--assistant { align-self: flex-start; border-left: 2px solid var(--accent); }
+.remote-event--tool { align-self: center; max-width: 96%; background: color-mix(in srgb, var(--accent) 6%, var(--raised)); }
+.remote-event--error { border-left: 2px solid var(--red); background: var(--red-soft); }
+.remote-composer { display: block; margin-top: 12px; }
+.remote-composer textarea { min-height: 92px; font-family: var(--font-sans); }
+.remote-console-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 9px; }
+
+@media (max-width: 980px) {
+  .remote-workspace-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 620px) {
+  .remote-workspace-page .page-head { align-items: stretch; flex-direction: column; }
+  .remote-workspace-page .page-head > .btn { width: 100%; }
+  .remote-launch-fields { grid-template-columns: 1fr; }
+  .remote-execution-map { grid-template-columns: 1fr; }
+  .remote-console-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .remote-console-actions .btn { min-height: 44px; }
+  .remote-event { max-width: 100%; }
+  .remote-pairing-code { letter-spacing: .05em; }
+}
+
+/* Session layout is shared by the browser dashboard and the desktop webview. */
+.remote-chats-workspace { margin-top: var(--space-6); min-width: 0; }
+.remote-chats-toolbar { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
+.remote-chats-toolbar h3 { margin: 0; font-size: var(--text-section); }
+.remote-chats-toolbar p, .remote-split-limit { margin: 0; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); }
+.remote-chats-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: var(--space-3); align-items: stretch; }
+.remote-session-rail { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius); background: var(--rail); min-width: 0; max-height: 720px; overflow: auto; }
+.remote-session-row { border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--surface); cursor: grab; }
+.remote-session-row.is-active { border-color: var(--accent-ring); background: var(--accent-soft); }
+.remote-session-open { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-width: 0; padding: var(--space-3); color: var(--text); background: transparent; border: 0; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
+.remote-session-open:hover { background: var(--raised-hover); }
+.remote-session-open > span { display: grid; min-width: 0; gap: var(--space-1); }
+.remote-session-open strong, .remote-session-open small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-session-open strong { font-size: var(--text-control); font-weight: var(--weight-semibold); }
+.remote-session-open small { color: var(--muted); font-size: var(--text-caption); }
+.remote-session-open svg { flex: 0 0 auto; width: var(--icon-sm); height: var(--icon-sm); color: var(--muted); }
+.remote-session-split-actions { display: flex; justify-content: flex-end; padding: 0 var(--space-2) var(--space-2); gap: var(--space-1); }
+.remote-session-split-actions .btn { min-height: 28px; padding: var(--space-1) var(--space-2); }
+.remote-session-split-actions svg, .remote-pane-close svg { width: var(--icon-sm); height: var(--icon-sm); }
+.remote-pane-surface { min-width: 0; height: clamp(560px, 75vh, 900px); overflow: auto; border-radius: var(--radius); }
+/* A track holding a nested split reserves that subtree's minimum, so nested side-by-side splits
+   never scroll inside a pane column; when the tree is wider than the surface, the surface scrolls once. */
+.remote-split-branch { display: grid; min-width: calc(var(--split-min-width, 0) * 1px); height: 100%; }
+.remote-split-branch--row { grid-template-columns: minmax(calc(var(--split-first-min, 0) * 1px), calc(var(--split-ratio) * 100% - 4px)) 8px minmax(calc(var(--split-second-min, 0) * 1px), 1fr); }
+.remote-split-branch--column { grid-template-rows: minmax(0, calc(var(--split-ratio) * 100% - 4px)) 8px minmax(0, 1fr); }
+.remote-split-child { min-width: 0; min-height: 0; overflow: auto; }
+.remote-split-divider { position: relative; background: transparent; touch-action: none; cursor: col-resize; }
+.remote-split-branch--column > .remote-split-divider { cursor: row-resize; }
+.remote-split-divider::after { content: ""; position: absolute; inset: 0 3px; background: var(--border); border-radius: var(--radius-xs); }
+.remote-split-branch--column > .remote-split-divider::after { inset: 3px 0; }
+.remote-split-divider:hover::after, .remote-split-divider:focus-visible::after { background: var(--accent); }
+.remote-split-divider:focus-visible, .remote-session-open:focus-visible, .remote-chat-pane-name:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+.remote-chat-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.remote-chat-pane.is-active { border-color: var(--accent-ring); }
+.remote-chat-pane-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.remote-chat-pane-name { display: flex; align-items: center; flex: 1; min-width: 0; gap: var(--space-2); cursor: grab; }
+.remote-chat-pane-name > div { display: grid; min-width: 0; }
+.remote-chat-pane-name strong { font-size: var(--text-control); }
+.remote-chat-pane-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--text-caption); }
+.remote-chat-pane-name svg { flex: 0 0 auto; width: var(--icon-sm); height: var(--icon-sm); color: var(--muted); }
+.remote-chat-access { color: var(--muted); font-size: var(--text-caption); margin-top: var(--space-2); }
+.remote-chat-pane .remote-events { flex: 1 1 180px; min-height: 100px; max-height: none; }
+.remote-chat-pane > :not(.remote-events) { flex-shrink: 0; }
+.remote-chat-pane .remote-composer textarea { min-height: 44px; height: 64px; }
+.remote-pane-drop-targets { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
+.remote-pane-drop { position: absolute; display: grid; place-items: center; color: var(--accent); font-size: var(--text-label); font-weight: var(--weight-semibold); background: color-mix(in srgb, var(--accent-soft) 94%, var(--surface)); border: 2px dashed var(--accent-ring); }
+.remote-pane-drop.is-over { background: var(--accent-soft); border-color: var(--accent); border-style: solid; }
+.remote-pane-drop--left { inset: 0 70% 0 0; }
+.remote-pane-drop--right { inset: 0 0 0 70%; }
+.remote-pane-drop--up { inset: 0 30% 50%; }
+.remote-pane-drop--down { inset: 50% 30% 0; }
+@media (max-width: 980px) {
+  .remote-chats-layout { grid-template-columns: 1fr; }
+  .remote-session-rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); max-height: 220px; }
+}
+@media (max-width: 760px) {
+  /* Keep every composer reachable without nested horizontal scrolling. The saved
+     split tree and ratios remain intact for a return to a wider viewport. */
+  .remote-pane-surface { height: auto; overflow: visible; }
+  .remote-split-branch { display: flex; flex-direction: column; gap: var(--space-3); height: auto; min-width: 0; }
+  .remote-split-child { overflow: visible; }
+  .remote-split-divider { display: none; }
+  .remote-chat-pane { height: auto; min-height: 440px; }
+  .remote-session-split-actions .btn, .remote-pane-close { min-height: 44px; min-width: 44px; }
+  .remote-chat-pane .remote-console-actions .btn { min-height: 44px; }
+}

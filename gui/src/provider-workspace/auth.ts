@@ -8,7 +8,10 @@ export type ProviderAuthSurface = "codex-accounts" | "oauth-accounts" | "api-key
 export interface OAuthAccountIdentity {
   id: string;
   alias?: string;
-  email?: string;
+  /** Server label that follows privacy.maskEmails: masked by default, the raw email when unmasked. */
+  accountLabel?: string;
+  /** Always-masked label; fallback for servers that do not send accountLabel. */
+  maskedLabel?: string;
 }
 
 /**
@@ -37,12 +40,11 @@ export function oauthAccountDisplayLabel<T extends OAuthAccountIdentity>(
   accounts: readonly T[],
   account: OAuthAccountIdentity,
   t: TFn,
-  ordinalOnly = false,
 ): string {
-  const alias = ordinalOnly ? undefined : account.alias?.trim();
+  const alias = account.alias?.trim();
   if (alias) return alias;
-  const email = ordinalOnly ? undefined : account.email?.trim();
-  if (email) return email;
+  const label = account.accountLabel?.trim() || account.maskedLabel?.trim();
+  if (label) return label;
   const index = accounts.findIndex(candidate => candidate.id === account.id);
   return t("pws.accountOrdinal", { count: String(index >= 0 ? index + 1 : 1) });
 }

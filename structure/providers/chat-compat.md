@@ -47,7 +47,7 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Reasoning and tool-result compatibility
 
-For `api.mistral.ai`, `src/adapters/openai-chat/response-events.ts` preserves typed text/thinking arrays in both response paths and rejects unsupported blocks. Inline-tag parsing crosses adjacent text blocks but resets at typed reasoning. It adds no signature replay.
+The [canonical Mistral wire policy](mistral-chat.md) also covers native Chat request fields and response strings. For `api.mistral.ai`, `src/adapters/openai-chat/response-events.ts` preserves typed text/thinking arrays in both response paths and rejects unsupported blocks. Inline-tag parsing crosses adjacent text blocks but resets at typed reasoning. It adds no signature replay.
 On that same host, `src/adapters/openai-chat/messages.ts` reconstructs historical thinking as native `content` chunks before assistant text, for every hosted model family. An explicit `preserveReasoningContentModels` list, including `[]`, still controls enrollment; the default preserves supplied thinking. The shared prompt projection counts that thinking. Replay can recover actual text from the existing scoped tool-call cache, but never invents placeholders or forwards generic IR signatures. Original chunk metadata and exact chunk boundaries are not retained by this text-only reconstruction. Native Chat passthrough and other destinations retain their existing behavior.
 Tests: `tests/adapters/openai/openai-chat-mistral-content.test.ts`; byte budgets retain their existing limits.
 
@@ -112,7 +112,7 @@ Passthrough and routed-compaction raw-body repairs emit it as a user turn (`exte
 Stateful developer-guidance injection reuses that validator for its raw insertion
 boundary, so parsed messages and stored raw history retain the same task/guidance order.
 
-Native Chat passthrough and translated Chat share `src/adapters/openai-chat/reasoning-wire.ts` after provider resolution. Explicit reasoning/effort false declarations and empty strength ladders remove unsupported effort; toggle false removes the switch without declaring an unknown strength axis unsupported. A declared toggle wire serializes the independent thinking choice without treating enabled/disabled/adaptive discriminators as strengths. Dual-control requests still pass through gateway-object projection and tool-bearing effort omission; a legacy toggle configuration gains a second serialized control only with explicit effort support; unknown declarations preserve legacy raw forwarding. Native passthrough also sanitizes routed reasoning history so `reasoning` input items do not send
+Native Chat passthrough and translated Chat share `src/adapters/openai-chat/reasoning-wire.ts` after provider resolution. Explicit reasoning/effort false declarations and empty strength ladders remove unsupported effort; toggle false removes the switch without declaring an unknown strength axis unsupported. A declared toggle wire serializes the independent thinking choice without treating enabled/disabled/adaptive discriminators as strengths. On a dual-control wire, an explicit `__omit__` effort alias removes the strength while the caller's effort still selects the thinking switch. Native `ultra` honors the `max` omission alias before ladder clamping, unless the declared ladder supports native `ultra` itself. Dual-control requests still pass through gateway-object projection and tool-bearing effort omission; a legacy toggle configuration gains a second serialized control only with explicit effort support; unknown declarations preserve legacy raw forwarding. Native passthrough also sanitizes routed reasoning history so `reasoning` input items do not send
 non-empty `content` arrays to upstream models that reject them. Chat Completions bridging repairs
 orphan `toolResult` messages by inserting a synthetic assistant `tool_call` before tool messages.
 It also repairs the opposite direction (260718): an assistant `tool_calls` round left dangling —
@@ -269,39 +269,13 @@ converted. A retained previous-response ID does not override an explicit custom-
 > Decision record: [ADR-0052](../decisions/ADR-0052-reasoning-and-tool-result-compatibility.md)
 
 ## Declared hosted-tool denials
-The explicitly selected Codex Responses Lite ordinary unreferenced history projection follows [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding): it changes historical cells, not hosted tool declarations or action capability.
-A gateway that speaks the Responses API does not necessarily accept everything OpenAI accepts.
-`unsupportedHostedTools` is how such a destination says so: it names the hosted tool declarations
-this provider rejects, and `stripUnsupportedHostedTools` in
-`src/adapters/openai-responses/tool-schema.ts` removes them from `tools`, from client-loaded
-`additional_tools`, and from `tool_choice` before the body is serialized.
 
-The capability is provider-declared rather than destination-matched, and that is the point. The
-original mechanism in `src/responses/hosted-tool-policy.ts` was a table of `(model, baseUrl)`
-predicates, so a narrower gateway could only be supported by shipping a proxy release naming its
-endpoint. The reported destination (#5002) accepted plain Responses requests and `function` tools
-but rejected hosted `web_search` with HTTP 400 `unsupported_request`, which meant a text-only
-prompt failed before the model answered, because Codex's hosted declaration travelled with it. A
-provider nobody has classified can now describe itself in config.
+Provider-declared hosted-tool denials for Responses destinations, unconditional
+(`unsupportedHostedTools`) and conditional on client tools
+(`unsupportedHostedToolsWithClientTools`), are described in
+[hosted-tool denials](hosted-tool-denials.md#declared-hosted-tool-denials).
 
-The declaration is additive to that table, not a replacement for it. The table is for destinations that reject a tool regardless of configuration, so an operator who never heard of the field stays protected;
-a declaration can only deny more, never re-enable a known-broken pairing. The table denies `web_search` and `web_search_preview` for `xiaomimimo.com` and its subdomains, including the public API and token-plan hosts (#5501), independent of model name. Matching uses the parsed URL hostname, so unrelated hosts with MiMo names in paths or queries are unaffected.
-OpenCode Go keeps hosted search: it refuses two OpenAI-private fields rather than the tool, and `src/adapters/xai-web-search.ts` normalizes those fields for every Grok model there.
-
-Two properties are deliberate. Spelling variants of one capability are aliased, so declaring
-`web_search` also denies `web_search_preview` — the rest of the proxy already folds that pair into
-a single tool, and honouring only the spelling the operator happened to write would reproduce the
-original 400 while the config claimed to have prevented it. And the value is validated against a
-closed vocabulary in `src/config/schema/leaf-validators.ts` and `src/server/auth-cors.ts`, because
-the provider schema ends in `.passthrough()`: an unvalidated misspelling would be persisted and
-then match no tool, leaving the operator with the upstream rejection this field exists to prevent
-and nothing explaining why. That is the `codexToolMode` lesson from #2106.
-
-This capability is independent of `supportsResponsesCustomTools`, which denies native `custom`
-tools and `custom_tool_call` items. A gateway that rejects both sets both; neither implies the
-other.
-
-When that capability is explicitly false, `src/responses/custom-tool-compat.ts` also lowers valid
+When `supportsResponsesCustomTools` is explicitly false, `src/responses/custom-tool-compat.ts` also lowers valid
 historical custom-call/result pairs absent from the live catalog, without adding their names to
 current declaration or restoration sets. Malformed or duplicate call identities and collisions
 with live function names fail closed. Unmapped custom outputs request full replay; residual native

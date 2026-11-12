@@ -317,3 +317,8 @@ manual and automatic triggers, while subsequent turns keep their conversation se
 
 - **INV-MESSAGES-SSE-01** — Messages SSE contains data only after a completed eligible first-field error declaration. Other blocks retain exact bytes and logical enqueue timing, including later error declarations.
   Enforced by `tests/server/messages-sse-error-filter.test.ts`.
+
+- **INV-LINK-CHILD-01** — `native/ocx-child` and the TypeScript Link modules agree byte for byte on data/management route admission, `Host`/`Origin` and smuggling rejection, caller credential stripping, `link-relay-auth` v2 HMAC proofs, OCX-6 `appliedCodexSettingsDigest`, and `#1798`-resilient offline journal attach/detach.
+  Enforced by `tests/clients/link-ocx-child-conformance.test.ts`.
+- **INV-LINK-CHILD-OPS-01** — A Home without links starts no Child-ops timer and loads no Child-ops host or scheduler (route modules loaded by status, DELETE or policy reads may import `child-policy` statically); the host starts when the link listener owns its socket and stops when it closes.
+  Enforced by `tests/lab/link-child-ops-no-timer.test.ts`.
