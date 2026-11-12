@@ -496,3 +496,22 @@ test("an unavailable journal disables every grant and says why", async () => {
   await act(async () => { root.unmount(); });
 });
 
+
+test("a grant with an unparseable end date and no reported windows confirms without inventing either", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  globalThis.fetch = pickerFetch(posts, {
+    read: () => ({ ...PICKER, grants: [grant("odd", { endsAt: "not-a-date", startsAt: "also-bad", clears: [] })] }),
+  });
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  expect(checkedId(container)).toBe("odd");
+  expect(container.textContent).not.toContain("Invalid Date");
+  expect(container.textContent).not.toContain("NaN");
+  await click(container, "[data-anthropic-grant-use]");
+  expect(container.textContent).not.toContain("Expires");
+  expect(container.textContent).toContain("The limits this reset clears were not reported.");
+  await click(container, "[data-anthropic-grant-confirm]");
+  expect(posts[0]).toMatchObject({ grantId: "odd" });
+  await act(async () => { root.unmount(); });
+});
+

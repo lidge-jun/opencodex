@@ -114,6 +114,11 @@ const BLOCKER_KEYS = {
   not_limited: "anthropicGrant.requiresLimit",
 } as const satisfies Record<AnthropicGrantBlocker, TKey>;
 
+/** An ISO time only when it parses; anything else is shown as absent rather than "Invalid Date". */
+function validTime(iso: string | null): string | null {
+  return iso !== null && !Number.isNaN(Date.parse(iso)) ? iso : null;
+}
+
 function grantName(grant: AnthropicResetGrant): string {
   return grant.label || grant.id;
 }
@@ -139,7 +144,9 @@ function GrantOption({ grant, snapshot, checked, selectable, optionRef, onSelect
   locale: string;
   t: TFn;
 }) {
-  const days = grant.endsAt ? daysUntil(grant.endsAt) : null;
+  const startsAt = validTime(grant.startsAt);
+  const endsAt = validTime(grant.endsAt);
+  const days = endsAt ? daysUntil(endsAt) : null;
   const blocker = grantBlocker(snapshot, grant);
   const note = blocker ? t(BLOCKER_KEYS[blocker]) : null;
   return (
@@ -163,10 +170,10 @@ function GrantOption({ grant, snapshot, checked, selectable, optionRef, onSelect
         </span>
       </div>
       <div className="credit-item-dates">
-        {grant.startsAt && <span>{t("anthropicGrant.validFrom", { date: formatCreditDate(grant.startsAt, locale) })}</span>}
-        {grant.endsAt && days !== null && (
+        {startsAt && <span>{t("anthropicGrant.validFrom", { date: formatCreditDate(startsAt, locale) })}</span>}
+        {endsAt && days !== null && (
           <span className={days <= 7 ? "credit-urgent" : ""}>
-            {t("anthropicGrant.expires", { date: formatCreditDateTime(grant.endsAt, locale), days: String(days) })}
+            {t("anthropicGrant.expires", { date: formatCreditDateTime(endsAt, locale), days: String(days) })}
           </span>
         )}
       </div>
@@ -360,6 +367,7 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
     </p>
   );
 
+  const confirmEndsAt = confirming ? validTime(confirming.grant.endsAt) : null;
   const heldGrant = unresolved && snapshot ? snapshot.grants.find(grant => grant.id === unresolved.grantId) : undefined;
   const total = snapshot ? unspentResets(snapshot) : 0;
 
@@ -400,16 +408,16 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
               <p className="faint text-label" data-anthropic-grant-confirm-which={confirming.grantId}>
                 {t("anthropicGrant.confirmWhich", { label: grantName(confirming.grant) })}
               </p>
-              {confirming.grant.endsAt && (
+              {confirmEndsAt && (
                 <p className="faint text-label">
-                  {t("anthropicGrant.confirmExpires", { date: formatCreditDateTime(confirming.grant.endsAt, locale) })}
+                  {t("anthropicGrant.confirmExpires", { date: formatCreditDateTime(confirmEndsAt, locale) })}
                 </p>
               )}
-              {confirming.grant.clears.length > 0 && (
-                <p className="faint text-label">
-                  {t("anthropicGrant.confirmClears", { windows: clearedWindows(confirming.grant, locale, t) })}
-                </p>
-              )}
+              <p className="faint text-label">
+                {confirming.grant.clears.length > 0
+                  ? t("anthropicGrant.confirmClears", { windows: clearedWindows(confirming.grant, locale, t) })
+                  : t("anthropicGrant.confirmClearsUnknown")}
+              </p>
               <p className="faint text-label">{t("anthropicGrant.irreversible")}</p>
             </div>
             <div className="modal-actions">
