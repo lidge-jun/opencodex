@@ -54,8 +54,9 @@ export interface LinkListenerLifecycle<T> {
   start(ctx: LinkListenerStartContext<T>): void;
   ensureStarted(): Promise<void>;
   linkAdmissionKeyIds(): ReadonlySet<string>;
-  onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
-  notifyAuthenticatedCatalog(apiKeyId: string): void;
+  /** A key-admitted catalog request; routeProofId is a multi-route readiness proof it carried (src/link/route-proof.ts). */
+  onAuthenticatedCatalog(listener: (apiKeyId: string, routeProofId?: string) => void): () => void;
+  notifyAuthenticatedCatalog(apiKeyId: string, routeProofId?: string): void;
   /** What this Home last learned of a Child over the link; empty until it relays a request. */
   peerObservation(linkId: string): LinkPeerEntry;
   /** Relayed model traffic for one link (D5); legacy key admissions count against every link. */
@@ -85,7 +86,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   let ensureFlight: Promise<void> | undefined;
   let closeFlight: Promise<void> | undefined;
   let stopped = false;
-  const authenticatedCatalogListeners = new Set<(apiKeyId: string) => void>();
+  const authenticatedCatalogListeners = new Set<(apiKeyId: string, routeProofId?: string) => void>();
   const catalogServedListeners = new Set<(served: LinkCatalogServed) => void>();
   let lifecycleStatus: LinkListenerStatus = { state: "off", port: null, reason: null };
   const peers = createLinkPeerObservations();
@@ -230,8 +231,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       authenticatedCatalogListeners.add(listener);
       return () => { authenticatedCatalogListeners.delete(listener); };
     },
-    notifyAuthenticatedCatalog(apiKeyId) {
-      for (const listener of authenticatedCatalogListeners) listener(apiKeyId);
+    notifyAuthenticatedCatalog(apiKeyId, routeProofId) {
+      for (const listener of authenticatedCatalogListeners) listener(apiKeyId, routeProofId);
     },
     peerObservation: linkId => peers.get(linkId),
     linkActivity: (linkId, now) => activity.snapshot(linkId, now),

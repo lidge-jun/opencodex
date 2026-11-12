@@ -247,7 +247,7 @@ export interface ServeOptionsContext {
   loopbackRouteAllowed: (url: URL, req: Request) => boolean;
   managementIngressRouteAllowed: (url: URL, req: Request) => boolean;
   linkRouteAllowed: (url: URL, req: Request) => boolean;
-  onAuthenticatedCatalog: (apiKeyId: string) => void;
+  onAuthenticatedCatalog: (apiKeyId: string, routeProofId?: string) => void;
   linkPolicy: () => RequestPolicyView;
   packageTreeChangedResponse: (
     req: Request,
@@ -391,7 +391,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
         if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === ""
           && (req.method === "GET" || req.method === "HEAD")
-          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId);
+          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId, req.headers.get("x-opencodex-link-route-proof") ?? undefined);
         // #6957: the Child's read-only view of this Home. Admitted by the link key above and by
         // the shared table in src/link/management-routes.ts; never reachable on another ingress.
         if (isLinkManagementPath(requestUrl.pathname)) {
