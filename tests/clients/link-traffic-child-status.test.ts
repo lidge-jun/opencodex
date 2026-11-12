@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
@@ -101,3 +101,31 @@ for (const [label, sidecar, reason] of [
     expect(calls).toEqual([]);
   });
 }
+
+test("a lost sidecar under a Child-initiated marker makes the traffic row failed, not a Home-initiated idle link", async () => {
+  writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole: "client", client: connection }));
+  mkdirSync(join(root, "link"), { recursive: true });
+  writeFileSync(join(root, "link", "child-initiated.json"), JSON.stringify({ linkId: LINK_ID }));
+  const calls: string[][] = [];
+  const runner: SshRunner = {
+    async run(argv) { calls.push([...argv]); return { code: 0, stdout: "", stderr: "" }; },
+    spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
+  };
+  const server = startMachineListener(0, { state: connection, managementAuthState: authState(), linkSshRunner: runner, readSidecar: () => null });
+  servers.push(server);
+  const html = await (await fetch(new URL("/opencodex-session", server.url))).text();
+  const headers = { "X-OpenCodex-API-Key": meta(html, "opencodex-session-token"), "X-OpenCodex-GUI-Origin": meta(html, "opencodex-session-origin") };
+  const counted = await (await fetch(new URL("/api/link/status?traffic=1", server.url), { headers })).json() as { links: Array<Record<string, unknown>> };
+  expect(counted.links[0]).toMatchObject({ alias: "unknown", direction: "client-initiated", state: "failed", reason: "sidecar_missing", path: { via: "unknown" } });
+  expect(calls).toEqual([]);
+});
+
+test("no sidecar and no marker is a Home-initiated link that reads idle since it connected", async () => {
+  writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole: "client", client: connection }));
+  const server = startMachineListener(0, { state: connection, managementAuthState: authState(), readSidecar: () => null });
+  servers.push(server);
+  const html = await (await fetch(new URL("/opencodex-session", server.url))).text();
+  const headers = { "X-OpenCodex-API-Key": meta(html, "opencodex-session-token"), "X-OpenCodex-GUI-Origin": meta(html, "opencodex-session-origin") };
+  const counted = await (await fetch(new URL("/api/link/status?traffic=1", server.url), { headers })).json() as { links: Array<Record<string, unknown>> };
+  expect(counted.links[0]).toMatchObject({ direction: "hub-initiated", state: "idle", since: connection.connectedAt, reason: null, path: { via: "unknown" } });
+});
