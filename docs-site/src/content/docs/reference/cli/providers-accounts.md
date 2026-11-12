@@ -334,7 +334,8 @@ Otherwise, if the existing account's organization stays unknown (expired token, 
 login whose own organization was not reported), the login may replace it, as earlier releases did.
 Reauthenticating an account is refused when its known organization differs from the login's, or
 when another account already holds the login's organization; add the other organization as a new
-login instead. With an unknown organization on either side, reauthentication proceeds as before. Before adding another
+login instead. An unknown organization on either side never counts as a conflict, but the
+second rule still applies: another account holding the login's known organization refuses it. Before adding another
 organization, make sure the existing account is signed in and its token is current, for example
 by sending it one request.
 
