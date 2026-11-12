@@ -155,8 +155,11 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   because Bun's text embeds the URL and the poll body carries the `device_code`. The CLI reports it
   as `oauth_authentication_failed`, not `network_error`, on both CLI surfaces: the callback
   reporter (`src/oauth/login-cli-errors.ts`) and the headless device branch of
-  `src/oauth/login-cli.ts`, which otherwise classifies through `classifyLoginCodeError` and would
-  call it `invalid_or_expired_code`. A plain `TypeError` and a real connection
+  `src/oauth/login-cli.ts`. The machine-readable reason is owned by
+  `classifyLoginCodeError` in `src/oauth/login-flow-state.ts`, which the headless CLI, the
+  code-mode paste response and `GET /api/oauth/status` all read, so the refusal reaches API
+  callers as `oauth_authentication_failed` rather than the `invalid_or_expired_code` fallthrough
+  that would tell them their device code was bad. A plain `TypeError` and a real connection
   failure carry neither marker and stay retriable. The inherited browser-callback, code-exchange
   and refresh requests keep the runtime's default redirect policy. Regression coverage:
   `tests/providers/xai/xai-device-login.test.ts`, `tests/oauth/oauth-login-cli-errors.test.ts`,

@@ -17,7 +17,6 @@ import { configuredAdminToken } from "../lib/admin-secrets";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
 import { reportOAuthLoginError } from "./login-cli-errors";
-import { XaiRedirectRefusedError } from "./xai";
 import { terminalSafeText } from "../lib/terminal-safe-text";
 
 /**
@@ -196,12 +195,10 @@ async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> 
   } catch (error) {
     // Never let the raw error reach stderr: a token endpoint's error body can quote the pasted
     // code back. Only fixed, allowlisted text and the machine-readable reason are printed.
-    // A refused redirect is a definitive answer, not a bad paste: `classifyLoginCodeError` would
-    // fall through to `invalid_or_expired_code` for an error that carries no HTTP status, telling
-    // the operator to try another code when the client will refuse the same redirect again.
-    const reason = error instanceof XaiRedirectRefusedError
-      ? "oauth_authentication_failed"
-      : classifyLoginCodeError(error);
+    // The reason comes from the same classifier the management API reports, so a definitive
+    // refusal (a redirect the client will not follow) reads as `oauth_authentication_failed`
+    // here and in `GET /api/oauth/status` rather than as a bad code or a network fault.
+    const reason = classifyLoginCodeError(error);
     console.error(`\n❌ ${name} login failed (${reason}): ${publicOAuthAuthenticationErrorMessage(error)}`);
     process.exit(1);
   }

@@ -40,7 +40,8 @@ unchanged.
 - **Paste contract.** `POST /api/oauth/login/code` with a `flowId` (or while the provider's newest
   flow is code-mode) answers with the **outcome of the token exchange**, not merely acceptance:
   `{ ok: true, account }` or `{ ok: false, error }` where `error` is one of `state_mismatch`,
-  `invalid_or_expired_code`, `no_pending_login` (409), `provider_unreachable`, `malformed_input`.
+  `invalid_or_expired_code`, `no_pending_login` (409), `provider_unreachable`, `malformed_input`,
+  `oauth_authentication_failed`.
   `account` is the row this flow wrote (recorded when it settles), which need not be the active
   account; a flow cleared or dropped while its exchange runs answers `no_pending_login`. A
   `flowId` that is not a code flow of the named provider answers `no_pending_login` without
@@ -50,7 +51,11 @@ unchanged.
   A code flow is single-use after that: once a paste is handed to the token exchange, further
   pastes answer `no_pending_login`, and a failed exchange settles the flow. `provider_unreachable` is reserved
   for a network failure (`TimeoutError`/`AbortError`, or a fetch `TypeError` carrying a `code`);
-  any other error falls to `invalid_or_expired_code`, with the original message kept on the flow.
+  `oauth_authentication_failed` is a definitive provider refusal the client will not retry (today,
+  a redirect the device poll refused to follow); any other error falls to
+  `invalid_or_expired_code`, with the original message kept on the flow. `classifyLoginCodeError`
+  in `src/oauth/login-flow-state.ts` is the single source of these reasons: the paste response,
+  `GET /api/oauth/status` (`errorCode`) and the headless CLI all read it.
   Without a `flowId` and with no code-mode flow, the legacy accept-only contract is unchanged.
 - **Status.** `GET /api/oauth/status` reports the provider's newest flow, including `mode` for a
   code flow. An explicit flow id is honoured only for its own provider. A caller running several flows tracks each one through its own paste response.

@@ -17,7 +17,7 @@ import {
 } from "../../src/oauth";
 import { getAccountSet, removeCredential, resetOAuthReauthReconcileStateForTests } from "../../src/oauth/store";
 import { admitLoginFlow, classifyLoginCodeError, loginFlowKeys, loginState, resetOAuthFlowReconcileStateForTests } from "../../src/oauth/login-flow-state";
-import { ANTHROPIC_CODE_REDIRECT_URI, AnthropicOAuthFlow } from "../../src/oauth/anthropic";
+import { ANTHROPIC_CODE_REDIRECT_URI, AnthropicOAuthFlow, AnthropicTokenError } from "../../src/oauth/anthropic";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -714,10 +714,132 @@ describe("OAuth code-display login", () => {
     expect(listCodeLoginProviders()).toContain("xai");
   });
 
+  // A refused redirect must reach API callers with its own reason. The management status route is
+  // the surface a dashboard polls, and it reports `errorCode` straight from the classifier that
+  // `startLoginFlow` settles with; before this, that classifier fell through to
+  // `invalid_or_expired_code`, telling a caller its device code was bad when the client had
+  // deliberately refused to follow a redirect.
+  describe("xAI device flow reason over the status API", () => {
+    const original = globalThis.fetch;
+    /** The error this runtime really throws for `redirect: "error"`, from a live loopback server. */
+    async function realRedirectRefusal(): Promise<Error> {
+      const server = Bun.serve({
+        hostname: "127.0.0.1", port: 0,
+        fetch: () => new Response(null, { status: 307, headers: { location: "https://auth.x.ai/oauth2/token" } }),
+      });
+      try {
+        await fetch(`http://127.0.0.1:${server.port}/redirect`, { method: "POST", redirect: "error", body: "x=1" });
+        throw new Error("fixture server did not redirect");
+      } catch (error) {
+        return error as Error;
+      } finally {
+        await server.stop(true);
+      }
+    }
+
+    /**
+     * Discovery and device authorization always succeed; the token poll is `poll`. The grant
+     * interval is the smallest the client accepts (1s), so this costs one real interval and no
+     * arbitrary wait: `waitForLoginSettled` is what bounds the assertions.
+     */
+    function mockDevicePoll(poll: (url: string, init?: RequestInit) => Response): string[] {
+      const originalFetch = globalThis.fetch;
+      const tokenCalls: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "https://auth.x.ai/.well-known/openid-configuration") {
+          return Response.json({
+            authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+            token_endpoint: "https://auth.x.ai/oauth2/token",
+            device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+          });
+        }
+        if (url === "https://auth.x.ai/oauth2/device/code") {
+          return Response.json({
+            device_code: "device-secret-code", user_code: "ABCD-EFGH",
+            verification_uri: "https://accounts.x.ai/oauth2/device", expires_in: 60, interval: 0.01,
+          });
+        }
+        if (url === "https://auth.x.ai/oauth2/token") {
+          tokenCalls.push(url);
+          return poll(url, init);
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+      return tokenCalls;
+    }
+
+    test("a granted device login completes, and status carries no reason or secret", async () => {
+      const tokenCalls = mockDevicePoll(() => Response.json({ access_token: "access", refresh_token: "refresh", expires_in: 3600 }));
+      const server = startServer(0);
+      try {
+        const started = await startLoginFlow("xai", { forceLogin: true, flow: "device" });
+        expect(started.deviceCode).toBe("ABCD-EFGH");
+        expect(await waitForLoginSettled("xai", 10_000)).toBe(true);
+        const response = await fetch(new URL("/api/oauth/status?provider=xai", server.url));
+        const raw = await response.text();
+        const body = JSON.parse(raw) as { status: string; loggedIn: boolean; errorCode?: string; error?: string };
+        expect(body).toMatchObject({ status: "complete", loggedIn: true });
+        expect(body.errorCode).toBeUndefined();
+        expect(body.error).toBeUndefined();
+        expect(tokenCalls).toHaveLength(1);
+        expect(raw).not.toContain("device-secret-code");
+        expect(raw).not.toContain("ABCD-EFGH");
+        expect(raw).not.toContain("oauth2/token");
+      } finally {
+        await server.stop(true);
+        cancelLoginFlow("xai");
+        clearLoginState("xai");
+        globalThis.fetch = original;
+      }
+    });
+
+    test("a redirect refused by the client settles as oauth_authentication_failed, not a bad code", async () => {
+      const refusal = await realRedirectRefusal();
+      const tokenCalls = mockDevicePoll(() => { throw refusal; });
+      const server = startServer(0);
+      try {
+        const started = await startLoginFlow("xai", { forceLogin: true, flow: "device" });
+        expect(started.deviceCode).toBe("ABCD-EFGH");
+        expect(await waitForLoginSettled("xai", 10_000)).toBe(true);
+        const response = await fetch(new URL("/api/oauth/status?provider=xai", server.url));
+        const raw = await response.text();
+        const body = JSON.parse(raw) as { status: string; loggedIn: boolean; errorCode?: string; error?: string; done: boolean };
+        expect(body).toMatchObject({ status: "error", done: true, errorCode: "oauth_authentication_failed" });
+        expect(body.loggedIn).not.toBe(true);
+        // The public message is the fixed one; the runtime's redirect text embeds the target URL
+        // and the poll body carries the device code, so neither may surface here.
+        expect(body.error).toBe("OAuth authentication failed. Check the OpenCodex account status and retry.");
+        expect(raw).not.toContain("device-secret-code");
+        expect(raw).not.toContain("UnexpectedRedirect");
+        expect(raw).not.toContain("oauth2/token");
+        expect(raw).not.toContain("invalid_or_expired_code");
+        expect(raw).not.toContain("provider_unreachable");
+        // One poll, then the terminal refusal: the refusal is not retried as a network fault.
+        expect(tokenCalls).toHaveLength(1);
+      } finally {
+        await server.stop(true);
+        cancelLoginFlow("xai");
+        clearLoginState("xai");
+        globalThis.fetch = original;
+      }
+    });
+
+    test("the shared classifier names the refusal, and existing code failures keep their reason", async () => {
+      const { XaiRedirectRefusedError } = await import("../../src/oauth/xai");
+      expect(classifyLoginCodeError(new XaiRedirectRefusedError())).toBe("oauth_authentication_failed");
+      // Unaffected by the new branch: a 4xx stays a code problem, a 5xx a provider problem.
+      expect(classifyLoginCodeError(new AnthropicTokenError("body", 400, "invalid_grant"))).toBe("invalid_or_expired_code");
+      expect(classifyLoginCodeError(new AnthropicTokenError("body", 503, "server_error"))).toBe("provider_unreachable");
+      expect(classifyLoginCodeError(new TypeError("Cannot read properties of undefined"))).toBe("invalid_or_expired_code");
+    });
+  });
+
   // A refused redirect on the device grant is a definitive server answer, and the CLI surface that
-  // runs that grant reports it through `classifyLoginCodeError`, not the callback reporter. That
-  // classifier sees no HTTP status and would fall through to `invalid_or_expired_code`, sending the
-  // operator to try another code against a client that will refuse the same redirect again.
+  // runs that grant reports it through `classifyLoginCodeError`, not the callback reporter. The
+  // classifier names it `oauth_authentication_failed` rather than falling through to
+  // `invalid_or_expired_code`, which would send the operator to try another code against a client
+  // that will refuse the same redirect again.
   test("a refused xAI redirect in the headless device login is reported as an auth failure", async () => {
     const { handleLogin } = await import("../../src/oauth/login-cli");
     const { XaiRedirectRefusedError } = await import("../../src/oauth/xai");
