@@ -384,7 +384,7 @@ describe("link socket sweep and revocation (design 2.4, 11.1-4)", () => {
     expect(lifecycle.status().state).toBe("off");
   });
 
-  test("through the real listener, a busy link socket counts in linkActivity and its close ends the count (T5b-R1-01)", async () => {
+  test("through the real listener, a busy link socket counts in linkActivity, and a close with a tool pending keeps it there as a hold (T5b-R1-01, T5d1)", async () => {
     const seen: { message?: () => void; closed?: () => void } = {};
     let finish: (() => void) | undefined;
     let socketActivity: import("../../src/codex/websocket-activity").CodexWebSocketActivity | undefined;
@@ -407,7 +407,9 @@ describe("link socket sweep and revocation (design 2.4, 11.1-4)", () => {
     const closed = new Promise<void>(resolve => { seen.closed = resolve; });
     wire.destroy();
     await closed;
-    expect(lifecycle.linkActivity(linkId, Date.now()).inFlight).toBe(0);
+    // The socket's own count ended (tests/server/link-websocket-drain.test.ts covers that alone); the
+    // pending tool result left a durable hold, so the link stays in flight for the restart gates.
+    expect(lifecycle.linkActivity(linkId, Date.now()).inFlight).toBe(1);
   });
 
   test("a removed link refuses the next frame before the shared handler sees it", async () => {

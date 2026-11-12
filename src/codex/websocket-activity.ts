@@ -24,6 +24,19 @@ function resultKey(type: string, id: string): string {
   return createHash("sha256").update(JSON.stringify([type, id])).digest("hex");
 }
 
+function resultKeyOfItem(item: unknown): string | null {
+  if (!record(item) || typeof item.type !== "string") return null;
+  const id = item.type === "mcp_approval_response" ? item.approval_request_id : item.call_id;
+  if (typeof id !== "string" || id.length > MAX_RESULT_ID_LENGTH) return null;
+  return resultKey(item.type === "local_shell_call_output" ? "function_call_output" : item.type, id);
+}
+
+/** The hashed result keys an input returns, in the tracker's own encoding (content-free). */
+export function resultKeysOf(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input.map(resultKeyOfItem).filter((key): key is string => key !== null);
+}
+
 /** Content-free activity owned by one admitted incoming Responses socket. */
 export class CodexWebSocketActivity {
   lastUsed = ++activityOrder;
@@ -53,6 +66,12 @@ export class CodexWebSocketActivity {
   /** A turn admitted on this socket has not finished, superseded cleanup included. */
   get running(): boolean { return this.turns > 0; }
 
+  /** How many admitted turns have not finished, superseded cleanup included. */
+  get runningTurns(): number { return this.turns; }
+
+  /** The hashed keys of the results this socket is waiting for (content-free). */
+  pendingKeys(): string[] { return [...this.pendingResults]; }
+
   /** Identities overflowed or were ambiguous: completion of client work cannot be proved. */
   get untracked(): boolean { return this.untrackedResults; }
 
@@ -78,12 +97,7 @@ export class CodexWebSocketActivity {
     }
   }
 
-  private resultKeyOf(item: unknown): string | null {
-    if (!record(item) || typeof item.type !== "string") return null;
-    const id = item.type === "mcp_approval_response" ? item.approval_request_id : item.call_id;
-    if (typeof id !== "string" || id.length > MAX_RESULT_ID_LENGTH) return null;
-    return resultKey(item.type === "local_shell_call_output" ? "function_call_output" : item.type, id);
-  }
+  private resultKeyOf(item: unknown): string | null { return resultKeyOfItem(item); }
 
   touch(): void {
     this.lastUsed = ++activityOrder;

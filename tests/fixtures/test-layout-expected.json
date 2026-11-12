@@ -1693,5 +1693,7 @@
   "link-websocket-gate.test.ts": "server",
   "link-websocket-drain.test.ts": "server",
   "link-websocket-pump.test.ts": "server",
-  "link-websocket-rss.test.ts": "e2e-style"
+  "link-websocket-rss.test.ts": "e2e-style",
+  "link-websocket-holds.test.ts": "server",
+  "link-ws-activity-holds.test.ts": "clients"
 }

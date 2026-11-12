@@ -33,6 +33,9 @@ export interface LinkWebsocketLimits {
   framerSliceBytes: number;
   /** A link socket that does not drain for this long is closed; the turn's own stall bound. */
   sendStallMs: number;
+  /** Durable activity holds per link, and across links, before a link becomes unknown (design 5). */
+  holdsPerLink: number;
+  holdsTotal: number;
 }
 
 export const LINK_WS_LIMITS: Readonly<LinkWebsocketLimits> = Object.freeze({
@@ -49,6 +52,8 @@ export const LINK_WS_LIMITS: Readonly<LinkWebsocketLimits> = Object.freeze({
   sendThresholdBytes: 1 * MiB,
   framerSliceBytes: 256 * 1024,
   sendStallMs: 300_000,
+  holdsPerLink: 64,
+  holdsTotal: 1024,
 });
 
 /** Close code for a socket whose link, key or fingerprint no longer authorizes it. */

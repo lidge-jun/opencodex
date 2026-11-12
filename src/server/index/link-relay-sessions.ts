@@ -47,6 +47,12 @@ export interface LinkRelaySessionOptions {
   upgrade?: (req: Request, server: Server<unknown>, grant: LinkSessionGrant) => LinkUpgradeOutcome;
   /** Whether verified answers advertise the link WebSocket; the header pair is sent only while on. */
   websocketAdvertised?: () => boolean;
+  /**
+   * A relayed POST /v1/responses on a verified session, before dispatch: it may return results a
+   * closed link WebSocket of the same link and own thread was waiting for (link-websocket.ts holds).
+   * Must not consume the request body.
+   */
+  observeResponsesRequest?: (linkId: string, req: Request) => void;
 }
 
 /** One book per bound listener. A pending proof reserves the bind before the data request arrives. */
@@ -162,6 +168,9 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         release = () => { end(); lease(); };
       };
       if (countsActivity && sessionLink !== null) beginActivity();
+      if (sessionLink !== null && req.method === "POST" && url.pathname === "/v1/responses") {
+        try { options.observeResponsesRequest?.(sessionLink, req); } catch { /* observation never blocks the request */ }
+      }
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
       const beforeHeadersAbort = () => release();

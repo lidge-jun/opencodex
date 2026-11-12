@@ -34,7 +34,8 @@ export function isLinkIdle(snapshot: LinkActivitySnapshot, now: number, idleAfte
 interface ActivityEntry { inFlight: number; lastDataEndAt: number | null }
 
 /** In memory, no timers. One small entry per link id that ever relayed; links are bounded by links.json. */
-export function createLinkActivity(deps: { now?: () => number } = {}): LinkActivity {
+/** held: durable link WebSocket holds (src/link/ws-activity-holds.ts), counted as in flight. */
+export function createLinkActivity(deps: { now?: () => number; held?: (linkId: string) => number } = {}): LinkActivity {
   const now = deps.now ?? Date.now;
   const observedSince = now();
   const perLink = new Map<string, ActivityEntry>();
@@ -74,7 +75,9 @@ export function createLinkActivity(deps: { now?: () => number } = {}): LinkActiv
     snapshot(linkId) {
       const entry = perLink.get(linkId);
       const ends = [entry?.lastDataEndAt ?? null, legacy.lastDataEndAt].filter((value): value is number => value !== null);
-      return { inFlight: (entry?.inFlight ?? 0) + legacy.inFlight, lastDataEndAt: ends.length ? Math.max(...ends) : null, observedSince };
+      let held = 0;
+      try { held = deps.held?.(linkId) ?? 0; } catch { held = 1; }
+      return { inFlight: (entry?.inFlight ?? 0) + legacy.inFlight + held, lastDataEndAt: ends.length ? Math.max(...ends) : null, observedSince };
     },
   };
 }

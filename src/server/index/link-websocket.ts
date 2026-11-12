@@ -8,6 +8,8 @@ import type { AdmissionReservation } from "../../lib/admission";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { classifyUsageClient } from "../../usage/client";
 import type { LinkActivity, LinkSocketActivity } from "../../link/child-activity";
+import type { ActivityHolds } from "../../link/ws-activity-holds";
+import { resultKeysOf } from "../../codex/websocket-activity";
 import {
   LINK_WS_AGE_CLOSE, LINK_WS_DISABLED_CLOSE, LINK_WS_IDLE_CLOSE, LINK_WS_LIMITS, LINK_WS_REVOKED_CLOSE, type LinkWebsocketLimits,
 } from "./link-websocket-limits";
@@ -119,6 +121,8 @@ export interface LinkWebsocketGateDeps {
   now?: () => number;
   /** The per-link activity book: a busy link socket counts in flight there (design T4 section 5). */
   activity?: LinkActivity;
+  /** Durable holds: a busy close leaves one, and the crash fence is armed before the first upgrade. */
+  holds?: ActivityHolds;
 }
 
 /** What the gate keeps per open link socket. */
@@ -132,6 +136,10 @@ interface SocketState {
   closeAfterTurn: boolean;
   book: LinkSocketActivity | null;
   unsubscribe: () => void;
+  /** HMAC of the socket's own thread id; undefined until known, null when it has none. */
+  threadHash: string | null | undefined;
+  /** Closed by revocation: such a close leaves no hold (design 5). */
+  revoked: boolean;
 }
 
 const defaultTimers: LinkWebsocketTimers = {
@@ -181,6 +189,8 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
     const link = ws.data.link;
     if (!link || link.fenced) return;
     link.fenced = true;
+    const state = states.get(ws);
+    if (state && close === LINK_WS_REVOKED_CLOSE) state.revoked = true;
     if (ws.data.responsesActivity) ws.data.responsesActivity.closing = true;
     try { ws.data.cancel?.(); } catch { /* the close below still ends the socket */ }
     try { ws.close(close.code, close.reason); } catch { /* already closing */ }
@@ -245,6 +255,36 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
     if (!pastDeadline(state) && !activity.untracked && activity.returnsPending(frame.input)) return true;
     fence(ws, LINK_WS_DISABLED_CLOSE);
     return false;
+  };
+
+  /**
+   * A create on a link socket may return results a closed socket of the same link and own thread was
+   * waiting for. Parses only while the thread is still unknown or the link has releasable holds.
+   */
+  const observeForHolds = (ws: ServerWebSocket<WsData>, linkId: string, state: SocketState, raw: string | Buffer): void => {
+    const holds = deps.holds!;
+    if (state.threadHash !== undefined && !holds.releasable(linkId)) return;
+    let frame: Record<string, unknown>;
+    try { frame = JSON.parse(typeof raw === "string" ? raw : raw.toString()) as Record<string, unknown>; } catch { return; }
+    if (frame.type !== "response.create") return;
+    if (state.threadHash === undefined) {
+      const metadata = frame.client_metadata as Record<string, unknown> | undefined;
+      const threadId = metadata && typeof metadata.thread_id === "string" && metadata.thread_id ? metadata.thread_id : null;
+      state.threadHash = threadId ? holds.threadHash(threadId) : null;
+    }
+    if (holds.releasable(linkId)) holds.observe(linkId, state.threadHash, resultKeysOf(frame.input));
+  };
+
+  /** Design 5: a socket that closes while busy, for any reason except revocation, leaves a hold. */
+  const holdOnClose = (ws: ServerWebSocket<WsData>): void => {
+    const holds = deps.holds;
+    const link = ws.data.link;
+    const state = states.get(ws);
+    const activity = ws.data.responsesActivity;
+    if (!holds || !link || !state || state.revoked || !activity) return;
+    const pendingKeys = activity.pendingKeys();
+    if (!activity.running && pendingKeys.length === 0 && !activity.untracked) return;
+    holds.add(link.linkId, { threadHash: state.threadHash ?? null, pendingKeys, runningMarks: activity.runningTurns, untracked: activity.untracked });
   };
 
   const sweep = (): void => {
@@ -318,6 +358,10 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
         const admission = resolveResponsesApiAuth(req, deps.policy());
         if (!admission || admission.kind !== "configured" || admission.keyId !== grant.keyId) return refuse(unauthorized());
         if (!authorized(grant)) return refuse(unauthorized());
+        // Design 5: the crash fence is durable before any link socket exists; without it, no upgrade.
+        if (deps.holds && !deps.holds.arm()) {
+          return refuse(formatErrorResponse(426, "upgrade_required", "Remote Link WebSocket activity cannot be recorded; use HTTP.", { code: "link_websocket_unavailable" }));
+        }
         const memory = reserveMemory();
         if (!memory) return refuse(capacityRefusal());
         leases.add(memory);
@@ -371,7 +415,12 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           const state: SocketState = {
             openedAt: now(), idleSince: null, drainingSince: null, closeAfterTurn: false,
             book: deps.activity?.beginSocket(link.linkId) ?? null, unsubscribe: () => {},
+            threadHash: undefined, revoked: false,
           };
+          // Codex sends its own thread id on the handshake; a socket without it may name one in its
+          // first create's client_metadata (observeForHolds).
+          const threadId = ws.data.headers?.get("thread-id");
+          if (deps.holds && threadId) state.threadHash = deps.holds.threadHash(threadId);
           states.set(ws, state);
           const activity = ws.data.responsesActivity;
           if (activity) {
@@ -396,11 +445,14 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           if (state) {
             if (!enabledNow()) startDrain(state);
             if (state.drainingSince !== null && !admitWhileDraining(ws, state, raw)) return;
+            if (deps.holds) observeForHolds(ws, link.linkId, state, raw);
           }
           return base.message?.(ws, raw);
         },
         close(ws, code, reason) {
           try {
+            // Snapshot before the shared close cancels the turn: a busy socket leaves a hold.
+            holdOnClose(ws);
             // A link pump waiting for a drain stops waiting once the socket is gone.
             ws.data.link?.drained?.();
             base.close?.(ws, code, reason);

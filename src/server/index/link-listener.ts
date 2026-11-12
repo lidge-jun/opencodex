@@ -6,6 +6,9 @@ import type { RequestPolicyView } from "../auth-cors";
 import type { WsData } from "../ws-bridge";
 import { createLinkWebsocketGate, type LinkWebsocketGateDeps } from "./link-websocket";
 import { linkWebsocketTransportReady } from "./link-websocket-limits";
+import { createActivityHolds } from "../../link/ws-activity-holds";
+import { resultKeysOf } from "../../codex/websocket-activity";
+import { dirname } from "node:path";
 import {
   emptyLinkStore,
   readLinkStore,
@@ -76,6 +79,8 @@ export interface LinkListenerLifecycle<T> {
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
   /** The Home's own revoke path closes this link's WebSockets (4401) in the same task. */
   closeLinkSockets(linkId: string): number;
+  /** Resolves once relayed requests already seen have been checked against activity holds. */
+  activityHoldsSettled(): Promise<void>;
   /** A Child read a whole 200 `GET /v1/catalog` body through the relay. */
   onCatalogServed(listener: (served: LinkCatalogServed) => void): () => void;
   status(): LinkListenerStatus;
@@ -106,7 +111,16 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   let lifecycleStatus: LinkListenerStatus = { state: "off", port: null, reason: null };
   const peers = createLinkPeerObservations();
   // Lifecycle-owned so a rebind keeps the book.
-  const activity = createLinkActivity();
+  // Durable link WebSocket holds (design T4 section 5) live beside links.json. Nothing is read or
+  // written unless a crash fence exists or a link upgrade arms one.
+  const holds = createActivityHolds({
+    dir: dirname(storePath),
+    linkIds: () => { try { return readStore(storePath).links.map(link => link.id); } catch { return []; } },
+  });
+  holds.start();
+  const activity = createLinkActivity({ held: linkId => holds.count(linkId) });
+  // Relayed requests being checked against holds; tests and shutdown can wait for them.
+  const holdObservations = new Set<Promise<void>>();
 
   const setStatus = (state: LinkListenerStatus["state"], port: number | null, reason: string | null): void => {
     lifecycleStatus = { state, port, reason };
@@ -132,6 +146,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     ...deps.websocket,
     // The same lifecycle-owned book relayed HTTP turns count in, so restart gates see link sockets.
     activity,
+    holds,
     enabled: websocketEnabled,
     policy: () => startContext!.responsesWebsocket!.policy(),
     authorized: identity => fingerprintsFor(identity.keyId, identity.linkId).includes(identity.fingerprint),
@@ -157,7 +172,19 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     const linkWebsocket = startContext.responsesWebsocket;
     const sessions = createLinkRelaySessions({ peers, activity, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: fingerprintsFor,
-      ...(linkWebsocket ? { upgrade: websocketGate.upgrade, websocketAdvertised: websocketEnabled } : {}) });
+      ...(linkWebsocket ? { upgrade: websocketGate.upgrade, websocketAdvertised: websocketEnabled } : {}),
+      observeResponsesRequest: (linkId, req) => {
+        // Only a link with a releasable hold pays for reading a copy of the request body.
+        if (!holds.releasable(linkId)) return;
+        const header = req.headers.get("thread-id");
+        const observation = req.clone().json().then((body: unknown) => {
+          const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
+          const metadata = record.client_metadata as Record<string, unknown> | undefined;
+          const threadId = header || (metadata && typeof metadata.thread_id === "string" ? metadata.thread_id : "");
+          holds.observe(linkId, threadId ? holds.threadHash(threadId) : null, resultKeysOf(record.input));
+        }).catch(() => {}).finally(() => { holdObservations.delete(observation); });
+        holdObservations.add(observation);
+      } });
     let bound: Server<unknown>;
     try {
       bound = serve({
@@ -271,7 +298,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     },
     peerObservation: linkId => peers.get(linkId),
     linkActivity: (linkId, now) => activity.snapshot(linkId, now),
-    closeLinkSockets: linkId => websocketGate.closeLink(linkId),
+    // Only the Home's link removal calls this: the link's sockets close and its holds go with it.
+    closeLinkSockets: linkId => { const closed = websocketGate.closeLink(linkId); holds.removeLink(linkId); return closed; },
+    async activityHoldsSettled() { await Promise.all([...holdObservations]); },
     onCatalogServed(listener) {
       catalogServedListeners.add(listener);
       return () => { catalogServedListeners.delete(listener); };
@@ -289,6 +318,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       if (listener) await listener.stop(true);
       await close();
       websocketGate.dispose();
+      // Sockets are closed and their holds recorded; persist them, then mark the fence clean.
+      holds.stop();
       startContext = undefined;
       setStatus("off", null, null);
     },
