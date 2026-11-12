@@ -14,6 +14,8 @@ import {
 } from "../link/relay-auth";
 import { forgetVerifiedHomeConnection, recordVerifiedHomeConnection } from "./link-connection";
 import { childLinkTraffic, type LinkTrafficBook, type LinkTrafficFlow } from "../link/traffic";
+import { LINK_HOME_FEATURES_HEADER } from "../link/request-compression";
+import { recordLinkHomeFeatures } from "./link-home-features";
 
 export interface BoundLinkRelayTarget {
   tunnelPort: number;
@@ -205,8 +207,12 @@ function relayChallenge(target: BoundLinkRelayTarget, origin: URL) {
  * Called only after the Home's relay proof verified. Keep its connection generation when its own
  * proof binds it to this nonce and key; otherwise the connection is unknown, never the old value.
  */
-function noteHomeConnection(target: BoundLinkRelayTarget, nonce: string, headers: IncomingMessage["headers"]): void {
-  if (!target.linkId || !target.apiKeyId) return;
+function noteHomeConnection(target: BoundLinkRelayTarget, nonce: string, headers: IncomingMessage["headers"]): readonly string[] | null {
+  if (!target.linkId || !target.apiKeyId) return null;
+  // What this Home serves, as it named it on this verified answer (#3023). Recorded for the next
+  // request's decision and returned so this connection's own body can be chosen from it.
+  const named = headers[LINK_HOME_FEATURES_HEADER];
+  const features = recordLinkHomeFeatures(target.linkId, typeof named === "string" ? named : null);
   const generation = headers[LINK_RELAY_CONNECTION_HEADER];
   const proof = headers[LINK_RELAY_CONNECTION_PROOF_HEADER];
   const expected = typeof generation === "string"
@@ -215,6 +221,7 @@ function noteHomeConnection(target: BoundLinkRelayTarget, nonce: string, headers
   if (typeof generation === "string" && typeof proof === "string" && linkRelayProofMatches(proof, expected)) {
     recordVerifiedHomeConnection(target.linkId, generation);
   } else forgetVerifiedHomeConnection(target.linkId);
+  return features;
 }
 
 /**
@@ -271,7 +278,15 @@ export async function probeLinkRelayPreflight(
  */
 export async function fetchBoundLinkRelay(
   target: BoundLinkRelayTarget, destination: string, init: RequestInit,
-  options: { authTimeoutMs?: number; traffic?: LinkTrafficBook } = {},
+  options: {
+    authTimeoutMs?: number;
+    traffic?: LinkTrafficBook;
+    /**
+     * Choose the request body once this connection's Home has proved itself and named its
+     * features: a prepared body's zstd form only when this very answer names the capability.
+     */
+    selectBody?: (homeFeatures: readonly string[] | null) => { body: Uint8Array; headers: Record<string, string> };
+  } = {},
 ): Promise<Response> {
   const authTimeoutMs = options.authTimeoutMs ?? LINK_RELAY_AUTH_TIMEOUT_MS;
   if (!Number.isFinite(authTimeoutMs) || authTimeoutMs <= 0) throw new RangeError("invalid link relay auth timeout");
@@ -290,7 +305,7 @@ export async function fetchBoundLinkRelay(
     if (response.statusCode !== 204 || typeof proof !== "string" || !linkRelayProofMatches(proof, challenge.expected)) {
       throw new LinkRelayAuthenticationError(response.statusCode === 404);
     }
-    noteHomeConnection(target, challenge.nonce, response.headers);
+    const homeFeatures = noteHomeConnection(target, challenge.nonce, response.headers);
     // Drain the credential-free response before the Agent can reuse its socket.
     for await (const chunk of response) {
       if (chunk.length) throw new LinkRelayAuthenticationError();
@@ -301,9 +316,15 @@ export async function fetchBoundLinkRelay(
     if (!socket || socket.destroyed || socket !== agent.socket) throw new LinkRelayAuthenticationError();
     const headers = new Headers(init.headers);
     headers.set(LINK_RELAY_SESSION_HEADER, challenge.nonce);
+    let body = init.body;
+    if (options.selectBody) {
+      const chosen = options.selectBody(homeFeatures);
+      body = chosen.body;
+      for (const [name, value] of Object.entries(chosen.headers)) headers.set(name, value);
+    }
     dataRequestStarted = true;
     flow = target.linkId ? (options.traffic ?? childLinkTraffic).begin(target.linkId) : undefined;
-    const incoming = await requestOnConnection(url, { ...init, headers }, agent, socket, bytes => flow?.toHome(bytes));
+    const incoming = await requestOnConnection(url, { ...init, headers, body }, agent, socket, bytes => flow?.toHome(bytes));
     return await responseOnConnection(incoming, agent, init.method ?? "GET", flow);
   } catch (error) {
     flow?.end(false);
