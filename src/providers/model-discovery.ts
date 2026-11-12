@@ -1,4 +1,5 @@
 import { extractWorkBuddyModels } from "./workbuddy-models";
+import { extractCodeBuddyAiModels } from "./codebuddy-ai-models";
 import type { OcxProviderConfig } from "../types";
 import { providerSkipsInvalidModelRows } from "./model-discovery-config";
 import {
@@ -536,6 +537,7 @@ export function extractProviderModelItems(
 ): ProviderModelItemsResult {
   const limit = positiveIntegerAtMost(discovery.maxModels, MODEL_DISCOVERY_MAX_MODELS);
   if (discovery.spec?.format === "workbuddy") return extractWorkBuddyModels(value, limit);
+  if (discovery.spec?.format === "codebuddy-ai") return extractCodeBuddyAiModels(value, limit);
   let data: unknown[];
   let siblings: SiblingIndex | null = null;
   if (Array.isArray(value)) {

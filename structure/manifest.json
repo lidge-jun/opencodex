@@ -728,6 +728,20 @@
       ]
     },
     {
+      "path": "providers/codebuddy-ai.md",
+      "tier": 4,
+      "title": "CodeBuddy AI Subscription",
+      "scope": "CodeBuddy AI subscription provider mirroring the WorkBuddy contract.",
+      "documents": [
+        "src/oauth/codebuddy-ai.ts",
+        "src/providers/codebuddy-ai.ts",
+        "src/providers/codebuddy-ai-models.ts",
+        "src/providers/quota/codebuddy-ai.ts",
+        "src/adapters/codebuddy-ai.ts",
+        "src/adapters/codebuddy-ai-schema.ts"
+      ]
+    },
+    {
       "path": "providers/dsh-account.md",
       "tier": 4,
       "title": "DeepSeek Harness Account Provider",

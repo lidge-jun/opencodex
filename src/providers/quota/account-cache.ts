@@ -221,7 +221,7 @@ export function supportsPerAccountQuota(provider: string): boolean {
 
 export function explicitAccountReader(provider: string): boolean {
   return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code"
-    || provider === "devin" || provider === "workbuddy-ai" || provider === "dsh-account";
+    || provider === "devin" || provider === "workbuddy-ai" || provider === "codebuddy-ai" || provider === "dsh-account";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -577,6 +577,7 @@ export function quotaCredentialIdentity(provider: string, accountId: string, cre
     // every other provider's existing cache keys stay valid.
     ...(provider === "devin" && credential.apiBaseUrl ? [credential.apiBaseUrl] : []),
     ...(provider === "workbuddy-ai" ? [credential.workbuddy] : []),
+    ...(provider === "codebuddy-ai" ? [credential.codeBuddyAi] : []),
   ])).digest("hex");
 }
 
@@ -586,5 +587,5 @@ export function explicitQuotaDestination(provider: string, config: OcxProviderCo
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
   // These readers use fixed canonical billing origins, never config.baseUrl. Devin reads
   // the credential's own allowlisted api-server host instead (fetchDevinQuota revalidates it).
-  return provider === "xai" || provider === "cursor" || provider === "devin" || provider === "workbuddy-ai" || provider === "dsh-account";
+  return provider === "xai" || provider === "cursor" || provider === "devin" || provider === "workbuddy-ai" || provider === "codebuddy-ai" || provider === "dsh-account";
 }

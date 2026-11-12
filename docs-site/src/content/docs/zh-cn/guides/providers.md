@@ -222,8 +222,7 @@ API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex �
 
 ## 3. API 密钥目录
 
-opencodex 内置 107 个预设：86 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
-ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
+opencodex 内置 108 个预设：86 个密钥预设、18 个 OAuth 预设、3 个本地预设，以及 1 个默认的ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
 **ClinePass** 使用 Cline API 密钥连接[官方订阅目录](https://docs.cline.bot/getting-started/clinepass)和

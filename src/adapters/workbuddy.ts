@@ -3,6 +3,7 @@ import type { ProviderAdapter } from "./base";
 import { workBuddyToolParameters } from "./workbuddy-schema";
 import { retainTranslatedEvent, releaseTranslatedEvent } from "../lib/translator-budget";
 import { createOpenAIChatAdapter } from "./openai-chat";
+import { neutralizeClaudeCodeIdentity } from "./claude-code-identity";
 import type { AdapterEvent, OcxProviderConfig } from "../types";
 import { assertWorkBuddyDestination, WORKBUDDY_BASE_URL, workBuddyHeaders } from "../providers/workbuddy";
 
@@ -20,6 +21,7 @@ export function createWorkBuddyAdapter(provider: OcxProviderConfig): ProviderAda
       const body = JSON.parse(req.body);
       const messages = body.messages as Array<Record<string, unknown>>;
       for (const message of messages) if (message.role === "developer") message.role = "system";
+      neutralizeClaudeCodeIdentity(messages);
       if (messages[0]?.role !== "system") messages.unshift({ role: "system", content: "You are a helpful assistant." });
       if (body.max_completion_tokens !== undefined) { body.max_tokens = body.max_completion_tokens; delete body.max_completion_tokens; }
       if (body.tool_choice === "none") { delete body.tools; delete body.tool_choice; }

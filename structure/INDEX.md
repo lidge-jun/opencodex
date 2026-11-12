@@ -98,6 +98,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/anthropic-output-caps.md`](providers/anthropic-output-caps.md) | Routed omitted-output caps for adapter:anthropic rows keyed by Claude model id, precedence and unknown-id fallback. |
 | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) | Exact billing refusal evidence, immutable physical credential ownership, pacing provenance and bounded pre-output key recovery. |
 | [`providers/workbuddy.md`](providers/workbuddy.md) | Browser login, account-bound refresh and catalogs, fixed-origin Chat transport, tool continuity and display-only credit balances. |
+| [`providers/codebuddy-ai.md`](providers/codebuddy-ai.md) | CodeBuddy AI subscription provider mirroring the WorkBuddy contract. |
 | [`providers/dsh-account.md`](providers/dsh-account.md) | Explicit read-only DSH credential import, verified account identity, disabled refresh, pinned inference and probe destinations, and authoritative-empty quota. |
 | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) | Anthropic OAuth instances (primary and Pool 2), account pause, model routes, quota labels, and pool-bound helpers, quota, reset grants and management surfaces. |
 | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md) | Headless code-display OAuth login: flow ownership, expiry, unsupported providers, single-operator store. |
@@ -221,6 +222,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/anthropic-replay.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/adapters/anthropic-tool-catalog.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/adapters/base.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
+| `src/adapters/codebuddy-ai-schema.ts` | [`providers/codebuddy-ai.md`](providers/codebuddy-ai.md) |
+| `src/adapters/codebuddy-ai.ts` | [`providers/codebuddy-ai.md`](providers/codebuddy-ai.md) |
 | `src/adapters/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/adapters/kiro/` | [`providers/kiro.md`](providers/kiro.md) |
 | `src/adapters/openai-chat.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md)<br>[`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
@@ -385,6 +388,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/account-resume-health.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/api-key-pool-preserve.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/oauth/codebuddy-ai.ts` | [`providers/codebuddy-ai.md`](providers/codebuddy-ai.md) |
 | `src/oauth/dsh.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/oauth/generic-account-failover.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/oauth/login-cli.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
@@ -408,6 +412,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/providers/cc-switch-import-bytes.ts` | [`cli-management.md`](cli-management.md) |
 | `src/providers/cc-switch-import-source.ts` | [`cli-management.md`](cli-management.md) |
 | `src/providers/cc-switch-import.ts` | [`cli-management.md`](cli-management.md) |
+| `src/providers/codebuddy-ai-models.ts` | [`providers/codebuddy-ai.md`](providers/codebuddy-ai.md) |
+| `src/providers/codebuddy-ai.ts` | [`providers/codebuddy-ai.md`](providers/codebuddy-ai.md) |
 | `src/providers/codex-capacity.ts` | [`providers/openai-tiers.md`](providers/openai-tiers.md) |
 | `src/providers/dsh-account-destination.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/providers/meta-muse-plan-refusal.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
@@ -416,6 +422,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/providers/quota-decision-snapshot.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/quota/anthropic-account-quota.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/providers/quota/anthropic-cooldown-recovery-worker.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
+| `src/providers/quota/codebuddy-ai.ts` | [`providers/codebuddy-ai.md`](providers/codebuddy-ai.md) |
 | `src/providers/quota/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/providers/quota/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/providers/request-pacing.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |

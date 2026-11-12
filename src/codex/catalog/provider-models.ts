@@ -121,6 +121,7 @@ import type {
 } from "../convergence-types";
 import type { CapturedProviderGather, CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcome, ModelsAuthResolution, ModelsAuthResolver } from "./gather-capture";
 import { workBuddyCatalogIdentity } from "../../providers/workbuddy";
+import { codeBuddyAiCatalogIdentity } from "../../providers/codebuddy-ai";
 import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig, withVisionSidecarInput } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
 import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
@@ -166,6 +167,7 @@ export function observedModelsAuthResolver(
         oauthAccountId: observation.snapshot.accountId,
         oauthGeneration: observation.snapshot.generation,
         ...(observation.snapshot.workbuddy ? { workbuddy: observation.snapshot.workbuddy } : {}),
+        ...(observation.snapshot.codeBuddyAi ? { codeBuddyAi: observation.snapshot.codeBuddyAi } : {}),
         ...(observation.snapshot.providerUserId ? { oauthProviderUserId: observation.snapshot.providerUserId } : {}),
         ...(observation.snapshot.apiBaseUrl ? { oauthApiBaseUrl: observation.snapshot.apiBaseUrl } : {}),
         ...(observation.snapshot.projectId ? { oauthProjectId: observation.snapshot.projectId } : {}),
@@ -285,6 +287,7 @@ export async function fetchProviderModelsWithAuth(
           oauthAccountId: snapshot.accountId,
           oauthGeneration: snapshot.generation,
           ...(snapshot.workbuddy ? { workbuddy: snapshot.workbuddy } : {}),
+          ...(snapshot.codeBuddyAi ? { codeBuddyAi: snapshot.codeBuddyAi } : {}),
           ...(snapshot.providerUserId ? { oauthProviderUserId: snapshot.providerUserId } : {}),
           ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
@@ -658,7 +661,9 @@ export async function fetchProviderModelsWithAuth(
   if (cloudCodeAssist && !project) return observed(configured, "degraded");
   // WorkBuddy model entitlements belong to the captured account and tenant.
   const catalogAuthority = name === "workbuddy-ai"
-    ? workBuddyCatalogIdentity(apiKey!, auth.workbuddy) : undefined;
+    ? workBuddyCatalogIdentity(apiKey!, auth.workbuddy)
+    : name === "codebuddy-ai"
+      ? codeBuddyAiCatalogIdentity(apiKey!, auth.codeBuddyAi) : undefined;
   const fresh = getFreshCached(name, ttlMs, Date.now(), catalogAuthority);
   if (fresh) {
     return observed(
@@ -684,7 +689,7 @@ export async function fetchProviderModelsWithAuth(
   // The captured request predates any refresh, so a refreshing gather rebuilds it
   // from the auth it resolved: the token and its origin, together.
   const request = resolveAuth.kind === "refreshing" && name !== "anthropic2"
-    ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl, auth.workbuddy)
+    ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl, auth.workbuddy, auth.codeBuddyAi)
     : captured.request;
   const url = request.url;
   let headers = materializeCapturedHeaders(request, apiKey);

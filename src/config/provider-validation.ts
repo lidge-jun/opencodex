@@ -1,5 +1,6 @@
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { assertWorkBuddyDestination } from "../providers/workbuddy";
+import { assertCodeBuddyAiDestination } from "../providers/codebuddy-ai";
 import { resolveDshAccountMessagesUrl } from "../providers/dsh-account-destination";
 import { redactSecretString } from "../lib/redact";
 import {
@@ -455,6 +456,12 @@ export function credentialPinnedProviderConfigError(
     if (provider.adapter !== undefined && provider.adapter !== "workbuddy-ai") return 'adapter must stay "workbuddy-ai"';
     try { if (typeof provider.baseUrl === "string") assertWorkBuddyDestination(provider.baseUrl); }
     catch { return "WorkBuddy AI credentials require https://www.workbuddy.ai/v2"; }
+    return null;
+  }
+  if (providerName === "codebuddy-ai" || provider.adapter === "codebuddy-ai") {
+    if (provider.adapter !== undefined && provider.adapter !== "codebuddy-ai") return 'adapter must stay "codebuddy-ai"';
+    try { if (typeof provider.baseUrl === "string") assertCodeBuddyAiDestination(provider.baseUrl); }
+    catch { return "CodeBuddy AI credentials require https://www.codebuddy.ai/v2"; }
     return null;
   }
   if (providerName !== "dsh-account") return null;
