@@ -693,16 +693,15 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.failures).toContain("pnpm required dependency is missing from the selected store: foreign");
   });
 
-  test("refuses an undeclared dependency link reachable through an outside ancestor", () => {
+  test("an outside ancestor node_modules that supplies only undeclared names does not refuse a store-proven tree", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
     const outside = join(root, "outside", "foreign"); writeDependency(outside, "foreign");
     writeFileSync(join(outside, "index.js"), "module.exports = 1;\n");
     mkdirSync(join(root, "node_modules")); symlinkSync(outside, join(root, "node_modules", "foreign"), "dir");
     expect(realpathSync(createRequire(join(zod, "entry.js")).resolve("foreign"))).toBe(realpathSync(join(outside, "index.js")));
-    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"), exposingGroup(exposed));
-    expect(result.ok).toBe(false);
-    expect(result.failures).toContain("pnpm ancestor dependency root is outside the selected store");
+    // Above the store the ancestor walk stops: a user's own node_modules is not part of the package.
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"), exposingGroup(exposed))).toEqual({ ok: true, failures: [] });
   });
 
   test("refuses an escaping dependency link in an ancestor root inside the store", () => {
@@ -767,7 +766,7 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(verifyPnpmInstallTree(exposed, "2.0.0", store, exposingGroup(exposed))).toEqual({ ok: true, failures: [] });
   });
 
-  test("refuses an outside NODE_PATH that can supply an undeclared dependency", () => {
+  test("an outside NODE_PATH that supplies only undeclared names does not refuse a store-proven tree", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
     const fallback = join(root, "fallback"), foreign = join(fallback, "foreign"); writeDependency(foreign, "foreign");
@@ -780,9 +779,7 @@ describe("#4202 install-tree dependency ownership", () => {
     const original = process.env.NODE_PATH;
     try {
       process.env.NODE_PATH = fallback;
-      const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"), exposingGroup(exposed));
-      expect(result.ok).toBe(false);
-      expect(result.failures).toContain("pnpm global dependency lookup root is outside the selected store");
+      expect(verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"), exposingGroup(exposed))).toEqual({ ok: true, failures: [] });
     } finally {
       if (original === undefined) delete process.env.NODE_PATH; else process.env.NODE_PATH = original;
     }

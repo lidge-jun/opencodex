@@ -130,6 +130,30 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(storeCalls(layout).every(args => args.length === 3 && args[2] === "--dir=" + layout.home)).toBe(true);
   });
 
+  test("an empty node_modules above pnpm home or an unrelated NODE_PATH does not refuse a default-store install", () => {
+    const layout = globalStoreLayout(root);
+    // A user's ~/node_modules sits above the default pnpm home on macOS and Linux.
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    const elsewhere = join(root, "elsewhere", "lib", "node_modules");
+    mkdirSync(join(elsewhere, "unrelated"), { recursive: true });
+    const original = process.env.NODE_PATH;
+    try {
+      process.env.NODE_PATH = elsewhere;
+      expect(resolveOwner(layout)).toMatchObject({ ok: true, owner: { globalStore: true } });
+    } finally {
+      if (original === undefined) delete process.env.NODE_PATH; else process.env.NODE_PATH = original;
+    }
+  });
+
+  test("a declared dependency missing from the store still refuses when an outside ancestor could supply it", () => {
+    const layout = globalStoreLayout(root);
+    rmSync(join(dirname(layout.real), "..", "zod"), { recursive: true, force: true });
+    mkdirSync(join(root, "node_modules", "zod"), { recursive: true });
+    writeFileSync(join(root, "node_modules", "zod", "package.json"), JSON.stringify({ name: "zod", version: "1.0.0" }));
+    const result = resolveOwner(layout);
+    expect(result.ok).toBe(false);
+  });
+
   test("pnpm 11 uses the same proof", () => {
     const layout = globalStoreLayout(root, { pnpmVersion: "11.20.0" });
     expect(resolveOwner(layout)).toMatchObject({ ok: true, owner: { globalStore: true } });

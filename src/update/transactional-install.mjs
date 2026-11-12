@@ -242,9 +242,15 @@ function inspectAncestorDependency(packageDir, name, store, escaped) {
   }
 }
 
-/** Node may resolve undeclared names from any ancestor node_modules, so none may escape. */
+/**
+ * Ancestor node_modules inside the store must keep their links in the store. Above the store the walk
+ * stops: a user's ~/node_modules is not part of the package. A declared dependency that is missing in
+ * the store and resolves from outside is refused separately (inspectAncestorDependency). With
+ * preserved symlinks Node walks the lexical ancestors, so that walk keeps every root.
+ */
 function inspectAncestorRoots(packageDir, store, escaped, preserved = false, storeAlias = store, metadataSeen) {
   for (let parent = dirname(packageDir); ; parent = dirname(parent)) {
+    if (!preserved && !inside(parent, store)) return;
     if (basename(parent) !== "node_modules") {
       const root = join(parent, "node_modules");
       let exists = true;
@@ -326,7 +332,12 @@ function inspectPnpmMetadata(path, store, escaped, kind, storeAlias = store, see
   }
 }
 
-/** Node's global search paths can supply undeclared modules outside the package ancestry. */
+/**
+ * Node's global search paths (Module.globalPaths, NODE_PATH) that lie inside the store must keep their
+ * links there. Paths outside the store are the user's environment, not the package: they are not
+ * evidence that the package left its store, and a missing declared dependency they could supply is
+ * refused by inspectAncestorDependency's missing-dependency rule.
+ */
 function inspectGlobalLookupRoots(store, escaped, storeAlias = store) {
   const roots = new Set([...globalPaths, ...String(process.env.NODE_PATH ?? "").split(delimiter).filter(Boolean)]);
   for (const raw of roots) {
@@ -336,9 +347,7 @@ function inspectGlobalLookupRoots(store, escaped, storeAlias = store) {
       continue;
     }
     try {
-      if (!inside(realpathSync(root), store)) {
-        escaped.add("pnpm global dependency lookup root is outside the selected store"); continue;
-      }
+      if (!inside(realpathSync(root), store)) continue;
       resolveStoreLinkChain(root, store, storeAlias);
     } catch { escaped.add("pnpm global dependency lookup root could not be resolved"); continue; }
     inspectPnpmMetadata(root, store, escaped, "global dependency lookup", storeAlias);

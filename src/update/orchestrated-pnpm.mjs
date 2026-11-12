@@ -48,6 +48,8 @@ export function verifyOrchestratedPnpmInstall({ owner, activeRoot, version, runP
       const result = realpathSync.native(path);
       return process.platform === "win32" ? result.toLowerCase() : result;
     };
+    // The lexical store path is compared without following links, folded like matchesOrchestratedPnpmOwner.
+    const lexicalKey = path => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
     const verify = (path, expected, store, globalRoot, lexicalStore) => {
       try {
         const manifest = JSON.parse(readFileSync(join(path, "package.json"), "utf8"));
@@ -63,7 +65,7 @@ export function verifyOrchestratedPnpmInstall({ owner, activeRoot, version, runP
       || key(resolved.owner.globalBinDir) !== key(owner.globalBinDir)
       || Boolean(resolved.owner.globalStore) !== Boolean(owner.globalStore)) return false;
     if (owner.globalStore && (key(resolved.owner.store) !== key(owner.store)
-      || resolve(resolved.owner.storePath) !== resolve(owner.storePath)
+      || lexicalKey(resolved.owner.storePath) !== lexicalKey(owner.storePath)
       || !Array.isArray(owner.virtualStoreDirs) || !Array.isArray(resolved.owner.virtualStoreDirs)
       || owner.virtualStoreDirs.length !== resolved.owner.virtualStoreDirs.length
       || owner.virtualStoreDirs.some((path, index) => key(path) !== key(resolved.owner.virtualStoreDirs[index])))) return false;
