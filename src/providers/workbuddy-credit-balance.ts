@@ -49,6 +49,7 @@ function numberDecimal(value: number): Decimal {
   return { digits, scale };
 }
 
+/** Bounded plain decimal text as digits and scale; signs, exponents and spaces are refused. */
 function textDecimal(text: string): Decimal | undefined {
   const match = EXACT_TEXT.exec(text);
   return match ? { digits: BigInt(`${match[1]}${match[2] ?? ""}`), scale: match[2]?.length ?? 0 } : undefined;
@@ -65,6 +66,7 @@ function exactCapacity(value: unknown): Decimal | undefined {
   return decimal && decimal.scale <= EXACT_SCALE ? decimal : undefined;
 }
 
+/** Exact sum, aligned to the largest scale among the values. */
 function addDecimals(values: readonly Decimal[]): Decimal {
   const scale = Math.max(0, ...values.map(value => value.scale));
   return { digits: values.reduce((sum, value) => sum + value.digits * 10n ** BigInt(scale - value.scale), 0n), scale };
@@ -162,6 +164,7 @@ export function normalizeWorkBuddyCredits(value: unknown): WorkBuddyCreditBalanc
 
 interface PackageAmount extends WorkBuddyCreditAmount { exact?: { total: Decimal; remaining: Decimal } }
 
+/** One summary package or credit group, with exact total/remaining when both have a bounded form. */
 function packageAmount(row: Record<string, unknown>): PackageAmount | undefined {
   const total = workBuddyCapacity(row.CycleTotalCapacity), used = workBuddyCapacity(row.CycleUsedCapacity);
   const frozen = row.CycleFrozenCapacity === undefined ? 0 : workBuddyCapacity(row.CycleFrozenCapacity);
@@ -188,6 +191,7 @@ function sumExact(rows: readonly PackageAmount[]): WorkBuddyExactCredits | undef
   return total !== undefined && remaining !== undefined ? { total, remaining } : undefined;
 }
 
+/** Balance from the resource summary: Packages summed once, CreditGroups as a breakdown. */
 export function parseWorkBuddyCredits(value: unknown): WorkBuddyCreditBalance | undefined {
   const summary = workBuddyRecord(value);
   if (!Array.isArray(summary.Packages) || summary.Packages.length > 512) return undefined;

@@ -56,6 +56,7 @@ async function expiringCredits(summary: Record<string, unknown>, headers: Record
   return workBuddyExpiringCredits(lists.flat(), new Set(codes), now);
 }
 
+/** Display-only credit balance for one account; the enterprise meter fills an empty personal summary. */
 export async function fetchWorkBuddyQuota(provider: string, credential: OAuthCredentials): Promise<ProviderQuotaProbeResult> {
   if (!credential.workbuddy) return null;
   const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS), now = Date.now();

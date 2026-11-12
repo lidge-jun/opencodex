@@ -65,6 +65,7 @@ function decimalRatio(value: number): [bigint, bigint] {
   return scale >= 0 ? [digits, 10n ** BigInt(scale)] : [digits * 10n ** BigInt(-scale), 1n];
 }
 
+/** Unavailable share as a whole percent, rounding an exact half up, from exact ratios. */
 function roundedUnavailablePercent([totalNumerator, totalDenominator]: [bigint, bigint], [remainingNumerator, remainingDenominator]: [bigint, bigint]): number {
   const denominator = totalNumerator * remainingDenominator;
   const numerator = (denominator - remainingNumerator * totalDenominator) * 100n;
