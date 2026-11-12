@@ -12,7 +12,6 @@ import type { ChildObservation, ChildOp, ChildOperationSummary } from "./child-o
 import type { InstallKind, UpdateRoute } from "./child-update-contract";
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import type { LinkTrafficCounters } from "./traffic";
-import type { LinkPath } from "./ssh-route";
 
 export type LinkWireState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
 
@@ -36,8 +35,6 @@ export interface LinkStatusDto {
     child?: LinkChildOpsStatus;
     /** On request (`?traffic=1`): body bytes this machine relayed or served for the link since `since`. */
     traffic?: LinkTrafficCounters;
-    /** On request (`?traffic=1`): how the link's SSH alias reaches the other machine, from this machine's view. */
-    path?: LinkPath;
   }>;
   child: null | {
     alias: string;
@@ -86,20 +83,9 @@ export function attachLinkTunnelDiagnostics(dto: LinkStatusDto, supervisorStates
   return dto;
 }
 
-/**
- * Add `traffic` and `path` to every row (#3023). A Home counts in its hub-link listener, a Child in
- * its relay. Only the machine that runs a link's ssh can resolve its alias: a Home for a
- * Home-initiated link, a Child for the link it initiated; every other row reads "unknown".
- */
-export async function attachLinkTraffic(
-  dto: LinkStatusDto,
-  sources: { traffic(linkId: string): LinkTrafficCounters; resolvePath(alias: string): Promise<LinkPath> },
-): Promise<LinkStatusDto> {
-  await Promise.all(dto.links.map(async link => {
-    link.traffic = sources.traffic(link.id);
-    const owned = (dto.role === "home" && link.direction === "hub-initiated") || (dto.role === "child" && link.direction === "client-initiated");
-    link.path = owned ? await sources.resolvePath(link.alias).catch(() => ({ via: "unknown" as const })) : { via: "unknown" };
-  }));
+/** Add `traffic` to every row (#3023). A Home counts in its hub-link listener, a Child in its link transport. */
+export function attachLinkTraffic(dto: LinkStatusDto, traffic: (linkId: string) => LinkTrafficCounters): LinkStatusDto {
+  for (const link of dto.links) link.traffic = traffic(link.id);
   return dto;
 }
 

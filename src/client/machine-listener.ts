@@ -24,7 +24,6 @@ import { readClientLinkState, type ClientLinkState } from "./link-state";
 import { projectClientLinkChild, projectClientLinkRow, type ClientLinkSidecarRead } from "./link-status";
 import { attachLinkTraffic } from "../link/status-projection";
 import { childLinkTraffic } from "../link/traffic";
-import { createLinkPathReader, type LinkPathConfigDeps } from "../link/ssh-route";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 import type { LinkReadiness } from "./link-readiness";
 import { packageVersion } from "../lib/package-version";
@@ -65,8 +64,6 @@ export interface MachineListenerDeps {
   linkStatus?: () => ClientLinkSupervisorStatus;
   /** Link mode: the sidecar read for `GET /api/link/status`. */
   readSidecar?: () => ClientLinkState | null;
-  /** Link mode, test seam: the ssh_config files `GET /api/link/status?traffic=1` reads this Child's path from. */
-  linkPathConfig?: LinkPathConfigDeps;
   /** Link mode: how the link key is read; the listener reads it once and caches it. */
   linkKey?: LinkKeySourceDeps;
   /** Link mode: a key source the runtime already holds (shared with the tunnel supervisor). */
@@ -280,13 +277,11 @@ export function startMachineListener(
           // A Child never joins again from here, so the dashboard reads `joinAvailable: false`.
           const sidecar = readSidecarSafely(readSidecar);
           const status = projectClientLinkChild(sidecar, deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
-          // Opt-in (#3023): this Child's link as a row, with the bytes its relay carried and its SSH path.
+          // Opt-in (#3023): this Child's link as a row, with the bytes its link transport carried.
           if (url.searchParams.get("traffic") === "1" && connection.link) {
-            const { row, sshAlias } = projectClientLinkRow({ ...connection, link: connection.link }, sidecar, status.child, Date.now(),
-              undefined, linkHomeName(connection, sidecarOrNull));
-            status.links = [row];
-            await attachLinkTraffic(status, { traffic: id => childLinkTraffic.snapshot(id),
-              resolvePath: async alias => ({ via: alias === sshAlias ? createLinkPathReader(deps.linkPathConfig)(alias) : "unknown" }) });
+            status.links = [projectClientLinkRow({ ...connection, link: connection.link }, sidecar, status.child, Date.now(),
+              undefined, linkHomeName(connection, sidecarOrNull))];
+            attachLinkTraffic(status, id => childLinkTraffic.snapshot(id));
           }
           return Response.json({ ...status, joinAvailable: false }, { headers: { "Cache-Control": "no-store" } });
         }

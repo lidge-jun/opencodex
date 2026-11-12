@@ -2,41 +2,52 @@
  * Bytes a Remote Link carried, per link, since this process started counting (#3023 measurement).
  *
  * The counters are plain integer additions on the JavaScript thread: no lock, no log line, no
- * timer and no disk. A book holds at most `MAX_LINKS` links: beyond that it forgets the oldest
- * links with no request in flight, so a running request never loses its counts. Only links with
- * requests in flight can take a book past the bound, and as each of those requests ends the book
- * trims its oldest idle links back to the bound. Each link's counters carry their own `since`:
- * the book's start for a link counted before any eviction, otherwise when its entry was created;
- * a link without an entry reads zero since the last eviction. A process restart starts a new book.
- * A reader computes a rate only from two reads with the same `since`; a changed `since` means the
- * window restarted.
+ * timer and no disk, and no request ever scans the book. A book holds at most `MAX_LINKS` links
+ * and never more. A new link takes the place of the link idle longest; when every tracked link has a
+ * request in flight there is no place, so that request is not measured and counts only in the
+ * book-level `untrackedRequests`. Telemetry never refuses or slows a request.
  *
- * Two books exist. A Child's relay (`src/client/link-relay.ts`) counts every request-body byte it
- * hands to the link transport and every response-body byte it reads back, so its numbers are the
- * bodies that crossed the link, aborted requests included. A Home's hub-link listener
- * (`src/server/index/link-relay-sessions.ts`) counts the response-body bytes it streams back
- * exactly, but cannot wrap Bun's native request without losing its identity, so its request side
- * is each request's declared Content-Length; a request body without one is counted in
+ * Every time a link's counters start from zero (its first request, or its first after the book forgot
+ * it) it gets a new `generation` from one monotonic counter per book; a link the book does not hold
+ * reads zeros under the generation of the last forgetting. A consumer subtracts two reads only when
+ * their generation matches. `since` is the wall-clock time of that start, for people; it can repeat
+ * or go backward with the clock, so it is never the comparison key. A process restart starts a new
+ * book.
+ *
+ * Two books exist. A Child's link transport (`src/client/link-relay-transport.ts`) counts each
+ * request-body chunk or buffered body once its socket write completed and each response-body chunk
+ * as it is read off the socket. A write still pending when a request ends is not counted, even if
+ * part of it reached the Home, so while `incomplete` > 0 `toHomeBytes` is a lower bound of what
+ * crossed. A Home's hub-link listener (`src/server/index/link-relay-sessions.ts`) counts the
+ * response-body bytes it streams back and, for requests, each declared Content-Length (it cannot
+ * wrap Bun's native request without losing its identity); a request body without one is counted in
  * `toHomeUncounted` instead. Neither counts HTTP headers, the relay-auth challenge, SSH or TCP
  * framing, or what any relay between the machines adds.
  */
 export const MAX_LINKS = 256;
 
 export interface LinkTrafficCounters {
-  /** When counting for this link began (ISO). Every counter below covers the time since then. */
+  /** When this link's counters last started from zero (ISO). For people; compare on `generation`. */
   since: string;
+  /** Changes every time this link's counters start from zero; compare two reads only when it matches. */
+  generation: number;
   /** Relayed requests on this link. */
   requests: number;
   /** Of those, requests that ended before their response body did (abort, cancel, error, refusal). */
   incomplete: number;
-  /** Request-body bytes toward the Home. */
+  /**
+   * Request-body bytes toward the Home. Child: bytes whose socket write completed, a lower bound
+   * while `incomplete` > 0. Home: the declared Content-Length of each request.
+   */
   toHomeBytes: number;
   /** Response-body bytes from the Home. */
   fromHomeBytes: number;
-  /** How toHomeBytes was measured: bytes relayed (Child) or declared Content-Length (Home). */
+  /** How toHomeBytes was measured: socket writes completed (Child) or declared Content-Length (Home). */
   toHomeSource: "relayed" | "content-length";
   /** Requests whose body bytes toHomeBytes could not include (a Home request without Content-Length). */
   toHomeUncounted: number;
+  /** Book-level, the same on every row: requests on any link that were not measured because the book was full. */
+  untrackedRequests: number;
 }
 
 /** One relayed request. Every method is cheap; `end` is idempotent and decides only `incomplete`. */
@@ -51,14 +62,15 @@ export interface LinkTrafficFlow {
 export interface LinkTrafficBook {
   /** Start counting one request on `linkId`. */
   begin(linkId: string): LinkTrafficFlow;
-  /** This link's counters; zeros for a link that carried nothing. */
+  /** This link's counters; zeros for a link the book does not hold. */
   snapshot(linkId: string): LinkTrafficCounters;
-  /** How many links the book holds now (at most MAX_LINKS once no request is in flight). */
+  /** How many links the book holds now; never more than MAX_LINKS. */
   linkCount(): number;
 }
 
 interface Entry {
   since: string;
+  generation: number;
   inFlight: number;
   requests: number; incomplete: number; toHomeBytes: number; fromHomeBytes: number; toHomeUncounted: number;
 }
@@ -67,64 +79,69 @@ function addable(bytes: number): number {
   return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : 0;
 }
 
+const UNMEASURED: LinkTrafficFlow = { toHome() {}, fromHome() {}, uncounted() {}, end() {} };
+
 export function createLinkTrafficBook(
   toHomeSource: LinkTrafficCounters["toHomeSource"],
   deps: { now?: () => number } = {},
 ): LinkTrafficBook {
   const now = deps.now ?? Date.now;
   const started = new Date(now()).toISOString();
-  // null until the first eviction; from then on, a new or absent link counts from that moment on.
-  let lastEviction: string | null = null;
+  let sequence = 0;
+  let forgotten = { since: started, generation: 0 };
+  let untrackedRequests = 0;
   const entries = new Map<string, Entry>();
-  /** Forget the oldest idle links until the book is within `limit` or every link left is in flight. */
-  const trimTo = (limit: number): void => {
-    if (entries.size <= limit) return;
-    for (const [linkId, entry] of entries) {
-      if (entries.size <= limit) return;
-      if (entry.inFlight > 0) continue;
-      entries.delete(linkId);
-      lastEviction = new Date(now()).toISOString();
-    }
-  };
-  const entryFor = (linkId: string): Entry => {
-    let entry = entries.get(linkId);
-    if (!entry) {
-      trimTo(MAX_LINKS - 1);
-      entry = { since: lastEviction === null ? started : new Date(now()).toISOString(), inFlight: 0,
-        requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0, toHomeUncounted: 0 };
-      entries.set(linkId, entry);
-    }
-    return entry;
+  // Links with no request in flight, least recently active first: the next to forget is always the
+  // first key, so making room is O(1) and never scans the book.
+  const idle = new Map<string, Entry>();
+  const room = (): boolean => {
+    if (entries.size < MAX_LINKS) return true;
+    const oldest = idle.keys().next();
+    if (oldest.done) return false;
+    entries.delete(oldest.value);
+    idle.delete(oldest.value);
+    forgotten = { since: new Date(now()).toISOString(), generation: ++sequence };
+    return true;
   };
   return {
     begin(linkId) {
-      const entry = entryFor(linkId);
-      entry.requests += 1;
-      entry.inFlight += 1;
+      let entry = entries.get(linkId);
+      if (!entry) {
+        if (!room()) { untrackedRequests += 1; return UNMEASURED; }
+        entry = { since: new Date(now()).toISOString(), generation: ++sequence, inFlight: 0,
+          requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0, toHomeUncounted: 0 };
+        entries.set(linkId, entry);
+      }
+      const counted = entry;
+      counted.requests += 1;
+      counted.inFlight += 1;
+      idle.delete(linkId);
       let ended = false;
       return {
-        toHome(bytes) { entry.toHomeBytes += addable(bytes); },
-        fromHome(bytes) { entry.fromHomeBytes += addable(bytes); },
-        uncounted() { entry.toHomeUncounted += 1; },
+        toHome(bytes) { counted.toHomeBytes += addable(bytes); },
+        fromHome(bytes) { counted.fromHomeBytes += addable(bytes); },
+        uncounted() { counted.toHomeUncounted += 1; },
         end(complete) {
           if (ended) return;
           ended = true;
-          entry.inFlight -= 1;
-          if (!complete) entry.incomplete += 1;
-          trimTo(MAX_LINKS);
+          if (!complete) counted.incomplete += 1;
+          counted.inFlight -= 1;
+          if (counted.inFlight === 0) idle.set(linkId, counted);
         },
       };
     },
     snapshot(linkId) {
       const entry = entries.get(linkId);
       return {
-        since: entry?.since ?? lastEviction ?? started,
+        since: entry?.since ?? forgotten.since,
+        generation: entry?.generation ?? forgotten.generation,
         requests: entry?.requests ?? 0,
         incomplete: entry?.incomplete ?? 0,
         toHomeBytes: entry?.toHomeBytes ?? 0,
         fromHomeBytes: entry?.fromHomeBytes ?? 0,
         toHomeSource,
         toHomeUncounted: entry?.toHomeUncounted ?? 0,
+        untrackedRequests,
       };
     },
     linkCount: () => entries.size,

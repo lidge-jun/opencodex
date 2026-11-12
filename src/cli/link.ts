@@ -22,7 +22,7 @@ import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store
 import type { LinkChildKind } from "../link/store";
 import { findAvailablePort } from "../server/ports";
 import { viaLocalControlSocket, type LocalControlDeps } from "./link-local-control";
-import { validateLinkPath, validateLinkTraffic } from "./link-status-traffic";
+import { validateLinkTraffic } from "./link-status-traffic";
 import {
   CliUsageError,
   RuntimeApiError,
@@ -175,7 +175,7 @@ export function validateStatus(value: unknown): LinkStatusPayload {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
-    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "child", "traffic", "path"], `link ${index}`);
+    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "child", "traffic"], `link ${index}`);
     const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
@@ -198,7 +198,6 @@ export function validateStatus(value: unknown): LinkStatusPayload {
       ...(candidate.tunnel !== undefined ? { tunnel: validateTunnel(candidate.tunnel, index) } : {}),
       ...(candidate.child !== undefined ? { child: validateChildOps(candidate.child, index) } : {}),
       ...(candidate.traffic !== undefined ? { traffic: validateLinkTraffic(candidate.traffic, index) } : {}),
-      ...(candidate.path !== undefined ? { path: validateLinkPath(candidate.path, index) } : {}),
     };
   });
   let child: LinkStatusPayload["child"] = null;

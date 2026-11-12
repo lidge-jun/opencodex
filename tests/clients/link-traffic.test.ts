@@ -110,14 +110,18 @@ describe("link traffic counters (#3023)", () => {
     expect(child.snapshot(linkId)).toMatchObject({ requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0 });
   });
 
-  test("the book is bounded and reads zeros since its start for a link it never saw", () => {
+  test("the book is bounded and a link it forgot reads zeros under a new generation", () => {
     const book = createLinkTrafficBook("relayed", { now: () => Date.parse("2026-11-12T00:00:00.000Z") });
-    for (let i = 0; i <= MAX_LINKS; i++) {
+    const first = book.begin("lnk_0000000000000000"); first.toHome(1); first.end(true);
+    const before = book.snapshot("lnk_0000000000000000");
+    for (let i = 1; i <= MAX_LINKS; i++) {
       const flow = book.begin(`lnk_${i.toString(16).padStart(16, "0")}`);
       flow.toHome(1); flow.end(true);
     }
-    expect(book.snapshot("lnk_0000000000000000")).toEqual({ since: "2026-11-12T00:00:00.000Z", requests: 0, incomplete: 0,
-      toHomeBytes: 0, fromHomeBytes: 0, toHomeSource: "relayed", toHomeUncounted: 0 });
+    const after = book.snapshot("lnk_0000000000000000");
+    expect(after).toMatchObject({ requests: 0, toHomeBytes: 0, toHomeSource: "relayed", untrackedRequests: 0 });
+    expect(after.generation).not.toBe(before.generation);
+    expect(book.linkCount()).toBe(MAX_LINKS);
     expect(book.snapshot(`lnk_${MAX_LINKS.toString(16).padStart(16, "0")}`).toHomeBytes).toBe(1);
   });
 });
@@ -196,36 +200,48 @@ describe("link traffic counters at the transport boundary (#3023 review)", () =>
 });
 
 describe("traffic book eviction and buffered bodies (#3023 final review)", () => {
-  test("eviction never drops a link with a request in flight, and each entry says since when it counted", () => {
-    let clock = Date.parse("2026-11-12T00:00:00.000Z");
-    const book = createLinkTrafficBook("relayed", { now: () => clock });
+  test("eviction never drops a link with a request in flight", () => {
+    const book = createLinkTrafficBook("relayed");
     const live = book.begin("lnk_ffffffffffffffff");
     live.toHome(10);
     for (let i = 0; i < MAX_LINKS + 5; i++) {
-      clock += 1;
       const flow = book.begin(`lnk_${(i + 1).toString(16).padStart(16, "0")}`);
       flow.toHome(1); flow.end(true);
     }
     live.toHome(5); live.end(true);
-    // The live link kept its entry and every byte, counted since the book began.
-    expect(book.snapshot("lnk_ffffffffffffffff")).toMatchObject({ since: "2026-11-12T00:00:00.000Z", requests: 1, toHomeBytes: 15 });
-    // An evicted link reads zero only since the last eviction, never since the book began.
-    const evicted = book.snapshot("lnk_0000000000000001");
-    expect(evicted.toHomeBytes).toBe(0);
-    expect(Date.parse(evicted.since)).toBeGreaterThan(Date.parse("2026-11-12T00:00:00.000Z"));
-    // Counted again, it starts a new window with its own since.
-    clock += 1000;
-    const again = book.begin("lnk_0000000000000001"); again.toHome(3); again.end(true);
-    expect(book.snapshot("lnk_0000000000000001")).toMatchObject({ since: new Date(clock).toISOString(), requests: 1, toHomeBytes: 3 });
-  });
-
-  test("a burst of more links than the bound in flight at once trims back to the bound as they finish", () => {
-    const book = createLinkTrafficBook("relayed");
-    const flows = Array.from({ length: MAX_LINKS + 100 }, (_, i) => book.begin(`lnk_${(i + 1).toString(16).padStart(16, "0")}`));
-    expect(book.linkCount()).toBe(MAX_LINKS + 100);
-    for (const flow of flows) flow.end(true);
+    expect(book.snapshot("lnk_ffffffffffffffff")).toMatchObject({ requests: 1, toHomeBytes: 15 });
     expect(book.linkCount()).toBe(MAX_LINKS);
   });
+
+  test("more links in flight than the bound: the book never grows past it, and the rest are counted as untracked", () => {
+    const book = createLinkTrafficBook("relayed");
+    const flows = Array.from({ length: MAX_LINKS + 100 }, (_, i) => book.begin(`lnk_${(i + 1).toString(16).padStart(16, "0")}`));
+    for (const flow of flows) flow.toHome(7);
+    expect(book.linkCount()).toBe(MAX_LINKS);
+    for (const flow of flows) flow.end(true);
+    expect(book.linkCount()).toBe(MAX_LINKS);
+    const tracked = book.snapshot("lnk_0000000000000001"), untracked = book.snapshot(`lnk_${(MAX_LINKS + 100).toString(16).padStart(16, "0")}`);
+    expect(tracked).toMatchObject({ requests: 1, toHomeBytes: 7, untrackedRequests: 100 });
+    expect(untracked).toMatchObject({ requests: 0, toHomeBytes: 0, untrackedRequests: 100 });
+  });
+
+  for (const [label, clockFor] of [
+    ["repeats", () => { const at = Date.parse("2026-11-12T00:00:00.000Z"); return () => at; }],
+    ["moves backward", () => { let at = Date.parse("2026-11-12T00:00:00.000Z"); return () => (at -= 1000); }],
+  ] as const) {
+    test(`a reset gets a new generation even when the clock ${label}`, () => {
+      const book = createLinkTrafficBook("relayed", { now: clockFor() });
+      const flow = book.begin("lnk_0000000000000000"); flow.toHome(4); flow.end(true);
+      const counted = book.snapshot("lnk_0000000000000000");
+      for (let i = 1; i <= MAX_LINKS; i++) { const other = book.begin(`lnk_${i.toString(16).padStart(16, "0")}`); other.end(true); }
+      const forgotten = book.snapshot("lnk_0000000000000000");
+      const again = book.begin("lnk_0000000000000000"); again.toHome(1); again.end(true);
+      const recounted = book.snapshot("lnk_0000000000000000");
+      const generations = new Set([counted.generation, forgotten.generation, recounted.generation]);
+      expect(generations.size).toBe(3);
+      expect(recounted).toMatchObject({ requests: 1, toHomeBytes: 1 });
+    });
+  }
 
   test("a buffered body counts only once the socket took it", async () => {
     const answered = gate();
@@ -246,5 +262,29 @@ describe("traffic book eviction and buffered bodies (#3023 final review)", () =>
     expect(child.snapshot(linkId).toHomeBytes).toBe(0);
     await reader.cancel();
     expect(child.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1, toHomeBytes: 0 });
+  });
+
+  test("a Home that read a prefix before the request was cancelled: toHomeBytes is a lower bound of what crossed", async () => {
+    const prefix = 1024 * 1024;
+    const read = gate<number>();
+    const h = home(async req => {
+      const reader = req.body!.getReader();
+      let got = 0;
+      while (got < prefix) { const next = await reader.read(); if (next.done) break; got += next.value.byteLength; }
+      read.resolve(got);
+      return new Response(new ReadableStream<Uint8Array>({ start(c) { c.enqueue(encoder.encode("data: early\n\n")); } }), { headers: { "content-type": "text/event-stream" } });
+    });
+    const child = createLinkTrafficBook("relayed");
+    const body = "x".repeat(48 * 1024 * 1024);
+    const response = await fetchBoundLinkRelay(target(h.port), `http://127.0.0.1:${h.port}/v1/responses`,
+      { method: "POST", body, headers: { "content-type": "application/json" } }, { traffic: child });
+    const crossed = await read.promise;
+    expect(crossed).toBeGreaterThanOrEqual(prefix);
+    await response.body!.cancel();
+    const counted = child.snapshot(linkId);
+    // The contract: with incomplete > 0, toHomeBytes may miss bytes of those requests that did cross.
+    expect(counted.incomplete).toBe(1);
+    expect(counted.toHomeBytes).toBeLessThan(crossed);
+    expect(counted.toHomeBytes).toBeLessThanOrEqual(body.length);
   });
 });
