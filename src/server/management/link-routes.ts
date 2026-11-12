@@ -1,14 +1,15 @@
 import { isRouteClientId, ROUTE_CLIENT_IDS } from "../../link/route-intent";
 import { seedRouteDeviceClients, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { probe, confirmHost, apply } from "./link-enrollment";
-import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, type LinkRouteState } from "./link-route-state";
+import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, reconcileLinkListener, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
 import { requireRemotePlatform } from "../../link/remote-platform";
 import { purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
-import { newLinkId, type LinkStore } from "../../link/store";
+import { newLinkId } from "../../link/store";
+import { claimLinkRetirement, clearLinkRetirement, readLinkRetirement } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
@@ -22,7 +23,7 @@ import { clientLinkStatusIdentity } from "../../client/link-status";
 import { clientLinkTunnelStatus } from "../../client/link-tunnel";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
-import { readManagementJsonBodyOr } from "./body";
+import { readManagementJsonBodyOr, readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
 
@@ -206,11 +207,12 @@ async function reconnect(ctx: ManagementContext, state: LinkRouteState, id: stri
 
 async function remove(ctx: ManagementContext, state: LinkRouteState, id: string): Promise<Response> {
   if (!LINK_ID.test(id)) return fail("invalid_link_id", "The link id is invalid.", 400);
-  const current = readStoreFor(ctx);
-  const record = current.links.find(link => link.id === id);
-  if (!record) return fail("link_not_found", "The link was not found.", 404);
-  const body = await readManagementJsonBodyOr(ctx.req, {});
-  const payload = body === null ? {} : body;
+  let payload: unknown;
+  try { payload = await readOptionalManagementJsonBody(ctx.req); }
+  catch (error) {
+    rethrowManagementBodyTooLarge(error);
+    return fail("invalid_body", "force and purge must be booleans and cannot both be true.", 400);
+  }
   if (!isRecord(payload)
     || Object.keys(payload).some(key => key !== "force" && key !== "purge")
     || (payload.force !== undefined && typeof payload.force !== "boolean")
@@ -218,11 +220,20 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
     || (payload.force === true && payload.purge === true)) {
     return fail("invalid_body", "force and purge must be booleans and cannot both be true.", 400);
   }
+  let receipt: ReturnType<typeof readLinkRetirement>;
+  let found: ReturnType<typeof readStoreFor>["links"][number] | undefined;
+  try {
+    receipt = readLinkRetirement(id);
+    found = readStoreFor(ctx).links.find(link => link.id === id);
+  } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
+  if (!found && !receipt) return fail("link_not_found", "The link was not found.", 404);
+  if (receipt && found && JSON.stringify(found) !== JSON.stringify(receipt.link)) return fail("link_changed", "The link changed during removal.", 409);
+  const record = receipt?.link ?? { ...found! };
   const force = payload.force === true;
   const purge = payload.purge === true;
   const release = state.supervisor.holdLink?.(id);
   try {
-    await state.supervisor.stopLink(id);
+    if (!receipt) await state.supervisor.stopLink(id);
     const restartTunnel = async (): Promise<void> => {
       release?.();
       try {
@@ -232,7 +243,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         console.warn(`[link] tunnel restart failed linkId=${id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
-    if (!force && record.direction === "hub-initiated") {
+    if (!receipt && !force && record.direction === "hub-initiated") {
       try {
         const runner = runnerFor(ctx);
         const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, knownHostsFile(ctx));
@@ -254,21 +265,40 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
       }
     }
-    if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
-    let next: LinkStore;
     try {
-      next = withConfigMutationLockSync(() => {
+      if (!receipt) {
+        try { receipt = claimLinkRetirement(record, undefined, () => readStoreFor(ctx)); }
+        catch {
+          const latest = readStoreFor(ctx).links.find(link => link.id === id);
+          if (!latest || JSON.stringify(latest) !== JSON.stringify(record)) {
+            await restartTunnel();
+            return fail("link_changed", "The link changed during removal.", 409);
+          }
+          return fail("link_remove_failed", "The link retirement could not be claimed.", 503);
+        }
+      }
+      const owner = receipt;
+      const result = withConfigMutationLockSync(() => {
+        const currentReceipt = readLinkRetirement(id);
+        if (!currentReceipt || currentReceipt.nonce !== owner.nonce || JSON.stringify(currentReceipt.link) !== JSON.stringify(owner.link)) return "changed" as const;
         const latest = readStoreFor(ctx);
-        const filtered = { ...latest, links: latest.links.filter(link => link.id !== id) };
-        if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
-        reconcileHomeRouteDevices(filtered.links.map(link => link.id));
-        return filtered;
+        const active = latest.links.find(link => link.id === id);
+        if (active && JSON.stringify(active) !== JSON.stringify(record)) return "changed" as const;
+        if (active) {
+          if ((ctx.config.apiKeys ?? []).some(key => key.id === record.apiKeyId) && !revokeKeyIdempotent(ctx, record.apiKeyId)) return "revoke_failed" as const;
+          writeStoreFor(ctx, { ...latest, links: latest.links.filter(link => link.id !== id) });
+        }
+        reconcileHomeRouteDevices(readStoreFor(ctx).links.map(link => link.id));
+        return "ok" as const;
       });
+      if (result === "changed") return fail("link_changed", "The link changed during removal.", 409);
+      if (result === "revoke_failed") return fail("key_revoke_failed", "The link key could not be revoked.", 502);
       clearCompensationFailed(id, compensationPath());
+      state.compensationFailures?.delete(id);
+      await state.supervisor.reload();
+      await reconcileLinkListener(ctx, state.listener);
+      if (!clearLinkRetirement(owner, undefined, () => !readStoreFor(ctx).links.some(link => link.id === id))) return fail("link_remove_failed", "The link retirement changed during removal.", 503);
     } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
-    state.compensationFailures?.delete(id);
-    await state.supervisor.reload();
-    if (next.links.length === 0) await state.listener.close();
     return Response.json({ linkId: id });
   } finally { release?.(); }
 }

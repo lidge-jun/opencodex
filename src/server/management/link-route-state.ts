@@ -166,6 +166,24 @@ export function compensationFailure(ctx: ManagementContext, state: LinkRouteStat
   return fail("compensation_failed", "The link compensation could not be completed.", 500);
 }
 
+// All last-link closures share the listener, including failed-enrollment compensation.
+const listenerReconciliations = new WeakMap<LinkRouteListener, Promise<void>>();
+export async function reconcileLinkListener(ctx: ManagementContext, listener: LinkRouteListener): Promise<void> {
+  const previous = listenerReconciliations.get(listener);
+  const flight = (async () => {
+    if (previous) await previous.catch(() => {});
+    if (readStoreFor(ctx).links.length === 0) await listener.close();
+    if (readStoreFor(ctx).links.length > 0) {
+      await listener.ensureStarted();
+      if (readStoreFor(ctx).links.length > 0 && listener.status().state !== "listening") {
+        throw new Error("link listener unavailable");
+      }
+    }
+  })();
+  listenerReconciliations.set(listener, flight);
+  try { await flight; } finally { if (listenerReconciliations.get(listener) === flight) listenerReconciliations.delete(listener); }
+}
+
 export async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number]): Promise<Response | null> {
   const revoked = revokeKeyIdempotent(ctx, record.apiKeyId);
   if (!revoked) {
@@ -197,7 +215,7 @@ export async function compensateNewLink(ctx: ManagementContext, state: LinkRoute
     });
     clearCompensationFailed(record.id, compensationPath());
     state.compensationFailures?.delete(record.id);
-    if (next.links.length === 0) await state.listener.close();
+    if (next.links.length === 0) await reconcileLinkListener(ctx, state.listener);
     return null;
   } catch {
     return compensationFailure(ctx, state, record, "store");
