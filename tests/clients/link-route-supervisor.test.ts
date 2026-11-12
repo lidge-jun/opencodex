@@ -836,7 +836,7 @@ test("a link on a later route stays there until ocx link reconnect starts a roun
   await h.advance(60_000);
   expect(h.state().routes?.route?.name).toBe("pen-alpha");
   expect(h.runs.filter(run => run.kind === "probe" && run.destination === "alpha-lan")).toHaveLength(1);
-  expect(await h.supervisor.reconnect("${LINK}".replace("${LINK}", LINK))).toBe(true);
+  expect(await h.supervisor.reconnect(LINK)).toBe(true);
   await h.tick();
   expect(h.runs.filter(run => run.kind === "probe").at(-1)?.destination).toBe("alpha-lan");
   await h.grant();
