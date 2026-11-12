@@ -87,13 +87,14 @@ Drives no management route.
 
 Usage: `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]`
 
-Synchronize client catalogs, including Aside profiles through the running server's mutation owner.
+Synchronize client catalogs, including Aside profiles and Pi through the running server's mutation owner.
 
 State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
 | POST | `/api/client-integrations/aside/sync` |
+| POST | `/api/client-integrations/pi/sync` |
 
 | Flag | Value | Meaning |
 |---|---|---|
