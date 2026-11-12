@@ -857,6 +857,7 @@ describe("uninstall proxy stop defers the shared teardown through a receipt (#77
     platform: "win32",
     serviceStop: "stopped",
     readPid: () => 4242,
+    runtimeEndpointFor: pid => (pid === 4242 ? { hostname: "127.0.0.1", port: 10100 } : null),
     findLiveProxy: async () => null,
     endpointProvenDown: async () => true,
     claim: () => ({ nonce: NONCE }),
@@ -875,7 +876,7 @@ describe("uninstall proxy stop defers the shared teardown through a receipt (#77
       removeTracked: pid => { steps.push("remove:" + pid); },
     }));
     expect(steps).toEqual(["claim", "stop:4242", "remove:4242"]);
-    expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE }]);
+    expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } }]);
     expect(result).toEqual({ changed: true, provenDown: true, nonce: NONCE });
   });
 
@@ -888,7 +889,7 @@ describe("uninstall proxy stop defers the shared teardown through a receipt (#77
       stop: async (pid, stopIo) => { seen.push([pid, stopIo]); return true; },
       removeTracked: pid => { removed.push(pid); },
     }));
-    expect(seen).toEqual([[777, { skipPortWait: true, deferSharedTeardownNonce: NONCE }]]);
+    expect(seen).toEqual([[777, { skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 12000 } }]]);
     expect(removed).toEqual([]);
     expect(result.nonce).toBe(NONCE);
   });
@@ -897,14 +898,17 @@ describe("uninstall proxy stop defers the shared teardown through a receipt (#77
     for (const serviceStop of ["failed", "state-unknown", null] as const) {
       const seen: unknown[] = [];
       await stopUninstallProxy(io({ serviceStop, stop: async (_pid, stopIo) => { seen.push(stopIo); return false; } }));
-      expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, allowForcedFallback: false }]);
+      expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, allowForcedFallback: false, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } }]);
     }
     // A Part A that ended stopped (or found nothing) keeps today's fallback available.
     const allowed: unknown[] = [];
     for (const serviceStop of ["stopped", "absent"] as const) {
       await stopUninstallProxy(io({ serviceStop, stop: async (_pid, stopIo) => { allowed.push(stopIo); return false; } }));
     }
-    expect(allowed).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE }, { skipPortWait: true, deferSharedTeardownNonce: NONCE }]);
+    expect(allowed).toEqual([
+      { skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } },
+      { skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } },
+    ]);
   });
 
   test("a forbidden fallback that does not confirm withholds the proof of a stopped proxy", async () => {
@@ -939,8 +943,94 @@ describe("uninstall proxy stop defers the shared teardown through a receipt (#77
       stop: async (_pid, stopIo) => { seen.push(stopIo); return true; },
     }));
     expect(claimed).toBe(0);
-    expect(seen).toEqual([{ skipPortWait: false }]);
+    expect(seen).toEqual([{ skipPortWait: false, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } }]);
     expect(result).toEqual({ changed: true, provenDown: true });
+  });
+
+  test("the receipt names the endpoint the stop actually contacts (tracked pid)", async () => {
+    // #7771 round 8: the receipt used to be claimed from `readRuntimePort()` with no
+    // expectation, so a stale record could name an endpoint the stop never contacted, and
+    // `stopProxy` re-read the record on its own. The receipt and the POST now carry the one
+    // endpoint resolved for the target.
+    const claimed: unknown[] = [];
+    const seen: unknown[] = [];
+    await stopUninstallProxy(io({
+      runtimeEndpointFor: pid => (pid === 4242 ? { hostname: "127.0.0.1", port: 12000 } : null),
+      claim: (endpoint, source) => { claimed.push([endpoint, source]); return { nonce: NONCE }; },
+      stop: async (_pid, stopIo) => { seen.push(stopIo); return true; },
+    }));
+    expect(claimed).toEqual([[{ hostname: "127.0.0.1", port: 12000 }, "exact"]]);
+    expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 12000 } }]);
+  });
+
+  test("a stale runtime record does not become the receipt for a proxy found on another port", async () => {
+    // The pid file is gone but a stale runtime record survives; discovery finds the live
+    // proxy elsewhere. Claiming the stale record marked it "exact" while the stop went to
+    // the discovered endpoint, so the obligation named an address nobody contacted.
+    const claimed: unknown[] = [];
+    const seen: unknown[] = [];
+    await stopUninstallProxy(io({
+      readPid: () => null,
+      runtimeEndpointFor: () => ({ hostname: "127.0.0.1", port: 10999 }),
+      findLiveProxy: async () => ({ pid: 777, port: 12000, hostname: "127.0.0.1" }),
+      claim: (endpoint, source) => { claimed.push([endpoint, source]); return { nonce: NONCE }; },
+      stop: async (_pid, stopIo) => { seen.push(stopIo); return true; },
+    }));
+    expect(claimed).toEqual([[{ hostname: "127.0.0.1", port: 12000 }, "exact"]]);
+    expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 12000 } }]);
+  });
+
+  test("no target means no receipt: a guessed obligation recovery cannot resolve is not claimed", async () => {
+    // A missing pid file, no live proxy, and a definitively dead endpoint: nothing will be
+    // stopped, so nothing may be deferred. The old order claimed a "guessed" receipt first
+    // and left it outstanding, which recovery then refused to finish.
+    let claimed = 0;
+    const result = await stopUninstallProxy(io({
+      readPid: () => null,
+      findLiveProxy: async () => null,
+      endpointProvenDown: async () => true,
+      claim: () => { claimed++; return { nonce: NONCE }; },
+    }));
+    expect(claimed).toBe(0);
+    expect(result).toEqual({ changed: false, provenDown: true });
+  });
+
+  test("a tracked target with no runtime record claims nothing rather than a guessed endpoint", async () => {
+    let claimed = 0;
+    const seen: unknown[] = [];
+    await stopUninstallProxy(io({
+      runtimeEndpointFor: () => null,
+      claim: () => { claimed++; return { nonce: NONCE }; },
+      stop: async (_pid, stopIo) => { seen.push(stopIo); return true; },
+    }));
+    // With no endpoint there is no graceful POST to defer, so no receipt may name one.
+    expect(claimed).toBe(0);
+    expect(seen).toEqual([{ skipPortWait: true }]);
+  });
+
+  test("the tracked record is removed only for a stop that was proven", async () => {
+    // Keeping a record the stop did not clear leaves a live pid for the next command to
+    // chase; removing it on a failed POST claims a state change that did not happen.
+    const removed: number[] = [];
+    // Part A failed and the forced ladder was forbidden: nothing proves the proxy exited, so
+    // the record it names must stay for the next command to chase, and the step reports no
+    // change (the caller records the failure and keeps the shared teardown up).
+    const failed = await stopUninstallProxy(io({
+      serviceStop: "failed",
+      stop: async () => false,
+      removeTracked: pid => { removed.push(pid); },
+    }));
+    expect(removed).toEqual([]);
+    expect(failed.changed).toBe(false);
+    expect(failed.provenDown).toBe(false);
+
+    const stopped = await stopUninstallProxy(io({
+      stop: async () => true,
+      removeTracked: pid => { removed.push(pid); },
+    }));
+    expect(removed).toEqual([4242]);
+    expect(stopped.changed).toBe(true);
+    expect(stopped.provenDown).toBe(true);
   });
 
   test("the receipt is finished only after the shared restore ran", async () => {

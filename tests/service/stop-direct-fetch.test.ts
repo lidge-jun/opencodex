@@ -135,7 +135,9 @@ describe("local stop transport", () => {
   for (const [file, functionName, count, call] of [
     ["src/cli/index.ts", "handleStopUnlocked", 1, "stopProxy"],
     ["src/service/orchestration.ts", "stopTrackedProxyIfRunning", 2, "stopProxy"],
-    ["src/cli/uninstall-stop.ts", "stopUninstallProxy", 2, "io.stop"],
+    // One site: the target is resolved before the receipt, so both the tracked and the
+    // discovered path reach the stop through the same call (#7771 round 8).
+    ["src/cli/uninstall-stop.ts", "stopUninstallProxy", 1, "io.stop"],
   ] as const) {
     test(`${functionName} retains the direct stop default`, () => {
       const source = readFileSync(repoPath(file), "utf8");
