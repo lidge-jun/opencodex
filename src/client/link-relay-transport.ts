@@ -68,6 +68,7 @@ class SingleConnectionAgent extends Agent {
 
 function requestOnConnection(
   url: URL, init: RequestInit, agent: SingleConnectionAgent, authenticatedSocket?: Socket, onSent?: (bytes: number) => void,
+  onBodySettled?: () => void,
 ): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     const headers = Object.fromEntries(new Headers(init.headers));
@@ -77,6 +78,11 @@ function requestOnConnection(
       method: init.method ?? "GET", headers, agent, signal: init.signal ?? undefined,
       maxHeaderSize: 64 * 1024,
     }, resolve);
+    // The request body is settled once its last write was flushed or the request was torn down;
+    // response headers alone prove neither, since a Home may answer before it reads the upload.
+    let bodySettled = false;
+    const settleBody = () => { if (!bodySettled) { bodySettled = true; onBodySettled?.(); } };
+    outgoing.once("close", settleBody);
     outgoing.on("error", reject);
     outgoing.on("upgrade", (_response, socket) => { socket.destroy(); reject(new LinkRelayAuthenticationError()); });
     outgoing.on("socket", socket => {
@@ -107,11 +113,14 @@ function requestOnConnection(
         }
       } else if (body != null) {
         if (typeof body === "string" || body instanceof Uint8Array) {
-          outgoing.write(body);
+          outgoing.write(body, () => settleBody());
           onSent?.(typeof body === "string" ? Buffer.byteLength(body) : body.byteLength);
+          outgoing.end();
+          return;
         } else throw new TypeError("unsupported link relay body");
       }
       outgoing.end();
+      settleBody();
     })().catch(error => { outgoing.destroy(error instanceof Error ? error : new Error("link upload failed")); reject(error); });
   });
 }
@@ -286,6 +295,8 @@ export async function fetchBoundLinkRelay(
      * features: a prepared body's zstd form only when this very answer names the capability.
      */
     selectBody?: (homeFeatures: readonly string[] | null) => { body: Uint8Array; headers: Record<string, string> };
+    /** Called once the data request's body was flushed to the socket or the request was torn down. */
+    onBodySettled?: () => void;
   } = {},
 ): Promise<Response> {
   const authTimeoutMs = options.authTimeoutMs ?? LINK_RELAY_AUTH_TIMEOUT_MS;
@@ -324,7 +335,7 @@ export async function fetchBoundLinkRelay(
     }
     dataRequestStarted = true;
     flow = target.linkId ? (options.traffic ?? childLinkTraffic).begin(target.linkId) : undefined;
-    const incoming = await requestOnConnection(url, { ...init, headers, body }, agent, socket, bytes => flow?.toHome(bytes));
+    const incoming = await requestOnConnection(url, { ...init, headers, body }, agent, socket, bytes => flow?.toHome(bytes), options.onBodySettled);
     return await responseOnConnection(incoming, agent, init.method ?? "GET", flow);
   } catch (error) {
     flow?.end(false);

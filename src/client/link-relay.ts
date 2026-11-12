@@ -523,7 +523,9 @@ export async function relayLinkDataRequest(
       const selectBody = prepared ? (features: readonly string[] | null) => chooseLinkBody(prepared!, features) : undefined;
       upstream = await (deps.fetchImpl
         ? deps.fetchImpl(destination, seamInit(init, selectBody, target.linkId))
-        : fetchBoundLinkRelay(target, destination, init, { traffic: deps.traffic, ...(selectBody ? { selectBody } : {}) }));
+        : fetchBoundLinkRelay(target, destination, init, {
+          traffic: deps.traffic, ...(selectBody ? { selectBody, onBodySettled: () => releasePrepared() } : {}),
+        }));
     } catch (error) {
       if (error instanceof LinkRelayAuthenticationError) {
         return await tunnelUnavailable("auth_failed", error.message);
@@ -545,8 +547,9 @@ export async function relayLinkDataRequest(
       if (!tunnel || !resendable || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable("transport_error");
     }
   }
-  // The body has been handed to the Home's socket; the preparation allowance is free again.
-  releasePrepared();
+  // The transport frees the preparation allowance once the body was flushed or its request torn
+  // down (a Home may answer before it reads the upload); the fetch seam has no socket to wait for.
+  if (deps.fetchImpl) releasePrepared();
   if (relayAbort.signal.aborted) {
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return await tunnelUnavailable();
