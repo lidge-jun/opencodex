@@ -821,6 +821,25 @@ describe("TRAE CN ACP regression contract", () => {
       .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
   });
 
+  test("tool refusal drains a same-chunk prompt reply that follows the notification", async () => {
+    const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+    const fixture = traeFixture((request, child) => {
+      if (request.method !== "session/prompt") return false;
+      const frames = [
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session",
+          update: { sessionUpdate: "tool_call" } } },
+        { jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", usage } },
+      ];
+      (child.stdout as PassThrough).write(frames.map(frame => JSON.stringify(frame) + "\n").join(""));
+      return true;
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_tool_call_unsupported", usage });
+    expect(buildResponseJSON(events, "test-model").usage)
+      .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+  });
+
   test("malformed update refusal retains usage from an already received prompt reply", async () => {
     const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
     const fixture = traeFixture(request => {
