@@ -23,11 +23,11 @@ afterEach(() => { removeTreeWithRetry(home); });
 const restored = { success: true, message: "native Codex restored",
   artifacts: { config: { state: "restored" }, catalog: { state: "restored" }, history: { state: "restored" } } };
 
-function runStop(windowsPartA: string, windowsPartB?: string) {
+function runStop(windowsPartA: string | undefined, windowsPartB?: string, extra: Record<string, unknown> = {}) {
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
     cwd: repoPath(), env: { ...process.env, OPENCODEX_HOME: home },
     input: JSON.stringify({ receipt: true, json: true, response: { success: true, sharedTeardown: "deferred" },
-      restore: restored, windowsPartA, ...(windowsPartB ? { windowsPartB } : {}) }),
+      restore: restored, ...(windowsPartA ? { windowsPartA } : {}), ...(windowsPartB ? { windowsPartB } : {}), ...extra }),
     encoding: "utf8", timeout: 20_000, windowsHide: true,
   });
   expect(child.error, child.stderr).toBeUndefined();
@@ -68,6 +68,23 @@ describe("plain ocx stop on Windows: Part A holds the child stop", () => {
 });
 
 describe("plain ocx stop on Windows: Part B after a stopped Part A", () => {
+
+  test("under this home's wrapper with nothing registered: unknown, no POST, no shared teardown", () => {
+    // The real Part A refuses: this stop runs under this home's .cmd/.vbs wrapper and no
+    // service is registered. Reading that as absent would stop the child and restore shared
+    // config beneath a wrapper that can relaunch the proxy.
+    const run = runStop(undefined, undefined, { windowsPartAUnderOwnWrapper: true });
+    expect(run.calls.service, run.stderr).toBe(1);
+    expect(run.urls, run.stderr).toEqual([]);
+    expect(run.calls.partB).toBe(0);
+    expect(run.calls.native).toBe(0);
+    expect(run.calls.grok).toBe(0);
+    expect(run.nonce).toBeUndefined();
+    expect(run.exitCode).toBe(1);
+    expect(run.summary).toMatchObject({ outcome: "failed", service: "state-unknown", proxy: "unknown", sharedTeardown: "skipped", serviceStopReason: "evidence-unreadable" });
+    expect(run.stderr).toContain("this stop runs under this home's service wrapper");
+  });
+
   test("freed: the POST's receipt records Part A, then the restore runs and the receipt clears", () => {
     const run = runStop("stopped", "freed");
     expect(run.urls, run.stderr).toHaveLength(1);

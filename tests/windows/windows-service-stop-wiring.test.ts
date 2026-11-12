@@ -22,10 +22,11 @@ import {
   windowsStopAdmission,
   resolveStopDeadlineMs,
   parseStopDeadlineMs,
+  serviceStopOutcomeFromWindows,
   windowsStopDeadlineAt,
 } from "../../src/service/windows-service-stop";
 import { DEFAULT_WINDOWS_STOP_DEADLINE_MS } from "../../src/service/windows-stop-budget";
-import { PATHS, SCHEDULE_PID, entry, supervisedTree } from "../helpers/windows-checked-stop-fixtures";
+import { PATHS, SCHEDULE_PID, entry, launcher, loop, supervisedTree } from "../helpers/windows-checked-stop-fixtures";
 import { partAResult } from "../helpers/windows-stop-caller-fixtures";
 
 afterEach(() => {
@@ -109,6 +110,34 @@ describe("Part A through the caller wiring", () => {
     setWindowsServiceStopHooksForTests({ liveDeps: () => allowed.deps });
     expect((await runWindowsServiceStopPartA({ allowUnderOwnWrapper: true })).outcome).toBe("stopped");
     expect(allowed.calls).toContain("end");
+  });
+
+  test("under this home's wrapper with nothing registered: unknown, never absent, and nothing is ended", async () => {
+    // self 70 (ocx stop) <- cmd 30 (.cmd of this home) <- wscript 20 (.vbs of this home), with
+    // no task and no WinSW service. The own-wrapper guard makes the enumeration unreadable, and
+    // the stray path would otherwise read that as absent: no service registered, nothing to do.
+    const tree = () => [launcher(), loop(), entry(70, 30, "ocx.exe", "ocx stop", 6_000)];
+    const calls: string[] = [];
+    const refused = machine({
+      selfPid: 70,
+      probeScheduler: () => ({ status: "absent" }),
+      enumerate: () => { calls.push("enumerate"); return tree(); },
+    });
+    setWindowsServiceStopHooksForTests({ liveDeps: () => refused.deps });
+    const result = await runWindowsServiceStopPartA();
+    expect(result.outcome).toBe("unknown");
+    expect(result.reason).toBe("evidence-unreadable");
+    expect(result.detail).toBe(UNDER_OWN_WRAPPER_DETAIL);
+    expect(result.changed).toBe(false);
+    expect(result.terminated).toEqual([]);
+    expect(calls).toEqual(["enumerate"]);
+    expect(serviceStopOutcomeFromWindows(result)).toBe("state-unknown");
+    expect(windowsPartARecord(result)).toBeNull();
+
+    // The same machine where the refusal is allowed (the route and the updater) still sweeps.
+    const allowed = machine({ selfPid: 70, probeScheduler: () => ({ status: "absent" }), enumerate: tree });
+    setWindowsServiceStopHooksForTests({ liveDeps: () => allowed.deps });
+    expect((await runWindowsServiceStopPartA({ allowUnderOwnWrapper: true })).outcome).not.toBe("unknown");
   });
 
   test("a cap overrun is unknown at once, and nothing is ended or terminated after it", async () => {

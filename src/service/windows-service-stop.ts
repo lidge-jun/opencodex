@@ -135,7 +135,7 @@ export async function runWindowsServiceStopPartA(request: WindowsPartARequest = 
     // The guarded path binds on a snapshot it already read: check it before anything runs.
     if (request.bindSnapshot && guard(request.bindSnapshot)) return unknownResult(UNDER_OWN_WRAPPER_DETAIL);
     // Otherwise the bind enumeration is checked as it arrives; a hit reads as an unreadable
-    // table, which Part A answers before /end (registered) or as absent (nothing to end).
+    // table, which Part A answers before /end when a manager is registered.
     const deps = {
       ...base,
       enumerate: async (timeoutMs: number) => {
@@ -152,7 +152,16 @@ export async function runWindowsServiceStopPartA(request: WindowsPartARequest = 
     const result = await (request.authorize || request.capMs !== undefined
       ? guardedStopWindowsServiceChecked(authorize, deps, options)
       : stopWindowsServiceChecked(deps, options));
-    if (underOwnWrapper && result.outcome === "unknown") result.detail = UNDER_OWN_WRAPPER_DETAIL;
+    // The refusal is the answer whatever the stray path would have concluded: with nothing
+    // registered an unreadable enumeration reads as absent ("nothing to end"), which would
+    // let the caller stop the child and restore shared config beneath this home's own looping
+    // wrapper. Nothing has been changed at this point in either path, so it is unknown.
+    if (underOwnWrapper) {
+      result.outcome = "unknown";
+      result.reason = "evidence-unreadable";
+      result.detail = UNDER_OWN_WRAPPER_DETAIL;
+      result.changed = false;
+    }
     return result;
   };
   if (request.capMs === undefined) return run();

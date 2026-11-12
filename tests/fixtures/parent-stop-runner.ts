@@ -54,6 +54,11 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   /** #7771: simulate win32 and answer Part A (and Part B) of the checked Windows stop. */
   windowsPartA?: "stopped" | "absent" | "survived" | "denied" | "unknown" | "unverified-budget";
   windowsPartB?: "freed" | "survived" | "port-held-by-foreign" | "unconfirmed" | "unknown";
+  /**
+   * #7771: run the REAL Part A while this stop runs under this home's wrapper, with no task and
+   * no WinSW service registered, so the own-wrapper refusal has to answer for itself.
+   */
+  windowsPartAUnderOwnWrapper?: boolean;
 };
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
@@ -100,7 +105,9 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
 }));
 const endpoint = { hostname: "127.0.0.1", port: 10100 };
 const fakePid = 4242;
-const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0, partB: 0 };
+const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0, partB: 0, reclaim: 0 };
+/** The timeout each reclaimListenPort call asked for; #7771 makes a skipped 15 s wait visible. */
+const reclaimTimeouts: number[] = [];
 /** The Part A record each stop POST's receipt carried when the POST was sent (#7771). */
 const postPartA: unknown[] = [];
 let receiptBlocker: import("bun:sqlite").Database | undefined;
@@ -142,7 +149,7 @@ const receipts = await import("../../src/config/pending-teardown");
 process.on("exit", () => {
   receiptBlocker?.close();
   writeFileSync(join(home, "parent-stop-result.json"), JSON.stringify({
-    calls, urls, probes, transports, unexpectedIo, nonce, postPartA,
+    calls, reclaimTimeouts, urls, probes, transports, unexpectedIo, nonce, postPartA,
     receiptExists: nonce !== undefined && existsSync(receipts.pendingTeardownPathFor(nonce)),
   }));
 });
@@ -230,7 +237,12 @@ mock.module("../../src/grok/inject", () => ({
 const systemEnv = await import("../../src/server/system-env");
 mock.module("../../src/server/system-env", () => ({ ...systemEnv, revertSystemEnv() {} }));
 const portReclaim = await import("../../src/server/port-reclaim");
-mock.module("../../src/server/port-reclaim", () => ({ ...portReclaim, reclaimListenPort: async () => {} }));
+mock.module("../../src/server/port-reclaim", () => ({ ...portReclaim,
+  reclaimListenPort: async (_port: number, _host: string, options?: { timeoutMs?: number }) => {
+    calls.reclaim += 1;
+    reclaimTimeouts.push(options?.timeoutMs ?? 0);
+  },
+}));
 // Only shim preflight is unrelated to this stop contract; parsing and dispatch stay real.
 mock.module("../../src/cli/codex-shim-autorestore", () => ({ async maybeAutoRestoreCodexShimAsync() {} }));
 
@@ -303,6 +315,24 @@ if (options.windowsPartA) {
   (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
     partA: async () => { calls.service++; return partAResult(options.windowsPartA!); },
     partB: async () => { calls.partB++; return partBResult(options.windowsPartB ?? "freed"); },
+  });
+}
+if (options.windowsPartAUnderOwnWrapper) {
+  // This stop runs under this home's wrapper: ocx stop <- cmd.exe (.cmd) <- wscript.exe (.vbs),
+  // with nothing registered. The real Part A answers the own-wrapper refusal.
+  (await import("../../src/cli/stop-windows-checked")).resetOcxWindowsStopForTests("win32");
+  const { PATHS, launcher, loop } = await import("../helpers/windows-checked-stop-fixtures");
+  const self = { pid: process.pid, parentPid: 30, name: "ocx.exe", commandLine: "ocx stop", startTime: 6_000 };
+  (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
+    liveDeps: () => ({
+      canonicalPaths: PATHS, childPid: null, selfPid: process.pid,
+      probeScheduler: () => { calls.service++; return { status: "absent" }; }, probeWinsw: () => "nonexistent",
+      enumerate: () => [launcher(), loop(), self],
+      scheduleServicePid: () => null, endTask: () => unexpected("schtasks /end"), taskState: () => "not-running",
+      winswStop: () => "sent", winswState: () => "stopped", proxyAlive: () => false,
+      openWatch: () => ({ status: "gone" }),
+      terminate: () => unexpected("terminate"),
+    }),
   });
 }
 if (options.handover) process.env.OCX_UPDATE_TEARDOWN_HANDOVER = "1";
