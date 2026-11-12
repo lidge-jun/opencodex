@@ -5,11 +5,12 @@ import {
   isCyberPolicyMessage,
   isRateLimitOrQuotaFailureMessage,
   recognizedUpstreamError,
+  upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
 import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
-import { reduceBareUpstreamEvidence, wrappedServerErrorStatus, type BareUpstreamEvidence } from "./bare-upstream-error";
+import { isUntypedBareUpstreamError, reduceBareUpstreamEvidence, wrappedServerErrorStatus, type BareUpstreamEvidence } from "./bare-upstream-error";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -41,7 +42,6 @@ export interface UpstreamErrorPayload {
 
 // Bare error evidence is provisional: only a genuine terminal owns account-health status.
 const provisionalStatuses = new WeakMap<TerminalStatusContext, number>();
-const untypedProvisionalStatuses = new WeakSet<TerminalStatusContext>();
 const genuineTerminals = new WeakSet<TerminalStatusContext>();
 // The winning bare verdict owns the row's status, refusal identity and diagnostic copy together,
 // so a later losing frame cannot leave the status from one frame beside the copy of another.
@@ -120,10 +120,10 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
   const type = json.type;
   const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
   if (terminal) {
-    // A genuine terminal supersedes every provisional bare verdict: it retires the evidence
-    // first so a later bare frame starts fresh, then owns the row through the terminal
-    // classifier. Without this split the reducer's "no new evidence" result would be read as
-    // "keep the previous bare verdict" and the terminal would never claim the row.
+    // A genuine terminal supersedes every provisional bare verdict: it retires the evidence and
+    // owns the row through the terminal classifier. Without this split the reducer's "no new
+    // evidence" result would be read as "keep the previous bare verdict" and the terminal would
+    // never claim the row.
     bareEvidence.delete(logCtx);
     genuineTerminals.add(logCtx);
     // The classifier retires the provisional status it owns; clearing the map first would
@@ -149,6 +149,17 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
       json.error?.type ?? json.last_error?.type ?? json.response?.error?.type);
     return;
   }
+  // The client already ended on the genuine terminal, so a bare frame after it is not the
+  // turn's verdict: it may not restart evidence or touch status, code or type. Readers that
+  // keep inspecting past the terminal (the WS EOF observer, the metadata consumer) reach here.
+  // Its copy stays guarded as before: untyped text that fails the credential check is redacted.
+  if (genuineTerminals.has(logCtx)) {
+    if (logCtx.upstreamError === undefined && isUntypedBareUpstreamError(json)) {
+      const message = upstreamErrorMessageFromPayload(json);
+      if (typeof message === "string" && message.trim() && !diagnosticValueAllowed(message)) logCtx.upstreamError = "[REDACTED]";
+    }
+    return;
+  }
   const previousEvidence = bareEvidence.get(logCtx);
   const evidence = reduceBareUpstreamEvidence(previousEvidence, json);
   if (evidence === undefined || evidence === previousEvidence) return;
@@ -171,12 +182,9 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     const status = evidence.typed ? evidence.verdict.httpStatus : evidence.verdict.terminalStatus;
     if (status === undefined) {
       provisionalStatuses.delete(logCtx);
-      untypedProvisionalStatuses.delete(logCtx);
     } else {
       logCtx.terminalHttpStatus = status;
       provisionalStatuses.set(logCtx, status);
-      if (evidence.typed) untypedProvisionalStatuses.delete(logCtx);
-      else untypedProvisionalStatuses.add(logCtx);
     }
     if (evidence.verdict.refusalCode === CYBER_POLICY_ERROR_CODE) logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
     else delete logCtx.terminalErrorCode;
@@ -227,7 +235,6 @@ function captureTerminalHttpStatus(
   if (terminal && provisionalStatuses.has(logCtx)) {
     const provisional = provisionalStatuses.get(logCtx);
     provisionalStatuses.delete(logCtx);
-    untypedProvisionalStatuses.delete(logCtx);
     if (logCtx.terminalHttpStatus === provisional) {
       delete logCtx.terminalHttpStatus;
       delete logCtx.terminalErrorCode;

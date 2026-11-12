@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { httpStatusForRequestLogTerminal, inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
-import { consumeForInspection, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
+import { consumeForInspection, consumeForResponseLogMetadata, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
 import { teeWithBoundedInspection } from "../../src/server/inspection-tee";
 import { classifyCodexUpstreamOutcome } from "../../src/codex/routing/cooldown-math";
 import { codexWsUpstreamFetch, streamingInit } from "../helpers/ws-upstream-fixtures";
@@ -1059,6 +1059,56 @@ describe("untyped upstream error envelopes", () => {
       inspectResponseLogSsePayload(log, JSON.stringify({ error: { message: `fixture ${credential}` } }));
       expect(log.upstreamError ?? "").not.toContain(credential);
     } finally { restore(); }
+  });
+
+  describe("a bare frame after a genuine terminal leaves the row alone", () => {
+    const terminals = [
+      ["completed", { type: "response.completed", response: { status: "completed" } }],
+      ["incomplete", { type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } }],
+      ["incomplete", { type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "content_filter" } } }],
+    ] as const;
+    const bares = [
+      { error: { code: "rate_limit_exceeded", message: "untyped quota" } },
+      { type: "error", error: { code: "rate_limit_exceeded", message: "typed quota" } },
+      { error: { code: "cyber_policy", message: "untyped policy" } },
+    ];
+    const rowState = (log: RequestLogContext, kind: "completed" | "incomplete") => ({
+      status: log.terminalHttpStatus, policy: log.terminalErrorCode, code: log.upstreamErrorCode,
+      type: log.upstreamErrorType, row: httpStatusForRequestLogTerminal(kind, log),
+    });
+
+    test.each(terminals)("%s terminal keeps its row through every later bare frame", (kind, terminal) => {
+      for (const bare of bares) {
+        const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+        inspectResponseLogSsePayload(log, JSON.stringify(terminal));
+        const before = rowState(log, kind);
+        inspectResponseLogSsePayload(log, JSON.stringify(bare));
+        expect([bare, rowState(log, kind)]).toEqual([bare, before]);
+      }
+    });
+
+    test("the metadata consumer, which inspects past the terminal, keeps a max_output_tokens turn at 200", async () => {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      await new Promise<void>(resolve => consumeForResponseLogMetadata(sourceStream([
+        `event: response.incomplete\ndata: ${JSON.stringify(terminals[1][1])}\n\n`,
+        `event: error\ndata: ${JSON.stringify(bares[0])}\n\n`,
+      ]), log, undefined, resolve));
+      expect(httpStatusForRequestLogTerminal("incomplete", log)).toBe(200);
+      expect(log.terminalHttpStatus).toBeUndefined();
+    });
+
+    test("untyped copy after a terminal stays redacted when it echoes an outbound credential", () => {
+      const credential = "fixture_post_terminal_credential_8415";
+      const registry = new OutboundCredentialRegistry();
+      registry.remember({ authorization: `Bearer ${credential}` });
+      const restore = setOutboundCredentialRegistryForTests(registry);
+      try {
+        const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+        inspectResponseLogSsePayload(log, JSON.stringify(terminals[0][1]));
+        inspectResponseLogSsePayload(log, JSON.stringify({ error: { message: `fixture ${credential}` } }));
+        expect(log.upstreamError ?? "").not.toContain(credential);
+      } finally { restore(); }
+    });
   });
 });
 
