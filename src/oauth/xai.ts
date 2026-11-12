@@ -114,7 +114,11 @@ function getTokenIdentity(accessToken: string, idToken: string | undefined): { a
 }
 
 export class XaiTokenRequestError extends Error { constructor(public readonly status?:number,public readonly oauthError?:string,message="xAI token request failed",options?:{cause?:unknown}){super(message,options);this.name="XaiTokenRequestError";} }
-export interface XaiTokenRetryDeps { sleep?:(ms:number)=>Promise<void>; random?:()=>number; /** Default 3; the device poll sends one request per interval. */ maxAttempts?:number }
+export interface XaiTokenRetryDeps { sleep?:(ms:number)=>Promise<void>; random?:()=>number; /** Default 3; the device poll sends one request per interval. */ maxAttempts?:number; /**
+ * Fetch redirect policy. Inherited callers keep the runtime default (follow); the device poll sets
+ * `error` because its body carries the RFC 8628 `device_code`, a bearer-equivalent secret that must
+ * not be re-POSTed to a redirect target. A 307/308 preserves the method and body.
+ */ redirect?:RequestRedirect }
 const IMF_FIXDATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
 const RFC850_DATE_RE = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
 const ASCTIME_DATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( \d|\d{2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/i;
@@ -243,7 +247,7 @@ export async function postXaiToken(
   body: Record<string, string>,
   signal?: AbortSignal, deps:XaiTokenRetryDeps={},
 ): Promise<XaiTokenPayload> {
- const sleep=deps.sleep??((ms:number)=>sleepWithAbort(ms,signal)),random=deps.random??Math.random,max=deps.maxAttempts??3;let last:unknown;
+ const sleep=deps.sleep??((ms:number)=>sleepWithAbort(ms,signal)),random=deps.random??Math.random,max=deps.maxAttempts??3,redirect=deps.redirect;let last:unknown;
  for(let attempt=1;attempt<=max;attempt++){let response:Response;try{response=await fetch(tokenEndpoint, {
     method: "POST",
     headers: {
@@ -251,6 +255,7 @@ export async function postXaiToken(
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams(body).toString(),
+    ...(redirect === undefined ? {} : { redirect }),
     signal: requestSignal(signal),
   });}catch(error){
   if(signal?.aborted)throw error;
@@ -343,8 +348,22 @@ export class XaiOAuthFlow extends OAuthCallbackFlow {
 }
 
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+/** RFC 8628 §3.2 `expires_in` default when the issuer omits it; also the fallback `interval`. */
 const XAI_DEVICE_DEFAULT_TTL_S = 900;
 const XAI_DEVICE_DEFAULT_INTERVAL_S = 5;
+/**
+ * Hard ceilings on values the issuer supplies, so a hostile or corrupt response cannot turn the
+ * poll into a hot loop or an unbounded login.
+ *
+ * `setTimeout` stores its delay in a 32-bit signed int. A larger value overflows and fires on the
+ * next tick, which is exactly a hot loop against the auth endpoint; a `0`/negative/fractional
+ * `interval` floors to ~1 ms for the same effect. So the interval is clamped into
+ * [MIN, TTL] and the grant lifetime into (0, MAX_TTL]. RFC 8628 §3.2 says the issuer supplies
+ * `interval` and `expires_in`; the ceilings below are conservative readings of that, and the grant
+ * can no longer outlive a plausible human approval at another machine.
+ */
+const XAI_DEVICE_MIN_INTERVAL_MS = 1_000;
+const XAI_DEVICE_MAX_TTL_S = 30 * 60;
 
 interface XaiDeviceAuthorization {
   device_code?: unknown;
@@ -355,8 +374,30 @@ interface XaiDeviceAuthorization {
   interval?: unknown;
 }
 
-const positiveSeconds = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+/** Coerce a provider-supplied seconds value to a finite, positive number, or undefined. */
+function secondsToPositive(value: unknown): number | undefined {
+  const seconds = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+}
+
+/**
+ * Poll wait in ms: floored at 1s and capped at the grant lifetime.
+ *
+ * The lifetime cap is also the overflow guard. `setTimeout` stores its delay in a 32-bit signed
+ * int, so anything above 2^31-1 ms fires on the next tick instead of waiting; a 30-minute ceiling
+ * is 1.8e6 ms, three orders of magnitude below that, and the floor keeps a `0`, negative or
+ * fractional `interval` from becoming a tight loop.
+ */
+function deviceIntervalMs(raw: unknown, ttlMs: number): number {
+  const seconds = secondsToPositive(raw) ?? XAI_DEVICE_DEFAULT_INTERVAL_S;
+  return Math.min(ttlMs, Math.max(XAI_DEVICE_MIN_INTERVAL_MS, Math.round(seconds * 1000)));
+}
+
+/** Grant lifetime in ms: defaulted when absent, capped so a login cannot run unbounded. */
+function deviceGrantTtlMs(raw: unknown): number {
+  const seconds = Math.min(secondsToPositive(raw) ?? XAI_DEVICE_DEFAULT_TTL_S, XAI_DEVICE_MAX_TTL_S);
+  return Math.round(seconds * 1000);
+}
 
 /**
  * RFC 8628 device login, for a host whose browser cannot reach the 127.0.0.1:56121 callback:
@@ -376,6 +417,10 @@ export async function loginXaiDevice(
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: XAI_OAUTH_CLIENT_ID, scope: XAI_OAUTH_SCOPE }).toString(),
+    // The request carries the client id in its body and lands on a vetted issuer; a redirect would
+    // replay it somewhere `validateXaiEndpoint` never saw. Discovery already refused to produce a
+    // non-x.ai endpoint, so a redirect here can only be a downgrade, never a legitimate hop.
+    redirect: "error",
     signal: requestSignal(signal),
   });
   if (!response.ok) throw await readTokenError(response);
@@ -391,14 +436,21 @@ export async function loginXaiDevice(
     throw new Error("xAI device authorization response is incomplete");
   }
   // Validate before the optional call: `onAuth?.(…)` skips evaluating its argument when unset.
+  // `validateXaiEndpoint` parses the URL, which percent-encodes control characters out of the
+  // path/query. The user code is kept exact here: `deviceCode` is structured data that every login
+  // surface renders, and escaping belongs at the terminal boundary that prints it.
   const url = validateXaiEndpoint(verificationUri);
   ctrl.onAuth?.({
     url,
     instructions: `Open this URL in any browser and confirm the code ${device.user_code}.`,
     deviceCode: device.user_code,
   });
-  const deadline = Date.now() + (positiveSeconds(device.expires_in) ?? XAI_DEVICE_DEFAULT_TTL_S) * 1000;
-  let waitMs = (positiveSeconds(device.interval) ?? XAI_DEVICE_DEFAULT_INTERVAL_S) * 1000;
+  // Both bounds come from the issuer, so both are clamped before they reach a timer: an oversized
+  // `expires_in` would make `AbortSignal.timeout` and the deadline meaningless, and a tiny
+  // `interval` would poll the auth endpoint in a tight loop.
+  const ttlMs = deviceGrantTtlMs(device.expires_in);
+  const deadline = Date.now() + ttlMs;
+  let waitMs = deviceIntervalMs(device.interval, ttlMs);
   for (let remaining = deadline - Date.now(); remaining > 0; remaining = deadline - Date.now()) {
     await sleep(Math.min(waitMs, remaining));
     const left = deadline - Date.now();
@@ -410,14 +462,17 @@ export async function loginXaiDevice(
         discovery.tokenEndpoint,
         { grant_type: XAI_DEVICE_GRANT, client_id: XAI_OAUTH_CLIENT_ID, device_code: device.device_code },
         pollSignal,
-        { maxAttempts: 1 },
+        // The device code is a bearer-equivalent secret; it must not survive a redirect hop.
+        { maxAttempts: 1, redirect: "error" },
       );
       return credentialsFromTokenPayload(payload);
     } catch (error) {
       if (signal?.aborted) throw error;
       if (error instanceof XaiTokenRequestError) {
         if (error.oauthError === "slow_down") {
-          waitMs += 5_000;
+          // RFC 8628 §3.5: lengthen the interval by 5s and never poll faster than before. Kept
+          // under the same ceiling so the sleep cannot overflow into an immediate retry.
+          waitMs = Math.min(ttlMs, waitMs + 5_000);
           continue;
         }
         // Still waiting for approval, or a network or server failure the grant can outlast.

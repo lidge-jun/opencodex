@@ -160,6 +160,22 @@ describe("login flow-specific options", () => {
     expect(output().deviceCode).toBe("USER-CODE");
     expect(output().accessToken).toBeUndefined();
   });
+  for (const provider of ["xai", "openai", "kimi"]) test(`${provider} --device --code is refused before stdin, target or a grant`, async () => {
+    // A device grant has no paste step, and the proxy's code route is the code flow's. Accepting
+    // both would spend the caller's stdin and stash the paste into a flow it cannot settle.
+    const f = fixture();
+    expect(await handleAccountAuthCommand("login", [provider, "--device", "--code", "-"], f.deps)).toBe(2);
+    expect(await handleAccountAuthCommand("login", [provider, "--device", `--code=${SECRET}`], f.deps)).toBe(2);
+    expect(f.calls).toHaveLength(0); expect(f.probes()).toBe(0); expect(f.reads()).toBe(0);
+    expect(JSON.stringify(error.mock.calls)).toContain("--code cannot be combined with --device");
+  });
+  test("--code without --device still reads the code", async () => {
+    // The guard must not eat the ordinary code login it sits next to.
+    const f = fixture([{ flowId: "flow-1", url: "https://example.test/auth" }, { ok: true, input: SECRET }, { status: "done", loggedIn: true, done: true }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--code", "-", "--json"], f.deps)).toBe(0);
+    expect(f.reads()).toBe(1);
+    expect(f.calls).toHaveLength(3);
+  });
   test("Kiro native projection excludes its private device grant and credentials", async () => {
     const f = fixture([{ flowId: "flow-k", method: "google", state: "pending", userCode: "USER", verificationUri: "https://example.test/verify", expiresAt: 123, deviceCode: SECRET, clientSecret: SECRET, refreshToken: SECRET, error: SECRET }]);
     expect(await handleAccountAuthCommand("login", ["kiro", "--method", "google", "--no-wait", "--json"], f.deps)).toBe(0);

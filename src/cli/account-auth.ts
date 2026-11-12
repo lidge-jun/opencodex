@@ -230,6 +230,10 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider) && !DEVICE_OPT_IN_PROVIDERS.has(provider)) {
     throw new CliUsageError("--device is not supported for this provider", USAGE);
   }
+  // A device grant never asks for a pasted code: the CLI would have spent the caller's stdin, and
+  // the proxy would have accepted the paste into a flow with nothing to do with it (the device flow
+  // is not a code flow, so `submitLoginCode` stashes it and the login still waits for approval).
+  if (device && suppliedCode) throw new CliUsageError("--code cannot be combined with --device", USAGE);
   if (addAccount !== undefined && (reauth || CODEX_NAMES.has(provider))) throw new CliUsageError("--add-account is only valid for fresh provider OAuth login", USAGE);
   if (openBrowser !== undefined && (device || DEVICE_NATIVE_PROVIDERS.has(provider))) throw new CliUsageError("--open-browser is not supported for device login", USAGE);
   if (!CODEX_NAMES.has(provider) && id && !reauth) throw new CliUsageError("--id is only valid with --reauth for provider OAuth accounts", USAGE);

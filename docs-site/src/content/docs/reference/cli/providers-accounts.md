@@ -1107,9 +1107,10 @@ Open that URL on any other machine, enter the short code, and the login complete
 `--no-wait` the command polls until you finish; the device grant lives 15 minutes, and the
 command waits that long rather than the 5 minutes a browser login allows, because the point
 is that you walk away to another device. `ocx account login xai --device` runs xAI's device
-login the same way. `kimi`, `nous`, and `github-copilot` accept the flag
+login the same way, bounded to 30 minutes and to a poll no faster than once a second. `kimi`,
+`nous`, and `github-copilot` accept the flag
 as a no-op because their only login is already a device flow; a provider with no device grant
-rejects it.
+rejects it. A device login has nothing to paste, so `--device` with `--code` is refused.
 
 In the dashboard, the same login is selected by the **"Don't open a browser on the proxy
 machine"** checkbox on the add-account modal. That setting already means the operator is not

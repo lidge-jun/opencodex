@@ -17,6 +17,7 @@ import { configuredAdminToken } from "../lib/admin-secrets";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
 import { reportOAuthLoginError } from "./login-cli-errors";
+import { terminalSafeText } from "../lib/terminal-safe-text";
 
 /**
  * Seams a test drives in place of a browser, a terminal and a real provider. Production passes
@@ -178,8 +179,10 @@ async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> 
     await withPrompt(deps.ask, async (ask) => {
       await login(name, {
         onAuth: ({ url, instructions }) => {
-          console.log(`\n🔐 Open this URL in any browser to approve ${name}:\n${url}\n`);
-          if (instructions) console.log(instructions);
+          // Both are provider-supplied. `--headless` for xAI is the device grant, whose instructions
+          // quote the provider's user code; a control sequence there would drive this tty.
+          console.log(`\n🔐 Open this URL in any browser to approve ${name}:\n${terminalSafeText(url)}\n`);
+          if (instructions) console.log(terminalSafeText(instructions));
         },
         onProgress: (m) => console.log(`   ${m}`),
         onManualCodeInput: async () => await ask("Paste the code shown after approval: "),
@@ -207,11 +210,11 @@ export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}, op
     await login(name, {
       onAuth: ({ url, instructions }) => {
         if (!url) {
-          if (instructions) console.log(instructions);
+          if (instructions) console.log(terminalSafeText(instructions));
           return;
         }
-        console.log(`\n🔐 Opening browser for ${name} login...\n${url}\n`);
-        if (instructions) console.log(instructions);
+        console.log(`\n🔐 Opening browser for ${name} login...\n${terminalSafeText(url)}\n`);
+        if (instructions) console.log(terminalSafeText(instructions));
         // The controller does not await onAuth, so the launcher's answer cannot be reported from
         // here — this returns long before it arrives. It reports itself instead, and the one
         // thing that could collide with it waits below (#5261).

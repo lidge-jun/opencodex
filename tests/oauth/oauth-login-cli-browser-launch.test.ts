@@ -173,6 +173,58 @@ describe("CLI OAuth login reports the browser launch (#5261)", () => {
     expect(events).toEqual(["warn"]);
   });
 
+  test("provider-supplied URL and instructions reach the terminal escaped, and the launcher raw", async () => {
+    // The device flow hands the CLI a provider-supplied verification URL and an instruction line
+    // quoting the provider's user code. Both land in a tty, so a control sequence in either would
+    // rewrite the operator's screen. The launcher still needs the real URL, and a normal URL and
+    // code must print unchanged — escaping is not a rewrite of the value itself.
+    const lines: string[] = [];
+    const launched: string[] = [];
+    const capture = spyOn(console, "log").mockImplementation(line => { lines.push(String(line)); });
+    const hostileUrl = "https://accounts.x.ai/oauth2/device\u001b[31m?user_code=AB";
+    const hostileInstructions = "Confirm the code\u001b]0;pwnd\u0007AB";
+    try {
+      await handleOAuthLogin(anyOAuthProvider(), {
+        runLogin: async (_provider, ctrl) => {
+          ctrl.onAuth?.({ url: hostileUrl, instructions: hostileInstructions, deviceCode: "AB" });
+          return {} as OAuthCredentials;
+        },
+        openUrl: async (url: string) => { launched.push(url); return { status: "started" }; },
+      });
+    } finally { capture.mockRestore(); }
+
+    const printed = lines.join("\n");
+    expect(printed).not.toContain("\u001b");
+    expect(printed).not.toContain("\u0007");
+    expect(printed).toContain("\\x1b[31m");
+    expect(printed).toContain("\\x07");
+    // The value is only escaped where a human reads it.
+    expect(launched).toEqual([hostileUrl]);
+  });
+
+  test("an ordinary URL, code and instruction print unchanged", async () => {
+    const lines: string[] = [];
+    const capture = spyOn(console, "log").mockImplementation(line => { lines.push(String(line)); });
+    try {
+      await handleOAuthLogin(anyOAuthProvider(), {
+        runLogin: async (_provider, ctrl) => {
+          ctrl.onAuth?.({
+            url: "https://accounts.x.ai/oauth2/device?user_code=ABCD-EFGH",
+            instructions: "Open this URL in any browser and confirm the code ABCD-EFGH.",
+            deviceCode: "ABCD-EFGH",
+          });
+          return {} as OAuthCredentials;
+        },
+        openUrl: async () => ({ status: "started" }),
+      });
+    } finally { capture.mockRestore(); }
+
+    const printed = lines.join("\n");
+    expect(printed).toContain("https://accounts.x.ai/oauth2/device?user_code=ABCD-EFGH");
+    expect(printed).toContain("confirm the code ABCD-EFGH.");
+    expect(printed).not.toContain("\\x");
+  });
+
   test("a launcher that throws is reported, not turned into a failed login", async () => {
     // openUrl documents that it never rejects, but this seam accepts any launcher. A rejection
     // here used to travel out through settled(), which a polling flow does not await until the

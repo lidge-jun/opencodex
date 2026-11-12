@@ -127,11 +127,22 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
 - **Device login:** `loginXaiDevice` (`src/oauth/xai.ts`) runs the RFC 8628 device grant against
   the discovered `device_authorization_endpoint`, for hosts whose browser cannot reach the
   127.0.0.1:56121 callback. It shows the `accounts.x.ai` verification URL and user code, polls
-  the token endpoint once per provider interval (`slow_down` adds 5s, uncapped), keeps polling
-  through `authorization_pending`, timeouts, network failures, 429 and 5xx, cuts every poll off at
-  `expires_in`, and ends on denial, expiry or cancellation. It never imports the local Grok CLI token. `ocx login xai --headless`,
+  the token endpoint once per provider interval, keeps polling
+  through `authorization_pending`, timeouts, network failures, 429 and 5xx, and ends on denial,
+  expiry or cancellation. It never imports the local Grok CLI token. `ocx login xai --headless`,
   `ocx account login xai --device` and `POST /api/oauth/login` with `device: true` select it
   (`supportsDeviceLoginMode` in `src/oauth/index.ts`).
+  Both poll bounds come from the authorization response, so both are clamped before they reach a
+  timer: `interval` into `[1s, lifetime]` and `expires_in` into `(0, 30m]`. A delay above 2^31-1 ms
+  overflows `setTimeout` into a next-tick fire, which is a hot loop against the auth endpoint, and
+  a `0`, negative or fractional `interval` is the same loop from below; an uncapped `expires_in`
+  would make the deadline meaningless. `slow_down` still adds 5s, now under the same ceiling, and
+  every poll is cut off at the (bounded) deadline. Both the authorization request and each token
+  poll use `redirect: "error"`: a 307/308 preserves the method and body, so the client id and the
+  bearer-equivalent `device_code` must not follow a hop to a host `validateXaiEndpoint` never
+  approved. Discovery already refuses a non-x.ai endpoint, so a redirect here can only be a
+  downgrade. The inherited browser-callback, code-exchange and refresh requests keep the runtime's
+  default redirect policy. Regression coverage: `tests/providers/xai/xai-device-login.test.ts`.
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
   exchange plus a short global store-write lock + async mutation funnel around every
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist
