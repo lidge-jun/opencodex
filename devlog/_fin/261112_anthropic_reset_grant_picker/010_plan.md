@@ -111,7 +111,8 @@ hyds/deepseek-v4.1-flash-1m and hyds/deepseek-v4.1-flash failed with provider 40
 
 1. Stale snapshot could offer a picker while an attempt is open, and the ledger refused only a same-grant
    prior, so a different-grant claim could start — accepted, fixed on both sides: the ledger now allows at
-   most one unresolved operation per account and org (any grant), and the dialog re-reads the account when it
+   most one unresolved operation per account and org (any grant) inside the ten-minute retry window (an older
+   open record no longer blocks, matching the same-id retry limit), and the dialog re-reads the account when it
    opens. Fail-first tests: ledger (`tests/adapters/anthropic/anthropic-reset-grants.test.ts`), route
    (`tests/server/management-anthropic-reset-grants.test.ts`), dialog (`gui/tests/anthropic-reset-grants.test.tsx`).
 2. One frame with a live picker between `setHeld(null)` and the refresh — rebutted: `setHeld`, `setOutcome` and
@@ -147,3 +148,11 @@ Model trail for reviews: hyds/deepseek-v4.1-flash-1m and hyds/deepseek-v4.1-flas
 4. Missing `.catch` on the open re-read (nit) — accepted.
 5. Tests for newest prior / StrictMode (nit) — rebutted: two open records only exist in pre-change journals; the guarded render update is exercised by the stale-confirm test.
 
+
+## Outcome (D)
+
+Delivered in https://github.com/lidge-jun/opencodex/pull/8595 (squash merge into `dev`).
+What did not change: Grok coupons keep their earliest-expiry-first dialog with no picker; the GET's pending
+operation still does not filter by organization (an org change mid-window fails closed without a spend).
+What would refute the default: evidence that upstream `next_grant_id` encodes a preference the user should follow
+(for example a grant that clears the window the account is actually limited on); then prefer it among selectable grants.
