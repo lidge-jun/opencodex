@@ -260,9 +260,12 @@ for (const mode of ["abort", "deadline"] as const) {
     const exited = hold<void>();
     const controller = new AbortController();
     let child: childProcess.ChildProcess | undefined;
+    const script = "if (process.platform !== 'win32') process.on('SIGTERM', () => {}); console.log('READY'); setInterval(() => {}, 20);";
     const actualExec = childProcess.execFile;
     const spawn = spyOn(childProcess, "execFile").mockImplementation(((...args: Parameters<typeof actualExec>) => {
-      child = actualExec(...args);
+      const spawned = actualExec(...args);
+      if (args[0] !== process.execPath || !Array.isArray(args[1]) || args[1].length !== 2 || args[1][0] !== "-e" || args[1][1] !== script) return spawned;
+      child = spawned;
       let output = "";
       child.stdout?.on("data", chunk => { output += String(chunk); if (output.includes("READY")) ready.resolve(); });
       child.once("exit", () => exited.resolve());
@@ -277,7 +280,6 @@ for (const mode of ["abort", "deadline"] as const) {
       }
       return set(fn, delay, ...args);
     }) as typeof setTimeout);
-    const script = "if (process.platform !== 'win32') process.on('SIGTERM', () => {}); console.log('READY'); setInterval(() => {}, 20);";
     const pending = runtime.execCodexFileAsync(process.execPath, ["-e", script], {
       encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: mode === "deadline" ? 1234 : 10_000,
       windowsHide: true, signal: controller.signal,
@@ -286,6 +288,7 @@ for (const mode of ["abort", "deadline"] as const) {
     const rejected = pending.then(() => { throw new Error("held child unexpectedly completed"); }, error => error);
     try {
       await Promise.race([ready.promise, Bun.sleep(3000).then(() => { throw new Error("child never became READY"); })]);
+      await new Promise<void>((resolve, reject) => childProcess.execFile(process.execPath, ["-e", "process.exit(0)"], error => error ? reject(error) : resolve()));
       const started = Date.now();
       if (mode === "abort") controller.abort();
       const error = await rejected;
