@@ -70,7 +70,7 @@ describe("GET /api/link/status?traffic=1 (#3023)", () => {
     const stripped = { ...counted, links: counted.links.map(({ traffic: _traffic, ...rest }) => rest) };
     expect(stripped).toEqual(plain);
     const [hub, client] = counted.links;
-    expect(hub!.traffic).toEqual({ since: expect.any(String), generation: 0, requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0,
+    expect(hub!.traffic).toEqual({ since: expect.any(String), epoch: expect.stringMatching(/^[0-9a-f]{16}$/), generation: 0, requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0,
       toHomeSource: "content-length", toHomeUncounted: 0, untrackedRequests: 0 });
     expect(client!.traffic).toMatchObject({ requests: 0 });
     // `ocx link status` validates both shapes key by key.
@@ -109,7 +109,7 @@ describe("GET /api/link/status?traffic=1 (#3023)", () => {
   test("the CLI refuses a malformed traffic block", () => {
     const base = { role: "home", listener: { state: "listening", port: 18181 }, child: null, links: [{ id: HUB, alias: "a", direction: "hub-initiated",
       state: "connected", since: "2026-11-12T00:00:00.000Z", reason: null, tunnelPort: 41000 }] };
-    const traffic = { since: "2026-11-12T00:00:00.000Z", generation: 3, requests: 1, incomplete: 0, toHomeBytes: 5, fromHomeBytes: 6, toHomeSource: "relayed",
+    const traffic = { since: "2026-11-12T00:00:00.000Z", epoch: "0123456789abcdef", generation: 3, requests: 1, incomplete: 0, toHomeBytes: 5, fromHomeBytes: 6, toHomeSource: "relayed",
       toHomeUncounted: 0, untrackedRequests: 0 };
     const withRow = (row: Record<string, unknown>) => ({ ...base, links: [{ ...base.links[0], ...row }] });
     expect(() => validateStatus(withRow({ traffic }))).not.toThrow();
@@ -117,6 +117,8 @@ describe("GET /api/link/status?traffic=1 (#3023)", () => {
     expect(() => validateStatus(withRow({ traffic: { ...traffic, extra: 1 } }))).toThrow("link 0 traffic");
     expect(() => validateStatus(withRow({ traffic: { ...traffic, toHomeSource: "guess" } }))).toThrow("link 0 traffic");
     expect(() => validateStatus(withRow({ traffic: { ...traffic, generation: 1.5 } }))).toThrow("link 0 traffic");
+    expect(() => validateStatus(withRow({ traffic: { ...traffic, epoch: "" } }))).toThrow("link 0 traffic");
+    expect(() => validateStatus(withRow({ traffic: { ...traffic, epoch: 7 } }))).toThrow("link 0 traffic");
     expect(() => validateStatus(withRow({ traffic: { ...traffic, untrackedRequests: -1 } }))).toThrow("link 0 traffic");
     // The path kind is not part of the document; an unknown block is refused like any other key.
     expect(() => validateStatus(withRow({ traffic, path: { via: "direct" } }))).toThrow();
