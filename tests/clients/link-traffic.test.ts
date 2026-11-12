@@ -328,4 +328,28 @@ describe("traffic identity across restarts and cut uploads (#3023 review round 8
     expect(await response.text()).toBe("got 200000");
     expect(child.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 0, toHomeBytes: 200_000 });
   });
+
+  test("a read taken while a large write is still pending lags: the Home already has a prefix, incomplete is 0 and toHomeBytes misses it", async () => {
+    const prefix = 1024 * 1024;
+    const read = gate<number>(), answer = gate();
+    const h = home(async req => {
+      const reader = req.body!.getReader();
+      let got = 0;
+      while (got < prefix) { const next = await reader.read(); if (next.done) break; got += next.value.byteLength; }
+      read.resolve(got);
+      await answer.promise;
+      return new Response("data: done\n\n", { headers: { "content-type": "text/event-stream" } });
+    });
+    const child = createLinkTrafficBook("relayed");
+    const body = "x".repeat(48 * 1024 * 1024);
+    const pending = fetchBoundLinkRelay(target(h.port), `http://127.0.0.1:${h.port}/v1/responses`,
+      { method: "POST", body, headers: { "content-type": "application/json" } }, { traffic: child });
+    const crossed = await read.promise;
+    // The contract: an active write counts only once it completes, so a delta measures completed writes.
+    expect(child.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 0, toHomeBytes: 0 });
+    expect(crossed).toBeGreaterThanOrEqual(prefix);
+    answer.resolve();
+    await (await pending).body!.cancel();
+    expect(child.snapshot(linkId).incomplete).toBe(1);
+  });
 });
