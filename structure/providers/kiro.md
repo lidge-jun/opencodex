@@ -163,10 +163,13 @@ Schema sanitization is chosen per model id and per keyword, not per family or tr
 it taking. An exception can only widen what a probe covered; it is never "this model accepts
 everything".
 
-PR #8451 reports an opus-4.5 probe covering the rejected keywords (counting `if/then/else`
-as one item in its total of 28), so its exception is the empty set. It reports a constrained
-tool probe on `claude-opus-5.5` and `claude-sonnet-5.5` naming `pattern` and `maximum`; only
-those two keys survive for those ids. The report does not establish the other schema keys.
+PR #8451 reports an opus-4.5 probe covering every rejected keyword, so its exception is the empty
+set. Its list writes 27 items because `if/then/else` stands for three keys, which is exactly the
+29 keys of the set, while the report states that total as 28 — one fewer than the keys its list
+names. The accepted keys, not the stated count, are what the exception encodes. It reports a
+constrained tool probe on `claude-opus-5.5` and `claude-sonnet-5.5` naming `pattern` and
+`maximum`; only those two keys survive for those ids. The report does not establish the other
+schema keys.
 
 The remaining Claude ids on this provider (`claude-opus-5`, `claude-opus-4.8`,
 `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5`, `claude-sonnet-4.6`,

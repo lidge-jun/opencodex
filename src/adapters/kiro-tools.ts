@@ -84,8 +84,11 @@ function rejectAllExcept(accepted: readonly string[]): ReadonlySet<string> {
   return new Set([...KIRO_REJECTED_SCHEMA_KEYS].filter(key => !keep.has(key)));
 }
 
-// PR #8451 reports the rejected keys accepted on opus-4.5, with if/then/else grouped
-// in its count of 28. Its two 5.5 probes explicitly name only pattern and maximum.
+// PR #8451 reports the rejected keys above accepted on opus-4.5: its list enumerates 27 items
+// because if/then/else stands for three keys, which is all 29 keys of the set. The report states
+// that total as 28, one fewer than the 29 keys its own list names; the accepted keys, not the
+// stated count, are what the exception below encodes. Its two 5.5 probes explicitly name only
+// pattern and maximum.
 // Other keywords and model ids retain the default strip until supported by evidence.
 const KIRO_SCHEMA_KEY_EXCEPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["claude-opus-4.5", NO_SCHEMA_KEYS],
