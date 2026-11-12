@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHmac, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -16,6 +16,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  * no daemon and opens no port of its own: each route's ProxyCommand runs a private "sshd -i" as
  * the current user with a temporary host key, so the actual builders meet a real server.
  */
+// The opt-in fixture starts real sshd sessions; one ceiling for the whole file instead of one per test.
+setDefaultTimeout(60_000);
 const SSH = Bun.which("ssh");
 const SSHD = "/usr/sbin/sshd";
 const FIXTURE = process.env.OCX_OPENSSH_ROUTE_FIXTURE === "1" && SSH !== null && existsSync(SSHD);
@@ -116,7 +118,7 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
     expect(other.code).toBe(255);
     expect(routeOutcomeOfStderr(other.stderr)).toBe("hostkey");
     expect(readFileSync(knownHosts, "utf8")).toBe(before);
-  }, 60_000);
+  });
 
   test("OpenSSH confirms a granted -R, carries bytes through it, and refuses a second session the same port", async () => {
     const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("through the route") });
@@ -153,13 +155,13 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
       await Promise.allSettled(children.map(child => child.exited));
       target.stop(true);
     }
-  }, 60_000);
+  });
 
   test("a route on another port is still checked under the bare alias", async () => {
     const runner = createSshRunner();
     const probe = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-d", knownHostsFile: knownHosts })), { timeoutMs: 20_000 });
     expect({ code: probe.code, stdout: probe.stdout.trim() }).toEqual({ code: 0, stdout: "ocx-link-probe" });
-  }, 60_000);
+  });
 
   test("OpenSSH accepts a second key stored under a case variant of the alias; the route trust check refuses that file", async () => {
     const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
@@ -171,7 +173,7 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
     const other = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-b", knownHostsFile: mixed })), { timeoutMs: 20_000 });
     expect({ code: other.code, stdout: other.stdout.trim() }).toEqual({ code: 0, stdout: "ocx-link-probe" });
     expect(checkRouteTrust(text, "pin-alias", keyFingerprint(pinnedKey!))).toEqual({ ok: false, code: "pin_mismatch" });
-  }, 60_000);
+  });
 
   test("OpenSSH lowercases HostKeyAlias before it hashes it: a hashed line matches the lowercased alias only", async () => {
     const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
@@ -188,7 +190,7 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
     };
     expect({ lowerLine: await probe("PIN-ALIAS", "pin-alias"), exactLine: await probe("PIN-ALIAS", "PIN-ALIAS"), plain: await probe("pin-alias", "pin-alias") })
       .toEqual({ lowerLine: 0, exactLine: 255, plain: 0 });
-  }, 60_000);
+  });
 
   test("OpenSSH accepts another key from a wildcard, host list or hashed line beside the confirmed one; apply's check refuses each", async () => {
     const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
@@ -206,5 +208,5 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
       // A hashed line for the alias is a second key for it; a pattern or list cannot be ruled out at all.
       expect({ label, trust: confirmedLineTrust(text, "pin-alias", confirmed) }).toEqual({ label, trust: label === "hashed" ? "key_changed" : "trust_file_unexpected" });
     }
-  }, 60_000);
+  });
 });
