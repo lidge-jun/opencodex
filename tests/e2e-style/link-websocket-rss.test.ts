@@ -8,16 +8,20 @@ import { LinkWireClient } from "../helpers/link-ws-client";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
-// Release gate (design T4 6.3), opt-in: OCX_LINK_WS_RSS_ACCEPTANCE=1, optionally
-// OCX_LINK_WS_RSS_SOCKETS=<n> (default 24, the overall cap). It needs several hundred MiB of free memory
-// and is not part of the ordinary suite. Transport-only load: a fake upstream, every link socket sends a
-// near-maximum message, every reader stalls, upstream chunks run from 1 byte to 16 MiB around near-4 MiB
-// events, and the sockets are then cut in a seeded random order. Accepted when peak RSS minus idle RSS
-// of the Home process stays within n link socket reservations (the 768 MiB budget at n = 24).
+// Memory acceptance for the link WebSocket transport (design T4 6.3), opt-in: OCX_LINK_WS_RSS_ACCEPTANCE=1. It
+// needs a few GiB of free memory and is not part of the ordinary suite. The 32 MiB reservation per socket bounds
+// what the WebSocket transport itself adds on the Home, so the acceptance runs one stalled load twice, each in its
+// own Home process: every link socket (24, the overall cap) sends a near-maximum message whose reader then stalls,
+// upstream chunks run from 1 byte to 16 MiB around near-4 MiB events, each upstream stream is held after 16 MiB,
+// and the sockets are then cut in a seeded random order. The second run sends the same load through the HTTP link
+// relay under the same synchronization. Accepted when the WebSocket run's peak-over-idle RSS minus the HTTP run's
+// stays within n reservations (768 MiB at n = 24). What both transports share (fetch read-ahead and request
+// copies under a stalled reader) is a separate, pre-existing cost of the pipeline and is not part of this bound.
+// The definition, the measured numbers (R1 to R5) and how they were taken are in structure/remote-link.md.
 // The peak is the kernel's high-water mark (VmHWM, reset after the idle reading) on Linux 4.0 or later;
-// elsewhere the Home samples RSS on its own event loop, may miss a short peak, and reports "sampled".
-// Any OCX_LINK_WS_RSS_* setting besides the opt-in turns the run into a diagnostic: it prints its numbers and
-// never reports an acceptance.
+// elsewhere the Home samples RSS on its own event loop, may miss a short peak, reports "sampled", and cannot pass.
+// Any other OCX_LINK_WS_RSS_* setting turns the run into a diagnostic: it prints its numbers and never reports an
+// acceptance. The release gate stays closed in this build whatever the acceptance says.
 
 const ENABLED = process.env.OCX_LINK_WS_RSS_ACCEPTANCE === "1";
 const SOCKETS = Number(process.env.OCX_LINK_WS_RSS_SOCKETS ?? LINK_WS_LIMITS.totalSockets);
@@ -54,7 +58,7 @@ function eventsText(count: number): string {
 interface LoadResult { method: string; idle: number; peak: number; delta: number }
 
 /** One stalled load against a Home in its own process; prints its numbers and returns the peak reading. */
-async function runLoad(): Promise<LoadResult> {
+async function runLoad(options: { transport: "websocket" | "http"; hold: boolean }): Promise<LoadResult> {
     expect(SOCKETS).toBeGreaterThan(0);
     expect(SOCKETS).toBeLessThanOrEqual(LINK_WS_LIMITS.totalSockets);
     const root = mkdtempSync(join(tmpdir(), "ocx-link-ws-rss-"));
@@ -90,7 +94,7 @@ async function runLoad(): Promise<LoadResult> {
           pull(controller) {
             if (offset >= body.byteLength) { controller.close(); signal.gone(); return; }
             // A held stream (not the warm-up) supplies nothing more after the stall point, until it is cancelled.
-            if (UPSTREAM_HOLD && stream > 0 && offset >= HOLD_BYTES) { signal.held(); return new Promise<void>(() => {}); }
+            if (options.hold && stream > 0 && offset >= HOLD_BYTES) { signal.held(); return new Promise<void>(() => {}); }
             const size = Math.min(MAX_CHUNK, CHUNK_PLAN[pulls % CHUNK_PLAN.length]!);
             const chunk = body.subarray(offset, Math.min(body.byteLength, offset + size));
             offset += chunk.byteLength;
@@ -130,7 +134,7 @@ async function runLoad(): Promise<LoadResult> {
     const ask = async (command: string): Promise<number> => { child.stdin.write(command + "\n"); child.stdin.flush(); return Number((await nextLine()).rss); };
     const clients: LinkWireClient[] = [];
     try {
-      child.stdin.write(JSON.stringify({ upstreamPort: upstream.port, keys, stalls: TRANSPORT === "websocket" ? SOCKETS : Number.MAX_SAFE_INTEGER }) + "\n");
+      child.stdin.write(JSON.stringify({ upstreamPort: upstream.port, keys, stalls: options.transport === "websocket" ? SOCKETS : Number.MAX_SAFE_INTEGER }) + "\n");
       child.stdin.flush();
       const ready = await nextLine();
       const linkPort = Number(ready.linkPort);
@@ -150,7 +154,7 @@ async function runLoad(): Promise<LoadResult> {
         const wire = await LinkWireClient.open(linkPort);
         clients.push(wire);
         const { nonce } = await wire.challenge({ keyId: entry.id, linkId: entry.linkId, fingerprint: serviceApiTokenFingerprint(entry.key) });
-        if (TRANSPORT === "http") {
+        if (options.transport === "http") {
           wire.sendRequest("POST /v1/responses HTTP/1.1", {
             host: "127.0.0.1", "content-type": "application/json", authorization: "Bearer " + entry.key, "x-opencodex-link-session": nonce,
           }, JSON.stringify({ model: "fixture/fixture", input, stream: true }));
@@ -162,14 +166,14 @@ async function runLoad(): Promise<LoadResult> {
       }
       // The Home itself announces when every link pump is waiting on a drain at once. The HTTP
       // diagnostic has no pump to observe and settles for the upstream having enqueued its third chunk.
-      if (TRANSPORT === "websocket") {
+      if (options.transport === "websocket") {
         const announced = (async () => { for (;;) if ((await nextLine()).stalled === true) return "stalled" as const; })();
         const finished = Promise.all(signals.slice(1).map(signal => signal.cancelled)).then(() => "finished" as const);
         // A load that completes before every pump waits never reached the condition being measured.
         expect(await Promise.race([announced, finished])).toBe("stalled");
-      } else await Promise.all(signals.slice(1).map(signal => UPSTREAM_HOLD ? signal.reachedHold : signal.reachedStall));
+      } else await Promise.all(signals.slice(1).map(signal => options.hold ? signal.reachedHold : signal.reachedStall));
       // With a held upstream both transports also wait until every stream has supplied all it will.
-      if (UPSTREAM_HOLD && TRANSPORT === "websocket") await Promise.all(signals.slice(1).map(signal => signal.reachedHold));
+      if (options.hold && options.transport === "websocket") await Promise.all(signals.slice(1).map(signal => signal.reachedHold));
       const enqueuedAtStallMiB = delivered.slice(1).map(bytes => Math.round(bytes / MiB));
       if (HEAP) { child.stdin.write("heap\n"); child.stdin.flush(); console.log(JSON.stringify(await nextLine())); }
       // Cut every socket in a seeded random order, at different points of its stalled stream.
@@ -186,7 +190,7 @@ async function runLoad(): Promise<LoadResult> {
       const after = await ask("gc-rss");
       const delta = peak - idle;
       const budget = SOCKETS * LINK_WS_LIMITS.socketReservationBytes;
-      console.log(JSON.stringify({ method, transport: TRANSPORT, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
+      console.log(JSON.stringify({ method, transport: options.transport, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
       return { method, idle, peak, delta };
     } finally {
       for (const client of clients) client.destroy();
@@ -198,20 +202,32 @@ async function runLoad(): Promise<LoadResult> {
 }
 
 describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance (opt-in release gate: OCX_LINK_WS_RSS_ACCEPTANCE=1)", () => {
-  test.skipIf(!CANONICAL)("acceptance: peak RSS minus idle RSS of the Home stays within the link socket reservations"
+  // Design T4 6.3, as decided after the T5g measurements: the reservation bounds what the link WebSocket transport
+  // itself adds. Both transports run the same stalled load against a held upstream (identical synchronization), and
+  // the WebSocket's peak minus the HTTP relay's peak must stay within the sockets' reservations.
+  test.skipIf(!CANONICAL)("acceptance: the WebSocket's peak RSS over the HTTP relay's, under the same held load, stays within the link socket reservations"
     + (CANONICAL ? "" : " [skipped: diagnostic settings present (" + DIAGNOSTIC_SETTINGS.join(", ") + "); only the canonical load reports an acceptance]"), async () => {
-    const result = await runLoad();
-    // Only a kernel high-water mark, reset after the idle reading and read back, can satisfy the gate.
-    expect(result.method).toBe("kernel-vmhwm");
-    expect(Number.isFinite(result.peak) && result.peak >= result.idle).toBe(true);
-    expect(result.delta).toBeLessThanOrEqual(SOCKETS * LINK_WS_LIMITS.socketReservationBytes);
+    const websocket = await runLoad({ transport: "websocket", hold: true });
+    const http = await runLoad({ transport: "http", hold: true });
+    // Only kernel high-water marks, reset after each idle reading and read back, can satisfy the gate.
+    for (const result of [websocket, http]) {
+      expect(result.method).toBe("kernel-vmhwm");
+      expect(Number.isFinite(result.peak) && result.peak >= result.idle).toBe(true);
+    }
+    console.log(JSON.stringify({ acceptance: true, sockets: SOCKETS, websocketMinusHttpMiB: (websocket.delta - http.delta) / MiB, budgetMiB: SOCKETS * LINK_WS_LIMITS.socketReservationBytes / MiB }));
+    expect(websocket.delta - http.delta).toBeLessThanOrEqual(SOCKETS * LINK_WS_LIMITS.socketReservationBytes);
   });
 
   test.skipIf(CANONICAL)("diagnostic run, never an acceptance: " + (CANONICAL ? "none requested" : DIAGNOSTIC_SETTINGS.join(", ")), async () => {
-    const result = await runLoad();
-    // The numbers are printed by runLoad; a diagnostic only checks that the peak was really measured.
-    expect(result.method).toBe("kernel-vmhwm");
-    expect(Number.isFinite(result.peak) && result.peak >= result.idle).toBe(true);
+    // A transport or upstream setting measures that one configuration; otherwise the acceptance's pair is measured
+    // at the requested settings and its difference printed.
+    const single = process.env.OCX_LINK_WS_RSS_TRANSPORT !== undefined || process.env.OCX_LINK_WS_RSS_UPSTREAM !== undefined;
+    const runs = single ? [await runLoad({ transport: TRANSPORT, hold: UPSTREAM_HOLD })]
+      : [await runLoad({ transport: "websocket", hold: true }), await runLoad({ transport: "http", hold: true })];
+    for (const result of runs) {
+      expect(result.method).toBe("kernel-vmhwm");
+      expect(Number.isFinite(result.peak) && result.peak >= result.idle).toBe(true);
+    }
+    if (runs.length === 2) console.log(JSON.stringify({ diagnostic: true, sockets: SOCKETS, websocketMinusHttpMiB: (runs[0]!.delta - runs[1]!.delta) / MiB, perSocketMiB: (runs[0]!.delta - runs[1]!.delta) / SOCKETS / MiB }));
   });
 });
-
