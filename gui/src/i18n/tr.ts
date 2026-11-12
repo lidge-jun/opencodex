@@ -2989,6 +2989,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.needsReauth": "Tekrar Giriş Yap",
   "codexAuth.reauthenticate": "Yeniden Doğrula",
   "codexAuth.tokenExpired": "Jeton süresi doldu — hesabı yeniden doğrulayın",
+  "codexAuth.weeklyConflict": "İki haftalık pencere bildirildi: {first} ve {second}. Yukarıdaki sıfırlama tüm kotayı geri getirmeyebilir.",
   "codexAuth.mainTokenExpired": "Belirteç süresi doldu — aşağıdan cihaz koduyla veya Codex App girişiyle yeniden giriş yapın",
   "codexAuth.mainReauthSucceeded": "Giriş yapıldı",
   "codexAuth.mainReauthFailed": "Yeniden giriş başarısız",

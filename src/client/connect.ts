@@ -29,6 +29,8 @@ import {
   type CodexRoutingTarget,
 } from "../codex/inject";
 import {
+  adoptJournalForClient,
+  journalHandoverIncomplete,
   journalOwner,
   restoreJournalState,
 } from "../codex/journal";
@@ -790,6 +792,24 @@ async function connectClientUnlocked(
       commitClientConnection(connection);
       committed = true;
     }), deps.lifecycleLockDeps);
+    // Only now does the routing belong to this connection: take over a journal another owner wrote
+    // (src/codex/journal.ts adoptJournalForClient). A failure keeps the connection; sync retries.
+    if (injectionCommitted) {
+      try {
+        const adoption = adoptJournalForClient(apiKeyId, () => {
+          // Under the Codex lock: still this committed connection (same owner and link) and its
+          // token, or write nothing. The stored record is normalized, so identity is compared.
+          assertNoClientDisconnectPending();
+          const current = readClientConnectionState();
+          if (current.kind !== "connected" || !sameClientConnectionOwner(current.value, connection)
+            || current.value.link?.linkId !== connection.link?.linkId) throw new Error("client_connection_changed");
+          const token = readServiceApiTokenState();
+          if (token.kind !== "present" || token.fingerprint !== connection.tokenFingerprint) throw new Error("client_token_changed");
+        });
+        if (journalHandoverIncomplete(adoption)) console.warn(FOREIGN_JOURNAL_WARNING);
+      }
+      catch { console.warn("Warning: the Codex journal could not be handed to this connection; run 'ocx sync' so a supervised restart keeps Codex routing."); }
+    }
     // Recorded only when the injection that applied it ran (not with --no-sync). The connection is
     // already committed, so a failed record write must not reach the rollback below: it is a
     // warning, and `ocx status` reports no recorded apply until `ocx sync` writes one.
@@ -855,6 +875,8 @@ export interface ConnectedSyncResult {
   appliedRecord?: HomeCodexSettingsRecord;
   /** The Home's settings were injected but their record could not be written (OCX-6). */
   applyRecordFailed?: true;
+  /** Routing was injected but the Codex journal stayed with its previous owner; sync again. */
+  journalHandoverFailed?: true;
   /**
    * The connection this sync ran under, read inside its lock and compare-and-swapped on every
    * write. Callers decide link-vs-hub wording and restart ownership from this, never from a read
@@ -964,6 +986,7 @@ async function syncConnectedClientUnlocked(
   let homeSettings: HomeCodexSettingsSource | undefined;
   let appliedRecord: HomeCodexSettingsRecord | undefined;
   let applyRecordFailed = false;
+  let journalHandoverFailed = false;
   if (next.selectedClients.includes("codex")) {
     let config = loadConfig();
     // #6957: a link Child applies the Home's OpenCodex-owned Codex settings with the catalog.
@@ -984,6 +1007,13 @@ async function syncConnectedClientUnlocked(
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
     injected = true;
+    // A committed connection re-injected: own the journal too (retries a takeover connect missed),
+    // under the same connection guard as the injection, so a stale sync claims nothing.
+    try {
+      const adoption = adoptJournalForClient(next.apiKeyId, beforeClientWrite);
+      // No journal or another client's means the routing is not this connection's to keep.
+      if (journalHandoverIncomplete(adoption)) journalHandoverFailed = true;
+    } catch { journalHandoverFailed = true; }
     if (homeSettings && next.link) {
       const linkId = next.link.linkId;
       const settings = homeSettings;
@@ -1012,6 +1042,7 @@ async function syncConnectedClientUnlocked(
     ...(homeSettings ? { homeSettings } : {}),
     ...(appliedRecord ? { appliedRecord } : {}),
     ...(applyRecordFailed ? { applyRecordFailed } : {}),
+    ...(journalHandoverFailed ? { journalHandoverFailed: true as const } : {}),
     connection: next,
   };
 }
@@ -1052,6 +1083,8 @@ const DISCONNECT_PHASES: readonly DesktopDisconnectReceipt["phase"][] = [
 function disconnectAtLeast(receipt: DesktopDisconnectReceipt, phase: DesktopDisconnectReceipt["phase"]): boolean {
   return DISCONNECT_PHASES.indexOf(receipt.phase) >= DISCONNECT_PHASES.indexOf(phase);
 }
+
+const FOREIGN_JOURNAL_WARNING = "Warning: the Codex journal belongs to an earlier connection, so the next OpenCodex restart restores native Codex routing. After that restart, run 'ocx sync --restart-codex' to point Codex at this connection again.";
 
 function catalogIsRecordedPrior(connection: OcxClientConnectionConfig, snapshot: CatalogSnapshot): boolean {
   return snapshot.kind === "file" && !!connection.priorCatalog
@@ -1128,7 +1161,10 @@ export async function disconnectClient(
       }
       if (!receipt) {
         const desktop = inspectRemoteDesktopStore(desktopOwner(connection));
-        if (desktop.kind === "unsafe" || desktop.kind === "conflict") throw new Error("desktop_lifecycle_unsafe");
+        if (desktop.reason === "root_without_state") {
+          throw new Error(`desktop_lifecycle_unsafe: ${desktop.path} exists but holds no Claude Desktop remote state or disconnect receipt (a leftover or renamed file), so disconnect cannot tell what it would restore. Move that folder aside, then run ocx disconnect again.`);
+        }
+        if (desktop.kind === "unsafe" || desktop.kind === "conflict") throw new Error(`desktop_lifecycle_unsafe: the Claude Desktop remote profile store could not be verified (${desktop.kind}); nothing was changed.`);
         preflightDisconnectCatalog(connection, keepCatalog);
         receipt = { version: 1, owner: desktopOwner(connection), tokenFingerprint: connection.tokenFingerprint, keepCatalog, phase: "prepared" };
         writeDesktopDisconnectReceipt(held, previous, receipt);

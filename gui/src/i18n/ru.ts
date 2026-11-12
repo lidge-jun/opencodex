@@ -2961,6 +2961,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.needsReauth": "Повторный вход",
   "codexAuth.reauthenticate": "Переавторизоваться",
   "codexAuth.tokenExpired": "Токен истёк — переавторизуйте этот аккаунт",
+  "codexAuth.weeklyConflict": "Сообщено о двух недельных окнах: {first} и {second}. Сброс выше может не восстановить весь лимит.",
   "codexAuth.mainTokenExpired": "Токен истёк — войдите снова по коду устройства ниже или через вход в Codex App",
   "codexAuth.mainReauthSucceeded": "Вход выполнен",
   "codexAuth.mainReauthFailed": "Не удалось войти снова",

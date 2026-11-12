@@ -20,7 +20,7 @@ import { findLiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { localAdmissionToken, localInferenceDestination, localLoopbackInferencePorts, localManagementOrigin } from "../lib/local-destinations";
-import { PROXY_MARKER, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
+import { PROXY_MARKER, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, resolveClaudeKeychainPresence, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
@@ -37,6 +37,17 @@ import { desktopProfileWireAlias, legacyDesktopProfileWireAlias } from "../claud
 import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
 import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
 import { withoutSiblingMarker } from "../codex/sibling-start";
+import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
+
+/**
+ * The environment of the detached `ocx start` that `ocx claude` launches (the spawn adds the runtime
+ * provenance stamp): an ordinary owner. It
+ * carries OCX_SERVICE=1 but no service manager's marker, which is how a restart tells it apart from
+ * a manager-launched process (src/client/runtime-restart.ts classifyClientRestartSupervisor).
+ */
+export function claudeProxyStartEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return withoutSupervisorMarkers(withoutSiblingMarker({ ...base, OCX_SERVICE: "1" }));
+}
 
 export interface ClaudeLaunchEnv {
   [key: string]: string | undefined;
@@ -532,7 +543,7 @@ export async function ensureProxyForClaude(deps: ClaudeProxyEnsureDeps = {}): Pr
     stdio: "ignore",
     windowsHide: true,
     // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
-    env: withProcessRuntimeProvenance(withoutSiblingMarker({ ...process.env, OCX_SERVICE: "1" })),
+    env: withProcessRuntimeProvenance(claudeProxyStartEnv()),
   });
   child.unref();
   const deadline = Date.now() + 8_000;
@@ -866,7 +877,10 @@ export async function cmdClaude(args: string[]): Promise<number> {
   const gateway = await fetchGatewayModels(route, { admissionConfig: config });
   const forceAvailableSelectors = typeof route === "number" ? undefined : gateway?.models.map(model => model.id) ?? [];
   const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);
-  const env = buildClaudeEnv(config, route, process.env, contextWindows, { allowRootSkipPermissions, forceAvailable, forceAvailableSelectors });
+  const keychainPresence = await resolveClaudeKeychainPresence(config.claudeCode?.authMode);
+  const env = buildClaudeEnv(config, route, process.env, contextWindows, {
+    allowRootSkipPermissions, forceAvailable, forceAvailableSelectors, authDetect: { keychainProbe: () => keychainPresence },
+  });
   if (allowRootSkipPermissions) {
     console.error(rootSkipPermissionsNotice(env));
   }

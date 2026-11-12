@@ -599,7 +599,13 @@ export async function handleDisconnectCommand(
       knownHostsFile: deps.linkTeardownDeps?.knownHostsFile ?? linkKnownHostsPath(),
       timeoutMs: deps.linkTeardownDeps?.timeoutMs,
     });
-    const result = await disconnectClient({ keepCatalog }, deps);
+    const result = await disconnectClient({ keepCatalog }, deps).catch((error: unknown) => {
+      // The bare code left a Home-driven leave with nothing to act on; the remedy already exists.
+      if (error instanceof Error && error.message === "client_catalog_ownership_changed") {
+        throw new Error("client_catalog_ownership_changed: the Codex model catalog (opencodex-catalog.json in the Codex home) matches neither the catalog this connection wrote nor the one recorded before it connected, so something changed it after connecting and disconnect will not overwrite it. To disconnect and leave that file as it is, run: ocx disconnect --keep-catalog");
+      }
+      throw error;
+    });
     const payload = {
       ...result,
       homeRevoke: teardown.homeRevoke,

@@ -2986,6 +2986,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.needsReauth": "Đăng nhập lại",
   "codexAuth.reauthenticate": "Xác thực lại",
   "codexAuth.tokenExpired": "Token hết hạn — hãy xác thực lại tài khoản này",
+  "codexAuth.weeklyConflict": "Đã báo cáo hai khung tuần: {first} và {second}. Lần đặt lại ở trên có thể không khôi phục toàn bộ hạn mức.",
   "codexAuth.mainTokenExpired": "Token hết hạn — vui lòng đăng nhập lại thông qua Codex App login",
   "codexAuth.mainReauthSucceeded": "Đã đăng nhập",
   "codexAuth.mainReauthFailed": "Đăng nhập lại thất bại",

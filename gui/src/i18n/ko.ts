@@ -2440,6 +2440,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.needsReauth": "재로그인",
   "codexAuth.reauthenticate": "재인증",
   "codexAuth.tokenExpired": "토큰 만료 — 이 계정을 다시 인증하세요",
+  "codexAuth.weeklyConflict": "주간 사용 기간이 두 개로 보고되었습니다: {first}, {second}. 위의 초기화 시각에 전체 한도가 복구되지 않을 수 있습니다.",
   "codexAuth.mainTokenExpired": "토큰 만료 — 아래 디바이스 코드 또는 Codex 앱 로그인으로 다시 로그인하세요",
   "codexAuth.mainReauthSucceeded": "로그인됨",
   "codexAuth.mainReauthFailed": "다시 로그인 실패",
