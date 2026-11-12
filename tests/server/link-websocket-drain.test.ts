@@ -444,6 +444,28 @@ describe("restore of refused results across overlapping turns (T5d1-R5-01)", () 
     expect(activity.idle).toBe(false);
   });
 
+  test("on a link socket an upstream output with the same call id never settles a pending client call (T5d1-R10-01)", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.restoreRefusedResults = true;
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_up"));
+    const finish = activity.beginTurn("next");
+    activity.observePayload(JSON.stringify({ type: "response.output_item.done", item: { type: "function_call_output", call_id: "call_up", output: "from upstream" } }));
+    finish();
+    expect(activity.pendingKeys()).toHaveLength(1);
+    expect(activity.idle).toBe(false);
+  });
+
+  test("a local socket keeps settling on a same-id upstream output (characterization)", () => {
+    const activity = new CodexWebSocketActivity();
+    activity.beginTurn("start")();
+    activity.observePayload(toolCall("call_loc"));
+    const finish = activity.beginTurn("next");
+    activity.observePayload(JSON.stringify({ type: "response.output_item.done", item: { type: "function_call_output", call_id: "call_loc", output: "from upstream" } }));
+    finish();
+    expect(activity.pendingKeys()).toEqual([]);
+  });
+
   test("an older turn that was refused, with no newer acceptance, still restores", () => {
     const activity = new CodexWebSocketActivity();
     activity.restoreRefusedResults = true;

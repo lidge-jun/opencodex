@@ -265,7 +265,9 @@ export class CodexWebSocketActivity {
     if (this.untrackedResults) return;
     if (!record(item) || typeof item.type !== "string") return;
     // Hosted execution may publish both the call and its result in the output stream.
-    this.acceptResults([item]);
+    // On a Remote Link socket only an accepted client turn returns a client result: provider-executed
+    // calls never become pending, so an upstream output settling one would be ambiguous (design 5).
+    if (!this.restoreRefusedResults) this.acceptResults([item]);
     if (!Object.hasOwn(resultTypes, item.type)) return;
     if (providerExecuted && isAuthorizedProviderExecutedCall(item, providerExecuted)) return;
     if (item.type === "tool_search_call" && item.execution !== "client") return;
