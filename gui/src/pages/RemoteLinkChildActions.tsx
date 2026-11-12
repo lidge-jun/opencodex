@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from "rea
 import { LinkApiError, type LinkRowWire } from "../remote-link-api";
 import {
   CHILD_JOB_POLL_MS, CHILD_JOB_POLL_TIMEOUT_MS, changedPolicyKeys, codexRestartNeeded, getChildJob, getChildPolicy, postChildOperation, putChildPolicy,
-  restartWithheld, rowOperable, settleOrAbort, updateAvailable,
+  chunkLinkIds, restartWithheld, rowOperable, settleOrAbort, updateAvailable,
   type ChildJobView, type ChildOp, type ChildOperationBody, type ChildOpsRowView, type ChildPolicyReadView, type ChildPolicyView,
 } from "../remote-link-child-ops-api";
 import { type TKey, useT } from "../i18n/shared";
@@ -252,22 +252,26 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
   // The server expands "all" to every stored link and runs a pinned sync before it decides currency, so a
   // link outside the confirmation could still be reached. Both bulk actions name exactly the rows they cover:
   // update the updatable ones the dialog counts, observe the operable ones in the bar's own list.
-  const run = async (body: ChildOperationBody) => {
+  // The route takes at most 64 ids per body, so a larger list goes out as one job per group, in order; a refused
+  // group stops the rest and its error shows, while groups already accepted keep running as their own jobs.
+  const run = async (op: ChildOp, ids: readonly string[]) => {
     props.onError(null);
-    props.onRun({ linkId: "all", op: body.op });
-    try { props.onJob(await postChildOperation(props.apiBase, body)); }
+    props.onRun({ linkId: "all", op });
+    try {
+      for (const group of chunkLinkIds(ids)) props.onJob(await postChildOperation(props.apiBase, { op, linkIds: group }));
+    }
     catch (error) { props.onError(linkActionError(error)); }
     finally { props.onRun(null); }
   };
   return (
     <div className="remote-link-child-bulk flex flex-wrap items-center gap-2 px-1 py-2">
-      <Button variant="ghost" size="sm" onClick={() => void run({ op: "observe", linkIds: linkIds(operable) })}>{t("remoteLink.child.checkAll")}</Button>
+      <Button variant="ghost" size="sm" onClick={() => void run("observe", linkIds(operable))}>{t("remoteLink.child.checkAll")}</Button>
       <Button variant="outline" size="sm" disabled={updatable.length === 0}
         onClick={() => setConfirming("all")}>{t("remoteLink.child.updateAll")}</Button>
       <ChildConfirmDialog open={confirming === "all"} title={t("remoteLink.child.updateAll")}
         body={t("remoteLink.child.updateAllConfirm", { count: updatable.length, version: homeVersion })}
         confirm={t("remoteLink.child.updateAll")} onCancel={() => setConfirming(null)}
-        onConfirm={() => { setConfirming(null); void run({ op: "update", linkIds: linkIds(updatable) }); }} />
+        onConfirm={() => { setConfirming(null); void run("update", linkIds(updatable)); }} />
     </div>
   );
 }

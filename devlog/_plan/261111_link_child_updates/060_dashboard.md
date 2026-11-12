@@ -459,20 +459,22 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
   };
   return (
     <div className="remote-link-child-bulk flex flex-wrap items-center gap-2 px-1 py-2">
-      <Button variant="ghost" size="sm" onClick={() => void run({ op: "observe", linkIds: "all" })}>{t("remoteLink.child.checkAll")}</Button>
+      <Button variant="ghost" size="sm" onClick={() => void run("observe", linkIds(operable))}>{t("remoteLink.child.checkAll")}</Button>
       <Button variant="outline" size="sm" disabled={updatable.length === 0}
         onClick={() => setConfirming("all")}>{t("remoteLink.child.updateAll")}</Button>
       <ChildConfirmDialog open={confirming === "all"} title={t("remoteLink.child.updateAll")}
         body={t("remoteLink.child.updateAllConfirm", { count: updatable.length, version: homeVersion })}
         confirm={t("remoteLink.child.updateAll")} onCancel={() => setConfirming(null)}
-        onConfirm={() => { setConfirming(null); void run({ op: "update", linkIds: "all" }); }} />
+        onConfirm={() => { setConfirming(null); void run("update", linkIds(updatable)); }} />
     </div>
   );
 }
 ```
-Check all names `"all"` because 004 D14 allows it for observe; the server still refuses a client-initiated link inside the
-job, item by item, so a mixed list is safe. Update all is offered only when at least one row is actually updatable, and
-the count/version in its confirmation describe exactly those rows.
+Both bulk actions post explicit link ids, never `"all"` (Revision 7, #8581 review): the server expands `"all"` to
+every stored link and runs a pinned sync before it decides currency, so a link outside the confirmation could be
+reached. Check all names the operable rows; Update all names exactly the updatable rows its confirmation counts, and
+is offered only when at least one row is updatable. The route accepts at most 64 ids per body (`MAX_LINK_IDS`), so
+`run` posts one job per group of 64 in order (`chunkLinkIds`); a refused group stops the rest and shows its error.
 
 ```tsx
 export function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJobView; missing: boolean } {
@@ -724,7 +726,7 @@ implementation because `../src/pages/RemoteLinkChildActions` does not exist.
    sentence); confirm posts `restart:"app-server"`; choosing the desktop scope shows `codexBody` with the alias and posts `restart:"codex"`.
 6. *Update and Update all* — the row Update confirm names alias and version and contains the "ends any turn currently
    relayed" and "Automatic updates wait" sentences (English catalog), then posts `{op:"update",linkIds:[id]}`; Update all's
-   confirm names count and version with the same two sentences and posts `{op:"update",linkIds:"all"}`; disabled when no
+   confirm names count and version with the same two sentences and posts `{op:"update",linkIds:[<updatable ids>]}`; disabled when no
    row has an update. An unknown `restart.outcome` string renders as `<code>` text, not a crash (H5).
 7. *job progress* — POST returns a running job; the stub answers `jobs/<id>` running then done; the panel
    shows each item state and the restart outcome `done`, polls stop after done, and status refreshes once.
@@ -810,7 +812,7 @@ counts. Locale coverage is `gui/tests/locale-parity.test.ts` and `i18n-locales.t
 3. Check, Sync now, Restart Codex and Update each post exactly one `{op, linkIds:[id], restart?}` (tests 4–5).
 4. The Restart Codex dialog states that the app-server scope does not refresh the Codex desktop app's own
    app-server, and the desktop scope warns that conversations end (test 5).
-5. Update all and Check all post `linkIds:"all"`; Update and Update all need a confirmation that names the target
+5. Update all and Check all post the explicit ids of the rows they cover, at most 64 per request; Update and Update all need a confirmation that names the target
    version and says that a manual update ends the turn relayed for that Child while automatic updates wait for idle (test 6).
 6. A running job shows per-Child progress until done, then the status refreshes (test 7).
 7. While a job holds a row, its actions and Disconnect are disabled (test 9); a 409 from the server is shown translated (test 8).
@@ -903,3 +905,12 @@ Audit verdict GO-WITH-FIXES (blockers 3). All findings accepted; binding on the 
 8. Minor. `restart.outcome: "skipped"` copy (en): "Restart withheld: a request was in flight on this Child." (ko: "재시작 보류: 이
    Child에서 요청이 처리 중이었습니다."); test 12 updated to match.
 
+
+## Revision 7 (fresh final review r5 on #8581)
+
+Bulk actions post explicit ids, never `"all"`; the code sample, test 6 and acceptance item 5 above now say so. The
+operations route caps a body at 64 ids (`MAX_LINK_IDS`) while a Home's link count is unbounded, so Check all and Update
+all split their list with `chunkLinkIds` and post one job per group of 64, in order; a refused group stops the rest and
+shows its error. Test: "bulk actions split more than 64 Children into requests the server accepts" (65 rows, two
+requests of 64 and 1 for each action). Job polls carry a 15 s deadline each (`CHILD_JOB_POLL_TIMEOUT_MS`, CodeRabbit
+4547457599).

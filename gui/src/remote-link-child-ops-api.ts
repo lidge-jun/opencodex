@@ -148,6 +148,14 @@ export function jobHoldsLink(jobs: readonly ChildJobView[], linkId: string): boo
     && job.items.some(item => item.linkId === linkId && (item.state === "queued" || item.state === "running")));
 }
 export const CHILD_JOB_POLL_MS = 2_000;
+/** The operations route refuses a body naming more links than this (`MAX_LINK_IDS` in link-child-ops-routes.ts). */
+export const CHILD_OPERATION_MAX_LINK_IDS = 64;
+/** Splits a bulk target list into request-sized groups; a Home's link count is unbounded. */
+export function chunkLinkIds(ids: readonly string[], size = CHILD_OPERATION_MAX_LINK_IDS): string[][] {
+  const chunks: string[][] = [];
+  for (let start = 0; start < ids.length; start += size) chunks.push(ids.slice(start, start + size));
+  return chunks;
+}
 /** One job poll may take this long; a GET that never settles would otherwise stop every later poll. */
 export const CHILD_JOB_POLL_TIMEOUT_MS = 15_000;
 

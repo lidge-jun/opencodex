@@ -270,6 +270,29 @@ test("Update all and Check all name exactly the rows they cover", async () => {
   expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "observe", linkIds: ["l1", "l2", "l4"] });
 });
 
+test("bulk actions split more than 64 Children into requests the server accepts", async () => {
+  // The operations route refuses a body naming more than 64 links, and a Home's link count is unbounded.
+  const ids = Array.from({ length: 65 }, (_, index) => `l${index}`);
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status(ids.map(id => row(id, `box-${id}`, childBlock()))));
+    if (call.path === "/api/link/children/operations") return response({ job: job({ jobId: `ljob_${String(calls.length).padStart(16, "0")}`, state: "done", items: [] }) }, 202);
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await click(button(host, "Check all"));
+  await settleUntil(() => calls.filter(call => call.method === "POST").length === 2);
+  const checks = calls.filter(call => call.method === "POST").map(call => call.body);
+  expect(checks).toEqual([{ op: "observe", linkIds: ids.slice(0, 64) }, { op: "observe", linkIds: ids.slice(64) }]);
+  await click(button(host, "Update all"));
+  const bulkDialog = host.querySelector(".remote-link-child-bulk dialog")!;
+  expect(bulkDialog.textContent).toContain("Update 65 Children");
+  await click([...bulkDialog.querySelectorAll("button")].find(item => item.textContent === "Update all")!);
+  await settleUntil(() => calls.filter(call => call.method === "POST").length === 4);
+  const updates = calls.filter(call => call.method === "POST").slice(2).map(call => call.body);
+  expect(updates).toEqual([{ op: "update", linkIds: ids.slice(0, 64) }, { op: "update", linkIds: ids.slice(64) }]);
+  expect(host.textContent).not.toContain("could not be completed");
+});
+
 test("a running job shows per-item progress and refreshes status once when done", async () => {
   let jobPolls = 0;
   const calls = installFetch(call => {
