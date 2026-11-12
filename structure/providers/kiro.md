@@ -365,11 +365,13 @@ routes that rung to the emulated block instead.
 
 `KIRO_NATIVE_EFFORTS` is `low`, `medium`, `high`, `xhigh`, `max`. For `minimal`
 `buildKiroPayload` throws, and the request becomes HTTP 400 `invalid_request_error` before
-anything is sent, unless `kiroEmulatesUnsupportedEffort` accepts the model. `minimal` is the only
-outside-ladder value a caller's own request can deliver: the Responses parser folds `ultra` to
-`max` for both surfaces — the Messages translator copies `output_config.effort` through verbatim
-and hands the translated body to the same parser — and combo resolution draws from the catalog's
-`low`..`max` ladder. The emulation set is the seven Claude ids #8451 moved to native effort —
+anything is sent, unless `kiroEmulatesUnsupportedEffort` accepts the model. The surface split
+described below for a pinned `ultra` applies here unchanged, because it is the same throw on the
+same path. `minimal` is the only outside-ladder value a caller's own request can deliver: the
+Responses parser folds `ultra` to `max` for both surfaces — the Messages translator copies
+`output_config.effort` through verbatim and hands the translated body to the same parser — and
+combo resolution draws from the catalog's `low`..`max` ladder. The emulation set is the seven
+Claude ids #8451 moved to native effort —
 `claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`,
 `claude-sonnet-4.6`, `claude-haiku-5.5` — and they emulated every effort before the change, so
 they keep the emulated block for `minimal` instead of failing a request they used to serve.
@@ -383,9 +385,16 @@ against `isDeclaredReasoningEffort`, which includes the whole Codex ladder. So a
 does reach `buildKiroPayload`, and what happens there depends on the model:
 
 - A model in `KIRO_NATIVE_EFFORT_FIELDS` throws, because `ultra` is outside `KIRO_NATIVE_EFFORTS`
-  and `kiroEmulatesUnsupportedEffort` only ever admits `minimal`. The request becomes HTTP 400
-  `invalid_request_error` naming the model and the effort, on both the Responses and the Messages
-  surfaces, and nothing is sent upstream.
+  and `kiroEmulatesUnsupportedEffort` only ever admits `minimal`. The throw becomes HTTP 400
+  `invalid_request_error` on every surface, and nothing is sent upstream. What the client reads
+  differs: on Responses the adapter's `buildKiroPayload` message survives into `error.message` as
+  `Kiro <model> does not support reasoning effort "ultra"`
+  (`src/server/responses/adapter-dispatch.ts`), while Messages and Chat Completions replace it with
+  the fixed `request_rejected` copy `The provider rejected the request.`
+  (`upstreamConditionMessage` in `src/lib/upstream-condition.ts`, reached through
+  `ownedAnthropicErrorPayload` in `src/lib/messages-error-body.ts` and through `ownedChatErrorPayload`
+  in `src/lib/client-error-body.ts`) because those paths re-shape the error and do not forward the
+  adapter detail.
 - A model outside the table keeps the emulated path. `kiroThinkingBudget` has no `ultra` entry, so
   the pin is silently dropped and the request goes out with no reasoning signal — neither the
   native field nor the thinking block.
@@ -399,9 +408,9 @@ for them. `tests/providers/kiro/kiro-pinned-effort-ultra.test.ts` holds both hal
 
 The split is operator-visible. A `minimal` request reaches the seven as the emulated thinking
 block with no error, while the same request to Opus 5, Opus 5.5 or a native GPT model is a 400
-`invalid_request_error` naming the model and the effort. This is an enumerated fallback, not a
-general unknown-effort path: a value outside both the ladder and this set still throws. A future
-shared effort rung does not widen any of these allowlists.
+`invalid_request_error` with the surface split described above. This is an enumerated fallback,
+not a general unknown-effort path: a value outside both the ladder and this set still throws. A
+future shared effort rung does not widen any of these allowlists.
 
 The two members of `reasoningContent` are not interchangeable. The wire validates the shape of the
 member rather than its content, and the signature is not base64 — its alphabet contains `.` and

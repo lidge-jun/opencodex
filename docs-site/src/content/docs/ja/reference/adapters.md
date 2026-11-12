@@ -190,17 +190,27 @@ Kiro は `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-
 
 Kiro には `minimal` の段階がありません。`claude-opus-5` と `claude-opus-5.5` を除く上記の 9 モデルは、
 ネイティブ effort を有効にする前から動作していたリクエストを失敗させないよう、`minimal` でエミュレーションの
-ブロックを維持します。この 2 つの Opus 5 モデルとネイティブ effort を持つ GPT 系は、`minimal` を
-モデルと effort を示す 400 `invalid_request_error` で拒否します。
+ブロックを維持します。この 2 つの Opus 5 モデルとネイティブ effort を持つ GPT 系は、何も送信する前に
+`minimal` を 400 `invalid_request_error` で拒否します。
+
+拒否の伝え方はサーフェスごとに異なります。Responses リクエストはモデルと拒否された effort を示す文を
+`error.message` に入れます。Messages と Chat Completions の経路はその位置にプロキシの固定文言
+`The provider rejected the request.` を入れます。どちらもアダプターの詳細文をそのまま中継せず、自前の
+文言に置き換えるためです。モデルと effort を示すのは Responses だけです。ストリーミングと非ストリーミングは
+どのサーフェスでも同じ応答になります。拒否は上流へ送る本文を組み立てる途中で起きるため、ストリームは
+開かれず上流呼び出しも発生しません。
 
 `ultra` には区別が必要です。呼び出し元が送った `ultra` は、Responses と Messages のどちらの経路でも
 アダプターがリクエストを組み立てる前に `max` へ下げます。設定した pin は違います。
 `pinnedReasoningEffort`、`modelPinnedReasoningEfforts`、`modelPinnedEfforts` は `ultra` を受け付け、
 リクエストを解析した後に適用するため、アダプターまで届きます。ネイティブ Kiro effort を持つすべての
 モデル、つまり上記の Claude id と GPT モデルでは、この pin が Kiro の受け付けない段階であるため、
-モデルと effort を示す 400 `invalid_request_error` でリクエストが失敗します。エミュレーションを使うモデルでは pin は黙って捨てられ、推論シグナルのないままリクエストが
-送られます。これらの Claude id のいずれかをネイティブ effort に上げた後では、以前は捨てられていた
-`ultra` の pin が失敗します。`max` を pin してください。
+何も送信する前に 400 `invalid_request_error` でリクエストが失敗します。この拒否も `minimal` と
+同じくサーフェスごとに分かれます。Responses の本文はモデルと effort を示し、Messages と Chat
+Completions の本文はプロキシの固定文言だけを載せ、どちらも示しません。エミュレーションを使う
+モデルでは pin は黙って捨てられ、推論シグナルのないままリクエストが送られます。これらの Claude id
+のいずれかをネイティブ effort に上げた後では、以前は捨てられていた `ultra` の pin が失敗します。
+`max` を pin してください。
 
 `claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` と、上記にない Kiro モデルは
 すべての effort でエミュレーションを使います。effort の選択肢だけではネイティブ対応を意味しません。

@@ -222,17 +222,26 @@ Kiro는 `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`, `claude-opus-4.7`
 
 Kiro에는 `minimal` 단계가 없습니다. `claude-opus-5`와 `claude-opus-5.5`를 뺀 위의 아홉 모델은
 네이티브 effort를 쓰기 전에도 동작하던 요청을 실패시키지 않으려고 `minimal`에서 에뮬레이션 블록을
-유지합니다. 이 두 Opus 5 모델과 네이티브 effort를 쓰는 GPT 모델은 `minimal`을 모델과 effort를
-밝히는 400 `invalid_request_error`로 거부합니다.
+유지합니다. 이 두 Opus 5 모델과 네이티브 effort를 쓰는 GPT 모델은 `minimal`을 아무것도 보내기 전에
+400 `invalid_request_error`로 거부합니다.
+
+거부를 알리는 방식은 표면마다 다릅니다. Responses 요청은 모델과 거부된 effort를 밝히는 문장을
+`error.message`에 담습니다. Messages와 Chat Completions 경로는 그 자리에 프록시의 고정 문구인
+`The provider rejected the request.`를 넣습니다. 두 경로 모두 어댑터의 세부 문장을 그대로 전달하지
+않고 자기 문구로 바꾸기 때문입니다. 모델과 effort를 밝히는 쪽은 Responses뿐입니다. 스트리밍과
+비스트리밍은 모든 표면에서 같은 응답을 냅니다. 거부는 업스트림 요청 본문을 만드는 도중에 일어나므로
+스트림이 열리지 않고 업스트림 호출도 없습니다.
 
 `ultra`는 구분이 필요합니다. 호출자가 보낸 `ultra`는 Responses와 Messages 경로 모두 어댑터가
 요청을 만들기 전에 `max`로 낮춥니다. 설정한 pin은 다릅니다. `pinnedReasoningEffort`,
 `modelPinnedReasoningEfforts`, `modelPinnedEfforts`는 `ultra`를 받아들이고 요청을 파싱한 뒤에
 적용하므로 어댑터까지 도달합니다. 네이티브 Kiro effort를 쓰는 모든 모델, 즉 위에 나온 Claude id와
-GPT 모델에서는 이 pin이 Kiro가 받지 않는 단계라서 모델과 effort를 밝히는 400
-`invalid_request_error`로 요청이 실패합니다. 에뮬레이션을 쓰는 모델에서는 pin이
-조용히 버려지고 추론 신호 없이 요청이 나갑니다. 이 Claude id 중 하나를 네이티브 effort로 올린
-뒤라면, 전에는 버려지던 `ultra` pin이 이제 실패합니다. `max`를 pin하십시오.
+GPT 모델에서는 이 pin이 Kiro가 받지 않는 단계라서 아무것도 보내기 전에 400
+`invalid_request_error`로 요청이 실패합니다. 이 거부도 `minimal`과 똑같이 표면별로 나뉩니다.
+Responses 본문은 모델과 effort를 밝히고, Messages와 Chat Completions 본문은 프록시의 고정 문구만
+담으며 둘 다 밝히지 않습니다. 에뮬레이션을 쓰는 모델에서는 pin이 조용히 버려지고 추론 신호 없이
+요청이 나갑니다. 이 Claude id 중 하나를 네이티브 effort로 올린 뒤라면, 전에는 버려지던 `ultra`
+pin이 이제 실패합니다. `max`를 pin하십시오.
 
 `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5`와 위에 없는 Kiro 모델은 모든
 effort에서 에뮬레이션을 씁니다. 조절 항목이 있다고 네이티브 지원을 뜻하지는 않습니다.

@@ -161,19 +161,29 @@ garde le bloc de réflexion émulé.
 Kiro n’a pas de niveau `minimal`. Sur les neuf modèles ci-dessus sauf `claude-opus-5` et
 `claude-opus-5.5`, `minimal` conserve le bloc émulé au lieu de faire échouer une requête qui
 fonctionnait avant l’activation de l’effort natif. Ces deux modèles Opus 5, ainsi que les modèles GPT
-qui portent un effort natif, rejettent `minimal` par une erreur 400 `invalid_request_error`
-nommant le modèle et le niveau.
+qui portent un effort natif, rejettent `minimal` par une erreur 400 `invalid_request_error` avant
+que quoi que ce soit ne soit envoyé.
+
+Les surfaces rapportent ce refus différemment. Une requête Responses place dans `error.message` une
+phrase qui nomme le modèle et le niveau refusé. Les chemins Messages et Chat Completions y placent le
+texte fixe du proxy, `The provider rejected the request.`, parce qu’ils remplacent le détail de
+l’adaptateur par leur propre libellé au lieu de le relayer. Seul Responses nomme le modèle et le
+niveau. Les requêtes en flux et hors flux se lisent à l’identique sur toutes les surfaces : le refus
+survient pendant la construction du corps envoyé en amont, donc aucun flux ne s’ouvre et aucun appel
+amont n’a lieu.
 
 `ultra` demande une distinction. Le `ultra` envoyé par l’appelant est réduit à `max` avant que
 l’adaptateur ne construise la requête, sur les chemins Responses et Messages. Un pin configuré, non :
 `pinnedReasoningEffort`, `modelPinnedReasoningEfforts` et `modelPinnedEfforts` acceptent `ultra` et
 s’appliquent après l’analyse de la requête, donc l’adaptateur le reçoit. Pour chaque modèle à effort
 natif Kiro — les identifiants Claude ci-dessus et les modèles GPT — ce pin fait échouer la requête
-par une erreur 400 `invalid_request_error` nommant le modèle et le niveau, car `ultra` n’est pas un
-palier que Kiro accepte. Pour un modèle qui utilise
-l’émulation, le pin est abandonné et la requête part sans aucun signal de raisonnement. Si vous avez
-fait passer l’un de ces identifiants Claude en effort natif, un pin `ultra` autrefois ignoré échoue
-désormais : épinglez `max`.
+par une erreur 400 `invalid_request_error` avant tout envoi, car `ultra` n’est pas un palier que
+Kiro accepte. Ce refus se répartit entre les surfaces exactement comme `minimal` : le corps
+Responses nomme le modèle et le niveau, les corps Messages et Chat Completions ne portent que le
+libellé fixe du proxy et ne nomment ni l’un ni l’autre.
+Pour un modèle qui utilise l’émulation, le pin est abandonné et la requête part sans aucun signal de
+raisonnement. Si vous avez fait passer l’un de ces identifiants Claude en effort natif, un pin
+`ultra` autrefois ignoré échoue désormais : épinglez `max`.
 
 `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5`, ainsi que tout modèle Kiro non
 listé ci-dessus, utilisent une émulation à chaque niveau ; un réglage d’effort ne prouve pas une

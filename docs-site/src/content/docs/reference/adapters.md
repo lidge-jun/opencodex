@@ -751,17 +751,27 @@ reject native `xhigh`, so that rung keeps the emulated thinking block.
 Kiro has no `minimal` rung. On all nine models except `claude-opus-5` and `claude-opus-5.5`,
 `minimal` keeps the emulated block instead of failing a request that worked before native effort
 was enabled. Those two Opus 5 models, and the GPT models that carry native effort, reject
-`minimal` with a 400 `invalid_request_error` naming the model and the effort.
+`minimal` with a 400 `invalid_request_error` before anything is sent.
+
+The surfaces report that refusal differently. A Responses request puts a sentence naming the model
+and the rejected effort in `error.message`. The Messages and Chat Completions paths put their fixed
+condition copy there instead — `The provider rejected the request.` — because those paths replace an
+adapter detail with their own sentence rather than relaying it. Only Responses names the model and
+the effort. Stream and non-stream requests read identically on every surface: the refusal is raised
+while the wire payload is built, so no stream has opened and no request has gone upstream.
 
 `ultra` needs a distinction. A caller's own `ultra` is reduced to `max` before the adapter builds
 a request, on both the Responses and Messages paths. A configured pin is not: `pinnedReasoningEffort`,
 `modelPinnedReasoningEfforts` and `modelPinnedEfforts` accept `ultra` and are applied after the
 request is parsed, so the adapter does receive it. For every model with native Kiro effort — the
 Claude ids above and the GPT models — that pin fails the request with a 400
-`invalid_request_error` naming the model and the effort, because `ultra` is not a rung Kiro
-accepts. For a model that uses emulated reasoning the pin is dropped instead, and the request goes
-out with no reasoning signal at all. If you upgraded onto native effort for one of these Claude
-ids, a pin of `ultra` that used to be dropped now fails: pin `max` instead.
+`invalid_request_error` before anything is sent, because `ultra` is not a rung Kiro accepts. That
+refusal is split across the surfaces exactly as `minimal` is: the Responses body names the model
+and the effort, while the Messages and Chat Completions bodies carry only the fixed condition copy
+and name neither.
+For a model that uses emulated reasoning the pin is dropped instead, and the request goes out with
+no reasoning signal at all. If you upgraded onto native effort for one of these Claude ids, a pin of
+`ultra` that used to be dropped now fails: pin `max` instead.
 
 `claude-haiku-4.5`, `claude-opus-4.5` and `claude-sonnet-4.5`, along with any Kiro
 model not listed above, use emulated reasoning at every effort; an advertised effort control is

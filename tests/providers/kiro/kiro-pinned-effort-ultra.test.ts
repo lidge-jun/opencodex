@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KIRO_NATIVE_EFFORT_FIELDS } from "../../../src/adapters/kiro/reasoning";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
+import { handleChatCompletions } from "../../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../../src/server/claude-messages";
 import { handleResponses } from "../../../src/server/responses";
 import type { OcxConfig } from "../../../src/types";
@@ -57,17 +58,62 @@ function captureWire(): { bodies: Record<string, unknown>[] } {
   return { bodies };
 }
 
-async function responsesRequest(model: string, effort: string | undefined, pin: string | undefined) {
+async function responsesRequest(
+  model: string, effort: string | undefined, pin: string | undefined, stream = false,
+) {
   const captured = captureWire();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      model: `kiro/${model}`, input: "hi", stream: false,
+      model: `kiro/${model}`, input: "hi", stream,
       ...(effort ? { reasoning: { effort } } : {}),
     }),
   }), config([model], pin), { model, provider: "kiro" });
-  const body = await response.json() as { error?: { message?: string; type?: string } };
-  return { status: response.status, error: body.error, wires: captured.bodies };
+  const body = await response.json() as {
+    error?: { message?: string; type?: string; code?: string };
+  };
+  return {
+    status: response.status, error: body.error, wires: captured.bodies,
+    contentType: response.headers.get("content-type"),
+  };
+}
+
+/**
+ * The Messages surface. Its public contract for a local build refusal is the fixed condition copy,
+ * not the adapter's detail, so this returns the raw body for an exact-shape assertion rather than
+ * digging out `error.message` and hiding an extra field.
+ */
+async function messagesRequest(model: string, pin: string | undefined, stream = false) {
+  const captured = captureWire();
+  const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({
+      model: `kiro/${model}`, max_tokens: 256, stream,
+      messages: [{ role: "user", content: "hi" }],
+    }),
+  }), config([model], pin), { model: "", provider: "" } as never);
+  const body = await response.json() as unknown;
+  return {
+    status: response.status, body, wires: captured.bodies,
+    contentType: response.headers.get("content-type"),
+  };
+}
+
+/** Chat Completions is the third surface that reaches this adapter, and its copy is fixed too. */
+async function chatRequest(model: string, pin: string | undefined, stream = false) {
+  const captured = captureWire();
+  const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: `kiro/${model}`, stream, messages: [{ role: "user", content: "hi" }],
+    }),
+  }), config([model], pin), { model: "", provider: "" } as never);
+  const body = await response.json() as unknown;
+  return {
+    status: response.status, body, wires: captured.bodies,
+    contentType: response.headers.get("content-type"),
+  };
 }
 
 const reasoningField = (wire: Record<string, unknown> | undefined) =>
@@ -84,8 +130,10 @@ const userContent = (wire: Record<string, unknown> | undefined) => (wire?.conver
 test("an operator pin of ultra reaches the adapter, which admits only its own ladder", async () => {
   const native = await responsesRequest("claude-opus-4.8", "high", "ultra");
   expect(native.status).toBe(400);
-  expect(native.error?.type).toBe("invalid_request_error");
-  expect(native.error?.message).toContain('claude-opus-4.8 does not support reasoning effort "ultra"');
+  expect(native.error).toEqual({
+    message: 'Kiro claude-opus-4.8 does not support reasoning effort "ultra"',
+    type: "invalid_request_error", code: "invalid_request_error",
+  });
   // Nothing was sent: the refusal happens while the payload is built, not after an upstream round trip.
   expect(native.wires).toHaveLength(0);
 
@@ -101,12 +149,59 @@ test("every model with a native Kiro effort field rejects a pinned ultra instead
   // Guard the enumeration itself: an empty table would make the loop below pass vacuously.
   expect(models.length).toBeGreaterThan(0);
   for (const model of models) {
-    const { status, error, wires } = await responsesRequest(model, undefined, "ultra");
-    expect({ model, status }).toEqual({ model, status: 400 });
-    expect({ model, message: error?.message }).toEqual({
-      model, message: `Kiro ${model} does not support reasoning effort "ultra"`,
-    });
-    expect({ model, sends: wires.length }).toEqual({ model, sends: 0 });
+    for (const stream of [false, true]) {
+      const { status, error, wires, contentType } = await responsesRequest(model, undefined, "ultra", stream);
+      expect({ model, stream, status }).toEqual({ model, stream, status: 400 });
+      // The Responses public contract carries the adapter's sentence verbatim, stream or not.
+      expect({ model, stream, error }).toEqual({
+        model, stream,
+        error: {
+          message: `Kiro ${model} does not support reasoning effort "ultra"`,
+          type: "invalid_request_error", code: "invalid_request_error",
+        },
+      });
+      expect({ model, stream, sends: wires.length }).toEqual({ model, stream, sends: 0 });
+      // A refusal raised before the stream opens is JSON on both request shapes, never SSE.
+      expect(contentType).toContain("application/json");
+    }
+  }
+});
+
+test("Chat Completions answers the same refusals with its own fixed copy", async () => {
+  // The OpenAI-compatible body adds `param`/`code` around the same fixed sentence. That surface is
+  // asserted separately so a Messages-only change cannot silently leave it forwarding the detail.
+  for (const [model, pin] of [["gpt-5.6-sol", "ultra"], ["claude-opus-5.5", "minimal"]] as const) {
+    for (const stream of [false, true]) {
+      const { status, body, wires, contentType } = await chatRequest(model, pin, stream);
+      expect({ model, pin, stream, status }).toEqual({ model, pin, stream, status: 400 });
+      expect({ model, pin, stream, body }).toEqual({
+        model, pin, stream,
+        body: {
+          error: {
+            message: "The provider rejected the request.", type: "invalid_request_error",
+            param: null, code: "invalid_request_error",
+          },
+        },
+      });
+      expect({ model, pin, stream, sends: wires.length }).toEqual({ model, pin, stream, sends: 0 });
+      expect(contentType).toContain("application/json");
+    }
+  }
+});
+
+test("pinned minimal is refused with the same Responses detail on both stream modes", async () => {
+  // The emulated set admits `minimal`; the rest of the native table rejects it. These ids are the
+  // ones the docs name as refusing, so the roster here is spelled out instead of derived from the
+  // allowlist under test.
+  for (const model of ["claude-opus-5", "claude-opus-5.5", "gpt-5.6-sol"]) {
+    for (const stream of [false, true]) {
+      const { status, error, wires } = await responsesRequest(model, undefined, "minimal", stream);
+      expect({ model, stream, status }).toEqual({ model, stream, status: 400 });
+      expect({ model, stream, message: error?.message }).toEqual({
+        model, stream, message: `Kiro ${model} does not support reasoning effort "minimal"`,
+      });
+      expect({ model, stream, sends: wires.length }).toEqual({ model, stream, sends: 0 });
+    }
   }
 });
 
@@ -129,20 +224,26 @@ test("a model with no native field keeps its emulated path, so a pinned ultra is
   expect(userContent(minimal.wires[0])).toContain("<thinking_mode>enabled</thinking_mode>");
 });
 
-test("the Messages surface applies the same pin and answers with an Anthropic 400", async () => {
-  captureWire();
-  const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
-    method: "POST",
-    headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({
-      model: "kiro/claude-opus-4.8", max_tokens: 256,
-      messages: [{ role: "user", content: "hi" }],
-    }),
-  }), config(["claude-opus-4.8"], "ultra"), { model: "", provider: "" } as never);
-  const body = await response.json() as { type?: string; error?: { type?: string } };
-  expect(response.status).toBe(400);
-  expect(body.type).toBe("error");
-  expect(body.error?.type).toBe("invalid_request_error");
+test("the Messages surface replaces the adapter detail with the fixed condition copy", async () => {
+  // The same throw reaches a different public body here: `ownedAnthropicErrorPayload` re-shapes the
+  // Responses error and keeps only `upstreamConditionMessage("request_rejected")`, so the model and
+  // effort never reach a Messages client. Asserting the whole body pins that replacement rather
+  // than a substring a future forwarding change would still satisfy.
+  for (const [model, pin] of [["claude-opus-4.8", "ultra"], ["claude-opus-5", "minimal"]] as const) {
+    for (const stream of [false, true]) {
+      const { status, body, wires, contentType } = await messagesRequest(model, pin, stream);
+      expect({ model, pin, stream, status }).toEqual({ model, pin, stream, status: 400 });
+      expect({ model, pin, stream, body }).toEqual({
+        model, pin, stream,
+        body: {
+          type: "error",
+          error: { type: "invalid_request_error", message: "The provider rejected the request." },
+        },
+      });
+      expect({ model, pin, stream, sends: wires.length }).toEqual({ model, pin, stream, sends: 0 });
+      expect(contentType).toContain("application/json");
+    }
+  }
 });
 
 test("a caller's own ultra is folded on the Messages surface too, before the adapter", async () => {

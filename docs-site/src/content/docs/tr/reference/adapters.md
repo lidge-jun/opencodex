@@ -316,18 +316,26 @@ reddetmesidir; o seviye öykünülen düşünme bloğunu korur.
 Kiro'da `minimal` seviyesi yoktur. Yukarıdaki dokuz modelden `claude-opus-5` ve `claude-opus-5.5`
 dışındakiler, yerel çaba açılmadan önce çalışan bir isteği başarısız kılmamak için `minimal`
 seviyesinde öykünülen bloğu korur. Bu iki Opus 5 modeli ve yerel çaba kullanan GPT modelleri
-`minimal` seviyesini modeli ve seviyeyi belirten 400 `invalid_request_error` ile reddeder.
+`minimal` seviyesini hiçbir şey gönderilmeden önce 400 `invalid_request_error` ile reddeder.
+
+Yüzeyler bu reddi farklı bildirir. Responses isteği `error.message` alanına modeli ve reddedilen
+seviyeyi belirten bir cümle koyar. Messages ve Chat Completions yolları aynı yere proxy'nin sabit
+metnini, `The provider rejected the request.`, koyar; ikisi de adaptörün ayrıntısını olduğu gibi
+aktarmak yerine kendi metniyle değiştirir. Modeli ve seviyeyi yalnızca Responses belirtir. Akışlı ve
+akışsız istekler bütün yüzeylerde aynı okunur: ret, sağlayıcıya giden istek gövdesi kurulurken oluşur;
+bu yüzden akış açılmaz ve sağlayıcıya çağrı yapılmaz.
 
 `ultra` için bir ayrım gerekir. Çağıranın kendi gönderdiği `ultra`, hem Responses hem Messages
 yolunda adaptör isteği kurmadan önce `max` seviyesine indirilir. Yapılandırılmış pin ise böyle
 değildir: `pinnedReasoningEffort`, `modelPinnedReasoningEfforts` ve `modelPinnedEfforts` `ultra`
 değerini kabul eder ve istek ayrıştırıldıktan sonra uygulanır, dolayısıyla adaptör onu gerçekten
 alır. Yerel Kiro çabası kullanan her modelde, yani yukarıdaki Claude kimliklerinde ve GPT
-modellerinde, bu pin `ultra` Kiro'nun kabul ettiği bir seviye olmadığı için isteği modeli ve
-seviyeyi belirten 400 `invalid_request_error` ile başarısız kılar. Öykünme kullanan bir modelde ise
-pin sessizce düşürülür ve istek hiçbir akıl yürütme sinyali olmadan gider. Bu Claude
-kimliklerinden birini yerel çabaya yükselttiyseniz, önceden düşürülen bir `ultra` pin artık
-başarısız olur: `max` pinleyin.
+modellerinde, bu pin `ultra` Kiro'nun kabul ettiği bir seviye olmadığı için isteği hiçbir şey
+gönderilmeden önce 400 `invalid_request_error` ile başarısız kılar. Bu ret de `minimal` gibi yüzeylere
+ayrılır: Responses gövdesi modeli ve seviyeyi belirtir, Messages ve Chat Completions gövdeleri yalnızca
+proxy'nin sabit metnini taşır ve ikisini de belirtmez. Öykünme kullanan bir modelde ise pin sessizce düşürülür ve istek hiçbir akıl
+yürütme sinyali olmadan gider. Bu Claude kimliklerinden birini yerel çabaya yükselttiyseniz, önceden
+düşürülen bir `ultra` pin artık başarısız olur: `max` pinleyin.
 
 `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5` ve
 yukarıda listelenmeyen Kiro modelleri her seviyede öykünme kullanır; çaba seçeneği yerel desteğin

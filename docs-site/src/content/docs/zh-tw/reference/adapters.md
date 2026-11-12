@@ -177,15 +177,22 @@ Kiro 對 `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-
 
 Kiro 沒有 `minimal` 檔位。除 `claude-opus-5` 和 `claude-opus-5.5` 外的上述九個模型在
 `minimal` 時保留模擬區塊，而不是讓啟用原生 effort 之前可用的請求失敗。這兩個 Opus 5 模型以及使用
-原生 effort 的 GPT 模型會以 400 `invalid_request_error` 拒絕 `minimal`，並在錯誤中標明模型和
-effort。
+原生 effort 的 GPT 模型會在傳送任何內容之前以 400 `invalid_request_error` 拒絕 `minimal`。
+
+各介面表達這次拒絕的方式不同。Responses 請求把標明模型與被拒絕 effort 的句子放進
+`error.message`。Messages 與 Chat Completions 路徑在該位置放代理自己的固定文案
+`The provider rejected the request.`，因為這兩條路徑不會轉述適配器的細節，而是用自有文案替換。
+只有 Responses 會標明模型與 effort。串流與非串流在所有介面上回傳相同內容：拒絕發生在建構上游
+請求體時，因此沒有開啟串流，也沒有發出上游呼叫。
 
 `ultra` 需要區分。呼叫方自己送出的 `ultra` 會在適配器建置請求前被降為 `max`，Responses 和
 Messages 路徑都是如此。設定的 pin 則不同：`pinnedReasoningEffort`、`modelPinnedReasoningEfforts`
 和 `modelPinnedEfforts` 接受 `ultra`，並在請求解析之後才套用，因此會到達適配器。對所有使用原生
-Kiro effort 的模型（即上面的 Claude id 與 GPT 模型），這個 pin 都不是 Kiro 接受的檔位，請求會以
-400 `invalid_request_error` 失敗，並在錯誤中標明模型和 effort。對使用模擬推理的模型，pin 會被靜默丟棄，請求在沒有推理訊號的情況下送出。如果你已把其中
-某個 Claude id 升級為原生 effort，那麼以前會被丟棄的 `ultra` pin 現在會失敗；請改用 `max`。
+Kiro effort 的模型（即上面的 Claude id 與 GPT 模型），這個 pin 都不是 Kiro 接受的檔位，請求會在
+傳送任何內容之前以 400 `invalid_request_error` 失敗。這次拒絕也像 `minimal` 一樣按介面區分：
+Responses 正文標明模型與 effort，Messages 與 Chat Completions 正文只帶代理的固定文案，兩者都不標明。
+對使用模擬推理的模型，pin 會被靜默丟棄，請求在沒有推理訊號的情況下送出。如果你已把其中某個
+Claude id 升級為原生 effort，那麼以前會被丟棄的 `ultra` pin 現在會失敗；請改用 `max`。
 
 `claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro
 模型在每個 effort 上都使用模擬推理；提供 effort 選項不代表原生支援。
