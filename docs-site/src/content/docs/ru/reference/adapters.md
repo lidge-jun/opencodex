@@ -211,12 +211,13 @@ incomplete. `TOOL_USE` без фактического вызова инстру
 
 ### Reasoning effort
 
-Семейство GPT-5.6 использует `additionalModelRequestFields.reasoning.effort`, а `claude-opus-5`
-и остальные перечисленные ниже модели — `additionalModelRequestFields.output_config.effort`. Для
+Семейства GPT-5.6 и GPT-6 (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`) используют
+`additionalModelRequestFields.reasoning.effort`, а перечисленные ниже модели Claude —
+`additionalModelRequestFields.output_config.effort`. Для
 `gpt-5.6-luna` и `gpt-5.6-terra` нативный путь проверен только для `low`, `medium`, `high` и `max`.
 Их `xhigh` сохраняет прежнюю эмуляцию через ограниченные инструкции thinking, поскольку нативный
-уровень не проверен. `gpt-5.6-sol` и модели GPT-6 (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`,
-`gpt-6.1-terra`) сохраняют нативные `low`, `medium`, `high`, `xhigh` и `max`.
+уровень не проверен. `gpt-5.6-sol` и модели GPT-6 сохраняют нативные `low`, `medium`, `high`,
+`xhigh` и `max` через то же поле `reasoning.effort`.
 
 Kiro принимает `output_config.effort` для `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`,
 `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-sonnet-4.6`

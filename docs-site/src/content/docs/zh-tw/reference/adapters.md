@@ -161,12 +161,13 @@ Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 
 
 ### Reasoning effort
 
-GPT-5.6 系列使用 `additionalModelRequestFields.reasoning.effort`，`claude-opus-5` 以及下列其他模型使用
+GPT-5.6 系列和 GPT-6 系列（`gpt-6-sol`、`gpt-6-luna`、`gpt-6.1-sol`、`gpt-6.1-terra`）使用
+`additionalModelRequestFields.reasoning.effort`，下列 Claude 模型使用
 `additionalModelRequestFields.output_config.effort`。`gpt-5.6-luna` 和 `gpt-5.6-terra`
 只透過原生欄位傳送已驗證的 `low`、`medium`、`high` 和 `max`。
 這兩個模型的原生 `xhigh` 尚未驗證，因此仍使用原有的有界 thinking 指令模擬。
-`gpt-5.6-sol` 和 GPT-6 系列（`gpt-6-sol`、`gpt-6-luna`、`gpt-6.1-sol`、`gpt-6.1-terra`）
-保留原生 `low`、`medium`、`high`、`xhigh`、`max`。
+`gpt-5.6-sol` 和 GPT-6 系列透過同一個 `reasoning.effort` 欄位保留原生
+`low`、`medium`、`high`、`xhigh`、`max`。
 
 Kiro 對 `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-4.7`、
 `claude-opus-4.6`、`claude-sonnet-5.5`、`claude-sonnet-5`、`claude-sonnet-4.6` 和

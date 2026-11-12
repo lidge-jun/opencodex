@@ -168,14 +168,16 @@ as one item in its total of 28), so its exception is the empty set. It reports a
 tool probe on `claude-opus-5.5` and `claude-sonnet-5.5` naming `pattern` and `maximum`; only
 those two keys survive for those ids. The report does not establish the other schema keys.
 
-The remaining Claude ids on this provider (`claude-opus-4.8`, `claude-opus-4.7`,
-`claude-opus-4.6`, `claude-sonnet-5`, `claude-sonnet-4.6`, `claude-haiku-5.5`,
-`claude-haiku-4.5`, `claude-sonnet-4.0`) were not probed for schema keywords and keep the full
-strip. The scope is deliberate: this wire already separates Claude models on another field — Haiku
-4.5, Opus 4.5 and Sonnet 4.5 reject `output_config.effort` outright and the 4.6 pair rejects
-`xhigh` — so a family-wide promise would be an inference, and a wrong one surfaces as an upstream
-`ValidationException` for the whole request rather than a lost hint. The prose contract restates the original schema only when it fits the instruction budget;
-otherwise stripped constraints are absent from the model-facing structured-output request.
+The remaining Claude ids on this provider (`claude-opus-5`, `claude-opus-4.8`,
+`claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5`, `claude-sonnet-4.6`,
+`claude-sonnet-4.5`, `claude-sonnet-4.0`, `claude-haiku-5.5`, `claude-haiku-4.5`) were not
+probed for schema keywords and keep the full strip. The scope is deliberate: this wire already
+separates Claude models on another field — Haiku 4.5, Opus 4.5 and Sonnet 4.5 reject
+`output_config.effort` outright and the 4.6 pair rejects `xhigh` — so a family-wide promise would
+be an inference, and a wrong one surfaces as an upstream `ValidationException` for the whole
+request rather than a lost hint. The prose contract restates the original schema only when it fits
+the instruction budget; otherwise stripped constraints are absent from the model-facing
+structured-output request.
 
 Both the client-tool path and the structured-output tool (`kiroStructuredOutputSpec` in
 `src/adapters/kiro/structured-output.ts`) pass that set into `sanitizeKiroSchema`, so the two

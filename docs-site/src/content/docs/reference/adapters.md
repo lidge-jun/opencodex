@@ -732,13 +732,14 @@ The continuation's instruction tells the model that its ordinary text has not re
 
 ### Reasoning effort
 
-The GPT-5.6 family uses `additionalModelRequestFields.reasoning.effort`; `claude-opus-5`
-and the other models listed below use `additionalModelRequestFields.output_config.effort`.
+The GPT-5.6 family and the GPT-6 models (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`,
+`gpt-6.1-terra`) use `additionalModelRequestFields.reasoning.effort`; the Claude ids listed
+below use `additionalModelRequestFields.output_config.effort`.
 For `gpt-5.6-luna` and `gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the
 verified native path. Their `xhigh` selection retains the previous bounded thinking
 instructions in user content because that native rung has not been verified. `gpt-5.6-sol`
-and the GPT-6 models (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`) keep their
-native `low`, `medium`, `high`, `xhigh`, and `max` behavior.
+and the GPT-6 models keep their native `low`, `medium`, `high`, `xhigh`, and `max`
+behavior through that same `reasoning.effort` field.
 
 Kiro accepts `output_config.effort` for `claude-opus-5`, `claude-opus-5.5`,
 `claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`,
