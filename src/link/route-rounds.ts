@@ -17,7 +17,7 @@ import { isChildHealth, parseChildHttp, remoteChildHttpArgv } from "./remote-pro
 import { requireRemotePlatform } from "./remote-platform";
 import { aggregateRouteClass, composeGrantTap, routeCooldownMs, routeOutcomeOfStderr, type RouteOutcomeClass } from "./route-select";
 import type { RouteProofHandle, RouteProofRegistry } from "./route-proof";
-import type { SshChild, SshRunner } from "./ssh-runner";
+import { SSH_MAX_OUTPUT_BYTES, type SshChild, type SshRunner } from "./ssh-runner";
 import { effectiveLinkRoutes, type LinkRecord } from "./store";
 import { exitCause, type TunnelCause } from "./tunnel-history";
 import type { StderrClass, TunnelEvent, TunnelState } from "./tunnel-state";
@@ -35,7 +35,9 @@ export const CANDIDATE_KILL_GRACE_MS = 2_000;
 /** The ssh client check, and how long an unsupported answer stands. */
 export const CLIENT_CHECK_MS = 5_000;
 export const CLIENT_RECHECK_MS = 10 * 60_000;
-const CONFIG_MAX_BYTES = 64 * 1024;
+// The Child's whole effective config: enrollment accepts up to the runner maximum (#8380), so a
+// Child that enrolled with a large config must also pass this step on every route.
+const CONFIG_MAX_BYTES = SSH_MAX_OUTPUT_BYTES;
 const CATALOG_MAX_BYTES = 4 * 1024 * 1024;
 
 export type RouteBlock = "ssh_client_unsupported" | "stop_unconfirmed";
