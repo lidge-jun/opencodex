@@ -350,3 +350,37 @@ describe("provider evidence and status-less response.failed frames beside a code
     expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("none");
   });
 });
+
+describe("every prose field beside a coded verdict must describe the moderation refusal", () => {
+  const coded = (message: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ error: { type: "invalid_request_error", code: "content_filter", message, ...extra } });
+
+  test("parameter, model and account prose beside a moderation code keeps dev's decision", async () => {
+    for (const body of [
+      coded("Invalid 'temperature': maximum value is 2."),
+      coded("The model gpt-9 does not exist"),
+      coded("This account has been deactivated."),
+      coded("Your account is disabled."),
+      coded("This organization has been disabled."),
+      coded("Your API key is disabled."),
+      coded("The request was rejected because the account is not active."),
+      coded("The input was refused by moderation.", { accountSuspended: true }),
+      coded("The input was refused by moderation.", { metadata: { account_status: "suspended" } }),
+      coded("The input was refused by moderation.", { httpStatus: 429 }),
+    ]) {
+      expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: false });
+      const failure = await consumeComboFailure(new Response(body, { status: 400 }));
+      expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).not.toBe("none");
+    }
+  });
+
+  test("genuine coded refusals still hop", () => {
+    for (const body of [
+      coded("The input was refused by moderation. Categories: harassment."),
+      JSON.stringify({ error: { code: "content_filter", message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry.", innererror: { code: "ResponsibleAIPolicyViolation" } } }),
+      JSON.stringify({ error: { code: "moderation_refusal", message: "Your request was flagged by moderation." } }),
+    ]) {
+      expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: true });
+    }
+  });
+});

@@ -1005,17 +1005,33 @@ const MODERATION_COMPATIBLE_VALUES = new Set([
 ]);
 
 /** Keys whose values are structured verdicts rather than prose. */
-const MODERATION_VERDICT_KEYS = new Set(["code", "type", "error_code", "error_type", "reason", "kind", "category"]);
+// Keys are compared folded: lowercase with underscores and hyphens removed (errorCode, error_code).
+const MODERATION_VERDICT_KEYS = new Set(["code", "type", "errorcode", "errortype", "reason", "kind", "category"]);
 
 /** Keys that state an HTTP status; any stated status other than 400/422 is evidence of its own. */
-const MODERATION_STATUS_KEYS = new Set(["status", "status_code", "statuscode", "http_status"]);
+const MODERATION_STATUS_KEYS = new Set(["status", "statuscode", "httpstatus", "httpstatuscode"]);
+
+/** Keys whose string values are the body's prose. */
+const MODERATION_PROSE_KEYS = new Set(["message", "error", "detail", "details", "msg", "description", "errormessage"]);
+
+/**
+ * Every prose string beside a coded verdict must itself describe the moderation refusal. A body
+ * that also says something else (a parameter error, a missing model, an inactive account) carries
+ * evidence of its own, so the verdict is not the whole story and the body keeps dev's decision.
+ */
+const MODERATION_PROSE = /moderat|content[\s_-]*(?:filter|management|safety)|\bfiltered\b|responsible[\s_-]*ai/i;
+
+/** Fold a key for comparison: lowercase, underscores and hyphens removed. */
+function foldKey(key: string): string {
+  return key.toLowerCase().replace(/[_-]/g, "");
+}
 
 /**
  * Structured safety or policy flags (`safety_violation`, `blocked`, `policy_violation`). A
  * flag is the upstream's own safety verdict; only Azure's per-category content-filter results,
  * which describe the moderation verdict itself, may carry such fields.
  */
-const SAFETY_FLAG_KEY = /safety|violation|block|polic/i;
+const SAFETY_FLAG_KEY = /safety|violation|block|polic|account|suspend|disabl|deactivat|banned/i;
 const MODERATION_RESULT_KEY = /^content_filter_results?$|^prompt_filter_results?$/i;
 
 /**
@@ -1027,7 +1043,7 @@ const SAFETY_SYSTEM_WORDING = /\bsafety[\s_-]+(?:systems?|reasons?)\b|\bhigh[\s_
 
 /** Billing, quota and account-state wording: evidence about the provider, not about the prompt. */
 const PROVIDER_STATE_WORDING =
-  /\bcredit[\s_-]+balance\b|\bquota\b|\bbilling\b|\bpayment[\s_-]+required\b|\binsufficient[\s_-]+(?:quota|balance|funds|credits?)\b|\baccount[\s_-]+(?:suspended|disabled|deactivated|banned)\b|\brate[\s_-]+limit/i;
+  /\bcredit[\s_-]+balance\b|\bquota\b|\bbilling\b|\bpayment[\s_-]+required\b|\binsufficient[\s_-]+(?:quota|balance|funds|credits?)\b|\b(?:account|organi[sz]ation|api[\s_-]*key)\b[^.]{0,40}?\b(?:suspended|disabled|deactivated|banned|inactive|not[\s_-]+active)\b|\brate[\s_-]+limit/i;
 
 /** A refusal names the prompt or input it refused; any other `param` is a validation error. */
 function isAllowedModerationParam(param: string): boolean {
@@ -1111,14 +1127,18 @@ function moderationVerdictFields(payload: unknown): boolean | null {
       if (key.toLowerCase() === "param" && !recordStatesModeration && typeof field === "string" && field.trim() !== "" && !isAllowedModerationParam(field)) {
         return false;
       }
-      if (MODERATION_STATUS_KEYS.has(key.toLowerCase())) {
+      if (MODERATION_STATUS_KEYS.has(foldKey(key))) {
         const stated = typeof field === "number" ? field
           : typeof field === "string" && /^\d{3}$/.test(field.trim()) ? Number(field) : undefined;
         if (stated !== undefined && stated >= 400 && stated !== 400 && stated !== 422) return false;
         if (typeof field !== "object" || field === null) continue;
       }
       if (!insideFilterResult && SAFETY_FLAG_KEY.test(key)) return false;
-      if (MODERATION_VERDICT_KEYS.has(key.toLowerCase())) {
+      if (MODERATION_PROSE_KEYS.has(foldKey(key)) && typeof field === "string" && field.trim() !== ""
+        && !MODERATION_PROSE.test(field)) {
+        return false;
+      }
+      if (MODERATION_VERDICT_KEYS.has(foldKey(key))) {
         if (field === null || field === undefined) continue;
         // A Responses terminal event names itself in its root `type` (`response.failed`): that is
         // the transport's label for the carrier, not the upstream's verdict.
@@ -1185,7 +1205,7 @@ export function isProviderModerationRefusal(
   if (envelope === undefined) {
     // Plain text carries no structured fields; only the caller's code can state the verdict, and a
     // body that looks like JSON but does not parse (cut or malformed) never hops.
-    return callerStatesModeration && !/^\s*(?:data:\s*)?[[{]/.test(message);
+    return callerStatesModeration && !/^\s*(?:data:\s*)?[[{]/.test(message) && MODERATION_PROSE.test(message);
   }
   // An envelope root that states a verdict code of its own (invalid_request_error, origin,
   // context length, cancellation...) keeps it, as everywhere else in this file.
