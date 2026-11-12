@@ -272,10 +272,12 @@ for (const mode of ["abort", "deadline"] as const) {
       return child;
     }) as typeof actualExec);
     const set = globalThis.setTimeout;
+    let started: number | undefined;
+    let rejectedAt: number | undefined;
     // Arm the deadline only after the child has installed its signal handler.
     const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn, delay, ...args) => {
       if (mode === "deadline" && delay === 1234) {
-        const scheduled = set(() => { void ready.promise.then(() => fn(...args)); }, 0);
+        const scheduled = set(() => { void ready.promise.then(() => { started = performance.now(); fn(...args); }); }, 0);
         return scheduled;
       }
       return set(fn, delay, ...args);
@@ -285,15 +287,16 @@ for (const mode of ["abort", "deadline"] as const) {
       windowsHide: true, signal: controller.signal,
     });
     // Observe rejection before a fast Windows kill can settle it.
-    const rejected = pending.then(() => { throw new Error("held child unexpectedly completed"); }, error => error);
+    const rejected = pending.then(() => { throw new Error("held child unexpectedly completed"); }, error => { rejectedAt = performance.now(); return error; });
     try {
       await Promise.race([ready.promise, Bun.sleep(3000).then(() => { throw new Error("child never became READY"); })]);
       await new Promise<void>((resolve, reject) => childProcess.execFile(process.execPath, ["-e", "process.exit(0)"], error => error ? reject(error) : resolve()));
-      const started = Date.now();
-      if (mode === "abort") controller.abort();
+      if (mode === "abort") { started = performance.now(); controller.abort(); }
       const error = await rejected;
       expect(String(error)).toMatch(mode === "abort" ? /abort/i : /deadline|timed out|kill/i);
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(started).toBeDefined();
+      expect(rejectedAt! - started!).toBeGreaterThanOrEqual(0);
+      expect(rejectedAt! - started!).toBeLessThan(1000);
       const didExit = await Promise.race([
         exited.promise.then(() => true), Bun.sleep(SUBPROCESS_KILL_GRACE_MS + 1000).then(() => false),
       ]);
