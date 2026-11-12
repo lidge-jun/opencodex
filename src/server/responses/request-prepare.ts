@@ -462,7 +462,7 @@ export async function prepareResponsesRequest(
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
   // Remote Link holds and request-log fields (design T4 sections 5, 9.1): the expanded input, before any upstream I/O.
   if (!options.comboReplaySnapshot) observeLinkTurnExpansion(options.linkTurn, req, logCtx, body, previousResponseInputExpanded ? "chained"
-    : typeof (body as { previous_response_id?: unknown }).previous_response_id === "string" ? "unexpanded" : "none");
+    : body && typeof body === "object" && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string" ? "unexpanded" : "none");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
   options.responsesFileImage ||= responsesHasFileImage(body);
   // Counted after replay expansion so the catalog this request pays for is the one measured:

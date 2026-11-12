@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
 import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
-import { observeRequestLogsForTests, type RequestLogEntry } from "../../src/server/request-log";
+import { observeRequestLogsForTests, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
+import { handleResponses } from "../../src/server/responses";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { linkLogField } from "../../src/usage/link-log-fields";
 import { normalizeUsageEntryForTest, type PersistedUsageEntry } from "../../src/usage/log";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -190,5 +192,17 @@ describe("the seam (src/server/link-turn.ts)", () => {
     markLinkTurnMissing(logCtx);
     expect(logCtx).toEqual({});
     expect(forged.headers.has("x-opencodex-link-turn")).toBe(false);
+  });
+});
+describe("non-link requests are untouched (T5e1-R1-01)", () => {
+  test("a JSON null body takes the invalid-request path, with the feature off and no link observer", async () => {
+    const release = acquireOwnedSpendHome();
+    try {
+      const config = { port: 0, defaultProvider: "fixture", providers: { fixture: { adapter: "openai-responses", baseUrl: "https://fixture.test/v1", authMode: "key", apiKey: "fixture-key" } } } as OcxConfig;
+      const logCtx = { model: "unknown", provider: "unknown" } as RequestLogContext;
+      const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: "null" }), config, logCtx);
+      expect(response.status).toBe(400);
+      expect(logCtx).not.toHaveProperty("link");
+    } finally { release(); }
   });
 });
