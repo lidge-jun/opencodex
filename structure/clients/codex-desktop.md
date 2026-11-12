@@ -103,11 +103,18 @@ exchange through `authorizeDesktop` in `gui/src/desktop-compatibility-api.ts`: P
 grant on `/api/codex/desktop-compatibility/authorization`, then GET on that same endpoint verifies
 Desktop scope. The existing browser session and credentials are retained before refreshing status
 and enabling actions. Authorization never submits a certificate/runtime mutation or changes auto-start.
+Both dashboard editions mount that same component: the classic overlay in
+`gui/classic/src/pages/codex-desktop-compatibility.tsx` resolves the step-up from `gui/src` through the
+overlay plugin, so `/classic/` offers the Desktop grant rather than the ordinary pairing form, which
+cannot issue Desktop scope. Either edition treats a `desktop_authorization_required` refusal of a
+certificate, runtime or startup-setting write as lost scope: the open confirmation closes, the
+actions and the auto-start switch disable, and the step-up becomes available again.
 Machine-session changes discard pending consent and disable actions until fresh authority is read.
 The startup-setting child synchronously aborts its own in-flight operation on a machine-session
 change and rejects late completions by generation. An interrupted preference operation stays
 uncertain until a fresh settings GET, independently of refreshed certificate authorization.
-`gui/tests/desktop-compatibility-panel.test.tsx` and
+`gui/tests/desktop-compatibility-panel.test.tsx`, `gui/tests/classic-desktop-compatibility-authorization.test.tsx`
+(which resolves the page through the classic overlay, not either file directly) and
 `tests/server/management-desktop-compatibility-routes.test.ts` cover the UI and real
 Desktop grant boundary for both loopback-issued and locally paired sessions.
 
