@@ -3016,6 +3016,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.needsReauth": "Refazer login",
   "codexAuth.reauthenticate": "Reautenticar",
   "codexAuth.tokenExpired": "Token expirado — reautentique esta conta",
+  "codexAuth.weeklyConflict": "Duas janelas semanais foram informadas: {first} e {second}. A redefinição acima pode não restaurar toda a cota.",
   "codexAuth.mainTokenExpired": "Token expirado — refaça o login com um código de dispositivo abaixo ou pelo login do Codex App",
   "codexAuth.mainReauthSucceeded": "Login realizado",
   "codexAuth.mainReauthFailed": "Falha ao refazer o login",

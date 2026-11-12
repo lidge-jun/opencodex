@@ -2396,6 +2396,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.needsReauth": "Erneut anmelden",
   "codexAuth.reauthenticate": "Erneut anmelden",
   "codexAuth.tokenExpired": "Token abgelaufen — dieses Konto erneut authentifizieren",
+  "codexAuth.weeklyConflict": "Es wurden zwei Wochenfenster gemeldet: {first} und {second}. Der Reset oben stellt das Kontingent möglicherweise nicht vollständig wieder her.",
   "codexAuth.mainTokenExpired": "Token abgelaufen — unten mit Gerätecode oder über Codex-App-Login erneut anmelden",
   "codexAuth.mainReauthSucceeded": "Angemeldet",
   "codexAuth.mainReauthFailed": "Anmeldung fehlgeschlagen",
