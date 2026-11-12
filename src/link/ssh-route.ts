@@ -1,7 +1,7 @@
-import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, opendirSync, openSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
-import { expandSshIncludeGlob, splitSshDirective } from "./ssh-config";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { splitSshDirective } from "./ssh-config";
 
 /**
  * Which way a link's SSH alias reaches the other machine (#3023): through a ProxyCommand (a relay
@@ -13,9 +13,11 @@ import { expandSshIncludeGlob, splitSshDirective } from "./ssh-config";
  * file and then the system file, `Host` patterns with `*`, `?` and `!`, and `Include` at top
  * level or inside a matching `Host` block. What it cannot decide without running ssh reads
  * "unknown": a `Match` block or `CanonicalizeHostname` before the decision, an unreadable or
- * oversized file, or too many files. The work is bounded: no file is read past MAX_FILE_BYTES, an
- * Include glob stops listing past the file budget, and one status read reads each file once and at
- * most MAX_TOTAL_BYTES in all (createLinkPathReader). Only the kind leaves this module, never a command, a jump host
+ * oversized file, a named pipe or other non-regular file, an Include wildcard outside the last path
+ * component or over a directory of more than MAX_DIR_ENTRIES, or too many files. The work is
+ * bounded: no file is read past MAX_FILE_BYTES and no open blocks, Host patterns match without
+ * backtracking (matchWildcard), and one status read reads each file once and at most
+ * MAX_TOTAL_BYTES in all (createLinkPathReader). Only the kind leaves this module, never a command, a jump host
  * or an address. The tunnel's ssh is started with no `-F` and no proxy option of its own, so these
  * are the files it reads.
  */
@@ -26,6 +28,8 @@ const MAX_FILE_BYTES = 256 * 1024;
 const MAX_FILES = 64;
 const MAX_INCLUDE_DEPTH = 16;
 const MAX_TOTAL_BYTES = 1024 * 1024;
+/** The most directory entries one Include wildcard may list before the reader gives up. */
+const MAX_DIR_ENTRIES = 1024;
 
 export interface LinkPathConfigDeps {
   /** Home directory whose `.ssh/config` is read. Defaults to the user's home. */
@@ -38,18 +42,71 @@ export interface LinkPathConfigDeps {
   glob?: (pattern: string, limit: number) => string[];
 }
 
-/** Read at most `maxBytes + 1` bytes; a larger file is reported by its size without reading it. */
+/**
+ * Read a regular file of at most `maxBytes` (a larger one is refused by its size, unread). The type
+ * is checked before opening and the open does not block, so a named pipe or device never stalls the
+ * reader; anything but a regular file throws.
+ */
 function boundedRead(path: string, maxBytes: number): string {
-  const fd = openSync(path, "r");
+  if (!statSync(path).isFile()) throw new Error("not a regular file");
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
-    const size = fstatSync(fd).size;
-    if (size > maxBytes) return " ".repeat(maxBytes + 1);
-    const buffer = Buffer.alloc(Math.min(size, maxBytes) + 1);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Error("not a regular file");
+    if (stat.size > maxBytes) return " ".repeat(maxBytes + 1);
+    const buffer = Buffer.alloc(stat.size + 1);
     const read = readSync(fd, buffer, 0, buffer.length, 0);
     return buffer.subarray(0, read).toString("utf8");
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * `*` and `?` wildcard matching in O(pattern x text) with no backtracking blow-up: a run of `*`
+ * remembers only its last position, so a pattern full of wildcards cannot stall the event loop.
+ */
+export function matchWildcard(pattern: string, text: string): boolean {
+  let p = 0, t = 0, star = -1, mark = 0;
+  while (t < text.length) {
+    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === text[t])) { p += 1; t += 1; }
+    else if (p < pattern.length && pattern[p] === "*") { star = p; p += 1; mark = t; }
+    else if (star !== -1) { p = star + 1; mark += 1; t = mark; }
+    else return false;
+  }
+  while (p < pattern.length && pattern[p] === "*") p += 1;
+  return p === pattern.length;
+}
+
+/**
+ * Expand one absolute Include path without walking a tree: a wildcard (`*`, `?`) is allowed only
+ * in the last component and lists that one directory, at most `MAX_DIR_ENTRIES` entries, skipping
+ * dot files as OpenSSH's glob does. A wildcard elsewhere, a character class, or a longer listing
+ * throws, which reads as unknown.
+ */
+function boundedInclude(absolute: string, limit: number): string[] {
+  const dir = dirname(absolute), name = basename(absolute);
+  if (/[*?[\]]/.test(dir) || /[[\]]/.test(name)) throw new Error("unsupported include pattern");
+  if (!/[*?]/.test(name)) return [absolute];
+  let handle;
+  try { handle = opendirSync(dir); } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === "ENOENT") return [];
+    throw error;
+  }
+  const out: string[] = [];
+  try {
+    let seen = 0;
+    for (let entry = handle.readSync(); entry !== null; entry = handle.readSync()) {
+      if (++seen > MAX_DIR_ENTRIES) throw new Error("include directory too large");
+      if (entry.name.startsWith(".") && !name.startsWith(".")) continue;
+      if (!matchWildcard(name, entry.name)) continue;
+      out.push(join(dir, entry.name));
+      if (out.length > limit) break;
+    }
+  } finally {
+    handle.closeSync();
+  }
+  return out.sort();
 }
 
 function defaultSystemConfig(): string {
@@ -58,20 +115,13 @@ function defaultSystemConfig(): string {
     : "/etc/ssh/ssh_config";
 }
 
-function globMatch(pattern: string, host: string): boolean {
-  let regex = "^";
-  pattern = pattern.replace(/\*+/g, "*");
-  for (const char of pattern) regex += char === "*" ? ".*" : char === "?" ? "." : char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(regex + "$").test(host);
-}
-
 /** OpenSSH Host matching: any positive pattern matches and no negated one does, case-insensitively. */
 function hostMatches(patterns: readonly string[], host: string): boolean {
   let positive = false;
   for (const raw of patterns) {
     const negated = raw.startsWith("!");
     const pattern = (negated ? raw.slice(1) : raw).toLowerCase();
-    if (!globMatch(pattern, host)) continue;
+    if (!matchWildcard(pattern, host)) continue;
     if (negated) return false;
     positive = true;
   }
@@ -91,7 +141,7 @@ export function resolveLinkPathFromConfig(alias: string, deps: LinkPathConfigDep
 export function createLinkPathReader(deps: LinkPathConfigDeps = {}): (alias: string) => LinkPathVia {
   const home = deps.home ?? homedir();
   const read = deps.readFile ?? boundedRead;
-  const glob = deps.glob ?? expandSshIncludeGlob;
+  const glob = deps.glob ?? boundedInclude;
   const loaded = new Map<string, string | null>();
   let totalBytes = 0;
   const readOnce = (path: string): string | null => {
