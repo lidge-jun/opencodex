@@ -339,8 +339,12 @@ when no pending intent blocks it. Intent cleanup follows successful durable adop
 An unsent token request proven by structured `getaddrinfo` `ENOTFOUND` for the token host,
 with no outbound proxy configured in either the startup or current environment and a single
 HTTP/1.1 attempt without keep-alive reuse or redirect following, releases its intent as
-`pre-dispatch`; redirects and every other transport failure keep the intent.
-`tests/oauth/oauth-refresh.test.ts` covers this boundary.
+`pre-dispatch`. So does a refused first connection (#8577), in either transport's exact shape:
+Bun fetch's `ECONNREFUSED` naming this token URL in `path` (direct or through an HTTP proxy that
+is not listening), or the SOCKS5 transport's node `ECONNREFUSED` on `syscall: "connect"` to its
+proxy. Redirects, message text, a refusal for another URL or outside connect, and every other
+transport failure keep the intent. `tests/oauth/oauth-refresh.test.ts` and
+`tests/oauth/oauth-refresh-connection-refused.test.ts` cover this boundary.
 An already-expired identityless row whose old bearer no longer authenticates cannot establish
 continuity to a fully rotated pair automatically; explicit import can create a separate slot.
 
