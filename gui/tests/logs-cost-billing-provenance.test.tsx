@@ -11,6 +11,7 @@ import {
   installBillingFixturesPricing,
   legacyTokenRowWithoutBilling,
   mixedComboRow,
+  mixedExactComboRow,
   staleCreditProvenanceRow,
   tokenPriorityRow,
 } from "./helpers/logs-cost-billing-fixture";
@@ -159,7 +160,7 @@ test("a token-priced Priority row keeps its key, source, and lower bound", async
   } finally { await act(async () => { root.unmount(); }); }
 });
 
-test("a mixed combo attributes only the token leg, and the sum is not a floor", async () => {
+test("a mixed combo attributes only the token leg, and keeps the floor that leg earned", async () => {
   mockLogs([mixedComboRow("mixed-combo")]);
   const { root } = await mountAndOpen("mixed-combo");
   try {
@@ -169,9 +170,10 @@ test("a mixed combo attributes only the token leg, and the sum is not a floor", 
     // The parent's `price` is only the first attempt's key; it did not price the sum.
     expect(parentText).not.toContain("Matched price key");
     expect(parentText).not.toContain("Price source");
-    // One leg is an exact credit charge, so the total is not a known floor.
-    expect(parentText).toContain("$1.2900");
-    expect(parentText).not.toContain("≥");
+    // `credits x price + >=token` is still `>=` the true total: the exact credit leg does not
+    // erase the floor the token leg earned, and hiding it would understate the uncertainty.
+    expect(parentText).toContain("≥$1.2900");
+    expect(parentText).toContain("known lower bound");
 
     const attempts = [...document.querySelectorAll<HTMLTableRowElement>(".log-detail-attempts tbody tr")];
     expect(attempts).toHaveLength(2);
@@ -186,6 +188,20 @@ test("a mixed combo attributes only the token leg, and the sum is not a floor", 
     expect(tokenLeg).toContain("≥$1.2120");
     expect(tokenLeg).toContain("grok-4.7");
     expect(tokenLeg).toContain("Expected price overlay");
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
+test("a mixed combo with an exact token leg reports no floor", async () => {
+  mockLogs([mixedExactComboRow("mixed-exact")]);
+  const { root } = await mountAndOpen("mixed-exact");
+  try {
+    const section = costSection();
+    const parentText = section.textContent ?? "";
+    expect(parentText).toContain("Combined total (per-attempt basis)");
+    // Nothing in this sum is a floor: the credit leg is exact and the token leg resolved its
+    // standard rate. The mixed basis alone must not mint a `>=`.
+    expect(parentText).not.toContain("≥");
+    expect(parentText).not.toContain("known lower bound");
   } finally { await act(async () => { root.unmount(); }); }
 });
 

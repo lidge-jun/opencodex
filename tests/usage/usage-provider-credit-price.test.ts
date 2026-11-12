@@ -407,7 +407,7 @@ describe("credit billing does not inherit token-rate lower bounds", () => {
     expect(combo?.priorityLowerBound).toBeUndefined();
   });
 
-  test("a mixed combo does not turn a credit leg into a lower bound", () => {
+  test("a mixed combo stays a floor when its token leg is one", () => {
     refreshUserCostOverlays(grokConfig(0.04));
     const combo = estimateComboCost([
       { ordinal: 1, provider: "xai", model: "grok-4.7", usage: longPriority, usageStatus: "estimated", tierOutcome },
@@ -415,8 +415,26 @@ describe("credit billing does not inherit token-rate lower bounds", () => {
     ]);
 
     expect(combo?.billing).toEqual({ source: "mixed" });
-    // The token leg is genuinely a floor; the credit leg is an exact charge, so the SUM is not.
+    // The credit leg is exact, but the sum also contains a token charge that is a floor under a
+    // rate the proxy could not resolve. `credit x price + >=token` is still `>=` the true total,
+    // and the pre-#8452 rule (every leg) hid that behind the exact leg.
     expect(combo?.attempts?.[1]?.priorityLowerBound).toBe(true);
+    expect(combo?.priorityLowerBound).toBe(true);
+  });
+
+  test("an exact token leg does not borrow the credit leg's irrelevant token rate", () => {
+    refreshUserCostOverlays(grokConfig(0.04));
+    // Both rows resolve a Priority long-context token rate, but only the second one was priced
+    // from tokens. The credit leg's rate never produced its amount, so it cannot qualify the
+    // mixed total: with an exact token leg every component is exact.
+    const combo = estimateComboCost([
+      { ordinal: 1, provider: "xai", model: "grok-4.7", usage: longPriority, usageStatus: "estimated", tierOutcome },
+      { ordinal: 2, provider: "xai", model: "grok-4.7", usage: longToken, usageStatus: "reported" },
+    ]);
+
+    expect(combo?.billing).toEqual({ source: "mixed" });
+    expect(combo?.attempts?.[0]?.priorityLowerBound).toBeUndefined();
+    expect(combo?.attempts?.[1]?.priorityLowerBound).toBeUndefined();
     expect(combo?.priorityLowerBound).toBeUndefined();
   });
 });

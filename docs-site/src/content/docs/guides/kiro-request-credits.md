@@ -55,6 +55,12 @@ would produce a number that matches no price. Each attempt still states the char
 actually incurred. The management API exposes the same decision as an optional `billing` object on
 the cost estimate; clients that do not read it are unaffected.
 
+A credit charge is exact for the configured price, so it never makes a total a lower bound — and it
+never hides one either. When a mixed Combo's token-priced attempt is a floor under an unresolved
+Priority rate, the combined total still prints `≥`, because `credits × price + ≥token` is itself
+`≥` the true total. A credits-only total stays exact, and a mixed total whose token attempt resolved
+its standard rate prints no `≥`.
+
 ### Bounds and unrepresentable values
 
 `creditPriceUsd` must be **between 0 and 1,000,000**. The management boundary rejects anything else,

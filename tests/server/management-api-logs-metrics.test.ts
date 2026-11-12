@@ -819,7 +819,7 @@ describe("GET /api/logs credit billing provenance", () => {
     ]));
   });
 
-  test("a mixed combo keeps the token leg's uncertainty and drops the credit leg's phantom lower bound", async () => {
+  test("a mixed combo keeps the token leg's uncertainty and its floor, not the credit leg's phantom one", async () => {
     refreshUserCostOverlays(xaiCreditConfig);
     addRequestLog(baseEntry({
       provider: "combo", model: "combo/mixed", usageStatus: "estimated",
@@ -833,10 +833,10 @@ describe("GET /api/logs credit billing provenance", () => {
     const cost = dto!.displayMetrics.cost;
     expect(cost.kind).toBe("value");
     expect(cost.estimate.billing).toEqual({ source: "mixed" });
-    // The credit attempt is an exact charge; the token attempt is still a floor, so the SUM is
-    // not a floor either. Printing `>=` over the total would be a claim about the whole row.
-    expect(cost.estimate.priorityLowerBound).toBeUndefined();
-    expect(cost.estimateReasons).not.toContain("priority_lower_bound");
+    // The credit attempt is exact and the token attempt is a floor, so `credits + >=token` is
+    // still `>=` the true total. An exact leg must not erase the floor a token leg earned.
+    expect(cost.estimate.priorityLowerBound).toBe(true);
+    expect(cost.estimateReasons).toContain("priority_lower_bound");
     // Per-attempt provenance survives: the token leg still has its price and lower bound.
     const attempts = dto!.attempts as Array<Record<string, any>>;
     expect(attempts[0].displayMetrics.cost.estimate.billing).toEqual({ source: "provider-credits", providerCredits: 2, creditPriceUsd: 0.04 });
@@ -846,6 +846,26 @@ describe("GET /api/logs credit billing provenance", () => {
     // A token leg's cache reading is genuinely missing, so that reason still applies to the row.
     expect(cost.estimateReasons).toContain("cache_detail_missing");
     expect(cost.estimateReasons).toContain("expected_price_overlay");
+  });
+
+  test("a mixed combo whose token leg is exact reports no floor", async () => {
+    refreshUserCostOverlays(xaiCreditConfig);
+    addRequestLog(baseEntry({
+      provider: "combo", model: "combo/mixed-exact", usageStatus: "estimated",
+      usage: { inputTokens: 700_000, outputTokens: 2_000 },
+      attempts: [
+        attempt({ ordinal: 1, usage: creditUsage }),
+        // Under the long-context band and with no Priority outcome: this leg resolved its
+        // standard rate, so nothing in the sum is a floor.
+        attempt({ ordinal: 2, usageStatus: "reported", usage: { inputTokens: 100_000, outputTokens: 1_000 } }),
+      ],
+    }));
+    const [dto] = await readLogs();
+    const cost = dto!.displayMetrics.cost;
+    expect(cost.kind).toBe("value");
+    expect(cost.estimate.billing).toEqual({ source: "mixed" });
+    expect(cost.estimate.priorityLowerBound).toBeUndefined();
+    expect(cost.estimateReasons).not.toContain("priority_lower_bound");
   });
 
   test("a token row under the same overlay does name it", async () => {

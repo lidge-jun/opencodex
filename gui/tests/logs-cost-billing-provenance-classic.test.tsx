@@ -11,6 +11,7 @@ import {
   installBillingFixturesPricing,
   legacyTokenRowWithoutBilling,
   mixedComboRow,
+  mixedExactComboRow,
   staleCreditProvenanceRow,
   tokenPriorityRow,
 } from "./helpers/logs-cost-billing-fixture";
@@ -158,7 +159,7 @@ test("classic: a token-priced Priority row keeps its key, source, and lower boun
   } finally { await act(async () => { root.unmount(); }); }
 });
 
-test("classic: a mixed combo attributes only the token leg, and the sum is not a floor", async () => {
+test("classic: a mixed combo attributes only the token leg, and keeps the floor that leg earned", async () => {
   mockLogs([mixedComboRow("classic-mixed-combo")]);
   const { root } = await mountAndOpen("classic-mixed-combo");
   try {
@@ -166,8 +167,9 @@ test("classic: a mixed combo attributes only the token leg, and the sum is not a
     expect(parentText).toContain("Combined total (per-attempt basis)");
     expect(parentText).not.toContain("Matched price key");
     expect(parentText).not.toContain("Price source");
-    expect(parentText).toContain("$1.2900");
-    expect(parentText).not.toContain("≥");
+    // The exact credit leg must not erase the token leg's floor; `credits + >=token` is `>=`.
+    expect(parentText).toContain("≥$1.2900");
+    expect(parentText).toContain("known lower bound");
 
     const attempts = [...document.querySelectorAll<HTMLTableRowElement>(".log-detail-attempts tbody tr")];
     expect(attempts).toHaveLength(2);
@@ -180,6 +182,17 @@ test("classic: a mixed combo attributes only the token leg, and the sum is not a
     expect(tokenLeg).toContain("≥$1.2120");
     expect(tokenLeg).toContain("grok-4.7");
     expect(tokenLeg).toContain("Expected price overlay");
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
+test("classic: a mixed combo with an exact token leg reports no floor", async () => {
+  mockLogs([mixedExactComboRow("classic-mixed-exact")]);
+  const { root } = await mountAndOpen("classic-mixed-exact");
+  try {
+    const parentText = costSection().textContent ?? "";
+    expect(parentText).toContain("Combined total (per-attempt basis)");
+    expect(parentText).not.toContain("≥");
+    expect(parentText).not.toContain("known lower bound");
   } finally { await act(async () => { root.unmount(); }); }
 });
 
