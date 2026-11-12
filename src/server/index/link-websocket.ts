@@ -382,6 +382,11 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           if (owed) fence(ws, owed);
           else if (!accepting) fence(ws, LINK_WS_REVOKED_CLOSE);
         },
+        // Bun calls drain when the send buffer empties; a link pump waits for it (design 6.2).
+        drain(ws) {
+          ws.data.link?.drained?.();
+          base.drain?.(ws);
+        },
         message(ws, raw) {
           const link = ws.data.link;
           if (!link || link.fenced) return;
@@ -396,6 +401,8 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
         },
         close(ws, code, reason) {
           try {
+            // A link pump waiting for a drain stops waiting once the socket is gone.
+            ws.data.link?.drained?.();
             base.close?.(ws, code, reason);
           } finally {
             const link = ws.data.link;

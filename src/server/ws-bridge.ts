@@ -18,6 +18,7 @@ import { isProxyError } from "../lib/client-error-body";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
 import { NativeContinuationRefusalError } from "./responses/native-continuation-refusal";
 import type { UsageClient } from "../usage/client";
+import { LINK_WS_LIMITS, linkPumpTimer } from "./index/link-websocket-limits";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -92,6 +93,8 @@ export interface LinkSocketBinding {
   fenced: boolean;
   /** Releases every lease of the upgrade exactly once, from the close callback. */
   readonly leases: { closed(): void };
+  /** Set by the link pump while it waits for Bun's drain; the link handler calls it on drain and close. */
+  drained?: () => void;
 }
 
 export interface LiveSidebandUpstreamFailure {
@@ -297,9 +300,45 @@ export async function pumpResponsesSseToWebSocket(
   };
   const cancel = () => {
     clientCancelled = true;
+    wakeLinkWait?.();
     void reader.cancel().catch(() => {});
   };
   ws.data.cancel = cancel;
+
+  // Remote Link sockets only (design T4 6.2): after a send that leaves more than the threshold
+  // buffered, wait for Bun's drain before the next event, even within one upstream chunk, and feed
+  // the framer one bounded slice of a chunk at a time. Local sockets keep the single synchronous loop.
+  const link = ws.data.link;
+  let wakeLinkWait: (() => void) | undefined;
+  let linkStopped = false;
+  const waitForLinkDrain = async (): Promise<void> => {
+    if (!link || ws.getBufferedAmount() <= LINK_WS_LIMITS.sendThresholdBytes) return;
+    let stalled = false;
+    await new Promise<void>(resolve => {
+      const clock = linkPumpTimer();
+      const timer = clock.start(() => { stalled = true; done(); }, LINK_WS_LIMITS.sendStallMs);
+      function done(): void {
+        clock.stop(timer);
+        if (link!.drained === done) link!.drained = undefined;
+        if (wakeLinkWait === done) wakeLinkWait = undefined;
+        resolve();
+      }
+      link.drained = done;
+      wakeLinkWait = done;
+    });
+    if (stalled && !clientCancelled) {
+      try { ws.close(1011, "link websocket send stalled"); } catch { /* already closing */ }
+      throw new WsSendDroppedError();
+    }
+  };
+  const slicesOf = (chunk: Uint8Array): Uint8Array[] => {
+    if (!link || chunk.byteLength <= LINK_WS_LIMITS.framerSliceBytes) return [chunk];
+    const slices: Uint8Array[] = [];
+    for (let offset = 0; offset < chunk.byteLength; offset += LINK_WS_LIMITS.framerSliceBytes) {
+      slices.push(chunk.subarray(offset, offset + LINK_WS_LIMITS.framerSliceBytes));
+    }
+    return slices;
+  };
 
   const decoder = new TextDecoder();
   const framer = new BoundedSseFrameBuffer();
@@ -337,14 +376,22 @@ export async function pumpResponsesSseToWebSocket(
   };
 
   try {
-    while (!terminalSeen) {
+    reading: while (!terminalSeen) {
       const { done, value } = await reader.read();
       if (done) break;
-      for (const frame of framer.feed(value)) {
-        const payload = parseSseBlock(decoder.decode(frame.block));
-        if (payload && handlePayload(payload)) break;
+      for (const slice of slicesOf(value)) {
+        for (const frame of framer.feed(slice)) {
+          const payload = parseSseBlock(decoder.decode(frame.block));
+          if (payload && handlePayload(payload)) continue reading;
+          if (link) {
+            await waitForLinkDrain();
+            if (clientCancelled || ws.readyState !== OPEN) { linkStopped = true; break reading; }
+          }
+        }
       }
     }
+    // A link pump stopped by a cancel or close mid-chunk has nothing left to deliver or report.
+    if (linkStopped) return;
     const tail = framer.finish();
     if (!terminalSeen && tail.byteLength > 0) {
       const payload = parseSseBlock(decoder.decode(tail));

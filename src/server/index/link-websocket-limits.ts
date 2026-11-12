@@ -27,6 +27,12 @@ export interface LinkWebsocketLimits {
   maxAgeMs: number;
   /** After the switch goes off, open sockets drain for at most this long (design 2.5). */
   drainDeadlineMs: number;
+  /** After a send leaves more than this buffered, the link pump waits for Bun's drain (design 6.2). */
+  sendThresholdBytes: number;
+  /** The link pump feeds the SSE framer at most this much of an upstream chunk at a time. */
+  framerSliceBytes: number;
+  /** A link socket that does not drain for this long is closed; the turn's own stall bound. */
+  sendStallMs: number;
 }
 
 export const LINK_WS_LIMITS: Readonly<LinkWebsocketLimits> = Object.freeze({
@@ -40,6 +46,9 @@ export const LINK_WS_LIMITS: Readonly<LinkWebsocketLimits> = Object.freeze({
   idleCloseMs: 10 * 60_000,
   maxAgeMs: 60 * 60_000,
   drainDeadlineMs: 60 * 60_000,
+  sendThresholdBytes: 1 * MiB,
+  framerSliceBytes: 256 * 1024,
+  sendStallMs: 300_000,
 });
 
 /** Close code for a socket whose link, key or fingerprint no longer authorizes it. */
@@ -52,10 +61,10 @@ export const LINK_WS_IDLE_CLOSE = { code: 1000, reason: "link websocket idle" } 
 export const LINK_WS_AGE_CLOSE = { code: 1000, reason: "link websocket reauthenticate" } as const;
 
 /**
- * Release gate. The reservation above assumes the link-only bounded pump of design 6.2 (per-event
- * backpressure wait, 256 KiB framing slices), which is not in this build yet. Until the slice that
- * lands it sets this to true, linkResponsesWebsocket cannot admit or advertise anything, whatever
- * the config says. Tests of the admission path turn it on for themselves only.
+ * Release gate. linkResponsesWebsocket cannot admit or advertise anything while this is false,
+ * whatever the config says. It stays false until the measured memory acceptance of design 6.3,
+ * durable activity holds (section 5) and the release tests with the pinned Codex client are in
+ * place. Tests of the admission path turn it on for themselves only.
  */
 let transportReady = false;
 
@@ -65,5 +74,27 @@ export function linkWebsocketTransportReady(): boolean {
 
 export function setLinkWebsocketTransportReadyForTests(ready: boolean): void {
   transportReady = ready;
+}
+
+/** The link pump's stall timer (sendStallMs); tests replace it to fire the bound without waiting. */
+export interface LinkPumpTimer {
+  start(callback: () => void, ms: number): unknown;
+  stop(handle: unknown): void;
+}
+
+const realPumpTimer: LinkPumpTimer = {
+  start(callback, ms) {
+    const handle = setTimeout(callback, ms);
+    (handle as { unref?: () => void }).unref?.();
+    return handle;
+  },
+  stop(handle) { clearTimeout(handle as ReturnType<typeof setTimeout>); },
+};
+let pumpTimer: LinkPumpTimer = realPumpTimer;
+
+export function linkPumpTimer(): LinkPumpTimer { return pumpTimer; }
+
+export function setLinkPumpTimerForTests(timer: LinkPumpTimer | null): void {
+  pumpTimer = timer ?? realPumpTimer;
 }
 
