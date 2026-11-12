@@ -8,6 +8,7 @@ import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/nati
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { withConfigMutationLockSync } from "../../src/config/mutation-lock";
 import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 
@@ -1137,7 +1138,7 @@ describe("Codex catalog sync hardening", () => {
     slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/legacy-model");
     expect(slugs).toContain("cursor/composer-2.5");
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("drops legacy combo-alias ghost rows in both gather branches", () => {
     const legacyComboAlias = {

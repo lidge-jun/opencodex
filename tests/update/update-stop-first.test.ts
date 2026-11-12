@@ -234,7 +234,7 @@ process.on("exit", code => fixtureStatus("launcher-exit", { exitCode: code, sign
 `;
 }
 
-function instrumentRecoveryLauncher(source: string, directory: string): string {
+function instrumentRecoveryLauncher(source: string, directory: string, serviceHome?: "absent" | "unknown"): string {
   // Fail closed on drift, preserving the real calls and every original handler.
   const replaceOnce = (needle: string, replacement: string) => {
     if (source.split(needle).length !== 2) throw new Error("recovery diagnostic fixture: launcher seam changed");
@@ -256,6 +256,8 @@ function instrumentRecoveryLauncher(source: string, directory: string): string {
   replaceOnce('child.on("error", err => {', `child.on("error", err => {
   fixtureStatus("runtime-spawn-error", recoveryErrorFields(err));`);
   replaceOnce('forwarding.attach(child);', 'forwarding.attach(child);\nchild.on("spawn", () => fixtureStatus("runtime-spawned", { pid: child.pid }));');
+  // Host service-manager availability must not choose this fixture's recovery policy.
+  if (serviceHome) replaceOnce('() => readNodeUpdateHome(authorityLauncher)', `() => ({ kind: ${JSON.stringify(serviceHome)} })`);
   return source;
 }
 const updateSource = readFileSync(join(repoRoot, "src", "update", "index.ts"), "utf8");
@@ -668,7 +670,7 @@ describe("update stops the running proxy before replacing files", () => {
         for (const name of ["stdout", "stderr", "status"]) {
           writeFileSync(join(diagnostics, name), "", { mode: 0o600, flag: "wx" });
         }
-        writeFileSync(launcher, instrumentRecoveryLauncher(launcherSource, diagnostics));
+        writeFileSync(launcher, instrumentRecoveryLauncher(launcherSource, diagnostics, "unknown"));
         chmodSync(launcher, 0o755);
         symlinkSync(join(repoRoot, "src"), join(packageRoot, "src"), "dir");
         symlinkSync(bundledBun, join(packageRoot, "node_modules", "bun"), "dir");
@@ -694,6 +696,19 @@ esac
         // Resolve wrapper-managed Node to its actual executable: wrappers can prepend
         // their own npm directory to PATH and bypass the fixture's failing npm.
         const node = Bun.spawnSync(["node", "-p", "process.execPath"], { stdout: "pipe" }).stdout.toString().trim();
+        const refused = Bun.spawnSync([node, launcher, "update"], {
+          cwd: root,
+          env,
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: UPDATE_SPAWN_TIMEOUT_MS,
+        });
+        const refusal = refused.stdout.toString() + refused.stderr.toString();
+        expect(refused.exitCode, refusal).toBe(1);
+        expect(refusal).toContain("service registration ownership could not be verified");
+        expect(refusal).not.toContain("Stopping the running proxy before updating");
+        expect(refusal).not.toContain(`Attempting to restart the proxy on port ${port}.`);
+        writeFileSync(launcher, instrumentRecoveryLauncher(launcherSource, diagnostics, "absent"));
         const result = Bun.spawnSync([node, launcher, "update"], {
           cwd: root,
           env,
