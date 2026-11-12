@@ -149,7 +149,7 @@ there. Feature code is grouped by responsibility:
 `src/generated/` is committed build output, not hand-edited; `scripts/generate-model-metadata.ts` derives `kimi-responses` → Moonshot metadata from the registry's `jawcodeBundle` while keeping its provider row distinct. The generated vendor priority supplies bundled fallback for the Azure modality/limit lookup described in [the shared catalog contract](catalog.md#shared-catalog); discovery can refresh public Azure metadata independently of a release, without generation-time network fetches or static-policy changes. Snapshot refreshes preserve the separate public OpenAI API and native Codex bundles.
 
 `src/server/` is split by responsibility: `index.ts` owns the listener and the startup transaction
-while `index/serve-options.ts` owns route ordering; `responses.ts` and `responses/core.ts` compose
+while `index/serve-options.ts` owns route ordering and re-exports the ingress/context contract from `index/serve-contract.ts`; `responses.ts` and `responses/core.ts` compose
 Responses handling from the owners inventoried in [Responses transport](transports/responses.md),
 and `responses/compact.ts` and `responses/compaction-retention.ts` own v1/v2 compaction under the [routed reasoning-retention contract](transports/responses-failover.md#compaction-routing-overrides) implemented by `src/responses/reasoning-retention.ts`; `images.ts` owns the standalone Images relay;
 `responses/codex-auth-error.ts` owns the shared Responses/compact Codex auth-context HTTP mapping and audio's native-main refresh refusals.

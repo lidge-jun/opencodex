@@ -338,9 +338,9 @@ const guarded = [
   ["/api/anthropic/reset-grants/consume", {}, "session_required"],
   ["/api/codex-prompt/repair", {}, "dashboard_session_required"],
   ["/api/oauth/login", { provider: "meta-muse" }, "oauth_consent_required"],
-  ["/api/codex/desktop-compatibility/certificate", { action: "prepare", confirmed: true }, "local_dashboard_confirmation_required"],
-  ["/api/codex/desktop-compatibility/runtime", { action: "observe", confirmed: true }, "local_dashboard_confirmation_required"],
-  ["/api/codex/desktop-compatibility/settings", { startOnProxyStart: false, revision: "a".repeat(64), confirmed: true }, "local_dashboard_confirmation_required"],
+  ["/api/codex/desktop-compatibility/certificate", { action: "prepare", confirmed: true }, "desktop_authorization_required"],
+  ["/api/codex/desktop-compatibility/runtime", { action: "observe", confirmed: true }, "desktop_authorization_required"],
+  ["/api/codex/desktop-compatibility/settings", { startOnProxyStart: false, revision: "a".repeat(64), confirmed: true }, "desktop_authorization_required"],
 ] as const;
 test("remembered admission reaches and refuses all seven consent routes even with trusted loopback ingress", async () => {
   const device = await remember("http://127.0.0.1:10100");
@@ -355,7 +355,7 @@ test("remembered admission reaches and refuses all seven consent routes even wit
   }
 });
 
-test("ordinary loopback sessions reach the sidebar and paired sessions reach desktop services", async () => {
+test("ordinary loopback sessions reach the sidebar and a Desktop grant reaches desktop services", async () => {
   config.hostname = "127.0.0.1"; config.port = 10100;
   const origin = "http://127.0.0.1:10100";
   const session = issueGuiSession(request("/", { origin, method: "GET", token: null }), config, state)!;
@@ -371,7 +371,7 @@ test("ordinary loopback sessions reach the sidebar and paired sessions reach des
     status: async () => status, prepare: async () => { calls.push("prepare"); return status; },
     trust: async () => status, removeTrust: async () => status, renew: async () => status,
   } };
-  // Desktop compatibility mutations additionally require a paired session.
+  // Desktop compatibility mutations require the Desktop step-up grant: pairing alone is not enough.
   expect((await dispatch(deviceRequest(loopback, guarded[4][0], { body: guarded[4][1] }), deps, true)).status).toBe(403);
   expect(calls).toEqual([]);
   const grant = createGuiPairingGrant(origin, config, state);
@@ -379,6 +379,11 @@ test("ordinary loopback sessions reach the sidebar and paired sessions reach des
     config, state, Date.now(), { ingress: "public", peerAddress: "127.0.0.1", tailscaleUser: null, browserOrigin: origin });
   expect(paired && "token" in paired).toBe(true);
   const device = { origin, cookie: "", body: { session: paired } } as Device;
+  expect((await dispatch(deviceRequest(device, guarded[4][0], { body: guarded[4][1] }), deps, true)).status).toBe(403);
+  expect(calls).toEqual([]);
+  const desktopGrant = createGuiPairingGrant(origin, config, state, Date.now(), true);
+  const authorized = await dispatch(deviceRequest(device, "/api/codex/desktop-compatibility/authorization", { body: { grant: desktopGrant.grant } }), deps, true);
+  expect(authorized.status).toBe(200);
   expect((await dispatch(deviceRequest(device, guarded[4][0], { body: guarded[4][1] }), deps, true)).status).toBe(200);
   expect(calls).toEqual(["prepare"]);
   const runtime = createDesktopCompatibilityRuntime({ platform: "linux" });

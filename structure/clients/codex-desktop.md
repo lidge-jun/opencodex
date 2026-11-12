@@ -87,21 +87,30 @@ in-process, and the helper's cmdlet-free script on every platform.
 `src/server/management/desktop-compatibility-routes.ts` exposes the authenticated
 `/api/codex/desktop-compatibility/certificate` setup endpoint. GET is read-only public metadata and OS-trust inspection;
 it does not decrypt a key, create a file, acquire a lease or register trust. POST
-uses `src/server/management/desktop-compatibility-authorization.ts` to require an
-operator-paired GUI session on trusted loopback ingress and explicit confirmation.
+requires a current GUI session with a Desktop-purpose grant on trusted standalone loopback ingress and explicit confirmation.
 Trust mutations also require the exact SHA-256 fingerprint. Raw admin tokens cannot
 substitute the pairing ceremony, and automatically issued loopback sessions cannot mutate trust.
 The certificate response carries request-specific `mutationAuthorized` metadata. The local
-dashboard reuses `gui/src/connect-pairing.tsx` with a machine-plane handoff, validates that
-authority through a read-only certificate request, and commits the session before refreshing
-or enabling actions. Pairing never submits a certificate/runtime mutation or changes auto-start.
+dashboard uses `gui/src/pages/desktop-compatibility-authorization.tsx` for the Desktop grant
+exchange, validates that authority through a read-only certificate request, and commits the
+session before refreshing or enabling actions. Pairing never submits a certificate/runtime
+mutation or changes auto-start.
 Machine-session changes discard pending consent and disable actions until fresh authority is read.
 The startup-setting child synchronously aborts its own in-flight operation on a machine-session
 change and rejects late completions by generation. An interrupted preference operation stays
 uncertain until a fresh settings GET, independently of refreshed certificate authorization.
-`gui/tests/desktop-compatibility-panel.test.tsx`, `gui/tests/local-link-pairing.test.ts` and
-`tests/server/management-desktop-compatibility-routes.test.ts` cover the UI, credential plane
-and real loopback-versus-paired session boundary.
+`gui/tests/desktop-compatibility-panel.test.tsx` and
+`tests/server/management-desktop-compatibility-routes.test.ts` cover the UI and real
+loopback-versus-paired session boundary.
+
+`ocx gui pair --desktop --origin <dashboard-origin>` uses the attested runtime and private-home
+one-use intent through a separately signed pairing path. `/api/codex/desktop-compatibility/authorization`
+consumes that purpose only for the existing current browser session; GET reports its Desktop scope.
+The scope expires after at most five minutes without renewal and disappears with session revocation,
+eviction, restart or an observed role/listener change. It changes neither pairing issuance nor key
+disclosure authority. Certificate, runtime and startup-setting POSTs revalidate it before reading
+the body and after body/import awaits immediately before their service calls. An admitted operation
+finishes even if its scope expires while the service runs. Hub and connected-client writes stay refused.
 
 `src/codex/desktop-compatibility/certificate-service.ts` serializes setup and refuses
 busy operations. Only prepare may generate a key. Trust/removal load existing validated
@@ -251,7 +260,10 @@ The status CLI verb remains deferred to this integration owner.
 OpenCodex client mode does not offer these controls because its local listener deliberately
 does not admit durable machine mutations through a dashboard bootstrap session.
 
-`gui/src/desktop-compatibility-api.ts` projects public status and issues one POST per action.
+`gui/src/desktop-compatibility-api.ts` projects public status and issues one POST per action through
+`fetchDesktopSession` in `gui/src/api.ts`, bypassing automatic renewal, admin fallback and replay.
+`gui/src/pages/desktop-compatibility-authorization.tsx` exchanges a code once, validates Desktop scope,
+then refreshes certificate/runtime status and the startup revision. Earlier actions and consent are discarded.
 Fingerprint-bound trust/renew/removal and the account-wide trial require separate acknowledgement.
 Observe/start/stop/launch follow explicit button actions. No action is replayed after an uncertain
 response; a fresh status read is required. Changing the API target remounts the panel and discards

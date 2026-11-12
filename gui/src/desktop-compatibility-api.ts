@@ -1,7 +1,6 @@
-import { fetchApiSessionValidation } from "./api";
+import { fetchApiSessionValidation, fetchDesktopSession } from "./api";
 import { discardResponseBody, withFetchDeadline } from "./bounded-fetch";
 import { PairingError } from "./connect-pairing-transport";
-
 export type CertificateState = "missing" | "invalid" | "expired" | "renewal-required" | "prepared" | "trusted" | "unknown";
 export interface CompatibilityCertificate {
   supported: boolean; state: CertificateState; fingerprint?: string; expiresAt?: number; renewalDue: boolean; busy: string | null; mutationAuthorized?: boolean;
@@ -27,6 +26,7 @@ export class CompatibilityApiError extends Error {
   constructor(code: string) { super(code); this.code = code; }
 }
 async function reply(response: Response): Promise<Record<string, unknown>> {
+  if (response.status === 401) { await response.body?.cancel(); throw new CompatibilityApiError("desktop_authorization_required"); }
   let value: unknown; try { value = await response.json(); } catch { throw new CompatibilityApiError("invalid_response"); }
   if (!object(value)) throw new CompatibilityApiError("invalid_response");
   if (!response.ok || value.ok !== true) {
@@ -44,7 +44,7 @@ export async function readCompatibilityStartupSettings(apiBase: string, signal: 
   return parseStartupSettings((await reply(await fetch(apiBase + ROOT + "settings", { signal }))).settings);
 }
 export async function saveCompatibilityStartupSettings(apiBase: string, current: CompatibilityStartupSettings, enabled: boolean, signal: AbortSignal): Promise<CompatibilityStartupSettings> {
-  return parseStartupSettings((await reply(await fetch(apiBase + ROOT + "settings", { method: "POST", signal,
+  return parseStartupSettings((await reply(await fetchDesktopSession(apiBase + ROOT + "settings", { method: "POST", signal,
     headers: { "content-type": "application/json" }, body: JSON.stringify({ startOnProxyStart: enabled, revision: current.revision, confirmed: true }) }))).settings);
 }
 export function parseCompatibilityCertificate(value: unknown): CompatibilityCertificate {
@@ -130,9 +130,25 @@ export async function readCompatibilitySnapshot(apiBase: string, signal: AbortSi
 /** Exactly one POST. Network ambiguity is resolved by a later status read, never automatic replay. */
 export async function runCompatibilityAction(apiBase: string, action: CompatibilityAction, signal: AbortSignal): Promise<void> {
   if (action.target === "certificate" && action.action !== "prepare" && (!action.fingerprint || !/^[A-F0-9]{64}$/.test(action.fingerprint))) throw new CompatibilityApiError("certificate_fingerprint_required");
-  await reply(await fetch(apiBase + ROOT + action.target, { method: "POST", signal, headers: { "content-type": "application/json" },
+  await reply(await fetchDesktopSession(apiBase + ROOT + action.target, { method: "POST", signal, headers: { "content-type": "application/json" },
     body: JSON.stringify({ action: action.action, confirmed: true,
       ...(action.target === "certificate" && action.action !== "prepare" ? { fingerprint: action.fingerprint } : {}),
       ...(action.target === "runtime" && action.action === "apply" ? { accountWideConsent: true } : {}) }),
   }));
+}
+
+export interface DesktopAuthorization { supported: boolean; authorized: boolean }
+export async function readDesktopAuthorization(apiBase: string, signal: AbortSignal): Promise<DesktopAuthorization> {
+  const value = await reply(await fetchDesktopSession(apiBase + ROOT + "authorization", { signal, cache: "no-store" }));
+  if (typeof value.authorized !== "boolean" || typeof value.supported !== "boolean") throw new CompatibilityApiError("invalid_response");
+  return { supported: value.supported, authorized: value.authorized };
+}
+/** Consumes a fresh code once, then checks Desktop scope; it never repeats the user's old action. */
+export async function authorizeDesktop(apiBase: string, grant: string, signal: AbortSignal): Promise<DesktopAuthorization> {
+  if (!/^ocx_pair_[A-Za-z0-9_-]{43}$/.test(grant)) throw new CompatibilityApiError("invalid_request");
+  await reply(await fetchDesktopSession(apiBase + ROOT + "authorization", { method: "POST", signal,
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ grant }) }));
+  const actual = await readDesktopAuthorization(apiBase, signal);
+  if (!actual.authorized) throw new CompatibilityApiError("desktop_authorization_required");
+  return actual;
 }

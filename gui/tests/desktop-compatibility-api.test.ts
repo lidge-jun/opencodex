@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { parseCompatibilityCertificate, parseCompatibilityRuntime, runCompatibilityAction } from "../src/desktop-compatibility-api";
+import { authorizeDesktop, parseCompatibilityCertificate, parseCompatibilityRuntime, runCompatibilityAction } from "../src/desktop-compatibility-api";
 import { DICTS } from "../src/i18n/catalogs";
 const originalFetch = globalThis.fetch;
 test("observation counters never upgrade response observations into native recovery proof", () => {
@@ -38,6 +38,20 @@ test("only the deliberate apply action carries account-wide consent", async () =
   await runCompatibilityAction("", { target: "runtime", action: "start" }, new AbortController().signal);
   await runCompatibilityAction("", { target: "runtime", action: "apply" }, new AbortController().signal);
   expect(bodies).toEqual([{ action: "start", confirmed: true }, { action: "apply", confirmed: true, accountWideConsent: true }]);
+});
+
+test("Desktop authorization checks its own status, keeps codes out of errors and never replays the old action", async () => {
+  const paths: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    paths.push(`${init?.method ?? "GET"} ${String(input)}`);
+    return Response.json(init?.method === "POST" ? { ok: true, authorized: true } : { ok: true, supported: true, authorized: true });
+  }) as typeof fetch;
+  expect(await authorizeDesktop("", "ocx_pair_" + "A".repeat(43), new AbortController().signal)).toEqual({ supported: true, authorized: true });
+  expect(paths).toEqual(["POST /api/codex/desktop-compatibility/authorization", "GET /api/codex/desktop-compatibility/authorization"]);
+  paths.length = 0;
+  globalThis.fetch = (async input => { paths.push(String(input)); return Response.json({ error: "desktop_authorization_required" }, { status: 403 }); }) as typeof fetch;
+  await expect(runCompatibilityAction("", { target: "runtime", action: "stop" }, new AbortController().signal)).rejects.toThrow("desktop_authorization_required");
+  expect(paths).toHaveLength(1);
 });
 test("build assessment projection is strict, optional and never marks another version verified", () => {
   const base = { supported: true, phase: "off", running: false };

@@ -16,6 +16,14 @@ import { resetWindowsPrincipalForTests, setWindowsPrincipalRunnerForTests, setAs
 import { resolveTrustedWindowsIcaclsExe } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { runGuiCommand } from "../../src/cli/gui";
+import { requestBoundGuiPairingGrant } from "../../src/cli/gui-pair-client";
+import { createManagementSessionControl, requireManagementAuth, managementPrincipal, type ManagementAuthState } from "../../src/server/management-auth";
+import { issueGuiSession, consumeGuiPairingGrant } from "../../src/server/gui-session";
+import { handleManagementAPI } from "../../src/server/management-api";
+import { DESKTOP_GUI_PAIR_PATH, GUI_PAIR_CAPABILITY_VERSION } from "../../src/lib/gui-pair-capability";
+import { desktopGuiOrigin } from "../../src/lib/desktop-gui-origin";
+import { LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, createLocalAttestationProof } from "../../src/lib/local-management-attestation";
 
 const ORIGIN = "http://127.0.0.1:10100";
 const CAP = "A".repeat(43);
@@ -71,6 +79,79 @@ afterEach(() => {
   setIcaclsRunnerForTests(null); setAsyncIcaclsRunnerForTests(null);
   if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
   removeTreeWithRetry(root);
+});
+
+test("Desktop CLI intent crosses real capability admission, grant delivery and dispatcher exchange once", async () => {
+  const cfg = config(), s: Extract<ManagementAuthState, { available: true }> = {
+    available: true, token: "fixture-admin-only", source: "environment", sessions: new Map(), pairingGrants: new Map(),
+  };
+  const origin = "http://localhost:10100", secret = "D".repeat(43), pid = 4242;
+  const session = issueGuiSession(new Request(origin, { headers: { host: "localhost:10100", Origin: origin } }), cfg, s)!;
+  const control = createManagementSessionControl(s);
+  let printed = "", grantRequests = 0, lastHeaders: Headers | undefined;
+  const print = spyOn(console, "log").mockImplementation(value => { printed = String(value); });
+  const warn = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const result = await runGuiCommand(["pair", "--desktop", "--origin", origin, "--json"], {
+      loadConfig: () => cfg, openDefaultGui: async () => 99,
+      findLiveProxy: async () => ({ source: "runtime", pid, port: cfg.port, hostname: cfg.hostname! }),
+      requestPairingGrant: (target, browser, options) => requestBoundGuiPairingGrant(target, browser, {
+        ...options, readRuntime: () => ({ pid, port: cfg.port, hostname: cfg.hostname!, attestationSecret: secret }),
+        fetchImpl: async (input, init) => {
+          if (String(input).endsWith("/healthz")) {
+            const nonce = new Headers(init?.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER)!;
+            return Response.json({ service: "opencodex", status: "ok", version: "fixture", uptime: 1, pid, port: cfg.port,
+              guiPairCapability: GUI_PAIR_CAPABILITY_VERSION }, { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, pid, cfg.port)! } });
+          }
+          grantRequests++; expect(new URL(String(input)).pathname).toBe(DESKTOP_GUI_PAIR_PATH);
+          const req = new Request(String(input), init); lastHeaders = new Headers(req.headers);
+          expect(requireManagementAuth(req, s, cfg, { attestationSecret: secret, pid, port: cfg.port })).toBeNull();
+          expect(managementPrincipal(req, s, cfg, { attestationSecret: secret, pid, port: cfg.port })).toBe("gui-pair-capability");
+          return Response.json(deliverGuiPairingGrant(req, cfg, s), { status: 201 });
+        },
+      }),
+    });
+    expect(result).toBe(0); expect(grantRequests).toBe(1); expect(s.sessions.size).toBe(1);
+    const grant = JSON.parse(printed).grant as string;
+    const request = (path: string, body?: unknown) => new Request(origin + path, { method: body ? "POST" : "GET", headers: {
+      host: "localhost:10100", Origin: origin, "x-opencodex-api-key": session.token,
+      "x-opencodex-gui-origin": origin, "x-opencodex-csrf-token": session.csrfToken, "content-type": "application/json",
+    }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const exchange = request("/api/codex/desktop-compatibility/authorization", { grant });
+    const response = await handleManagementAPI(exchange, new URL(exchange.url), cfg, {}, "gui-session", control, { trustedLoopback: true });
+    expect(response?.status).toBe(200);
+    const status = request("/api/codex/desktop-compatibility/authorization");
+    const view = await handleManagementAPI(status, new URL(status.url), cfg, {}, "gui-session", control, { trustedLoopback: true });
+    expect(await view!.json()).toEqual({ ok: true, supported: true, authorized: true });
+    expect(control.isPaired(status, cfg)).toBe(false); expect(control.canRevealDataKeys!(status, cfg)).toBe(false);
+    const replay = new Request("http://127.0.0.1:10100" + DESKTOP_GUI_PAIR_PATH, { method: "POST", headers: lastHeaders });
+    expect(requireManagementAuth(replay, s, cfg, { attestationSecret: secret, pid, port: cfg.port })?.status).toBe(401);
+    const exchangeAgain = request("/api/codex/desktop-compatibility/authorization", { grant });
+    expect((await handleManagementAPI(exchangeAgain, new URL(exchangeAgain.url), cfg, {}, "gui-session", control, { trustedLoopback: true }))?.status).toBe(403);
+  } finally { print.mockRestore(); warn.mockRestore(); }
+});
+
+test("Desktop purpose cannot be forged onto ordinary pairing, remote roles, wrong ports or forwarded ingress", () => {
+  const cfg = config();
+  expect(desktopGuiOrigin(cfg, "http://localhost:10100")).toBe("http://localhost:10100");
+  for (const origin of ["http://localhost:10101", "https://localhost:10100", "http://127.1:10100", "http://[::1]:10100", "http://localhost:10100/path", "http://user@localhost:10100"])
+    expect(desktopGuiOrigin(cfg, origin)).toBeNull();
+  for (const runtimeRole of ["hub", "client"] as const) expect(desktopGuiOrigin({ ...cfg, runtimeRole }, ORIGIN)).toBeNull();
+  const intent = createGuiPairIntent(CAP), s = state();
+  try {
+    const forwarded = new Request(ORIGIN + DESKTOP_GUI_PAIR_PATH, { method: "POST", headers: {
+      [GUI_PAIR_BROWSER_ORIGIN_HEADER]: ORIGIN, [GUI_PAIR_CAPABILITY_HEADER]: CAP, [GUI_PAIR_INTENT_HEADER]: intent.proof,
+      "X-Forwarded-For": "127.0.0.1",
+    } });
+    expect(() => deliverGuiPairingGrant(forwarded, cfg, s)).toThrow(GuiPairingIntentRequiredError);
+    const valid = new Request(ORIGIN + DESKTOP_GUI_PAIR_PATH, { method: "POST", headers: {
+      [GUI_PAIR_BROWSER_ORIGIN_HEADER]: ORIGIN, [GUI_PAIR_CAPABILITY_HEADER]: CAP, [GUI_PAIR_INTENT_HEADER]: intent.proof,
+    } });
+    const grant = deliverGuiPairingGrant(valid, cfg, s);
+    expect(consumeGuiPairingGrant(new Request(ORIGIN + "/opencodex-session", { method: "POST", headers: { host: "127.0.0.1:10100", Origin: ORIGIN } }),
+      { grant: grant.grant }, cfg, s, Date.now(), { ingress: "public", peerAddress: "127.0.0.1", tailscaleUser: null, browserOrigin: ORIGIN })).toBeNull();
+    expect(s.sessions.size).toBe(0);
+  } finally { intent.dispose(); }
 });
 
 describe("one-use local CLI pairing intent", () => {

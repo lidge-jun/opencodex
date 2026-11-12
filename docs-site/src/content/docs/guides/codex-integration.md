@@ -1138,6 +1138,17 @@ script wrappers; uninstall restores the saved launcher. See the
 trial while retaining the native Codex login. This is an experimental relay, not a guarantee
 that every Codex build or exhausted-account state can recover its composer.
 
+On a standalone local dashboard, first run the command shown in the panel, for example
+`ocx gui pair --desktop --origin http://localhost:10100`, on the proxy computer and paste
+its secret one-use code. Install the CLI first if `ocx` is unavailable. A private-home
+permission refusal must be resolved before a code can be issued. This authorizes Desktop
+actions for at most five minutes in the current session; it does not change Remote Link or
+key-disclosure permissions. Hub and connected-client Desktop writes are unsupported.
+After expiry or logout, reload the local dashboard and authorize again. The panel refreshes
+status, fingerprint and settings revision; select the desired action and consent again.
+It never replays an earlier POST. Certificate expiry or unknown trust does not prevent this
+local HTTP authorization; cleanup, renewal, stopping and turning off startup still require it.
+
 1. Inspect status, prepare the encrypted certificate and review its fingerprint before
    registering trust. Windows may ask for confirmation. Trust applies to the current Windows
    user and allows the local relay to handle `chatgpt.com` traffic.

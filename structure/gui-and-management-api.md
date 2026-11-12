@@ -115,7 +115,7 @@ OpenCodex uses three mutually exclusive reusable admission credential classes:
 | --- | --- | --- |
 | Data plane | `OPENCODEX_API_AUTH_TOKEN`, the `service-api-token` file loaded through `OCX_API_TOKEN_FILE`, and `config.apiKeys` | `/v1/*` HTTP endpoints and new data-plane WebSocket handshakes only |
 | Management plane | `OPENCODEX_ADMIN_AUTH_TOKEN` or the independent protected `admin-api-token` file | `/api/*` only |
-| GUI session | A short-lived token issued only with a legitimate same-origin local dashboard page | `/api/*` only, bound to the issuing origin Codex compatibility [certificate setup](clients/codex-desktop.md#certificate-setup-api) additionally requires trusted loopback ingress, explicit confirmation and an exact fingerprint for trust changes; status remains read-only and setup never enables a relay, changes login or restarts the app. |
+| GUI session | A short-lived token issued only with a legitimate same-origin local dashboard page | `/api/*` only, bound to the issuing origin. Codex compatibility [certificate setup](clients/codex-desktop.md#certificate-setup-api) additionally requires a fixed-duration Desktop-purpose grant, trusted standalone loopback ingress, explicit confirmation and an exact fingerprint for trust changes; status remains read-only. |
 
 The service token file remains a delivery mechanism for the data-plane environment token; it is not
 a fourth credential class. A management credential that equals any configured data-plane credential
