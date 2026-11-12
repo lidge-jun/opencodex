@@ -662,3 +662,60 @@ test("an edit made during a policy reload survives it", async () => {
   await click(button(host, "Save"));
   expect(calls.filter(call => call.method === "PUT").at(-1)?.body).toEqual({ catalogFanout: "manual" });
 });
+
+test("an older poll landing after a newer one never restores a released hold", async () => {
+  const first = deferred<Response>();
+  const second = deferred<Response>();
+  const items = (state: string) => job({ jobId: "ljob_overlap000000000", state: "running", items: [
+    { linkId: "l1", alias: "box-one", state, reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+  ] });
+  let reads = 0;
+  installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path === "/api/link/children/operations") return response({ job: items("running") }, 202);
+    if (call.path === "/api/link/children/jobs/ljob_overlap000000000") {
+      reads += 1;
+      // Poll A (running) is deliberately slow; poll B (succeeded) resolves first.
+      return reads === 1 ? first.promise : reads === 2 ? second.promise : response({ job: items("succeeded") });
+    }
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await click(button(host, "Check"));
+  await settleUntil(() => reads === 1);
+  // A second tick fires while the first request is still pending. Serialized polling skips it; without the guard
+  // both are in flight and the older running response can land last and restore the hold.
+  await pollJobs();
+  await act(async () => { second.resolve(response({ job: items("succeeded") })); await flush(); });
+  await act(async () => { first.resolve(response({ job: items("running") })); await flush(); });
+  // Asserted before the next interval tick: a later poll would re-release a row a stale response re-held.
+  expect(button(host, "Check").disabled).toBe(false);
+  expect(host.querySelector(".remote-link-job")!.textContent).toContain("Succeeded");
+});
+
+test("a reload merges only the fields the operator changed onto the server's answer", async () => {
+  const slow = deferred<Response>();
+  let reads = 0;
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path === "/api/link/children/policy" && call.method === "GET") {
+      reads += 1;
+      // The reload reports updates: off, a field the operator never touched.
+      return reads === 1 ? response({ policy: POLICY, warning: null }) : slow.promise;
+    }
+    if (call.path === "/api/link/children/policy" && call.method === "PUT") return response({ policy: { ...POLICY, catalogFanout: "manual", updates: "off" }, warning: null });
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await settleUntil(() => host.querySelector(".remote-link-policy") !== null);
+  await click(button(host, "Refresh"));
+  await settleUntil(() => reads === 2);
+  await click(openSelect(host, 0));
+  await chooseOption("Manual");
+  await act(async () => { slow.resolve(response({ policy: { ...POLICY, updates: "off" }, warning: null })); await flush(); });
+  // The untouched field adopts the server's value; the operator's field stays.
+  expect(openSelect(host, 2).textContent).toContain("Off");
+  expect(openSelect(host, 0).textContent).toContain("Manual");
+  await click(button(host, "Save"));
+  expect(calls.filter(call => call.method === "PUT").at(-1)?.body).toEqual({ catalogFanout: "manual" });
+});

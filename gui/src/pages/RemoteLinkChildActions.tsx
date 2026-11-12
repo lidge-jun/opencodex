@@ -287,25 +287,37 @@ function useChildJob(apiBase: string, job: ChildJobView, onSnapshot?: (job: Chil
   useEffect(() => {
     if (job.state === "done") return;
     let stopped = false;
+    // The interval and the visibility listener can both fire while a request is pending, and responses need not
+    // arrive in the order they were sent: skip a tick while one is in flight, and drop any response older than
+    // the last applied one so a stale "running" snapshot cannot restore a hold a newer one released.
+    let inFlight = false;
+    let sequence = 0;
+    let applied = 0;
     const controller = new AbortController();
-    const tick = async () => {
-      if (document.visibilityState === "hidden") return;
+    // The interval ticks skip while a request is pending, so a slow Home cannot pile them up; the visibility
+    // listener is user-driven and may overlap one, which the sequence tag then orders.
+    const tick = async (fromListener = false) => {
+      if (document.visibilityState === "hidden" || (inFlight && !fromListener)) return;
+      inFlight = true;
+      const mine = ++sequence;
       try {
         const next = await getChildJob(apiBase, job.jobId, controller.signal);
-        if (!stopped) { setPolled({ jobId: job.jobId, value: next }); notify.current?.(next); }
+        if (!stopped && mine > applied) {
+          applied = mine;
+          setPolled({ jobId: job.jobId, value: next }); notify.current?.(next);
+        }
       } catch (error) {
-        if (stopped) return;
         if (error instanceof LinkApiError && (error.code === "job_not_found" || error.status === 404)) {
           stopped = true;                       // the Home restarted (retention is 1 h / 32 jobs)
           controller.abort();
           setMissingFor(job.jobId);
         }
-      }
+      } finally { inFlight = false; }
     };
     const timer = window.setInterval(() => void tick(), CHILD_JOB_POLL_MS);
-    const onVisibility = () => { if (document.visibilityState !== "hidden") void tick(); };
+    const onVisibility = () => { if (document.visibilityState !== "hidden") void tick(true); };
     document.addEventListener("visibilitychange", onVisibility);
-    return () => { stopped = true; controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisibility); };
+    return () => { stopped = true; inFlight = false; controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisibility); };
   }, [apiBase, job.jobId, job.state]);
   return { job: snapshot, missing };
 }
@@ -369,18 +381,26 @@ export function ChildPolicyPanel(props: { apiBase: string; busy: boolean; reload
   const saving = useRef(false);
   const draftRef = useRef<ChildPolicyView | null>(draft);
   useEffect(() => { draftRef.current = draft; }, [draft]);
+  const readRef = useRef<ChildPolicyReadView | null>(read);
+  useEffect(() => { readRef.current = read; }, [read]);
   // Revision 6: load once per mount, after a save, and on an explicit page Refresh. A status poll never re-reads,
   // so an edit survives it.
   const load = useCallback(async (signal?: AbortSignal) => {
     const startedAt = generation.current;
     const startedDraft = draftRef.current;
+    const startedRead = readRef.current;
     try {
       const value = await getChildPolicy(apiBase, signal);
       if (signal?.aborted) return;
       if (generation.current !== startedAt) return;   // a save started after this GET began; it owns the values now
       setRead(value);
-      // The operator changed a knob while this reload ran: keep their draft and take only the server's baseline.
-      if (draftRef.current === startedDraft) setDraft(value.policy);
+      // The operator changed knobs while this reload ran: merge field by field, keeping exactly those they changed
+      // against the baseline this GET started from and adopting the server's value for every untouched field.
+      if (draftRef.current !== startedDraft && startedRead) {
+        // Compare the live draft, not the one this GET started from: the operator's edit happened in between.
+        const operatorChanged = changedPolicyKeys(startedRead.policy, draftRef.current!);
+        setDraft({ ...value.policy, ...operatorChanged });
+      } else setDraft(value.policy);
       setLoadError(null);
     } catch (error) { if (!signal?.aborted) setLoadError(linkActionError(error)); }
   }, [apiBase]);
