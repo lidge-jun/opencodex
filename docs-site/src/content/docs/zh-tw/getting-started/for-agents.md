@@ -10,7 +10,7 @@ description: 從 agent 驅動或腳本化終端機安裝並操作 opencodex，�
 安裝已發布的套件，並確認 `ocx` 在 `PATH` 上：
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 

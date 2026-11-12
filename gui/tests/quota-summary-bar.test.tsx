@@ -37,14 +37,14 @@ const rows = buildQuotaSummary(freshQuotaReportsFromResponse([
   { provider: "kimi", label: "Kimi", updatedAt: now, quota: { weeklyPercent: 31, updatedAt: now } },
 ], now), provider => provider);
 
-async function mount() {
+async function mount(renderRows = rows) {
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
   let root!: Root;
   await act(async () => {
     root = createRoot(container);
-    root.render(<QuotaSummaryChips rows={rows} t={t} locale="en" />);
+    root.render(<QuotaSummaryChips rows={renderRows} t={t} locale="en" />);
   });
   const list = container.querySelector("ul")!;
   return {
@@ -56,6 +56,29 @@ async function mount() {
     unmount: () => act(async () => { root.unmount(); }),
   };
 }
+
+test("WorkBuddy chip names unavailable credits so frozen funds are not called used", async () => {
+  const workbuddy = buildQuotaSummary(freshQuotaReportsFromResponse([
+    { provider: "workbuddy-ai", label: "WorkBuddy AI", updatedAt: now, quota: {
+      updatedAt: now, workbuddyCredits: { total: 100, used: 0, remaining: 0, frozen: 100, groups: [] },
+    } },
+  ], now), provider => provider);
+  const view = await mount(workbuddy);
+  expect(view.chip("WorkBuddy AI").textContent).toContain("quotaSummary.creditsUnavailable");
+  expect(view.chip("WorkBuddy AI").textContent).toContain("100%");
+  await view.unmount();
+});
+
+test("WorkBuddy chip rounds its informational percentage to the nearest whole number", async () => {
+  const workbuddy = buildQuotaSummary(freshQuotaReportsFromResponse([
+    { provider: "workbuddy-ai", label: "WorkBuddy AI", updatedAt: now, quota: {
+      updatedAt: now, workbuddyCredits: { total: 100, used: 89.6, remaining: 10.4, frozen: 0, groups: [] },
+    } },
+  ], now), provider => provider);
+  const view = await mount(workbuddy);
+  expect(view.chip("WorkBuddy AI").textContent).toContain("90%");
+  await view.unmount();
+});
 
 async function click(element: Element) {
   await act(async () => {

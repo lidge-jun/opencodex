@@ -4,6 +4,7 @@ import MemoryObservabilityCard from "../components/MemoryObservabilityCard";
 import MemoryModelsPanel from "../components/MemoryModelsPanel";
 import NativeReasoningRetentionPanel from "../components/NativeReasoningRetentionPanel";
 import FallbackPanel from "../components/FallbackPanel";
+import TelemetrySettingsPanel from "../components/TelemetrySettingsPanel";
 import type { useDashboardData } from "./use-dashboard-data";
 import {
   DashboardCodexSection,
@@ -34,6 +35,9 @@ export function DashboardOverviewPanels({ readOnly = false, ...props }: Dash & {
       <SettingsSection id="proxy-fallback" title={t("proxyV2.secFallback")} lede={t("proxyV2.secFallbackLede")}>
         {/* A Remote Link Child shows its Home's settings; they are changed on the Home. */}
         <FallbackPanel apiBase={props.apiBase} section="routing" readOnly={readOnly} embedded />
+      </SettingsSection>
+      <SettingsSection id="proxy-telemetry" title={t("proxyV2.secTelemetry")} lede={t("proxyV2.secTelemetryLede")}>
+        <TelemetrySettingsPanel apiBase={props.apiBase} readOnly={readOnly} />
       </SettingsSection>
     </>
   );

@@ -81,7 +81,7 @@ Authorization: Bearer <admin-token>
 
 在 **Providers > xAI Grok > Accounts** 中，每个账号的票据徽章可查看剩余优惠券及有效期。对话框发送客户端生成的 `operationId`。请求送达或结果不确定时，仪表板会在浏览器标签页会话期间保留同一次尝试，关闭并重新打开对话框、切换页面或重新加载后也会保留。该记录在发送请求之前写入，只有收到同一 `operationId` 的确定响应时才会清除。刷新只发送 GET，不允许额外的兑换 POST。对应的终端命令是 `ocx account grok-reset-coupons`。
 
-Claude 用量重置同样可以从 **Providers > Anthropic > Accounts** 操作。每个已登录账号行都带有显示剩余重置次数的票据徽章，对话框会在再次确认后使用一次重置机会。重置会恢复 5 小时和每周用量额度，但不会改变每周额度的重置日期。如果请求未及时返回结果，对话框会保留其 `operationId`，并在十分钟内提供使用同一 ID 重试的选项；Claude Code 客户端也以此方式恢复。在此期间，同一重置机会的新操作会被拒绝。重置机会只能通过仪表板使用：仅凭管理员令牌会收到 `403 session_required`。
+Claude 用量重置同样可以从 **Providers > Anthropic > Accounts** 操作。每个已登录账号行都带有显示剩余重置次数的票据徽章，对话框会在再次确认后使用一次重置机会。每个重置机会的过期时间和可重置的额度各不相同，因此对话框允许选择要使用的重置机会：默认选中当前可用且最先过期的一个，当前不可用的会显示为禁用并注明原因；确认步骤会显示所选重置机会的名称、过期时间和可重置的额度，然后发送对应的 `grantId`。服务器会再次检查所选重置机会，不可用时以 `409 grant_not_usable` 拒绝。重置会恢复该重置机会可重置的额度（通常是 5 小时和每周用量额度），但不会改变每周额度的重置日期。如果请求未及时返回结果，对话框会保留其 `operationId`，并在十分钟内提供使用同一 ID 重试的选项；Claude Code 客户端也以此方式恢复。在此期间，该账号的任何新操作（无论哪个重置机会）都会被拒绝。重置机会只能通过仪表板使用：仅凭管理员令牌会收到 `403 session_required`。
 
 关于模型名录和加密工作任务行为的概念，请参见 [子代理界面](/guides/sub-agent-surface/)。
 
@@ -245,6 +245,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `GET, POST, DELETE /api/providers/keys` | 列出已脱敏的 provider 密钥，添加/激活一个，或移除一个 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/active` | 选择某个 provider 的活跃密钥 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/alias` | 设置或清除 provider 密钥别名 | 400 输入无效；404 provider/密钥缺失 |
+| `PUT /api/providers/keys/pause` | 暂停或恢复一个 provider API 密钥。Body `{ name, id, paused }`。暂停当前活跃密钥时，按环形顺序选择下一个可用密钥。成功响应包含结果 `activeAccountId`（没有时为 `null`）和 `activeAccountChanged`。 | 400 输入无效；404 provider/密钥缺失 |
 | `GET, POST, PATCH, DELETE /api/keys` | 列出、创建、编辑或删除数据平面准入密钥 | 400 请求体/id 无效；404 密钥缺失 |
 | `PUT /api/oauth/accounts/affinity-reset` | 无需账户即可确认 provider 全部会话绑定的重置已保存。Body `{ provider }`；成功返回 `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 

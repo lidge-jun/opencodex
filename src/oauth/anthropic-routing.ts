@@ -1,4 +1,4 @@
-import { clearAllAnthropicFamilyQuota, anthropicModelQuotaFor, anthropicModelPercents, anthropicModelWeeklyPercent } from "./anthropic-model-quota";
+import { clearAllAnthropicFamilyQuota, anthropicModelQuotaFor, anthropicModelPercents, anthropicModelRankPercent, anthropicModelWeeklyPercent } from "./anthropic-model-quota";
 /**
  * Opt-in Anthropic OAuth account pool (#294).
  *
@@ -274,6 +274,8 @@ export type AnthropicCooldownRecoveryClaim = Readonly<{
   accountId: string;
   cooldownGeneration: number;
   claimedAt: number;
+  /** False for a reset-derived refusal that named no window: a usage read can only retain it. */
+  namesRejectedWindow: boolean;
 }>;
 
 export type AnthropicCooldownRecoverySettlement = "cleared" | "retained" | "superseded";
@@ -434,8 +436,9 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     now = Date.now(),
   ): AnthropicCooldownRecoveryClaim | null {
     const entry = upstreamHealth.get(accountId);
-    if (!entry || entry.cooldownUntil <= now || recoverableQuotaWindows(entry) === null) return null;
-    return { instance, accountId, cooldownGeneration: entry.cooldownGeneration, claimedAt: now };
+    const windows = entry && entry.cooldownUntil > now ? recoverableQuotaWindows(entry) : null;
+    if (!entry || windows === null) return null;
+    return { instance, accountId, cooldownGeneration: entry.cooldownGeneration, claimedAt: now, namesRejectedWindow: windows.length > 0 };
   }
 
   /**
@@ -584,9 +587,16 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     }
   }
 
-  function usageScore(config: OcxConfig, accountId: string, model?: string): number {
+  /**
+   * `rank` compares accounts, restating a family allowance on the weekly scale where the configured
+   * window ranks on weekly usage. Five-hour ranking has no five-hour tie-break, so a fresh Fable
+   * seat's 50 would mask every lower five-hour reading there; it and thresholds keep the family's own percent.
+   */
+  function usageScore(config: OcxConfig, accountId: string, model?: string, rank = false): number {
     if (model) {
-      const family = anthropicModelWeeklyPercent(getCachedProviderAccountQuota(PROVIDER, accountId), model);
+      const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
+      const weeklyScale = rank && anthropicQuotaWindow(anthropicAccountPoolConfig(config)) !== "five-hour";
+      const family = weeklyScale ? anthropicModelRankPercent(quota, model) : anthropicModelWeeklyPercent(quota, model);
       if (family === undefined) return usageScore(config, accountId);
       return hasKnownUsage(config, accountId) ? Math.max(family, usageScore(config, accountId)) : family;
     }
@@ -804,7 +814,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const scored: ScoredAccount[] = eligible.map(accountId => ({
       accountId,
       hasKnownUsage: hasKnownUsage(config, accountId, model),
-      score: usageScore(config, accountId, model),
+      score: usageScore(config, accountId, model, true),
       fiveHourTieBreak: window === "five-hour" ? 0 : fiveHourScore(accountId),
       // Every window EXCEPT the legacy five-hour default is an explicit opt-in, so
       // known-before-unknown applies to all of them and to none of the default path.

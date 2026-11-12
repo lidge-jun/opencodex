@@ -2824,6 +2824,8 @@ button.prov-account-row.active { cursor: default; }
 .claude-move-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: end; margin-top: 10px; }
 .claude-move-row > label { grid-column: 1 / -1; margin: 0; }
 .claude-move-row .input { min-width: 0; height: 34px; padding-block: 4px; }
+.claude-remove-row { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
+.claude-remove-hint { color: var(--muted); font-size: 11.5px; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;

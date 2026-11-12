@@ -1,15 +1,16 @@
 import { useId, useState } from "react";
 import { useT } from "../i18n/shared";
 import { Select } from "../ui";
-import { validKiroIamOptions, type KiroIamOptions, type KiroIamProfile } from "../kiro-device-login-helpers";
+import { KIRO_IAM_REGIONS, validKiroIamOptions, type KiroIamOptions, type KiroIamProfile } from "../kiro-device-login-helpers";
 
 export function KiroIamLoginForm({ disabled, onStart, onBack }: {
   disabled: boolean; onStart: (options: KiroIamOptions) => void; onBack: () => void;
 }) {
   const t = useT();
   const id = useId();
+  const regionListId = id + "regions";
   const [startUrl, setStartUrl] = useState("");
-  const [region, setRegion] = useState("us-east-1");
+  const [region, setRegion] = useState("");
   const [invalid, setInvalid] = useState(false);
   return <form className="kiro-iam-form" onSubmit={event => {
     event.preventDefault();
@@ -23,10 +24,13 @@ export function KiroIamLoginForm({ disabled, onStart, onBack }: {
       placeholder="https://example.awsapps.com/start" autoComplete="url" aria-describedby={invalid ? `${id}-error` : undefined}
       aria-invalid={invalid || undefined} onChange={event => { setStartUrl(event.target.value); setInvalid(false); }} />
     <label className="field-label" htmlFor={`${id}-region`}>{t("kiroLogin.region")}</label>
-    <input className="input" id={`${id}-region`} required maxLength={32} value={region} disabled={disabled}
+    <input className="input" id={`${id}-region`} list={regionListId} required maxLength={32} value={region} disabled={disabled}
       placeholder="us-east-1" autoComplete="off" aria-invalid={invalid || undefined}
       aria-describedby={invalid ? `${id}-error` : undefined}
       onChange={event => { setRegion(event.target.value); setInvalid(false); }} />
+    <datalist id={regionListId}>
+      {KIRO_IAM_REGIONS.map(region => <option key={region} value={region} />)}
+    </datalist>
     {invalid && <p id={`${id}-error`} role="alert" className="notice-warn">{t("kiroLogin.invalidIam")}</p>}
     <div className="kiro-device-actions">
       <button type="button" className="btn btn-ghost" disabled={disabled} onClick={onBack}>{t("kiroLogin.back")}</button>

@@ -45,7 +45,8 @@ function formatClock(ms: number, locale: Locale): string {
 }
 
 function windowLabel(window: QuotaSummaryWindow, t: TFn): string {
-  return window.labelKey ? t(window.labelKey) : window.label ?? window.id;
+  if (window.labelKey) return t(window.labelKey);
+  return window.displayLabel ?? window.label ?? window.id;
 }
 
 function severityText(severity: QuotaSummarySeverity, t: TFn): string {
@@ -229,13 +230,20 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
         onClick={onClick}
       >
         <span className="quota-summary-name">{row.label}</span>
+        {headline.labelKey === "quotaSummary.creditsUnavailable" && (
+          <span className="quota-summary-name">{t("quotaSummary.creditsUnavailable")}</span>
+        )}
         {row.passive ? row.passive.windows.map(window => (
           <span key={`${window.dimension}:${window.window ?? ""}`} className="quota-summary-pct" title={t("quotaSummary.remainingLimit")}>{passiveLabel(window, t)}: {passiveCounts(window, t, locale)}{isPassiveStale(window, currentTime) ? ` · ${t("startup.stale")}` : ""}<span className="sr-only">{t("quotaSummary.remainingLimit")}</span></span>
         )) : row.showAllWindows ? row.windows.map(window => (
           <span key={window.id} className={`quota-summary-pct quota-summary-pct--${window.severity}`} title={windowLabel(window, t)}>
             {windowLabel(window, t).split(" (")[0]}: {formatQuotaPercent(window.percent)}
           </span>
-        )) : <span className="quota-summary-pct">{formatQuotaPercent(headline.percent)}</span>}
+        )) : (
+          <span className="quota-summary-pct">
+            {headline.unknownBudget === true ? t("cws.quota.unknown") : formatQuotaPercent(headline.percent)}
+          </span>
+        )}
         {row.provider === "meta-muse" && headline.resetAt !== undefined && (
           <span className="quota-summary-name" title={formatResetFuture(headline.resetAt, t, locale)}>
             {formatMuseResetCountdown(headline.resetAt, clock)}
@@ -266,7 +274,9 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
               )) : row.windows.map(window => (
                 <tr key={window.id} className={`quota-summary-row--${window.severity}`}>
                   <th scope="row">{windowLabel(window, t)}</th>
-                  <td className="quota-summary-row-pct">{formatQuotaPercent(window.percent)}</td>
+                  <td className="quota-summary-row-pct">
+                    {window.unknownBudget === true ? t("cws.quota.unknown") : formatQuotaPercent(window.percent)}
+                  </td>
                   <td className="quota-summary-row-reset">
                     {window.resetAt !== undefined ? formatResetFuture(window.resetAt, t, locale) : "-"}
                   </td>

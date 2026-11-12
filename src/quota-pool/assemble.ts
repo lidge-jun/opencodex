@@ -25,8 +25,6 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
 import { isDisplayOnlyQuota } from "../providers/quota-types";
-import { providerQuotaRoutingBinding } from "../providers/quota-routing-cache";
-import { resolveEnvValue } from "../config/proxy-env";
 import type { StoredAccountQuota } from "../codex/quota-types";
 import { isTerminalShortWindow, resetAtToMs } from "../codex/quota-types";
 import { runPassiveRead } from "../lib/passive-read";
@@ -35,7 +33,7 @@ import { listCodexAuthAccountsSnapshot } from "../codex/auth-api";
 import { latestCodexQuotaObservationSource } from "../codex/quota";
 import { ACCOUNT_LOG_LABEL_RE, oauthAccountLogLabel } from "../codex/account-label";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers-destination";
-import { hasCodexPoolProvider, heldProviderQuotaReports, keyReportCredentialIds, routingEvidence, type ProviderQuotaReport } from "../providers/quota/report-cache";
+import { hasCodexPoolProvider, heldProviderQuotaReports, type ProviderQuotaReport } from "../providers/quota/report-cache";
 import {
   accountCacheKey,
   accountQuotaCache,
@@ -45,7 +43,7 @@ import {
 } from "../providers/quota/account-cache";
 import { parseQuotaFailureCode } from "../providers/quota-types";
 import { getAccountSet } from "../oauth/store";
-import { peekClaudeUsageObservation } from "../adapters/claude-cli/usage-admission";
+import { claudeSignedInIdentity, peekClaudeUsageObservation } from "../providers/claude-cli-usage-state";
 import {
   QUOTA_POOL_SCHEMA,
   type QuotaPool,
@@ -68,6 +66,8 @@ export interface QuotaPoolDeps {
   now?: () => number;
   /** Test seam for the Claude CLI admission file. */
   claudeUsageStatePath?: string;
+  /** Test seam for a suspended passive Codex snapshot. */
+  codexSnapshot?: typeof listCodexAuthAccountsSnapshot;
 }
 
 export type QuotaPoolResult = { ok: true; pool: QuotaPool } | { ok: false; error: "quota_pool_identity_unavailable" };
@@ -169,6 +169,7 @@ function customWindow(window: ProviderQuotaWindow, source: QuotaPoolSource, upda
 
 /** A `ProviderQuota` (provider report or per-account cache row). */
 export function providerQuotaWindows(quota: ProviderQuota, source: QuotaPoolSource, now: number): QuotaPoolWindow[] {
+  // Display-only readings (Mistral budgets) never become pool capacity or exhaustion evidence.
   if (isDisplayOnlyQuota(quota)) return [];
   const out: QuotaPoolWindow[] = [];
   const push = (window: QuotaPoolWindow | null) => { if (window) out.push(window); };
@@ -276,8 +277,14 @@ function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: numbe
   });
 }
 
+/**
+ * The signed-in Claude account's row, by the identity the last sign-in read recorded. The pool is a
+ * passive read and may not read the Keychain itself; the Home's dashboard and turns keep it current.
+ */
 function claudeCliAccounts(identity: QuotaPoolIdentity, provider: string, deps: QuotaPoolDeps, now: number): TrackedAccount[] {
-  const observation = peekClaudeUsageObservation(deps.claudeUsageStatePath ? { statePath: deps.claudeUsageStatePath } : {});
+  const signedIn = claudeSignedInIdentity();
+  if (!signedIn) return [];
+  const observation = peekClaudeUsageObservation({ ...(deps.claudeUsageStatePath ? { statePath: deps.claudeUsageStatePath } : {}), identity: signedIn });
   if (!observation) return [];
   const windows = observation.quota ? providerQuotaWindows(observation.quota, "measured", now) : [];
   if (finite(observation.refusalUntil) && observation.refusalUntil > now) {
@@ -306,12 +313,10 @@ function enabled(provider: OcxProviderConfig | undefined): provider is OcxProvid
 
 async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: QuotaPoolDeps): Promise<QuotaPool> {
   const now = (deps.now ?? Date.now)();
-  const codex = hasCodexPoolProvider(config) ? (await listCodexAuthAccountsSnapshot(config)).accounts : [];
-  // The snapshot yields; select providers and validate held reports against the same current
-  // configuration used below, with no further await between validation and projection.
   const names = Object.keys(config.providers).filter(name => enabled(config.providers[name])).sort();
   const reports = new Map(heldProviderQuotaReports(config).reports.map(report => [report.provider, report]));
   const codexPool = hasCodexPoolProvider(config);
+  const codex = codexPool ? (await (deps.codexSnapshot ?? listCodexAuthAccountsSnapshot)(config)).accounts : [];
   const providers: QuotaPoolProvider[] = [];
   for (const name of names) {
     const provider = config.providers[name]!;
@@ -334,17 +339,11 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
     }
     const report = reports.get(name);
     if (!tracked && !report) continue;
-    // Account rows are the evidence a held report was computed from, at least as new and with
-    // their own observation times; the report stands in only where there are no rows.
-    const evidence = report && routingEvidence.get(report);
-    const credential = resolveEnvValue(provider.apiKey)?.trim();
-    const reportQuota = report && (keyReportCredentialIds.has(report)
-      ? (provider.apiKeyPool?.length ?? 0) <= 1 && credential && evidence?.binding === providerQuotaRoutingBinding(name, provider, credential)
-        ? evidence.quota : undefined
-      : report.quota);
-    const windows = poolFromRows && rows.length > 0
+    // Account rows carry their own observation times. Claude never falls back to a held report,
+    // which may have been captured before the most recent recorded identity change.
+    const windows = poolFromRows && (rows.length > 0 || provider.adapter === "claude-cli")
       ? pooledWindows(rows.map(row => row.pool), now)
-      : report && reportQuota ? providerQuotaWindows(reportQuota, reportSource(report), now) : [];
+      : report ? providerQuotaWindows(report.quota, reportSource(report), now) : [];
     const pooled: QuotaPoolProvider["pooled"] = { windows };
     const next = nextResetAt(windows);
     if (next) pooled.nextResetAt = next;

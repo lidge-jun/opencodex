@@ -34,7 +34,7 @@ export function assertChatCompletionsRoutingBody(raw: unknown): asserts raw is C
 // Pi's "off" thinking level onto it (src/clients/config-export.ts). Dropping it here let a
 // provider default re-enable thinking the caller had explicitly turned off — and for the
 // Anthropic families that think by default, omission is not the same as disabled.
-const OUTPUT_CONFIG_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+export const OUTPUT_CONFIG_EFFORTS: ReadonlySet<string> = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const OUTPUT_CONFIG_SUMMARIES = new Set(["auto", "concise", "detailed", "none"]);
 
 export function contentToText(content: unknown): string {

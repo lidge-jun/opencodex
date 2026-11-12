@@ -56,17 +56,19 @@ export function observeQuotaSnapshot(input: {
   readonly windows: ReadonlyArray<QuotaWindowObservation>;
   readonly now?: number;
   readonly retainAbsentShortWindow?: boolean;
+  /** Display-only windows the producer reports as unknown; their last baseline is kept. */
+  readonly retainUnknownWindows?: ReadonlyArray<{ window: string; resetAt: number }>;
 }): QuotaResetEvent[] {
   try {
     if (!sink) return [];
-    if (input.windows.length === 0) return [];
+    if (input.windows.length === 0 && input.retainUnknownWindows === undefined) return [];
     const now = input.now ?? Date.now();
     const accountTag = quotaAccountTag(input.accountKey, quotaResetAccountSalt());
     // Stamp the observation time as it becomes the baseline. The detector needs the gap
     // between two observations to tell a rolling window's natural decay from a real reset,
     // and only this layer knows when the snapshot was taken.
     const stamped = input.windows.map(window => ({ ...window, observedAt: now }));
-    const previous = swapLastObservedWindows(input.scope, accountTag, stamped, input.retainAbsentShortWindow);
+    const previous = swapLastObservedWindows(input.scope, accountTag, stamped, input.retainAbsentShortWindow, input.retainUnknownWindows);
     if (!previous) return [];
 
     const detected = detectQuotaResets({

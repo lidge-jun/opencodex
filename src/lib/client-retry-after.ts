@@ -64,3 +64,32 @@ export function formatClientRetryAfter(value: string | number | null | undefined
   if (seconds === undefined || !Number.isFinite(seconds)) return undefined;
   return String(Math.min(MAX_CLIENT_RETRY_AFTER_SECONDS, Math.ceil(seconds)));
 }
+
+/**
+ * Compact client-facing wait, e.g. "45s", "2m", "3h", "2d", derived from the same
+ * clamped seconds {@link formatClientRetryAfter} would write. For client-visible
+ * messages that name the earliest retry; scheduling still reads the parsed evidence.
+ */
+export function formatClientRetryIn(value: string | number | null | undefined, now = Date.now()): string | undefined {
+  const formatted = formatClientRetryAfter(value, now);
+  if (formatted === undefined) return undefined;
+  const seconds = Math.max(1, Number(formatted));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.ceil(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.ceil(hours / 24)}d`;
+}
+
+/**
+ * Name the earliest recovery inside a client-visible sentence: " (retry in ~2m)" goes before a
+ * trailing period, or at the end when there is none. Unusable advice leaves the message unchanged,
+ * so every listener that shows the same refusal shows the same wait.
+ */
+export function appendClientRetryIn(message: string, value: string | number | null | undefined, now = Date.now()): string {
+  const retryIn = formatClientRetryIn(value, now);
+  if (retryIn === undefined) return message;
+  const suffix = ` (retry in ~${retryIn})`;
+  return message.endsWith(".") ? `${message.slice(0, -1)}${suffix}.` : `${message}${suffix}`;
+}

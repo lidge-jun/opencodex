@@ -13,7 +13,7 @@ disponible pour une configuration interactive ; consultez le [tableau de bord w
 Installez le package publié et confirmez que `ocx` est sur `PATH` :
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 

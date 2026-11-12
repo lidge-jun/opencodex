@@ -8,7 +8,7 @@ import { isMainAccountIdentityGenerationLive } from "../../codex/main-account-ca
 import { codexPlanKey } from "../../codex/plan";
 import { isKeychainReference, resolveProviderApiKey } from "../key-store";
 import { resolveEnvValue } from "../../config/proxy-env";
-import { runPassiveReadSync } from "../../lib/passive-read";
+import { apiKeyPoolEntryId } from "../api-keys";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../registry";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../openai-tiers";
 import { CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type CodexCapacityAggregation, type CodexCapacityQuota } from "../codex-capacity";
@@ -22,32 +22,30 @@ import type { ProviderQuota, ProviderRoutingQuota } from "../quota-types";
 export const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
 export const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boolean>();
-/** Probe-bound reset identity, held only in memory and never part of the report DTO. */
-export const accountReportObservationKeys = new WeakMap<ProviderQuotaReport, string>();
+/** The measured quota a reset detector should observe when the shown quota is an estimate (pooled rows). */
+export const observedQuotaFor = new WeakMap<ProviderQuotaReport, ProviderQuota>();
 export const routingEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
-/** Credential identity captured by the probe; never serialized with the report. */
+/**
+ * Credential identity captured by a probe that opted into binding; never serialized with the
+ * report. Only producers whose report must not outlive its credential register here (#8290),
+ * so a provider that did not opt in keeps its dev-era cache and join behaviour unchanged.
+ */
 export const keyReportCredentialIds = new WeakMap<ProviderQuotaReport, string>();
-type ProviderReportBinding = { name: string; authMode: string; adapter: string; baseUrl: string };
-const providerReportBindings = new WeakMap<ProviderQuotaReport, ProviderReportBinding>();
-function providerReportBinding(name: string, provider: OcxProviderConfig): ProviderReportBinding {
-  return { name, authMode: provider.authMode ?? "key", adapter: provider.adapter, baseUrl: provider.baseUrl };
-}
-/** Bind a provider-level probe before it awaits, without changing account-level report DTOs. */
-export async function bindProviderReportProbe<T extends ProviderQuotaProbeResult>(result: Promise<T>, name: string, provider: OcxProviderConfig): Promise<T> {
-  const binding = providerReportBinding(name, provider);
-  const value = await result;
-  if (value && typeof value !== "symbol" && !providerReportBindings.has(value)) providerReportBindings.set(value, binding);
-  return value;
-}
-export function providerReportCurrentForConfig(value: ProviderQuotaReport, provider: OcxProviderConfig | undefined, passive = false): boolean {
-  const binding = providerReportBindings.get(value);
-  if (!provider || provider.disabled || !binding || binding.name !== value.provider || binding.authMode !== (provider.authMode ?? "key")
-    || binding.adapter !== provider.adapter || binding.baseUrl !== provider.baseUrl) return false;
+const keyReportDestinations = new WeakMap<ProviderQuotaReport, { adapter: string; baseUrl: string }>();
+/**
+ * Whether a probe-bound report still describes the provider as it is configured NOW.
+ *
+ * A report is published only for the credential and destination that produced it. The
+ * comparison is a full digest: the 8-character apiKeyPoolEntryId is a cache discriminator,
+ * not an identity, and two distinct keys can share it.
+ */
+export function keyReportCredentialCurrent(value: ProviderQuotaReport, provider: OcxProviderConfig | undefined, passive = false): boolean {
   const captured = keyReportCredentialIds.get(value);
   if (!captured) return true;
-  if ((provider.authMode ?? "key") !== "key") return false;
-  // A passive reader cannot prove a keychain secret is still current without accessing the OS
-  // store. The normal resolver also publishes routing observations even for literal/env keys.
+  if (!provider || provider.disabled || (provider.authMode ?? "key") !== "key") return false;
+  const destination = keyReportDestinations.get(value);
+  if (!destination || destination.adapter !== provider.adapter || destination.baseUrl !== provider.baseUrl) return false;
+  // A passive read cannot open the OS keychain or publish credential observations.
   if (passive && isKeychainReference(provider.apiKey)) return false;
   const current = (passive ? resolveEnvValue(provider.apiKey) : resolveProviderApiKey(provider.apiKey))?.trim();
   return !!current && createHash("sha256").update(current).digest("hex") === captured;
@@ -57,14 +55,12 @@ export function validateJoinedReports(response: ProviderQuotaResponse, config: O
   return { ...response, reports: response.reports.filter(item => {
     const provider = config.providers[item.provider];
     return !!provider && !provider.disabled && isProviderQuotaReportCurrent(item)
-      && providerReportCurrentForConfig(item, provider);
+      && keyReportCredentialCurrent(item, provider);
   }) };
 }
 /** Only the live Antigravity probe binds this projection; display/last-good rows cannot create it. */
 export const antigravityEvidence = new WeakMap<ProviderQuotaReport, { receipt: AntigravityQuotaReceipt; windows: readonly DecisionQuotaWindow[] }>();
 export let providerQuotaBeforePublishForTests: (() => void | Promise<void>) | null = null;
-export let providerQuotaBeforeObservationForTests: (() => void | Promise<void>) | null = null;
-export function setProviderQuotaBeforeObservationForTests(hook: (() => void | Promise<void>) | null): void { providerQuotaBeforeObservationForTests = hook; }
 
 /** Test-only seam for identity/config invalidation after probes but before publication. */
 export function setProviderQuotaBeforePublishForTests(
@@ -176,7 +172,10 @@ function cacheKey(config: OcxConfig): string {
       const resolvedKey = typeof provider.apiKey === "string"
         ? resolveProviderApiKey(provider.apiKey)?.trim()
         : undefined;
-      const activeKeyId = resolvedKey ? createHash("sha256").update(resolvedKey).digest("hex") : "none";
+      // The 8-char pool id is a cheap discriminator, not an identity: two keys can share it.
+      // A probe-bound report is re-validated against its captured full digest
+      // (keyReportCredentialCurrent), so a collision cannot serve the other key's budgets.
+      const activeKeyId = resolvedKey ? apiKeyPoolEntryId(resolvedKey) : "none";
       return `${name}:${provider.adapter}:${provider.authMode ?? "key"}:${providerCodexAccountMode(name, provider) ?? "none"}:${provider.disabled === true ? "off" : "on"}:${provider.baseUrl}:${activeKeyId}`;
     })
     .sort()
@@ -362,12 +361,13 @@ export function keyReport(
   config: OcxProviderConfig,
   probedCredential: string,
   inferenceQuota?: ProviderQuota,
+  options?: { bindCredential?: boolean },
 ): ProviderQuotaReport | null {
   const result = report(provider, source, quota);
   if (!result) return result;
-  providerReportBindings.set(result, providerReportBinding(provider, config));
-  if (config.authMode !== "oauth" && config.authMode !== "forward") {
+  if (options?.bindCredential === true) {
     keyReportCredentialIds.set(result, createHash("sha256").update(probedCredential).digest("hex"));
+    keyReportDestinations.set(result, { adapter: config.adapter, baseUrl: config.baseUrl });
   }
   if (!inferenceQuota) return result;
   const binding = providerQuotaRoutingBinding(provider, config, probedCredential);
@@ -417,11 +417,7 @@ export function publishCollectedDecisionQuota(reports: ProviderQuotaReport[], co
   const oauth: AntigravityQuotaObservation[] = [];
   for (const report of reports) {
     const provider = config.providers[report.provider];
-    if (!provider || !isProviderQuotaReportCurrent(report) || !providerReportCurrentForConfig(report, provider)) {
-      // A rejected receipt must not regain publication authority if the old config returns.
-      antigravityEvidence.delete(report);
-      continue;
-    }
+    if (!provider || !isProviderQuotaReportCurrent(report)) continue;
     const observation = antigravityEvidence.get(report);
     if (observation) oauth.push({ name: report.provider, provider, ...observation });
     const evidence = routingEvidence.get(report);
@@ -437,15 +433,12 @@ export function publishCollectedDecisionQuota(reports: ProviderQuotaReport[], co
  * dashboard and traffic keep the cache current.
  */
 export function heldProviderQuotaReports(config: OcxConfig): ProviderQuotaResponse {
-  return runPassiveReadSync(() => {
-    const held = getProviderQuotaReportCache()?.response;
-    return {
-      generatedAt: held?.generatedAt ?? Date.now(),
-      reports: (held?.reports ?? []).filter(item => {
-        const provider = config.providers[item.provider];
-        return !!provider && !provider.disabled && isProviderQuotaReportCurrent(item)
-          && providerReportCurrentForConfig(item, provider, true);
-      }),
-    };
-  });
+  const held = getProviderQuotaReportCache()?.response;
+  return {
+    generatedAt: held?.generatedAt ?? Date.now(),
+    reports: (held?.reports ?? []).filter(item => {
+      const provider = config.providers[item.provider];
+      return !!provider && isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, provider, true);
+    }),
+  };
 }

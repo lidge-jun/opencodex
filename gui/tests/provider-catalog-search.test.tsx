@@ -123,6 +123,34 @@ test("a query that matches nothing on the selected tab does not move the tab", a
   expect(selectedTabs()).toEqual(["Paid"]);
 });
 
+test("a stale add-provider form cannot POST its values to a new target", async () => {
+  let posts = 0;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).includes("/api/providers") && init?.method === "POST") posts += 1;
+    return Response.json({ success: true, providers: [] });
+  }) as typeof fetch;
+  await mount({ initialCustom: true, targetKey: "hub-a" });
+  const name = win.document.querySelector<HTMLInputElement>('input[placeholder="e.g. openrouter"]')!;
+  const baseUrl = win.document.querySelector<HTMLInputElement>('input[placeholder="https://..."]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(name, "custom-a");
+    name.dispatchEvent(new win.Event("input", { bubbles: true }));
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(baseUrl, "https://a.example/v1");
+    baseUrl.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    root!.render(
+      <LanguageProvider>
+        <AddProviderModal apiBase="" targetKey="hub-b" existingNames={[]} initialTier="paid" initialCustom onClose={() => {}} onAdded={() => {}} />
+      </LanguageProvider>,
+    );
+  });
+  const add = [...win.document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Add provider")!;
+  await act(async () => { add.click(); await Promise.resolve(); });
+  expect(posts).toBe(0);
+  expect(win.document.body.textContent).toContain("The dashboard target changed");
+});
+
 test("clicking the strip during a search does not throw the query away", async () => {
   await mount();
   await type("nvidia");

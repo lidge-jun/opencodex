@@ -1,4 +1,8 @@
 import { expect, spyOn, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import * as wireModel from "../../src/providers/quota/passive-wire-model";
 import { routedProviderConfig } from "../../src/providers/routed-config";
 import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof";
@@ -591,6 +595,45 @@ test("retiring one provider does not clear another provider's observation", asyn
   observations.clearPassiveKeyLimits("provider-a");
   expect(getPassiveKeyLimits(a, "provider-a", "model")).toEqual([]);
   expect(getPassiveKeyLimits(b, "provider-b", "model")).toMatchObject([{ remaining: 5 }, { dimension: "tokens", window: "minute" }]);
+});
+
+// Two installations can configure the same provider and the same API key. The observed counter
+// still belongs to the home that observed it: without that dimension, the second home reads the
+// first home's rows and, worse, its own send retires them.
+test("the same provider and key in another config home neither reads nor retires this home's rows", async () => {
+  const name = "shared-key-home";
+  const priorHome = process.env.OPENCODEX_HOME;
+  const homeA = mkdtempSync(join(tmpdir(), "ocx-passive-home-a-"));
+  const homeB = mkdtempSync(join(tmpdir(), "ocx-passive-home-b-"));
+  process.env.OPENCODEX_HOME = homeA;
+  try {
+    const config = fixture(name);
+    // Each home's upstream reports a different remaining count, so a shared cache row would be
+    // visible as the wrong number rather than merely as a nonempty answer.
+    const send = (remaining: number) => passiveKeyPhysicalFetch(trusted(async () => new Response(null, {
+      headers: { "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": String(remaining) },
+    })), config, name, routedProviderConfig(name, config.providers[name]!))("https://api.groq.com/openai/v1/chat/completions", init);
+    await send(5);
+    expect(getPassiveKeyLimits(config, name, "model")[0]).toMatchObject({ remaining: 5 });
+
+    process.env.OPENCODEX_HOME = homeB;
+    // Home B has configured the identical provider and key, but has observed nothing yet.
+    expect(getPassiveKeyLimits(config, name, "model")).toEqual([]);
+    expect(listPassiveKeyLimits(config)).toEqual([]);
+    // A send in home B publishes only for home B; it neither replaces nor retires home A's row.
+    await send(42);
+    expect(getPassiveKeyLimits(config, name, "model")[0]).toMatchObject({ remaining: 42 });
+
+    process.env.OPENCODEX_HOME = homeA;
+    expect(getPassiveKeyLimits(config, name, "model")[0]).toMatchObject({ remaining: 5 });
+    expect(listPassiveKeyLimits(config)).toHaveLength(1);
+  } finally {
+    if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = priorHome;
+    observations.clearPassiveKeyLimits();
+    removeTreeWithRetry(homeA);
+    removeTreeWithRetry(homeB);
+  }
 });
 
 test("pause and unpause retire the prior key incarnation, including its in-flight send", async () => {

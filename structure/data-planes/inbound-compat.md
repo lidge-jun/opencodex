@@ -63,8 +63,8 @@ unchanged, on both join credentials described under streaming audio. Coverage li
 `src/server/audio-client.ts` recognizes explicit audio keys before local legacy admission.
 Browser sockets offer opencodex-audio and opencodex-key.<base64url-key>; only the public
 marker is selected downstream. Invalid presented keys cannot become credential-free native calls.
-`src/server/audio-dictation.ts` maps the validated desktop session.start/audio.append/session.close
-protocol to ChatGPT dictation with server-owned credentials and a five-minute lifetime.
+`src/server/audio-dictation.ts` validates session.start/audio.append/audio.flush/session.close for ChatGPT dictation with server-owned credentials, a ten-minute recording budget, and a separate bounded 60-second finalization window after close.
+The forwarded TTL does not set the recording budget. ScribeTray's bounded optional metadata and minimal server VAD preserve PCM checks and refusal of audio after close.
 The `src/server/index.ts` byte relay retains bounded queues, handshake/session deadlines and
 the account/turn lifecycle until its upstream closes. `src/server/ws-bridge.ts` carries the
 in-memory callbacks and signal; handshake credentials are cleared after socket construction.
@@ -175,7 +175,7 @@ keepalives. They preserve connection liveness without adding a Chat completion c
 usage, or claiming semantic progress; see the
 [heartbeat contract](../transports/streaming-health.md#heartbeat-and-stall-deadline).
 Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
-aliasing as native Responses; see [`responses.md`](../transports/responses.md).
+aliasing as native Responses; see [`responses.md`](../transports/responses.md). At the final OpenAI-operated Responses serializer only, trusted Chat ingress sets omitted function `strict` to `false` (including legacy `functions`); explicit booleans and parameter schemas survive. The bridge, shared IR, native Responses, hosted tools, Chat destinations, and third-party Responses keep their defaults. Regression: `tests/responses/chat-inbound-tool-strict-defaults.test.ts`.
 
 On that bridge, `src/chat/inbound.ts` decides where a `system` or `developer` message lands by
 where the caller wrote it. A leading block, before any conversational item exists, becomes

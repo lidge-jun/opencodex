@@ -4,19 +4,21 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { resolveProviderApiKey } from "./key-store";
 import type { ProviderQuota } from "./quota-types";
-import { providerQuotaRoutingBinding, type ProviderQuotaRoutingEvidence } from "./quota-routing-cache";
 import { ACCOUNT_QUOTA_TTL_MS } from "./quota-wire";
 
 const MAX_ENTRIES = 256;
 const LAST_GOOD_MS = 30 * 60_000;
-type Entry = { ts: number; quota: ProviderQuota | null; routing?: ProviderQuotaRoutingEvidence; unavailable?: true };
+/** `unread` marks a synthesized row: no read happened, so `ts` is not a read time. */
+type Entry = { ts: number; quota: ProviderQuota | null; unavailable?: true; unread?: true };
 export type KeyQuotaProbeOutcome =
-  | { kind: "quota"; quota: ProviderQuota; routing?: ProviderQuotaRoutingEvidence }
+  | { kind: "quota"; quota: ProviderQuota }
   | { kind: "empty" | "terminal" | "unavailable" };
 export interface ProviderApiKeyQuota {
   keyId: string;
   quota: ProviderQuota | null;
   unavailable?: true;
+  /** When this key's quota was last read, success or failure; absent when no read happened. */
+  readAt?: number;
   /** Server-only, non-enumerable; call immediately before the safe DTO join. */
   isCurrent: () => boolean;
 }
@@ -59,14 +61,11 @@ export function cachedApiKeyQuota(
   try { resolved = resolveProviderApiKey(key)?.trim(); } catch { return null; }
   if (!resolved) return null;
   const entry = cache.get(identity(name, provider, keyId, resolved));
-  if (!entry || entry.unavailable || !entry.routing) return null;
+  if (!entry || entry.unavailable || !entry.quota) return null;
   const now = Date.now();
   if (now - entry.ts >= ACCOUNT_QUOTA_TTL_MS) return null;
-  const quota = entry.routing.quota;
-  if (!Number.isFinite(quota.updatedAt) || quota.updatedAt < 0 || quota.updatedAt > now
-    || now - quota.updatedAt >= LAST_GOOD_MS) return null;
-  if (provider.disabled || entry.routing.binding !== providerQuotaRoutingBinding(name, provider, resolved)) return null;
-  return quota;
+  if (now - entry.quota.updatedAt >= LAST_GOOD_MS) return null;
+  return entry.quota;
 }
 
 /** Test seam: keyed on identity(), so it takes the raw key rather than an account id. */
@@ -80,10 +79,7 @@ export function setCachedProviderApiKeyQuotaForTests(
 ): void {
   const resolved = resolveProviderApiKey(key)?.trim();
   if (!resolved) return;
-  const binding = providerQuotaRoutingBinding(name, provider, resolved);
-  remember(identity(name, provider, keyId, resolved), {
-    ts: Date.now(), quota, ...(quota && binding ? { routing: { quota, binding } } : {}), ...(unavailable ? { unavailable } : {}),
-  });
+  remember(identity(name, provider, keyId, resolved), { ts: Date.now(), quota, ...(unavailable ? { unavailable } : {}) });
 }
 
 /** Four workers per roster, not a process-wide network limit. */
@@ -135,12 +131,12 @@ async function readEntry(
   if (running) return running;
   const lastGood = previous?.quota && Date.now() - previous.quota.updatedAt < LAST_GOOD_MS
     ? previous.quota : null;
-  if (flights.size >= MAX_ENTRIES) return { ts: Date.now(), quota: lastGood, unavailable: true };
+  if (flights.size >= MAX_ENTRIES) return { ts: Date.now(), quota: lastGood, unavailable: true, unread: true };
   const flight = (async (): Promise<Entry> => {
     let result: KeyQuotaProbeOutcome;
     try { result = await probe(); } catch { result = { kind: "unavailable" }; }
     const entry: Entry = result.kind === "quota"
-      ? { ts: Date.now(), quota: result.quota, routing: result.routing }
+      ? { ts: Date.now(), quota: result.quota }
       : result.kind === "empty"
         ? { ts: Date.now(), quota: null }
         : {
@@ -181,17 +177,26 @@ export async function readProviderApiKeyQuotas(
         return !!currentKey && identity(name, current, row.id, currentKey) === key;
       } catch { return false; }
     };
+    const isPaused = () => row.disabled === true
+      || roster(config.providers[name] ?? providerSnapshot).find(candidate => candidate.id === row.id)?.disabled === true;
+    const cached = key ? cache.get(key) : undefined;
     const entry = key && resolved && isCurrent()
-      ? await readEntry(key, force, isCurrent, () => {
-          const isolatedProvider = { ...providerSnapshot, apiKey: resolved, apiKeyPool: undefined };
-          const isolatedConfig = { ...config, providers: { [name]: isolatedProvider } };
-          return probe(isolatedProvider, isolatedConfig);
-        })
-      : { ts: Date.now(), quota: null, unavailable: true as const };
+      ? isPaused()
+        ? (cached && (!cached.quota || Date.now() - cached.quota.updatedAt < LAST_GOOD_MS)
+          ? cached
+          : { ts: Date.now(), quota: null, unavailable: true as const, unread: true as const })
+        : await readEntry(key, force, isCurrent, () => {
+            const isolatedProvider = { ...providerSnapshot, apiKey: resolved, apiKeyPool: undefined };
+            const isolatedConfig = { ...config, providers: { [name]: isolatedProvider } };
+            return probe(isolatedProvider, isolatedConfig);
+          })
+      : { ts: Date.now(), quota: null, unavailable: true as const, unread: true as const };
+    const current = isCurrent();
     const result = {
       keyId: row.id,
-      quota: isCurrent() ? entry.quota : null,
-      ...(!isCurrent() || entry.unavailable ? { unavailable: true as const } : {}),
+      quota: current ? entry.quota : null,
+      ...(!current || entry.unavailable ? { unavailable: true as const } : {}),
+      ...(current && !entry.unread ? { readAt: entry.ts } : {}),
     };
     return Object.defineProperty(result, "isCurrent", { value: isCurrent }) as ProviderApiKeyQuota;
   });

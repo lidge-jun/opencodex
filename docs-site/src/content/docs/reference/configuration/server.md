@@ -36,6 +36,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | `nativeReasoningRetention?` | `{ modelSwitch?: boolean; accountSwitch?: boolean }` | both `false` | Permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT backend. Account retention is experimental. See [Native reasoning retention](#native-reasoning-retention). |
 | `workflowBudget?` | `{ maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number }` | `8` / `256` / `64` | Per-task fan-out ceilings: turns running at once, upstream sends per 10-minute window, and distinct subagent threads per window. Omitted fields keep the built-in value. See [Workflow limits](#workflow-limits). |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
+| `dashboardTrustedProxy?` | `{ origin: string; proxyAddresses: string[]; trustHeaders?: ("x-forwarded-host" \| "x-forwarded-proto")[] }` | unset | Standalone only, opt-in: lets **Remember this device** work through one TLS-terminating reverse proxy. `origin` is one exact `https://` origin, `proxyAddresses` are the proxy's exact IP addresses (no ranges or wildcards), and `trustHeaders` reads the browser host from `X-Forwarded-Host` and/or requires `X-Forwarded-Proto: https` (default: `Host` only). Ignored on a loopback bind or a Hub. See [Remember behind a reverse proxy](/guides/web-dashboard/#remember-behind-a-reverse-proxy). |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` data-plane admission credentials on non-loopback binds. They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
 | `usageLedgerMaxBytes?` | `number` | unset | Opt-in ceiling in bytes for `usage.jsonl`. Absent means the request history grows without limit, which stays the default. See [usage history size](#usage-history-size). |
@@ -63,6 +64,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
+| `telemetry?` | `OcxTelemetryConfig` | default-on after human disclosure | Anonymous daily usage telemetry consent state (`decision`, `decidedAt`, `noticeShownAt`). Nothing is sent until a person has seen the notice or opted in. Overridden by `OCX_TELEMETRY=0` or `DO_NOT_TRACK=1`. See [Telemetry (`telemetry`)](#telemetry-telemetry) and [Telemetry and Privacy](/guides/telemetry/). |
 
 On Linux x64/arm64 with pidfd support, service health recovery binds termination to the proxy's
 kernel process identity, so PID reuse cannot redirect it. The sentinel's watching log ends in
@@ -463,13 +465,18 @@ use `ssh -g -L`, broad container publishing, or forwarding modes that expose the
 
 ## Account email masking (`privacy`)
 
-Stored account emails are masked everywhere they leave the proxy — the dashboard account lists,
+Stored account emails are masked by default wherever they leave the proxy — the dashboard account lists,
 `GET /api/codex-auth/accounts`, `GET /api/oauth/status`, and the `ocx status` logins section all
 show `p***n@example.com` rather than the address on file.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to show stored account emails in full. Absent, `true`, and any malformed value all keep masking, so only a deliberate `false` reveals an address. |
+| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to reveal stored account emails in projected email fields. Absent, `true`, and any malformed value keep masking, so only a deliberate `false` reveals an address. |
+
+Dashboard labels for OAuth accounts (Claude, Grok, Kiro, and the other OAuth providers) follow this
+flag: masked by default, the stored email when it is `false`. An account alias takes precedence over
+the email label. The active account uses the same label in Overview, the reset and coupon dialogs,
+and the remove confirmation. The desktop tray surfaces keep showing the masked form either way.
 
 Turn it off when you run many accounts on a machine you control and cannot tell them apart from
 masked forms. Read the flag as a disclosure decision rather than a display preference: management
@@ -486,6 +493,42 @@ way.
 block exists, because `config set` walks into existing objects and never creates them. Write the
 whole object instead — `ocx config set privacy '{"maskEmails":false}'` — or add the block to
 `config.json` by hand.
+
+## Telemetry (`telemetry`)
+
+Anonymous daily usage telemetry defaults to on only after a person has seen the disclosure notice
+(in the GUI popup or an interactive terminal prompt). The `telemetry` block in `config.json` records
+that consent state:
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | unset (undecided) | Explicit user choice. `"declined"` disables telemetry and deletes `<OPENCODEX_HOME>/telemetry-id.json`; `"accepted"` enables daily reports. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | unset | UTC timestamp when `decision` was recorded. Only completed UTC calendar days strictly after the UTC day of `decidedAt ?? noticeShownAt` (`day > formatUtcDay(decidedAt ?? noticeShownAt)`) are ever sent; the consent/disclosure day itself and earlier days are never backfilled. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | unset | UTC timestamp when a human saw the disclosure in the web dashboard or an interactive terminal. When `decision` is unset, telemetry sends only if `noticeShownAt` is set (`default-on`); without it the proxy remains in `awaiting-notice`. |
+
+The collector endpoint (`https://telemetry.opencodex.me/v1/events`) is a code constant and cannot
+be configured in `config.json`.
+
+Two environment variables override `config.json` and disable telemetry immediately without modifying
+saved `config.json` (observing either opt-out at proxy startup or on a scheduler tick also persists
+`ineligibleThroughDay` set to today's UTC day in `<OPENCODEX_HOME>/telemetry-state.json` and deletes
+`<OPENCODEX_HOME>/telemetry-id.json`, so opt-out days are never backfilled and a fresh ID is minted
+if the variable is later removed):
+
+- `OCX_TELEMETRY=0` (also accepts `false`, `off`, or `no`, case-insensitive)
+- `DO_NOT_TRACK=1` (also accepts `true` or `yes`, case-insensitive)
+
+`ocx config set telemetry` and `ocx config unset telemetry` are refused for all callers, and `ocx config import` ignores any imported `telemetry` block for every caller and preserves persisted `telemetry` state unchanged. Use `ocx telemetry enable` (requires an interactive human TTY; prints the disclosure block and confirmation prompt, or exits non-zero with `agent_consent_required` / `tty_required`), `ocx telemetry disable`, `ocx telemetry status [--json]`, or the dashboard **Proxy details** toggle instead. See [Telemetry and Privacy](/guides/telemetry/) for the full payload schema and retention policy.
 
 ## Storage cleanup
 
@@ -677,7 +720,7 @@ modes, the preview, and the per-request trace.
 | --- | --- | --- | --- |
 | `protocols.unrepresentable?` | `"legacy" \| "reject"` | `"legacy"` | `legacy` sends a request whose path drops a feature and records the loss in the trace. `reject` refuses it with HTTP 400 before any send, naming only the feature keys. |
 | `protocols.rollout.nativeChatCombos?` | `boolean` | `false` | Send an eligible Chat candidate inside a combo natively from its own copy of the client body. |
-| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to a direct, key-authenticated Anthropic provider instead of through the internal Responses bridge. |
+| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to an eligible direct Anthropic provider or a key-auth Anthropic-compatible or first-party Anthropic child in a strict failover combo without a default effort. Other combo strategies, policy routes and bridge-only rewrites retain the bridge. |
 | `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Native Messages for the `anthropic` OAuth provider on `api.anthropic.com`, including stored account pools. Requires `managedMessagesNative`. For the settled `anthropic` provider, an enabled pool supplies true for absent native flags when `anthropicAccountPool.nativeMessages` is absent or true. Explicit false/malformed flags and a false/malformed pool preference remain off. Other providers and pool-off keep explicit rollout behavior. Eligible pooled requests retain shared selection, affinity and bounded pre-output recovery. Recognized JSON-string `metadata.user_id` account UUIDs are aligned with the serving OAuth credential; device and session fields are preserved. |
 | `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
 | `protocols.rollout.antigravityDirect?` | `boolean` | `true` | Send a Chat or Messages request to a single Google Antigravity route without the internal Responses body in either direction. Request settings still pass through the usual policies, and a request the lane cannot carry uses the bridge. Set `false` to turn it off. |
@@ -807,6 +850,15 @@ the thread itself runs elsewhere. Naming `"auto"` here points the compaction at 
 provider-qualified model with its own credentials and quota only when `sourceModels` is omitted
 or matches the incoming model. A list containing only `provider/*` entries does not cover a bare
 native compaction model.
+
+When `model` names a combo, a compaction whose targets are all cooling fails fast with
+`combo_unavailable`, and the message names the earliest recovery, for example `(retry in ~2m)`.
+A refusal from a cooling local Codex Pool account cools its combo target only for the short combo
+backoff, so the target returns once that account recovers. To let a dedicated compaction combo try
+its cooled targets again without waiting out a long upstream `Retry-After`, enable that combo's
+opt-in [all-cooled recovery](/guides/combos/#retry-all-cooled-targets-opt-in), for example
+`{"cooldownReprobe": {"enabled": true, "intervalMs": 300000}}`. Recovery stays demand-driven and
+keeps account quota and admission checks; it cannot make an exhausted account serve.
 
 OpenCodex changes only requests with explicit `request_kind: "compaction"` metadata whose
 `compaction.trigger` is one of the values you listed, sent to `/v1/responses/compact` or to

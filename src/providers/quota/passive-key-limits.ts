@@ -10,7 +10,15 @@ export type PassiveKeyLimit = {
   resetAt?: number;
 };
 export type PassiveKeyLimitReading = PassiveKeyLimit & { stale: boolean };
-export type PassiveKeyIdentity = { owner: string; provider: PassiveKeyProvider; model: string; namespace?: string; account?: string };
+/**
+ * `home` is the config home that observed the send. Two installations can hold the same
+ * provider and API key, so the credential alone does not identify a counter: without this
+ * dimension home B would read, replace, or retire home A's rows.
+ */
+export type PassiveKeyIdentity = {
+  owner: string; provider: PassiveKeyProvider; model: string; home: string;
+  namespace?: string; account?: string;
+};
 
 const PROVIDERS: readonly string[] = ["openai", "xai", "groq", "anthropic", "mistral"];
 const MAX_COUNT = 1_000_000_000_000;
@@ -89,9 +97,13 @@ export function parsePassiveKeyLimits(provider: PassiveKeyProvider, headers: Hea
   return result;
 }
 
-type Entry = { sequence: number; rows: PassiveKeyLimit[]; pending: number; namespace?: string; account?: string; timer?: ReturnType<typeof setTimeout> };
+type Entry = {
+  sequence: number; rows: PassiveKeyLimit[]; pending: number; home: string;
+  namespace?: string; account?: string; timer?: ReturnType<typeof setTimeout>;
+};
 export type PassiveKeyLimitReservation = {
-  record(headers: Headers, observedAt: number): boolean;
+  /** `status` is the physical response status: a redirect is not a quota reading. */
+  record(headers: Headers, observedAt: number, status: number): boolean;
   cancel(): void;
 };
 
@@ -110,8 +122,9 @@ export class PassiveKeyLimitCache {
     }
   }
 
-  clear(namespace?: string, account?: string): void {
+  clear(home: string, namespace?: string, account?: string): void {
     for (const [key, entry] of this.entries) {
+      if (entry.home !== home) continue;
       if (namespace !== undefined && entry.namespace !== namespace) continue;
       if (account !== undefined && entry.account !== account) continue;
       if (entry.timer) clearTimeout(entry.timer);
@@ -121,10 +134,12 @@ export class PassiveKeyLimitCache {
 
   private key(identity: PassiveKeyIdentity): string | undefined {
     if (!identity || typeof identity.owner !== "string" || identity.owner.length < 1 || identity.owner.length > 256
+      || typeof identity.home !== "string" || identity.home.length < 1 || identity.home.length > 1024
       || !PROVIDERS.includes(identity.provider) || (identity.namespace !== undefined && (typeof identity.namespace !== "string" || identity.namespace.length > 128)) || typeof identity.model !== "string"
       || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(identity.model)) return undefined;
     const ownerHash = new Bun.CryptoHasher("sha256").update(identity.owner).digest("hex");
-    return JSON.stringify([ownerHash, identity.provider, identity.model]);
+    const homeHash = new Bun.CryptoHasher("sha256").update(identity.home).digest("hex");
+    return JSON.stringify([homeHash, ownerHash, identity.provider, identity.model]);
   }
 
   /**
@@ -138,7 +153,7 @@ export class PassiveKeyLimitCache {
     if (!key || !Number.isSafeInteger(sequence) || sequence < 0) return undefined;
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { sequence: -1, rows: [], pending: 0, namespace: identity.namespace, account: identity.account };
+      entry = { sequence: -1, rows: [], pending: 0, home: identity.home, namespace: identity.namespace, account: identity.account };
       this.entries.set(key, entry);
       this.evictOverflow();
     }
@@ -156,10 +171,10 @@ export class PassiveKeyLimitCache {
       return true;
     };
     return {
-      record: (headers, observedAt) => {
+      record: (headers, observedAt, status) => {
         if (!active) return false;
         try {
-          return this.entries.get(key) === reservedEntry && this.record(reservedIdentity, headers, observedAt, sequence);
+          return this.entries.get(key) === reservedEntry && this.record(reservedIdentity, headers, observedAt, sequence, status);
         } finally { release(); }
       },
       cancel: () => { release(); },
@@ -167,12 +182,20 @@ export class PassiveKeyLimitCache {
   }
 
   /** Legacy response-only API; use reserve at send time to fence eviction races. */
-  record(identity: PassiveKeyIdentity, headers: Headers, observedAt: number, sequence: number): boolean {
+  record(identity: PassiveKeyIdentity, headers: Headers, observedAt: number, sequence: number, status: number): boolean {
     const key = this.key(identity);
     if (!key || !timestamp(observedAt) || !Number.isSafeInteger(sequence) || sequence < 0) return false;
+    // A redirect is never a reading: its headers belong to the intermediary, and counting one
+    // would let a headerless manual 302 advance the fence over a real response that is still in
+    // flight. Refusals stay eligible — a 429's cells are the most useful observation there is.
+    if (!Number.isInteger(status) || status < 100 || status > 599 || (status >= 300 && status < 400)) return false;
+    const parsed = parsePassiveKeyLimits(identity.provider, headers, observedAt);
+    // A parsed response with no count, remaining value or reset in any family proves nothing.
+    // It must not advance the sequence fence or replace a retained numeric measurement.
+    if (!parsed.some(row => row.limit !== undefined || row.remaining !== undefined || row.resetAt !== undefined)) return false;
     const current = this.entries.get(key);
     if (current && sequence <= current.sequence) return false;
-    const rows = parsePassiveKeyLimits(identity.provider, headers, observedAt).flatMap(row => {
+    const rows = parsed.flatMap(row => {
       if (row.limit !== undefined || row.remaining !== undefined || row.resetAt !== undefined) return [row];
       const previous = current?.rows.find(item => item.dimension === row.dimension && item.window === row.window
         && (item.limit !== undefined || item.remaining !== undefined || item.resetAt !== undefined)
@@ -181,7 +204,7 @@ export class PassiveKeyLimitCache {
       return previous ? [previous, row] : [row];
     });
     if (current?.timer) clearTimeout(current.timer);
-    const entry: Entry = current ?? { sequence, rows, pending: 0, namespace: identity.namespace, account: identity.account };
+    const entry: Entry = current ?? { sequence, rows, pending: 0, home: identity.home, namespace: identity.namespace, account: identity.account };
     entry.sequence = sequence;
     entry.rows = rows;
     entry.timer = setTimeout(() => { entry.rows = []; entry.timer = undefined; }, this.retentionMs);
@@ -220,15 +243,17 @@ export class PassiveKeyLimitCache {
     return rows.map(row => ({ ...row, stale: row.resetAt !== undefined && now >= row.resetAt }));
   }
 
-  list(owner: string, provider: PassiveKeyProvider, now: number): { model: string; windows: PassiveKeyLimitReading[] }[] {
-    if (typeof owner !== "string" || !owner || owner.length > 256 || !PROVIDERS.includes(provider) || !timestamp(now)) return [];
+  list(home: string, owner: string, provider: PassiveKeyProvider, now: number): { model: string; windows: PassiveKeyLimitReading[] }[] {
+    if (typeof home !== "string" || !home || home.length > 1024
+      || typeof owner !== "string" || !owner || owner.length > 256 || !PROVIDERS.includes(provider) || !timestamp(now)) return [];
+    const homeHash = new Bun.CryptoHasher("sha256").update(home).digest("hex");
     const ownerHash = new Bun.CryptoHasher("sha256").update(owner).digest("hex");
     const models = Array.from(this.entries.keys()).flatMap(key => {
-      const [storedOwner, storedProvider, model] = JSON.parse(key) as [string, string, string];
-      return storedOwner === ownerHash && storedProvider === provider ? [model] : [];
+      const [storedHome, storedOwner, storedProvider, model] = JSON.parse(key) as [string, string, string, string];
+      return storedHome === homeHash && storedOwner === ownerHash && storedProvider === provider ? [model] : [];
     });
     return models.flatMap(model => {
-      const windows = this.get({ owner, provider, model }, now);
+      const windows = this.get({ home, owner, provider, model }, now);
       return windows.length ? [{ model, windows }] : [];
     });
   }

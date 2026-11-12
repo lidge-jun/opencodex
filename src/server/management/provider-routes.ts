@@ -2,6 +2,7 @@ import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelC
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
+import { providerHasStoredApiKey } from "../../providers/api-keys";
 import { providerGcpCredentialInputResponse, removeProviderWithGcpCredentials } from "./provider-gcp-credential-routes";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -73,10 +74,8 @@ import {
 import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
 import { clearPassiveKeyLimits, listPassiveKeyLimits, passiveProviderOwnership } from "../../providers/passive-key-observation";
-import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
-import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
+import { providerRoutingQuota } from "./provider-routing-quota";
 import { probeJevDecisionProvider } from "../../combos/jev";
 import { comboDependsOnProviderRoute } from "./decision-model-validation";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
@@ -121,6 +120,7 @@ import {
 } from "../auth-cors";
 import { providerCatalogCapabilityConfigError } from "./provider-capability-config";
 import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
+import { applyThinkingDisplayPatchFields } from "./provider-thinking-display-patch";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -153,7 +153,7 @@ type ProviderPatchApplication =
       headersTouched: boolean;
     };
 
-const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases"] as const;
+const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases", "aliasTemplate"] as const;
 type ProviderAliasOverlayField = typeof PROVIDER_ALIAS_OVERLAY_FIELDS[number];
 
 /**
@@ -382,6 +382,14 @@ function applyProviderPatchFields(
     const dm = rawBody.defaultModel.trim();
     if (dm) next.defaultModel = dm;
     else delete next.defaultModel;
+    touched = true;
+  }
+  for (const field of ["project", "location"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (typeof value !== "string") return { error: `${field} must be a string` };
+    if (value.trim()) next[field] = value.trim();
+    else delete next[field];
     touched = true;
   }
   if (Object.hasOwn(rawBody, "authMode")) {
@@ -681,6 +689,11 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "thinkingDisplay") || Object.hasOwn(rawBody, "modelThinkingDisplay")) {
+    const displayError = applyThinkingDisplayPatchFields(next, rawBody);
+    if (displayError) return displayError;
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "noStructuredOutputModels")) {
     const value = rawBody.noStructuredOutputModels;
     if (value === null) {
@@ -707,23 +720,25 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
-  if (Object.hasOwn(rawBody, "unsupportedHostedTools")) {
-    const value = rawBody.unsupportedHostedTools;
+  // The conditional list (#8204) shares the unconditional list's vocabulary and clearing rules.
+  for (const field of ["unsupportedHostedTools", "unsupportedHostedToolsWithClientTools"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
     if (value === null) {
-      delete next.unsupportedHostedTools;
+      delete next[field];
     } else {
-      const error = nonBlankStringArrayConfigError(value, "unsupportedHostedTools");
+      const error = nonBlankStringArrayConfigError(value, field);
       if (error) return { error };
       const tools = normalizeNonBlankStringArray(value as string[]);
       const unknownTool = tools.find(tool => !DECLARABLE_HOSTED_TOOL_TYPES.has(tool));
       if (unknownTool !== undefined) {
         return {
-          error: `unsupportedHostedTools must name only hosted tool types: `
+          error: `${field} must name only hosted tool types: `
             + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`,
         };
       }
-      if (tools.length > 0) next.unsupportedHostedTools = tools;
-      else delete next.unsupportedHostedTools;
+      if (tools.length > 0) next[field] = tools;
+      else delete next[field];
     }
     touched = true;
   }
@@ -847,40 +862,6 @@ function canonicalOpenAiBudgetPatchError(
     ?? providerEmptyToolOutputConfigError("openai", applied.next);
 }
 
-function providerRoutingQuota(config: OcxConfig, name: string, now: number): ProviderRoutingQuota {
-  const provider = hasOwnProvider(config.providers, name) ? config.providers[name] : undefined;
-  const quota = getCachedProviderRoutingQuota(name, provider, now);
-  if (!quota || !Number.isFinite(quota.updatedAt) || quota.updatedAt < 0 || quota.updatedAt > now
-    || now >= quota.updatedAt + PROVIDER_QUOTA_MAX_AGE_MS) return { state: "unknown" };
-
-  // Removing search/MCP windows may leave only a timestamp. That is not inference evidence.
-  const percentages = [quota.fiveHourPercent, quota.weeklyPercent, quota.monthlyPercent,
-    ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.percent)];
-  const hasPercentage = percentages.some(value => typeof value === "number" && Number.isFinite(value) && value >= 0);
-  const credits = quota.creditsUsd;
-  const hasCredits = credits !== undefined && Number.isFinite(credits.percent)
-    && credits.percent >= 0 && Number.isFinite(credits.remaining);
-  if (!hasPercentage && !hasCredits) return { state: "unknown" };
-
-  const state = cachedProviderQuotaIsExhausted(quota, now) ? "exhausted" : "available";
-  let validUntil = quota.updatedAt + PROVIDER_QUOTA_MAX_AGE_MS;
-  if (state === "exhausted") {
-    const resets = [quota.fiveHourResetAt, quota.weeklyResetAt, quota.monthlyResetAt,
-      ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.resetAt)]
-      .filter((reset): reset is number => typeof reset === "number" && Number.isFinite(reset)
-        && reset > now && reset < validUntil)
-      .sort((left, right) => left - right);
-    // Reuse dispatch's predicate: another exhausted window or USD cap may still block.
-    for (const reset of resets) {
-      if (!cachedProviderQuotaIsExhausted(quota, reset)) {
-        validUntil = reset;
-        break;
-      }
-    }
-  }
-  return { state, updatedAt: quota.updatedAt, validUntil };
-}
-
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -903,12 +884,14 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
   if (url.pathname === "/api/providers" && req.method === "GET") {
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
-      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel, hasApiKey: !!p.apiKey,
+      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
+      hasApiKey: providerHasStoredApiKey(p),
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       preserveResponsesReasoningContent: p.preserveResponsesReasoningContent,
       promoteAdditionalTools: p.promoteAdditionalTools,
+      forwardAdvisorTool: p.forwardAdvisorTool,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,
       models: p.models ?? [],
@@ -925,6 +908,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       noStructuredOutputModels: p.noStructuredOutputModels,
       noJsonSchemaModels: p.noJsonSchemaModels,
       unsupportedHostedTools: p.unsupportedHostedTools,
+      unsupportedHostedToolsWithClientTools: p.unsupportedHostedToolsWithClientTools,
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
@@ -1613,7 +1597,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       success: true,
       name,
       disabled: config.providers[name]!.disabled === true,
-      hasApiKey: !!config.providers[name]!.apiKey,
+      hasApiKey: providerHasStoredApiKey(config.providers[name]!),
       ...(shadowDependency ? { dependentShadowIntercept: shadowDependency } : {}),
       ...(name === "xai"
         ? { xaiResponsesOptInState: xaiResponsesOptInState(config.providers[name]!) }
@@ -1798,7 +1782,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           latencyMs,
           error: extracted.reason === "too_many_models"
             ? `upstream /models exceeded the ${discovery.maxModels}-row model limit`
-            : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined)}`,
+            : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined, discovery.skipInvalidRows === true)}`,
         });
       }
       const models = ccaModels?.length ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);
@@ -1806,7 +1790,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ok: true,
         latencyMs,
         models,
-        message: `Connected — ${models} model${models === 1 ? "" : "s"} available.`,
+        message: `Connected — ${models} model${models === 1 ? "" : "s"} available${extracted && "skippedInvalidRows" in extracted && extracted.skippedInvalidRows ? ` (${extracted.skippedInvalidRows} invalid row${extracted.skippedInvalidRows === 1 ? "" : "s"} skipped)` : ""}.`,
       });
     } catch (err) {
       return jsonResponse({

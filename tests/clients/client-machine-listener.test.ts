@@ -224,6 +224,7 @@ describe("client machine listener", () => {
     expect((await fetch(statusUrl, { method: "HEAD", headers: safeHeaders })).status).toBe(200);
     const body = await status.json();
     expect(body).toMatchObject({ mode: "client", connected: true, apiKeyId: "client-key-a", managementTransport: "direct" });
+    expect(body).not.toHaveProperty("relayTargetCheck");
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain("tokenFingerprint");
     expect(serialized).not.toContain("a".repeat(64));
@@ -240,6 +241,18 @@ describe("client machine listener", () => {
     })).status).toBe(403);
     expect((await fetch(statusUrl, { method: "POST", headers: mutationHeaders, body: "{}" })).status).toBe(403);
     expect(syncCalls).toBe(0);
+  });
+
+  test("hub relay status advertises expected-target-v1", async () => {
+    const server = startMachineListener(0, {
+      state: connection("relay"),
+      managementAuthState: authState(),
+    });
+    servers.push(server);
+    const status = await fetch(new URL("/api/machine/status", server.url), { headers: await guiHeaders(server) });
+    expect(status.status).toBe(200);
+    const body = await status.json() as { relayTargetCheck?: string };
+    expect(body.relayTargetCheck).toBe("expected-target-v1");
   });
 
   test("does not let a bootstrapped GUI session disconnect or recycle the machine", async () => {
@@ -562,11 +575,13 @@ describe("client machine listener in link mode", () => {
 
     const machine = await fetch(new URL("/api/machine/status", server.url), { headers });
     const body = await machine.json() as {
-      machineBase: string; sharedBase: string; sharedServerOrigin: string; managementTransport: string; link?: unknown;
+      machineBase: string; sharedBase: string; sharedServerOrigin: string; managementTransport: string; relayTargetCheck?: string; link?: unknown;
     };
     // #6957: the dashboard's shared plane is this listener's relay base, read-only, to the Home.
     expect(body.sharedBase).toBe(`${body.machineBase}/api/machine/hub-relay`);
     expect(body.managementTransport).toBe("relay");
+    // Link mode is read-only; it does not advertise a mutation target check.
+    expect(body).not.toHaveProperty("relayTargetCheck");
     expect(body.link).toEqual({ linkId: `lnk_${"b".repeat(16)}`, home: "home-mac", readOnly: true });
     expect(body.sharedServerOrigin).toBe(body.machineBase);
     expect(body.machineBase).toBe(`http://127.0.0.1:${server.port}`);
@@ -638,5 +653,29 @@ describe("client machine listener in link mode", () => {
     const server = startMachineListener(0, { state: connection(), managementAuthState: authState() });
     servers.push(server);
     expect((await fetch(new URL("/api/link/status", server.url), { headers: await guiHeaders(server) })).status).toBe(404);
+    expect((await fetch(new URL("/api/link/diagnostics", server.url), { headers: await guiHeaders(server) })).status).toBe(404);
+  });
+
+  test("a link Child serves its own sanitized diagnostics to a dashboard session, read-only", async () => {
+    mkdirSync(join(root, "link"), { recursive: true });
+    const file = join(root, "link", "diagnostics.jsonl");
+    const content = JSON.stringify({ event: "tunnel_transition", outcome: "network", previousState: "connected", state: "reconnecting", attempt: 1, tunnelPort: 43110, timestamp: 7, alias: "\u001b[2Jhome-mac" }) + "\n";
+    writeFileSync(file, content);
+    const { server, upstream } = linkListener();
+    const url = new URL("/api/link/diagnostics?limit=5", server.url);
+    expect((await fetch(url)).status).toBe(401);
+    const response = await fetch(url, { headers: await guiHeaders(server) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      schema: "ocx.link.diagnostics/1",
+      files: [{ name: "diagnostics.jsonl.1", state: "absent", truncated: false }, { name: "diagnostics.jsonl", state: "read", truncated: false }],
+      matched: 1,
+      skipped: 0,
+      records: [{ event: "tunnel_transition", outcome: "network", state: "reconnecting", previousState: "connected", attempt: 1, tunnelPort: 43110, timestamp: 7 }],
+    });
+    expect((await fetch(url, { method: "POST", headers: await guiHeaders(server, true), body: "{}" })).status).toBe(404);
+    expect(readFileSync(file, "utf8")).toBe(content);
+    // Served locally: the Child's own evidence, never relayed to the Home.
+    expect(upstream).toHaveLength(0);
   });
 });

@@ -65,4 +65,8 @@ enabled Desktop selection even when the target disappears: validation fails with
 Neither failure resumes package/Bun execution. Repair the Desktop command, disable it,
 or explicitly use `OCX_NO_DESKTOP_HANDOFF=1` for a package invocation. Missing/disabled
 records, maintenance exclusions and Windows PATH selection retain their existing behavior.
+The launcher's SIGINT/SIGTERM/SIGHUP forwarders (`src/lib/launcher-signal-forwarding.mjs`) are
+installed before the Desktop target or the Bun child is spawned. A signal that arrives once the
+child has started, even before `spawn()` returns, therefore reaches that child; it cannot kill the
+launcher by default action and orphan the child while the sync mutex stays held.
 `tests/cli/ocx-launcher-desktop-handoff.test.ts` exercises refusal and restored-target handoff.

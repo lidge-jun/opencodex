@@ -78,7 +78,7 @@ test("provider quotas isolate a malformed unobserved keychain account", async ()
   } finally { setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
 });
 
-test("a proxied response without rate headers publishes unknown Groq dimensions without a probe", async () => {
+test("a proxied response without rate headers publishes nothing and sends no probe", async () => {
   const config = getDefaultConfig();
   config.defaultProvider = "unknown-fixture";
   config.defaultModel = "unknown-model";
@@ -90,20 +90,14 @@ test("a proxied response without rate headers publishes unknown Groq dimensions 
     return Response.json({ id: "synthetic", object: "chat.completion", model: "unknown-model",
       choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] });
   }) as typeof fetch;
-  const before = Date.now();
   const request = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "unknown-fixture/unknown-model", input: "hi", stream: false, store: false }) });
   await (await handleResponses(request, config, { provider: "", model: "" }, {})).text();
   const url = new URL("http://localhost/api/provider-quotas");
   const body = await (await handleManagementAPI(new ManagementRequest(url), url, config))!.json();
-  const row = body.passiveKeyLimits.find((item: { provider: string }) => item.provider === "unknown-fixture");
-  expect(row.windows).toEqual([
-    { dimension: "requests", window: "day", observedAt: expect.any(Number), stale: false },
-    { dimension: "tokens", window: "minute", observedAt: expect.any(Number), stale: false },
-  ]);
-  expect(row.windows[0].observedAt).toBeGreaterThanOrEqual(before);
-  expect(row.windows[0].observedAt).toBeLessThanOrEqual(Date.now());
-  expect(row.windows[1].observedAt).toBe(row.windows[0].observedAt);
+  // A headerless response proves nothing about the account's counters, so it neither becomes a
+  // row of its own nor fences a real reading with a send sequence it cannot support.
+  expect(body.passiveKeyLimits).toEqual([]);
   expect(sends).toBe(1);
 });
 

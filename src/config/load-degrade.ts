@@ -27,6 +27,7 @@ import { isPassiveRead } from "../lib/passive-read";
 import { redactSecretString } from "../lib/redact";
 import { isValidProviderName } from "./provider-name";
 import { MODEL_ALIAS_PATTERN } from "../providers/default-aliases";
+import { aliasTemplateError } from "../providers/alias-template";
 import { MODEL_DISCOVERY_MAX_MODELS } from "../providers/model-discovery-limits";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport, registryModelServiceTierCapabilityApplies } from "../providers/registry";
 import { providerFastSwitchOff } from "../providers/fast-opt-in";
@@ -52,6 +53,7 @@ import {
   transientRetryOn5xxPolicySchema,
   runtimeRoleSchema,
   spendSchema,
+  telemetryConfigSchema,
   chatgptDesktopConfigIssue,
 } from "./schema/leaf-validators";
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
@@ -152,6 +154,7 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
   warnDegradedMemoryModels(rawParsed, validated);
+  warnDegradedTelemetry(rawParsed);
   // The schema replaces a malformed policy with { allProfiles: false }, which silently turns every Aside profile off (#6757).
   const asidePolicy = rawParsed && typeof rawParsed === "object" ? (rawParsed as Record<string, unknown>).asideProfileSync : undefined;
   if (asidePolicy !== undefined && !asideProfileSyncSchema.safeParse(asidePolicy).success) {
@@ -850,6 +853,20 @@ export function malformedCodexPoolWarning(rawParsed: unknown): string | null {
   return `codexPool${field ? `.${field}` : ""} ignored: invalid Codex pool selection policy`;
 }
 
+export function malformedTelemetryWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "telemetry") || raw.telemetry === undefined) return null;
+  const result = telemetryConfigSchema.safeParse(raw.telemetry);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `telemetry${field ? `.${field}` : ""} ignored: invalid telemetry consent configuration`;
+}
+
+export function warnDegradedTelemetry(rawParsed: unknown): void {
+  const warning = malformedTelemetryWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
 /**
  * Warn once per load that the section was dropped.
  *
@@ -1016,7 +1033,13 @@ export function sanitizeAliasesForLoad(raw: unknown, warn: (message: string) => 
   const comboAliases = new Set(Object.values((root.combos as Record<string, { alias?: unknown }> | undefined) ?? {})
     .map(combo => typeof combo?.alias === "string" ? combo.alias.toLowerCase() : "").filter(Boolean));
   const accountNamespaces = new Set(Object.keys((root.codexAccountNamespaces as Record<string, unknown> | undefined) ?? {}).map(name => name.toLowerCase()));
-  for (const provider of Object.values(providers)) {
+  for (const [providerName, provider] of Object.entries(providers)) {
+    // #7705: a hand-edited template that would not validate loses only itself, not the config.
+    if (provider.aliasTemplate !== undefined
+      && (typeof provider.aliasTemplate !== "string" || aliasTemplateError(provider.aliasTemplate) !== null)) {
+      warn(`Ignoring invalid alias template for provider ${providerName} in config.json`);
+      delete provider.aliasTemplate;
+    }
     const alias = provider.alias;
     if (typeof alias !== "string" || !isValidProviderName(alias)
       || providerNames.has(alias.toLowerCase()) || claimedProviders.has(alias.toLowerCase())

@@ -8,6 +8,7 @@ import {
   AUTHORITATIVE_EMPTY_QUOTA,
   hasQuotaRows,
   keyReport,
+  report,
   TERMINAL_QUOTA_FAILURE,
   type ProviderQuotaProbeResult,
   type ProviderQuotaReport,
@@ -24,7 +25,13 @@ async function quotaFetch(providerName: string, config: OcxProviderConfig, url: 
 }
 
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
-const KIMI_CODE_USAGE_URL = `${KIMI_CODE_BASE_URL}/usages`;
+/**
+ * Kimi's regional (kimi.ai) Coding API. Its `/usages` answers a Coding Plan API key the same way
+ * the kimi.com origin does (#8332). Only key auth may use it: the probe then calls the origin that
+ * already receives this key for inference, so it adds no credential destination. OAuth tokens
+ * stay on the kimi.com origin they were issued for.
+ */
+const KIMI_CODE_REGIONAL_BASE_URL = "https://api.kimi.ai/coding/v1";
 const COMMAND_CODE_BASE_URL = "https://api.commandcode.ai";
 const COMMAND_CODE_WHOAMI_URL = `${COMMAND_CODE_BASE_URL}/alpha/whoami`;
 const COMMAND_CODE_CREDITS_URL = `${COMMAND_CODE_BASE_URL}/alpha/billing/credits`;
@@ -71,11 +78,24 @@ function isCanonicalDeepSeekBaseUrl(baseUrl: string): boolean {
   return normalized === DEEPSEEK_BASE_URL || normalized === `${DEEPSEEK_BASE_URL}/v1`;
 }
 
+/** Only the exact HTTPS origin, optionally with the `/v1` API root: no credentials, port, query or fragment. */
 function isCanonicalMistralBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === MISTRAL_BASE_URL || normalized === `${MISTRAL_BASE_URL}/v1`;
 }
 
+const MISTRAL_PLAN_NAMES = new Set(["FREE", "INDIVIDUAL", "EDU", "TEAM"]);
+const MISTRAL_BUDGETS = [["api_budget", "API budget"], ["vibe_budget", "Vibe budget"]] as const;
+
+/**
+ * Mistral Studio/Vibe budgets (#8290).
+ *
+ * Display-only: the result never carries routing evidence, so neither key ranking nor the
+ * passive quota pool may spend or order a key from it. The destination is fixed and canonical,
+ * the request rides the provider's own egress, redirects are refused, and the body is bounded
+ * by readQuotaJson. A denial (401/403 and other non-retryable client statuses) is terminal and
+ * suppresses the previous row; transport trouble, 408, 429 and 5xx are transient and keep it.
+ */
 async function fetchMistralQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalMistralBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
@@ -89,7 +109,10 @@ async function fetchMistralQuota(provider: string, config: OcxProviderConfig): P
     quotaFetch(provider, config, `${MISTRAL_BASE_URL}/v1/billing/subscription`, init),
   ]);
   const responses = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
-  if (responses.some(response => response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429)) return TERMINAL_QUOTA_FAILURE;
+  // 402 is a billing refusal of the reading, not proof that the credential is invalid: the
+  // plan may be exhausted or the billing endpoint may be gated. Keep the last-good row, as for
+  // 408/429, instead of erasing the measured budgets on a payment-required response.
+  if (responses.some(response => response.status >= 400 && response.status < 500 && response.status !== 402 && response.status !== 408 && response.status !== 429)) return TERMINAL_QUOTA_FAILURE;
   if (responses.length !== 2 || responses.some(response => !response.ok)) return null;
   const [budgetResponse, subscriptionResponse] = responses as [Response, Response];
   const [budgetValue, subscriptionValue] = await Promise.all([
@@ -99,11 +122,11 @@ async function fetchMistralQuota(provider: string, config: OcxProviderConfig): P
   const budget = asRecord(budgetValue);
   const subscription = asRecord(subscriptionValue);
   if (!budget || !subscription) return null;
-  const plan = typeof subscription.plan_name === "string" && ["FREE", "INDIVIDUAL", "EDU", "TEAM"].includes(subscription.plan_name)
+  const plan = typeof subscription.plan_name === "string" && MISTRAL_PLAN_NAMES.has(subscription.plan_name)
     ? subscription.plan_name : undefined;
   const customWindows: NonNullable<ProviderQuota["customWindows"]> = [];
   const unknownBudgetWindows: NonNullable<ProviderQuota["unknownBudgetWindows"]> = [];
-  for (const [key, label] of [["api_budget", "API budget"], ["vibe_budget", "Vibe budget"]] as const) {
+  for (const [key, label] of MISTRAL_BUDGETS) {
     const row = asRecord(budget[key]);
     const resetAt = normalizeResetAt(row?.reset_at);
     const reset = resetAt === undefined ? {} : { resetAt };
@@ -120,7 +143,7 @@ async function fetchMistralQuota(provider: string, config: OcxProviderConfig): P
   }
   const quota: ProviderQuota = { customWindows, unknownBudgetWindows, updatedAt: Date.now() };
   // Vibe and PAYG entitlements are display information, not inference eligibility evidence.
-  return keyReport(provider, "mistral:budget", markDisplayOnlyQuota(quota), config, apiKey);
+  return keyReport(provider, "mistral:budget", markDisplayOnlyQuota(quota), config, apiKey, undefined, { bindCredential: true });
 }
 
 function isCanonicalClineBaseUrl(baseUrl: string): boolean {
@@ -441,10 +464,10 @@ async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): 
   const label = grantedBalance !== undefined && grantedBalance > 0
     ? `API balance (${amount(balance)} total, ${amount(grantedBalance)} granted)`
     : `API balance (${amount(balance)})`;
-  return keyReport(provider, "deepseek:balance", {
+  return report(provider, "deepseek:balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
-  }, config, apiKey);
+  });
 }
 
 /**
@@ -868,10 +891,10 @@ async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): P
     }
   }
   if (customWindows.length === 0) return null;
-  return keyReport(provider, "minimax:token-plan-remains", {
+  return report(provider, "minimax:token-plan-remains", {
     customWindows,
     updatedAt: Date.now(),
-  }, config, apiKey);
+  });
 }
 
 /**
@@ -913,10 +936,10 @@ async function fetchMoonshotQuota(provider: string, config: OcxProviderConfig): 
   const label = voucher !== undefined && cash !== undefined
     ? `Balance (${money(available)} ${unit} available, ${money(voucher)} voucher)`
     : `Balance (${money(available)} ${unit} available)`;
-  return keyReport(provider, "moonshot:balance", {
+  return report(provider, "moonshot:balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
-  }, config, apiKey);
+  });
 }
 
 /**
@@ -951,15 +974,15 @@ async function fetchVeniceQuota(provider: string, config: OcxProviderConfig): Pr
   if (epochAllocated !== undefined && epochAllocated > 0 && epochUsed !== undefined) {
     const percent = normalizePercent((epochUsed / epochAllocated) * 100);
     if (percent === undefined) return null;
-    return keyReport(provider, "venice:billing-balance", {
+    return report(provider, "venice:billing-balance", {
       customWindows: [{ label, percent }],
       updatedAt: Date.now(),
-    }, config, apiKey);
+    });
   }
-  return keyReport(provider, "venice:billing-balance", {
+  return report(provider, "venice:billing-balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
-  }, config, apiKey);
+  });
 }
 
 /**
@@ -1008,8 +1031,7 @@ async function fetchSyntheticQuota(provider: string, config: OcxProviderConfig):
   }
   const inferenceQuota = { ...quota };
   delete inferenceQuota.customWindows; // search.hourly does not constrain model inference.
-  return windows > 0 ? keyReport(provider, "synthetic:quotas", quota, config, apiKey,
-    fiveHour !== undefined || weekly !== undefined ? inferenceQuota : undefined) : null;
+  return windows > 0 ? keyReport(provider, "synthetic:quotas", quota, config, apiKey, inferenceQuota) : null;
 }
 
 /**
@@ -1044,15 +1066,15 @@ async function fetchDeepInfraQuota(provider: string, config: OcxProviderConfig):
     const spent = total !== undefined && total > 0 ? total : Math.max(0, spendLimit - available);
     const percent = normalizePercent((spent / spendLimit) * 100);
     if (percent === undefined) return null;
-    return keyReport(provider, "deepinfra:billing-checklist", {
+    return report(provider, "deepinfra:billing-checklist", {
       customWindows: [{ label: `Billing cycle spend ($${spent.toFixed(2)} of $${spendLimit.toFixed(2)})`, percent }],
       updatedAt: Date.now(),
-    }, config, apiKey);
+    });
   }
-  return keyReport(provider, "deepinfra:billing-checklist", {
+  return report(provider, "deepinfra:billing-checklist", {
     customWindows: [{ label: `Prepaid balance ($${available.toFixed(2)})`, percent: 0 }],
     updatedAt: Date.now(),
-  }, config, apiKey);
+  });
 }
 
 /**
@@ -1101,7 +1123,7 @@ async function fetchNeuralwattQuota(provider: string, config: OcxProviderConfig)
       windows += 1;
     }
   }
-  return windows > 0 ? keyReport(provider, "neuralwatt:quota", quota, config, apiKey) : null;
+  return windows > 0 ? report(provider, "neuralwatt:quota", quota) : null;
 }
 
 /**
@@ -1171,6 +1193,18 @@ function quotaResetAt(row: Record<string, unknown>): number | undefined {
 
 export function isCanonicalKimiCodeBaseUrl(baseUrl: string): boolean {
   return normalizedBaseUrl(baseUrl) === KIMI_CODE_BASE_URL;
+}
+
+/**
+ * The Kimi Coding origin whose `/usages` a quota probe may call with this provider's bearer, or
+ * null. It is always the configured inference origin, matched exactly against Kimi's own origins,
+ * so a user-edited or lookalike host never receives the credential.
+ */
+function kimiCodeQuotaBaseUrl(config: Pick<OcxProviderConfig, "baseUrl" | "authMode">): string | null {
+  const normalized = normalizedBaseUrl(config.baseUrl);
+  if (normalized === KIMI_CODE_BASE_URL) return normalized;
+  if (normalized === KIMI_CODE_REGIONAL_BASE_URL && (config.authMode ?? "key") === "key") return normalized;
+  return null;
 }
 
 export function isCanonicalCommandCodeBaseUrl(baseUrl: string): boolean {
@@ -1324,9 +1358,10 @@ async function resolveKimiQuotaBearer(config: OcxProviderConfig, accountId?: str
 
 export async function fetchKimiQuota(provider: string, config: OcxProviderConfig, accessToken: string): Promise<ProviderQuotaReport | null> {
   // Never release credentials to a user-edited or lookalike provider host.
-  if (!isCanonicalKimiCodeBaseUrl(config.baseUrl)) return null;
+  const baseUrl = kimiCodeQuotaBaseUrl(config);
+  if (!baseUrl) return null;
   if (!accessToken) return null;
-  const response = await quotaFetch(provider, config, KIMI_CODE_USAGE_URL, {
+  const response = await quotaFetch(provider, config, `${baseUrl}/usages`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1489,7 +1524,7 @@ type KeyQuotaReader = (name: string, provider: OcxProviderConfig) => Promise<Pro
 /** Same selector drives cheap capabilities and uncached reads; never resolves credentials. */
 export function keyQuotaReaderForProvider(name: string, provider: OcxProviderConfig): KeyQuotaReader | null {
   if (provider.disabled === true || (provider.authMode ?? "key") !== "key") return null;
-  if (isCanonicalKimiCodeBaseUrl(provider.baseUrl)) {
+  if (kimiCodeQuotaBaseUrl(provider)) {
     return async (id, config) => {
       const bearer = await resolveKimiQuotaBearer(config);
       return bearer ? fetchKimiQuota(id, config, bearer) : null;
@@ -1505,6 +1540,8 @@ export function keyQuotaReaderForProvider(name: string, provider: OcxProviderCon
   if (isCanonicalA6apiBaseUrl(provider.baseUrl)) return fetchA6apiQuota;
   if (name === "openrouter" && isCanonicalOpenRouterBaseUrl(provider.baseUrl)) return fetchOpenRouterQuota;
   if (name === "deepseek" && isCanonicalDeepSeekBaseUrl(provider.baseUrl)) return fetchDeepSeekQuota;
+  // The canonical-URL guard alone decides eligibility, so a custom provider name that points
+  // at Mistral's own origin still probes, and a Mistral-named lookalike still dispatches nothing.
   if (isCanonicalMistralBaseUrl(provider.baseUrl)) return fetchMistralQuota;
   if (name === "cline-pass" && isCanonicalClineBaseUrl(provider.baseUrl)) return fetchClineQuota;
   if (isCanonicalOllamaCloudBaseUrl(provider.baseUrl ?? getProviderRegistryEntry(name)?.baseUrl)) return fetchOllamaCloudQuota;

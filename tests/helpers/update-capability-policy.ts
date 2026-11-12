@@ -21,7 +21,8 @@ const readsFor = (module: string): Set<string> | undefined => {
   module = module.replace(/^node:/, "");
   if (module === "fs" || module === "fs/promises") return fsReads;
   if (module === "bun") return bunReads;
-  if (module === "crypto") return new Set(["randomBytes", "randomUUID", "createHash"]);
+  // createPublicKey and verify are pure: they build a key object from bytes and check a signature.
+  if (module === "crypto") return new Set(["randomBytes", "randomUUID", "createHash", "createPublicKey", "verify"]);
   if (module === "os") return new Set(["homedir", "tmpdir", "platform", "arch", "type", "release"]);
   if (module === "tty") return new Set(["isatty"]);
   // process imports are disallowed: the global view below is deliberately narrow.

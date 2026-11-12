@@ -4,6 +4,7 @@
 // Probe rows confer no update authority. Child rows retain only their own child.
 import { orchestratedChildReview } from "./update-review-orchestrated-child";
 import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
 
 const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   ["src/update/config-preflight.ts:<module>:import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from \"node:fs\";", "read-only config preflight: open with O_RDONLY | O_NONBLOCK, inspect and read the fd, then close it"],
@@ -30,6 +31,10 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   ["src/update/posix-install-supervisor.mjs:publish:writeFileSync(temp, JSON.stringify({ ...marker, installerPid: pid, installerPgid: pid }), { flag: \"wx\", mode: 0o600 })","supervisor child: replaces only an existing marker in phase mutating with an integer pid (exclusive 0600 temp then rename); every reviewed caller passes join(configDir(), update-orchestrated.json)"],
   ["src/update/posix-install-supervisor.mjs:publish:renameSync(temp, path)","supervisor child: replaces only an existing marker in phase mutating with an integer pid; every reviewed caller passes join(configDir(), update-orchestrated.json)"],
   ["src/update/posix-install-supervisor.mjs:publish:unlinkSync(temp)","supervisor child: removes only its own unrenamed temp file"],
+  ["src/update/windows-installer-marker.mjs:<module>:import { readFileSync, renameSync, unlinkSync, writeFileSync } from \"node:fs\";","Windows installer witness: marker publication below; reviewed callers runNpmInstall and the runWindowsInstallerSync bridge pass join(configDir(), update-orchestrated.json)"],
+  ["src/update/windows-installer-marker.mjs:publishWindowsInstallerPid:writeFileSync(temp, JSON.stringify({ ...marker, installerPid: pid }), { flag: \"wx\", mode: 0o600 })","Windows installer witness: replaces only a marker awaiting an installer with the supervisor pid (exclusive 0600 temp then rename)"],
+  ["src/update/windows-installer-marker.mjs:publishWindowsInstallerPid:renameSync(temp, markerPath)","Windows installer witness: replaces only a marker awaiting an installer with the supervisor pid"],
+  ["src/update/windows-installer-marker.mjs:publishWindowsInstallerPid:unlinkSync(temp)","Windows installer witness: removes only its own unrenamed temp file"],
   ["src/update/posix-install-supervisor.mjs:alive:process.kill(-pgid, 0)","supervisor child: signal-zero probe of the installer group this supervisor spawned"],
   ["src/update/posix-install-supervisor.mjs:supervise:spawn(process.execPath, [entry, \"install\"], { detached: true, stdio: [\"pipe\", \"ignore\", \"inherit\"], cwd: config.cwd, env: process.env })","supervisor child: starts its own detached installer group; reviewed caller runPosixInstallerSync launches this entry via guardedSpawnSync(authorizeMutation, 'package') at posix-install-supervisor.mjs:18"],
   ["src/update/posix-install-supervisor.mjs:runPosixInstallerSupervisorMain:spawn(input.file, input.args, { cwd: input.cwd, env: process.env, stdio: [\"ignore\", \"inherit\", \"inherit\"] })","supervisor child: runs exactly the installer its stdin caller supplied, with the invoking user's authority; reviewed caller runPosixInstallerSync launches this entry via guardedSpawnSync(authorizeMutation, 'package') at posix-install-supervisor.mjs:18"],
@@ -89,10 +94,6 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   [
     "bin/ocx.mjs:<module>:probeSpawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2).filter(arg => !arg.startsWith(NODE_LAUNCH_PROOF_PREFIX))], { stdio: \"inherit\", // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no // console to inherit. Without this flag Windows allocates a visible console for // the long-running Bun child, and closing that window kills the proxy (#1236). windowsHide: true, env: { // A cache shared with another Bun version (the CI test runner's) is evicted on every start. ...scopeTranspilerCacheToRuntime(inheritedEnv, bunRuntime.version, join), [NODE_LAUNCH_CONTEXT_ENV]: launchContext, [BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source, [BUN_RUNTIME_PATH_ENV]: bunRuntime.path, }, })",
     "bounded probe or ordinary launcher; no update control"
-  ],
-  [
-    "bin/ocx.mjs:<module>:child.kill(sig)",
-    "only this function's exact returned child / ordinary signal relay"
   ],
   [
     "src/update/async-check.ts:<module>:defaultDeps: AsyncLookupDeps = { ownerFn: pnpmOwner, spawnFn: probeSpawn }",
@@ -220,4 +221,4 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   ["src/update/npm-install.mjs:runNpmInstall:process.stderr.write(chunk)","bounded helper protocol output; no successful update publication"],
   ["src/update/refresh-scheduler.ts:createRefreshScheduler:deps.write(tag, latest, deps.now())","version badge cache only; no runtime or install authority"]
 ];
-export const updatePrimitiveAllowlist: readonly (readonly [string, string])[] = [...basePrimitiveAllowlist, ...orchestratedEntryReview.primitive, ...orchestratedChildReview.primitive];
+export const updatePrimitiveAllowlist: readonly (readonly [string, string])[] = [...basePrimitiveAllowlist, ...orchestratedEntryReview.primitive, ...orchestratedChildReview.primitive, ...signedSupplyReview.primitive];

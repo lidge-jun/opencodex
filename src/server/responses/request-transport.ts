@@ -1,9 +1,10 @@
 import { publicOAuthErrorPresentation } from "../../oauth";
-import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { observeProviderFailureEvent, projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { SendBudgetExhaustedError, errorDestinationText, providerErrorDestinationLabel } from "../../lib/upstream-retry";
-import { appendLoadedToolDefinitions, appendOnlyToolLoadingMatches } from "../../claude/inbound-tool-loading";
+import { appendLoadedToolDefinitions, toolLoadingModelMatches } from "../../claude/inbound-tool-loading";
+import { applyChatToolDispatch } from "../../claude/chat-tool-dispatch";
 import { isRec } from "../../claude/inbound-records";
 import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-tools";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
@@ -28,6 +29,7 @@ import {
 } from "../../oauth/store";
 import { refreshKiroAccountModelsDetached } from "../../providers/kiro-model-catalog";
 import type { ProviderAdapter, AdapterRequest } from "../../adapters/base";
+import { copyVertexRequestAuthority, hasVertexRequestAuthority, vertexRequestAuthorityIsCurrent } from "../../lib/gcp-adc";
 import { releaseProviderRequestSlot, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../providers/request-pacing";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
@@ -84,18 +86,15 @@ import {
   providerApiKeySelectionIsCurrent,
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendGuardInit, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import { resolveConnectTimeoutMs } from "../../stall-timeout";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
-import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota, recordPassiveAccountQuota } from "../../providers/quota";
-import { bindMuseQuotaConfig, captureMuseQuotaOwner, type MuseQuotaOwner } from "../../providers/quota/muse-owner";
-import { captureProviderAccountQuotaEpoch } from "../../providers/quota/account-cache";
-import { isMuseSubscriptionUsagePayload, parseMuseSubscriptionUsage } from "../../providers/muse-subscription-usage";
-import { runPassiveReadSync } from "../../lib/passive-read";
+import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
@@ -366,17 +365,6 @@ export async function prepareResponsesTransport(
    * the case the fence exists for. Stays 0 for every provider without a passive quota.
    */
   let passiveQuotaWriterGeneration = 0;
-  let passiveQuotaOwner: MuseQuotaOwner | null = null;
-  let passiveQuotaEpoch = 0;
-  const createPassiveQuotaObserver = (): ((payload: unknown) => void) => {
-    const owner = passiveQuotaOwner, generation = passiveQuotaWriterGeneration, epoch = passiveQuotaEpoch;
-    return payload => {
-      // Deferred stream replacement invalidates the receipt for the earlier response.
-      if (!owner || owner !== passiveQuotaOwner || !isMuseSubscriptionUsagePayload(payload)) return;
-      const quota = parseMuseSubscriptionUsage(payload);
-      if (quota) recordPassiveAccountQuota(route.providerName, owner.accountId, quota, generation, owner, epoch);
-    };
-  };
   const copilotRequestedModel = route.modelId;
   /** Project only bounded Copilot refusal metadata; upstream bodies and session tokens never reach the client. */
   const copilotRefusalResponse = (error: unknown): Response | undefined => {
@@ -611,6 +599,7 @@ export async function prepareResponsesTransport(
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
     if (usesApiKeyAccount(route.provider)) {
+      if (!logCtx.activeAttempt?.usage && usage) recordKeyAttemptUsage(logCtx, usage);
       logCtx.usage = logCtx.activeAttempt?.usage;
     } else if (usage) {
       logCtx.usage = usage;
@@ -644,11 +633,19 @@ export async function prepareResponsesTransport(
     // Capture this physical adapter's destination. A retry/rebind gets a fresh decision, and
     // each build projects a copy so unselected fallbacks retain the original tool catalog.
     const discovery = options.anthropicToolLoadingSource;
-    const appendOnly = inboundWire === "anthropic" && discovery && provider.adapter === "openai-responses"
+    // Shared by both direct-route opt-ins: combo attempts and policy-owned requests keep the
+    // original catalog.
+    const directToolLoadingRoute = inboundWire === "anthropic"
       && !options.comboAttempt && !route.combo && route.routeKind !== "combo" && route.routeKind !== "policy"
-      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility
-      && appendOnlyToolLoadingMatches(config.claudeCode?.appendOnlyToolLoadingModels,
-        `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`);
+      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility;
+    const wireModel = `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`;
+    const appendOnly = discovery && directToolLoadingRoute && provider.adapter === "openai-responses"
+      && toolLoadingModelMatches(config.claudeCode?.appendOnlyToolLoadingModels, wireModel);
+    // The Chat wire has no additional_tools; its own opt-in keeps the catalog stable through a
+    // dispatcher instead, projected and un-projected at this one physical adapter (#7452).
+    const chatDispatch = discovery && directToolLoadingRoute && provider.adapter === "openai-chat"
+      && toolLoadingModelMatches(config.claudeCode?.chatToolDispatchModels, wireModel);
+    if (chatDispatch) applyChatToolDispatch(resolved, discovery);
     if (appendOnly) {
       const buildWithOriginalCatalog = resolved.buildRequest.bind(resolved);
       resolved.buildRequest = (requestParsed, incoming) => {
@@ -689,6 +686,7 @@ export async function prepareResponsesTransport(
     const observeEvent = (event: AdapterEvent, response: object): void => {
       delivery.noteAdapterEvent();
       observeUsage(event, response);
+      observeProviderFailureEvent(logCtx, event);
     };
     const parseStream = resolved.parseStream.bind(resolved);
     resolved.parseStream = async function* (...args) {
@@ -708,7 +706,11 @@ export async function prepareResponsesTransport(
     // Persistence consent is configuration: capture its generation with the provider snapshot.
     const fileConsentGeneration = captureConfigGeneration();
     resolved.buildRequest = async (requestParsed, incoming) => {
-      const request = await build(requestParsed, incoming);
+      const guardedIncoming = incoming ? { ...incoming, beforePhysicalSend: () => {
+        incoming.beforePhysicalSend?.();
+        if (!selectionIsCurrent(binding)) throw new Error("Credential selection changed before auxiliary send");
+      } } : incoming;
+      const request = await build(requestParsed, guardedIncoming);
       // Capture at adapter creation, never from mutable serving state after an await.
       if (binding) requestBindings.set(request, binding);
       const allowedImageFileModels = fileProvider.modelCapabilities
@@ -804,7 +806,16 @@ export async function prepareResponsesTransport(
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...route.provider, _apiKeyAttempt: undefined });
         if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
       }
-      if (!current) throw new Error("API key selection is unavailable before dispatch");
+      if (!current) {
+        // Rethrown through oauthDispatch so adapter-dispatch / passthrough-dispatch map it
+        // as a local 403 admission refusal without charging an upstream send.
+        if (isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
+        throw new Error("API key selection is unavailable before dispatch");
+      }
+      if (route.provider.googleMode === "vertex" || current.googleMode === "vertex") {
+        const freshPolicy = captureRouteStaticPolicy(route.providerName, route.modelId, current, route.staticPolicy.effectiveAlias, inboundWire);
+        if (freshPolicy.model.adapter !== route.staticPolicy.model.adapter) throw new Error("Vertex model wire changed before dispatch");
+      }
       await resolveCopilotSelection(requestParsed, true, current);
     }
     adapter = activeAdapter = runTurnAdapter = resolveSelectionAdapter(
@@ -817,7 +828,7 @@ export async function prepareResponsesTransport(
     if (route.provider.authMode === "forward") return false;
     const available = route.provider.authMode === "oauth"
       ? getAccountSet(route.providerName)?.accounts.some(row => !row.paused && !row.needsReauth)
-      : !!config.providers[route.providerName]?.apiKey;
+      : !isProviderApiKeyPaused(config.providers[route.providerName]) && !!config.providers[route.providerName]?.apiKey;
     if (!available) return false;
     await refreshDispatchAdapter(requestParsed);
     // Bind before the recovery caller rebuilds. A terminal retry can be a clone;
@@ -921,12 +932,10 @@ export async function prepareResponsesTransport(
           await reacquirePacing(route.provider, route.modelId);
           pacingChanged = false;
         }
-        if (selectionIsCurrent(requestBindings.get(wireRequest)) && copilotSessionExpiresAt > Date.now() + 1000) {
+        if (selectionIsCurrent(requestBindings.get(wireRequest)) && vertexRequestAuthorityIsCurrent(wireRequest) && copilotSessionExpiresAt > Date.now() + 1000) {
           const ws = codexWsExecutorBinding(execute);
           const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? ws?.http ?? execute;
           const binding = requestBindings.get(wireRequest);
-          // Each attempt starts without attribution; only the admitted final wire can prove it.
-          if (hasPassiveAccountQuota(route.providerName)) passiveQuotaOwner = null;
           const snapshot = anthropicInstance !== undefined && binding?.kind === "oauth"
             ? binding.snapshot : undefined;
           const target = destination instanceof Request ? destination.url : String(destination);
@@ -974,18 +983,10 @@ export async function prepareResponsesTransport(
               passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target), config, route.providerName, route.provider),
               input,
               { ...physicalInit, redirect: "manual",
-                ...physicalSendObserverInit(observeAutoPause, target, deferredCopilotNote ? commitKeyAttemptSend : undefined,
-                  hasPassiveAccountQuota(route.providerName) ? (sameDestination, headers) => {
-                    passiveQuotaOwner = null;
-                    try {
-                      if (!sameDestination || target !== wireRequest.url || binding?.kind !== "oauth"
-                        || headers.get("authorization") !== `Bearer ${binding.snapshot.accessToken}` || headers.has("x-api-key")
-                        || !runPassiveReadSync(() => selectionIsCurrent(binding))) return;
-                      passiveQuotaWriterGeneration = captureConfigGeneration();
-                      passiveQuotaEpoch = captureProviderAccountQuotaEpoch(route.providerName);
-                      passiveQuotaOwner = bindMuseQuotaConfig(captureMuseQuotaOwner(route.providerName, binding.snapshot.accountId, binding.snapshot.generation), config, route.providerName);
-                    } catch { /* Quota attribution is best-effort and never blocks the send. */ }
-                  } : undefined) },
+                ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination), deferredCopilotNote ? commitKeyAttemptSend : undefined),
+                ...(hasVertexRequestAuthority(wireRequest) ? physicalSendGuardInit((finalTarget, finalHeaders) => {
+                    if (!selectionIsCurrent(requestBindings.get(wireRequest)) || !vertexRequestAuthorityIsCurrent(wireRequest, finalTarget, finalHeaders)) throw new Error("Vertex credential authority changed before dispatch");
+                  }) : {}) },
               { providerName: route.providerName, provider: route.provider },
             )) as typeof globalThis.fetch;
             response = await fetchWithHeaderTimeout(target, dispatchInit, dispatchInit.signal ?? options.abortSignal ?? req.signal,
@@ -1029,6 +1030,7 @@ export async function prepareResponsesTransport(
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
           completedToolBlocks: requestState.completedToolBlocks,
           headers: requestState.selectedForwardHeaders, providerName: route.providerName, translatorBudget,
+          abortSignal: dispatchInit.signal ?? options.abortSignal ?? req.signal,
           dispatchPacingHeld: true,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
         });
@@ -1037,11 +1039,21 @@ export async function prepareResponsesTransport(
           rebuilt.releaseBodyObservation?.();
           return markProxyError(formatErrorResponse(413, "outbound_body_too_large", describeOutboundBodyRefusal(bodySize)), "outbound");
         }
+        // A Google schema-repair replay owns its modified body. Retain it only when the
+        // credential rebuild produced the same original payload; otherwise refuse to combine
+        // a repair for the old request with a newly constructed request.
+        let refreshedBody: BodyInit | null | undefined = rebuilt.body;
+        if (route.provider.adapter === "google" && route.provider.googleMode === "vertex"
+          && typeof dispatchInit.body === "string" && dispatchInit.body !== wireRequest.body) {
+          if (rebuilt.body !== wireRequest.body) throw new Error("Vertex request changed during schema repair");
+          refreshedBody = dispatchInit.body;
+        }
         const headers = new Headers(dispatchInit.headers);
         for (const name of Object.keys(wireRequest.headers)) headers.delete(name);
         for (const [name, value] of Object.entries(rebuilt.headers)) headers.set(name, value);
         wireRequest.releaseBodyObservation?.();
         Object.assign(wireRequest, rebuilt);
+        copyVertexRequestAuthority(rebuilt, wireRequest);
         const binding = requestBindings.get(rebuilt);
         if (binding) requestBindings.set(wireRequest, binding);
         else requestBindings.delete(wireRequest);
@@ -1049,7 +1061,7 @@ export async function prepareResponsesTransport(
         sameTargetParsed = requestParsed;
         sameTargetToken = transportToken;
         destination = rebuilt.url;
-        dispatchInit = { ...dispatchInit, method: rebuilt.method, headers, body: rebuilt.body };
+        dispatchInit = { ...dispatchInit, method: rebuilt.method, headers, body: refreshedBody };
         pacingChanged = route.provider.requestPacing?.enabled === true
           && (!!route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin");
         // A refreshed key must reacquire admission before the next synchronous send guard.
@@ -1232,6 +1244,10 @@ export async function prepareResponsesTransport(
         if (anthropicInstance !== undefined && anthropicRouting!.hasAnthropicFailoverQuorum()) {
           anthropicPoolAccountId = resolved.accountId;
         }
+        // Captured beside the account it fences, so the two can never disagree.
+        if (hasPassiveAccountQuota(route.providerName)) {
+          passiveQuotaWriterGeneration = captureConfigGeneration();
+        }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
@@ -1280,13 +1296,25 @@ export async function prepareResponsesTransport(
   // The Transport variant, not the bare picker: the picker answers with the PERSISTED row, and
   // a built-in provider stored in its valid minimal form would lose the adapter id, base URL
   // and static headers registry backfill supplies, throwing `Unknown adapter: undefined`.
-  const proactiveKeyProvider = selectProactiveApiKeyTransport(
-    config,
-    route.providerName,
-    route.provider,
-    parsed.options.promptCacheKey,
-  );
+  let proactiveKeyProvider: OcxProviderConfig | null;
+  try {
+    proactiveKeyProvider = selectProactiveApiKeyTransport(
+      config,
+      route.providerName,
+      route.provider,
+      parsed.options.promptCacheKey,
+    );
+  } catch (err) {
+    if (err instanceof OAuthAccountPausedError) {
+      return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)), publicOAuthErrorPresentation(err));
+    }
+    throw err;
+  }
   if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+  if (isProviderApiKeyPaused(route.provider)) {
+    const err = new ProviderApiKeyPausedError();
+    return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)), publicOAuthErrorPresentation(err));
+  }
   route.provider = resolveProviderTransport(
     route.providerName,
     route.provider,
@@ -1490,7 +1518,7 @@ export async function prepareResponsesTransport(
     adapterBindings,
     commitResolvedOAuthSelection,
     refreshResolvedOAuthSelection,
-    createPassiveQuotaObserver,
+    get passiveQuotaWriterGeneration(): number { return passiveQuotaWriterGeneration; },
     applyFailoverSnapshot,
     selectionIsCurrent,
     resolveSelectionAdapter,

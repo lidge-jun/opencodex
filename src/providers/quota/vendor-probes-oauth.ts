@@ -4,11 +4,13 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
 import { loadConfig } from "../../config";
 import { configuredAnthropicInstance, type AnthropicInstanceId } from "../anthropic-instance";
+import { isAnthropicPoolEnabledFor } from "../../oauth/anthropic-pool-config";
 import { captureOAuthAccountSelection, credentialGeneration, getAccountCredential, getAccountSet } from "../../oauth/store";
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
 import { probeAnthropicUsageQuota, type AnthropicUsageProbe } from "../claude-cli-usage";
+import { claudeSignedInIdentity, peekClaudeUsageObservation } from "../claude-cli-usage-state";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
@@ -21,8 +23,8 @@ import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type Codex
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
 import {
-  accountReportCurrent,
-  accountReportObservationKeys,
+  accountReportCurrent, observedQuotaFor,
+  AUTHORITATIVE_EMPTY_QUOTA,
   TERMINAL_QUOTA_FAILURE,
   providerLabel,
   providerQuotaFromCodexQuota,
@@ -37,6 +39,7 @@ import {
   accountCacheKey,
   captureProviderAccountQuotaEpoch,
   accountQuotaCache,
+  getCachedProviderAccountQuota,
   hydrateAccountQuotaCache,
   mayCommitAccountQuotaKey,
   persistAccountQuotaCache,
@@ -44,15 +47,6 @@ import {
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
 import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor } from "./anthropic-cooldown-recovery";
-import { bindMuseQuotaConfig, captureMuseQuotaOwner, type MuseQuotaOwner } from "./muse-owner";
-
-function bindMuseReport(value: ProviderQuotaReport | null, owner: MuseQuotaOwner): ProviderQuotaReport | null {
-  if (value) {
-    accountReportCurrent.set(value, owner.isCurrent);
-    accountReportObservationKeys.set(value, owner.accountKey);
-  }
-  return value;
-}
 
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
 const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
@@ -290,6 +284,51 @@ export async function fetchAnthropicUsageProbeForInstance(
   return probe;
 }
 
+/** Pool switch plus each seat's routability, in store order; a change retires a cached pooled report. */
+function anthropicPoolState(config: OcxConfig, instance: AnthropicInstanceId): string {
+  const accounts = getAccountSet(instance)?.accounts ?? [];
+  return JSON.stringify([isAnthropicPoolEnabledFor(config, instance),
+    accounts.map(row => [row.id, row.paused === true, row.needsReauth === true])]);
+}
+
+/**
+ * Pooled Anthropic report: the same display-only configured-weight estimate the Codex pool row
+ * carries, so the Providers overview shows pool-wide 5-hour/weekly bars, the next recovery and the
+ * effective account instead of the active seat alone.
+ *
+ * Only when the account pool is enabled and holds more than one account: with the pool off,
+ * requests are served by the active account, so its own reading is the provider's quota. Each
+ * account reads its last-good per-account row (the active one was just refreshed above); Anthropic
+ * reports no seat tier, so every routable account weighs 1. Paused, reauth and stale accounts are
+ * excluded and surface as incomplete coverage, exactly as for Codex.
+ */
+function anthropicPoolReport(
+  provider: string,
+  instance: AnthropicInstanceId,
+  config: OcxConfig,
+  activeAccountId: string,
+  activeQuota: ProviderQuota,
+): ProviderQuotaReport | null {
+  if (!isAnthropicPoolEnabledFor(config, instance)) return null;
+  const accounts = getAccountSet(instance)?.accounts ?? [];
+  if (accounts.length < 2) return null;
+  const capacity = aggregateCodexPoolCapacity(accounts.map(row => ({
+    isMain: false,
+    active: row.id === activeAccountId,
+    weight: 1,
+    paused: row.paused === true,
+    needsReauth: row.needsReauth === true,
+    quota: (row.id === activeAccountId ? activeQuota : getCachedProviderAccountQuota(instance, row.id)) as CodexCapacityQuota | null,
+  })));
+  if (!capacity.aggregation || !capacity.quota) return null;
+  return report(
+    provider,
+    "anthropic:oauth-usage",
+    capacity.quota as ProviderQuota,
+    publicCapacityAggregation(capacity.aggregation, "aggregate"),
+  );
+}
+
 /** `config` is the caller's live object; currency re-reads it instead of reloading the file. */
 export async function fetchAnthropicQuota(provider: string, config: OcxConfig = loadConfig()): Promise<ProviderQuotaReport | null> {
   const instance = configuredAnthropicInstance(config, provider);
@@ -344,9 +383,16 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
       accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent }); anthropicPublish?.();
     }
   }
-  const quotaReport = report(provider, "anthropic:oauth-usage", quota);
+  const pooledReport = anthropicPoolReport(provider, instance, config, probedAccountId, quota);
+  const quotaReport = pooledReport ?? report(provider, "anthropic:oauth-usage", quota);
+  // The estimate carries no reset times, so reset detection keeps observing the active seat's reading.
+  if (pooledReport) observedQuotaFor.set(pooledReport, quota);
+  // Current only while the pool switch and membership are unchanged: pausing, resuming or reauthorizing
+  // an inactive seat changes the aggregate, and turning the pool on or adding a seat changes the report.
+  const poolState = anthropicPoolState(config, instance);
   if (quotaReport && anthropicCurrent) {
-    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && getAccountSet(instance)?.activeAccountId === probedAccountId);
+    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && anthropicPoolState(config, instance) === poolState
+      && getAccountSet(instance)?.activeAccountId === probedAccountId);
   }
   return quotaReport;
 }
@@ -391,34 +437,27 @@ export async function fetchKiroQuota(provider: string): Promise<ProviderQuotaRep
  * switch to is gated on supportsPerAccountQuota, which has no meta-muse reader, so the
  * GUI account list would go from showing observations to showing nothing.
  */
-export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): Promise<ProviderQuotaReport | null> {
-  const captured = captureMuseQuotaOwner(provider);
-  const owner = config ? bindMuseQuotaConfig(captured, config, provider) : captured;
-  if (!owner) return null;
-  const probedAccountId = owner.accountId;
+export async function fetchMuseKeyQuota(provider: string): Promise<ProviderQuotaReport | null> {
+  const probedAccountId = getAccountSet(provider)?.activeAccountId;
+  if (!probedAccountId) return null;
   // A paused account is excluded from every automatic upstream use; a key mint is one.
   if (getAccountSet(provider)?.accounts.find(account => account.id === probedAccountId)?.paused === true) return null;
   const oauthAccessToken = getAccountCredential(provider, probedAccountId)?.muse?.oauthAccessToken;
   // An imported or pasted credential has no account token and never will: it is
   // capability, not provider id, that decides whether a probe is possible.
-  if (!oauthAccessToken || !owner.isCurrent()) return null;
+  if (!oauthAccessToken) return null;
   const probedAccountKey = accountCacheKey(provider, probedAccountId);
   const writerGeneration = captureConfigGeneration();
-  const epoch = captureProviderAccountQuotaEpoch(provider);
-  const quota = await fetchMuseKeyQuotaSnapshot(probedAccountId, oauthAccessToken, {}, undefined, owner.identity);
-  if (!quota || !owner.isCurrent() || epoch !== captureProviderAccountQuotaEpoch(provider)
-    || !mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) return null;
-  // Hydrate before writing: persistence serializes the whole in-memory map.
-  hydrateAccountQuotaCache();
-  const entry = { ts: Date.now(), quota, identity: owner.identity,
-    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent(),
-    isConfigCurrent: owner.isConfigCurrent };
-  accountQuotaCache.set(probedAccountKey, entry);
-  persistAccountQuotaCache();
-  return bindMuseReport(report(provider, `${provider}:key-endpoint`, quota), {
-    ...owner, isCurrent: () => accountQuotaCache.get(probedAccountKey) === entry
-      && epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent(),
-  });
+  const quota = await fetchMuseKeyQuotaSnapshot(probedAccountId, oauthAccessToken);
+  if (!quota) return null;
+  if (mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
+    // Hydrate before writing, for the same reason recordPassiveAccountQuota does:
+    // persistAccountQuotaCache serializes the whole in-memory map.
+    hydrateAccountQuotaCache();
+    accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
+    persistAccountQuotaCache();
+  }
+  return report(provider, `${provider}:key-endpoint`, quota);
 }
 /**
  * Provider-level row for a passive provider: the ACTIVE account's last observed
@@ -431,19 +470,73 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
  * as the relative age of the row.
  */
 export async function fetchPassiveProviderQuota(provider: string): Promise<ProviderQuotaReport | null> {
-  const owner = captureMuseQuotaOwner(provider);
-  if (!owner) return null;
+  const activeId = getAccountSet(provider)?.activeAccountId;
+  if (!activeId) return null;
   // Idempotent; without it a proxy restart shows nothing until the next streaming turn
   // even though the last observation is on disk.
   hydrateAccountQuotaCache();
-  const key = accountCacheKey(provider, owner.accountId);
-  const entry = accountQuotaCache.get(key);
-  if (!entry?.quota || entry.identity !== owner.identity || !entry.isCurrent?.()) return null;
+  const entry = accountQuotaCache.get(accountCacheKey(provider, activeId));
+  if (!entry?.quota) return null;
   const built = report(provider, `${provider}:subscription-observation`, entry.quota);
   // Tagged here rather than inside report(), which every probed path shares.
-  return bindMuseReport(built ? { ...built, observed: true } : null, {
-    ...owner, isCurrent: () => accountQuotaCache.get(key) === entry && entry.isCurrent?.() === true && owner.isCurrent(),
-  });
+  return built ? { ...built, observed: true } : null;
+}
+
+/**
+ * Provider-level row for the Claude Code CLI subscription: the signed-in account's last usage the
+ * admission recorded, in the same shape `fetchPassiveProviderQuota` returns.
+ *
+ * Cache-only. OpenCodex stores no Claude credential and this path must never spawn the CLI or
+ * probe an endpoint on a dashboard load; the admission already reads Anthropic's usage endpoint
+ * before a launch. A forced quota refresh re-reads the local sign-in and this snapshot, not the
+ * upstream. `updatedAt` stays the observation time, which is the age the quota card renders.
+ *
+ * The row belongs to one account. Signed out, an unreadable sign-in, or a sign-in with no recorded
+ * snapshot is authoritative empty, which clears another account's cached row. A cached row stops
+ * being current as soon as any later sign-in read (a turn's admission included) names another account.
+ */
+export async function fetchClaudeCliObservedQuota(provider: string, forceRefresh: boolean): Promise<ProviderQuotaProbeResult> {
+  // Lazy: the adapter's sign-in reader (Keychain, child process) stays off the core request path.
+  const { currentClaudeIdentityKey } = await import("../../adapters/claude-cli/usage-admission");
+  await currentClaudeIdentityKey(forceRefresh);
+  return heldClaudeCliObservedQuota(provider);
+}
+
+/** Resolve against the latest recorded identity without accessing credentials or probing. */
+export function heldClaudeCliObservedQuota(provider: string): ProviderQuotaProbeResult {
+  const identity = claudeSignedInIdentity();
+  if (!identity) return AUTHORITATIVE_EMPTY_QUOTA;
+  const observation = peekClaudeUsageObservation({ identity });
+  if (!observation?.quota) return AUTHORITATIVE_EMPTY_QUOTA;
+  const built = report(provider, `${provider}:subscription-observation`, observation.quota);
+  if (!built) return AUTHORITATIVE_EMPTY_QUOTA;
+  // Tagged here rather than inside report(), which every probed path shares.
+  const row = { ...built, observed: true };
+  accountReportCurrent.set(row, () => claudeSignedInIdentity() === identity);
+  return row;
+}
+
+/** Refresh only Claude CLI rows in a held response; other providers keep their cached readings. */
+export function refreshHeldClaudeCliReports(config: OcxConfig, reports: ProviderQuotaReport[]): ProviderQuotaReport[] {
+  const claude = Object.entries(config.providers).filter(([, provider]) => provider.adapter === "claude-cli" && provider.disabled !== true);
+  if (!claude.length) return reports;
+  const names = new Set(claude.map(([name]) => name));
+  const current = claude.map(([name]) => heldClaudeCliObservedQuota(name))
+    .filter((item): item is ProviderQuotaReport => item !== null && item !== TERMINAL_QUOTA_FAILURE && item !== AUTHORITATIVE_EMPTY_QUOTA);
+  return [...reports.filter(item => !names.has(item.provider)), ...current];
+}
+
+/**
+ * Before the provider-report cache fast path: re-read the Claude Code sign-in (the admission's
+ * one-minute identity cache bounds this to one Keychain read a minute), so a cached Claude CLI
+ * row stops being current within a minute of a sign-out or account switch. Returns undefined when
+ * no Claude CLI provider is enabled: awaiting even a resolved promise would add a tick to every
+ * other read and reorder its in-flight join.
+ */
+export function refreshClaudeCliSignIn(config: OcxConfig): Promise<unknown> | undefined {
+  if (!Object.values(config.providers).some(provider => provider.adapter === "claude-cli" && provider.disabled !== true)) return undefined;
+  // Lazy: the adapter's sign-in reader (Keychain, child process) stays off the core request path.
+  return import("../../adapters/claude-cli/usage-admission").then(admission => admission.currentClaudeIdentityKey());
 }
 
 // ---------------------------------------------------------------------------

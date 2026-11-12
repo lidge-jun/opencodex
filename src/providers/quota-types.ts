@@ -49,6 +49,13 @@ export interface ProviderQuotaWindow {
    * provider-wide group named "Opus" there would otherwise be mistaken for a per-model window.
    */
   scope?: "model";
+  /**
+   * Share of the provider-wide weekly limit a model-scoped window may consume, in percent:
+   * Anthropic's `weekly_scoped_shares[].allowance_percent_of_weekly` (Fable is "up to 50% of
+   * your weekly limit"). `percent` stays relative to this allowance. Read from upstream, never
+   * inferred from a plan; ranking restates family usage on the weekly scale with it.
+   */
+  weeklyAllowancePercent?: number;
   /** Passive family readings have their own freshness clock, independent of active probes. */
   passiveObservedAt?: number;
   /** Upstream refusal evidence, distinct from a measured utilization counter. */
@@ -79,6 +86,12 @@ export interface ProviderQuota {
   kiroCreditsUsed?: number;
   kiroCreditsLimit?: number;
   customWindows?: ProviderQuotaWindow[];
+  /**
+   * Display-only measurements the producer withheld from routing: Anthropic model-scoped rows
+   * that upstream reports with `is_active: false`. Routing, exhaustion, cooldown recovery and
+   * reset ordering read only `customWindows`; nothing but quota display reads this field.
+   */
+  displayWindows?: ProviderQuotaWindow[];
   creditsUsd?: ProviderQuotaCreditsUsd;
   updatedAt: number;
 }
@@ -91,6 +104,24 @@ export interface AccountQuotaFields {
   quota?: ProviderQuota | null;
   quotaUnavailable?: boolean;
   quotaFailure?: QuotaFailureCode;
+  /** Why the current balance is unknown (#8397); a last-good value may still ride along with read_failed. */
+  quotaUnknownReason?: QuotaUnknownReason;
+  /** When the balance was last read (epoch ms), success or failure; absent when never read. */
+  quotaReadAt?: number;
+}
+
+/**
+ * Closed reasons a balance is unknown. A row with a reason must never be rendered as zero.
+ * no_balance_source: no reader exists for this destination. passive_not_observed: a passive
+ * provider has not observed usage yet. read_failed: a reader exists and its last read failed.
+ * not_read: a reader exists but no read was made (paused key, or the key changed mid-read).
+ * not_reported: the read succeeded and the provider authoritatively reported no balance to meter
+ * (for example zero total credits, or a plan with no model window).
+ */
+export const QUOTA_UNKNOWN_REASONS = ["no_balance_source", "passive_not_observed", "read_failed", "not_read", "not_reported"] as const;
+export type QuotaUnknownReason = typeof QUOTA_UNKNOWN_REASONS[number];
+export function parseQuotaUnknownReason(value: unknown): QuotaUnknownReason | undefined {
+  return QUOTA_UNKNOWN_REASONS.find(reason => reason === value);
 }
 
 
@@ -102,4 +133,9 @@ export const QUOTA_FAILURE_CODES = [
 export type QuotaFailureCode = typeof QUOTA_FAILURE_CODES[number];
 export function parseQuotaFailureCode(value: unknown): QuotaFailureCode | undefined {
   return QUOTA_FAILURE_CODES.find(code => code === value);
+}
+
+/** A model family's share of the weekly limit is meaningful only as a finite percent in (0, 100]. */
+export function isWeeklyAllowancePercent(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100;
 }
