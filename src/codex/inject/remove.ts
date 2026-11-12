@@ -1,6 +1,6 @@
 import { beginCodexWriteSection, publishCodexArtifact, removeCodexProfileEntry } from "./config-write-section";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
+import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText, splitSourceLines } from "../toml-source-lines";
 import { atomicWriteFile } from "../../config";
 import { ConfigWriteLockRefusal, configWriteLockFailureMessage, withConfigWriteLockHeld, withConfigWriteRecovery } from "../config-write-lock";
 import type { LockHandle } from "../config-write-lock";
@@ -145,6 +145,92 @@ function stripOpencodexConfigResult(
 export function stripOpencodexConfig(content: string): string {
   return stripOpencodexConfigResult(content).content;
 }
+
+/**
+ * What OpenCodex still owns in a Codex config, judged by the same strip `ocx restore` applies and
+ * the journaled injection: the key or table header of each line it would remove. Empty means
+ * nothing OpenCodex wrote is left, so lines Codex or the person added are all that changed.
+ * Only parsed key names and table headers are returned, never values or continuation lines of a
+ * multiline value, so a refusal can quote them without leaking a credential.
+ */
+export function remainingOpencodexConfigKeys(rawContent: string): string[] {
+  const content = applyEol(rawContent, "\n");
+  const stripped = stripOpencodexConfigResult(
+    content,
+    journaledInjectedOpenaiBaseUrl(),
+    journaledInjectedRealtimeWsBaseUrl(),
+    journaledInjectedRootWebSearch(),
+    journaledReplacedRootWebSearch(),
+    journaledInjectedSubagentDefaults(),
+  );
+  if (stripped.managedDefaultsError) return ["[agents] managed subagent defaults"];
+  // The strip also normalizes blank lines; that alone is not an OpenCodex line.
+  if (stripped.content === normalizeStructuralWhitespace(content)) return [];
+  const kept = new Map<string, number>();
+  for (const line of stripped.content.split("\n")) kept.set(line.trim(), (kept.get(line.trim()) ?? 0) + 1);
+  const keys: string[] = [];
+  const add = (label: string) => { if (!keys.includes(label)) keys.push(label); };
+  // Lines under a removed table are covered by the table's label.
+  let underRemovedTable = false;
+  for (const line of splitSourceLines(content)) {
+    const text = line.text.trim();
+    if (!text) continue;
+    const header = line.structural && text.startsWith("[");
+    const left = kept.get(text) ?? 0;
+    if (left > 0) { kept.set(text, left - 1); if (header) underRemovedTable = false; continue; }
+    // A line inside a multiline string or array is a value, never a name.
+    if (!line.structural) continue;
+    if (header) { underRemovedTable = true; add(ownedTableLabel(text)); continue; }
+    if (underRemovedTable) continue;
+    if (text.startsWith("#")) { add("an OpenCodex marker comment"); continue; }
+    const key = /^([A-Za-z0-9_]{1,64})\s*=/.exec(text)?.[1];
+    add(key && OWNED_CONFIG_KEYS.has(key) ? key : "an OpenCodex line");
+  }
+
+  // The strip changed something without removing a line: it would put back a line it replaced.
+  return keys.length > 0 ? keys : ["web_search"];
+}
+
+/**
+ * The config with the person's own root `web_search` line put back, when OpenCodex set it aside while
+ * routed (the journal records the exact line) and the file now has no root `web_search` at all.
+ * Only that line is inserted, at the end of the root section; every other byte is kept. Null when
+ * there is nothing to put back. The caller must re-check the result for OpenCodex settings.
+ */
+export function withReplacedWebSearchRestored(rawContent: string): string | null {
+  const line = journaledReplacedRootWebSearch()?.replace(/\r?\n$/, "");
+  if (!line || rootAssignmentKey(line) !== "web_search") return null;
+  // Work on the file's own lines and endings: a mixed CRLF/LF file keeps every existing byte.
+  const { bom, lines, rootEnd } = rootSourceLines(rawContent);
+  if (lines.slice(0, rootEnd).some(entry => entry.structural && rootAssignmentKey(entry.text) === "web_search")) return null;
+  // Insert after the last non-blank root line, so a blank separator before the first table stays put.
+  let at = rootEnd;
+  while (at > 0 && lines[at - 1]!.structural && lines[at - 1]!.text.trim() === "") at -= 1;
+  const before = at > 0 ? lines[at - 1]! : null;
+  // The new line takes the ending of the line it follows; only a final line with no ending gains one.
+  const eol = before?.eol || (dominantEol(rawContent) === "\r\n" ? "\r\n" as const : "\n" as const);
+  const next = [...lines];
+  if (before && before.eol === "") next[at - 1] = { ...before, eol };
+  next.splice(at, 0, { text: line, eol, structural: true });
+  return bom + sourceText(next);
+}
+
+
+/** The only names a refusal may quote: keys OpenCodex writes. Anything else gets a fixed label. */
+const OWNED_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "openai_base_url", REALTIME_WS_BASE_URL_KEY, "model_provider", "model", "model_catalog_json", "web_search", "profile",
+  "default_subagent_model", "default_subagent_reasoning_effort",
+]);
+
+/** A fixed label per table OpenCodex writes; a table name can carry arbitrary quoted text. */
+function ownedTableLabel(header: string): string {
+  const name = header.replace(/^\[+|\]+$/g, "").replace(/[\s"']/g, "");
+  for (const label of ["model_providers.opencodex", "profiles.opencodex", "agents"]) {
+    if (name === label || name.startsWith(label + ".")) return "[" + label + "]";
+  }
+  return "an OpenCodex table";
+}
+
 
 function hasOpencodexRouting(content: string): boolean {
   return (

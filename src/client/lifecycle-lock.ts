@@ -1,4 +1,7 @@
-/** Client/Desktop lifecycle exclusion. Lock order: N -> L -> C; never acquire N inside L. */
+/**
+ * Client/Desktop lifecycle exclusion. Lock order: D -> N -> L -> C; never acquire N inside L.
+ * D (one disconnect attempt) is outermost and taken by nothing else.
+ */
 import { Database } from "bun:sqlite";
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -54,14 +57,14 @@ function preparePath(lockPath: string): void {
   assertPath(lockPath, false);
 }
 
-function acquire(deps: ClientLifecycleLockDeps): Database {
+function acquire(deps: ClientLifecycleLockDeps, name = "client-desktop-lifecycle.sqlite", suffix = ""): Database {
   let database: Database | undefined;
   try {
     // The production namespace belongs to the effective OS user, never HOME,
     // OPENCODEX_HOME, Desktop library overrides or an environment test switch.
     const path = deps.lockPath === undefined
-      ? join(resolveEffectiveUserRuntimeRoot(resolveEffectiveUserIdentity()), "client-desktop-lifecycle.sqlite")
-      : resolve(deps.lockPath);
+      ? join(resolveEffectiveUserRuntimeRoot(resolveEffectiveUserIdentity()), name)
+      : resolve(deps.lockPath) + suffix;
     preparePath(path);
     database = new Database(path, { create: true });
     database.exec("PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
@@ -125,5 +128,27 @@ export function withClientLifecycleSync<T>(
     outcome = { ok: true, value };
   } catch (error) { outcome = { ok: false, error }; }
   finally { activeLeases.delete(held); }
+  return finish(database, outcome);
+}
+
+/**
+ * D: one ocx disconnect attempt at a time, held across the whole attempt.
+ *
+ * A disconnect restores Codex outside L, so two attempts used to share one prepared receipt
+ * there; rolling back one attempt's receipt then removed the other's while it was still
+ * restoring. D is a separate lock so taking it never orders against N, L or C.
+ */
+export async function withClientDisconnectAttempt<T>(work: () => Promise<T>, deps: ClientLifecycleLockDeps = {}): Promise<T> {
+  let database: Database;
+  try { database = acquire(deps, "client-disconnect-attempt.sqlite", ".disconnect-attempt"); }
+  catch (error) {
+    if (errorCode(error) === "client_lifecycle_busy") {
+      throw new ClientLifecycleError("client_disconnect_busy: another ocx disconnect is running on this machine; let it finish, then run ocx disconnect again");
+    }
+    throw error;
+  }
+  let outcome: Outcome<T>;
+  try { outcome = { ok: true, value: await work() }; }
+  catch (error) { outcome = { ok: false, error }; }
   return finish(database, outcome);
 }

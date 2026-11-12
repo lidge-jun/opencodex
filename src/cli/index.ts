@@ -50,7 +50,7 @@ import {
   runCodexHistoryJob,
 } from "../codex/history-job";
 import { findCrossHomeOwner, markCrossHomeSibling, markLiveHomeSibling } from "./cross-home-owner";
-import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
+import { clientStartupRefusalMessage, inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import {
   codexAutoStartEnabled,
   getConfigDir,
@@ -487,7 +487,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   const rotationGate = inspectClientRotationRecoveryGate(clientState);
   if (clientState.kind === "connected") {
     if (rotationGate.kind === "recovery-required" || rotationGate.kind === "unsafe") {
-      throw new Error(`client startup refused: ${rotationGate.reason}`);
+      throw new Error(clientStartupRefusalMessage(rotationGate.reason));
     }
     const { startClientRuntime } = await import("../client/runtime");
     // Same lease-held owner recheck as the server path below: this branch binds and publishes too.

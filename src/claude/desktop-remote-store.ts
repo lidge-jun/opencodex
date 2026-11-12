@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { readConfigDiagnostics, withConfigMutationLockSync } from "../config";
 import { assertClientLifecycleHeld, type ClientLifecycleHeld } from "../client/lifecycle-lock";
-import { readServiceApiTokenState, serviceApiTokenFingerprint } from "../lib/service-secrets";
+import { readServiceApiTokenState, serviceApiTokenBackupPath, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { assertDesktop3pModelsValid } from "./desktop-3p-guard";
 import { profilePath } from "./desktop-3p-library";
 import type { Desktop3pConfigMode, Desktop3pModelEntry } from "./desktop-3p";
@@ -50,35 +50,62 @@ function recordedGenerations(io: StoreIO, owner: DesktopRemoteOwner): string[] {
     ...(bundle.state?.pending ? [bundle.state.pending.tokenFingerprint] : [])];
 }
 
+/**
+ * Why an inspection answered conflict or unsafe, and the file or folder it was looking at, so a
+ * refusal can name both. The step that failed decides the reason; nothing here changes the verdict.
+ */
+export type DesktopStoreInspectReason =
+  | "root_without_state" | "store_unreadable" | "store_other_connection" | "library_unreadable"
+  | "profile_missing" | "profile_edited" | "profile_ambiguous" | "token_unreadable" | "connection_changed" | "unknown";
+
 export function inspectRemoteDesktopStore(owner: DesktopRemoteOwner): {
   kind: "absent" | "active" | "pending" | "restored" | "legacy_current_connection" | "conflict" | "unsafe";
-  /** Set for the one refusal a person can clear: the store folder exists with nothing in it OpenCodex reads. */
-  reason?: "root_without_state";
+  /** Set with conflict and unsafe. */
+  reason?: DesktopStoreInspectReason;
   path?: string;
 } {
+  let site: { reason: DesktopStoreInspectReason; path?: string } = { reason: "unknown" };
   try {
     parseOwner(owner);
-    const io = new StoreIO(), bundle = loadBundle(io);
+    site = { reason: "store_unreadable" };
+    const io = new StoreIO();
+    site.path = storePaths().root;
+    const bundle = loadBundle(io);
     if (bundle.state?.phase === "cleaned") {
       const terminal = receipt(io);
       if (terminal?.phase === "complete" && sameOwner(bundle.state.owner, terminal.owner) && !sameOwner(owner, terminal.owner)) return { kind: "absent" };
     }
+    site = { reason: "store_other_connection", path: bundle.paths.state };
     requireOwner(bundle, owner);
     if (bundle.state) {
       if (bundle.state.phase === "prepared" || bundle.state.pending) return { kind: "pending" };
       if (bundle.state.phase === "cleaned") return { kind: "restored" };
+      site = { reason: "library_unreadable", path: bundle.paths.library };
       const meta = metadata(io, bundle.paths.library);
       selectedFile(io, bundle.paths.library, meta.value);
-      if (!meta.value.entries.some(e => e.id === bundle.state!.targetId && e.name === "opencodex")) return { kind: "conflict" };
-      const file = io.read(profilePath(bundle.paths.library, bundle.state.targetId));
-      if (projectionHash(file?.value ?? null) !== bundle.state.lastProjectionHash) return { kind: "conflict" };
+      if (!meta.value.entries.some(e => e.id === bundle.state!.targetId && e.name === "opencodex")) {
+        return { kind: "conflict", reason: "profile_missing", path: bundle.paths.library };
+      }
+      const target = profilePath(bundle.paths.library, bundle.state.targetId);
+      site.path = target;
+      const file = io.read(target);
+      if (projectionHash(file?.value ?? null) !== bundle.state.lastProjectionHash) return { kind: "conflict", reason: "profile_edited", path: target };
       return { kind: bundle.state.phase === "restored" ? "restored" : "active" };
     }
     if (existsSync(bundle.paths.root) && !receipt(io)) return { kind: "unsafe", reason: "root_without_state", path: bundle.paths.root };
-    const legacy = locateLegacy(io, owner, serviceGenerations());
+    site = { reason: "token_unreadable", path: serviceApiTokenBackupPath() };
+    const generations = serviceGenerations();
+    site = { reason: "profile_ambiguous", path: bundle.paths.library };
+    const legacy = locateLegacy(io, owner, generations);
+    site = { reason: "connection_changed" };
     if (legacy) currentConnection(owner);
     return { kind: legacy ? "legacy_current_connection" : "absent" };
-  } catch (error) { return { kind: error instanceof DesktopStoreError && error.reason === "conflict" ? "conflict" : "unsafe" }; }
+  } catch (error) {
+    const conflict = error instanceof DesktopStoreError && error.reason === "conflict";
+    // Only an ambiguous match is a conflict in the legacy scan; an unreadable list is not.
+    const reason = site.reason === "profile_ambiguous" && !conflict ? "library_unreadable" : site.reason;
+    return { kind: conflict ? "conflict" : "unsafe", reason, ...(site.path ? { path: site.path } : {}) };
+  }
 }
 
 export function applyRemoteDesktopStore(held: ClientLifecycleHeld, options: {
@@ -227,6 +254,29 @@ export function writeDesktopDisconnectReceipt(held: ClientLifecycleHeld, expecte
     throw new Error(error instanceof DesktopStoreError && error.reason === "conflict"
       ? "desktop_disconnect_receipt_conflict" : error instanceof DesktopStoreError && error.reason === "unsafe"
         ? "desktop_disconnect_receipt_unsafe" : "desktop_disconnect_receipt_write_failed");
+  }
+}
+
+/**
+ * Remove a disconnect receipt that never passed `prepared`, and its folder when the receipt was all
+ * it held. Compare-and-delete: a receipt another run advanced or replaced is left alone.
+ */
+export function removeDesktopDisconnectReceipt(held: ClientLifecycleHeld, expected: DesktopDisconnectReceipt): void {
+  assertClientLifecycleHeld(held);
+  try {
+    withConfigMutationLockSync(() => {
+      if (parseDisconnect(expected).phase !== "prepared") throw new DesktopStoreError("conflict");
+      const io = new StoreIO(), paths = storePaths();
+      const file = io.read(paths.disconnect, 64 * 1024, true);
+      if (!file || canonical(parseDisconnect(file.value)) !== canonical(expected)) throw new DesktopStoreError("conflict");
+      io.remove(paths.disconnect, file);
+      // Not recursive: a folder that still holds Claude Desktop state stays, and that state
+      // explains itself to the next inspection. An empty one would read as a leftover.
+      try { rmdirSync(paths.root); } catch { /* not empty, or already gone */ }
+    });
+  } catch (error) {
+    throw new Error(error instanceof DesktopStoreError && error.reason === "conflict"
+      ? "desktop_disconnect_receipt_conflict" : "desktop_disconnect_receipt_unsafe");
   }
 }
 

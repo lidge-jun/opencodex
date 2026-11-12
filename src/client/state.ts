@@ -162,6 +162,20 @@ export function assertNoClientDisconnectPending(): void {
   }
 }
 
+/**
+ * The message client startup refuses with. A pending disconnect names the command that clears it:
+ * under the desktop app or a service the supervisor only logs this line, and on 2.100.2 a person
+ * had to move desktop-remote/ aside by hand because nothing said a retry would finish or roll back.
+ */
+export function clientStartupRefusalMessage(reason: string): string {
+  if (reason !== "client_disconnect_pending") return `client startup refused: ${reason}`;
+  const receipt = readDesktopDisconnectReceipt();
+  const valid = receipt.kind === "valid" ? receipt.value : null;
+  const command = valid?.keepCatalog ? "ocx disconnect --keep-catalog" : "ocx disconnect";
+  return `client startup refused: an ocx disconnect on this machine stopped part way${valid ? ` at phase ${valid.phase}` : ""}. `
+    + `Run ${command} again to finish it or roll it back. (code client_disconnect_pending)`;
+}
+
 /** Full snapshot CAS for work returning from an await, including selection and rotation state. */
 export function assertClientConnectionUnchanged(expected: OcxClientConnectionConfig): void {
   assertNoClientDisconnectPending();
