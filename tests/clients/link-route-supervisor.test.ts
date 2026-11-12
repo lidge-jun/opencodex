@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createLinkSupervisor, type LinkSupervisor, type Pidfile } from "../../src/link/supervisor";
 import { createRouteProofRegistry, type RouteProofRegistry } from "../../src/link/route-proof";
-import type { SshChild, SshRunner, SshRunResult } from "../../src/link/ssh-runner";
+import { SshRunnerError, type SshChild, type SshRunner, type SshRunResult } from "../../src/link/ssh-runner";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import { READY_PROOF_MS, ROUTE_PROBE_MS } from "../../src/link/route-rounds";
 
@@ -48,6 +48,8 @@ function harness(options: {
   writePidfile?: () => void;
   /** Hold every tunnel's stderr until released (an exit still being classified). */
   holdStderr?: { release?: () => void };
+  /** The Child's `ocx config show --json` stdout. */
+  configStdout?: string;
 } = {}) {
   let now = 0;
   let tick: () => void = () => {};
@@ -75,13 +77,15 @@ function harness(options: {
         const attempt = (probes.get(route) ?? 0) + 1;
         probes.set(route, attempt);
         answer = options.probe ? options.probe(route, attempt) : ok("ocx-link-probe\n");
-      } else if (kind === "config") answer = ok(JSON.stringify({ port: CHILD_PORT, runtimeRole: "client" }));
+      } else if (kind === "config") answer = ok(options.configStdout ?? JSON.stringify({ port: CHILD_PORT, runtimeRole: "client" }));
       else if (kind === "health") answer = options.health ?? ok(JSON.stringify({ service: "opencodex", role: "client", port: CHILD_PORT, pid: 77 }) + "\n200");
       else if (kind === "catalog") {
         const admit = () => proofs.admit("link-key", proofId!);
         answer = options.catalog ? options.catalog(entry.destination!, proofId!, admit) : (admit(), ok(JSON.stringify({ models: [] }) + "\n200"));
       } else answer = remote.includes("uname") ? ok("Linux\n") : ok();
       if (answer === "hang") return new Promise<SshRunResult>(() => {});
+      // The real runner refuses output past the caller's cap (or its 64 KiB default).
+      if (!(answer instanceof Promise) && answer.stdout.length > (runOptions?.maxOutputBytes ?? 64 * 1024)) return Promise.reject(new SshRunnerError("output_limit", "ssh output exceeded the cap"));
       return Promise.resolve(answer);
     },
     spawnTunnel(argv, tunnelOptions) {
@@ -745,4 +749,16 @@ test("a replacement pidfile that reuses the original pid with another start time
   holder = "none";
   await h.advance(1_000);
   expect(h.state().orphan).toBeUndefined();
+});
+
+test("a Child whose config output is over 64 KiB still proves readiness and connects (#8356)", async () => {
+  // Enrollment accepts up to the runner maximum (#8380); a multi-route link must too, or every candidate
+  // on every route fails its config step and is stopped at the readiness deadline.
+  const big = JSON.stringify({ port: CHILD_PORT, runtimeRole: "client", providers: { padding: "x".repeat(200 * 1024) } });
+  const h = await started({ configStdout: big });
+  await h.grant();
+  await h.tick();
+  expect(h.runs.some(run => run.kind === "config")).toBe(true);
+  expect(h.state().state.kind).toBe("connected");
+  expect(h.state().routes?.route?.name).toBe("alpha-lan");
 });

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore } from "../../src/link/store";
-import { LINK_ROUTE_PROOF_HEADER } from "../../src/link/route-proof";
+import { LINK_ROUTE_PROOF_HEADER, takeRouteProof } from "../../src/link/route-proof";
 import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -40,19 +40,28 @@ afterEach(async () => {
   testHome = "";
 });
 
-test("the hub-link catalog admission takes the route proof header off the request before dispatch and reports it", () => {
+test("takeRouteProof hands back the proof id and leaves the request without the header", () => {
+  const req = new Request("http://127.0.0.1/v1/catalog", { headers: { [LINK_ROUTE_PROOF_HEADER]: PROOF, "x-opencodex-api-key": LINKED_KEY } });
+  expect(takeRouteProof(req)).toBe(PROOF);
+  // Whatever handles the request next cannot see it.
+  expect(req.headers.has(LINK_ROUTE_PROOF_HEADER)).toBe(false);
+  expect(req.headers.get("x-opencodex-api-key")).toBe(LINKED_KEY);
+  expect(takeRouteProof(req)).toBeUndefined();
+  expect(takeRouteProof(new Request("http://127.0.0.1/v1/catalog"))).toBeUndefined();
+});
+
+test("a proof header that cannot be taken off the request is not reported", () => {
+  const headers = new Headers({ [LINK_ROUTE_PROOF_HEADER]: PROOF });
+  const req = { headers: { get: (name: string) => headers.get(name), delete: () => { throw new TypeError("immutable"); } } } as unknown as Request;
+  expect(takeRouteProof(req)).toBeUndefined();
+});
+
+test("the hub-link catalog admission reports the proof through takeRouteProof before dispatch", () => {
   const source = readFileSync(repoPath("src/server/index/serve-options.ts"), "utf8");
-  const line = source.split("\n").find(text => text.includes("onAuthenticatedCatalog(admission.keyId")) ?? "";
-  const read = line.indexOf('req.headers.get("' + LINK_ROUTE_PROOF_HEADER + '")');
-  const removed = line.indexOf('req.headers.delete("' + LINK_ROUTE_PROOF_HEADER + '")');
-  const reported = line.indexOf("onAuthenticatedCatalog(admission.keyId, taken ? routeProof : undefined)");
-  expect(read).toBeGreaterThan(-1);
-  expect(removed).toBeGreaterThan(read);
-  // A proof is reported only when the header was taken off; nothing downstream of this line sees it.
-  expect(reported).toBeGreaterThan(removed);
-  expect(line).toContain("catch { taken = false; }");
-  const dispatchIndex = source.indexOf("isLinkManagementPath(requestUrl.pathname)");
-  expect(source.indexOf(line)).toBeLessThan(dispatchIndex);
+  const call = source.indexOf("onAuthenticatedCatalog(admission.keyId, takeRouteProof(req))");
+  expect(call).toBeGreaterThan(-1);
+  expect(source).not.toContain('req.headers.get("' + LINK_ROUTE_PROOF_HEADER + '")');
+  expect(call).toBeLessThan(source.indexOf("isLinkManagementPath(requestUrl.pathname)"));
 });
 
 test("the link listener passes a proof id to every subscriber and leaves it out when absent", () => {

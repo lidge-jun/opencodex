@@ -17,7 +17,7 @@ import { isChildHealth, parseChildHttp, remoteChildHttpArgv } from "./remote-pro
 import { requireRemotePlatform } from "./remote-platform";
 import { aggregateRouteClass, composeGrantTap, routeCooldownMs, routeOutcomeOfStderr, type RouteOutcomeClass } from "./route-select";
 import type { RouteProofHandle, RouteProofRegistry } from "./route-proof";
-import type { SshChild, SshRunner } from "./ssh-runner";
+import { SSH_MAX_OUTPUT_BYTES, type SshChild, type SshRunner } from "./ssh-runner";
 import { effectiveLinkRoutes, type LinkRecord } from "./store";
 import { exitCause, type TunnelCause } from "./tunnel-history";
 import type { StderrClass, TunnelEvent, TunnelState } from "./tunnel-state";
@@ -35,7 +35,9 @@ export const CANDIDATE_KILL_GRACE_MS = 2_000;
 /** The ssh client check, and how long an unsupported answer stands. */
 export const CLIENT_CHECK_MS = 5_000;
 export const CLIENT_RECHECK_MS = 10 * 60_000;
-const CONFIG_MAX_BYTES = 64 * 1024;
+// The Child's whole effective config: enrollment accepts up to the runner maximum (#8380), so a
+// Child that enrolled with a large config must also pass this step on every route.
+const CONFIG_MAX_BYTES = SSH_MAX_OUTPUT_BYTES;
 const CATALOG_MAX_BYTES = 4 * 1024 * 1024;
 
 export type RouteBlock = "ssh_client_unsupported" | "stop_unconfirmed";
@@ -429,6 +431,11 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
         return;
       }
       if (now >= phase.spawnedAt + READY_PROOF_MS) {
+        // Unlike a one-route tunnel, which reads connected after its 5 s grace and is never stopped
+        // for lacking proof, a candidate with no proof by now is stopped: a granted forward whose
+        // relay cannot authenticate or serve looks the same as a slow one, and keeping it would
+        // starve the next route forever. A request already on it fails toward its caller, as on
+        // any reconnect; once a route is proven it is never stopped for lack of later proofs.
         stopCandidate(linkId, phase, phase.grantedAt === undefined ? "grant_unobserved" : "readiness");
         return;
       }
