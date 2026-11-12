@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { OcxConfig } from "../../src/types";
-import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
+import { setLinkWebsocketLimitsForTests, setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore, type LinkStore } from "../../src/link/store";
@@ -68,6 +68,7 @@ const children: Array<ReturnType<typeof Bun.spawn>> = [];
 
 afterEach(async () => {
   setLinkWebsocketTransportReadyForTests(false);
+  setLinkWebsocketLimitsForTests(null);
   for (const child of children.splice(0)) if (child.exitCode === null) child.kill();
   await standin?.stop(); standin = null;
   if (server) await server.stop(true);
@@ -170,6 +171,40 @@ describe("link WebSocket release gate (design 11.1 item 13)", () => {
     expect(secondRun.some(event => event.startsWith("upgrade-refused:"))).toBe(true);
     expect(secondRun).not.toContain("upgrade");
     expect(secondRun.at(-1)).toBe("http:200");
+  });
+
+  gate("drain past its deadline: the session's next create is fenced on the socket, costs one retry, and the same request completes over HTTP", async () => {
+    // Design 2.5: at or after t0 + 60 min a draining socket admits no create, even one returning a pending result.
+    // A zero deadline puts this Home there as soon as the switch goes off, without waiting an hour.
+    setLinkWebsocketLimitsForTests({ drainDeadlineMs: 0 });
+    const bodies: string[] = [];
+    const h = await home((body, index) => {
+      bodies.push(body);
+      if (index === 0) {
+        setLinkWebsocketTransportReadyForTests(false);
+        return new Response(toolCall("resp_" + index), { headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(completed("resp_" + index), { headers: { "content-type": "text/event-stream" } });
+    });
+    standin = startRelayStandin({ linkPort: h.linkPort, identity, bearer: SECRET });
+    // One codex exec: one session, one request budget.
+    expectCompleted(await runCodex(standin.port, { argument: "say gate-ok" }));
+    const events = standin.events;
+    const creates = events.flatMap((event, index) => event.startsWith("ws-create:") ? [index] : []);
+    // The first request ran on the socket (after a warmup create, for a Codex that sends one); the tool result's
+    // create was the last one sent on it, and the Home fenced the socket with 1000 after it.
+    expect(events[0]).toBe("upgrade");
+    expect(creates.length).toBeGreaterThanOrEqual(2);
+    const fenced = events.indexOf("home-close:1000");
+    expect(fenced).toBeGreaterThan(creates.at(-1)!);
+    // The fenced frame never reached the upstream: the Home saw the first request and then the HTTP retry only.
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toContain("call_gate_goal");
+    // Codex retried: its reconnect was refused, and the same request (carrying the tool result) completed over HTTP.
+    const after = events.slice(fenced + 1);
+    expect(after.some(event => event.startsWith("upgrade-refused:"))).toBe(true);
+    expect(after).not.toContain("upgrade");
+    expect(after.at(-1)).toBe("http:200");
   });
 
   gate("a request over the 8 MiB message limit goes over HTTP", async () => {

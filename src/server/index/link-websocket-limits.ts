@@ -81,6 +81,15 @@ export function setLinkWebsocketTransportReadyForTests(ready: boolean): void {
   transportReady = ready;
 }
 
+/** Test-only overrides of LINK_WS_LIMITS for gates a test cannot construct itself (a Home started by startServer). */
+let limitOverrides: Partial<LinkWebsocketLimits> | null = null;
+
+export function linkWebsocketLimitOverrides(): Partial<LinkWebsocketLimits> | null { return limitOverrides; }
+
+export function setLinkWebsocketLimitsForTests(overrides: Partial<LinkWebsocketLimits> | null): void {
+  limitOverrides = overrides;
+}
+
 /** The link pump's stall timer (sendStallMs); tests replace it to fire the bound without waiting. */
 export interface LinkPumpTimer {
   start(callback: () => void, ms: number): unknown;

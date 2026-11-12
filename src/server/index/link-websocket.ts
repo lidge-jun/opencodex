@@ -13,7 +13,7 @@ import type { LinkWsCloseReason, LinkWsCounters, LinkWsRefusal } from "../../lin
 import type { LinkTurnObserver } from "../link-turn";
 import { resultKeysOf } from "../../codex/websocket-activity";
 import {
-  LINK_WS_AGE_CLOSE, LINK_WS_DISABLED_CLOSE, LINK_WS_IDLE_CLOSE, LINK_WS_LIMITS, LINK_WS_REVOKED_CLOSE, type LinkWebsocketLimits,
+  LINK_WS_AGE_CLOSE, LINK_WS_DISABLED_CLOSE, LINK_WS_IDLE_CLOSE, LINK_WS_LIMITS, LINK_WS_REVOKED_CLOSE, type LinkWebsocketLimits, linkWebsocketLimitOverrides,
 } from "./link-websocket-limits";
 
 /**
@@ -236,7 +236,7 @@ function unauthorized(): Response {
 }
 
 export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
-  const limits: LinkWebsocketLimits = { ...LINK_WS_LIMITS, ...deps.limits };
+  const limits: LinkWebsocketLimits = { ...LINK_WS_LIMITS, ...linkWebsocketLimitOverrides(), ...deps.limits };
   const timers = deps.timers ?? defaultTimers;
   const draining = deps.draining ?? isDraining;
   // A full shared gate lets a link upgrade reclaim an idle link socket, never a local one.
