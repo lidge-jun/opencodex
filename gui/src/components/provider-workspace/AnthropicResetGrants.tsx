@@ -250,7 +250,7 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
   const [opening, setOpening] = useState(true);
   useEffect(() => {
     let live = true;
-    void refresh(accountId, { keepSnapshot: true }).finally(() => { if (live) setOpening(false); });
+    void refresh(accountId, { keepSnapshot: true }).catch(() => undefined).finally(() => { if (live) setOpening(false); });
     return () => { live = false; };
   }, [accountId, refresh]);
 
@@ -383,6 +383,8 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
   // One tab stop for the group even when nothing can be chosen, so the reasons stay reachable.
   const tabStopId = selected?.id ?? snapshot?.grants[0]?.id;
   const selectableCount = snapshot ? snapshot.grants.filter(grant => grantSelectable(snapshot, grant)).length : 0;
+  // The hint describes the default, so it shows only while the default is what is selected.
+  const showPickHint = selectableCount > 1 && selected !== undefined && selected.id === (snapshot ? spendableGrant(snapshot)?.id : undefined);
   const heldGrant = unresolved && snapshot ? snapshot.grants.find(grant => grant.id === unresolved.grantId) : undefined;
   const total = snapshot ? unspentResets(snapshot) : 0;
 
@@ -486,7 +488,7 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
                         locale={locale} t={t} />
                     ))}
                   </div>
-                  {selectableCount > 1 && (
+                  {showPickHint && (
                     <p className="card-sub text-caption" style={{ marginTop: 8 }}>{t("anthropicGrant.pickHint")}</p>
                   )}
                   <button type="button" className="btn btn-primary" data-anthropic-grant-use

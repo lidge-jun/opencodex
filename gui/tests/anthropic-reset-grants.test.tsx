@@ -360,8 +360,11 @@ test("a clicked grant is confirmed by name, expiry and windows, and its id is wh
   globalThis.fetch = pickerFetch(posts);
   const { container, root } = await mount();
   await click(container, "[data-anthropic-grant-badge]");
+  expect(container.textContent).toContain("The reset that expires first is selected");
   await act(async () => { radio(container, "late").click(); });
   expect(checkedId(container)).toBe("late");
+  // The default hint would now be false: the chosen grant is not the one expiring first.
+  expect(container.textContent).not.toContain("The reset that expires first is selected");
   await click(container, "[data-anthropic-grant-use]");
   const confirm = container.textContent ?? "";
   expect(confirm).toContain("late reset");

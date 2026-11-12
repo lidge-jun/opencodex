@@ -138,3 +138,12 @@ Security review round 2 (combo/deepseek-flash-pool, head 6f93946d70): APPROVE; i
 `anthropicGrant.unresolvedPrior`, structure scope per pool journal, newest open record named by the ledger) were folded in 7f90636f41.
 Model trail for reviews: hyds/deepseek-v4.1-flash-1m and hyds/deepseek-v4.1-flash returned 403 again; combo stalled on two final-review briefs.
 
+
+## Final review — system24/deepseek-v4.1-flash, head bf87ad512f, APPROVE
+
+1. pickHint false after a pick (should-fix) — accepted: shown only while the default grant is selected; test extended (fails on bf87ad512f).
+2. Silent fallback when a picked grant becomes unusable (nit) — rebutted: the confirm step names the grant before any spend.
+3. GET pending filter lacks orgDigest (nit) — rebutted for this PR: adding it needs a profile read on every GET; an org change mid-window fails closed (`operation_identity_mismatch` releases the hold, nothing is spent).
+4. Missing `.catch` on the open re-read (nit) — accepted.
+5. Tests for newest prior / StrictMode (nit) — rebutted: two open records only exist in pre-change journals; the guarded render update is exercised by the stale-confirm test.
+
