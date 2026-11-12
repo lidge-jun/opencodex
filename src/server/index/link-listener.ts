@@ -130,6 +130,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const websocketEnabled = (): boolean => linkWebsocketTransportReady() && startContext?.responsesWebsocket?.enabled() === true;
   const websocketGate = createLinkWebsocketGate({
     ...deps.websocket,
+    // The same lifecycle-owned book relayed HTTP turns count in, so restart gates see link sockets.
+    activity,
     enabled: websocketEnabled,
     policy: () => startContext!.responsesWebsocket!.policy(),
     authorized: identity => fingerprintsFor(identity.keyId, identity.linkId).includes(identity.fingerprint),

@@ -95,6 +95,7 @@ async function startListener(options: {
   fingerprints?: (keyId: string) => readonly string[];
   limits?: Partial<typeof LINK_WS_LIMITS>;
   reserveSocket?: () => AdmissionReservation<ServerWebSocket<WsData>> | null;
+  base?: WebSocketHandler<WsData>;
 } = {}) {
   const current = { value: store() };
   const clock = manualTimers();
@@ -113,7 +114,7 @@ async function startListener(options: {
       const entry = KEYS.find(candidate => candidate.id === keyId);
       return entry ? [serviceApiTokenFingerprint(entry.key)] : [];
     }),
-    responsesWebsocket: { handler: base.handler, enabled: options.on ?? (() => true), policy },
+    responsesWebsocket: { handler: options.base ?? base.handler, enabled: options.on ?? (() => true), policy },
   });
   stops.push(() => lifecycle.stop());
   const port = lifecycle.status().port!;
@@ -381,6 +382,32 @@ describe("link socket sweep and revocation (design 2.4, 11.1-4)", () => {
     expect(head.status).not.toBe(101);
     await closing;
     expect(lifecycle.status().state).toBe("off");
+  });
+
+  test("through the real listener, a busy link socket counts in linkActivity and its close ends the count (T5b-R1-01)", async () => {
+    const seen: { message?: () => void; closed?: () => void } = {};
+    let finish: (() => void) | undefined;
+    let socketActivity: import("../../src/codex/websocket-activity").CodexWebSocketActivity | undefined;
+    const handler: WebSocketHandler<WsData> = {
+      open(ws) { ws.data.admissionLease?.bind(ws); },
+      message(ws) { socketActivity = ws.data.responsesActivity; finish = socketActivity!.beginTurn("start"); seen.message?.(); },
+      close(ws) { ws.data.admissionLease?.release(); seen.closed?.(); },
+    };
+    const { port, lifecycle } = await startListener({ base: handler });
+    const { wire } = await connectAs(port);
+    const linkId = FIRST.linkId;
+    expect(lifecycle.linkActivity(linkId, Date.now()).inFlight).toBe(0);
+    const delivered = new Promise<void>(resolve => { seen.message = resolve; });
+    wire.sendText("{}");
+    await delivered;
+    expect(lifecycle.linkActivity(linkId, Date.now()).inFlight).toBe(1);
+    socketActivity!.observePayload(JSON.stringify({ type: "response.output_item.done", item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "shell", arguments: "{}" } }));
+    finish!();
+    expect(lifecycle.linkActivity(linkId, Date.now()).inFlight).toBe(1);
+    const closed = new Promise<void>(resolve => { seen.closed = resolve; });
+    wire.destroy();
+    await closed;
+    expect(lifecycle.linkActivity(linkId, Date.now()).inFlight).toBe(0);
   });
 
   test("a removed link refuses the next frame before the shared handler sees it", async () => {
