@@ -143,13 +143,14 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 
 ### Effort de raisonnement
 
-Les modèles GPT-5.6 utilisent `additionalModelRequestFields.reasoning.effort`, et `claude-opus-5`
-ainsi que les autres modèles listés ci-dessous utilisent
-`additionalModelRequestFields.output_config.effort`. Pour `gpt-5.6-luna` et `gpt-5.6-terra`,
-seuls `low`, `medium`, `high` et `max` empruntent le chemin natif vérifié. Leur niveau `xhigh`
-conserve les instructions de réflexion bornées existantes, car ce niveau natif n’a pas été vérifié.
-`gpt-5.6-sol` et les modèles GPT-6 (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`)
-conservent leurs niveaux natifs `low`, `medium`, `high`, `xhigh` et `max`.
+Les modèles GPT-5.6 et GPT-6 (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`)
+utilisent `additionalModelRequestFields.reasoning.effort`, et les modèles Claude listés ci-dessous
+utilisent `additionalModelRequestFields.output_config.effort`.
+Pour `gpt-5.6-luna` et `gpt-5.6-terra`, seuls `low`, `medium`, `high` et `max` empruntent le
+chemin natif vérifié. Leur niveau `xhigh` conserve les instructions de réflexion bornées
+existantes, car ce niveau natif n’a pas été vérifié.
+`gpt-5.6-sol` et les modèles GPT-6 conservent leurs niveaux natifs `low`, `medium`, `high`,
+`xhigh` et `max` par ce même champ `reasoning.effort`.
 
 Kiro accepte `output_config.effort` pour `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`,
 `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-sonnet-4.6`

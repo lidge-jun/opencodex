@@ -174,12 +174,13 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 
 ### Reasoning effort
 
-GPT-5.6 系は `additionalModelRequestFields.reasoning.effort`、`claude-opus-5` と
-以下に挙げるその他のモデルは `additionalModelRequestFields.output_config.effort` を使用します。
+GPT-5.6 系と GPT-6 系（`gpt-6-sol`、`gpt-6-luna`、`gpt-6.1-sol`、`gpt-6.1-terra`）は
+`additionalModelRequestFields.reasoning.effort`、以下に挙げる Claude のモデルは
+`additionalModelRequestFields.output_config.effort` を使用します。
 `gpt-5.6-luna` と `gpt-5.6-terra` では、検証済みの `low`、`medium`、`high`、`max` だけをネイティブフィールドで送信します。
 両モデルの `xhigh` は未検証のため、従来の上限付き thinking 指示によるエミュレーションを維持します。
-`gpt-5.6-sol` と GPT-6 系（`gpt-6-sol`、`gpt-6-luna`、`gpt-6.1-sol`、`gpt-6.1-terra`）は
-ネイティブの `low`、`medium`、`high`、`xhigh`、`max` を維持します。
+`gpt-5.6-sol` と GPT-6 系は、同じ `reasoning.effort` フィールドでネイティブの `low`、`medium`、
+`high`、`xhigh`、`max` を維持します。
 
 Kiro は `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-4.7`、
 `claude-opus-4.6`、`claude-sonnet-5.5`、`claude-sonnet-5`、`claude-sonnet-4.6`、
