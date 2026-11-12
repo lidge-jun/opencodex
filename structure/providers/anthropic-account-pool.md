@@ -322,6 +322,12 @@ Its private versioned proof binds the UUID to SHA-256 of the access bearer. Stor
 in `src/oauth/store.ts` drops malformed or stale proofs; account summaries omit the entire field.
 Profile observations reject redirects and use a ten-second deadline and 64 KiB body limit.
 Organization, email, generic account ID, disk location and active selection do not establish proof.
+An account can join several organizations; each grant serves one. The proof may carry the bearer-observed
+`organizationUuid` (UUID, lowercased), a slot scope, never identity. `src/oauth/anthropic-login-slot.ts` lets login and
+CLI import write the same-organization row, else an unknown one; a proven other organization gets a new row. Unknown
+rows are asked through their own unexpired bearer before the lock, never rewritten. Reauth refuses an organization
+another row proves; continuity, cross-pool checks and plan labels treat proven organizations as different accounts.
+Own-grant refresh keeps the stored organization unless fresh evidence names one; it never throws over it.
 
 `src/oauth/anthropic-continuity.ts` permits usable changed local-CLI generations with a shared
 nonempty token. A fully rotated pair instead requires matching authenticated account UUIDs.

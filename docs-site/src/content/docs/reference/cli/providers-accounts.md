@@ -319,6 +319,14 @@ A code-display login's paste window is 10 minutes, and each login accepts one co
 fails, start a new login. A successful login becomes the provider's active account, exactly
 like a browser login.
 
+A Claude account that belongs to several organizations can be added once per organization: run
+`ocx login anthropic` again and pick the other organization on Claude's consent screen. Each
+organization has its own subscription and limits, so it becomes its own pool account instead of
+replacing the first. Logging in to an organization that already has an account refreshes that
+account. Reauthenticating an account into a different organization is refused; add it as a new
+login instead. Accounts saved before this release learn their organization on their next token
+refresh.
+
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned
 catalog metadata are refreshed. A live-discovery provider keeps its selected default model; a

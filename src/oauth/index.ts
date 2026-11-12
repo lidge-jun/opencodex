@@ -99,7 +99,8 @@ import { REFRESH_SKEW_MS } from "./refresh-policy";
 import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
-import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
+import { anthropicOrganizationsConflict, mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
+import { anthropicOrganizationHeldElsewhere } from "./anthropic-login-slot";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
   workbuddy?: import("./types").WorkBuddyOAuthMetadata;
@@ -794,7 +795,7 @@ function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OA
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
   return {
     ...fresh,
-    ...mergeAnthropicIdentity(fresh, previous),
+    ...mergeAnthropicIdentity(fresh, previous, { sameGrant: true }),
     plan: mergeOAuthPlan(fresh, previous),
     // Shared: a refresh function returns "local-cli" only when the credential it hands back
     // still is the local CLI's (Devin re-reading the CLI file, Meta Muse echoing its durable
@@ -1676,7 +1677,8 @@ export async function runLogin(
         ? kiroReauthIdentityMatches(existing, cred, getAccountSet("kiro")?.accounts
           .filter(account => account.id !== opts.reauthAccountId).map(account => account.credential))
         : existing.accountId && cred.accountId
-          ? existing.accountId === cred.accountId
+          ? existing.accountId === cred.accountId && !anthropicOrganizationsConflict(existing, cred)
+            && !anthropicOrganizationHeldElsewhere(getAccountSet(provider)?.accounts ?? [], opts.reauthAccountId, cred)
           : existing.email && cred.email
             ? existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase()
             : false;

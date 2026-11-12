@@ -24,7 +24,8 @@ import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
 import { isPassiveRead } from "../lib/passive-read";
 import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
-import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
+import { normalizeAnthropicIdentity, mergeAnthropicIdentity } from "./anthropic-identity";
+import { findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
 import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
@@ -968,6 +969,9 @@ export async function saveCredentialWithReceipt(
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
   if (!safe) return null;
+  // Network reads stay outside the store lock; the answers are bound to bearers rechecked inside.
+  const anthropicOrganizations = isAnthropicInstanceId(provider)
+    ? await observeAnthropicSlotOrganizations(getAccountSet(provider)?.accounts ?? [], safe) : undefined;
   // A login that clears an automatic pause publishes it once the write commits (#8398).
   let pauseCleared = false;
   const receipt = await mutateStore(store => {
@@ -989,7 +993,7 @@ export async function saveCredentialWithReceipt(
       store[provider] = { activeAccountId: id, accounts: [{ id, credential: safe, addedAt: Date.now() }] };
       accountId = id;
     } else if (provider === "anthropic" && safe.source === "local-cli") {
-      const existing = set.accounts.find(a => matchesAnthropicImport(a.credential, safe));
+      const existing = findAnthropicImportSlot(set.accounts, safe, anthropicOrganizations, set.activeAccountId);
       if (existing) {
         existing.credential = { ...safe, ...mergeAnthropicIdentity(safe, existing.credential),
           plan: mergeOAuthPlan(safe, existing.credential),
@@ -1011,7 +1015,9 @@ export async function saveCredentialWithReceipt(
       // same-session whoami email (#6641); the helper never guesses between identified users.
       const existing = provider === "kiro"
         ? findKiroAccountForLogin(set.accounts, safe)
-        : set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
+        : isAnthropicInstanceId(provider)
+          ? findAnthropicLoginSlot(set.accounts, safe, anthropicOrganizations, set.activeAccountId)
+          : set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
       if (existing) {
         const incoming = provider === "kiro" ? withRetainedKiroUser(safe, existing.credential) : safe;
         // Same identity: a login whose tier read failed keeps the stored label (plan absent),

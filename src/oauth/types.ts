@@ -73,8 +73,11 @@ export type OAuthCredentials = {
   source?: OAuthCredentialSource;
   /** Validated upstream subscription label; null is an observed unknown, absent is not read. */
   plan?: string | null;
-  /** Private authenticated account proof; never projected into account summaries. */
-  anthropicIdentity?: { v: 1; accountUuid: string; bearerSha256: string };
+  /**
+   * Private authenticated account proof; never projected into account summaries. The optional
+   * organization is the grant's scope, observed from the same bearer; it never proves identity.
+   */
+  anthropicIdentity?: { v: 1; accountUuid: string; bearerSha256: string; organizationUuid?: string };
   /** Google Antigravity (Cloud Code Assist) discovered project id; injected into the CCA envelope. */
   projectId?: string;
   /**
