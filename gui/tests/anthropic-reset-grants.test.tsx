@@ -5,7 +5,7 @@ import { act, useLayoutEffect, useState } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { useT } from "../src/i18n/shared";
-import { useAnthropicResetGrants } from "../src/hooks/useAnthropicResetGrants";
+import { spendableGrant, useAnthropicResetGrants, type AnthropicResetGrantSnapshot } from "../src/hooks/useAnthropicResetGrants";
 import { AnthropicGrantBadge, AnthropicResetGrantModal } from "../src/components/provider-workspace/AnthropicResetGrants";
 
 // The dialog's one irreversible action: after a claim with an unknown outcome it
@@ -117,9 +117,12 @@ async function tick(): Promise<void> {
   });
 }
 
+let harnessController: ReturnType<typeof useAnthropicResetGrants> | undefined;
+
 function Harness() {
   const t = useT();
   const controller = useAnthropicResetGrants({ apiBase: "", accountIds: ["acct-1"], enabled: true });
+  harnessController = controller;
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -252,3 +255,244 @@ test("a replayed refusal reads as that refusal, not as a success", async () => {
   expect(container.querySelector(".pws-status-warn")).not.toBeNull();
   await act(async () => { root.unmount(); });
 });
+
+// ---- Grant picker: the user chooses which grant a reset spends. ----
+
+function grant(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id, label: id + " reset", resetsTotal: 1, resetsLeft: 1,
+    startsAt: null, endsAt: "2099-12-01T00:00:00+00:00", clears: ["five_hour"],
+    paused: false, usableNow: true, useRequiresLimit: false, percentUsed: {},
+    ...overrides,
+  };
+}
+
+// Upstream order deliberately puts the later-expiring grant first.
+const PICKER = {
+  ...SNAPSHOT,
+  grants: [
+    grant("late", { endsAt: "2099-12-01T00:00:00+00:00", clears: ["five_hour"] }),
+    grant("soon", { endsAt: "2099-11-01T00:00:00+00:00", clears: ["seven_day", "seven_day_overage_included"] }),
+    grant("paused", { endsAt: "2099-10-01T00:00:00+00:00", paused: true }),
+    grant("notyet", { endsAt: "2099-10-02T00:00:00+00:00", usableNow: false }),
+    grant("empty", { endsAt: "2099-10-03T00:00:00+00:00", resetsLeft: 0 }),
+    grant("limit", { endsAt: "2099-10-04T00:00:00+00:00", useRequiresLimit: true }),
+    grant("nodate", { endsAt: null }),
+  ],
+  nextGrantId: "late",
+};
+
+const PICKER_ID = "11111111-2222-4333-8444-555555555555";
+
+function radio(container: HTMLElement, id: string): HTMLElement {
+  const element = container.querySelector(`[role="radio"][data-anthropic-grant="${id}"]`) as HTMLElement | null;
+  expect(element).not.toBeNull();
+  return element!;
+}
+
+function checkedId(container: HTMLElement): string | null {
+  const checked = container.querySelectorAll('[role="radio"][aria-checked="true"]');
+  expect(checked.length).toBeLessThanOrEqual(1);
+  return checked[0]?.getAttribute("data-anthropic-grant") ?? null;
+}
+
+async function press(target: HTMLElement, key: string): Promise<void> {
+  await act(async () => {
+    target.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }) as unknown as Event);
+  });
+  await tick();
+}
+
+function pickerFetch(posts: Array<Record<string, unknown>>, options: {
+  read?: (reads: number) => unknown;
+  post?: (body: Record<string, unknown>, count: number) => Response | Promise<Response>;
+} = {}): typeof fetch {
+  let reads = 0;
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/anthropic/reset-grants?")) {
+      reads += 1;
+      return Response.json(options.read?.(reads) ?? PICKER);
+    }
+    if (url === "/api/anthropic/reset-grants/consume") {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      posts.push(body);
+      return options.post?.(body, posts.length) ?? Response.json({ code: "reset", replayed: false, resetsLeft: 0 });
+    }
+    throw new Error("unexpected fetch " + url);
+  }) as typeof fetch;
+}
+
+test("the default grant is the usable one that expires first, not upstream order", () => {
+  const snapshot = { ...PICKER, pendingOperation: null } as unknown as AnthropicResetGrantSnapshot;
+  expect(spendableGrant(snapshot)?.id).toBe("soon");
+  // A malformed or missing end date never sorts ahead of a real one.
+  const odd = { ...snapshot, grants: [grant("bad", { endsAt: "not-a-date" }), grant("none", { endsAt: null }), grant("real")] } as unknown as AnthropicResetGrantSnapshot;
+  expect(spendableGrant(odd)?.id).toBe("real");
+  expect(spendableGrant({ ...snapshot, journalAvailable: false })).toBeUndefined();
+});
+
+test("grants render as a radio group; unusable grants are disabled with their reason", async () => {
+  globalThis.fetch = pickerFetch([]);
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  expect(container.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Choose a reset to use");
+  expect(checkedId(container)).toBe("soon");
+  expect(radio(container, "soon").tabIndex).toBe(0);
+  expect(radio(container, "late").tabIndex).toBe(-1);
+  const notes: Record<string, string> = {
+    paused: "Paused", notyet: "Not usable yet", empty: "No resets left", limit: "Usable once this account hits a limit",
+  };
+  for (const [id, note] of Object.entries(notes)) {
+    const option = radio(container, id);
+    expect(option.getAttribute("aria-disabled")).toBe("true");
+    expect(option.tabIndex).toBe(-1);
+    expect(option.textContent).toContain(note);
+    await act(async () => { option.click(); });
+    expect(checkedId(container)).toBe("soon");
+  }
+  for (const id of ["late", "soon", "nodate"]) expect(radio(container, id).getAttribute("aria-disabled")).not.toBe("true");
+  await act(async () => { root.unmount(); });
+});
+
+test("a clicked grant is confirmed by name, expiry and windows, and its id is what gets spent", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  globalThis.fetch = pickerFetch(posts);
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  await act(async () => { radio(container, "late").click(); });
+  expect(checkedId(container)).toBe("late");
+  await click(container, "[data-anthropic-grant-use]");
+  const confirm = container.textContent ?? "";
+  expect(confirm).toContain("late reset");
+  expect(confirm).toContain("Expires");
+  expect(confirm).toContain("2099");
+  expect(confirm).toContain("Clears: 5-hour limit");
+  expect(posts).toHaveLength(0);
+  await click(container, "[data-anthropic-grant-confirm]");
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ accountId: "acct-1", grantId: "late" });
+  expect(String(posts[0].operationId)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  await act(async () => { root.unmount(); });
+});
+
+test("arrow keys move focus and selection across usable grants only; Space selects", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  globalThis.fetch = pickerFetch(posts);
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  await act(async () => { radio(container, "soon").focus(); });
+  await press(radio(container, "soon"), "ArrowDown");
+  expect(checkedId(container)).toBe("nodate");
+  expect(testWindow.document.activeElement?.getAttribute("data-anthropic-grant")).toBe("nodate");
+  await press(radio(container, "nodate"), "ArrowDown");
+  expect(checkedId(container)).toBe("late");
+  await press(radio(container, "late"), "ArrowUp");
+  expect(checkedId(container)).toBe("nodate");
+  await press(radio(container, "nodate"), "Home");
+  expect(checkedId(container)).toBe("late");
+  await press(radio(container, "late"), "End");
+  expect(checkedId(container)).toBe("nodate");
+  await press(radio(container, "paused"), " ");
+  expect(checkedId(container)).toBe("nodate");
+  await click(container, "[data-anthropic-grant-use]");
+  await click(container, "[data-anthropic-grant-confirm]");
+  expect(posts[0]).toMatchObject({ grantId: "nodate" });
+  await act(async () => { root.unmount(); });
+});
+
+test("after an unknown outcome the held grant is locked: no picker, retry posts the same grant and id", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  globalThis.fetch = pickerFetch(posts, {
+    post: (_body, count) => {
+      if (count === 1) throw new TypeError("connection reset");
+      return Response.json({ code: "reset", replayed: false, resetsLeft: 0 });
+    },
+  });
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  await act(async () => { radio(container, "late").click(); });
+  await click(container, "[data-anthropic-grant-use]");
+  await click(container, "[data-anthropic-grant-confirm]");
+  expect(container.querySelector('[role="radio"]')).toBeNull();
+  expect(container.textContent).toContain("late reset");
+  await click(container, "[data-anthropic-grant-retry]");
+  expect(posts).toHaveLength(2);
+  expect(posts[1]).toEqual(posts[0]);
+  expect(posts[0]).toMatchObject({ grantId: "late" });
+  await act(async () => { root.unmount(); });
+});
+
+test("a server-held attempt on another grant locks the picker and retries that grant", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  globalThis.fetch = pickerFetch(posts, {
+    read: () => ({ ...PICKER, pendingOperation: { operationId: PICKER_ID, grantId: "late", retryableUntil: Date.now() + 60_000 } }),
+  });
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  expect(container.querySelector('[role="radio"]')).toBeNull();
+  expect(container.querySelector("[data-anthropic-grant-use]")).toBeNull();
+  expect(container.textContent).toContain("late reset");
+  await click(container, "[data-anthropic-grant-retry]");
+  expect(posts).toEqual([{ accountId: "acct-1", grantId: "late", operationId: PICKER_ID }]);
+  await act(async () => { root.unmount(); });
+});
+
+test("an unresolved prior attempt on the chosen grant is resumed after the refusal re-reads the account", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  let refused = false;
+  globalThis.fetch = pickerFetch(posts, {
+    read: () => refused
+      ? { ...PICKER, pendingOperation: { operationId: PICKER_ID, grantId: "late", retryableUntil: Date.now() + 60_000 } }
+      : PICKER,
+    post: (body, count) => {
+      if (count === 1) {
+        refused = true;
+        return Response.json({ error: { code: "unresolved_prior_operation", message: "x" }, pendingOperationId: PICKER_ID }, { status: 409 });
+      }
+      return Response.json({ code: "already_used", replayed: false, resetsLeft: 0, operationId: body.operationId });
+    },
+  });
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  await act(async () => { radio(container, "late").click(); });
+  await click(container, "[data-anthropic-grant-use]");
+  await click(container, "[data-anthropic-grant-confirm]");
+  expect(container.querySelector('[role="radio"]')).toBeNull();
+  await click(container, "[data-anthropic-grant-retry]");
+  expect(posts[1]).toEqual({ accountId: "acct-1", grantId: "late", operationId: PICKER_ID });
+  await act(async () => { root.unmount(); });
+});
+
+test("a confirmed grant that stops being usable sends the dialog back to the picker without posting", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  let pauseLate = false;
+  globalThis.fetch = pickerFetch(posts, {
+    read: () => pauseLate ? { ...PICKER, grants: PICKER.grants.map(item => item.id === "late" ? { ...item, paused: true } : item) } : PICKER,
+  });
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  await act(async () => { radio(container, "late").click(); });
+  await click(container, "[data-anthropic-grant-use]");
+  expect(container.querySelector("[data-anthropic-grant-confirm]")).not.toBeNull();
+  pauseLate = true;
+  await act(async () => { await harnessController!.refresh("acct-1"); });
+  await tick();
+  expect(container.querySelector("[data-anthropic-grant-confirm]")).toBeNull();
+  expect(checkedId(container)).toBe("soon");
+  expect(container.textContent).toContain("This reset cannot be used right now");
+  expect(posts).toHaveLength(0);
+  await act(async () => { root.unmount(); });
+});
+
+test("an unavailable journal disables every grant and says why", async () => {
+  globalThis.fetch = pickerFetch([], { read: () => ({ ...PICKER, journalAvailable: false }) });
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  for (const option of container.querySelectorAll('[role="radio"]')) expect(option.getAttribute("aria-disabled")).toBe("true");
+  expect(checkedId(container)).toBeNull();
+  expect((container.querySelector("[data-anthropic-grant-use]") as HTMLButtonElement).disabled).toBe(true);
+  expect(container.textContent).toContain("The reset journal is busy or unavailable");
+  await act(async () => { root.unmount(); });
+});
+
