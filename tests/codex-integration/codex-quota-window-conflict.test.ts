@@ -53,6 +53,14 @@ describe("conflicting weekly quota windows (#8574)", () => {
     expect(detectWeeklyWindowConflicts(mixed, 2, at(15, 5))).toEqual([]);
     expect(detectWeeklyWindowConflicts(mixed, undefined, at(15, 5))).toEqual([]);
   });
+
+  test("account and spark conflicts are reported separately, and a parse keeps at most two", async () => {
+    const both = reported.map(row => ({ ...row, windows: [...row.windows, ...row.windows.map(window => ({ ...window, family: "spark" as const }))] }));
+    const conflicts = detectWeeklyWindowConflicts(both, 1, at(17, 45));
+    expect(conflicts.map(conflict => conflict.family)).toEqual(["account", "spark"]);
+    const { parseWeeklyWindowConflicts } = await import("../../src/codex/quota-window-conflict");
+    expect(parseWeeklyWindowConflicts([...conflicts, conflicts[0]])).toHaveLength(2);
+  });
 });
 
 describe("the pool account row names a weekly window conflict (#8574)", () => {
@@ -120,6 +128,41 @@ describe("the pool account row names a weekly window conflict (#8574)", () => {
     const now = Date.now();
     const row = await rowAfter([[now - 30 * 60_000, "wham", 40, now + 6 * D], [now - 10 * 60_000, "response-header", 41, now + 6 * D]]);
     expect(row).not.toHaveProperty("weeklyQuotaConflicts");
+  });
+
+  test("a row built from the listing's store snapshot adds no credential store reads", async () => {
+    const now = Date.now();
+    await rowAfter([[now - 30 * 60_000, "wham", 24, now + 6 * D], [now - 20 * 60_000, "wham", 100, now + 3 * H], [now - 10 * 60_000, "wham", 24, now + 6 * D], [now - 5 * 60_000, "wham", 100, now + 3 * H]]);
+    const { registerDecisionQuotaSink } = await import("../../src/lib/decision-quota-sink");
+    const { loadConfig } = await import("../../src/config");
+    const { readCodexAccountRecord } = await import("../../src/codex/account-store");
+    const { poolAccountDto } = await import("../../src/codex/auth-api/account-list");
+    const config = loadConfig();
+    const record = readCodexAccountRecord("pool-flip");
+    let storeLoads = 0;
+    const counter = new Proxy({}, { get: (_target, name) => name === "codexStoreLoaded" ? () => { storeLoads++; } : () => undefined });
+    const detach = registerDecisionQuotaSink(counter as never);
+    try {
+      const dto = poolAccountDto(config, config.codexAccounts![0]!, { quota: null, needsReauth: false }, true, false, 0, false, undefined, record);
+      expect(dto.weeklyQuotaConflicts?.[0]?.family).toBe("account");
+    } finally {
+      detach();
+    }
+    // The one remaining read is the health projection's, which predates #8574. The conflict
+    // reader and the credits identity take the snapshot record instead of reloading the store.
+    expect(storeLoads).toBe(1);
+  });
+
+  test("reading conflicts never prunes or clears the stored history", async () => {
+    const now = Date.now();
+    await rowAfter([[now - 30 * 60_000, "wham", 24, now + 6 * D], [now - 10 * 60_000, "wham", 100, now + 3 * H]]);
+    const { readCodexAccountRecord } = await import("../../src/codex/account-store");
+    const { getAccountWeeklyQuotaConflicts, getAccountQuotaHistory } = await import("../../src/codex/quota");
+    const record = readCodexAccountRecord("pool-flip")!;
+    const stranger = { ...record, quotaHistoryIdentity: "00000000-0000-4000-8000-000000000000" };
+    expect(getAccountWeeklyQuotaConflicts("pool-flip", stranger, now)).toEqual([]);
+    expect(getAccountWeeklyQuotaConflicts("pool-flip", null, now)).toEqual([]);
+    expect(getAccountQuotaHistory("pool-flip").observations).toHaveLength(2);
   });
 });
 

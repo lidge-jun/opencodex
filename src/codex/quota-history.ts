@@ -99,6 +99,17 @@ export class CodexQuotaHistory {
     return bucket.samples.at(-1)?.source;
   }
 
+  /**
+   * The stored samples, without pruning, clearing or cloning: a passive read changes nothing.
+   * The caller must not mutate them. Samples past the age limit may still be here; a caller
+   * that cares about age filters by `observedAt` itself.
+   */
+  peekSamples(accountId: string, identity: string | undefined): readonly QuotaHistorySample[] {
+    const bucket = this.accounts.get(accountId);
+    if (!identity || !bucket || bucket.identity !== identity) return [];
+    return bucket.samples;
+  }
+
   clear(accountId?: string): number {
     if (accountId === undefined) {
       const count = this.accounts.size;

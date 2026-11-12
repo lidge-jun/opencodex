@@ -448,10 +448,15 @@ export async function fetchCodexRows(
     ...(includeQuota ? {
       quota: projectQuota(a.quota),
       quotaRefresh: projectCodexQuotaRefreshOutcome(a.quotaRefresh),
-      ...(parseWeeklyWindowConflicts(a.weeklyQuotaConflicts) ? { weeklyQuotaConflicts: parseWeeklyWindowConflicts(a.weeklyQuotaConflicts) } : {}),
+      ...weeklyQuotaConflictsField(a.weeklyQuotaConflicts),
     } : {}),
   }));
   return { rows, activeId, autoSwitchThreshold, status: 200 };
+}
+
+function weeklyQuotaConflictsField(value: unknown): { weeklyQuotaConflicts?: WeeklyWindowConflict[] } {
+  const weeklyQuotaConflicts = parseWeeklyWindowConflicts(value);
+  return weeklyQuotaConflicts ? { weeklyQuotaConflicts } : {};
 }
 
 interface OAuthAccountDto {

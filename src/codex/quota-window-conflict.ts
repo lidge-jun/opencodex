@@ -13,6 +13,10 @@ import type { QuotaHistorySample } from "./quota-history";
  * Windows A (earlier reset) and B (later reset) conflict while A's reset is still ahead and A was
  * observed again after B was first observed. A true rollover (A, A's reset passes, then B) and an
  * early reset (A, then only B) never repeat A after B, so neither is a conflict.
+ *
+ * One stray observation is enough: a single B between two A readings keeps the warning up until
+ * A's reset passes. That is deliberate, since the stored reading may have followed that stray
+ * one, and the warning only says the two disagree.
  */
 export const RESET_TOLERANCE_MS = 60 * 60_000;
 
