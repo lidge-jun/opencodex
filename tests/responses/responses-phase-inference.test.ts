@@ -35,6 +35,50 @@ function phaseOf(block: string): string | undefined {
 }
 
 describe("Responses phase inference block rewrite", () => {
+  test("snapshot-only tool work classifies preceding messages as commentary", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
+    const call = { type: "custom_tool_call", id: "tool", call_id: "read", name: "exec", input: "read source" };
+    const [out] = rewrite(completed([{ type: "message", id: "progress" }, call]));
+    expect(phaseOf(out!)).toBe("commentary,");
+    expect(JSON.parse(out!.split("data: ")[1]!).response.output[1]).toEqual(call);
+    rewrite.dispose?.();
+  });
+
+  test("pending message uses following terminal snapshot tool work", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
+    const out = [messageDone(0, "reading"), completed([
+      { type: "message", id: "msg_0" },
+      { type: "function_call", id: "tool", call_id: "read", name: "shell", arguments: "{}" },
+    ])].flatMap(block => rewrite(block));
+    expect(out.map(phaseOf)).toEqual(["commentary", "commentary,"]);
+    rewrite.dispose?.();
+  });
+
+  test("snapshot continuation preserves explicit phases and cannot borrow a different item id", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
+    const out = [messageDone(0, "reading"), completed([
+      { type: "message", id: "other", phase: "final_answer" },
+      { type: "function_call", id: "tool", call_id: "read", name: "shell", arguments: "{}" },
+      { type: "message", id: "last" },
+    ])].flatMap(block => rewrite(block));
+    expect(out.map(phaseOf)).toEqual(["final_answer", "final_answer,,final_answer"]);
+    rewrite.dispose?.();
+  });
+
+  for (const missingId of ["event", "snapshot"]) {
+    test(`pending snapshot continuation matches by index with a missing ${missingId} id`, () => {
+      const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
+      const item = { type: "message", ...(missingId === "snapshot" ? {} : { id: "msg_0" }) };
+      const held = missingId === "event"
+        ? sse("response.output_item.done", { output_index: 0, item: { type: "message" } })
+        : messageDone(0, "reading");
+      const out = [held, completed([item, { type: "custom_tool_call", id: "tool", call_id: "read", name: "exec", input: "read" }])]
+        .flatMap(block => rewrite(block));
+      expect(out.map(phaseOf)).toEqual(["commentary", "commentary,"]);
+      rewrite.dispose?.();
+    });
+  }
+
   test("message followed by a tool call becomes commentary", () => {
     const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [messageDone(0, "checking the grid"), functionCallAdded(1)].flatMap(b => rewrite(b));
