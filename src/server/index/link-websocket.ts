@@ -8,7 +8,8 @@ import type { AdmissionReservation } from "../../lib/admission";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { classifyUsageClient } from "../../usage/client";
 import type { LinkActivity, LinkSocketActivity } from "../../link/child-activity";
-import type { ActivityHolds } from "../../link/ws-activity-holds";
+import type { ActivityHolds, FingerprintMark } from "../../link/ws-activity-holds";
+import type { LinkTurnObserver } from "../link-turn";
 import { resultKeysOf } from "../../codex/websocket-activity";
 import {
   LINK_WS_AGE_CLOSE, LINK_WS_DISABLED_CLOSE, LINK_WS_IDLE_CLOSE, LINK_WS_LIMITS, LINK_WS_REVOKED_CLOSE, type LinkWebsocketLimits,
@@ -140,6 +141,61 @@ interface SocketState {
   threadHash: string | null | undefined;
   /** Closed by revocation: such a close leaves no hold (design 5). */
   revoked: boolean;
+  /**
+   * One entry per turn that entered the pipeline, keyed by the handler's turn id and written and
+   * cleared only by that turn's own observer and cleanup: "pending" until expansion, then its
+   * fingerprint, or "unknown" when expansion or hashing failed or Codex sent no turn id, and "done"
+   * once its own terminal arrived (no longer cut work). The turn's cleanup removes the entry.
+   */
+  captures: Map<number, FingerprintMark | "pending" | "unknown" | "done">;
+}
+
+function bodyRecord(body: unknown): Record<string, unknown> {
+  return body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
+}
+
+function inputItems(body: Record<string, unknown>): unknown[] {
+  return Array.isArray(body.input) ? body.input : body.input === undefined ? [] : [body.input];
+}
+
+/** Codex's own turn id (client_metadata.turn_id); optional on Codex's side. */
+function turnIdOf(body: Record<string, unknown>): string | null {
+  const metadata = bodyRecord(body.client_metadata);
+  return typeof metadata.turn_id === "string" && metadata.turn_id ? metadata.turn_id : null;
+}
+
+/** Design 5 capture: the expanded input's length and HMAC, with the turn reference. */
+export function fingerprintCapture(holds: ActivityHolds, body: unknown): FingerprintMark | "unknown" {
+  const record = bodyRecord(body);
+  const turnId = turnIdOf(record);
+  if (!turnId) return "unknown";
+  try {
+    const items = inputItems(record);
+    if (items.length === 0) return "unknown";
+    return { n: items.length, inputHmac: holds.inputHmac(items), turnRef: holds.turnRef(turnId) };
+  } catch { return "unknown"; }
+}
+
+/**
+ * Rules (a)-(c): the fingerprinted marks of this link that a request re-sends: an inference request
+ * (generate is not false) of the same own thread and turn whose expanded input starts with the cut
+ * request's input. Rule (d), an upstream-completed terminal, is checked by the caller at the end.
+ */
+export function marksResent(holds: ActivityHolds, linkId: string, threadHash: string | null, body: unknown): FingerprintMark[] {
+  const record = bodyRecord(body);
+  if (!threadHash || record.generate === false || !holds.hasMarks(linkId)) return [];
+  const turnId = turnIdOf(record);
+  if (!turnId) return [];
+  try {
+    const items = inputItems(record);
+    return holds.markCandidates(linkId, threadHash, holds.turnRef(turnId))
+      .filter(mark => items.length >= mark.n && holds.inputHmac(items.slice(0, mark.n)) === mark.inputHmac);
+  } catch { return []; }
+}
+
+/** Rule (d): only a terminal the upstream itself reported as completed releases a running mark; no provenance is not enough. */
+export function upstreamCompleted(status: string | undefined, source: string | undefined): boolean {
+  return status === "completed" && source === "upstream";
 }
 
 const defaultTimers: LinkWebsocketTimers = {
@@ -284,7 +340,15 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
     if (!holds || !link || !state || state.revoked || !activity) return;
     const pendingKeys = activity.pendingKeys();
     if (!activity.running && pendingKeys.length === 0 && !activity.untracked) return;
-    holds.add(link.linkId, { threadHash: state.threadHash ?? null, pendingKeys, runningMarks: activity.runningTurns, untracked: activity.untracked });
+    // Snapshot, in this task, every turn's capture: a fingerprint becomes a mark released on its own;
+    // a turn that closed before its capture, or could not be fingerprinted, becomes an unknown mark.
+    const marks: FingerprintMark[] = [];
+    let unknown = 0;
+    for (const capture of state.captures.values()) {
+      if (typeof capture === "object") marks.push(capture); else if (capture !== "done") unknown += 1;
+    }
+    unknown += Math.max(0, activity.runningTurns - state.captures.size);
+    holds.add(link.linkId, { threadHash: state.threadHash ?? null, pendingKeys, runningMarks: unknown, marks, untracked: activity.untracked });
   };
 
   const sweep = (): void => {
@@ -415,8 +479,32 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           const state: SocketState = {
             openedAt: now(), idleSince: null, drainingSince: null, closeAfterTurn: false,
             book: deps.activity?.beginSocket(link.linkId) ?? null, unsubscribe: () => {},
-            threadHash: undefined, revoked: false,
+            threadHash: undefined, revoked: false, captures: new Map(),
           };
+          if (deps.holds) {
+            const holds = deps.holds;
+            const linkId = link.linkId;
+            // One observer per turn, created when the turn enters the pipeline (websocket-handler.ts).
+            ws.data.linkTurnObserver = (turnId: number): LinkTurnObserver => {
+              state.captures.set(turnId, "pending");
+              let resent: FingerprintMark[] = [];
+              const own = (value: FingerprintMark | "unknown" | "done"): void => { if (state.captures.has(turnId)) state.captures.set(turnId, value); };
+              return {
+                expanded(body) {
+                  own(fingerprintCapture(holds, body));
+                  resent = marksResent(holds, linkId, state.threadHash ?? null, body);
+                },
+                expansionFailed() { own("unknown"); },
+                terminal(status, source) {
+                  // The turn's own entry ends with its own terminal, superseded or not.
+                  own("done");
+                  if (resent.length && state.threadHash && upstreamCompleted(status, source)) holds.releaseMarks(linkId, state.threadHash, resent);
+                },
+              };
+            };
+            // The turn's cleanup (websocket-handler.ts): its entry goes, whether or not a terminal came.
+            ws.data.linkTurnEnded = (turnId: number): void => { state.captures.delete(turnId); };
+          }
           // Codex sends its own thread id on the handshake; a socket without it may name one in its
           // first create's client_metadata (observeForHolds).
           const threadId = ws.data.headers?.get("thread-id");

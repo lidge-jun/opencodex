@@ -369,6 +369,7 @@ export function createWebsocketHandler(
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
               nativeControl,
+              ...(ws.data.linkTurnObserver ? { linkTurn: ws.data.linkTurnObserver(turnId) } : {}),
               abortSignal: turnAbort.signal,
               turnAdmissionLease,
               onFirstOutput: () => recordFirstOutput(logCtx, start),
@@ -450,6 +451,7 @@ export function createWebsocketHandler(
             turnAdmissionLease.release();
             if (ws.data.nativeControl === nativeControl) ws.data.nativeControl = undefined;
             if (!logged && turnAbort.signal.aborted) finalizeLog(499);
+            ws.data.linkTurnEnded?.(turnId);
             if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
           }
         });

@@ -57,3 +57,5 @@ This structural mechanism does not alter supplier bodies, reasoning effort, retr
 settlement or provider-opaque replay scope.
 
 The route-independent Claude bridge pool key agrees with final Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).
+
+Right after continuation expansion, and only for a request that carries a Remote Link turn observer (a link WebSocket turn, or a relayed request with the link relay's internal token header), `request-prepare.ts` reports the expanded input to `src/server/link-turn.ts`; an expansion miss reports a failure. A request without an observer runs no code there, and the header is removed before anything is forwarded (`structure/remote-link.md`).

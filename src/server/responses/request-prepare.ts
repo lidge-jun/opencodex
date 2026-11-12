@@ -1,4 +1,5 @@
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { failLinkTurnExpansion, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
@@ -448,6 +449,7 @@ export async function prepareResponsesRequest(
     }
     // Local replay failures require full client replay.
     if (replayFailure) {
+      failLinkTurnExpansion(options.linkTurn, req, logCtx);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -455,6 +457,8 @@ export async function prepareResponsesRequest(
       ));
     }
   }
+  // Remote Link activity holds (design T4 section 5): the expanded input, before any upstream I/O.
+  if (!options.comboReplaySnapshot) observeLinkTurnExpansion(options.linkTurn, req, logCtx, body);
   const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
     ?? (body !== originalBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");

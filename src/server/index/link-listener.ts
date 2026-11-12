@@ -4,7 +4,9 @@ import { createLinkActivity, type LinkActivitySnapshot } from "../../link/child-
 import type { Server, WebSocketHandler } from "bun";
 import type { RequestPolicyView } from "../auth-cors";
 import type { WsData } from "../ws-bridge";
-import { createLinkWebsocketGate, type LinkWebsocketGateDeps } from "./link-websocket";
+import { createLinkWebsocketGate, marksResent, upstreamCompleted, type LinkWebsocketGateDeps } from "./link-websocket";
+import type { FingerprintMark } from "../../link/ws-activity-holds";
+import { LINK_TURN_HEADER, registerLinkTurnToken, releaseLinkTurnToken } from "../link-turn";
 import { LINK_WS_LIMITS, linkWebsocketTransportReady } from "./link-websocket-limits";
 import { createActivityHolds } from "../../link/ws-activity-holds";
 import { resultKeysOf } from "../../codex/websocket-activity";
@@ -176,22 +178,42 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: fingerprintsFor,
       ...(linkWebsocket ? { upgrade: websocketGate.upgrade, websocketAdvertised: websocketEnabled } : {}),
       observeResponsesRequest: (linkId, req) => {
-        // Only a link with a releasable hold pays for reading a copy of the request body.
-        if (!holds.releasable(linkId)) return;
         const header = req.headers.get("thread-id");
-        let decide!: (accepted: boolean) => void;
-        const decision = new Promise<boolean>(resolve => { decide = resolve; });
-        // The copy is read alongside the request, but released only if the handler accepted it.
-        const parsed = req.clone().json().catch(() => null);
-        const observation = Promise.all([parsed, decision]).then(([body, accepted]) => {
-          if (!accepted || !body || typeof body !== "object") return;
-          const record = body as Record<string, unknown>;
+        const threadHashOf = (body: unknown): string | null => {
+          const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
           const metadata = record.client_metadata as Record<string, unknown> | undefined;
           const threadId = header || (metadata && typeof metadata.thread_id === "string" ? metadata.thread_id : "");
-          holds.observe(linkId, threadId ? holds.threadHash(threadId) : null, resultKeysOf(record.input));
-        }).catch(() => {}).finally(() => { holdObservations.delete(observation); });
-        holdObservations.add(observation);
-        return decide;
+          try { return threadId ? holds.threadHash(threadId) : null; } catch { return null; }
+        };
+        // Running marks: the pipeline reports this request's expanded input and its terminal
+        // (src/server/link-turn.ts), through a token header it removes before anything is forwarded.
+        let token: string | null = null;
+        if (holds.hasMarks(linkId)) {
+          let resent: FingerprintMark[] = [];
+          let threadHash: string | null = null;
+          token = registerLinkTurnToken({
+            expanded(body) { threadHash = threadHashOf(body); resent = marksResent(holds, linkId, threadHash, body); },
+            expansionFailed() { resent = []; },
+            terminal(status, source) { if (resent.length && threadHash && upstreamCompleted(status, source)) holds.releaseMarks(linkId, threadHash, resent); },
+          });
+          try { req.headers.set(LINK_TURN_HEADER, token); } catch { releaseLinkTurnToken(token); token = null; }
+        }
+        // Pending result keys: only a link with a releasable hold pays for reading a copy of the body.
+        let decide: ((accepted: boolean) => void) | undefined;
+        if (holds.releasable(linkId)) {
+          const decision = new Promise<boolean>(resolve => { decide = resolve; });
+          // The copy is read alongside the request, but released only if the handler accepted it.
+          const parsed = req.clone().json().catch(() => null);
+          const observation = Promise.all([parsed, decision]).then(([body, accepted]) => {
+            if (!accepted || !body || typeof body !== "object") return;
+            holds.observe(linkId, threadHashOf(body), resultKeysOf((body as Record<string, unknown>).input));
+          }).catch(() => {}).finally(() => { holdObservations.delete(observation); });
+          holdObservations.add(observation);
+        }
+        if (token === null && !decide) return;
+        // Preparation claimed the token before the handler answered; dropping it again is a no-op,
+        // and it keeps a request that never reached preparation from leaving one behind.
+        return (accepted: boolean) => { if (token !== null) releaseLinkTurnToken(token); decide?.(accepted); };
       } });
     let bound: Server<unknown>;
     try {

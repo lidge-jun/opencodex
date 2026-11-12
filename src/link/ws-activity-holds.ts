@@ -26,18 +26,48 @@ export interface HoldInput {
   threadHash: string | null;
   /** Hashed result keys the socket was waiting for (CodexWebSocketActivity). */
   pendingKeys: readonly string[];
-  /** Turns running at close. Until fingerprints are captured each is unknown (operator only). */
+  /** Running turns whose cut request could not be fingerprinted: unknown, operator only. */
   runningMarks: number;
+  /** Running turns whose cut request was fingerprinted after expansion; each is released on its own. */
+  marks?: readonly FingerprintMark[];
   untracked: boolean;
 }
+
+/** The cut request of a running turn: its expanded-input prefix length, HMAC, and turn reference. */
+export interface FingerprintMark { n: number; inputHmac: string; turnRef: string }
 
 interface Hold {
   threadHash: string | null;
   pendingKeys: string[];
   runningMarks: number;
+  marks: FingerprintMark[];
   untracked: boolean;
   createdAt: number;
 }
+
+/** Canonical JSON: object keys sorted, no whitespace; throws for anything JSON cannot represent. */
+function canonical(value: unknown): string {
+  const seen = new Set<unknown>();
+  const sort = (input: unknown): unknown => {
+    if (input === null || typeof input === "string" || typeof input === "boolean") return input;
+    if (typeof input === "number") { if (!Number.isFinite(input)) throw new Error("non-finite number"); return input; }
+    if (typeof input !== "object") throw new Error("not representable");
+    if (seen.has(input)) throw new Error("cycle");
+    seen.add(input);
+    const out = Array.isArray(input) ? input.map(sort)
+      : Object.fromEntries(Object.keys(input as Record<string, unknown>).sort()
+        .filter(key => (input as Record<string, unknown>)[key] !== undefined)
+        .map(key => [key, sort((input as Record<string, unknown>)[key])]));
+    seen.delete(input);
+    return out;
+  };
+  return JSON.stringify(sort(value));
+}
+
+const isMark = (value: unknown): value is FingerprintMark => {
+  const mark = value as Record<string, unknown> | null;
+  return !!mark && Number.isSafeInteger(mark.n) && (mark.n as number) > 0 && typeof mark.inputHmac === "string" && typeof mark.turnRef === "string";
+};
 
 interface LinkHolds { holds: Hold[]; unknown: UnknownReason | null }
 
@@ -76,7 +106,8 @@ function isLinkHolds(value: unknown): value is LinkHolds {
     const h = hold as Record<string, unknown>;
     return h && (h.threadHash === null || typeof h.threadHash === "string") && Array.isArray(h.pendingKeys)
       && h.pendingKeys.every(key => typeof key === "string") && Number.isSafeInteger(h.runningMarks) && (h.runningMarks as number) >= 0
-      && typeof h.untracked === "boolean" && typeof h.createdAt === "number";
+      && typeof h.untracked === "boolean" && typeof h.createdAt === "number"
+      && (h.marks === undefined || (Array.isArray(h.marks) && h.marks.every(isMark)));
   });
 }
 
@@ -173,7 +204,7 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
   };
 
   const finished = (hold: Hold): boolean =>
-    hold.threadHash !== null && !hold.untracked && hold.runningMarks === 0 && hold.pendingKeys.length === 0;
+    hold.threadHash !== null && !hold.untracked && hold.runningMarks === 0 && hold.marks.length === 0 && hold.pendingKeys.length === 0;
 
   return {
     /** At Home start. Reads only when a fence file exists. */
@@ -209,7 +240,7 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
         const rotated = file.keyId !== null && file.keyId !== keyId();
         for (const [linkId, value] of Object.entries(file.links)) {
           const kept = rotated ? value.holds.filter(hold => hold.threadHash === null) : value.holds;
-          links.set(linkId, { holds: kept.map(hold => ({ ...hold, pendingKeys: [...hold.pendingKeys] })),
+          links.set(linkId, { holds: kept.map(hold => ({ ...hold, pendingKeys: [...hold.pendingKeys], marks: [...(hold.marks ?? [])] })),
             unknown: value.unknown ?? (rotated && kept.length < value.holds.length ? "key-rotated" : null) });
         }
       }
@@ -238,7 +269,10 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
       if (value.holds.length >= deps.limits.holdsPerLink || total() >= deps.limits.holdsTotal) {
         value.unknown ??= "overflow";
       } else {
-        value.holds.push({ threadHash: input.threadHash, pendingKeys: [...input.pendingKeys], runningMarks: input.runningMarks, untracked: input.untracked, createdAt: now() });
+        // Fingerprints need the thread to be matched by; without it they are operator-only, like unknown marks.
+        const marks = input.threadHash === null ? [] : [...(input.marks ?? [])];
+        const unknown = input.runningMarks + (input.threadHash === null ? input.marks?.length ?? 0 : 0);
+        value.holds.push({ threadHash: input.threadHash, pendingKeys: [...input.pendingKeys], runningMarks: unknown, marks, untracked: input.untracked, createdAt: now() });
       }
       persistOrMark(linkId);
     },
@@ -257,6 +291,48 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
       if (!changed) return;
       value.holds = value.holds.filter(hold => !finished(hold));
       persistOrMark(linkId);
+    },
+
+    /** HMAC of a turn's expanded input items (canonical JSON). Throws when they cannot be canonicalized. */
+    inputHmac(items: readonly unknown[]): string {
+      return createHmac("sha256", refKey()).update("opencodex-link-input-v1\0" + canonical(items)).digest("hex");
+    },
+
+    /** HMAC of Codex's own turn id (client_metadata.turn_id). */
+    turnRef(turnId: string): string {
+      return createHmac("sha256", refKey()).update("opencodex-link-turn-v1\0" + turnId).digest("hex");
+    },
+
+    /** Whether any hold on this link has a fingerprinted running mark: callers skip hashing otherwise. */
+    hasMarks(linkId: string): boolean {
+      return links.get(linkId)?.holds.some(hold => hold.marks.length > 0) ?? false;
+    },
+
+    /** Fingerprinted marks a request of this own thread and turn could release. */
+    markCandidates(linkId: string, threadHash: string, turnRef: string): FingerprintMark[] {
+      return (links.get(linkId)?.holds ?? []).filter(hold => hold.threadHash === threadHash)
+        .flatMap(hold => hold.marks.filter(mark => mark.turnRef === turnRef));
+    },
+
+    /** Rule (d): an upstream-completed inference request of the same thread and turn re-sent these. */
+    releaseMarks(linkId: string, threadHash: string, released: readonly FingerprintMark[]): void {
+      const value = links.get(linkId);
+      if (!value || released.length === 0) return;
+      let changed = false;
+      for (const hold of value.holds) {
+        if (hold.threadHash !== threadHash) continue;
+        const left = hold.marks.filter(mark => !released.some(other => other.n === mark.n && other.inputHmac === mark.inputHmac && other.turnRef === mark.turnRef));
+        if (left.length !== hold.marks.length) { hold.marks = left; changed = true; }
+      }
+      if (!changed) return;
+      value.holds = value.holds.filter(hold => !finished(hold));
+      persistOrMark(linkId);
+    },
+
+    /** Running marks on a link: fingerprinted and unknown (operator only). */
+    markCounts(linkId: string): { fingerprinted: number; unknown: number } {
+      const holds = links.get(linkId)?.holds ?? [];
+      return { fingerprinted: holds.reduce((sum, hold) => sum + hold.marks.length, 0), unknown: holds.reduce((sum, hold) => sum + hold.runningMarks, 0) };
     },
 
     /** Whether a request on this link could release anything: callers skip parsing otherwise. */

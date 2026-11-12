@@ -6,7 +6,7 @@ import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
 export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
-import { captureUpstreamTerminalDiagnostics, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
+import { captureUpstreamTerminalDiagnostics, notifyLinkTurnFinal, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
@@ -1435,7 +1435,7 @@ export function addFinalRequestLog(
 ): void {
   const intercept = finalRequestLogInterceptors.get(logCtx);
   if (intercept) { intercept(status, meta); return; }
-  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog);
+  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog); notifyLinkTurnFinal(logCtx, meta?.terminalStatus);
 }
 
 function writeFinalRequestLog(

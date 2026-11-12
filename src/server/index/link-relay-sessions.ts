@@ -148,7 +148,8 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           release(); return refuse();
         }
         // Keep the native Request identity: Bun's requestIP/timeout APIs need the original request.
-        try { req.headers.delete(LINK_RELAY_SESSION_HEADER); } catch { release(); return refuse(); }
+        // The link turn header is ours alone (src/server/link-turn.ts): never accepted from a peer.
+        try { req.headers.delete(LINK_RELAY_SESSION_HEADER); req.headers.delete("x-opencodex-link-turn"); } catch { release(); return refuse(); }
         if (options.upgrade && req.headers.has("upgrade")) {
           const outcome = options.upgrade(req, server as Server<unknown>, { keyId: session.keyId, linkId: session.linkId, fingerprint: session.fingerprint, release });
           if (outcome.handled) return outcome.response as Response;

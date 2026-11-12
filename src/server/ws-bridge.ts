@@ -82,6 +82,10 @@ export interface WsData {
   nativeControlDisabled?: boolean;
   /** Present only on a Remote Link socket (src/server/index/link-websocket.ts). */
   link?: LinkSocketBinding;
+  /** Remote Link sockets only: one observer per admitted turn, by the handler's turn id. */
+  linkTurnObserver?: (turnId: number) => import("./link-turn").LinkTurnObserver;
+  /** Remote Link sockets only: the turn's cleanup ran, so its capture entry goes. */
+  linkTurnEnded?: (turnId: number) => void;
 }
 
 /** The verified identity and lease owner of one Remote Link socket; no secret is kept. */
