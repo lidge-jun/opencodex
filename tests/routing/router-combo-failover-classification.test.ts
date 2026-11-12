@@ -8,7 +8,15 @@ import {
   pickComboTarget,
   targetKey,
 } from "../../src/combos";
-import { codexAccountModelRefusalHardStopCode, comboFailureCooldownScope, comboFailureDecision } from "../../src/combos/failover";
+import {
+  codexAccountModelRefusalHardStopCode,
+  comboFailureCooldownScope,
+  comboFailureDecision,
+  isMalformedResponseFormatRequest,
+  isOpenRouterOpaque400Envelope,
+} from "../../src/combos/failover";
+import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { normalizeUpstreamErrorText } from "../../src/server/responses/core-errors";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
 import type { OcxConfig } from "../../src/types";
 
@@ -68,6 +76,13 @@ describe("combo failure cooldown scope", () => {
     expect(comboFailureCooldownScope(502,
       "Your input exceeds the context window of this model. Please adjust your input and try again.",
       { code: "upstream_server_error" })).toBe("none");
+    // A request whose token cap was exhausted before output was produced is request-specific.
+    expect(comboFailureCooldownScope(502,
+      "Provider reached its output token limit before producing output",
+      { code: "zero_output_token_limit" })).toBe("none");
+    expect(comboFailureDecision(502,
+      "Provider reached its output token limit before producing output",
+      { code: "zero_output_token_limit" })).toBe("hop");
     // A credential verdict keeps its provider scope even when the body quotes context prose.
     expect(comboFailureCooldownScope(401, "invalid key for the 200k context window tier")).toBe("provider");
     // A provider's own per-target hard cap (vendor code 5059) is equally request-shaped.
@@ -76,6 +91,337 @@ describe("combo failure cooldown scope", () => {
       "prompt 900000 > 200000 maximum context length",
       { code: "5059" },
     )).toBe("none");
+  });
+
+  test("an opaque OpenRouter numeric-400 hops without cooling the failed target", () => {
+    // OpenRouter's Stealth wrapper drops the type and reports the HTTP status as a numeric code;
+    // this is still an opaque upstream failure, not a caller validation verdict.
+    const openRouterOpaque400 = JSON.stringify({
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+      user_id: "user_test",
+    });
+    expect(comboFailureDecision(400, openRouterOpaque400)).toBe("hop");
+    expect(comboFailureCooldownScope(400, openRouterOpaque400)).toBe("none");
+
+    // An opaque envelope must not turn known malformed response_format requests into
+    // retries of the same invalid payload.
+    for (const malformed of [
+      "Invalid schema for response_format 'reply': 'type' is a required property.",
+      "response_format.type must be one of 'text', 'json_object', 'json_schema'.",
+      "response_format must be a valid JSON schema.",
+      "response_format.json_schema.schema must be a valid JSON schema.",
+    ]) {
+      expect(comboFailureDecision(400, malformed, { openRouterOpaque400: true })).toBe("stop");
+    }
+
+    const envelopeWithDetail = JSON.stringify({
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+        detail: "response_format.json_schema.schema must be a valid JSON schema.",
+      },
+    });
+    expect(comboFailureDecision(400, envelopeWithDetail)).toBe("stop");
+  });
+
+  test("a wrapped invalid_request_error 400 still stops and cools the target", () => {
+    const wrapped = 'Provider error 400: {"type":"error","error":{"type":"invalid_request_error","message":"tools.0.custom.name: String should match pattern ..."}}';
+    expect(comboFailureDecision(400, wrapped)).toBe("stop");
+    expect(comboFailureCooldownScope(400, wrapped)).toBe("target");
+
+    const plain = "Invalid 'input[3].content': expected a string, got null.";
+    expect(comboFailureDecision(400, plain)).toBe("stop");
+    expect(comboFailureCooldownScope(400, plain)).toBe("target");
+  });
+
+  test("leaves numeric codes undefined in normalizeUpstreamErrorText and accepts them directly in classification inputs", async () => {
+    // Numeric exhaustion code 1308 is not coerced to string by normalizeUpstreamErrorText
+    const exhaustionBody = JSON.stringify({
+      error: { message: "Usage limit reached", code: 1308 },
+    });
+    const normalized1308 = normalizeUpstreamErrorText(exhaustionBody, "fallback");
+    expect(normalized1308.code).toBeUndefined();
+
+    const failure1308 = await consumeComboFailure(new Response(exhaustionBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(failure1308.upstreamCode).toBeUndefined();
+    expect(comboFailureDecision(400, failure1308.classificationText, { code: 1308 })).toBe("hop");
+    expect(comboFailureCooldownScope(400, failure1308.classificationText, { code: 1308 })).toBe("target");
+
+    // Non-400 numeric code (e.g. 404) in an HTTP 400 response must not take the uncoded hop or skip cooldown
+    const non400CodeBody = JSON.stringify({
+      error: { message: "Resource not found", code: 404, type: "upstream_error" },
+    });
+    const normalized404 = normalizeUpstreamErrorText(non400CodeBody, "fallback");
+    expect(normalized404.code).toBeUndefined();
+
+    const failure404 = await consumeComboFailure(new Response(non400CodeBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(failure404.upstreamCode).toBeUndefined();
+    expect(comboFailureDecision(400, failure404.classificationText, {
+      code: 404,
+    })).toBe("stop");
+    expect(comboFailureCooldownScope(400, failure404.classificationText, {
+      code: 404,
+    })).toBe("target");
+
+    // Numeric 400 code in OpenRouter opaque envelope retains numeric 400 code and takes the hop
+    const openRouterOpaque400 = JSON.stringify({
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    });
+    const normalizedOR = normalizeUpstreamErrorText(openRouterOpaque400, "fallback");
+    expect(normalizedOR.code).toBeUndefined();
+    const failureOR = await consumeComboFailure(new Response(openRouterOpaque400, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(failureOR.upstreamCode).toBeUndefined();
+    expect(failureOR.openRouterOpaque400).toBe(true);
+    expect(comboFailureDecision(400, failureOR.classificationText, {
+      code: failureOR.upstreamCode,
+      openRouterOpaque400: failureOR.openRouterOpaque400,
+    })).toBe("hop");
+    expect(comboFailureCooldownScope(400, failureOR.classificationText, {
+      code: failureOR.upstreamCode,
+      openRouterOpaque400: failureOR.openRouterOpaque400,
+    })).toBe("none");
+
+    // Accepts numeric code directly in classification options
+    expect(comboFailureDecision(400, failureOR.classificationText, {
+      code: 400,
+      openRouterOpaque400: failureOR.openRouterOpaque400,
+    })).toBe("hop");
+    expect(comboFailureCooldownScope(400, failureOR.classificationText, {
+      code: 400,
+      openRouterOpaque400: failureOR.openRouterOpaque400,
+    })).toBe("none");
+  });
+
+  test("a typed 400 with a numeric vendor code stays terminal", async () => {
+    // Only the untyped OpenRouter shape is target-local; a typed envelope names its own verdict.
+    for (const body of [
+      JSON.stringify({ error: { type: "upstream_error", message: "bad thing", code: 1001 } }),
+      JSON.stringify({ error: { type: "invalid_request_error", message: "Provider returned error", code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth" } } }),
+    ]) {
+      expect(isOpenRouterOpaque400Envelope(body)).toBe(false);
+      const failure = await consumeComboFailure(new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }));
+      expect(failure.openRouterOpaque400).toBe(false);
+      expect(comboFailureDecision(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        openRouterOpaque400: failure.openRouterOpaque400,
+        malformedResponseFormat: failure.malformedResponseFormat,
+      })).toBe("stop");
+    }
+  });
+
+  test("a typed root keeps an opaque-looking nested 400 terminal over HTTP, as it does over SSE", async () => {
+    const opaque = { message: "Provider returned error", code: 400, metadata: { raw: "ERROR", provider_name: "Stealth" } };
+    for (const root of [
+      { type: "invalid_request_error" },
+      { code: "invalid_request_error" },
+      { type: "error", code: "invalid_request_error" },
+      { type: "error", code: "content_policy_violation" },
+      { type: "error", code: "context_length_exceeded" },
+    ]) {
+      const body = JSON.stringify({ ...root, error: opaque });
+      expect(isOpenRouterOpaque400Envelope(body)).toBe(false);
+      const failure = await consumeComboFailure(new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }));
+      expect(failure.openRouterOpaque400).toBe(false);
+      expect(comboFailureDecision(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        openRouterOpaque400: failure.openRouterOpaque400,
+        malformedResponseFormat: failure.malformedResponseFormat,
+      })).toBe("stop");
+    }
+    // A root that repeats the numeric 400 adds no verdict of its own.
+    expect(isOpenRouterOpaque400Envelope(JSON.stringify({ code: 400, error: opaque }))).toBe(true);
+  });
+
+  test("an envelope root is authoritative only when its code is itself a terminal verdict", async () => {
+    const opaque = { message: "Provider returned error", code: 400, metadata: { raw: "ERROR" } };
+    // The root code used to be read by inequality against "400", which made every other code
+    // -- including the ones that are ordinary hop signals, and a blank one -- suppress the
+    // opaque verdict. Each of these must leave the wrapper target-local.
+    for (const code of [
+      "model_not_found",
+      "insufficient_quota",
+      "usage_limit_exceeded",
+      "free_rate_limited",
+      "input_admission_refused",
+      "unsupported_input_modality",
+      "",
+      "   ",
+    ]) {
+      const body = JSON.stringify({ code, error: opaque });
+      expect(isOpenRouterOpaque400Envelope(body)).toBe(true);
+      const failure = await consumeComboFailure(new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }));
+      expect(comboFailureDecision(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        rootCode: failure.upstreamRootCode,
+        openRouterOpaque400: failure.openRouterOpaque400,
+        malformedResponseFormat: failure.malformedResponseFormat,
+      })).toBe("hop");
+      expect(comboFailureCooldownScope(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        openRouterOpaque400: failure.openRouterOpaque400,
+        malformedResponseFormat: failure.malformedResponseFormat,
+      })).toBe("none");
+    }
+  });
+
+  test("a root hard stop keeps a retryable nested record terminal over HTTP", async () => {
+    // normalizeUpstreamErrorText selects the nested record first, so the root code needs its own
+    // carrier. The rule is the one SSE already applies: each code alone must authorize the hop.
+    for (const [rootCode, nestedCode] of [
+      ["content_policy_violation", "model_not_found"],
+      ["origin_rejected", "rate_limit_exceeded"],
+      ["context_length_exceeded", "insufficient_quota"],
+    ]) {
+      const body = JSON.stringify({ code: rootCode, error: { message: "retryable", code: nestedCode } });
+      const failure = await consumeComboFailure(new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }));
+      expect(failure.upstreamRootCode).toBe(rootCode);
+      expect(comboFailureDecision(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        rootCode: failure.upstreamRootCode,
+      })).toBe("stop");
+    }
+    // The mirror case: a retryable root and record still hop, which is dev's behavior.
+    const retryable = await consumeComboFailure(new Response(JSON.stringify({
+      code: "server_error", error: { message: "overloaded", code: "server_is_overloaded" },
+    }), { status: 503, headers: { "content-type": "application/json" } }));
+    expect(comboFailureDecision(503, retryable.classificationText, {
+      code: retryable.upstreamCode,
+      rootCode: retryable.upstreamRootCode,
+    })).toBe("hop");
+  });
+
+  test("preserves complete evidence across display truncation for longer envelopes and late details", async () => {
+    const longPadding = "x".repeat(600);
+    const longOpenRouterBody = JSON.stringify({
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false, note: longPadding },
+      },
+      user_id: "user_test",
+    });
+    expect(longOpenRouterBody.length).toBeGreaterThan(500);
+    expect(longOpenRouterBody.length).toBeLessThan(16_384);
+    expect(isOpenRouterOpaque400Envelope(longOpenRouterBody)).toBe(true);
+
+    const openRouterFailure = await consumeComboFailure(new Response(longOpenRouterBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(openRouterFailure.openRouterOpaque400).toBe(true);
+    expect(openRouterFailure.classificationText.length).toBeLessThanOrEqual(500);
+    expect(comboFailureDecision(400, openRouterFailure.classificationText, {
+      code: openRouterFailure.upstreamCode,
+      openRouterOpaque400: openRouterFailure.openRouterOpaque400,
+      malformedResponseFormat: openRouterFailure.malformedResponseFormat,
+    })).toBe("hop");
+    expect(comboFailureCooldownScope(400, openRouterFailure.classificationText, {
+      code: openRouterFailure.upstreamCode,
+      openRouterOpaque400: openRouterFailure.openRouterOpaque400,
+      malformedResponseFormat: openRouterFailure.malformedResponseFormat,
+    })).toBe("none");
+
+    const longMalformedBody = JSON.stringify({
+      error: {
+        message: "Upstream request failed",
+        type: "upstream_error",
+        padding: longPadding,
+        detail: "response_format.json_schema.schema must be a valid JSON schema.",
+      },
+    });
+    expect(longMalformedBody.length).toBeGreaterThan(500);
+    expect(longMalformedBody.length).toBeLessThan(16_384);
+    expect(isMalformedResponseFormatRequest(400, longMalformedBody)).toBe(true);
+
+    const malformedFailure = await consumeComboFailure(new Response(longMalformedBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(malformedFailure.malformedResponseFormat).toBe(true);
+    expect(comboFailureDecision(400, malformedFailure.classificationText, {
+      code: malformedFailure.upstreamCode,
+      openRouterOpaque400: malformedFailure.openRouterOpaque400,
+      malformedResponseFormat: malformedFailure.malformedResponseFormat,
+    })).toBe("stop");
+
+    const rootDetailOpaqueBody = JSON.stringify({
+      detail: "Invalid schema for response_format: 'type' must be 'object'",
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    });
+    expect(isMalformedResponseFormatRequest(400, rootDetailOpaqueBody)).toBe(true);
+    const rootDetailFailure = await consumeComboFailure(new Response(rootDetailOpaqueBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(rootDetailFailure.malformedResponseFormat).toBe(true);
+    expect(rootDetailFailure.openRouterOpaque400).toBe(true);
+    expect(comboFailureDecision(400, rootDetailFailure.classificationText, {
+      code: rootDetailFailure.upstreamCode,
+      openRouterOpaque400: rootDetailFailure.openRouterOpaque400,
+      malformedResponseFormat: rootDetailFailure.malformedResponseFormat,
+    })).toBe("stop");
+    expect(comboFailureCooldownScope(400, rootDetailFailure.classificationText, {
+      code: rootDetailFailure.upstreamCode,
+      openRouterOpaque400: rootDetailFailure.openRouterOpaque400,
+      malformedResponseFormat: rootDetailFailure.malformedResponseFormat,
+    })).toBe("target");
+
+    const flatOpaqueBody = JSON.stringify({
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+    });
+    expect(isOpenRouterOpaque400Envelope(flatOpaqueBody)).toBe(true);
+    const flatFailure = await consumeComboFailure(new Response(flatOpaqueBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(flatFailure.openRouterOpaque400).toBe(true);
+    expect(comboFailureDecision(400, flatFailure.classificationText, {
+      code: flatFailure.upstreamCode,
+      openRouterOpaque400: flatFailure.openRouterOpaque400,
+      malformedResponseFormat: flatFailure.malformedResponseFormat,
+    })).toBe("hop");
+    expect(comboFailureCooldownScope(400, flatFailure.classificationText, {
+      code: flatFailure.upstreamCode,
+      openRouterOpaque400: flatFailure.openRouterOpaque400,
+      malformedResponseFormat: flatFailure.malformedResponseFormat,
+    })).toBe("none");
   });
 
   test.each([400, 422])("HTTP %s per-request free-tier cap still hops without cooldown scope", status => {
@@ -466,12 +812,15 @@ describe("definite upstream context overflow", () => {
     expect(comboFailureDecision(502, failedTerminal(prose), { code: "context_length_exceeded" })).toBe("hop");
     expect(comboFailureDecision(400, "context length exceeded", { code: "context_length_exceeded" })).toBe("hop");
     expect(comboFailureDecision(400, `Provider error 400: ${prose}`)).toBe("hop");
+    expect(comboFailureDecision(400, "This is not a timeout: the model's context window is full")).toBe("hop");
+    expect(comboFailureDecision(400, "Request was not accepted because its history is at or past the model's context limit")).toBe("hop");
   });
 
   test("evidence must come from the innermost message, not a stray code token", () => {
     const unrelated = JSON.stringify({ error: { ...unsupportedUser, code: "context_length_exceeded" } });
     expect(comboFailureDecision(400, unrelated)).toBe("stop");
     expect(comboFailureDecision(400, "ordinary invalid request", { code: "context_length_exceeded" })).toBe("stop");
+    expect(comboFailureDecision(400, "Requested tokens should not exceed maximum context length (8192)")).toBe("stop");
     // Reflected prose inside an unrelated body is not the provider's own verdict.
     expect(comboFailureDecision(400, JSON.stringify({ error: { ...unsupportedUser, param: "tools", note: prose } })))
       .toBe("stop");
@@ -523,6 +872,181 @@ describe("bounded optional-control error envelopes", () => {
     const message = JSON.stringify({ error: unsupportedEffort });
     expect(comboFailureDecision(400, message, { code: "unsupported_value" })).toBe("hop");
     expect(comboFailureCooldownScope(400, message, { code: "unsupported_value" })).toBe("none");
+  });
+  test("exact reasoning effort refusal hops when wrapped in single-line data: prefix", () => {
+    const payload = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
+    for (const msg of [
+      payload,
+      `data: ${payload}`,
+      `Provider error 400: data: ${payload}`,
+    ]) {
+      expect(comboFailureDecision(400, msg)).toBe("hop");
+      expect(comboFailureCooldownScope(400, msg)).toBe("none");
+    }
+  });
+  test("rejects malformed error codes before granting a combo hop for reasoning effort", () => {
+    for (const malformedCode of [42, true, {}, []]) {
+      const payloadWithCode = JSON.stringify({
+        error: { type: "invalid_request_error", code: malformedCode, message: "Invalid reasoning effort." },
+      });
+      expect(comboFailureDecision(400, payloadWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, payloadWithCode)).toBe("target");
+
+      const rootWithCode = JSON.stringify({
+        code: malformedCode,
+        error: "Invalid reasoning effort.",
+      });
+      expect(comboFailureDecision(400, rootWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, rootWithCode)).toBe("target");
+    }
+  });
+  test("rejects conflicting root and nested codes before granting a combo hop for reasoning effort", () => {
+    for (const conflictingCode of ["context_length_exceeded", "origin_rejected", "unknown_terminal_code"]) {
+      const payloadWithCode = JSON.stringify({
+        error: { type: "invalid_request_error", code: conflictingCode, message: "Invalid reasoning effort." },
+      });
+      expect(comboFailureDecision(400, payloadWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, payloadWithCode)).toBe("target");
+
+      const rootWithCode = JSON.stringify({
+        code: conflictingCode,
+        error: { type: "invalid_request_error", message: "Invalid reasoning effort." },
+      });
+      expect(comboFailureDecision(400, rootWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, rootWithCode)).toBe("target");
+    }
+  });
+  test("pins root code behavior against reasoning effort matcher (dev regression)", () => {
+    for (const code of ["insufficient_quota", "model_not_found", "rate_limit_exceeded"]) {
+      const body = JSON.stringify({ code, error: { type: "invalid_request_error", message: "Invalid reasoning effort." } });
+      expect(comboFailureDecision(400, body)).toBe("stop");
+      expect(comboFailureCooldownScope(400, body)).toBe("target");
+    }
+    const permBody = JSON.stringify({ code: "permission_denied", error: { type: "invalid_request_error", message: "Invalid reasoning effort." } });
+    expect(comboFailureDecision(400, permBody)).toBe("hop");
+    expect(comboFailureCooldownScope(400, permBody)).toBe("target");
+  });
+
+  test("rejects competing error carriers before granting a target-local combo hop for reasoning effort", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      response: { code: "permission_denied" },
+    });
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects competing diagnostic arrays before granting a target-local combo hop for reasoning effort", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: [{ code: "unknown_terminal_code" }],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("fails closed when diagnostic array exceeds bounded scan budget", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: [...Array(32).fill({}), { code: "unknown_terminal_code" }],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects nested error carriers in details before granting combo hop", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: { error: { code: "unknown_terminal_code" } },
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects serialized diagnostic entries in details before granting combo hop", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: ['{"code":"unknown_terminal_code"}'],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("fails closed on unclassifiable string entries in details array", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: ["unrecognized_plain_text_error"],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects conflicting named parameters before exact-effort combo hop", () => {
+    const payload = JSON.stringify({
+      param: "temperature",
+      error: {
+        type: "invalid_request_error",
+        param: "reasoning_effort",
+        message: "Invalid reasoning effort.",
+      },
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects competing root or nested diagnostic messages before granting exact-effort hop", () => {
+    // Competing root message on vendor envelope elevates to target cooldown or stop, never cooldown none
+    const permPayload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      message: "permission_denied",
+    });
+    expect(comboFailureDecision(400, permPayload)).toBe("hop");
+    expect(comboFailureCooldownScope(400, permPayload)).toBe("target");
+
+    for (const competing of ["unknown_terminal_code", "invalid_request_error", "unsupported parameter: user"]) {
+      const payload = JSON.stringify({
+        code: "invalid-argument",
+        error: "Invalid reasoning effort.",
+        message: competing,
+      });
+      expect(comboFailureDecision(400, payload)).toBe("stop");
+      expect(comboFailureCooldownScope(400, payload)).toBe("target");
+
+      const nestedPayload = JSON.stringify({
+        message: competing,
+        error: {
+          type: "invalid_request_error",
+          message: "Invalid reasoning effort.",
+        },
+      });
+      expect(comboFailureDecision(400, nestedPayload)).toBe("stop");
+      expect(comboFailureCooldownScope(400, nestedPayload)).toBe("target");
+
+      const competingNestedError = JSON.stringify({
+        error: {
+          type: "invalid_request_error",
+          message: "Invalid reasoning effort.",
+          error: competing,
+        },
+      });
+      expect(comboFailureDecision(400, competingNestedError)).toBe("stop");
+      expect(comboFailureCooldownScope(400, competingNestedError)).toBe("target");
+    }
+
+    // Reconciled matching message grants hop without cooldown
+    const matchingPayload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      message: "Invalid reasoning effort.",
+    });
+    expect(comboFailureDecision(400, matchingPayload)).toBe("hop");
+    expect(comboFailureCooldownScope(400, matchingPayload)).toBe("none");
   });
 });
 

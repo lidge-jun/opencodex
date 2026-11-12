@@ -9,9 +9,10 @@ import { KiroIamLoginForm, KiroIamProfilePicker } from "./KiroIamLoginForm";
 import type { KiroFinalOutcome } from "../kiro-device-login-finalizer";
 import "../styles/kiro-device-login.css";
 
-export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount, busy, onCli, onClose, onSettled,
+export default function KiroDeviceLoginDialog({ apiBase, targetKey, triggerRef, addAccount, busy, onCli, onClose, onSettled,
   pollDelay }: {
   apiBase: string;
+  targetKey?: string;
   triggerRef: RefObject<HTMLButtonElement | null>;
   addAccount: boolean;
   busy: boolean;
@@ -23,14 +24,15 @@ export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount,
   const t = useT();
   const titleId = useId();
   const dialogRef = useModalDialog(true, triggerRef);
-  const login = useKiroDeviceLogin(apiBase, onSettled, pollDelay);
+  const login = useKiroDeviceLogin(apiBase, onSettled, pollDelay, targetKey);
   const [iamSetup, setIamSetup] = useState(false);
   const copy = useCopyFeedback<string>();
   const { state } = login;
   const view = state.view;
   const destination = view?.verificationUriComplete ?? view?.verificationUri;
-  const safeLink = kiroVerificationLink(destination);
+  const safeLink = kiroVerificationLink(destination, view?.method);
   const cancel = () => { void login.close(); onClose(); };
+  const finished = state.phase === "done" || state.phase === "failed" || state.phase === "expired" || state.phase === "ended";
   return (
     <dialog ref={dialogRef} className="kiro-device-dialog" aria-modal="true" aria-labelledby={titleId}
       onCancel={event => { event.preventDefault(); cancel(); }}>
@@ -80,7 +82,7 @@ export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount,
         {(state.phase === "failed" || state.phase === "expired" || state.phase === "ended") && (
           <button type="button" className="btn btn-ghost btn-sm" onClick={login.reset}>{t("kiroLogin.tryAgain")}</button>
         )}
-        <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>{t("common.cancel")}</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>{t(finished ? "common.close" : "common.cancel")}</button>
       </div>
     </dialog>
   );

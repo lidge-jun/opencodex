@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -8,6 +10,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -132,6 +135,8 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
   ...shellV2Copy("tr"),
+  ...codexCliUpdateCopy("tr"),
+  ...remoteLinkDiagnosticsCopy("tr"),
   ...modelsV2Copy("tr"),
   ...accountsV2Copy("tr"),
   ...subagentsV2Copy("tr"),
@@ -140,6 +145,7 @@ export const tr: Record<TKey, string> = {
   ...connectV2Copy("tr"),
   ...startupV2Copy("tr"),
   ...proxyV2Copy("tr"),
+  ...telemetryProfileCopy("tr"),
   "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
   "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",
   "claude.tierDefaults.title": "CLI varsayılan modelleri",
@@ -283,6 +289,8 @@ export const tr: Record<TKey, string> = {
   "advisor.modelsEmpty": "Seçilebilir model yok. Sağlayıcıyı ve modeli etkinleştirip yeniden deneyin.",
   "advisor.effort": "Muhakeme düzeyi",
   "advisor.policy": "Politika",
+  "advisor.questionOnly": "Yalnızca çalışanın sorusunu gönder",
+  "advisor.questionOnlyNote": "Yalnızca çalışanın sorusu (en fazla 2000 karakter korunur; daha uzunsa kırpma bildirimi eklenir) ve sabit danışman talimatı gönderilir. Geçmiş, araç sonuçları ve görev bağlamı eklenmez. Çalışan gerekli arka planı soruya eklemelidir. Otomatik danışmalar duraklatılır; mevcut çağrı sınırları geçerlidir.",
   "advisor.policy.manual": "Manuel — yalnızca worker istediğinde",
   "advisor.policy.preflight": "Preflight — yönelim kanıtı oluşunca otomatik danışma denemesi",
   "advisor.policy.adaptive": "Uyarlanabilir — başlangıç ve başarısız onarım danışmaları",
@@ -821,6 +829,8 @@ export const tr: Record<TKey, string> = {
   "prov.port": "Port",
   "prov.default": "Varsayılan",
   "prov.loadingConfig": "Yükleniyor…",
+  "prov.targetChanged": "Pano hedefi değişti. Bu formu geçerli sunucuda yeniden açın.",
+  "prov.legacyTargetPreflight": "Bu proxy göndermeden önce kayıt hedefini kontrol eder ancak bunu atomik olarak doğrulayamaz. Hedefe bağlı kayıtlar için proxy’yi güncelleyin.",
   "prov.saved": "Kaydedildi! Uygulamak için proxy'yi yeniden başlatın.",
   "prov.loadConfigFail": "Konfigürasyon yüklenemedi",
   "prov.invalidJson": "Geçersiz JSON",
@@ -1860,6 +1870,9 @@ export const tr: Record<TKey, string> = {
   "quota.creditsBalance": "Kredi bakiyesi",
   "quota.creditsPeriodEnds": "Faturalandırma dönemi {date} tarihinde sona erer",
   "quota.usedPercent": "%{pct} kullanıldı",
+  "quota.weeklyShare": "Haftalık limitin en fazla %{pct} kadarı",
+  "quota.notInEffect": "Şu an geçerli değil",
+  "quota.notInEffectHint": "Claude bu limitin şu anda kullanımı kısıtlamadığını bildiriyor. Bilgi amaçlı gösterilir; hesap yönlendirmesi yalnızca geçerli limitleri kullanır.",
   "quota.limitReached": "Limite ulaşıldı",
   "quota.resetsToday": "Bugün {time} saatinde sıfırlanır",
   "quota.resetsTomorrow": "Yarın {time} saatinde sıfırlanır",
@@ -1945,6 +1958,7 @@ export const tr: Record<TKey, string> = {
   "pws.currentAccountUsage": "Geçerli hesabın kullanımı",
   "pws.quotaUnsupported": "Bu hesap için kota sorgulama desteklenmiyor.",
   "pws.quotaUnobserved": "Henüz kullanım gözlemi yok.",
+  "pws.quotaLastRead": "Son okuma",
   "pws.quotaCheckCompleted": "Kota kontrolü tamamlandı",
   "pws.modelBreakdown": "Model dağılımı",
   "pws.col.model": "Model",
@@ -2004,6 +2018,7 @@ export const tr: Record<TKey, string> = {
   "pws.accountSwitching": "Değiştiriliyor…",
   "pws.accountCurrent": "Mevcut hesap",
   "pws.accountPausedHint": "Devam ettirilene kadar otomatik seçim, yeniden deneme, bekleme süresinden kurtarma, manuel seçim ve proaktif belirteç yenilemesinden hariç tutulur.",
+  "pws.resumeAndActivateKey": "Devam ettir ve kullan",
   "pws.defaultModelNone": "Yok (sağlayıcı varsayılanını kullan)",
   "pws.discardSettings": "Vazgeç",
   "pws.jsonEditorDesc": "Ham sağlayıcı JSON konfigürasyonunu düzenleyin.",
@@ -2083,12 +2098,19 @@ export const tr: Record<TKey, string> = {
   "pws.pacingRemoveModel": "{model} için istek aralığı kuralını kaldır",
   "pws.pacingRuleRequired": "Önce bir sağlayıcı sınırı veya model kuralı belirleyin.",
   "pws.pacingCapInvalid": "Maksimum eşzamanlı istek sayısı 1 veya daha büyük bir tam sayı olmalıdır.",
+  "pws.pacingValueInvalid": "Geçerli bir hız değeri girin: RPM 1/60–60.000, gecikme 1–3.600.000 ms, eşzamanlılık 1 veya daha fazla.",
   "pws.saving": "Kaydediliyor…",
   "pws.settingsSaved": "Ayarlar kaydedildi.",
   "pws.accountModeSaved": "Hesap modu kaydedildi.",
   "pws.accountModeFailed": "Hesap modu değiştirilemedi.",
   "pws.accountModeConfirm": "OpenAI hesap modu değiştirilsin mi? Aktif oturumlar hedef hesap havuzuna yönlendirilecek ve kota yeni mod altında birikecektir.",
   "pws.settingsUnsavedBar": "Kaydedilmemiş değişiklikleriniz var.",
+  "pws.draftTarget": "Düzenleniyor: {target}",
+  "pws.draftConflict": "Siz düzenlerken bu sunucudaki kayıtlı ayarlar değişti. Taslağınız korunuyor; hangi değerlerin kalacağını seçin.",
+  "pws.draftConflictFields": "Bu alanlar iki tarafta da değişti. Taslağı düzenleyin veya kayıtlı değerleri kullanın:",
+  "pws.draftConflictUseSaved": "Kayıtlı değerleri kullan",
+  "pws.draftConflictKeepDraft": "Taslağımı koru",
+  "pws.draftConflictResolveFirst": "Kaydetmeden önce hangi değerlerin kalacağını seçin.",
   "pws.unsavedLeaveBody": "Kaydedilmemiş değişiklikleriniz var. Ayrılmadan önce kaydetmek ister misiniz?",
   "pws.unsavedLeaveTitle": "Kaydedilmemiş değişiklikler",
   "pws.attentionRequired": "Dikkat gerekiyor",
@@ -2564,6 +2586,10 @@ export const tr: Record<TKey, string> = {
   "integrations.preview.loading": "Kesin değişiklik planı yükleniyor…",
   "integrations.preview.failed": "Değişiklik planı yüklenemedi. Hiçbir şey değiştirilmedi.",
   "integrations.preview.stale": "Onay sırasında entegrasyon değişti. Güncellenen planı inceleyip yeniden onaylayın.",
+  "integrations.preview.catalogUnavailable": "Model kataloğu henüz yüklenmediği için bu değişiklik planlanamıyor. Devam etmek için kataloğu yükleyin.",
+  "integrations.preview.loadCatalogRetry": "Kataloğu yükle ve yeniden dene",
+  "integrations.preview.recovering": "Katalog yükleniyor…",
+  "integrations.action.chooseProfile": "Profil seç",
   "integrations.dialog.apply.title": "Bu entegrasyon uygulansın mı?",
   "integrations.dialog.apply.changes": "opencodex, yönettiği sağlayıcı ayarlarını istemci yapılandırmasına ekleyecek.",
   "integrations.dialog.apply.breakage": "İstemci, bu opencodex örneğinin sunduğu modelleri kullanacak.",
@@ -2713,6 +2739,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Ayar yüklenemedi.",
   "codexAuth.openaiPresetUnavailable": "Ayar kullanılamıyor.",
   "codexAuth.openProviders": "Sağlayıcıları Aç",
+  "codexAuth.changeAccountMode": "Hesap modunu değiştir",
   "codexAuth.add": "Ekle",
   "codexAuth.credits": "Kredi",
   "codexAuth.creditsRemaining": "kalan",
@@ -2962,6 +2989,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.needsReauth": "Tekrar Giriş Yap",
   "codexAuth.reauthenticate": "Yeniden Doğrula",
   "codexAuth.tokenExpired": "Jeton süresi doldu — hesabı yeniden doğrulayın",
+  "codexAuth.weeklyConflict": "İki haftalık pencere bildirildi: {first} ve {second}. Yukarıdaki sıfırlama tüm kotayı geri getirmeyebilir.",
   "codexAuth.mainTokenExpired": "Belirteç süresi doldu — aşağıdan cihaz koduyla veya Codex App girişiyle yeniden giriş yapın",
   "codexAuth.mainReauthSucceeded": "Giriş yapıldı",
   "codexAuth.mainReauthFailed": "Yeniden giriş başarısız",
@@ -3723,6 +3751,11 @@ export const tr: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "{family} varsayılanı olarak kullan",
   "claudeDesktop.moveTo": "Şuraya taşı",
   "claudeDesktop.move": "Taşı",
+  "claudeDesktop.removeUnavailable": "Kaldır",
+  "claudeDesktop.removeAllUnavailable": "Kullanılamayanları kaldır ({n})",
+  "claudeDesktop.removeUnavailableHint": "Bu atamayı ve takma adını kaldırır. Kaydet değişikliği tutar; Kaydet ve uygula Claude Desktop'ı da günceller.",
+  "claudeDesktop.removeUnavailableTierHint": "Bir katmanın varsayılanı kullanılabilir olmalı; bu yüzden bu katmandaki diğer {n} kullanılamayan modeli de kaldırır. Kaydet değişikliği tutar; Kaydet ve uygula Claude Desktop'ı da günceller.",
+  "claudeDesktop.removedUnavailable": "{n} kullanılamayan model kaldırıldı. Kaydet değişikliği tutar, Kaydet ve uygula Claude Desktop'ı günceller.",
   "claudeDesktop.status.applied": "Desktop'a Uygulandı",
   "claudeDesktop.status.stale": "Desktop yapılandırması güncel değil — tekrar uygulayın",
   "claudeDesktop.status.notApplied": "Uygulanmadı",
@@ -3865,7 +3898,7 @@ export const tr: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "Sağlayıcı tablosuyla yönlendirme, mevcut openai etiketli konuşmaları bazı mobil uzak listelerde gizleyebilir. Geçmiş silinmez. Uzak istemci tüm sağlayıcıları listelemelidir; bu anahtar istemcinin filtresini düzeltmez.",
   "models.newPolicyGlobal": "Yeni modeller devre dışı başlasın", "models.newPolicyProvider": "Yeni model ilkesi",
   "models.fastProvider": "Fast modu", "models.fastProviderHint": "Kullanım kredilerini 2 kat fiyatla harcar", "models.fastEnabled": "Fast modu açık", "models.fastDisabled": "Fast modu kapalı", "models.fastSaveFailed": "Fast modu kaydedilemedi",
-  "models.newPolicy_inherit": "Devral", "models.newPolicy_off": "Kapalı", "models.newPolicy_on": "Açık", "models.newBadge": "YENİ", "models.newCount": "{count} yeni, kapalı",
+  "models.newPolicy_inherit": "Devral", "models.newPolicy_off": "Kapalı", "models.newPolicy_on": "Açık", "models.newPolicy_admit": "Seçime ekle", "models.newBadge": "YENİ", "models.newCount": "{count} yeni, kapalı",
   "models.aliases": "Takma adlar",
   "models.aliasesTable": "Takma ad tablosu",
   "models.aliasPrompt": "Sağlayıcı takma adı (temizlemek için boş bırakın)",

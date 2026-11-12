@@ -108,12 +108,13 @@ export function quotaWindows(quota: AccountQuota | null) {
     { id: 'quota.monthlyLimit', key: 'quota.monthlyLimit' as const, percent: quota.monthlyPercent, reset: quota.monthlyResetAt },
     // A provider-named window is identified by its own label; the de-duplication below is what
     // keeps that unique, including against the fixed keys above.
-    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.label, modelId: w.modelId, percent: w.percent, reset: w.resetAt })) : []),
+    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.label, ...(typeof w.displayLabel === 'string' && w.displayLabel.trim() ? { displayLabel: w.displayLabel } : {}), modelId: w.modelId, percent: w.percent, reset: w.resetAt })) : []),
+    ...(Array.isArray(quota.unknownBudgetWindows) ? quota.unknownBudgetWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.label, percent: undefined, reset: w.resetAt, unknownBudget: true as const })) : []),
   ];
-  // A window is listed only when it reports a percentage (zero included) or a reset time. Plans
+  // Ordinary windows are listed only when they report a percentage (zero included) or a reset time. Plans
   // differ in which windows they have: a weekly-only account has no 5-hour window, and showing a
   // dash row for it reads as "unknown usage" rather than "not part of this plan".
-  const kept = windows.filter(w => finite(w.percent) || resetTimestamp(w.reset) !== null);
+  const kept = windows.filter(w => finite(w.percent) || resetTimestamp(w.reset) !== null || ('unknownBudget' in w && w.unknownBudget === true));
   // A provider is free to report two custom windows under one label. The row identity has to
   // stay unique anyway, or React reconciles two different windows onto the same row.
   const seen = new Map<string, number>();

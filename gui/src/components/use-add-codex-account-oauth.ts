@@ -10,6 +10,8 @@ import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { parseBrowserLaunch } from "../oauth-browser-launch";
 import { startVisibilityPoll } from "../visibility-poll";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 
 /**
  * How long the modal waits before giving up. The browser flow is bounded by
@@ -27,12 +29,15 @@ import {
 
 export function useAddCodexAccountOAuth({
   apiBase,
+  targetKey,
   reauthAccountId,
   ui,
   dispatch,
   t,
 }: {
   apiBase: string;
+  /** Logical dashboard target; a relay keeps one apiBase across a re-pair. */
+  targetKey?: string;
   reauthAccountId?: string;
   ui: {
     step: AddCodexAccountStep;
@@ -44,6 +49,8 @@ export function useAddCodexAccountOAuth({
   dispatch: Dispatch<AddCodexAccountUiAction>;
   t: TFn;
 }) {
+  // The hook's render owns the target for a login started from this surface.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const aliveRef = useRef(true);
   const pollErrorStreakRef = useRef(0);
   const pollInFlightRef = useRef(false);
@@ -51,6 +58,10 @@ export function useAddCodexAccountOAuth({
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
   const flowRef = useRef<string | null>(null);
+  /** The target the live flow started on; every request for it uses this capture. */
+  const flowCaptureRef = useRef<ApiTargetCapture | null>(null);
+  /** Invalidates a replaced flow's late responses and completions. */
+  const flowGenerationRef = useRef(0);
   const manualCodeStateRef = useRef(ui.manualCodeState);
   const loginAbortRef = useRef<AbortController | null>(null);
   const startedReauthRef = useRef<string | null>(null);
@@ -81,9 +92,12 @@ export function useAddCodexAccountOAuth({
   }, [dispatch]);
 
   const cancelLogin = useCallback(async () => {
+    flowGenerationRef.current += 1;
     clearManualCode();
     const flowId = flowRef.current;
+    const capture = flowCaptureRef.current;
     flowRef.current = null;
+    flowCaptureRef.current = null;
     dispatch({ type: "set-flow-id", flowId: null });
     // Clear the whole hint, not just the URL: leaving deviceCode behind would
     // display an expired code next to the timeout error.
@@ -91,13 +105,15 @@ export function useAddCodexAccountOAuth({
     stopPolling();
     loginAbortRef.current?.abort();
     loginAbortRef.current = null;
-    if (!flowId) return;
-    await fetch(`${apiBase}/api/codex-auth/login/cancel`, {
+    if (!flowId || !capture) return;
+    // Cancel on the flow's own target. A stale capture is refused before fetch, so an
+    // abandoned A flow never sends its id to B; the server expires it.
+    await targetFetch(capture, `${capture.apiBase}/api/codex-auth/login/cancel`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ flowId }),
     }).catch(() => {});
-  }, [apiBase, clearManualCode, dispatch, stopPolling]);
+  }, [clearManualCode, dispatch, stopPolling]);
 
   // Replay-safe under StrictMode: remount must revive aliveRef and clear the
   // reauth latch so the remounted effect can start OAuth again.
@@ -109,19 +125,22 @@ export function useAddCodexAccountOAuth({
       startedReauthRef.current = null;
       loginAbortRef.current?.abort();
       loginAbortRef.current = null;
+      flowGenerationRef.current += 1;
       const flowId = flowRef.current;
+      const capture = flowCaptureRef.current;
       flowRef.current = null;
+      flowCaptureRef.current = null;
       dispatch({ type: "set-flow-id", flowId: null });
       stopPolling();
-      if (flowId) {
-        void fetch(`${apiBase}/api/codex-auth/login/cancel`, {
+      if (flowId && capture) {
+        void targetFetch(capture, `${capture.apiBase}/api/codex-auth/login/cancel`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ flowId }),
         }).catch(() => {});
       }
     };
-  }, [apiBase, clearManualCode, dispatch, stopPolling]);
+  }, [clearManualCode, dispatch, stopPolling]);
 
   const bindCallbacks = useCallback((
     onAdded: (completion: CodexAccountMutationCompletion) => void,
@@ -139,12 +158,20 @@ export function useAddCodexAccountOAuth({
   const startOAuth = useCallback(async (requestedId?: string, options?: { device?: boolean }) => {
     clearManualCode();
     flowRef.current = null;
+    flowCaptureRef.current = null;
     dispatch({ type: "set-flow-id", flowId: null });
+    // The flow owns the target it starts on. Every later request for it uses this
+    // capture, so a re-render under another target cannot retarget its flow id.
+    const capture = { ...renderCapture };
+    const generation = ++flowGenerationRef.current;
     const controller = new AbortController();
     loginAbortRef.current?.abort();
     loginAbortRef.current = controller;
     dispatch({ type: "reset-oauth-start" });
     pollErrorStreakRef.current = 0;
+    const isCurrent = () => aliveRef.current
+      && flowGenerationRef.current === generation
+      && isApiTargetCaptureCurrent(capture);
     try {
       const accountId = reauthAccountId ?? requestedId?.trim() ?? "";
       // An explicit choice from the modal, not an inference. "Don't open a
@@ -153,7 +180,7 @@ export function useAddCodexAccountOAuth({
       // reading it as a device-flow request would retarget a preference some
       // users set for an unrelated reason (#3366).
       const wantsDeviceFlow = options?.device === true;
-      const requestLogin = () => fetch(`${apiBase}/api/codex-auth/login`, {
+      const requestLogin = () => targetFetch(capture, `${capture.apiBase}/api/codex-auth/login`, {
         signal: controller.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -175,14 +202,14 @@ export function useAddCodexAccountOAuth({
         browserLaunch?: unknown;
       };
       let resp = await requestLogin();
-      if (!aliveRef.current) return;
+      if (!isCurrent()) return;
       if (resp.status === 409) {
-        await fetch(`${apiBase}/api/codex-auth/login/cancel`, {
+        await targetFetch(capture, `${capture.apiBase}/api/codex-auth/login/cancel`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: "{}",
         });
-        if (!aliveRef.current || controller.signal.aborted) return;
+        if (!isCurrent() || controller.signal.aborted) return;
         resp = await requestLogin();
         if (resp.status === 409) {
           dispatch({ type: "set-error", error: t("codexAuth.oauthAlreadyInProgress") });
@@ -191,9 +218,10 @@ export function useAddCodexAccountOAuth({
       }
       // Preserve structured `{ error }` bodies on non-2xx instead of collapsing to networkError.
       const data = await readJsonOrThrow<LoginResponse>(resp, t("modal.networkError"));
-      if (!aliveRef.current || !data) return;
+      if (!isCurrent() || !data) return;
       if (data.url) {
         flowRef.current = data.flowId ?? null;
+        flowCaptureRef.current = capture;
         dispatch({ type: "set-flow-id", flowId: data.flowId ?? null });
         // Carry the device code and prose through: LoginHint already renders a
         // copyable code, but the Codex modal used to pass only the URL, so a
@@ -210,14 +238,17 @@ export function useAddCodexAccountOAuth({
         const fid = data.flowId ?? "";
         const reauthQuery = reauthAccountId ? "&reauth=1" : "";
         const statusUrl = fid
-          ? `${apiBase}/api/codex-auth/login-status?flowId=${encodeURIComponent(fid)}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}${reauthQuery}`
-          : `${apiBase}/api/codex-auth/login-status`;
+          ? `${capture.apiBase}/api/codex-auth/login-status?flowId=${encodeURIComponent(fid)}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}${reauthQuery}`
+          : `${capture.apiBase}/api/codex-auth/login-status`;
         const pollSession = new AbortController();
         pollAbortRef.current = pollSession;
         // A hidden tab cannot complete OAuth; the visible make-up tick checks the
         // login status the moment the user returns to the modal.
         pollRef.current = startVisibilityPoll(async () => {
           if (pollInFlightRef.current || pollSession.signal.aborted) return;
+          // A tick from a replaced flow must not stop the replacement's poll.
+          if (pollAbortRef.current !== pollSession) return;
+          if (!isCurrent()) { stopPolling(); return; }
           pollInFlightRef.current = true;
           // Bound each tick and abort it when stopPolling/cleanup cancels the session.
           const tickSignal = AbortSignal.any([
@@ -225,14 +256,15 @@ export function useAddCodexAccountOAuth({
             AbortSignal.timeout(10_000),
           ]);
           try {
-            const stRes = await fetch(statusUrl, { signal: tickSignal });
+            const stRes = await targetFetch(capture, statusUrl, { signal: tickSignal });
             const st = await readJsonIfOk<{
               status: string;
               error?: string;
               catalogRefreshPending?: unknown;
               validationPending?: unknown;
             }>(stRes);
-            if (!aliveRef.current || pollSession.signal.aborted) return;
+            if (pollAbortRef.current !== pollSession || pollSession.signal.aborted) return;
+            if (!isCurrent()) { stopPolling(); return; }
             if (!st) {
               pollErrorStreakRef.current += 1;
               if (pollErrorStreakRef.current >= 3) {
@@ -250,19 +282,20 @@ export function useAddCodexAccountOAuth({
               stopPolling();
               clearManualCode();
               flowRef.current = null;
+              flowCaptureRef.current = null;
               dispatch({ type: "set-flow-id", flowId: null });
-              if (!aliveRef.current) return;
               onAddedRef.current(codexAccountMutationCompletion(st));
               onCloseRef.current();
+              flowGenerationRef.current += 1;
             } else if (st.status === "error" || st.status === "expired") {
               stopPolling();
               clearManualCode();
               flowRef.current = null;
+              flowCaptureRef.current = null;
+              flowGenerationRef.current += 1;
               dispatch({ type: "set-flow-id", flowId: null });
-              if (aliveRef.current) {
-                if (!reauthAccountId) dispatch({ type: "set-step", step: "pick" });
-                dispatch({ type: "set-error", error: st.error ?? t("codexAuth.loginFailed") });
-              }
+              if (!reauthAccountId) dispatch({ type: "set-step", step: "pick" });
+              dispatch({ type: "set-error", error: st.error ?? t("codexAuth.loginFailed") });
             }
           } catch (e) {
             if (!aliveRef.current || pollSession.signal.aborted) return;
@@ -291,11 +324,11 @@ export function useAddCodexAccountOAuth({
       }
       if (data.error && !data.url) dispatch({ type: "set-error", error: data.error });
     } catch (e) {
-      if (aliveRef.current && !(e instanceof Error && e.name === "AbortError")) {
+      if (isCurrent() && !(e instanceof Error && e.name === "AbortError")) {
         dispatch({ type: "set-error", error: e instanceof Error ? e.message : String(e) });
       }
     }
-  }, [apiBase, cancelLogin, clearManualCode, dispatch, reauthAccountId, stopPolling, t]);
+  }, [cancelLogin, clearManualCode, dispatch, reauthAccountId, renderCapture, stopPolling, t]);
 
   useEffect(() => {
     if (!reauthAccountId) {
@@ -309,17 +342,29 @@ export function useAddCodexAccountOAuth({
 
   const submitManualCode = useCallback(async () => {
     const flowId = flowRef.current;
+    const capture = flowCaptureRef.current;
     const input = ui.manualCode.trim();
-    if (!flowId || !input || manualCodeBusy || manualCodeWaiting) return;
+    if (!flowId || !capture || !input || manualCodeBusy || manualCodeWaiting) return;
+    // The code belongs to the flow's own target. Without a current capture the flow is
+    // gone (target changed or it ended), so refuse instead of posting the code to B.
+    if (!isApiTargetCaptureCurrent(capture)) {
+      dispatch({ type: "set-error", error: t("prov.targetChanged") });
+      return;
+    }
     dispatch({ type: "set-manual-code-state", manualCodeState: "submitting" });
     dispatch({ type: "set-status-notice", statusNotice: "", statusTone: "ok" });
     try {
-      const resp = await fetch(`${apiBase}/api/codex-auth/login/code`, {
+      const resp = await targetFetch(capture, `${capture.apiBase}/api/codex-auth/login/code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ flowId, input }),
       });
       if (!aliveRef.current) return;
+      if (!isApiTargetCaptureCurrent(capture)) {
+        dispatch({ type: "set-error", error: t("prov.targetChanged") });
+        dispatch({ type: "set-manual-code-state", manualCodeState: "idle" });
+        return;
+      }
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({})) as { error?: string };
         dispatch({ type: "set-error", error: t("prov.pasteFail", { error: data.error ?? resp.statusText }) });
@@ -335,7 +380,7 @@ export function useAddCodexAccountOAuth({
         dispatch({ type: "set-manual-code-state", manualCodeState: "idle" });
       }
     }
-  }, [apiBase, dispatch, manualCodeBusy, manualCodeWaiting, t, ui.manualCode]);
+  }, [dispatch, manualCodeBusy, manualCodeWaiting, t, ui.manualCode]);
 
   return {
     manualCodeBusy,

@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -8,6 +10,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
@@ -129,6 +132,8 @@ export const zhTW: Record<TKey, string> = {
   "workflowBudget.saved": "工作流程限制已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
   ...shellV2Copy("zh-TW"),
+  ...codexCliUpdateCopy("zh-TW"),
+  ...remoteLinkDiagnosticsCopy("zh-TW"),
   ...modelsV2Copy("zh-TW"),
   ...accountsV2Copy("zh-TW"),
   ...subagentsV2Copy("zh-TW"),
@@ -137,6 +142,7 @@ export const zhTW: Record<TKey, string> = {
   ...connectV2Copy("zh-TW"),
   ...startupV2Copy("zh-TW"),
   ...proxyV2Copy("zh-TW"),
+  ...telemetryProfileCopy("zh-TW"),
   "claude.tierDefaults.unset": "未設定（保留現有 Claude 設定）",
   "claude.tierDefaults.recovery": "套用已停止，自動還原失敗。重試前請檢查下方備份。",
   "claude.tierDefaults.title": "CLI 層級預設模型",
@@ -275,6 +281,8 @@ export const zhTW: Record<TKey, string> = {
   "advisor.modelsEmpty": "沒有可選模型。請啟用供應商與模型後重試。",
   "advisor.effort": "推理強度",
   "advisor.policy": "策略",
+  "advisor.questionOnly": "僅傳送主模型的問題",
+  "advisor.questionOnlyNote": "僅傳送主模型填寫的問題（最多保留 2000 字元，超出時附加截斷提示）和固定顧問指令，不自動附加對話歷史、工具結果或任務上下文。主模型需要自行補充必要背景。自動諮詢暫停，現有諮詢次數限制仍然生效。",
   "advisor.policy.manual": "手動 — 僅在 Worker 主動請求時",
   "advisor.policy.preflight": "Preflight — 出現方向性證據後自動嘗試諮詢",
   "advisor.policy.adaptive": "自適應 — 初始探查與修復失敗時諮詢",
@@ -685,6 +693,8 @@ export const zhTW: Record<TKey, string> = {
   "prov.port": "連接埠",
   "prov.default": "預設",
   "prov.loadingConfig": "載入中…",
+  "prov.targetChanged": "儀表板目標已變更。請在目前伺服器上重新開啟此表單。",
+  "prov.legacyTargetPreflight": "此代理會在傳送前檢查儲存目標，但無法以原子方式驗證。若要使用目標綁定的儲存，請更新代理。",
   "prov.saved": "已儲存！重新啟動代理以生效。",
   "prov.loadConfigFail": "載入配置失敗",
   "prov.invalidJson": "無效的 JSON",
@@ -1537,6 +1547,9 @@ export const zhTW: Record<TKey, string> = {
   "quota.creditsBalance": "額度餘額",
   "quota.creditsPeriodEnds": "帳單週期結束於 {date}",
   "quota.usedPercent": "已用 {pct}%",
+  "quota.weeklyShare": "最多佔每週限額的 {pct}%",
+  "quota.notInEffect": "目前未生效",
+  "quota.notInEffectHint": "Claude 回報此限額目前並未限制用量。此處僅供參考，帳號路由只使用目前生效的限額。",
   "quota.limitReached": "已達上限",
   "quota.resetsToday": "今天 {time} 重設",
   "quota.resetsTomorrow": "明天 {time} 重設",
@@ -1622,6 +1635,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.currentAccountUsage": "目前帳戶用量",
   "pws.quotaUnsupported": "此帳戶不支援查詢配額。",
   "pws.quotaUnobserved": "尚未觀測到用量。",
+  "pws.quotaLastRead": "上次讀取",
   "pws.quotaCheckCompleted": "配額檢查完成",
   "pws.modelBreakdown": "模型用量明細",
   "pws.col.model": "模型",
@@ -1674,6 +1688,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.accountSwitching": "切換中…",
   "pws.accountCurrent": "當前帳號",
   "pws.accountPausedHint": "恢復前不會參與自動選取、重試、冷卻恢復、手動選擇或主動 Token 刷新。",
+  "pws.resumeAndActivateKey": "恢復並使用",
   "pws.defaultModelNone": "無（使用供應商預設值）",
   "pws.discardSettings": "放棄",
   "pws.jsonEditorDesc": "直接編輯供應商 JSON 配置。更改將立即儲存。",
@@ -1753,9 +1768,16 @@ export const zhTW: Record<TKey, string> = {
   "pws.pacingRemoveModel": "移除 {model} 的請求節流規則",
   "pws.pacingRuleRequired": "請先設定供應商限制或模型規則，再啟用請求節流。",
   "pws.pacingCapInvalid": "最大同時請求數必須是 1 以上的整數。",
+  "pws.pacingValueInvalid": "請輸入有效的限速值：RPM 1/60–60,000，延遲 1–3,600,000 毫秒，並行數 1 或以上。",
   "pws.saving": "儲存中…",
   "pws.settingsSaved": "設定已儲存。",
   "pws.settingsUnsavedBar": "有未儲存的更改。",
+  "pws.draftTarget": "正在編輯：{target}",
+  "pws.draftConflict": "編輯期間此伺服器上已儲存的設定已變更。草稿已保留，請選擇要保留的值。",
+  "pws.draftConflictFields": "這些欄位在兩邊都發生了變更。請編輯草稿或使用已儲存的值：",
+  "pws.draftConflictUseSaved": "使用已儲存的值",
+  "pws.draftConflictKeepDraft": "保留我的草稿",
+  "pws.draftConflictResolveFirst": "儲存前請選擇要保留的值。",
   "pws.unsavedLeaveBody": "有未儲存的更改。離開前儲存嗎？",
   "pws.unsavedLeaveTitle": "未儲存的更改",
   "pws.attentionRequired": "需要關注",
@@ -2033,6 +2055,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "無法載入 OpenAI 供應商預設。",
   "codexAuth.openaiPresetUnavailable": "OpenAI 供應商預設不可用。",
   "codexAuth.openProviders": "開啟供應商",
+  "codexAuth.changeAccountMode": "變更帳號模式",
   "codexAuth.add": "新增",
   "codexAuth.credits": "額度",
   "codexAuth.creditsRemaining": "剩餘",
@@ -2230,6 +2253,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.needsReauth": "重新登入",
   "codexAuth.reauthenticate": "重新認證",
   "codexAuth.tokenExpired": "權杖已過期 — 請重新認證此帳號",
+  "codexAuth.weeklyConflict": "回報了兩個每週視窗：{first} 和 {second}。上方的重置時間不一定會恢復全部額度。",
   "codexAuth.mainTokenExpired": "權杖已過期 — 請使用下方裝置碼或透過 Codex 應用程式登入重新登入",
   "codexAuth.mainReauthSucceeded": "已登入",
   "codexAuth.mainReauthFailed": "重新登入失敗",
@@ -2869,6 +2893,11 @@ export const zhTW: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "設為 {family} 預設模型",
   "claudeDesktop.moveTo": "移動到",
   "claudeDesktop.move": "移動",
+  "claudeDesktop.removeUnavailable": "移除",
+  "claudeDesktop.removeAllUnavailable": "移除不可用模型 ({n})",
+  "claudeDesktop.removeUnavailableHint": "移除此指派及其別名。「儲存」會保留變更；「儲存並套用」也會更新 Claude Desktop。",
+  "claudeDesktop.removeUnavailableTierHint": "由於某一層級的預設模型必須可用，也會移除該層級中另外 {n} 個不可用模型。「儲存」會保留變更；「儲存並套用」也會更新 Claude Desktop。",
+  "claudeDesktop.removedUnavailable": "已移除 {n} 個不可用模型。「儲存」保留變更，「儲存並套用」更新 Claude Desktop。",
   "claudeDesktop.status.applied": "已套用到 Desktop",
   "claudeDesktop.status.stale": "Desktop 設定尚未更新 — 需重新套用",
   "claudeDesktop.status.notApplied": "未套用",
@@ -3506,6 +3535,10 @@ export const zhTW: Record<TKey, string> = {
   "integrations.preview.loading": "正在載入精確的變更計畫…",
   "integrations.preview.failed": "無法載入變更計畫。未進行任何變更。",
   "integrations.preview.stale": "確認期間整合狀態已變更。請檢視更新後的計畫並再次確認。",
+  "integrations.preview.catalogUnavailable": "模型目錄尚未載入，無法規劃此變更。請載入後繼續。",
+  "integrations.preview.loadCatalogRetry": "載入目錄並重試",
+  "integrations.preview.recovering": "正在載入目錄…",
+  "integrations.action.chooseProfile": "選擇設定檔",
   "integrations.dialog.apply.title": "套用此整合？",
   "integrations.dialog.apply.changes": "opencodex 會將其管理的供應商設定加入用戶端設定。",
   "integrations.dialog.apply.breakage": "用戶端將使用此 opencodex 執行個體目前提供的模型。",
@@ -3828,7 +3861,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "供應商表路由可能使既有的 openai 標記對話在部分行動版遠端清單中隱藏。歷程並未刪除。遠端用戶端必須列出所有供應商；此開關不會修正用戶端的清單篩選器。",
   "models.newPolicyGlobal": "新模型預設停用", "models.newPolicyProvider": "新模型策略",
   "models.fastProvider": "Fast 模式", "models.fastProviderHint": "以 2 倍價格消耗用量額度", "models.fastEnabled": "已開啟 Fast 模式", "models.fastDisabled": "已關閉 Fast 模式", "models.fastSaveFailed": "無法儲存 Fast 模式",
-  "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
+  "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newPolicy_admit": "加入選擇", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
   "models.aliases": "別名",
   "models.aliasesTable": "別名表",
   "models.aliasPrompt": "供應商別名（留空即清除）",

@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -8,6 +10,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -131,6 +134,8 @@ export const ko: Record<TKey, string> = {
   "workflowBudget.saved": "워크플로 한도를 저장했습니다.",
   ...desktopCompatibilityCopy("ko"),
   ...shellV2Copy("ko"),
+  ...codexCliUpdateCopy("ko"),
+  ...remoteLinkDiagnosticsCopy("ko"),
   ...modelsV2Copy("ko"),
   ...accountsV2Copy("ko"),
   ...subagentsV2Copy("ko"),
@@ -139,6 +144,7 @@ export const ko: Record<TKey, string> = {
   ...connectV2Copy("ko"),
   ...startupV2Copy("ko"),
   ...proxyV2Copy("ko"),
+  ...telemetryProfileCopy("ko"),
   "claude.tierDefaults.unset": "미지정 (기존 Claude 설정 유지)",
   "claude.tierDefaults.recovery": "적용이 중단되었고 자동 복원에 실패했어요. 다시 시도하기 전에 아래 백업을 확인하세요.",
   "claude.tierDefaults.title": "CLI 티어 기본 모델",
@@ -283,6 +289,8 @@ export const ko: Record<TKey, string> = {
   "advisor.modelsEmpty": "선택할 모델이 없습니다. 공급자와 모델을 활성화한 뒤 다시 시도하세요.",
   "advisor.effort": "추론 강도",
   "advisor.policy": "정책",
+  "advisor.questionOnly": "워커의 질문만 전송",
+  "advisor.questionOnlyNote": "워커의 질문(최대 2000자를 유지하며, 초과하면 잘림 안내 추가)과 고정된 자문 지침만 전송합니다. 대화 기록, 도구 결과, 작업 맥락은 자동으로 첨부하지 않습니다. 워커가 필요한 배경을 질문에 포함해야 합니다. 자동 자문은 일시 중지되며 기존 횟수 제한은 유지됩니다.",
   "advisor.policy.manual": "수동 — Worker가 요청할 때만",
   "advisor.policy.preflight": "Preflight — 방향 증거가 생기면 자동 상담 시도",
   "advisor.policy.adaptive": "적응형 — 초기 탐색 및 수정 실패 시 상담",
@@ -816,6 +824,8 @@ export const ko: Record<TKey, string> = {
   "prov.port": "포트",
   "prov.default": "기본값",
   "prov.loadingConfig": "불러오는 중…",
+  "prov.targetChanged": "대시보드 대상이 바뀌었습니다. 현재 서버에서 이 양식을 다시 여세요.",
+  "prov.legacyTargetPreflight": "이 프록시는 전송 전에 저장 대상을 확인하지만 원자적으로 검증할 수는 없습니다. 대상에 고정된 저장을 사용하려면 프록시를 업데이트하세요.",
   "prov.saved": "저장됨! 적용하려면 프록시를 재시작하세요.",
   "prov.loadConfigFail": "설정을 불러오지 못했습니다",
   "prov.invalidJson": "잘못된 JSON",
@@ -2030,6 +2040,10 @@ export const ko: Record<TKey, string> = {
   "integrations.preview.loading": "정확한 변경 계획을 불러오는 중…",
   "integrations.preview.failed": "변경 계획을 불러오지 못했습니다. 아무것도 변경하지 않았습니다.",
   "integrations.preview.stale": "확인하는 동안 통합 상태가 바뀌었습니다. 갱신된 계획을 검토하고 다시 확인하세요.",
+  "integrations.preview.catalogUnavailable": "모델 카탈로그가 아직 로드되지 않아 이 변경을 계획할 수 없습니다. 계속하려면 카탈로그를 로드하세요.",
+  "integrations.preview.loadCatalogRetry": "카탈로그 로드 후 다시 시도",
+  "integrations.preview.recovering": "카탈로그 로드 중…",
+  "integrations.action.chooseProfile": "프로필 선택",
   "integrations.dialog.apply.title": "이 통합을 적용할까요?",
   "integrations.dialog.apply.changes": "opencodex가 관리하는 공급자 설정을 클라이언트 구성에 추가합니다.",
   "integrations.dialog.apply.breakage": "클라이언트는 현재 이 opencodex 인스턴스가 제공하는 모델을 사용합니다.",
@@ -2168,6 +2182,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI 공급자 프리셋을 불러오지 못했습니다.",
   "codexAuth.openaiPresetUnavailable": "OpenAI 공급자 프리셋을 사용할 수 없습니다.",
   "codexAuth.openProviders": "프로바이더 열기",
+  "codexAuth.changeAccountMode": "계정 모드 변경",
   "codexAuth.add": "추가",
   "codexAuth.credits": "크레딧",
   "codexAuth.creditsRemaining": "남음",
@@ -2425,6 +2440,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.needsReauth": "재로그인",
   "codexAuth.reauthenticate": "재인증",
   "codexAuth.tokenExpired": "토큰 만료 — 이 계정을 다시 인증하세요",
+  "codexAuth.weeklyConflict": "주간 사용 기간이 두 개로 보고되었습니다: {first}, {second}. 위의 초기화 시각에 전체 한도가 복구되지 않을 수 있습니다.",
   "codexAuth.mainTokenExpired": "토큰 만료 — 아래 디바이스 코드 또는 Codex 앱 로그인으로 다시 로그인하세요",
   "codexAuth.mainReauthSucceeded": "로그인됨",
   "codexAuth.mainReauthFailed": "다시 로그인 실패",
@@ -3066,6 +3082,9 @@ export const ko: Record<TKey, string> = {
   "quota.creditsBalance": "크레딧 잔액",
   "quota.creditsPeriodEnds": "청구 기간 종료: {date}",
   "quota.usedPercent": "{pct}% 사용",
+  "quota.weeklyShare": "주간 한도의 최대 {pct}%",
+  "quota.notInEffect": "현재 적용 안 됨",
+  "quota.notInEffectHint": "Claude가 지금 사용량을 묶고 있는 한도가 아니라고 보고한 항목입니다. 참고용으로 표시하며, 계정 라우팅은 적용 중인 한도만 사용합니다.",
   "quota.limitReached": "한도 도달",
   "quota.resetsToday": "오늘 {time} 초기화",
   "quota.resetsTomorrow": "내일 {time} 초기화",
@@ -3151,6 +3170,7 @@ export const ko: Record<TKey, string> = {
   "pws.currentAccountUsage": "현재 계정 사용량",
   "pws.quotaUnsupported": "이 계정은 할당량 조회를 지원하지 않습니다.",
   "pws.quotaUnobserved": "아직 관측된 사용량이 없습니다.",
+  "pws.quotaLastRead": "마지막 조회",
   "pws.quotaCheckCompleted": "할당량 확인 완료",
   "pws.modelBreakdown": "모델별 사용량",
   "pws.col.model": "모델",
@@ -3210,6 +3230,7 @@ export const ko: Record<TKey, string> = {
   "pws.accountSwitching": "전환 중…",
   "pws.accountCurrent": "현재 계정",
   "pws.accountPausedHint": "재개할 때까지 자동 선택, 재시도, 쿨다운 복구, 수동 선택 및 사전 토큰 갱신에서 제외됩니다.",
+  "pws.resumeAndActivateKey": "재개 및 사용",
   "pws.defaultModelNone": "없음 (프로바이더 기본값 사용)",
   "pws.discardSettings": "되돌리기",
   "pws.jsonEditorDesc": "프로바이더 JSON 설정을 직접 편집합니다. 저장 즉시 반영됩니다.",
@@ -3289,12 +3310,19 @@ export const ko: Record<TKey, string> = {
   "pws.pacingRemoveModel": "{model} 모델의 요청 속도 설정 제거",
   "pws.pacingRuleRequired": "프로바이더 제한이나 모델별 제한을 하나 이상 설정한 뒤 요청 속도 조절을 켜세요.",
   "pws.pacingCapInvalid": "최대 동시 요청 수는 1 이상의 정수여야 합니다.",
+  "pws.pacingValueInvalid": "유효한 속도 제한 값을 입력하세요. RPM 1/60~60,000, 지연 1~3,600,000ms, 동시성 1 이상.",
   "pws.saving": "저장 중…",
   "pws.settingsSaved": "설정이 저장되었습니다.",
   "pws.accountModeSaved": "계정 모드가 저장되었습니다.",
   "pws.accountModeFailed": "계정 모드를 전환할 수 없습니다.",
   "pws.accountModeConfirm": "OpenAI 계정 모드를 전환할까요? 실행 중인 대화가 다른 모드의 계정 세트로 다시 연결되며, 할당량 사용량은 새 모드로 집계됩니다.",
   "pws.settingsUnsavedBar": "저장하지 않은 변경사항이 있습니다.",
+  "pws.draftTarget": "편집 중: {target}",
+  "pws.draftConflict": "편집하는 동안 이 서버에 저장된 설정이 바뀌었습니다. 초안은 그대로 보관되어 있습니다. 유지할 값을 선택하세요.",
+  "pws.draftConflictFields": "양쪽에서 바뀐 필드입니다. 초안을 수정하거나 저장된 값을 사용하세요:",
+  "pws.draftConflictUseSaved": "저장된 값 사용",
+  "pws.draftConflictKeepDraft": "내 초안 유지",
+  "pws.draftConflictResolveFirst": "저장하기 전에 유지할 값을 선택하세요.",
   "pws.unsavedLeaveBody": "저장하지 않은 변경사항이 있습니다. 나가기 전에 저장하시겠습니까?",
   "pws.unsavedLeaveTitle": "미저장 변경사항",
   "pws.attentionRequired": "주의 필요",
@@ -3720,6 +3748,11 @@ export const ko: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "{family} 기본 모델로 사용",
   "claudeDesktop.moveTo": "이동 위치",
   "claudeDesktop.move": "이동",
+  "claudeDesktop.removeUnavailable": "제거",
+  "claudeDesktop.removeAllUnavailable": "사용 불가 모델 제거 ({n})",
+  "claudeDesktop.removeUnavailableHint": "이 배정과 별칭을 지웁니다. 저장하면 변경이 남고, 저장 후 적용하면 Claude Desktop에도 반영됩니다.",
+  "claudeDesktop.removeUnavailableTierHint": "한 등급의 기본값은 사용 가능해야 하므로, 이 등급의 다른 사용 불가 모델 {n}개도 함께 제거합니다. 저장하면 변경이 남고, 저장 후 적용하면 Claude Desktop에도 반영됩니다.",
+  "claudeDesktop.removedUnavailable": "사용 불가 모델 {n}개를 제거했습니다. 저장하면 변경이 남고, 저장 후 적용하면 Claude Desktop에 반영됩니다.",
   "claudeDesktop.status.applied": "Desktop에 적용됨",
   "claudeDesktop.status.stale": "Desktop 설정이 최신 상태가 아님 — 재적용 필요",
   "claudeDesktop.status.notApplied": "미적용",
@@ -3864,7 +3897,7 @@ export const ko: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "제공자 테이블 방식에서는 일부 모바일 원격 목록에 기존 openai 태그 스레드가 보이지 않을 수 있습니다. 기록이 삭제된 것은 아닙니다. 원격 클라이언트가 모든 제공자를 조회해야 하며, 이 스위치는 해당 목록 필터를 수정하지 않습니다.",
   "models.newPolicyGlobal": "새 모델을 비활성화 상태로 추가", "models.newPolicyProvider": "새 모델 정책",
   "models.fastProvider": "Fast 모드", "models.fastProviderHint": "사용 크레딧을 2배 가격으로 소모합니다", "models.fastEnabled": "Fast 모드를 켰습니다", "models.fastDisabled": "Fast 모드를 껐습니다", "models.fastSaveFailed": "Fast 모드를 저장하지 못했습니다",
-  "models.newPolicy_inherit": "상속", "models.newPolicy_off": "끔", "models.newPolicy_on": "켬", "models.newBadge": "신규", "models.newCount": "신규 {count}개, 꺼짐",
+  "models.newPolicy_inherit": "상속", "models.newPolicy_off": "끔", "models.newPolicy_on": "켬", "models.newPolicy_admit": "선택에 추가", "models.newBadge": "신규", "models.newCount": "신규 {count}개, 꺼짐",
   "models.aliases": "별칭",
   "models.aliasesTable": "별칭 표",
   "models.aliasPrompt": "공급자 별칭 (비우면 해제)",

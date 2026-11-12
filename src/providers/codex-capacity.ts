@@ -59,6 +59,12 @@ export interface CodexCapacityAccount {
   isMain: boolean;
   active?: boolean;
   plan?: unknown;
+  /**
+   * Explicit capacity weight for providers without a calibrated plan table (Anthropic seats
+   * report no tier). When set it replaces the Codex plan lookup and the account is not counted
+   * as an uncalibrated plan.
+   */
+  weight?: number;
   paused: boolean;
   needsReauth?: boolean;
   quota: CodexCapacityQuota | null;
@@ -227,10 +233,13 @@ export function aggregateCodexPoolCapacity(
   let staleQuotaAccounts = 0;
 
   for (const account of accounts) {
-    const weight = codexCapacityWeight(account.plan);
+    const explicitWeight = typeof account.weight === "number" && Number.isFinite(account.weight) && account.weight > 0
+      ? account.weight
+      : undefined;
+    const weight = explicitWeight ?? codexCapacityWeight(account.plan);
     // Still reported, so the operator can see the estimate is conservative for this seat —
     // but no longer a reason to drop the account from the aggregate (#3155).
-    if (!isCalibratedPlan(account.plan)) unknownPlanAccounts += 1;
+    if (explicitWeight === undefined && !isCalibratedPlan(account.plan)) unknownPlanAccounts += 1;
     if (account.paused) pausedAccounts += 1;
     if (account.needsReauth) reauthAccounts += 1;
     const quota = account.quota;

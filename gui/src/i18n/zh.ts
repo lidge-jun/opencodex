@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -8,6 +10,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -131,6 +134,8 @@ export const zh: Record<TKey, string> = {
   "workflowBudget.saved": "工作流限制已保存。",
   ...desktopCompatibilityCopy("zh"),
   ...shellV2Copy("zh"),
+  ...codexCliUpdateCopy("zh"),
+  ...remoteLinkDiagnosticsCopy("zh"),
   ...modelsV2Copy("zh"),
   ...accountsV2Copy("zh"),
   ...subagentsV2Copy("zh"),
@@ -139,6 +144,7 @@ export const zh: Record<TKey, string> = {
   ...connectV2Copy("zh"),
   ...startupV2Copy("zh"),
   ...proxyV2Copy("zh"),
+  ...telemetryProfileCopy("zh"),
   "claude.tierDefaults.unset": "未设置（保留现有 Claude 设置）",
   "claude.tierDefaults.recovery": "应用已停止，自动恢复失败。重试前请检查下方备份。",
   "claude.tierDefaults.title": "CLI 层级默认模型",
@@ -283,6 +289,8 @@ export const zh: Record<TKey, string> = {
   "advisor.modelsEmpty": "没有可选模型。请启用提供商和模型后重试。",
   "advisor.effort": "推理强度",
   "advisor.policy": "策略",
+  "advisor.questionOnly": "仅发送主模型的问题",
+  "advisor.questionOnlyNote": "仅发送主模型填写的问题（最多保留 2000 字符，超出时附加截断提示）和固定顾问指令，不自动附带对话历史、工具结果或任务上下文。主模型需要自行补充必要背景。自动咨询暂停，现有咨询次数限制仍然生效。",
   "advisor.policy.manual": "手动 — 仅在 Worker 主动请求时",
   "advisor.policy.preflight": "Preflight — 出现方向性证据后自动尝试咨询",
   "advisor.policy.adaptive": "自适应 — 初始探查与修复失败时咨询",
@@ -813,6 +821,8 @@ export const zh: Record<TKey, string> = {
   "prov.port": "端口",
   "prov.default": "默认",
   "prov.loadingConfig": "加载中…",
+  "prov.targetChanged": "仪表板目标已更改。请在当前服务器上重新打开此表单。",
+  "prov.legacyTargetPreflight": "此代理会在发送前检查保存目标，但无法以原子方式验证。要使用目标绑定的保存，请更新代理。",
   "prov.saved": "已保存！重启代理以生效。",
   "prov.loadConfigFail": "加载配置失败",
   "prov.invalidJson": "无效的 JSON",
@@ -2003,6 +2013,10 @@ export const zh: Record<TKey, string> = {
   "integrations.preview.loading": "正在加载准确的更改计划…",
   "integrations.preview.failed": "无法加载更改计划。未进行任何更改。",
   "integrations.preview.stale": "确认期间集成状态已变化。请查看更新后的计划并再次确认。",
+  "integrations.preview.catalogUnavailable": "模型目录尚未加载，无法规划此更改。请加载后继续。",
+  "integrations.preview.loadCatalogRetry": "加载目录并重试",
+  "integrations.preview.recovering": "正在加载目录…",
+  "integrations.action.chooseProfile": "选择配置文件",
   "integrations.dialog.apply.title": "应用此集成？",
   "integrations.dialog.apply.changes": "opencodex 会将其管理的提供商设置添加到客户端配置。",
   "integrations.dialog.apply.breakage": "客户端将使用此 opencodex 实例当前提供的模型。",
@@ -2141,6 +2155,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "无法加载 OpenAI 提供方预设。",
   "codexAuth.openaiPresetUnavailable": "OpenAI 提供方预设不可用。",
   "codexAuth.openProviders": "打开提供商",
+  "codexAuth.changeAccountMode": "更改账号模式",
   "codexAuth.add": "添加",
   "codexAuth.credits": "额度",
   "codexAuth.creditsRemaining": "剩余",
@@ -2398,6 +2413,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.needsReauth": "重新登录",
   "codexAuth.reauthenticate": "重新认证",
   "codexAuth.tokenExpired": "令牌已过期 — 请重新认证此账号",
+  "codexAuth.weeklyConflict": "报告了两个每周窗口：{first} 和 {second}。上方的重置时间不一定会恢复全部额度。",
   "codexAuth.mainTokenExpired": "令牌已过期 — 请使用下方设备码或通过 Codex 应用登录重新登录",
   "codexAuth.mainReauthSucceeded": "已登录",
   "codexAuth.mainReauthFailed": "重新登录失败",
@@ -3039,6 +3055,9 @@ export const zh: Record<TKey, string> = {
   "quota.creditsBalance": "额度余额",
   "quota.creditsPeriodEnds": "账单周期结束于 {date}",
   "quota.usedPercent": "已用 {pct}%",
+  "quota.weeklyShare": "最多占每周限额的 {pct}%",
+  "quota.notInEffect": "当前未生效",
+  "quota.notInEffectHint": "Claude 报告此限额目前并未限制用量。此处仅供参考，账号路由只使用当前生效的限额。",
   "quota.limitReached": "已达上限",
   "quota.resetsToday": "今天 {time} 重置",
   "quota.resetsTomorrow": "明天 {time} 重置",
@@ -3124,6 +3143,7 @@ export const zh: Record<TKey, string> = {
   "pws.currentAccountUsage": "当前账户用量",
   "pws.quotaUnsupported": "此账户不支持查询配额。",
   "pws.quotaUnobserved": "尚未观测到用量。",
+  "pws.quotaLastRead": "上次读取",
   "pws.quotaCheckCompleted": "配额检查完成",
   "pws.modelBreakdown": "模型用量明细",
   "pws.col.model": "模型",
@@ -3183,6 +3203,7 @@ export const zh: Record<TKey, string> = {
   "pws.accountSwitching": "切换中…",
   "pws.accountCurrent": "当前账户",
   "pws.accountPausedHint": "恢复前不会参与自动切换、重试、冷却恢复、手动选择或主动令牌刷新。",
+  "pws.resumeAndActivateKey": "恢复并使用",
   "pws.defaultModelNone": "无（使用提供商默认值）",
   "pws.discardSettings": "放弃",
   "pws.jsonEditorDesc": "直接编辑提供商 JSON 配置。更改将立即保存。",
@@ -3262,12 +3283,19 @@ export const zh: Record<TKey, string> = {
   "pws.pacingRemoveModel": "移除 {model} 的请求节流规则",
   "pws.pacingRuleRequired": "请先设置提供商限制或模型规则，再启用请求节流。",
   "pws.pacingCapInvalid": "最大并发请求数必须是大于或等于 1 的整数。",
+  "pws.pacingValueInvalid": "请输入有效的限速值：RPM 1/60–60,000，延迟 1–3,600,000 毫秒，并发数 1 或以上。",
   "pws.saving": "保存中…",
   "pws.settingsSaved": "设置已保存。",
   "pws.accountModeSaved": "账户模式已保存。",
   "pws.accountModeFailed": "无法切换账户模式。",
   "pws.accountModeConfirm": "切换 OpenAI 账户模式？正在进行的对话将重新分配到另一种模式的账户集合，配额用量将按新模式计入。",
   "pws.settingsUnsavedBar": "有未保存的更改。",
+  "pws.draftTarget": "正在编辑：{target}",
+  "pws.draftConflict": "编辑期间此服务器上已保存的设置发生了变化。草稿已保留，请选择要保留的值。",
+  "pws.draftConflictFields": "这些字段在两边都发生了变化。请编辑草稿或使用已保存的值：",
+  "pws.draftConflictUseSaved": "使用已保存的值",
+  "pws.draftConflictKeepDraft": "保留我的草稿",
+  "pws.draftConflictResolveFirst": "保存前请选择要保留的值。",
   "pws.unsavedLeaveBody": "有未保存的更改。离开前保存吗？",
   "pws.unsavedLeaveTitle": "未保存的更改",
   "pws.attentionRequired": "需要关注",
@@ -3693,6 +3721,11 @@ export const zh: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "设为 {family} 默认模型",
   "claudeDesktop.moveTo": "移动到",
   "claudeDesktop.move": "移动",
+  "claudeDesktop.removeUnavailable": "移除",
+  "claudeDesktop.removeAllUnavailable": "移除不可用模型 ({n})",
+  "claudeDesktop.removeUnavailableHint": "移除此分配及其别名。“保存”会保留更改；“保存并应用”还会更新 Claude Desktop。",
+  "claudeDesktop.removeUnavailableTierHint": "由于某一层级的默认模型必须可用，还会移除该层级中另外 {n} 个不可用模型。“保存”会保留更改；“保存并应用”还会更新 Claude Desktop。",
+  "claudeDesktop.removedUnavailable": "已移除 {n} 个不可用模型。“保存”保留更改，“保存并应用”更新 Claude Desktop。",
   "claudeDesktop.status.applied": "已应用到 Desktop",
   "claudeDesktop.status.stale": "Desktop 配置尚未更新 — 需重新应用",
   "claudeDesktop.status.notApplied": "未应用",
@@ -3863,7 +3896,7 @@ export const zh: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "提供商表路由可能使已有的 openai 标签会话在部分移动端远程列表中隐藏。历史记录并未删除。远程客户端必须列出所有提供商；此开关不会修复客户端的列表过滤器。",
   "models.newPolicyGlobal": "新模型默认停用", "models.newPolicyProvider": "新模型策略",
   "models.fastProvider": "Fast 模式", "models.fastProviderHint": "按 2 倍价格消耗用量额度", "models.fastEnabled": "已开启 Fast 模式", "models.fastDisabled": "已关闭 Fast 模式", "models.fastSaveFailed": "无法保存 Fast 模式",
-  "models.newPolicy_inherit": "继承", "models.newPolicy_off": "关闭", "models.newPolicy_on": "开启", "models.newBadge": "新增", "models.newCount": "{count} 个新增，已关闭",
+  "models.newPolicy_inherit": "继承", "models.newPolicy_off": "关闭", "models.newPolicy_on": "开启", "models.newPolicy_admit": "加入选择", "models.newBadge": "新增", "models.newCount": "{count} 个新增，已关闭",
   "models.aliases": "别名",
   "models.aliasesTable": "别名表",
   "models.aliasPrompt": "服务商别名（留空即清除）",

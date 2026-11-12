@@ -1,7 +1,7 @@
 import { useClientResource, useKeyedClientResource } from "../client-resource";
-import { STARTUP_HEALTH_STALE_RETRY_MS, startupChecklistDone } from "../startup-health-ui";
+import { STARTUP_HEALTH_STALE_RETRY_MS, type StartupChecklistBody } from "../startup-health-ui";
 
-type StartupBody = Parameters<typeof startupChecklistDone>[0];
+type StartupBody = StartupChecklistBody;
 
 export function useStartupChecklist(apiBase: string) {
   const key = `home-startup:${apiBase}`;

@@ -100,6 +100,7 @@ describe("models per-model settings command", () => {
       modelId: "model",
       contextWindow: null,
       inputModalities: null,
+      responsesCustomTools: null,
       reasoningEfforts: null,
       defaultReasoningEffort: null,
     });

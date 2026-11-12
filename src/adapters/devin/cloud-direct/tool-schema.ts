@@ -9,10 +9,26 @@
  * accept type arrays, so only the Gemini family is rewritten, and only that one
  * keyword: the full Google subset sanitizer would strip keywords this backend
  * accepts.
+ *
+ * Claude models behind the same wire answer `invalid_argument` for a root
+ * `oneOf` (#8302), as Anthropic rejects a root composition in any
+ * `input_schema`. Claude uids get the same root flattening as Claude Chat
+ * gateways; a schema without a root composition is passed through unchanged.
  */
+import { flattenClaudeRootToolParameters } from '../../openai-chat/tool-schema.js';
 
 export function isDevinGeminiModelUid(modelUid: string): boolean {
   return /^gemini-/i.test(modelUid) || /^MODEL_GOOGLE_GEMINI_/i.test(modelUid);
+}
+
+export function isDevinClaudeModelUid(modelUid: string): boolean {
+  return /^claude-/i.test(modelUid) || /^MODEL_CLAUDE_/i.test(modelUid);
+}
+
+const ROOT_COMPOSITION_KEYS = ['oneOf', 'anyOf', 'allOf'] as const;
+
+function hasRootComposition(parameters: unknown): boolean {
+  return isSchema(parameters) && ROOT_COMPOSITION_KEYS.some((key) => Array.isArray(parameters[key]));
 }
 
 /** Keys whose values are instance data, not subschemas. */
@@ -79,7 +95,9 @@ function rewrite(node: unknown): unknown {
   return splitTypeArray(out, types);
 }
 
-/** Rewrite type arrays for Gemini uids; every other model gets the schema unchanged. */
+/** Rewrite type arrays for Gemini uids and root compositions for Claude uids; others are unchanged. */
 export function normalizeDevinToolParameters(modelUid: string, parameters: unknown): unknown {
-  return isDevinGeminiModelUid(modelUid) ? rewrite(parameters) : parameters;
+  if (isDevinGeminiModelUid(modelUid)) return rewrite(parameters);
+  if (isDevinClaudeModelUid(modelUid) && hasRootComposition(parameters)) return flattenClaudeRootToolParameters(parameters);
+  return parameters;
 }

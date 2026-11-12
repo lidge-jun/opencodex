@@ -10,7 +10,12 @@ import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
 import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
+import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
+import { LINK_CHILD_OPS_USAGE, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
+import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
+import { validateChildOps, type LinkChildOpsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
+import { boundHint } from "../link/ssh-runner";
 import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
@@ -38,18 +43,30 @@ export const LINK_USAGE = `Usage:
   ocx link port [--json]
   ocx link issue --alias <alias> --tunnel-port <port> [--json]
   ocx link status [--json]
+  ${LINK_DIAGNOSTICS_USAGE}
   ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
   ocx link reconnect --link-id <id> [--json]
   ocx link cleanup [--link-id <id>] [--json]
+  ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+${LINK_CHILD_OPS_USAGE.join("\n")}
+${LINK_CAPTURE_USAGE.join("\n")}
 
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
-Cleanup reports each Child's platform with disconnect guidance; it changes nothing.`;
+Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
+Diagnostics reads this computer's bounded link diagnostics file directly; it contacts no proxy and writes nothing.
+Check reads each Home-initiated Child's installed version and update route; it changes no install.
+Update, sync and restart-codex run on the Child over the link's SSH trust and wait for the job unless --no-wait.
+Capture opens a short, local window in which this machine's link tunnels log sanitized SSH diagnostics.
+Policy reads or changes how this Home keeps its Children current; without flags it only reads.`;
 
 /**
  * What `ocx link status` prints: the runtime's status DTO itself, so a field the server adds (like
- * `peer` or the diagnostics `tunnel`) is part of this type the moment it is part of the wire.
+ * `peer` or the diagnostics `tunnel`) is part of this type the moment it is part of the wire. The `child` block is
+ * read tolerantly, so its type is this CLI's view of it.
  */
-export type LinkStatusPayload = LinkStatusDto;
+export type LinkStatusPayload = Omit<LinkStatusDto, "links"> & {
+  links: Array<Omit<LinkStatusDto["links"][number], "child"> & { child?: LinkChildOpsView }>;
+};
 
 export interface LinkIssuePayload {
   linkId: string;
@@ -58,7 +75,7 @@ export interface LinkIssuePayload {
   listenerPort: number;
 }
 
-export interface LinkCliDeps extends RuntimeApiDeps, LocalControlDeps, Omit<LinkCleanupDeps, "readStore"> {
+export interface LinkCliDeps extends RuntimeApiDeps, LocalControlDeps, LinkCaptureDeps, Omit<LinkCleanupDeps, "readStore"> {
   /** Test seam can shorten, never extend, the whole enrollment deadline. */
   enrollmentTimeoutMs?: number;
   choosePort?: () => Promise<number>;
@@ -68,6 +85,8 @@ export interface LinkCliDeps extends RuntimeApiDeps, LocalControlDeps, Omit<Link
   confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string; ocxVersion?: string | null; runtimeKind?: "full" | "ephemeral" | "missing"; binarySizeBytes?: number }) => Promise<boolean>;
   readStore?: () => LinkStore;
   readAdminToken?: () => string | null;
+  /** Test seam: the config directory whose link diagnostics `ocx link diagnostics` reads. */
+  linkConfigDir?: string;
 }
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -155,7 +174,7 @@ export function validateStatus(value: unknown): LinkStatusPayload {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
-    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind"], `link ${index}`);
+    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "child"], `link ${index}`);
     const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
@@ -176,6 +195,7 @@ export function validateStatus(value: unknown): LinkStatusPayload {
       ...parity,
       ...(candidate.peer !== undefined ? { peer: validatePeer(candidate.peer, index) } : {}),
       ...(candidate.tunnel !== undefined ? { tunnel: validateTunnel(candidate.tunnel, index) } : {}),
+      ...(candidate.child !== undefined ? { child: validateChildOps(candidate.child, index) } : {}),
     };
   });
   let child: LinkStatusPayload["child"] = null;
@@ -246,17 +266,22 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   } catch (error) {
     if (error instanceof RuntimeApiError) {
       // Never echo an API error body: issue responses contain a one-time data key. Only the error
-      // code survives, because callers branch on it and a code is never secret.
+      // code, the server's already-bounded hint and the residual flag survive (errorCodeBody).
       throw new RuntimeApiError(`Link management request failed (${error.status})`, error.status, errorCodeBody(error.body));
     }
     throw error;
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string }; residual?: true } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string }; residual?: true } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
-  return typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? { error: { code }, ...(body.residual === true ? { residual: true as const } : {}) } : null;
+  if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
+  // The hint is the only other field kept (#8357): the server builds it from a Child's last stderr
+  // line, already bounded and redacted, and it is bounded and redacted again here. The rest of
+  // the body is still never echoed.
+  const hint = typeof body.error.hint === "string" ? boundHint(body.error.hint) : undefined;
+  return { error: { code, ...(hint ? { hint } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -299,10 +324,10 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
     }
     throw error;
   }
-  // A proxy older than the compatibility report or the tunnel diagnostics ignores the query and
-  // answers without those fields.
+  // A proxy older than the compatibility report, the tunnel diagnostics or the Child block ignores
+  // the query and answers without those fields.
   const result = validateStatus(await viaLocalControlSocket(baseUrl, deps,
-    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1", {}, statusDeps)));
+    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1&children=1", {}, statusDeps)));
   console.log(JSON.stringify(result));
 }
 
@@ -377,18 +402,27 @@ async function runReconnect(args: string[], deps: LinkCliDeps): Promise<void> {
 }
 
 export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}): Promise<number> {
-  return runCliAction(async () => {
+  // runCliAction maps thrown errors (2 usage, 4 on 404, 5 on 409, else 1) and returns 0 on success, so a
+  // verb's own verdict exit (check: 6 for a partial result) travels beside it.
+  let verdictExit = 0;
+  const code = await runCliAction(async () => {
     const args = [...rawArgs];
     const command = args.shift();
     if (command === "probe" || command === "add") await runLinkEnrollment(command, args, deps, linkRequest, LINK_USAGE);
     else if (command === "port") await runPort(args, deps);
     else if (command === "issue") await runIssue(args, deps);
     else if (command === "status") await runStatus(args, deps);
+    else if (command === "diagnostics") await runLinkDiagnostics(args, deps, LINK_USAGE);
     else if (command === "revoke") await runRevoke(args, deps);
     else if (command === "reconnect") await runReconnect(args, deps);
     else if (command === "cleanup") await runLinkCleanup(args, deps, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, revoke, reconnect, cleanup", LINK_USAGE);
+    else if (command === "check") verdictExit = await runLinkCheck(args, deps, linkRequest, LINK_USAGE);
+    else if (command === "update" || command === "sync" || command === "restart-codex") verdictExit = await runLinkChildOp(command, args, deps, linkRequest, LINK_USAGE);
+    else if (command === "capture") await runLinkCapture(args, deps, LINK_USAGE);
+    else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, cleanup, check, update, sync, restart-codex, capture, policy", LINK_USAGE);
   });
+  return code === 0 ? verdictExit : code;
 }
 
 const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt"] as const;
