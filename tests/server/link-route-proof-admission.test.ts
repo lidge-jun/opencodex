@@ -9,7 +9,6 @@ import { LINK_ROUTE_PROOF_HEADER, takeRouteProof } from "../../src/link/route-pr
 import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { repoPath } from "../helpers/repo-root";
 
 const LINKED_KEY = "link-linked-route-proof";
 const LINKED_ID = "linked-key";
@@ -56,14 +55,6 @@ test("a proof header that cannot be taken off the request is not reported", () =
   expect(takeRouteProof(req)).toBeUndefined();
 });
 
-test("the hub-link catalog admission reports the proof through takeRouteProof before dispatch", () => {
-  const source = readFileSync(repoPath("src/server/index/serve-options.ts"), "utf8");
-  const call = source.indexOf("onAuthenticatedCatalog(admission.keyId, takeRouteProof(req))");
-  expect(call).toBeGreaterThan(-1);
-  expect(source).not.toContain('req.headers.get("' + LINK_ROUTE_PROOF_HEADER + '")');
-  expect(call).toBeLessThan(source.indexOf("isLinkManagementPath(requestUrl.pathname)"));
-});
-
 test("the link listener passes a proof id to every subscriber and leaves it out when absent", () => {
   const listener = createLinkListenerLifecycle({ storePath: join(testHome, "link", "links.json") });
   const seen: Array<[string, string | undefined]> = [];
@@ -92,13 +83,20 @@ test("a key-admitted catalog request carrying a proof id is still served normall
     clientIntegrations: { codex: false },
   } as OcxConfig);
   const { startServer } = await import("../../src/server");
-  server = startServer(0);
+  // What the hub-link admission reports to the link listener, and through it to the proof registry.
+  const reported: Array<[string, string | undefined]> = [];
+  server = startServer(0, { observeAuthenticatedCatalog: (apiKeyId, routeProofId) => { reported.push([apiKeyId, routeProofId]); } });
   const linkPort = JSON.parse(readFileSync(linkStorePath(), "utf8")).listenerPort as number;
   const response = await fetch("http://127.0.0.1:" + linkPort + "/v1/catalog", {
     headers: { "x-opencodex-api-key": LINKED_KEY, [LINK_ROUTE_PROOF_HEADER]: PROOF },
   });
   expect(response.status).toBe(200);
   expect(Array.isArray((await response.json() as { models?: unknown }).models)).toBe(true);
+  expect(reported).toEqual([[LINKED_ID, PROOF]]);
   // Without the key, the header admits nothing.
   expect((await fetch("http://127.0.0.1:" + linkPort + "/v1/catalog", { headers: { [LINK_ROUTE_PROOF_HEADER]: PROOF } })).status).toBe(401);
+  expect(reported).toEqual([[LINKED_ID, PROOF]]);
+  // A key-admitted catalog request without the header is reported without a proof id.
+  await fetch("http://127.0.0.1:" + linkPort + "/v1/catalog", { headers: { "x-opencodex-api-key": LINKED_KEY } });
+  expect(reported).toEqual([[LINKED_ID, PROOF], [LINKED_ID, undefined]]);
 });

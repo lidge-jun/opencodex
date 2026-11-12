@@ -12,6 +12,7 @@ import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
 import { LINK_CHILD_OPS_USAGE, runLinkActivity, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
+import { LINK_ROUTES_USAGE, runLinkRoutes } from "./link-routes";
 import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
 import { validateChildOps, validateLinkWs, type LinkChildOpsView, type LinkWsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
@@ -47,6 +48,7 @@ export const LINK_USAGE = `Usage:
   ${LINK_DIAGNOSTICS_USAGE}
   ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
   ocx link reconnect --link-id <id> [--json]
+${LINK_ROUTES_USAGE.join("\n")}
   ocx link cleanup [--link-id <id>] [--json]
   ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ${LINK_CHILD_OPS_USAGE.join("\n")}
@@ -277,7 +279,7 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string; hint?: string }; residual?: true } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
   if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
@@ -285,7 +287,9 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string };
   // line, already bounded and redacted, and it is bounded and redacted again here. The rest of
   // the body is still never echoed.
   const hint = typeof body.error.hint === "string" ? boundHint(body.error.hint) : undefined;
-  return { error: { code, ...(hint ? { hint } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
+  // A cause is a class word (an unproven route's `hostkey`, `auth`, ...): kept only in that shape.
+  const cause = typeof body.error.cause === "string" && /^[a-z_]{1,32}$/.test(body.error.cause) ? body.error.cause : undefined;
+  return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -424,8 +428,9 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "update" || command === "sync" || command === "restart-codex") verdictExit = await runLinkChildOp(command, args, deps, linkRequest, LINK_USAGE);
     else if (command === "capture") await runLinkCapture(args, deps, LINK_USAGE);
     else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);
+    else if (command === "routes") await runLinkRoutes(args, deps, linkRequest, LINK_USAGE);
     else if (command === "activity") await runLinkActivity(args, deps, linkRequest, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, routes, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
   });
   return code === 0 ? verdictExit : code;
 }

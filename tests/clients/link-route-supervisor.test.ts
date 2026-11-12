@@ -50,6 +50,8 @@ function harness(options: {
   holdStderr?: { release?: () => void };
   /** The Child's `ocx config show --json` stdout. */
   configStdout?: string;
+  /** spawnTunnel throws while this returns true (ssh missing). */
+  spawnFails?: () => boolean;
 } = {}) {
   let now = 0;
   let tick: () => void = () => {};
@@ -89,6 +91,7 @@ function harness(options: {
       return Promise.resolve(answer);
     },
     spawnTunnel(argv, tunnelOptions) {
+      if (options.spawnFails?.()) throw new Error("spawn ssh ENOENT");
       let resolveExit!: (code: number) => void;
       const exited = new Promise<number>(resolve => { resolveExit = resolve; });
       let stderr = "";
@@ -760,5 +763,83 @@ test("a Child whose config output is over 64 KiB still proves readiness and conn
   await h.tick();
   expect(h.runs.some(run => run.kind === "config")).toBe(true);
   expect(h.state().state.kind).toBe("connected");
+  expect(h.state().routes?.route?.name).toBe("alpha-lan");
+});
+
+test("the readiness budget runs from the grant: a slow route granted late still has the full budget to prove", async () => {
+  // A relay route to a slow Child can spend much of 30 s before its listener is granted.
+  let clock: () => number = () => 0;
+  const h = await started({ catalog: (_route, _proofId, admit) => {
+    if (clock() < 32_000) return ok(JSON.stringify({ models: [] }) + "\n200");
+    admit();
+    return ok(JSON.stringify({ models: [] }) + "\n200");
+  } });
+  clock = h.now;
+  await h.advance(25_000);
+  await h.grant();
+  await h.tick();
+  expect(h.state().state.kind).toBe("connecting");
+  for (let at = 25_000; at < 34_000; at += 1_000) await h.advance(1_000);
+  expect(h.state().state.kind).toBe("connected");
+  expect(h.tunnels).toHaveLength(1);
+  expect(h.tunnels[0]!.signals).toEqual([]);
+});
+
+test("a granted candidate is still stopped when its proof fails for the whole budget after the grant", async () => {
+  const h = await started({ catalog: () => ok(JSON.stringify({ models: [] }) + "\n200") });
+  await h.advance(5_000);
+  await h.grant();
+  await h.advance(READY_PROOF_MS - 1);
+  expect(h.tunnels[0]!.signals).toEqual([]);
+  await h.advance(1);
+  expect(h.tunnels[0]!.signals).toContain("SIGTERM");
+});
+
+test("a one-route link's orphan flag left by a failed spawn is watched when the link gains routes, and the link starts once it is gone", async () => {
+  // At start the one-route reaper cannot prove the old tunnel's identity, so it flags it; ssh is
+  // missing, so no spawn clears the flag. A route edit must not leave that flag with nothing watching it.
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record()] };
+  let alive = true;
+  let sshMissing = true;
+  const h = await started({
+    store: () => current,
+    pidfile: () => ({ version: 1, linkId: LINK, pid: 4545, argv: ["ssh", "old"] }),
+    processArgv: () => alive ? ["ssh", "other"] : null, processAlive: () => alive,
+    spawnFails: () => sshMissing,
+  });
+  expect(h.tunnels).toHaveLength(0);
+  expect(h.state().orphan).toBe("orphan-unverified");
+  sshMissing = false;
+  current = { ...current, links: [record(["alpha-lan", "pen-alpha"])] };
+  await h.supervisor.reload();
+  await h.tick();
+  // Still possibly alive: nothing starts and nothing is signalled.
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+  expect(h.kills).toEqual([]);
+  alive = false;
+  await h.advance(1_000);
+  await h.tick();
+  expect(h.state().orphan).toBeUndefined();
+  // The link is in its failed spawn's backoff; its next due attempt starts the first round.
+  for (let waited = 0; waited < 61_000 && h.runs.every(run => run.kind !== "probe"); waited += 1_000) await h.advance(1_000);
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+});
+
+test("a link on a later route stays there until ocx link reconnect starts a round from the first rested route", async () => {
+  let lanDown = true;
+  const h = await started({ probe: route => route === "alpha-lan" && lanDown ? refused("ssh: connect to host 10.0.0.5 port 22: Connection refused") : ok("ocx-link-probe\n") });
+  await h.grant();
+  await h.tick();
+  expect(h.state().routes?.route?.name).toBe("pen-alpha");
+  // The direct route comes back and its rest ends: the link does not move by itself.
+  lanDown = false;
+  await h.advance(60_000);
+  expect(h.state().routes?.route?.name).toBe("pen-alpha");
+  expect(h.runs.filter(run => run.kind === "probe" && run.destination === "alpha-lan")).toHaveLength(1);
+  expect(await h.supervisor.reconnect(LINK)).toBe(true);
+  await h.tick();
+  expect(h.runs.filter(run => run.kind === "probe").at(-1)?.destination).toBe("alpha-lan");
+  await h.grant();
+  await h.tick();
   expect(h.state().routes?.route?.name).toBe("alpha-lan");
 });

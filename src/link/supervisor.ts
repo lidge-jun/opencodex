@@ -678,6 +678,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const nextInstances = new Map(nextStore.links.map(record => [record.id, recordInstance(record, nextStore.listenerPort)]));
         const changed = new Set<string>();
         const routesEdited: LinkRecord[] = [];
+        const gainedRoutes: LinkRecord[] = [];
         for (const record of nextStore.links) {
           if (recordInstances.get(record.id) !== undefined && recordInstances.get(record.id) !== nextInstances.get(record.id)) {
             changed.add(record.id);
@@ -699,6 +700,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
             const state = states.get(record.id);
             if (child && state?.kind !== "connected") { changed.add(record.id); continue; }
             if (child && state?.kind === "connected") rounds.adopt(record, child.child, state.since);
+            gainedRoutes.push(record);
           }
           routesEdited.push(record);
         }
@@ -708,6 +710,15 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         for (const linkId of recordInstances.keys()) if (!nextInstances.has(linkId)) { rounds.cancel(linkId); orphanWatches.delete(linkId); }
         for (const record of nextStore.links) if (!rounds.isMultiRoute(record)) orphanWatches.delete(record.id);
         store = nextStore;
+        // A one-route link flagged at start whose spawn never cleared the flag (ssh missing, say) now
+        // blocks its rounds: watch that pidfile as a multi-route orphan, or lift the flag when there is
+        // no earlier process left to watch.
+        for (const record of gainedRoutes) {
+          if (!orphanUnverified.has(record.id) || orphanWatches.has(record.id)) continue;
+          const file = readPidfile(pidfilePath(record.id));
+          if (file !== null && file.linkId === record.id) reapMultiRouteOrphan(record, file);
+          if (!orphanWatches.has(record.id)) orphanUnverified.delete(record.id);
+        }
         if (routesEdited.some(record => rounds.isMultiRoute(record))) rounds.recheckClient();
         for (const record of routesEdited) if (rounds.isMultiRoute(record)) rounds.routesChanged(record);
         for (const [linkId] of [...children]) {

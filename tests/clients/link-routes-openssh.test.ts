@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { createHmac, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir, userInfo } from "node:os";
@@ -6,6 +7,7 @@ import { join } from "node:path";
 import { buildRouteProbeArgv, buildTunnelArgv } from "../../src/link/ssh-argv";
 import { createSshRunner, type SshChild } from "../../src/link/ssh-runner";
 import { composeGrantTap, routeOutcomeOfStderr } from "../../src/link/route-select";
+import { checkRouteTrust, confirmedLineTrust, keyFingerprint } from "../../src/link/route-trust";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -14,6 +16,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  * no daemon and opens no port of its own: each route's ProxyCommand runs a private "sshd -i" as
  * the current user with a temporary host key, so the actual builders meet a real server.
  */
+// The opt-in fixture starts real sshd sessions; one ceiling for the whole file instead of one per test.
+setDefaultTimeout(60_000);
 const SSH = Bun.which("ssh");
 const SSHD = "/usr/sbin/sshd";
 const FIXTURE = process.env.OCX_OPENSSH_ROUTE_FIXTURE === "1" && SSH !== null && existsSync(SSHD);
@@ -98,7 +102,8 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
       "Host " + name, "  ProxyCommand " + SSHD + " -i -f " + join(dir, sshdConfig), "  User " + userInfo().username,
       "  IdentityFile " + join(dir, "client"), "  IdentitiesOnly yes",
     ].join("\n");
-    writeFileSync(config, [host("route-a", "sshd-a.conf"), host("route-b", "sshd-b.conf"), host("route-c", "sshd-c.conf"), ""].join("\n"));
+    // route-d reaches the pinned machine but names another port: HostKeyAlias lookups ignore the port.
+    writeFileSync(config, [host("route-a", "sshd-a.conf"), host("route-b", "sshd-b.conf"), host("route-c", "sshd-c.conf"), host("route-d", "sshd-a.conf") + "\n  Port 2222", ""].join("\n"));
     knownHosts = join(dir, "known_hosts");
     const [type, key] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
     writeFileSync(knownHosts, "pin-alias " + type + " " + key + "\n");
@@ -113,7 +118,7 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
     expect(other.code).toBe(255);
     expect(routeOutcomeOfStderr(other.stderr)).toBe("hostkey");
     expect(readFileSync(knownHosts, "utf8")).toBe(before);
-  }, 60_000);
+  });
 
   test("OpenSSH confirms a granted -R, carries bytes through it, and refuses a second session the same port", async () => {
     const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("through the route") });
@@ -150,6 +155,58 @@ describe.skipIf(!FIXTURE)("real OpenSSH routes (OCX_OPENSSH_ROUTE_FIXTURE=1)", (
       await Promise.allSettled(children.map(child => child.exited));
       target.stop(true);
     }
-  }, 60_000);
-});
+  });
 
+  test("a route on another port is still checked under the bare alias", async () => {
+    const runner = createSshRunner();
+    const probe = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-d", knownHostsFile: knownHosts })), { timeoutMs: 20_000 });
+    expect({ code: probe.code, stdout: probe.stdout.trim() }).toEqual({ code: 0, stdout: "ocx-link-probe" });
+  });
+
+  test("OpenSSH accepts a second key stored under a case variant of the alias; the route trust check refuses that file", async () => {
+    const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
+    const [otherType, otherKey] = readFileSync(join(dir, "hk-other.pub"), "utf8").split(" ");
+    const mixed = join(dir, "known_hosts-mixed-case");
+    const text = "pin-alias " + type + " " + pinnedKey + "\nPIN-ALIAS " + otherType + " " + otherKey + "\n";
+    writeFileSync(mixed, text);
+    const runner = createSshRunner();
+    const other = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-b", knownHostsFile: mixed })), { timeoutMs: 20_000 });
+    expect({ code: other.code, stdout: other.stdout.trim() }).toEqual({ code: 0, stdout: "ocx-link-probe" });
+    expect(checkRouteTrust(text, "pin-alias", keyFingerprint(pinnedKey!))).toEqual({ ok: false, code: "pin_mismatch" });
+  });
+
+  test("OpenSSH lowercases HostKeyAlias before it hashes it: a hashed line matches the lowercased alias only", async () => {
+    const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
+    const hashed = (name: string) => {
+      const salt = randomBytes(20);
+      return "|1|" + salt.toString("base64") + "|" + createHmac("sha1", salt).update(name).digest("base64");
+    };
+    const runner = createSshRunner();
+    const probe = async (alias: string, hashedName: string) => {
+      const file = join(dir, "known_hosts-hashed-" + alias + "-" + hashedName);
+      writeFileSync(file, hashed(hashedName) + " " + type + " " + pinnedKey!.trim() + "\n");
+      const result = await runner.run(withConfig(buildRouteProbeArgv({ alias, destination: "route-a", knownHostsFile: file })), { timeoutMs: 20_000 });
+      return result.code;
+    };
+    expect({ lowerLine: await probe("PIN-ALIAS", "pin-alias"), exactLine: await probe("PIN-ALIAS", "PIN-ALIAS"), plain: await probe("pin-alias", "pin-alias") })
+      .toEqual({ lowerLine: 0, exactLine: 255, plain: 0 });
+  });
+
+  test("OpenSSH accepts another key from a wildcard, host list or hashed line beside the confirmed one; apply's check refuses each", async () => {
+    const [type, pinnedKey] = readFileSync(join(dir, "hk-pinned.pub"), "utf8").split(" ");
+    const [otherType, otherKey] = readFileSync(join(dir, "hk-other.pub"), "utf8").split(" ");
+    const confirmed = "pin-alias " + type + " " + pinnedKey;
+    const salt = randomBytes(20);
+    const hashed = "|1|" + salt.toString("base64") + "|" + createHmac("sha1", salt).update("pin-alias").digest("base64");
+    const runner = createSshRunner();
+    for (const [label, host] of [["wildcard", "pin-*"], ["host list", "elsewhere,pin-alias"], ["hashed", hashed]] as const) {
+      const file = join(dir, "known_hosts-extra-" + label.replace(" ", "-"));
+      const text = confirmed + "\n" + host + " " + otherType + " " + otherKey!.trim() + "\n";
+      writeFileSync(file, text);
+      const other = await runner.run(withConfig(buildRouteProbeArgv({ alias: "pin-alias", destination: "route-b", knownHostsFile: file })), { timeoutMs: 20_000 });
+      expect({ label, code: other.code, stdout: other.stdout.trim() }).toEqual({ label, code: 0, stdout: "ocx-link-probe" });
+      // A hashed line for the alias is a second key for it; a pattern or list cannot be ruled out at all.
+      expect({ label, trust: confirmedLineTrust(text, "pin-alias", confirmed) }).toEqual({ label, trust: label === "hashed" ? "key_changed" : "trust_file_unexpected" });
+    }
+  });
+});
