@@ -264,3 +264,14 @@ test("route edits need the link authority: an unpaired dashboard session is refu
   expect(h.probes).toHaveLength(0);
 });
 
+test("the route endpoints are reachable neither over the Child-readable relay nor on the local control socket", async () => {
+  const { linkManagementReadAllowed } = await import("../../src/link/management-routes");
+  const { localControlRouteAllowed } = await import("../../src/server/index/local-control-listener");
+  const path = "/api/link/" + LINK + "/routes";
+  expect(linkManagementReadAllowed("GET", path)).toBe(false);
+  expect(linkManagementReadAllowed("POST", path)).toBe(false);
+  for (const method of ["GET", "POST"]) {
+    const url = new URL("http://localhost" + path);
+    expect(localControlRouteAllowed(url, new Request(url, { method }))).toBe(false);
+  }
+});
