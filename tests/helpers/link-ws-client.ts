@@ -125,6 +125,12 @@ export class LinkWireClient {
     this.socket.write(head);
   }
 
+  /** Sends one HTTP request with a body on this connection without reading the answer. */
+  sendRequest(requestLine: string, headers: Record<string, string>, body: string): void {
+    this.write(requestLine, { ...headers, "content-length": String(Buffer.byteLength(body)) });
+    this.socket.write(body);
+  }
+
   sendText(data: string): void { this.sendFrame(0x1, Buffer.from(data, "utf8")); }
 
   sendJson(value: unknown): void { this.sendText(JSON.stringify(value)); }
@@ -173,6 +179,9 @@ export class LinkWireClient {
   }
 
   destroy(): void { this.socket.destroy(); }
+
+  /** Stops reading: the server's sends back up into its own buffers, as with a stalled client. */
+  pause(): void { this.socket.pause(); }
 }
 
 /** A JSON text frame's "type", or null for anything else. */

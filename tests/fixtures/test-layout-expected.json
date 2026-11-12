@@ -1692,5 +1692,6 @@
   "link-websocket-upgrade.test.ts": "server",
   "link-websocket-gate.test.ts": "server",
   "link-websocket-drain.test.ts": "server",
-  "link-websocket-pump.test.ts": "server"
+  "link-websocket-pump.test.ts": "server",
+  "link-websocket-rss.test.ts": "e2e-style"
 }
