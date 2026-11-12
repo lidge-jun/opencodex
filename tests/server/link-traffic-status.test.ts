@@ -44,6 +44,13 @@ function harness(book = createLinkTrafficBook("content-length")) {
   const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: "hub", defaultProvider: "mock", providers: {}, apiKeys: [] } as OcxConfig;
   const deps: ManagementApiDeps = { readLinkStore: () => current, writeLinkStore: () => {}, linkSupervisor: () => supervisor,
     linkListener: () => listener, linkKnownHostsPath: () => join(temp, "known_hosts") };
+  const callText = async (path: string) => {
+    const url = new URL(`http://127.0.0.1${path}`);
+    const response = await handleManagementAPI(new Request(url, { headers: { host: "127.0.0.1" } }), url, config, deps, "admin-token",
+      { isPaired: () => true, isCurrent: () => true, revokeCurrent: () => true }, { trustedLoopback: true, guiSessionIssuance: null });
+    expect(response?.status).toBe(200);
+    return await response!.text();
+  };
   const call = async (path: string) => {
     const url = new URL(`http://127.0.0.1${path}`);
     const response = await handleManagementAPI(new Request(url, { headers: { host: "127.0.0.1" } }), url, config, deps, "admin-token",
@@ -51,7 +58,7 @@ function harness(book = createLinkTrafficBook("content-length")) {
     expect(response?.status).toBe(200);
     return await response!.json() as LinkStatusDto;
   };
-  return { call, book };
+  return { call, callText, book };
 }
 
 describe("GET /api/link/status?traffic=1 (#3023)", () => {
@@ -63,12 +70,19 @@ describe("GET /api/link/status?traffic=1 (#3023)", () => {
     const stripped = { ...counted, links: counted.links.map(({ traffic: _traffic, ...rest }) => rest) };
     expect(stripped).toEqual(plain);
     const [hub, client] = counted.links;
-    expect(hub!.traffic).toEqual({ since: expect.any(String), requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0,
-      toHomeSource: "content-length", toHomeUncounted: 0 });
+    expect(hub!.traffic).toEqual({ since: expect.any(String), generation: 0, requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0,
+      toHomeSource: "content-length", toHomeUncounted: 0, untrackedRequests: 0 });
     expect(client!.traffic).toMatchObject({ requests: 0 });
     // `ocx link status` validates both shapes key by key.
     expect(validateStatus(plain).links[0]).not.toHaveProperty("traffic");
     expect(validateStatus(counted).links[0]).toMatchObject({ traffic: { requests: 0 } });
+  });
+
+  test("the plain document's bytes are exactly the pre-change document", async () => {
+    const h = harness();
+    const flow = h.book.begin(HUB); flow.toHome(5); flow.end(true);
+    // Literal bytes, not parsed equality: older CLIs validate this document key by key.
+    expect(await h.callText("/api/link/status")).toBe("{\"role\":\"home\",\"listener\":{\"state\":\"listening\",\"port\":18181},\"links\":[{\"id\":\"lnk_0123456789abcdef\",\"alias\":\"host-cdef\",\"direction\":\"hub-initiated\",\"state\":\"connected\",\"since\":\"2025-11-01T12:26:40.000Z\",\"reason\":null,\"tunnelPort\":41000,\"lastApplyAt\":null,\"runtimeStartedAt\":null,\"appliedCodexSettingsDigest\":null,\"reportedAt\":null},{\"id\":\"lnk_fedcba9876543210\",\"alias\":\"host-3210\",\"direction\":\"client-initiated\",\"state\":\"idle\",\"since\":\"2026-11-01T00:00:00.000Z\",\"reason\":null,\"tunnelPort\":41000,\"lastApplyAt\":null,\"runtimeStartedAt\":null,\"appliedCodexSettingsDigest\":null,\"reportedAt\":null}],\"child\":null}");
   });
 
   test("rows carry what the listener counted", async () => {
@@ -95,12 +109,15 @@ describe("GET /api/link/status?traffic=1 (#3023)", () => {
   test("the CLI refuses a malformed traffic block", () => {
     const base = { role: "home", listener: { state: "listening", port: 18181 }, child: null, links: [{ id: HUB, alias: "a", direction: "hub-initiated",
       state: "connected", since: "2026-11-12T00:00:00.000Z", reason: null, tunnelPort: 41000 }] };
-    const traffic = { since: "2026-11-12T00:00:00.000Z", requests: 1, incomplete: 0, toHomeBytes: 5, fromHomeBytes: 6, toHomeSource: "relayed", toHomeUncounted: 0 };
+    const traffic = { since: "2026-11-12T00:00:00.000Z", generation: 3, requests: 1, incomplete: 0, toHomeBytes: 5, fromHomeBytes: 6, toHomeSource: "relayed",
+      toHomeUncounted: 0, untrackedRequests: 0 };
     const withRow = (row: Record<string, unknown>) => ({ ...base, links: [{ ...base.links[0], ...row }] });
     expect(() => validateStatus(withRow({ traffic }))).not.toThrow();
     expect(() => validateStatus(withRow({ traffic: { ...traffic, toHomeBytes: -1 } }))).toThrow("link 0 traffic");
     expect(() => validateStatus(withRow({ traffic: { ...traffic, extra: 1 } }))).toThrow("link 0 traffic");
     expect(() => validateStatus(withRow({ traffic: { ...traffic, toHomeSource: "guess" } }))).toThrow("link 0 traffic");
+    expect(() => validateStatus(withRow({ traffic: { ...traffic, generation: 1.5 } }))).toThrow("link 0 traffic");
+    expect(() => validateStatus(withRow({ traffic: { ...traffic, untrackedRequests: -1 } }))).toThrow("link 0 traffic");
     // The path kind is not part of the document; an unknown block is refused like any other key.
     expect(() => validateStatus(withRow({ traffic, path: { via: "direct" } }))).toThrow();
   });

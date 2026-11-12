@@ -13,17 +13,18 @@ function count(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-const TRAFFIC_KEYS = ["since", "requests", "incomplete", "toHomeBytes", "fromHomeBytes", "toHomeSource", "toHomeUncounted"] as const;
+const TRAFFIC_KEYS = ["since", "generation", "requests", "incomplete", "toHomeBytes", "fromHomeBytes", "toHomeSource", "toHomeUncounted", "untrackedRequests"] as const;
 
 /** A row's `traffic` block from `?traffic=1` (#3023), validated key by key like the rest of the row. */
 export function validateLinkTraffic(value: unknown, index: number): LinkTrafficCounters {
   if (!isRecord(value) || !exactKeys(value, TRAFFIC_KEYS) || typeof value.since !== "string" || Number.isNaN(Date.parse(value.since))
-    || !count(value.requests) || !count(value.incomplete) || !count(value.toHomeBytes) || !count(value.fromHomeBytes)
-    || (value.toHomeSource !== "relayed" && value.toHomeSource !== "content-length") || !count(value.toHomeUncounted)) {
+    || !count(value.generation) || !count(value.requests) || !count(value.incomplete) || !count(value.toHomeBytes) || !count(value.fromHomeBytes)
+    || (value.toHomeSource !== "relayed" && value.toHomeSource !== "content-length") || !count(value.toHomeUncounted) || !count(value.untrackedRequests)) {
     throw new Error(`invalid link API response: link ${index} traffic`);
   }
   return {
-    since: value.since, requests: value.requests, incomplete: value.incomplete, toHomeBytes: value.toHomeBytes,
+    since: value.since, generation: value.generation, requests: value.requests, incomplete: value.incomplete, toHomeBytes: value.toHomeBytes,
     fromHomeBytes: value.fromHomeBytes, toHomeSource: value.toHomeSource, toHomeUncounted: value.toHomeUncounted,
+    untrackedRequests: value.untrackedRequests,
   };
 }
