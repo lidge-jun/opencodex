@@ -457,6 +457,47 @@ test("a damaged policy file warns and a save writes every knob", async () => {
   expect(calls.filter(call => call.method === "PUT").at(-1)?.body).toEqual({ catalogFanout: "auto", childCodexRestart: "never", updates: "off", idleAfterMs: 600_000 });
 });
 
+test("a failed policy load shows an error with Retry, and Retry re-reads the policy", async () => {
+  let reads = 0;
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path === "/api/link/children/policy" && call.method === "GET") {
+      reads += 1;
+      return reads === 1 ? response({ error: { code: "policy_write_failed" } }, 500) : response({ policy: POLICY, warning: null });
+    }
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await settleUntil(() => host.querySelector(".remote-link-policy")?.textContent?.includes("Could not load Child automation settings") ?? false);
+  const panel = host.querySelector(".remote-link-policy")!;
+  expect(panel.textContent).toContain("Could not load Child automation settings.");
+  expect(calls.filter(call => call.path === "/api/link/children/policy")).toHaveLength(1);
+  await click(button(host, "Retry"));
+  await settleUntil(() => host.querySelector(".remote-link-policy")?.querySelector("[role=combobox]") !== null);
+  const reloaded = host.querySelector(".remote-link-policy")!;
+  expect(reloaded.querySelectorAll("[role=combobox]").length).toBeGreaterThan(0);
+  expect(reloaded.textContent).not.toContain("Could not load Child automation settings.");
+  expect(calls.filter(call => call.path === "/api/link/children/policy" && call.method === "GET")).toHaveLength(2);
+});
+
+test("the page Refresh also reloads the policy", async () => {
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path === "/api/link/children/policy" && call.method === "GET") return response({ policy: POLICY, warning: null });
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await settleUntil(() => host.querySelector(".remote-link-policy") !== null);
+  expect(calls.filter(call => call.path === "/api/link/children/policy")).toHaveLength(1);
+  // A status poll alone must not re-read the policy, or an in-progress edit would be lost.
+  await act(async () => { win.document.dispatchEvent(new win.Event("visibilitychange")); });
+  await flush();
+  expect(calls.filter(call => call.path === "/api/link/children/policy")).toHaveLength(1);
+  await click(button(host, "Refresh"));
+  await settleUntil(() => calls.filter(call => call.path === "/api/link/children/policy").length === 2);
+  expect(calls.filter(call => call.path === "/api/link/children/policy" && call.method === "GET").length).toBe(2);
+});
+
 test("a withheld restart says a request was in flight", async () => {
   installFetch(() => response({ job: job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "skipped" }, startedAt: null, finishedAt: null }] }) }));
   const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(job({ op: "restart-codex" }))} onDone={() => {}} />);

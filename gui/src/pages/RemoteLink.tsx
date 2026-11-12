@@ -164,6 +164,8 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
   // Revision 6: child operations and the policy save never enter `busy`, which RemoteLinkSheet types as a closed union.
   const [childOpBusy, setChildOpBusy] = useState<{ linkId: string | "all"; op: ChildOp } | null>(null);
   const [policyBusy, setPolicyBusy] = useState(false);
+  // Bumped by the page Refresh so the policy panel re-reads alongside the status; a poll never bumps it.
+  const [policyReload, setPolicyReload] = useState(0);
   const [childJobs, setChildJobs] = useState<ChildJobView[]>([]);
   const childJobIds = useRef(new Set<string>());
   const [actionError, setActionError] = useState<LinkActionErrorView | null>(null);
@@ -477,7 +479,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
   const roleLabel: TKey = status?.role === "home" || choseHome ? "remoteLink.role.home" : status?.role === "child" ? "remoteLink.role.child" : "remoteLink.role.standalone";
   const primaryActionDisabled = role === "child" && !childSelectable;
 
-  const refreshButton = <Button variant="ghost" size="sm" onClick={() => void refreshStatus()} disabled={busy !== null}><IconRefresh />{t("link.refresh")}</Button>;
+  const refreshButton = <Button variant="ghost" size="sm" onClick={() => { setPolicyReload(value => value + 1); void refreshStatus(); }} disabled={busy !== null}><IconRefresh />{t("link.refresh")}</Button>;
   if (!sessionReady) return (
     <div className="remote-link-page flex min-w-0 flex-col gap-5 font-sans text-fg">
       <PageHeader title={t("link.title")} subtitle={t("link.subtitle")} />
@@ -615,7 +617,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
           )}
         </section>
       )}
-      {showChildOps && <ChildPolicyPanel apiBase={apiBase} busy={policyBusy} onBusy={setPolicyBusy} onError={setActionError} />}
+      {showChildOps && <ChildPolicyPanel apiBase={apiBase} busy={policyBusy} reloadSignal={policyReload} onBusy={setPolicyBusy} onError={setActionError} />}
       {(status?.role === "child" || statusRows.length > 0) && <FallbackPanel apiBase={apiBase} section="devices" readOnly={status?.role === "child"} />}
       <RemoteLinkDiagnostics apiBase={diagnosticsApiBase} />
 

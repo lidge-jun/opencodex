@@ -341,28 +341,43 @@ export function ChildJobProgress(props: { apiBase: string; job: ChildJobView; on
   );
 }
 
-export function ChildPolicyPanel(props: { apiBase: string; busy: boolean; onBusy(on: boolean): void;
+export function ChildPolicyPanel(props: { apiBase: string; busy: boolean; reloadSignal: number; onBusy(on: boolean): void;
   onError(error: LinkActionErrorView | null): void }): ReactElement | null {
   const t = useT();
   const [read, setRead] = useState<ChildPolicyReadView | null>(null);
   const [draft, setDraft] = useState<ChildPolicyView | null>(null);
   const [saved, setSaved] = useState(false);
-  const { apiBase, onError } = props;
-  // Revision 6: load once per mount and after a save. A status poll never re-reads, so an edit survives it.
+  const [loadError, setLoadError] = useState<LinkActionErrorView | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const { apiBase, reloadSignal } = props;
+  // Revision 6: load once per mount, after a save, and on an explicit page Refresh. A status poll never re-reads,
+  // so an edit survives it.
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const value = await getChildPolicy(apiBase, signal);
+      if (signal?.aborted) return;
       setRead(value); setDraft(value.policy);
-    } catch (error) { if (!signal?.aborted) onError(linkActionError(error)); }
-  }, [apiBase, onError]);
+      setLoadError(null);
+    } catch (error) { if (!signal?.aborted) setLoadError(linkActionError(error)); }
+  }, [apiBase]);
   // Deferred a microtask so the fetch starts after mount commits; calling the loader directly trips
   // react-compiler's EffectSetState rule even though its state writes land after the await.
   useEffect(() => {
     const controller = new AbortController();
     void Promise.resolve().then(() => load(controller.signal));
     return () => controller.abort();
-  }, [load]);
-  if (!draft || !read) return null;
+  }, [load, attempt, reloadSignal]);
+  if (!draft || !read) {
+    if (!loadError) return null;
+    return (
+      <section className="remote-link-policy flex min-w-0 flex-col gap-2 rounded-[12px] bg-surface p-4 ring-1 ring-line" aria-labelledby="remote-link-policy-title">
+        <h3 id="remote-link-policy-title" className="m-0 text-[14px] font-semibold">{t("remoteLink.policy.title")}</h3>
+        <Banner tone="err" action={<Button variant="outline" size="sm" onClick={() => { setLoadError(null); setAttempt(value => value + 1); }}>{t("link.retry")}</Button>}>
+          {t("remoteLink.policy.loadFailed")}
+        </Banner>
+      </section>
+    );
+  }
   const changed = changedPolicyKeys(read.policy, draft);
   const damaged = read.warning === "policy-file-invalid";
   const save = async () => {
