@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   setUninstallServiceHooksForTests,
+  uninstallServiceDetailed,
   uninstallServiceIfInstalled,
 } from "../../src/service";
 import { pathToFileURL } from "node:url";
@@ -90,6 +91,7 @@ describe("full uninstall command", () => {
       probeWindowsTask: () => ({ status: "present" }),
       uninstallWindowsTask: () => { calls.push("scheduler"); },
       nativeStatus: () => "started",
+      nativeOwnership: () => "owned",
       uninstallNative: () => {
         calls.push("native");
         throw new Error("native removal failed");
@@ -100,6 +102,39 @@ describe("full uninstall command", () => {
     expect(() => uninstallServiceIfInstalled()).toThrow("native removal failed");
     expect(calls).toEqual(["scheduler", "native"]);
     expect(stateRemovals).toBe(0);
+  });
+
+  test("a foreign WinSW registration is left alone and an unreadable one refuses removal", () => {
+    const calls: string[] = [];
+    let stateRemovals = 0;
+    const hooks = (ownership: "owned" | "foreign" | "unknown") => ({
+      platform: "win32" as const,
+      assertEnvironment: () => {},
+      probeWindowsTask: () => ({ status: "absent" }) as never,
+      uninstallWindowsTask: () => { calls.push("scheduler"); },
+      nativeStatus: () => "started" as const,
+      nativeOwnership: () => ownership,
+      uninstallNative: () => { calls.push("native"); },
+      removeInstallState: () => { stateRemovals++; },
+    });
+
+    // `sc stop/delete opencodex-proxy-native` names a fixed ID, so a registration under it
+    // is not proof it is this home's. Another installation's WinSW service must survive.
+    setUninstallServiceHooksForTests(hooks("foreign"));
+    expect(uninstallServiceDetailed()).toBe("absent");
+    expect(calls).toEqual([]);
+    expect(stateRemovals).toBe(0);
+
+    // Unreadable ownership is not absence: refuse and keep install state for a retry.
+    setUninstallServiceHooksForTests(hooks("unknown"));
+    expect(() => uninstallServiceDetailed()).toThrow("could not be verified");
+    expect(calls).toEqual([]);
+    expect(stateRemovals).toBe(0);
+
+    setUninstallServiceHooksForTests(hooks("owned"));
+    expect(uninstallServiceDetailed()).toBe("removed");
+    expect(calls).toEqual(["native"]);
+    expect(stateRemovals).toBe(1);
   });
 
   test("scheduler removal failure propagates without deleting install state", () => {
@@ -256,6 +291,29 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(at).toBeGreaterThan(-1);
     return cli.slice(at, at + 9000);
   }
+
+  test("Windows removal is gated on a Part A that ended stopped or absent", async () => {
+    const { serviceRemovalAllowed } = await import("../../src/cli/uninstall-plan");
+    for (const outcome of ["stopped", "absent"] as const) {
+      expect(serviceRemovalAllowed({ serviceStop: outcome }, "win32")).toBe(true);
+    }
+    // A Part A that failed, could not read the state, or left a respawnable wrapper still
+    // has a manager that can relaunch the proxy; `ocx service uninstall` refuses there, and
+    // deleting the registration would remove the evidence without stopping the wrapper.
+    for (const outcome of ["failed", "state-unknown", "stopped-respawnable", null] as const) {
+      expect(serviceRemovalAllowed({ serviceStop: outcome }, "win32")).toBe(false);
+    }
+    // Non-Windows removal is unchanged.
+    for (const platform of ["linux", "darwin"] as const) {
+      for (const outcome of ["stopped", "absent", "stopped-respawnable", "failed", "state-unknown", null] as const) {
+        expect(serviceRemovalAllowed({ serviceStop: outcome }, platform)).toBe(true);
+      }
+    }
+    const fn = await uninstallFn();
+    const step = fn.slice(fn.indexOf('runStep("service removed"'), fn.indexOf('runStep("service removed"') + 800);
+    expect(step).toContain("serviceRemovalAllowed(observed)");
+    expect(step.indexOf("serviceRemovalAllowed(observed)")).toBeLessThan(step.indexOf("uninstallServiceDetailed()"));
+  });
 
   test("the detailed outcome is consumed, not the boolean collapse", async () => {
     const fn = await uninstallFn();

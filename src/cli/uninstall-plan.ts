@@ -43,6 +43,24 @@ export function respawnWindowRequired(
   return o.serviceStop === "stopped-respawnable" || (platform === "win32" && o.serviceStop === "stopped");
 }
 
+/**
+ * Whether the uninstall may remove the installed manager.
+ *
+ * On Windows the removal deletes a Task Scheduler registration and stops/deletes a WinSW
+ * service. Both are only safe once Part A proved the manager stopped or that none is
+ * registered: `ocx service uninstall` refuses in the same states, and removing the
+ * registration of a manager that could not be stopped hides the reason the proxy may
+ * come back instead of fixing it. Other platforms remove after their own stop attempt, as
+ * before.
+ */
+export function serviceRemovalAllowed(
+  o: Pick<UninstallObservation, "serviceStop">,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") return true;
+  return o.serviceStop === "stopped" || o.serviceStop === "absent";
+}
+
 export function sharedTeardownAuthorized(o: UninstallObservation, platform: NodeJS.Platform = process.platform): boolean {
   if (o.serviceStop === null) return false;
   // "absent" and a clean stop are the only service states that prove nothing is managing

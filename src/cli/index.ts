@@ -80,7 +80,7 @@ import {
 } from "../config/pending-teardown";
 import { collectStatus, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, runtimeSupervisorLine, statusDeadProxyLines, statusProxyUp, statusUnusedProxyLines } from "./status";
 import { stopUninstallProxy } from "./uninstall-stop";
-import { endpointsToProve, everyEndpointProvenDownAsync, respawnWindowRequired, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
+import { endpointsToProve, everyEndpointProvenDownAsync, respawnWindowRequired, serviceRemovalAllowed, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
 
@@ -1604,6 +1604,18 @@ async function handleUninstall() {
   });
 
   await runStep("service removed", () => {
+    // Windows only: a Part A that failed (or could not read the state, or left a wrapper
+    // that can still respawn) leaves a manager this uninstall cannot account for. Deleting
+    // its registration would remove the evidence without stopping the wrapper, and
+    // `ocx service uninstall` refuses in the same states. The failure stays recorded so the
+    // shared teardown below stays blocked.
+    if (!serviceRemovalAllowed(observed)) {
+      observed.serviceRemoval = "failed";
+      throw new Error(
+        "the service manager could not be proven stopped, so its registration was left in place; "
+        + "resolve the 'service stopped' failure, then rerun 'ocx uninstall'",
+      );
+    }
     const outcome = uninstallServiceDetailed();
     observed.serviceRemoval = outcome;
     // "absent" and "removed" are both fine; a failure is not, and it used to look like

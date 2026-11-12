@@ -7,7 +7,8 @@ import { readPid, removePid, removeRuntimePort, verifyPidIdentity } from "../con
 import { isWslRuntime } from "../codex/home";
 import { isProcessAlive, stopProxy } from "../lib/process-control";
 import { randomUUID } from "node:crypto";
-import { startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, type WinswStatus } from "../lib/winsw";
+import { startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, WINSW_SERVICE_ID, winswExePath, winswStatusSummary, type WinswStatus } from "../lib/winsw";
+import { queryWinswBinaryPathName, scBinaryPathNamesExecutable } from "../service-manager-probe";
 import { diagnoseService } from "./diagnostics";
 import { assertServiceEnvironmentMatchesInstall } from "./guards";
 import { runLaunchctl, launchdEvictionTargets, launchctlBootoutBenign, probeLaunchdLoadState, installLaunchd, startLaunchd, stopLaunchd, statusLaunchd, uninstallLaunchd } from "./launchd";
@@ -620,6 +621,13 @@ type UninstallServiceHooksForTests = {
   probeWindowsTask: () => WindowsSchedulerTaskProbe;
   uninstallWindowsTask: () => void;
   nativeStatus: () => WinswStatus;
+  /**
+   * Is the registered `opencodex-proxy-native` service THIS home's? `sc stop/delete` name a
+   * fixed ID, so a registration is not evidence of ownership — another installation's
+   * WinSW service under the same ID would be stopped and deleted here. Production reads
+   * `sc qc` BINARY_PATH_NAME and compares it with this home's executable.
+   */
+  nativeOwnership?: () => "owned" | "foreign" | "unknown";
   uninstallNative: () => void;
   removeInstallState: () => void;
   launchdPlistPath?: () => string;
@@ -649,6 +657,26 @@ export function setUninstallServiceHooksForTests(hooks: UninstallServiceHooksFor
 export type ServiceUninstallOutcome = "absent" | "removed" | "failed";
 
 /**
+ * Does the registered WinSW service run this home's executable?
+ *
+ * The same proof the guarded manager and Part A use (`sc qc` `BINARY_PATH_NAME`), reduced to
+ * the three answers removal needs: this home's (`owned`), another's (`foreign`), or one that
+ * could not be read (`unknown`, which refuses).
+ */
+function winswOwnershipOfThisHome(
+  query: () => string | null = queryWinswBinaryPathName,
+): "owned" | "foreign" | "unknown" {
+  let binaryPathName: string | null;
+  try {
+    binaryPathName = query();
+  } catch {
+    return "unknown";
+  }
+  if (binaryPathName === null) return "unknown";
+  return scBinaryPathNamesExecutable(binaryPathName, winswExePath()) ? "owned" : "foreign";
+}
+
+/**
  * Remove installed manager assets, including orphaned launchd recovery files.
  * Keep install state on removal failure; Windows refusal and unknown probes may throw.
  */
@@ -676,8 +704,19 @@ export function uninstallServiceDetailed(): ServiceUninstallOutcome {
       removed = true;
     }
     if ((hooks?.nativeStatus ?? statusWinswRaw)() !== "nonexistent") {
-      (hooks?.uninstallNative ?? uninstallWinswService)();
-      removed = true;
+      // Re-prove ownership right before the destructive step: `sc qc` may have changed
+      // since the install-state read, and a foreign registration must survive an uninstall
+      // of this home. Unreadable is not a licence to delete — fail closed and keep state.
+      const ownership = (hooks?.nativeOwnership ?? winswOwnershipOfThisHome)();
+      if (ownership === "unknown") {
+        throw new Error(
+          `The native service registration's ownership could not be verified (sc qc ${WINSW_SERVICE_ID}); refusing to remove it. Check 'sc query ${WINSW_SERVICE_ID}' and retry.`,
+        );
+      }
+      if (ownership === "owned") {
+        (hooks?.uninstallNative ?? uninstallWinswService)();
+        removed = true;
+      }
     }
     if (removed) { (hooks?.removeInstallState ?? removeServiceInstallState)(); return "removed"; }
   } else if (platform === "linux" && existsSync(unitPath())) {
