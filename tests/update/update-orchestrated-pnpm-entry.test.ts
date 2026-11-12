@@ -66,11 +66,14 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     expect(existsSync(env.OCX_FIXTURE_STOP_BOUNDARY)).toBe(false);
     expireFixtureFence(home);
     rmSync(result, { force: true });
-    const owner = { commandPath: join(bin, "pnpm"), packagePath: pkg, globalDir: join(root, "global"), globalRoot: group, globalBinDir: bin, store, storePath: store, virtualStoreDirs: [] };
+    // A legacy global group (hoisted, .modules.yaml): its owner pins no store, as on the released updater.
+    const owner = { commandPath: join(bin, "pnpm"), packagePath: pkg, globalDir: join(root, "global"), globalRoot: group, globalBinDir: bin };
     const expectIndex = args.indexOf("--orchestrated-expect") + 1;
-    const pinned = (pnpmOwner: typeof owner) => encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: token, pnpmOwner });
+    const pinned = (pnpmOwner: object) => encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: token,
+      pnpmOwner: pnpmOwner as typeof owner });
     const otherStore = join(root, "other-store", "v11"); mkdirSync(otherStore, { recursive: true });
-    for (const changed of [{ ...owner, store: otherStore }, { ...owner, commandPath: join(bin, "ocx") }, { ...owner, globalBinDir: home }]) {
+    const withStore = { ...owner, store: otherStore, storePath: otherStore, virtualStoreDirs: [] };
+    for (const changed of [withStore, { ...owner, commandPath: join(bin, "ocx") }, { ...owner, globalBinDir: home }]) {
       args[expectIndex] = pinned(changed);
       const capability = issueOrchestratedResultCapability(result).capability;
       const refused = spawnSync(node, args, { cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: capability }, encoding: "utf8", timeout: 30000 });
@@ -112,21 +115,6 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     const parentEnv = { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" };
     const parent = (extraEnv = {}) => spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, ...extraEnv }, encoding: "utf8", timeout: 30000 });
     const logBefore = readFileSync(log, "utf8").split("\n").filter(line => line.includes('"add"')).length;
-    const drifted = parent({ OCX_FIXTURE_CHILD_STORE: otherStore });
-    expect({ status: drifted.status, stderr: drifted.stderr }).toMatchObject({ status: 10 });
-    expect(JSON.parse(drifted.stdout)).toMatchObject({ error: "plan-changed", applied: false });
-    expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
-    expect(readFileSync(log, "utf8").split("\n").filter(line => line.includes('"add"')).length).toBe(logBefore);
-    expect(existsSync(env.OCX_FIXTURE_STOP_BOUNDARY)).toBe(false);
-    expireFixtureFence(home);
-    const virtualStore = join(store, "configured-virtual"); mkdirSync(virtualStore);
-    const driftedVirtual = parent({ OCX_FIXTURE_CHILD_VIRTUAL_STORE: virtualStore });
-    expect({ status: driftedVirtual.status, stderr: driftedVirtual.stderr }).toMatchObject({ status: 10 });
-    expect(JSON.parse(driftedVirtual.stdout)).toMatchObject({ error: "plan-changed", applied: false });
-    expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
-    expect(readFileSync(log, "utf8").split("\n").filter(line => line.includes('"add"')).length).toBe(logBefore);
-    expect(existsSync(env.OCX_FIXTURE_STOP_BOUNDARY)).toBe(false);
-    expireFixtureFence(home);
     const unchanged = parent({ OCX_FIXTURE_FAIL: "1" });
     expect({ status: unchanged.status, stderr: unchanged.stderr }).toMatchObject({ status: 11 });
     expect(JSON.parse(unchanged.stdout)).toMatchObject({ rolledBack: false, applied: false });

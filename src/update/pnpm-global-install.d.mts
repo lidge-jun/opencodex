@@ -27,6 +27,8 @@ export interface PnpmGlobalOwner {
   storePath?: string;
   globalStore?: boolean;
   virtualStoreDirs?: string[];
+  /** pnpm home the store query was anchored at; pinned for every later store re-check. */
+  homeAnchor?: string;
   version?: string;
 }
 
@@ -78,9 +80,11 @@ export type PnpmGlobalPackage =
       globalDir?: string;
       globalRoot?: string;
       globalBinDir?: string;
-      store: string;
-      storePath: string;
-      virtualStoreDirs: string[];
+      /** Present only for a global virtual-store owner. */
+      store?: string;
+      storePath?: string;
+      virtualStoreDirs?: string[];
+      homeAnchor?: string;
     }
   | { ok: false; reason: string };
 
@@ -93,6 +97,8 @@ export interface PnpmGlobalReadConstraints {
   /** Set false only for pre-update owner binding; post-update reads verify shims by default. */
   checkShims?: boolean;
   platform?: NodeJS.Platform;
+  /** Environment the pnpm commands receive; locates pnpm home for the store query. */
+  env?: NodeJS.ProcessEnv;
   verifyShims?: (
     packageDir: string,
     globalBinDir: string,
@@ -115,6 +121,7 @@ export declare function resolvePnpmGlobalOwner(options: {
   runPnpm: RunPnpmCandidate;
   verify?: (packageDir: string, expectedVersion?: string, store?: string, globalRoot?: string, lexicalStore?: string) => PnpmVerificationResult;
   platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
 }): PnpmGlobalOwnerResult;
 
 export type PnpmGlobalUpdateResult =

@@ -126,43 +126,60 @@ describe("pnpm executable selection", () => {
   });
 });
 
-const fixtureStore = join(mkdtempSync(join(tmpdir(), "ocx-update-store-")), "v11");
-mkdirSync(fixtureStore);
+// A real pnpm home and store: the global-store proof lstat()s the anchor and realpath()s the store.
+const fixtureHome = join(realpathSync(mkdtempSync(join(tmpdir(), "ocx-update-store-"))), "pnpm-home");
+const fixtureStore = join(fixtureHome, "store", "v11");
+mkdirSync(fixtureStore, { recursive: true });
+/** Where a global-store install of this version lives inside the fixture store. */
+const storePackagePath = (version: string): string => {
+  const path = join(fixtureStore, "links", "@bitkyc08", "opencodex", version, "h", "node_modules", "@bitkyc08", "opencodex");
+  mkdirSync(path, { recursive: true });
+  return path;
+};
+/** A legacy global group: no store fields, no store query (the released behavior). */
 const ownerFor = (version = "1.0.0"): PnpmGlobalOwner => ({
   commandPath: "/pnpm/owner/bin/pnpm",
   packagePath: `/pnpm/owner/global/v11/node_modules/@bitkyc08/opencodex-${version}`,
   globalDir: "/pnpm/owner/global",
   globalRoot: "/pnpm/owner/global/v11",
   globalBinDir: "/pnpm/owner/bin",
+});
+/** A pnpm 11/12 global virtual-store owner bound to the fixture store. */
+const storeOwnerFor = (): PnpmGlobalOwner => ({
+  ...ownerFor(),
+  packagePath: storePackagePath("1.0.0"),
+  globalStore: true,
   store: realpathSync(fixtureStore), storePath: fixtureStore,
   virtualStoreDirs: [],
+  homeAnchor: fixtureHome,
 });
 
 describe("pnpm global owner binding", () => {
-  test("uses global configuration and a store probe accepted by a strict pnpm parser", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-pnpm-store-config-"));
+  test("asks pnpm for its store at pnpm home, without a store override, for a custom store", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-pnpm-store-config-")));
     try {
-      const globalDir = join(root, "global"), globalRoot = join(globalDir, "11"), globalBinDir = join(root, "bin");
-      const store = join(root, "custom-store", "v11"), packagePath = join(store, "links", "package");
+      const home = join(root, "pnpm-home"), globalDir = join(home, "global"), globalRoot = join(globalDir, "v11");
+      const globalBinDir = join(home, "bin"), store = join(root, "custom-store", "v11");
+      const packagePath = join(store, "links", "@bitkyc08", "opencodex", "1.0.0", "h", "node_modules", "@bitkyc08", "opencodex");
       mkdirSync(packagePath, { recursive: true });
+      mkdirSync(globalBinDir, { recursive: true });
       const calls: string[][] = [];
       const run = (_command: string, args: readonly string[]): PnpmRunResult => {
         calls.push([...args]);
+        if (args[0] === "--version") return { status: 0, stdout: "12.16.1" };
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "1.0.0", path: packagePath } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "config" && args[2] === "global-dir") return { status: 0, stdout: globalDir };
         if (args[0] === "config" && args[2] === "global-bin-dir") return { status: 0, stdout: globalBinDir };
-        if (args[0] === "config" && args[2] === "store-dir") {
-          if (!args.includes("-g") || !args.includes(`--config.global-dir=${globalDir}`)) return { status: 1 };
-          return { status: 0, stdout: join(root, "custom-store") };
-        }
         if (args[0] === "config") return { status: 0, stdout: "undefined" };
-        if (args[0] === "store") return args.some(arg => arg.startsWith("--global-dir")) ? { status: 1 } : { status: 0, stdout: store };
+        if (args[0] === "store") return args.length === 3 && args[2] === `--dir=${home}` ? { status: 0, stdout: store } : { status: 1 };
         return { status: 1 };
       };
-      const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath, commandPaths: ["/fixture/pnpm"], runPnpm: run, verify: () => ({ ok: true }) });
-      expect(result).toMatchObject({ ok: true, owner: { store: realpathSync(store), storePath: store } });
-      expect(calls.find(args => args[0] === "store")).toEqual(["store", "path", `--store-dir=${join(root, "custom-store")}`]);
+      const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath, commandPaths: ["/fixture/pnpm"], runPnpm: run,
+        verify: () => ({ ok: true }), env: { PNPM_HOME: home } });
+      expect(result).toMatchObject({ ok: true, owner: { globalStore: true, store: realpathSync(store), storePath: store, homeAnchor: home } });
+      expect(calls.filter(args => args[0] === "store")).toEqual([["store", "path", `--dir=${home}`]]);
+      expect(calls.some(args => args[0] === "config" && args[2] === "store-dir")).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
   test("selects the candidate whose global listing owns the running package", () => {
@@ -218,9 +235,6 @@ describe("pnpm global owner binding", () => {
           globalDir: baseB,
           globalRoot: groupB,
           globalBinDir: binB,
-          store: realpathSync(groupB), storePath: groupB,
-          virtualStoreDirs: [],
-          globalStore: true,
         },
       });
       expect(calls.some(call => call.command === "/pnpm/a/bin/pnpm")).toBe(true);
@@ -315,7 +329,7 @@ describe("pnpm global owner binding", () => {
 
       expect(result).toEqual({
         ok: true,
-        owner: { commandPath: "/pnpm/default", packagePath, version: "1.0.0", globalDir: base, globalRoot: group, globalBinDir: bin, store: realpathSync(group), storePath: group, virtualStoreDirs: [], globalStore: true },
+        owner: { commandPath: "/pnpm/default", packagePath, version: "1.0.0", globalDir: base, globalRoot: group, globalBinDir: bin },
       });
       const pinnedList = calls.find(args => args[0] === "list" && args.includes(`--global-dir=${base}`));
       expect(pinnedList).toBeDefined();
@@ -327,7 +341,7 @@ describe("pnpm global owner binding", () => {
   });
 
   test("pins both global group and bin directory and preserves the selected PATH", () => {
-    const owner = ownerFor();
+    const owner = storeOwnerFor();
     expect(pnpmGlobalCommandArgs(["add", "-g", "--allow-build=bun", `${PKG}@2.0.0`], owner)).toEqual([
       "add",
       `--global-dir=${owner.globalDir}`,
@@ -557,8 +571,8 @@ function fakePnpm(state: FakePnpmState, owner = ownerFor()): (args: readonly str
   return (args, capture = false) => {
     const normalized = [...args];
     state.calls.push({ args: normalized, capture });
-    if (normalized[0] === "store") return { status: 0, stdout: fixtureStore };
-    if (normalized[0] === "config" && normalized[2] === "store-dir") return { status: 0, stdout: fixtureStore };
+    if (normalized[0] === "--version") return { status: 0, stdout: "12.16.1" };
+    if (normalized[0] === "store") return normalized[2] === `--dir=${fixtureHome}` ? { status: 0, stdout: fixtureStore } : { status: 1 };
     if (normalized[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(normalized[2] ?? "")) return { status: 0, stdout: "undefined" };
     if (normalized[0] === "list") {
       return {
@@ -570,7 +584,7 @@ function fakePnpm(state: FakePnpmState, owner = ownerFor()): (args: readonly str
               version: state.activeVersion,
               path: state.activeVersion === "1.0.0"
                 ? owner.packagePath
-                : `/virtual/pnpm/${state.activeVersion}`,
+                : owner.globalStore ? storePackagePath(state.activeVersion) : `/virtual/pnpm/${state.activeVersion}`,
             },
           },
         }]),
@@ -587,7 +601,8 @@ function fakePnpm(state: FakePnpmState, owner = ownerFor()): (args: readonly str
 
 function fakeVerify(state: FakePnpmState, owner = ownerFor()) {
   return (path: string, expectedVersion?: string) => ({
-    ok: (path === owner.packagePath || path === `/virtual/pnpm/${state.activeVersion}`)
+    ok: (path === owner.packagePath || path === `/virtual/pnpm/${state.activeVersion}`
+      || (owner.globalStore === true && path === storePackagePath(state.activeVersion)))
       && expectedVersion === state.activeVersion
       && !state.invalidVersions?.has(state.activeVersion),
   });
@@ -601,7 +616,7 @@ function fakeShims(state: FakePnpmState) {
 
 describe("pnpm global update", () => {
   test("refuses an owner without pinned virtual-store settings before mutation", () => {
-    const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const owner = storeOwnerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     delete owner.virtualStoreDirs;
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: fakePnpm(state, owner), verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
@@ -609,11 +624,11 @@ describe("pnpm global update", () => {
     expect(state.calls).toEqual([]);
   });
   test("refuses undefined, relative, or changed effective global store before mutation", () => {
-    for (const configured of ["undefined", "relative", join(dirname(fixtureStore), "different")]) {
-      const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    for (const configured of ["undefined", "relative/v11", join(dirname(fixtureStore), "different", "v11")]) {
+      const owner = storeOwnerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
       const run = fakePnpm(state, owner);
       const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
-        runPnpm: (args, capture) => args[0] === "config" && args[2] === "store-dir" ? { status: 0, stdout: configured } : run(args, capture),
+        runPnpm: (args, capture) => args[0] === "store" ? { status: 0, stdout: configured } : run(args, capture),
         verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
       expect(result.ok).toBe(false);
       expect(state.calls.some(call => call.args[0] === "add")).toBe(false);
@@ -621,15 +636,15 @@ describe("pnpm global update", () => {
   });
   test("refuses a missing or changed configured store before mutation", () => {
     for (const value of ["", join(tmpdir(), "missing-store")]) {
-      const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+      const owner = storeOwnerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
       const run = fakePnpm(state, owner);
       const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
         runPnpm: (args, capture) => args[0] === "store" ? { status: 0, stdout: value } : run(args, capture),
         verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-      expect(result).toMatchObject({ ok: false, phase: "preflight", error: "pnpm configured store could not be resolved" });
+      expect(result).toMatchObject({ ok: false, phase: "preflight", error: "pnpm store path is not one absolute versioned path" });
       expect(state.calls.some(call => call.args[0] === "add")).toBe(false);
     }
-    const owner = { ...ownerFor(), store: realpathSync(dirname(tmpdir())) };
+    const owner = { ...storeOwnerFor(), store: realpathSync(dirname(tmpdir())) };
     const state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: fakePnpm(state, owner), verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
@@ -637,17 +652,17 @@ describe("pnpm global update", () => {
     expect(state.calls.some(call => call.args[0] === "add")).toBe(false);
   });
   test("does not roll back into a changed store after installation", () => {
-    const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const owner = storeOwnerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     const run = fakePnpm(state, owner); let stores = 0;
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: (args, capture) => args[0] === "store" && ++stores > 1
         ? { status: 0, stdout: join(dirname(fixtureStore), "other", "v11") } : run(args, capture),
       verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-    expect(result).toMatchObject({ ok: false, phase: "install", rolledBack: false, error: "pnpm configured store could not be resolved" });
+    expect(result).toMatchObject({ ok: false, phase: "install", rolledBack: false, error: "pnpm store path could not be resolved" });
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
   });
   test("refuses readback and rollback if virtual-store configuration changes after install", () => {
-    const owner = { ...ownerFor(), virtualStoreDirs: [] }, state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const owner = { ...storeOwnerFor(), virtualStoreDirs: [] }, state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     const run = fakePnpm(state, owner);
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: (args, capture) => args[0] === "config" && args[2] === "virtual-store-dir" && state.activeVersion === "2.0.0"
@@ -660,7 +675,7 @@ describe("pnpm global update", () => {
     [{ status: 0, stdout: "relative/path" }, "pnpm virtual-store directory is not absolute"],
     [{ status: 0, stdout: join(tmpdir(), "missing-virtual-store") }, "pnpm virtual-store directory could not be resolved"],
   ])("refuses unresolved virtual-store configuration before mutation", (probe, error) => {
-    const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const owner = storeOwnerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     const run = fakePnpm(state, owner);
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: (args, capture) => args[0] === "config" && args[2] === "virtual-store-dir" ? probe : run(args, capture),
@@ -669,7 +684,7 @@ describe("pnpm global update", () => {
     expect(state.calls.some(call => call.args[0] === "add")).toBe(false);
   });
   test("rechecks the store before rollback even when post-install listing fails", () => {
-    const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const owner = storeOwnerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     const run = fakePnpm(state, owner); let lists = 0, stores = 0;
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: (args, capture) => {
@@ -677,7 +692,7 @@ describe("pnpm global update", () => {
         if (args[0] === "store" && ++stores > 1) return { status: 0, stdout: join(dirname(fixtureStore), "other", "v11") };
         return run(args, capture);
       }, verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-    expect(result).toMatchObject({ ok: false, rolledBack: false, error: "pnpm configured store could not be resolved" });
+    expect(result).toMatchObject({ ok: false, rolledBack: false, error: "pnpm store path could not be resolved" });
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
   });
   test("unconfirmed installer exit stops before inspection or rollback", () => {
@@ -728,9 +743,10 @@ describe("pnpm global update", () => {
       "add",
       `--global-dir=${owner.globalDir}`,
       `--config.global-bin-dir=${owner.globalBinDir}`,
-      `--store-dir=${owner.storePath}`,
       "-g", "--allow-build=bun", `${PKG}@2.0.0`,
     ]);
+    // A legacy group keeps the released behavior: no store query and no store pin.
+    expect(state.calls.some(call => call.args[0] === "store" || call.args.some(arg => arg.startsWith("--store-dir")))).toBe(false);
     expect(state.calls.every(call => call.args[0] !== "list" || call.args.includes(`--global-dir=${owner.globalDir}`))).toBe(true);
   });
 
@@ -761,7 +777,7 @@ describe("pnpm global update", () => {
   });
 
   test("rolls back when a zero-exit install leaves an invalid tree or stale shim", () => {
-    const owner = ownerFor();
+    const owner = storeOwnerFor();
     const state: FakePnpmState = {
       activeVersion: "1.0.0",
       invalidVersions: new Set(["2.0.0"]),

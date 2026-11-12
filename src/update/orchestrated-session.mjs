@@ -144,10 +144,12 @@ function validateExpect(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || !["cliRoot,home,planToken,runtimePid,servingRoot", "cliRoot,home,planToken,pnpmOwner,runtimePid,servingRoot"].includes(keys)
     || (keys.includes(",pnpmOwner,") && (!owner || typeof owner !== "object" || Array.isArray(owner)
-      || Object.keys(owner).sort().join(",") !== "commandPath,globalBinDir,globalDir,globalRoot,packagePath,store,storePath,virtualStoreDirs"
-      || [owner.commandPath, owner.globalBinDir, owner.globalDir, owner.globalRoot, owner.packagePath, owner.store, owner.storePath].some(path => typeof path !== "string" || !isAbsolute(path))
-      || !Array.isArray(owner.virtualStoreDirs) || owner.virtualStoreDirs.length > 2
-      || owner.virtualStoreDirs.some(path => typeof path !== "string" || !isAbsolute(path))))
+      || !["commandPath,globalBinDir,globalDir,globalRoot,packagePath", "commandPath,globalBinDir,globalDir,globalRoot,packagePath,store,storePath,virtualStoreDirs"]
+        .includes(Object.keys(owner).sort().join(","))
+      || [owner.commandPath, owner.globalBinDir, owner.globalDir, owner.globalRoot, owner.packagePath].some(path => typeof path !== "string" || !isAbsolute(path))
+      || ("store" in owner && ([owner.store, owner.storePath].some(path => typeof path !== "string" || !isAbsolute(path))
+        || !Array.isArray(owner.virtualStoreDirs) || owner.virtualStoreDirs.length > 2
+        || owner.virtualStoreDirs.some(path => typeof path !== "string" || !isAbsolute(path))))))
     || typeof value.home !== "string" || !isAbsolute(value.home)
     || typeof value.cliRoot !== "string" || !isAbsolute(value.cliRoot)
     || (value.servingRoot !== null && (typeof value.servingRoot !== "string" || !isAbsolute(value.servingRoot)))

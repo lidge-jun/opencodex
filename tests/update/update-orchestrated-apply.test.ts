@@ -20,11 +20,18 @@ test.skipIf(process.platform === "win32")("pnpm parent identity binds the lexica
     const store = join(root, "store", "v11"), alias = join(root, "alias", "v11");
     mkdirSync(store, { recursive: true }); mkdirSync(join(root, "alias"));
     symlinkSync(store, alias, "dir");
-    const owner = { commandPath: root, packagePath: root, globalDir: root, globalRoot: root, globalBinDir: root,
-      store: realpathSync(store), storePath: store, virtualStoreDirs: [] };
+    const legacy = { commandPath: root, packagePath: root, globalDir: root, globalRoot: root, globalBinDir: root };
+    const owner = { ...legacy, globalStore: true, store: realpathSync(store), storePath: store, virtualStoreDirs: [] };
     const expected = canonicalOrchestratedPnpmOwner(owner);
     expect(matchesOrchestratedPnpmOwner(expected, owner)).toBe(true);
     expect(matchesOrchestratedPnpmOwner(expected, { ...owner, storePath: alias })).toBe(false);
+    // A legacy group carries no store, and neither shape can stand in for the other.
+    const legacyExpected = canonicalOrchestratedPnpmOwner(legacy);
+    expect(Object.keys(legacyExpected).sort()).toEqual(["commandPath", "globalBinDir", "globalDir", "globalRoot", "packagePath"]);
+    expect(matchesOrchestratedPnpmOwner(legacyExpected, legacy)).toBe(true);
+    expect(matchesOrchestratedPnpmOwner(legacyExpected, owner)).toBe(false);
+    expect(matchesOrchestratedPnpmOwner(expected, legacy)).toBe(false);
+    expect(() => canonicalOrchestratedPnpmOwner({ ...legacy, store: realpathSync(store) })).toThrow();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

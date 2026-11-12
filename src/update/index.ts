@@ -146,6 +146,7 @@ export function resolveCurrentPnpmGlobalOwner(
     commandPaths: deps.commandPaths ?? resolvePnpmCommands(),
     runningShimPath: runningPnpmShimPath(invoked),
     runPnpm: (commandPath, args, capture, owner) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env, owner),
+    env: deps.env ?? process.env,
   });
 }
 
@@ -170,8 +171,8 @@ export function runOwnedPnpm(
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
   authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? "")
-    || (args[0] === "store" && args[1] === "path" && (args.length === 2
-      || (args.length === 3 && args[2]?.startsWith("--store-dir=") && isAbsolute(args[2].slice("--store-dir=".length))))),
+    || (args[0] === "store" && args[1] === "path" && args.length === 3
+      && args[2]?.startsWith("--dir=") === true && isAbsolute(args[2].slice("--dir=".length))),
   session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence" | "noteUntrackedInstaller" | "confirmInstallerExit">,
   markerPath = join(getConfigDir(), "update-orchestrated.json"),
 ): { status: number | null; stdout?: string | null; stderr?: string | null; processTreeExited?: boolean } {
@@ -213,7 +214,7 @@ export function runOwnedPnpm(
 
 /** Re-read the owning group's active package and return its verified launcher. */
 export function resolvePnpmActiveLauncher(owner: PnpmGlobalOwner): string | null {
-  if (!Array.isArray(owner.virtualStoreDirs)) return null;
+  if (owner.globalStore && !Array.isArray(owner.virtualStoreDirs)) return null;
   const active = readPnpmGlobalPackage(
     PKG,
     (args, capture = false) => runOwnedPnpm(owner, args, capture),

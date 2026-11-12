@@ -1,0 +1,258 @@
+/**
+ * #8183 / #8331: pnpm 11 and 12 install a global package as a link from the global group into
+ * `<store>/v11/links/...`. The updater may accept that layout only when pnpm itself names the store
+ * (`store path --dir=<pnpm home>`, never `--store-dir`), the anchor has no symlink component, the
+ * pnpm version is one whose behavior was checked, and every link from the listed package path stays
+ * inside the global group or that store. Default-store users must keep updating, and legacy groups
+ * keep the behavior they had before this change (no store query at all).
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, isAbsolute } from "node:path";
+import { tmpdir } from "node:os";
+import { verifyPnpmInstallTree } from "../../src/update/transactional-install.mjs";
+import { resolvePnpmGlobalOwner, runPnpmGlobalUpdate } from "../../src/update/pnpm-global-install.mjs";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+const PKG = "@bitkyc08/opencodex";
+const BUN_BYTES = 10 * 1024 * 1024 + 1024;
+const okShims = () => ({ ok: true });
+
+function inside(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function link(target: string, path: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  symlinkSync(target, path, "junction");
+}
+
+/** One pnpm global-store package instance with its sibling dependencies, as pnpm 12.16.1 writes it. */
+function writeInstance(store: string, version: string): string {
+  const group = join(store, "links", "@bitkyc08", "opencodex", version, "h" + version.replaceAll(".", ""), "node_modules");
+  const pkg = join(group, "@bitkyc08", "opencodex");
+  mkdirSync(join(pkg, "bin"), { recursive: true });
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: PKG, version, dependencies: { bun: "1", zod: "1" } }));
+  writeFileSync(join(pkg, "bin", "ocx.mjs"), "#!/usr/bin/env node\n" + "x".repeat(2048));
+  for (const name of ["bun", "zod"]) {
+    mkdirSync(join(group, name), { recursive: true });
+    writeFileSync(join(group, name, "package.json"), JSON.stringify({ name, version: "1.0.0" }));
+  }
+  writeFileSync(join(group, "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
+  return pkg;
+}
+
+type Call = string[];
+type Layout = {
+  root: string; home: string; store: string; globalDir: string; globalRoot: string; bin: string;
+  exposed: string; real: string; env: NodeJS.ProcessEnv; calls: Call[];
+  version: string; storeOutput: () => string;
+  run: (args: string[]) => { status: number; stdout?: string };
+};
+
+function globalStoreLayout(root: string, opts: { pnpmVersion?: string } = {}): Layout {
+  const home = join(root, "pnpm-home");
+  const store = join(home, "store", "v11");
+  const globalDir = join(home, "global");
+  const globalRoot = join(globalDir, "v11");
+  const bin = join(home, "bin");
+  mkdirSync(bin, { recursive: true });
+  const real = writeInstance(store, "1.0.0");
+  const exposed = join(globalRoot, "e36c-0", "node_modules", "@bitkyc08", "opencodex");
+  link(real, exposed);
+  const layout: Layout = {
+    root, home, store, globalDir, globalRoot, bin, exposed, real, calls: [],
+    env: { PNPM_HOME: home, HOME: join(root, "user-home") },
+    version: "1.0.0",
+    storeOutput: () => store,
+    run: args => {
+      layout.calls.push([...args]);
+      const [command] = args;
+      if (command === "--version") return { status: 0, stdout: (opts.pnpmVersion ?? "12.16.1") + "\n" };
+      if (command === "list") {
+        return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: layout.version, path: exposed } } }]) };
+      }
+      if (command === "root") return { status: 0, stdout: globalRoot + "\n" };
+      if (command === "bin") return { status: 0, stdout: bin + "\n" };
+      if (command === "config") return { status: 0, stdout: "undefined\n" };
+      if (command === "store" && args[1] === "path") {
+        if (args.length !== 3 || args[2] !== "--dir=" + home) return { status: 1 };
+        return { status: 0, stdout: layout.storeOutput() + "\n" };
+      }
+      if (command === "add") {
+        const spec = args.at(-1) ?? "";
+        const target = spec.slice(spec.lastIndexOf("@") + 1);
+        unlinkSync(exposed);
+        link(writeInstance(store, target), exposed);
+        layout.version = target;
+        return { status: 0 };
+      }
+      return { status: 1 };
+    },
+  };
+  return layout;
+}
+
+function resolveOwner(layout: Layout, packagePath = layout.exposed) {
+  return resolvePnpmGlobalOwner({
+    packageName: PKG, packagePath, commandPaths: [join(layout.root, "pnpm")],
+    runPnpm: (_command, args) => layout.run(args), env: layout.env,
+  });
+}
+
+function storeCalls(layout: Layout): Call[] {
+  return layout.calls.filter(args => args[0] === "store");
+}
+
+describe("pnpm global virtual-store owner (#8183)", () => {
+  let root: string;
+  beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-pnpm-global-store-"))); });
+  afterEach(() => { removeTreeWithRetry(root); });
+
+  test("a default-store install resolves through pnpm's store path and updates with the lexical store pinned", () => {
+    const layout = globalStoreLayout(root);
+    const resolved = resolveOwner(layout);
+    expect(resolved).toMatchObject({ ok: true });
+    if (!resolved.ok) return;
+    expect(resolved.owner).toMatchObject({ globalStore: true, storePath: layout.store, store: realpathSync(layout.store) });
+    // The query is pnpm's own answer for the pnpm home: no --store-dir, no global flags.
+    expect(storeCalls(layout)).toEqual([["store", "path", "--dir=" + layout.home]]);
+
+    layout.calls.length = 0;
+    const result = runPnpmGlobalUpdate({
+      packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest",
+      owner: resolved.owner, runPnpm: args => layout.run(args), verifyShims: okShims,
+    });
+    expect(result).toMatchObject({ ok: true, version: "2.0.0" });
+    const add = layout.calls.find(args => args[0] === "add");
+    expect(add).toContain("--store-dir=" + layout.store);
+    expect(storeCalls(layout).every(args => args.length === 3 && args[2] === "--dir=" + layout.home)).toBe(true);
+  });
+
+  test("pnpm 11 uses the same proof", () => {
+    const layout = globalStoreLayout(root, { pnpmVersion: "11.20.0" });
+    expect(resolveOwner(layout)).toMatchObject({ ok: true, owner: { globalStore: true } });
+  });
+
+  test("a legacy hoisted group with an unset store keeps owner discovery without any store query", () => {
+    const globalDir = join(root, "global"), globalRoot = join(globalDir, "v11");
+    const group = join(globalRoot, "node_modules"), pkg = join(group, ...PKG.split("/"));
+    const bin = join(root, "bin"), calls: Call[] = [];
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: PKG, version: "2.0.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(pkg, "bin", "ocx.mjs"), "x".repeat(2048));
+    for (const name of ["bun", "zod"]) {
+      mkdirSync(join(group, name), { recursive: true });
+      writeFileSync(join(group, name, "package.json"), JSON.stringify({ name }));
+    }
+    writeFileSync(join(group, "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
+    writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
+    const result = resolvePnpmGlobalOwner({
+      packageName: PKG, packagePath: pkg, commandPaths: [join(root, "pnpm")],
+      runPnpm: (_command, args) => {
+        calls.push([...args]);
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: pkg } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "config" && args[2] === "global-dir") return { status: 0, stdout: globalDir };
+        if (args[0] === "config" && args[2] === "global-bin-dir") return { status: 0, stdout: bin };
+        if (args[0] === "config") return { status: 0, stdout: "undefined" };
+        return { status: 1 };
+      },
+      env: { PNPM_HOME: join(root, "missing-home") },
+    });
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) expect(result.owner.globalStore).toBeUndefined();
+    expect(calls.some(args => args[0] === "store" || args[0] === "--version")).toBe(false);
+  });
+
+  test("a package link that leaves both roots before entering the store is refused", () => {
+    const layout = globalStoreLayout(root);
+    expect(resolveOwner(layout)).toMatchObject({ ok: true });
+    expect(verifyPnpmInstallTree(layout.exposed, "1.0.0", layout.store, layout.globalRoot).ok).toBe(true);
+
+    const relay = join(root, "outside", "relay");
+    link(layout.real, relay);
+    unlinkSync(layout.exposed);
+    link(relay, layout.exposed);
+    // pnpm still reports the global-group spelling; only the hop between them moved outside.
+    const listed = JSON.parse(layout.run(["list", "-g", "--depth=0", "--json", PKG]).stdout ?? "[]")[0].dependencies[PKG].path;
+    expect(listed).toBe(layout.exposed);
+    expect(inside(listed, layout.globalRoot)).toBe(true);
+    expect(inside(relay, layout.globalRoot) || inside(relay, layout.store)).toBe(false);
+    expect(inside(realpathSync(listed), realpathSync(layout.store))).toBe(true);
+
+    const direct = verifyPnpmInstallTree(layout.exposed, "1.0.0", layout.store, layout.globalRoot);
+    expect(direct.ok).toBe(false);
+    expect(direct.failures[0]).toBe("pnpm global links are outside the selected store");
+    layout.calls.length = 0;
+    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global links are outside the selected store" });
+  });
+
+  test("a symlink in the pnpm home anchor refuses before the store is queried", () => {
+    const layout = globalStoreLayout(root);
+    const alias = join(root, "alias-home");
+    link(layout.home, alias);
+    layout.env = { PNPM_HOME: alias };
+    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm home has a symbolic link component" });
+    expect(storeCalls(layout)).toEqual([]);
+  });
+
+  test("an unchecked pnpm version refuses before the store is queried", () => {
+    for (const version of ["10.12.3", "13.0.0", "not-a-version"]) {
+      const layout = globalStoreLayout(join(root, version), { pnpmVersion: version });
+      expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global-store behavior is not verified for this pnpm version" });
+      expect(storeCalls(layout)).toEqual([]);
+    }
+  });
+
+  test("store path output must be one absolute versioned path", () => {
+    for (const output of ["undefined", "relative/store/v11", "STORE/v11\nSTORE/v11", "STORE", "STORE/v11-wasm"]) {
+      const layout = globalStoreLayout(join(root, String(output.length) + output.replace(/[^a-z]/gi, "")));
+      layout.storeOutput = () => output.replaceAll("STORE", dirname(layout.store));
+      expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm store path is not one absolute versioned path" });
+    }
+  });
+
+  test("a listed package outside the store pnpm names is refused", () => {
+    const layout = globalStoreLayout(root);
+    const other = join(root, "other-store", "v11");
+    mkdirSync(other, { recursive: true });
+    layout.storeOutput = () => other;
+    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global-store package is outside the selected store" });
+  });
+
+  test("lexical or canonical store drift after discovery refuses before pnpm add", () => {
+    const layout = globalStoreLayout(root);
+    const resolved = resolveOwner(layout);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    const update = () => runPnpmGlobalUpdate({
+      packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest",
+      owner: resolved.owner, runPnpm: args => layout.run(args), verifyShims: okShims,
+    });
+
+    // Same canonical store, different spelling.
+    const alias = join(root, "store-alias");
+    link(dirname(layout.store), alias);
+    layout.storeOutput = () => join(alias, "v11");
+    layout.calls.length = 0;
+    expect(update()).toMatchObject({ ok: false, phase: "preflight", error: "pnpm configured store changed" });
+    expect(layout.calls.some(args => args[0] === "add")).toBe(false);
+
+    // Same spelling, different canonical store.
+    const moved = layout.root + "/moved-store";
+    layout.storeOutput = () => layout.store;
+    const resolvedAgain = resolveOwner(layout);
+    if (!resolvedAgain.ok) throw new Error(resolvedAgain.reason);
+    rmSync(join(root, "pnpm-home", "store"), { recursive: true, force: true });
+    writeInstance(join(moved, "v11"), "1.0.0");
+    link(moved, join(root, "pnpm-home", "store"));
+    layout.calls.length = 0;
+    expect(runPnpmGlobalUpdate({
+      packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest",
+      owner: resolvedAgain.owner, runPnpm: args => layout.run(args), verifyShims: okShims,
+    })).toMatchObject({ ok: false, phase: "preflight", error: "pnpm configured store changed" });
+    expect(layout.calls.some(args => args[0] === "add")).toBe(false);
+  });
+});
