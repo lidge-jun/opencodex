@@ -205,6 +205,18 @@ describe("POST /api/anthropic/reset-grants/consume", () => {
     expect(up.claims.map(claim => claim.body.grant_id)).toEqual([SECOND]);
   });
 
+  test("after an unknown outcome on one grant, a new spend on another grant of the account is refused", async () => {
+    const SECOND = "spring-bonus-20261101";
+    const up = upstream();
+    up.status = () => Response.json({ cedar_ember: grantBlock({ grants: [grantBlock().grants[0], { ...grantBlock().grants[0], id: SECOND }] }) });
+    up.claim = () => { throw new TypeError("connection reset"); };
+    expect((await consume(deps(up))).json.error.code).toBe("unknown_outcome");
+    up.claim = () => Response.json({ result: "reset", resets_left: 0, cleared: ["five_hour", "seven_day"] });
+    expect(await consume(deps(up), { accountId: "acct-1", grantId: SECOND, operationId: OP2 }))
+      .toMatchObject({ status: 409, json: { error: { code: "unresolved_prior_operation", pendingOperationId: OP } } });
+    expect(up.claims.map(claim => claim.body.grant_id)).toEqual([GRANT]);
+  });
+
   test("a spend posts once with the operation id as request id and then replays", async () => {
     const up = upstream();
     const first = await consume(deps(up));

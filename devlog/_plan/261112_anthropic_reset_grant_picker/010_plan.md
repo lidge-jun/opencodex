@@ -106,3 +106,20 @@ hyds/deepseek-v4.1-flash-1m and hyds/deepseek-v4.1-flash failed with provider 40
 8. A pending op on any grant blocks spending another grant — intended: one unresolved claim per account at a time,
    and the retry screen names the held grant.
 
+
+## Security review (C) — combo/deepseek-flash-pool, head afd5acdb04, REQUEST_CHANGES
+
+1. Stale snapshot could offer a picker while an attempt is open, and the ledger refused only a same-grant
+   prior, so a different-grant claim could start — accepted, fixed on both sides: the ledger now allows at
+   most one unresolved operation per account and org (any grant), and the dialog re-reads the account when it
+   opens. Fail-first tests: ledger (`tests/adapters/anthropic/anthropic-reset-grants.test.ts`), route
+   (`tests/server/management-anthropic-reset-grants.test.ts`), dialog (`gui/tests/anthropic-reset-grants.test.tsx`).
+2. One frame with a live picker between `setHeld(null)` and the refresh — rebutted: `setHeld`, `setOutcome` and
+   the refresh's synchronous `setEntry(loading)` run in the same task after the awaited spend and are batched
+   into one render; the unresolved-prior dialog test covers the path.
+3. `credit-next` now marks the selection — nit, kept (styling only).
+4. `CLEARS_KEYS` lookup on an unknown window — nit, unreachable: the hook parser filters `clears` to the three windows.
+
+CodeRabbit (5 minor) — accepted: per-grant limit wording in `anthropicGrant.desc` (11 locales) and docs (8 locales);
+unparsable dates hidden; empty `clears` shows `anthropicGrant.confirmClearsUnknown`.
+

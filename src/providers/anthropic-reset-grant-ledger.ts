@@ -214,8 +214,11 @@ export function beginAnthropicResetOperation(
       writeJournal(filePath, journal, now);
       return { kind: "execute", attempt: existing.attempts };
     }
+    // One unresolved claim per account, whatever grant it names: the dashboard lets the
+    // user pick a grant, and a stale view must not open a second claim while the first
+    // one's outcome is unknown. The reported pending operation is account-wide too.
     for (const [operationId, record] of Object.entries(journal.operations)) {
-      if (record.status === "open" && record.accountId === identity.accountId && record.grantId === identity.grantId
+      if (record.status === "open" && record.accountId === identity.accountId
         && record.orgDigest === identity.orgDigest && now - record.createdAt < ANTHROPIC_RESET_RETRY_WINDOW_MS) {
         return { kind: "unresolved-prior", operationId };
       }

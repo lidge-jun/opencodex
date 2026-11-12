@@ -242,6 +242,13 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
     if (dialog && !dialog.open) dialog.showModal();
   }, []);
 
+  // The row's badge may have been read long ago. Re-read on open so an attempt another
+  // tab or process left open shows its retry screen instead of a picker for a new one.
+  const { refresh } = controller;
+  useEffect(() => {
+    void refresh(accountId);
+  }, [accountId, refresh]);
+
   useEffect(() => {
     if (confirming) primaryRef.current?.focus();
   }, [confirming]);

@@ -448,7 +448,7 @@ test("an unresolved prior attempt on the chosen grant is resumed after the refus
     post: (body, count) => {
       if (count === 1) {
         refused = true;
-        return Response.json({ error: { code: "unresolved_prior_operation", message: "x" }, pendingOperationId: PICKER_ID }, { status: 409 });
+        return Response.json({ error: { code: "unresolved_prior_operation", message: "x", pendingOperationId: PICKER_ID } }, { status: 409 });
       }
       return Response.json({ code: "already_used", replayed: false, resetsLeft: 0, operationId: body.operationId });
     },
@@ -512,6 +512,25 @@ test("a grant with an unparseable end date and no reported windows confirms with
   expect(container.textContent).toContain("The limits this reset clears were not reported.");
   await click(container, "[data-anthropic-grant-confirm]");
   expect(posts[0]).toMatchObject({ grantId: "odd" });
+  await act(async () => { root.unmount(); });
+});
+
+
+test("opening the dialog re-reads the account, so an attempt started elsewhere locks the picker", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  let startedElsewhere = false;
+  globalThis.fetch = pickerFetch(posts, {
+    read: () => startedElsewhere
+      ? { ...PICKER, pendingOperation: { operationId: PICKER_ID, grantId: "soon", retryableUntil: Date.now() + 60_000 } }
+      : PICKER,
+  });
+  const { container, root } = await mount();
+  startedElsewhere = true;
+  await click(container, "[data-anthropic-grant-badge]");
+  expect(container.querySelector('[role="radio"]')).toBeNull();
+  expect(container.querySelector("[data-anthropic-grant-use]")).toBeNull();
+  await click(container, "[data-anthropic-grant-retry]");
+  expect(posts).toEqual([{ accountId: "acct-1", grantId: "soon", operationId: PICKER_ID }]);
   await act(async () => { root.unmount(); });
 });
 

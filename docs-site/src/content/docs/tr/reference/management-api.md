@@ -107,7 +107,7 @@ kullanır. Her sıfırlama hakkının kendi son kullanma tarihi ve sıfırladı�
 haftalık limitleri) yeniler. Bir talep zamanında yanıt vermezse iletişim kutusu
 `operationId` değerini korur ve on dakika boyunca aynı kimlikle yeniden deneme
 olanağı sunar; Claude Code istemcisi de bu şekilde toparlanır. Bu süre içinde
-aynı sıfırlama hakkı için yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
+o hesapta hangi sıfırlama hakkı için olursa olsun yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
 panelinden kullanılabilir: tek başına yönetici belirteci `403 session_required`
 yanıtını alır.
 
