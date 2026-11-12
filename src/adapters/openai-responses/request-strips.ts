@@ -8,7 +8,7 @@ import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
 
 /**
- * Codex requests output.encrypted_content, which xAI, Meta and Azure reject with HTTP 400.
+ * Codex requests output.encrypted_content, which xAI, Meta, Azure and Kimi Code reject with HTTP 400.
  * The caller gates this on the destination. Preserve reasoning.encrypted_content
  * for stateless replay and leave unknown or malformed values for upstream validation.
  */
@@ -21,6 +21,38 @@ export function stripUnsupportedOutputInclude(body: unknown): unknown {
     return rest;
   }
   return { ...body, include };
+}
+
+/** 仅移除已验证孤立边界中无摘要、未被引用的推理项密文，保留整条历史项。 */
+export function stripArkKimiOrphanCipher(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input;
+  const isUser = (item: unknown) => isPlainObject(item) && item.role === "user"
+    && (item.type === undefined || item.type === "message");
+  const referenced = new Set(input.filter(item => isPlainObject(item) && item.type === "item_reference").map(item => item.id));
+  let changed = false;
+  const next = input.map((item, i) => {
+    // A matching call/result pair is the other confirmed boundary before an orphan.
+    const call = input[i - 2], result = input[i - 1];
+    const afterTool = isPlainObject(call) && call.type === "function_call"
+      && isPlainObject(result) && result.type === "function_call_output"
+      && typeof call.call_id === "string" && call.call_id.length > 0 && result.call_id === call.call_id;
+    // 仅放宽已配对工具结果之后的 developer 边界，其他角色仍保留密文。
+    const following = input[i + 1];
+    const developerAfterTool = afterTool && isPlainObject(following) && following.role === "developer"
+      && (following.type === undefined || following.type === "message");
+    if ((!isUser(result) && !afterTool) || (!isUser(following) && !developerAfterTool) || !isPlainObject(item)
+      || item.type !== "reasoning" || !Array.isArray(item.summary) || item.summary.length
+      || typeof item.encrypted_content !== "string" || !item.encrypted_content
+      || (item.id !== undefined && referenced.has(item.id))
+      // Codex can explicitly serialize the absent content channel as null.
+      || !Object.keys(item).every(key => ["type", "id", "status", "summary", "encrypted_content"].includes(key)
+        || (key === "content" && item.content === null))) return item;
+    const { encrypted_content: _cipher, ...rest } = item;
+    changed = true;
+    return rest;
+  });
+  return changed ? { ...body, input: next } : body;
 }
 
 /**

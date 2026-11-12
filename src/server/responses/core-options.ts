@@ -1,3 +1,4 @@
+import type { ClientFacingModelLabel } from "../../lib/error-destination";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
 import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
@@ -32,8 +33,20 @@ export interface ConsumedComboFailure {
   classificationText: string;
   /** Complete bounded-envelope evidence captured before display truncation; never serialized. */
   codexModelRefusal?: CodexAccountModelRefusal;
+  /** Complete bounded-envelope malformed response_format diagnostic verdict captured before display truncation. */
+  malformedResponseFormat?: boolean;
+  /** Complete bounded-envelope OpenRouter opaque-400 verdict captured before display truncation. */
+  openRouterOpaque400?: boolean;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
+  /**
+   * The envelope root's own structured code when it differs from {@link upstreamCode}.
+   *
+   * `normalizeUpstreamErrorText` selects the nested record first, so a root verdict would
+   * otherwise never reach the combo decision. Both transports pass it, and the decision hops
+   * only when the root and the record each would.
+   */
+  upstreamRootCode?: string;
   /** Sanitized structured `error.message`; compared only against proxy-owned constants, never emitted. */
   upstreamMessage?: string;
   /** Complete structured provider type, retained for conservative recovery classification. */
@@ -96,6 +109,10 @@ export interface DirectRequestOption {
 }
 
 export interface HandleResponsesOptions {
+  /** Original caller label, carried through synthetic children without route substitution. */
+  clientModelLabel?: ClientFacingModelLabel;
+  /** Original client envelope label when a combo was selected by a synthetic rewrite. */
+  clientResponseModelLabel?: ClientFacingModelLabel;
   /** Immutable caller scope inherited by a capability-authenticated internal sidecar request. */
   admissionScope?: AdmissionModelScope;
   /** Captured synchronously at ingress, before parsing or child replay can suspend. */
@@ -118,6 +135,8 @@ export interface HandleResponsesOptions {
   claudeGoAffinity?: { sessionLane?: string };
   /** Validated Claude metadata identity; projected only into final canonical attempt headers. */
   claudeNativeSessionId?: string;
+  /** Private Claude bridge pool identity (validated, principal-scoped when derived); completes session-id/thread-id only on Codex account-selection headers. */
+  claudeBridgePoolSession?: string;
   /** Original live policy owner; separate from caller-specific routing/sidecar snapshots. */
   codexAuthPolicy?: CodexAuthPolicyConfig;
   turnAdmissionLease?: AdmissionLease;
@@ -191,11 +210,13 @@ export interface HandleResponsesOptions {
   anthropicServerTools?: readonly Record<string, unknown>[];
   /** The Claude client's replayable server-tool exchanges (`replayedAnthropicServerBlocks`); same scope. */
   anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
+  /** The caller's cached system prefix (`systemCachePrefix`); same scope. */
+  anthropicSystemCachePrefix?: string;
   /** Metadata-qualified Messages discovery evidence, never caller JSON or a preselected destination. */
   anthropicToolLoadingSource?: Readonly<Record<string, unknown>>;
   /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
   droidDefaultEffort?: string;
-  /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
+  /** The Chat or Messages source a combo child may send natively; set only by that ingress. */
   protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
@@ -284,6 +305,12 @@ export interface HandleResponsesOptions {
   clientEncoder?: ClientEncoderOption;
   /** Chat ingress raw-channel delivery preference; never an upstream generation option. */
   chatRawReasoningVisible?: boolean;
+  /** Value-free fact retained before Chat instruction content is projected to text. */
+  chatInstructionImage?: boolean;
+  /** Original Responses instruction image, retained across preprocessing and combo replay. */
+  responsesInstructionImage?: boolean;
+  /** File-backed Responses image retained before parsing and replay. */
+  responsesFileImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
 }

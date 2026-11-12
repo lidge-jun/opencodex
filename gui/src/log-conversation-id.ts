@@ -43,12 +43,27 @@ export function unwrapLogConversationQuery(query: string): string {
 /**
  * The candidate ids a conversation query may legitimately match: the unwrapped link id
  * and the untouched paste — a client may literally send a `codex://threads/…` session
- * id, hashed whole for storage. Mirrors the server matcher's candidate set.
+ * id, hashed whole for storage, and a Claude Code user_id is stored without `tk`.
+ * Mirrors the server matcher's candidate set.
  */
 function logConversationQueryCandidates(query: string): string[] {
   const trimmed = query.trim();
   const unwrapped = unwrapLogConversationQuery(trimmed);
-  return unwrapped === trimmed ? [unwrapped] : [unwrapped, trimmed];
+  const session = trimmed.length > 4096 ? trimmed : claudeSessionUserId(trimmed);
+  return [...new Set([unwrapped, trimmed, session])];
+}
+
+/** Mirrors src/server/request-log-conversation.claudeSessionUserId: drops Claude Code's per-turn `tk`. */
+function claudeSessionUserId(userId: string): string {
+  if (!userId.trimStart().startsWith("{")) return userId;
+  try {
+    const parsed: unknown = JSON.parse(userId);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "tk" in parsed) {
+      const { tk: _tk, ...rest } = parsed as Record<string, unknown>;
+      if (Object.keys(rest).length > 0) return JSON.stringify(rest);
+    }
+  } catch { /* not JSON */ }
+  return userId;
 }
 
 /** SHA-256 hex prefixes used as persisted conversation ids, one per query candidate. */

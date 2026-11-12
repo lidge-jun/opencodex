@@ -1,5 +1,10 @@
 import { autoRestoreCodexShim, autoRestoreCodexShimAsync } from "../codex/shim";
 import { codexShimAutoRestoreEnabled, readConfigDiagnostics } from "../config";
+import { skipsCodexShimAutoRestore } from "./preflight-exemptions";
+
+// Re-exported for existing importers; the list itself lives in a leaf module so a caller that
+// only needs it (the config-root startup wait) does not link the shim repair machinery.
+export { skipsCodexShimAutoRestore };
 
 export interface CodexShimAutoRestoreCliDeps {
   env: NodeJS.ProcessEnv;
@@ -14,40 +19,6 @@ const DEFAULT_DEPS: CodexShimAutoRestoreCliDeps = {
   restore: autoRestoreCodexShim,
   readConfig: readConfigDiagnostics,
 };
-
-/** Identify command namespaces whose execution must not trigger automatic shim repair. */
-export function skipsCodexShimAutoRestore(command: string | undefined, args: string[]): boolean {
-  if (command === "uninstall" || command === "remove") return true;
-  if (command === "status" || command === "doctor") return true;
-  // The launcher owns shim handoff after classifying routing, including native fast paths.
-  if (command === "codex") return true;
-  // Exec admission only observes the selected target; it must never repair a shim first.
-  if (command === "internal" && args[1] === "codex-exec-target") return true;
-  // `lab` is read-only inspection; it must not trigger shim side effects.
-  if (command === "lab") return true;
-  // Local messaging owns its helpers; even malformed usage must not repair/start anything.
-  if (command === "message") return true;
-  // `resolve` is read-only inspection for embedding shells: a lookup made to populate
-  // a consent surface must not trigger a shim repair side effect first.
-  if (command === "resolve") return true;
-  // `service status --json` is a passive inventory read for peers such as GOAT: a shim repair
-  // before dispatch would change the installation it was asked only to describe.
-  // Flags may precede the verb (`ocx service --json status`), exactly as parseServiceArgs reads it.
-  if (command === "service" && args.includes("--json")
-    && args.slice(1).find(arg => !arg.startsWith("--")) === "status") return true;
-  // The desktop's approval-bound stop must validate its snapshot before any unrelated
-  // CLI repair changes the installation it was approved against.
-  if (command === "stop" && args.some(arg => arg.startsWith("--expect-"))) return true;
-  // A pinned sync (#7694) must change nothing when its expected Home or hub key does not hold,
-  // so the root preflight may not repair the shim first; the sync runner repairs it only after
-  // the locked identity check passed (runCodexShimAutoRestore in src/cli/dispatch.ts).
-  if (command === "sync" && args.some(arg => /^--expect-(link|hub-key)(=|$)/.test(arg))) return true;
-  // The entire updater-inspection namespace is zero-effect, including malformed
-  // or future actions. A later `apply` implementation must own its preflight.
-  if (command === "system" && args[1] === "codex-cli-update") return true;
-  if (command === "__update-badge") return true;
-  return command === "codex-shim" && ["install", "status", "uninstall", "remove"].includes(args[1] ?? "");
-}
 
 export function maybeAutoRestoreCodexShim(
   command: string | undefined,

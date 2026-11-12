@@ -14,8 +14,8 @@ const GROUPS: Record<string, string[]> = {
   lifecycle: ["codex-provider", "chatgpt", "status", "resolve", "capabilities", "sync", "start", "stop", "restart", "service", "gui"],
   "providers-models": ["provider", "models", "alias"], accounts: ["account", "auth", "login", "logout"],
   "agents-routing": ["agent", "combo", "route", "fallback", "v2", "effort", "memory", "message", "advisor"], integrations: ["claude", "integration", "commandcode", "grok", "codex-shim"],
-  "observe-system": ["companion", "usage", "logs", "storage", "inspect", "system", "observe", "debug", "export", "import", "cost", "update", "config", "tray"],
-  "access-remote": ["link", "remote-workspace", "hub", "connect", "api", "access"], lab: ["lab"],
+  "observe-system": ["companion", "usage", "logs", "storage", "inspect", "system", "observe", "debug", "export", "import", "cost", "update", "config", "tray", "telemetry"],
+  "access-remote": ["link", "remote-workspace", "hub", "connect", "disconnect", "api", "access"], lab: ["lab"],
 };
 const FILENAMES = [INDEX, ...Object.keys(GROUPS).map(domain => `01_surface_${domain}.md`)];
 const SKILL_DIR = repoPath("skills", "ocx");

@@ -11,6 +11,9 @@ export interface ProviderPayloadForm {
   defaultModel: string;
   allowPrivateNetwork?: boolean;
   preserveResponsesReasoningContent?: boolean;
+  googleMode?: "vertex";
+  project?: string;
+  location?: string;
 }
 
 export interface ProviderPostPreset {
@@ -82,6 +85,10 @@ export interface ProviderPayload {
   codexAccountMode?: "pool" | "direct";
   allowPrivateNetwork?: boolean;
   preserveResponsesReasoningContent?: boolean;
+  googleMode?: "vertex";
+  project?: string;
+  location?: string;
+  liveModels?: boolean;
 }
 
 export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload {
@@ -92,6 +99,12 @@ export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload
 
   if (form.responsesPath?.trim()) {
     provider.responsesPath = form.responsesPath.trim();
+  }
+  if (form.adapter.trim() === "google" && form.googleMode === "vertex") {
+    provider.googleMode = "vertex";
+    provider.liveModels = false;
+    if (form.project?.trim()) provider.project = form.project.trim();
+    if (form.location?.trim()) provider.location = form.location.trim();
   }
   if (form.authMode === "key" || form.authMode === "forward") {
     provider.authMode = form.authMode;

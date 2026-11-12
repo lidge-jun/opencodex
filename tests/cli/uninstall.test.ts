@@ -42,6 +42,20 @@ describe("full uninstall command", () => {
     expect(cli).not.toContain("rmSync(getConfigDir()");
   });
 
+  test("an elevated-run refusal exits before the first teardown step", async () => {
+    const cli = await readText("src/cli/index.ts");
+    const body = cli.slice(cli.indexOf("async function handleUninstall()"));
+    const refusal = body.indexOf("const privilegeRefusal = uninstallPrivilegeRefusal(getConfigDir());");
+    const exit = body.indexOf("if (privilegeRefusal) { console.error(`❌ ${privilegeRefusal}`); process.exit(1); }");
+    expect(refusal).toBeGreaterThan(0);
+    expect(exit).toBeGreaterThan(refusal);
+    // Nothing before the check: every step that stops, removes or rewrites anything comes after the exit.
+    expect(body.slice(0, refusal).split("\n").filter(line => line.trim() && !line.trim().startsWith("//"))).toEqual(["async function handleUninstall() {"]);
+    for (const step of ["await runStep(", "stopServiceIfInstalledDetailed", "uninstallServiceDetailed", "restoreNativeCodexAsync", "revertSystemEnv", "uninstallCodexShimAsync", "removeOwnedConfigAfterDesktopCleanup"]) {
+      expect(body.indexOf(step)).toBeGreaterThan(exit);
+    }
+  });
+
   test("CLI exposes explicit legacy history recovery command", async () => {
     const dispatch = await readText("src/cli/dispatch.ts");
     const cli = await readText("src/cli/index.ts");
@@ -158,8 +172,7 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
 
   test("a removal failure is distinguishable from nothing being installed", async () => {
     const { setUninstallServiceHooksForTests, uninstallServiceDetailed } = await import("../../src/service");
-    // Windows is the platform whose hooks are injectable; the darwin/linux catch arms that
-    // returned the same false as absence are now typed outcomes rather than a boolean.
+    // An absent Windows service remains distinguishable from a failed removal.
     setUninstallServiceHooksForTests({
       platform: "win32",
       assertEnvironment: () => {},
@@ -172,8 +185,8 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(uninstallServiceDetailed()).toBe("absent");
 
     const serviceSource = await readText("src/service/orchestration.ts");
-    // The darwin and linux arms return "failed", not the absence value.
-    expect(serviceSource).toContain('try { uninstallLaunchd(); removeServiceInstallState(); return "removed"; } catch { return "failed"; }');
+    // Darwin removal failure is exercised through the real cleanup in launchd-repair.test.ts.
+    // Keep the unchanged Linux fallback's failure outcome covered here.
     expect(serviceSource).toContain('try { unlinkSync(unitPath()); removeServiceInstallState(); return "removed"; } catch { return "failed"; }');
   });
 

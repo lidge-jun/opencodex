@@ -28,7 +28,9 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-停止正在运行的代理（按 PID），移除 PID 文件；独立运行的所有者还会恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘的 **Stop** 按钮在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
+无人监督的 Link Child 处理退出信号时，会在每次写入前核对连接，并在关闭监听器前恢复 Codex 原生配置及受管理的 Grok。服务/Desktop、sibling、重启交接和父进程 stop 收据会保留配置。退出中的重启请求返回 `409 runtime_stopping`。强制终止可能跳过信号处理，仍需父进程 `ocx stop` 的恢复路径。
+
+停止正在运行的代理（按 PID），移除 PID 文件；独立运行的所有者还会恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘侧栏的代理拉杆拉到底时，在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
 
 对于已连接的 hub 客户端，`ocx stop`（包括成功的 API 停止）会保留连接所拥有的 Codex 路由、模型目录和 Grok 配置。`ocx start` 使用这些保留的配置恢复服务，不会重新注入路由。要让 Codex 回到自己的账户，请运行 `ocx disconnect`；若已恢复为原生路由，要重新应用连接路由，请运行 `ocx sync --restart-codex`。
 
@@ -77,6 +79,10 @@ ocx eject back
 ### `ocx uninstall` · `ocx remove`
 
 停止服务和代理，移除服务和 Codex shim，恢复原生 Codex，然后仅在所有恢复步骤都成功时才删除 opencodex 本地配置。`remove` 是 `uninstall` 的别名。配置清理需要由全新安装创建的所有权元数据；旧版或共享目录会保留原样。
+
+当 `ocx uninstall` 以 root 身份或在已提升（管理员）权限的 Windows 提示符中运行时，它会先确认其他账户无法修改配置目录、其上级目录以及其中的任何目录，并确认配置目录内没有指向其外部的链接（在 Windows 上则是完全没有链接）。只要有一项不满足，卸载就会在做出任何更改之前停止并说明原因。请以拥有配置目录的账户、不使用 `sudo` 或管理员权限运行 `ocx uninstall`，或者将这些目录限制为仅该账户可写并删除此类链接，然后重新运行。在无法判断提示符是否已提升权限的 Windows ARM64 上也会进行同样的检查；如果检查无法完成，请先停止 opencodex，再手动删除配置目录。
+
+如果某个已记录条目在配置目录内的上级目录是链接（符号链接或联接点），该条目会保留原样并列为剩余路径，本次运行以部分卸载结束。将该链接替换为真实目录或将其删除后，再次运行 `ocx uninstall` 即可完成。
 
 ## 状态与健康
 
@@ -160,9 +166,13 @@ ocx status --json
 
 ## 目录同步
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
 
-> **Remote Link Child：** `ocx sync` 还会应用 Home 的 Codex 设置；如果客户端运行时在该次应用之前启动，即使没有重启参数也会重启运行时。重启失败时，原有运行时继续提供服务，命令以非零状态退出。`ocx status --json` 和 `ocx link status --json` 中的相关字段见 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
+在 Remote Link Home 上，成功提交最新目录后，`ocx sync` 也会向符合条件的已连接 Child 同步。`--local-only` 可关闭此传播。`--json` 输出一个 `ocx.sync.fanout/1` 文档，包含 Home 的结果和每个 Child 的状态；被跳过的 Child 会注明原因。Home 自身的非零退出码会原样返回。Home 成功时，若传播时跳过已连接的 Child，或 Child 失败、超时或链接存储不可读，命令以退出码 6 结束。客户端发起的链接和 `--local-only` 等有意跳过的情况保留原有行为；被跳过的已连接 Child 会附带操作建议 `hint`。文本模式下，链接存储不可读的错误不包含路径。退出码 7 保留给正在进行的更新。JSON 模式下如果 Home 同步抛出异常，stdout 仍只包含一个结果文档，stderr 则输出经过安全转义的诊断信息。因 `--child` 未选中的链接（`not-selected`）和正被 Child 操作占用的 Child（`child-busy`）同样属于有意跳过，不会产生退出码 6；请求的 Child 重启未能确定完成时，命令以退出码 6 结束。
+
+除非传入 `--restart-children`（重启 app-server）或 `--restart-children=codex --yes`（重启 Codex 桌面应用，会结束进行中的对话，并需要该机器上已登录的桌面会话），传播不会请求重启 Child 上的 Codex。Home 先同步每个选中的 Child，再重新读取该 Child 的活动状态，然后才通过第二次固定目标同步发送重启。对于此刻正在中继模型请求的 Child（`restart-skipped:link-active`）、无法读取活动状态的 Child（`restart-skipped:activity-unknown`）、Windows Child（`restart-skipped:windows`）以及 `ocx-child`（`restart-unsupported:ocx-child`），Home 照常同步、只跳过重启，并以退出码 6 结束。未记录 Child 类型的链接仍会在第二次同步中收到重启标志，Home 由此得知它运行的是 `ocx-child`；`ocx-child` 会忽略该标志。如果重启未能发送，或已发送但结果未知，该 Child 的行显示 `restart-not-run` 或 `restart-result-unknown`，退出码同样为 6。与 `ocx link restart-codex` 一样，这项保护是尽力而为的：在读取活动状态与重启之间开始的请求仍可能被中断。`--child <linkId>`（可重复）只向这些链接传播，其余链接报告为 `not-selected`。正被 `ocx link update` 等 Child 操作占用的 Child 会以 `child-busy` 跳过。不过，Child 的固定目标同步在应用已更改的 Home 设置后，仍可能重启它自己的 OpenCodex 客户端运行时。Home 超时并停止本地 SSH 进程后，已开始的远程同步仍可能在 Child 上继续。
+
+> **Remote Link Child：** 在完整 `ocx` Child 上，`ocx sync` 还会应用 Home 的 Codex 设置并在客户端运行时早于该次应用启动时重启它；重启失败时原有运行时继续提供服务并以非零状态退出。在轻量级 `ocx-child` 主机上，`ocx-child sync` 会在中继未运行时启动 `ocx-child serve`，在 `runtimeStartedAt < lastApplyAt` 时轮换进程，并在非 `stale` 同步时尽力上报 parity（若轮换失败，旧中继已停止且命令以非零状态退出；Codex 桌面应用与长期运行的 `app-server` 进程如需刷新请单独重启）。Child 上的 `ocx status --json`（或 `ocx-child status --json`）与 Home 上的 `ocx link status --json` 相关字段见 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。 在 Home 上，`ocx link check (--link-id <id> | --all)` 通过 SSH 运行 `ocx update --plan`（每台子机 60 秒，不修改安装）读取每个由 Home 添加的子机的已安装版本和更新途径，`ocx link status --json` 会为每一行添加 `child` 块；详见 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英文）。`ocx link sync`、`ocx link restart-codex --yes` 和 `ocx link update --yes` 会在这些子机上运行同步、Codex 重启和更新任务，并输出 `ocx.link.child-job/1` 文档；详见 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英文）。`ocx link policy` 读取或修改 Home 的子机策略；目录自动分发默认开启，Home 目录变化后会通过 SSH 同步符合条件的子机；参见 [Automatic catalog fan-out and the Child policy](/guides/remote-link/#automatic-catalog-fan-out-and-the-child-policy)（英文）。
 
 显式指定重启标志后，即使目录和缓存的字节未变，成功提交 `config.toml` 更改也会触发重启。仅处理配置的操作若没有更改、被拒绝、仅作预检或写入已回滚，则不会触发重启。未指定重启标志时，sync 不会自动重启 Codex。
 
@@ -203,6 +213,12 @@ Windows 任务计划程序安装使用普通进程优先级（`Priority=4`）。
 在 Linux 上，systemd unit 调用安装时在 `PATH` 中找到的第一个常规可执行 `ocx` 文件，而不是已安装包目录内的 Bun 与 CLI 路径。**mise**、**asdf** 等版本管理器会安装到带版本号的目录并在升级时删除旧目录；其稳定的 shim 会让 unit 持续解析。没有 `ocx` 启动器的源码检出保留直接的 Bun + CLI 形式。Bun 启动前选定的可信 `OPENCODEX_BUN_PATH` 会透过 shim 保留；包内捆绑的 Bun 路径在升级后会被重新发现。
 
 在 macOS 上，launchd 则改用安装或修复时选定的包内 Bun 与 CLI 路径。这可防止可变的 PATH shim 在后续重启时获得服务 API 令牌和已配置的代理环境。升级版本管理器安装后，请在重启服务前运行 `ocx service repair` 刷新这些路径。
+
+macOS 代理使用 `ProcessType=Interactive`，以避免默认 daemon 类别的 CPU 和 I/O 限制，保持负载下的健康检查响应。升级现有安装后，请运行 `ocx service repair`，同时应用此策略。
+
+若定义的加载尚未确认，即使令牌发生变化，该状态也会保留到下次修复。仅在最初的 launchd 状态探测可用时才重试注册；可能需要图形登录会话。成功创建的原始备份会保留到 bootstrap 被接受且探测确认任务匹配。备份创建是尽力而为的；新安装没有先前的定义。
+
+若最初的 launchd 状态探测不可用，repair 会在写入新 plist 或备份之前拒绝操作。若更改后定义的 bootstrap 被拒绝且状态可检查，repair 会尝试恢复先前定义。若 bootstrap 后状态变得不可检查，则不会再次移除任务或回滚：bootstrap 被接受时会警告重载尚未验证，被拒绝时则失败。重试前请运行 `launchctl print gui/$(id -u)/com.opencodex.proxy` 检查任务。新安装会移除孤立的恢复文件，完整卸载也会在 plist 不存在时移除它们。新安装的恢复文件清理、待确认标记删除及卸载清理仅忽略文件已不存在的情况。这些步骤的其他错误会报告失败，且不会删除安装状态。经过验证的修复写入安装状态后，`.prev` 备份的删除是尽力而为的；该删除失败不会改变修复成功的结果。
 
 在此变更之前安装的定义仍带有旧的带版本路径，无法自行迁移——一旦旧可执行文件被删除，就没有 opencodex 代码运行来修复它。升级后请运行一次 `ocx service repair`。之后 Linux 服务启动会跟随启动器；macOS 的 repair 会把新的包路径写入 launchd 定义。外部升级不会替换已在运行的代理：当已安装的 CLI 比运行中的代理更新时，运行 `ocx service restart` 让新构建提供服务。在 macOS 上，此处的 `repair` 并不够：定义没有变化，而不改变任何内容的 repair 不会重新加载任何内容。反之若代理更新，请按 [`ocx status`](#ocx-status---json) 中的说明检查 CLI 安装与 `PATH`。
 

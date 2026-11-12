@@ -73,7 +73,7 @@ async function readGateScript(): Promise<string> {
   ).text();
   const workflow = Bun.YAML.parse(text) as Workflow;
   const script = workflow.jobs?.["enforce-target"]?.steps?.find(
-    step => step.name === "Enforce PR target, ancestry, and description",
+    step => step.name === "Enforce PR target and description",
   )?.with?.script;
   if (typeof script !== "string") {
     throw new Error("enforce-target step has no inline script");
@@ -98,7 +98,13 @@ describe("workflow comment-spam hardening", () => {
     const text = await Bun.file(
       new URL("../../.github/workflows/enforce-pr-target.yml", import.meta.url),
     ).text();
-    const workflow = Bun.YAML.parse(text) as Workflow;
+    const gate = Bun.YAML.parse(text) as Workflow;
+    // The gate runs as a local reusable workflow of pr-gates.yml (#7654), which owns
+    // the triggers; both load from the default branch.
+    expect(Object.keys(gate.on ?? {})).toEqual(["workflow_call"]);
+    const workflow = Bun.YAML.parse(await Bun.file(
+      new URL("../../.github/workflows/pr-gates.yml", import.meta.url),
+    ).text()) as Workflow;
 
     expect(workflow.on?.issue_comment).toBeUndefined();
     expect(workflow.on?.pull_request_review).toBeUndefined();
@@ -112,7 +118,7 @@ describe("workflow comment-spam hardening", () => {
       "unlabeled",
     ]));
 
-    const resolver = workflow.jobs?.["resolve-pr"];
+    const resolver = gate.jobs?.["resolve-pr"];
     const resolverIf = (resolver?.if ?? "").replace(/\s+/g, " ").trim();
     for (const guard of [
       "github.event_name == 'status'",
@@ -127,22 +133,22 @@ describe("workflow comment-spam hardening", () => {
       expect(resolverIf).toContain(guard);
     }
 
-    const job = workflow.jobs?.["enforce-target"];
+    const job = gate.jobs?.["enforce-target"];
     expect(job?.if).toBe("needs.resolve-pr.outputs.pull-number != ''");
 
     const checkoutStep = job?.steps?.find(
       step => step.name === "Checkout trusted PR-quality scripts",
     );
-    // Trusted scripts come from a fixed set of integration branches, never
-    // from the pull request itself. `status` keeps the default-branch
-    // boundary that owns the event; a `main`-targeting PR matches the workflow
-    // definition loaded from `main`; every other base resolves to `dev`.
+    // Trusted scripts come from `dev`, never from the pull request itself.
+    // `status` has no PR payload and keeps the default-branch boundary that
+    // owns the event; every pull_request event, including a stacked child's,
+    // resolves to `dev`, the single integration branch.
     expect(checkoutStep?.with?.ref).toBe(
-      "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}",
+      "${{ github.event_name == 'status' && github.event.repository.default_branch || 'dev' }}",
     );
 
     const gateStep = job?.steps?.find(
-      step => step.name === "Enforce PR target, ancestry, and description",
+      step => step.name === "Enforce PR target and description",
     );
     const script = gateStep?.with?.script ?? "";
     expect(gateStep?.env?.RESOLVED_PULL_NUMBER).toBe(

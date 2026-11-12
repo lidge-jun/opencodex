@@ -6,15 +6,30 @@ import {
   type UsageLogRevision,
 } from "../../usage/log";
 import {
+  readUsageLedgerRowsAtOffsets,
   scanUsageLedgerCooperatively,
   UsageLedgerRebuildRequiredError,
 } from "../../usage/ledger-scanner";
 import {
+  readUsageFilterCandidates,
+  readUsageFilterCandidatesPassive,
+  requestUsageFilterIndexRebuild,
+  resetUsageFilterIndexForTests,
+  UsageFilterIndexPageError,
+  type UsageFilterCandidateRead,
+  type UsageFilterIndexQuery,
+  type UsageFilterIndexSnapshot,
+  type UsageFilterQueryStats,
+} from "../../usage/filter-index";
+import { isPassiveRead } from "../../lib/passive-read";
+import {
   createUsageSummaryAccumulator,
   type UsageSummaryAccumulator,
+  type UsageSummaryFilterInput,
 } from "../../usage/summary";
 import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
 import type { UsageTimeWindow } from "../../usage/time-range";
+import { snapshotConfiguredKeyIds } from "../../usage/source-filter";
 import {
   createJevStatsAccumulator,
   type JevStatsAccumulator,
@@ -28,6 +43,7 @@ import {
 interface RetainedUsageAggregate {
   accumulator: UsageSummaryAccumulator;
   usageIncomplete: boolean;
+  usageInvalidRows: boolean;
   revision: UsageLogRevision | null;
   identityKey: string;
   revisionKey: string;
@@ -54,11 +70,17 @@ type RetainedAggregateState = RetainedUsageAggregate | RetainedJevStatsAggregate
 export interface UsageAggregateResult {
   accumulator: UsageSummaryAccumulator;
   usageIncomplete: boolean;
+  usageInvalidRows: boolean;
   revision: UsageLogRevision | null;
   processedThroughBytes: number;
   overlayVersion: number;
   timeZone: string;
   update: "unchanged" | "append" | "rebuild";
+  /**
+   * Present on filtered results: how many ledger rows the derived candidate index read to
+   * answer this filter, against the whole ledger. A full scan reports the same number twice.
+   */
+  filterIndex?: UsageFilterQueryStats;
 }
 
 export interface UsageAggregateOptions {
@@ -84,13 +106,18 @@ export interface UsageAggregateRetainedStats {
 }
 
 const MAX_REBUILD_ATTEMPTS = 2;
+// A filtered read can lose a race with a concurrent index rebuild and a ledger replacement in
+// the same call, so it gets one more attempt than a plain scan rebuild.
+const MAX_FILTER_INDEX_ATTEMPTS = 3;
+// Selected rows are folded in bounded batches, so a filter that matches most of a large ledger
+// costs the same peak memory as the streaming scan it replaces.
 const MAX_RETAINED_FILTERED_AGGREGATES = 4;
 
 let retainedAggregate: RetainedUsageAggregate | null = null;
 const pinnedAggregates = new Set<RetainedAggregateState>();
 let baseFlight: Promise<UsageAggregateResult> | null = null;
 const filteredFlights = new Map<string, Promise<UsageAggregateResult>>();
-const retainedFilteredAggregates = new Map<string, RetainedUsageAggregate>();
+const retainedFilteredAggregates = new Map<string, RetainedFilteredAggregate>();
 const MAX_CONCURRENT_FILTERED_AGGREGATES = 4;
 const retainedJevStatsAggregates = new Map<string, RetainedJevStatsAggregate>();
 const jevStatsFlights = new Map<string, Promise<JevStatsAggregateResult>>();
@@ -108,6 +135,7 @@ function resultFrom(
   return {
     accumulator: state.accumulator,
     usageIncomplete: state.usageIncomplete,
+    usageInvalidRows: state.usageInvalidRows,
     revision: state.revision,
     processedThroughBytes: state.processedThroughBytes,
     overlayVersion: state.overlayVersion,
@@ -133,6 +161,7 @@ function makeRetainedAggregate(
   return {
     accumulator,
     usageIncomplete: scan.oversizedRows > 0,
+    usageInvalidRows: scan.invalidRows > 0,
     revision: scan.revision,
     identityKey: usageLogIdentityKey(scan.revision),
     revisionKey: usageLogRevisionKey(scan.revision),
@@ -233,6 +262,7 @@ async function appendAggregate(
         // A partial unterminated row can be scanned again on the next append.
         // Preserve a boolean diagnostic rather than double-counting omissions.
         usageIncomplete: state.usageIncomplete || scan.oversizedRows > 0,
+        usageInvalidRows: state.usageInvalidRows || scan.invalidRows > 0,
         revision: scan.revision,
         identityKey: usageLogIdentityKey(scan.revision),
         revisionKey: usageLogRevisionKey(scan.revision),
@@ -293,21 +323,21 @@ function normalizeExactFilterValue(value: string | null | undefined): string | n
   return normalized || null;
 }
 
-export async function getFilteredUsageAggregate(filter: {
-  provider?: string | null;
-  model?: string | null;
-  apiKeyId?: string | null;
-}, window?: UsageTimeWindow): Promise<UsageAggregateResult> {
+export async function getFilteredUsageAggregate(filter: UsageSummaryFilterInput, window?: UsageTimeWindow): Promise<UsageAggregateResult> {
   const fixedWindow = window ? Object.freeze({ ...window }) : undefined;
   const normalizedFilter = {
     provider: normalizeFilterValue(filter.provider),
     model: normalizeFilterValue(filter.model),
     apiKeyId: normalizeExactFilterValue(filter.apiKeyId),
+    ...(filter.sourceFilter ? { sourceFilter: { client: filter.sourceFilter.client, device: { ...filter.sourceFilter.device } } } : {}),
+    ...(filter.configuredApiKeyIds ? { configuredApiKeyIds: snapshotConfiguredKeyIds(filter.configuredApiKeyIds) } : {}),
   };
   const key = JSON.stringify([
     normalizedFilter.provider,
     normalizedFilter.model,
     normalizedFilter.apiKeyId,
+    normalizedFilter.sourceFilter ?? null,
+    normalizedFilter.configuredApiKeyIds ?? null,
     fixedWindow?.since ?? null,
     fixedWindow?.until ?? null,
   ]);
@@ -330,7 +360,177 @@ type NormalizedUsageFilter = {
   provider: string | null;
   model: string | null;
   apiKeyId: string | null;
+  sourceFilter?: UsageSummaryFilterInput["sourceFilter"];
+  configuredApiKeyIds?: readonly string[];
 };
+
+/**
+ * A retained filtered projection plus the index generation its candidates came from.
+ * `null` means it was built by the streaming fallback and cannot be extended incrementally.
+ */
+type RetainedFilteredAggregate = RetainedUsageAggregate & { indexGeneration: string | null };
+
+/** The derived index and the ledger disagree about where a row starts. */
+class UsageFilterIndexCorruptError extends Error {}
+
+/** Pricing or time-zone inputs moved while a filtered projection was being built. */
+class UsageAggregationInputsChangedError extends Error {}
+
+function filterQuery(
+  filter: NormalizedUsageFilter,
+  window?: UsageTimeWindow,
+): UsageFilterIndexQuery {
+  return {
+    provider: filter.provider,
+    model: filter.model,
+    apiKeyId: filter.apiKeyId,
+    ...(filter.sourceFilter ? { sourceFilter: filter.sourceFilter } : {}),
+    ...(filter.configuredApiKeyIds ? { configuredApiKeyIds: filter.configuredApiKeyIds } : {}),
+    ...(window ? { window } : {}),
+  };
+}
+
+function filterStats(
+  read: UsageFilterCandidateRead,
+  update: UsageAggregateResult["update"],
+): UsageFilterQueryStats {
+  return {
+    totalRows: read.snapshot.indexedRows,
+    candidateRows: read.candidateRows,
+    scope: update,
+    ingestedRows: read.snapshot.ingestedRows,
+    ingestPasses: read.snapshot.ingestPasses,
+  };
+}
+
+function filteredStateFrom(
+  accumulator: UsageSummaryAccumulator,
+  snapshot: UsageFilterIndexSnapshot,
+  overlayVersion: number,
+  timeZone: string,
+): RetainedFilteredAggregate {
+  return {
+    accumulator,
+    // Diagnostics describe the whole ledger, not the selected candidates: an invalid or
+    // oversized row outside the filter still means the report is incomplete.
+    usageIncomplete: snapshot.oversizedRows > 0,
+    usageInvalidRows: snapshot.invalidRows > 0,
+    revision: snapshot.revision,
+    identityKey: snapshot.identityKey,
+    revisionKey: usageLogRevisionKey(snapshot.revision),
+    processedThroughBytes: snapshot.indexedOffset,
+    processedThroughDigest: snapshot.processedThroughDigest,
+    overlayVersion,
+    timeZone,
+    retainedAt: Date.now(),
+    indexGeneration: snapshot.generation,
+  };
+}
+
+/** The pre-index streaming read, used when the projection is unavailable or passive. */
+function streamingStateFrom(
+  accumulator: UsageSummaryAccumulator,
+  scan: Awaited<ReturnType<typeof scanUsageLedgerCooperatively>>,
+  overlayVersion: number,
+  timeZone: string,
+): RetainedFilteredAggregate {
+  return {
+    accumulator,
+    usageIncomplete: scan.oversizedRows > 0,
+    usageInvalidRows: scan.invalidRows > 0,
+    revision: scan.revision,
+    identityKey: usageLogIdentityKey(scan.revision),
+    revisionKey: usageLogRevisionKey(scan.revision),
+    processedThroughBytes: scan.processedThroughBytes,
+    processedThroughDigest: scan.processedThroughDigest,
+    overlayVersion,
+    timeZone,
+    retainedAt: Date.now(),
+    indexGeneration: null,
+  };
+}
+
+/**
+ * Candidate selection for one filter.
+ *
+ * A passive management read must not create or write anything, so it only uses a projection
+ * that is already current; otherwise the caller streams. Both paths return null when the
+ * acceleration is unusable, never when the ledger itself failed.
+ */
+async function readCandidates(
+  query: UsageFilterIndexQuery,
+): Promise<UsageFilterCandidateRead | null> {
+  return isPassiveRead()
+    ? readUsageFilterCandidatesPassive(query)
+    : readUsageFilterCandidates(query);
+}
+
+/**
+ * Folds every candidate page into the accumulator, yielding between pages and re-reading rows
+ * against the snapshot identity; closes the reader when done.
+ */
+async function accumulateCandidates(
+  accumulator: UsageSummaryAccumulator,
+  read: UsageFilterCandidateRead,
+  filter: NormalizedUsageFilter,
+): Promise<void> {
+  try {
+    let first = true;
+    for (;;) {
+      // Candidate selection and row decoding are synchronous bounded chunks. A timer yield
+      // between them prevents a broad authenticated query from monopolizing the event loop.
+      if (!first) await new Promise<void>(resolve => setTimeout(resolve, 0));
+      const offsets = read.nextPage();
+      if (!first && offsets.length === 0) break;
+      first = false;
+      const rows = await readUsageLedgerRowsAtOffsets({
+        offsets,
+        expectedIdentityKey: read.snapshot.identityKey,
+        // The offsets belong to this index snapshot. If the ledger moved since the snapshot,
+        // the reader re-validates the boundary before trusting any of them, and a rewrite of
+        // the indexed tail becomes a rebuild instead of a silently different row set.
+        expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
+        expectedProcessedThroughBytes: read.snapshot.indexedOffset,
+        expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
+        // The physical size at publish time; a torn suffix makes it larger than the boundary.
+        expectedFileSize: read.snapshot.revision?.size,
+      });
+      if (rows.unreadableOffsets.length > 0) {
+        // Serving only the rows that happened to parse would silently under-report the filter.
+        throw new UsageFilterIndexCorruptError();
+      }
+      for (const entry of rows.entries) accumulator.add(entry);
+      if (offsets.length === 0) break;
+    }
+  } finally {
+    read.close();
+  }
+  // Without a source filter the reported span covers the whole ledger, including rows this
+  // filter never selected. A source filter derives its span from the rows that match it, so
+  // only the unfiltered-source case needs the ledger-wide span restored.
+  if (!filter.sourceFilter) {
+    accumulator.noteLedgerSpan(read.snapshot.minTimestamp, read.snapshot.maxTimestamp);
+  }
+}
+
+async function withFilterIndexRetry<T>(run: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_FILTER_INDEX_ATTEMPTS; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      if (error instanceof UsageFilterIndexCorruptError) {
+        requestUsageFilterIndexRebuild();
+        continue;
+      }
+      if (error instanceof UsageLedgerRebuildRequiredError) continue;
+      if (error instanceof UsageAggregationInputsChangedError) continue;
+      throw error;
+    }
+  }
+  throw lastError ?? new Error("filtered usage aggregate did not settle");
+}
 
 function trimRetainedFilteredAggregates(): void {
   while (retainedFilteredAggregates.size > MAX_RETAINED_FILTERED_AGGREGATES) {
@@ -344,107 +544,174 @@ function trimRetainedFilteredAggregates(): void {
 
 function publishFilteredAggregate(
   key: string,
-  state: RetainedUsageAggregate,
+  state: RetainedFilteredAggregate,
   update: UsageAggregateResult["update"],
+  read: UsageFilterCandidateRead | null,
 ): UsageAggregateResult {
   retainedFilteredAggregates.set(key, state);
   trimRetainedFilteredAggregates();
   enforceAppOwnedMemoryBudget();
-  return resultFrom(state, update);
+  return read
+    ? { ...resultFrom(state, update), filterIndex: filterStats(read, update) }
+    : resultFrom(state, update);
 }
 
 async function rebuildFilteredAggregate(
   key: string,
   filter: NormalizedUsageFilter,
   window?: UsageTimeWindow,
+  overlayVersion: number = userCostOverlayVersion(),
+  timeZone: string = currentTimeZone(),
 ): Promise<UsageAggregateResult> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_REBUILD_ATTEMPTS; attempt += 1) {
-    const overlayVersion = userCostOverlayVersion();
-    const timeZone = currentTimeZone();
-    const accumulator = createUsageSummaryAccumulator({ filter, mode: "row-unique", window });
-    try {
-      const scan = await scanUsageLedgerCooperatively({ onEntry: entry => accumulator.add(entry) });
-      if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
-        lastError = new Error("usage aggregation inputs changed during filtered scan");
-        continue;
-      }
-      const state = makeRetainedAggregate(accumulator, scan, overlayVersion, timeZone);
-      return publishFilteredAggregate(key, state, "rebuild");
-    } catch (error) {
-      lastError = error;
-      if (!(error instanceof UsageLedgerRebuildRequiredError) || attempt + 1 >= MAX_REBUILD_ATTEMPTS) {
-        throw error;
-      }
-    }
+  const read = await readCandidates(filterQuery(filter, window));
+  if (!read) {
+    return rebuildFilteredAggregateStreaming(key, filter, window, overlayVersion, timeZone);
   }
-  throw lastError ?? new Error("filtered usage scan did not settle");
+  const accumulator = createUsageSummaryAccumulator({
+    filter,
+    mode: "row-unique",
+    ...(window ? { window } : {}),
+  });
+  await accumulateCandidates(accumulator, read, filter);
+  if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
+    throw new UsageAggregationInputsChangedError();
+  }
+  return publishFilteredAggregate(
+    key,
+    filteredStateFrom(accumulator, read.snapshot, overlayVersion, timeZone),
+    "rebuild",
+    read,
+  );
+}
+
+async function rebuildFilteredAggregateStreaming(
+  key: string,
+  filter: NormalizedUsageFilter,
+  window: UsageTimeWindow | undefined,
+  overlayVersion: number,
+  timeZone: string,
+): Promise<UsageAggregateResult> {
+  const accumulator = createUsageSummaryAccumulator({
+    filter,
+    mode: "row-unique",
+    ...(window ? { window } : {}),
+  });
+  const scan = await scanUsageLedgerCooperatively({ onEntry: entry => accumulator.add(entry) });
+  if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
+    throw new UsageAggregationInputsChangedError();
+  }
+  return publishFilteredAggregate(
+    key,
+    streamingStateFrom(accumulator, scan, overlayVersion, timeZone),
+    "rebuild",
+    null,
+  );
 }
 
 async function appendFilteredAggregate(
   key: string,
-  state: RetainedUsageAggregate,
+  state: RetainedFilteredAggregate,
   filter: NormalizedUsageFilter,
-  window?: UsageTimeWindow,
+  read: UsageFilterCandidateRead,
+  overlayVersion: number,
+  timeZone: string,
 ): Promise<UsageAggregateResult> {
   pinnedAggregates.add(state);
-  let rebuildAfterUnpin = false;
   try {
     const candidate = state.accumulator.clone();
-    const scan = await scanUsageLedgerCooperatively({
-      startAtBytes: state.processedThroughBytes,
-      expectedIdentityKey: state.identityKey,
-      expectedProcessedThroughDigest: state.processedThroughDigest,
-      onEntry: entry => candidate.add(entry),
-    });
-    if (userCostOverlayVersion() !== state.overlayVersion || currentTimeZone() !== state.timeZone) {
-      if (retainedFilteredAggregates.get(key) === state) retainedFilteredAggregates.delete(key);
-      rebuildAfterUnpin = true;
-    } else {
-      const next: RetainedUsageAggregate = {
-        ...state,
-        accumulator: candidate,
-        usageIncomplete: state.usageIncomplete || scan.oversizedRows > 0,
-        revision: scan.revision,
-        identityKey: usageLogIdentityKey(scan.revision),
-        revisionKey: usageLogRevisionKey(scan.revision),
-        processedThroughBytes: scan.processedThroughBytes,
-        processedThroughDigest: scan.processedThroughDigest,
-        retainedAt: Date.now(),
-      };
-      return publishFilteredAggregate(key, next, "append");
+    await accumulateCandidates(candidate, read, filter);
+    if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
+      throw new UsageAggregationInputsChangedError();
     }
+    return publishFilteredAggregate(
+      key,
+      filteredStateFrom(candidate, read.snapshot, overlayVersion, timeZone),
+      "append",
+      read,
+    );
   } catch (error) {
     if (retainedFilteredAggregates.get(key) === state) retainedFilteredAggregates.delete(key);
-    if (error instanceof UsageLedgerRebuildRequiredError) rebuildAfterUnpin = true;
-    else throw error;
+    throw error;
   } finally {
     pinnedAggregates.delete(state);
     trimRetainedFilteredAggregates();
   }
-  if (rebuildAfterUnpin) return rebuildFilteredAggregate(key, filter, window);
-  throw new Error("filtered usage append did not settle");
 }
 
+/**
+ * Serves the filtered report from the retained aggregate, appending new candidates or rebuilding
+ * as needed; a candidate-page failure clears the retained state and retries the streaming scan.
+ */
 async function refreshFilteredAggregate(
   key: string,
   filter: NormalizedUsageFilter,
   window?: UsageTimeWindow,
 ): Promise<UsageAggregateResult> {
-  const state = retainedFilteredAggregates.get(key);
-  if (!state) return rebuildFilteredAggregate(key, filter, window);
-  const observed = currentUsageLogRevision();
-  const overlayVersion = userCostOverlayVersion();
-  const timeZone = currentTimeZone();
-  if (requiresRebuild(state, observed, overlayVersion, timeZone)) {
-    retainedFilteredAggregates.delete(key);
-    return rebuildFilteredAggregate(key, filter, window);
+  try {
+    return await withFilterIndexRetry(async () => {
+      const overlayVersion = userCostOverlayVersion();
+      const timeZone = currentTimeZone();
+      const state = retainedFilteredAggregates.get(key);
+      if (!state
+        || state.overlayVersion !== overlayVersion
+        || state.timeZone !== timeZone
+        || state.indexGeneration === null) {
+        return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
+      }
+      const read = await readCandidates({
+        ...filterQuery(filter, window),
+        afterOffset: state.processedThroughBytes,
+      });
+      if (!read) {
+        retainedFilteredAggregates.delete(key);
+        return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
+      }
+      if (state.indexGeneration !== read.snapshot.generation
+        || state.identityKey !== read.snapshot.identityKey
+        || state.processedThroughBytes > read.snapshot.indexedOffset) {
+        // This branch never pages, so it owns closing the reader before the rebuild discards it.
+        read.close();
+        retainedFilteredAggregates.delete(key);
+        return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
+      }
+      if (state.processedThroughBytes === read.snapshot.indexedOffset) {
+        // Even an unchanged retained projection validates the ledger against the snapshot, so a
+        // rewrite in the window between the index refresh and this return is not served stale.
+        try {
+          await readUsageLedgerRowsAtOffsets({
+            offsets: [],
+            expectedIdentityKey: read.snapshot.identityKey,
+            expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
+            expectedProcessedThroughBytes: read.snapshot.indexedOffset,
+            expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
+            expectedFileSize: read.snapshot.revision?.size,
+          });
+        } finally {
+          // This branch never pages, so it owns closing the reader before publishing its stats.
+          read.close();
+        }
+        state.retainedAt = Date.now();
+        // Whole-ledger diagnostics can move without the boundary moving: a torn oversized or
+        // malformed suffix is observed by every append scan and never advances the offset.
+        state.usageIncomplete = read.snapshot.oversizedRows > 0;
+        state.usageInvalidRows = read.snapshot.invalidRows > 0;
+        state.revision = read.snapshot.revision;
+        state.revisionKey = usageLogRevisionKey(read.snapshot.revision);
+        return publishFilteredAggregate(key, state, "unchanged", read);
+      }
+      return appendFilteredAggregate(key, state, filter, read, overlayVersion, timeZone);
+    });
+  } catch (error) {
+    if (error instanceof UsageFilterIndexPageError) {
+      // A page failed after its reader was handed out: the index cannot serve this query,
+      // so answer from the authoritative ledger scan instead of failing the request.
+      retainedFilteredAggregates.delete(key);
+      return withFilterIndexRetry(() =>
+        rebuildFilteredAggregateStreaming(key, filter, window, userCostOverlayVersion(), currentTimeZone()),
+      );
+    }
+    throw error;
   }
-  if (state.revisionKey === usageLogRevisionKey(observed)) {
-    state.retainedAt = Date.now();
-    return resultFrom(state, "unchanged");
-  }
-  return appendFilteredAggregate(key, state, filter, window);
 }
 
 function jevStatsResultFrom(
@@ -671,4 +938,5 @@ export function resetUsageAggregateCacheForTests(): void {
   retainedFilteredAggregates.clear();
   jevStatsFlights.clear();
   retainedJevStatsAggregates.clear();
+  resetUsageFilterIndexForTests();
 }

@@ -20,6 +20,16 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## Function tool strictness on Chat input
+
+When Chat Completions is translated to OpenAI's Responses API or the ChatGPT backend,
+function tools keep Chat's non-strict
+default: an omitted `strict` is sent as `false`. Explicit `true` and `false` are preserved;
+legacy `functions` also stay non-strict. Optional arguments remain optional, including
+Computer Use's alternative element-index and coordinate selectors. This does not rewrite
+the caller's parameter schema or change the defaults for native Responses requests,
+Chat destinations, or third-party Responses providers.
+
 ## Required tools on buffered native combo routes
 
 A combo checks buffered native `openai-responses` JSON results when `tool_choice` is `required`
@@ -49,6 +59,18 @@ output and usage remain intact. Hosted execution evidence also prevents replay, 
 snapshot omits it. Auto/none, incomplete results and unknown contracts retain their existing rules.
 
 ## Required tools on translated Chat routes
+
+Before sending, the proxy rejects a mandatory tool choice that the selected Chat destination cannot
+represent, such as `computer_use` or a required allowed-tool list containing MCP selections. A direct
+route returns HTTP 400 without an upstream request. A routing profile can continue to another
+originally eligible destination under its configured fallback policy, preserving the original choice.
+An explicit nonempty catalog with `required` is also refused when no tool survives in the full parsed Chat catalog, including tools supplied through input items. A surviving client tool keeps a mixed catalog eligible; hosted web search retains its later sidecar handling.
+If no eligible target remains and all attempted candidates were locally incompatible, the profile returns the same HTTP 400 diagnostic;
+the Responses API returns HTTP 503 for an exhausted combo, naming the mandatory-tool constraint. Other failures
+retain their existing error handling. Copilot Auto uses the final negotiated model and wire for this check.
+A local incompatibility before inference does not count as a model send, including after a session refresh.
+Negotiating a replacement account or model does not rewrite the attribution of an earlier physical send.
+If a send-budget limit stops traversal first, the proxy retains the preceding failure instead of blaming tool compatibility.
 
 A translated OpenAI Chat response must contain a complete selected client tool call when
 `tool_choice` is required, names a tool, or uses a required allowed-tool selection. If the upstream
@@ -256,13 +278,44 @@ Use the actual sample rate of mono PCM16 audio. Wait for `session.started`, then
 send `{"type":"audio.append","audio":"<base64 PCM bytes>"}`. These are JSON text
 frames, not WAV files or binary WebSocket frames. The gateway accepts sample
 rates from 8,000 through 192,000 Hz; upstream support is account/service-dependent.
-Client frames are limited to 64 KiB and sessions to five minutes. Unsupported or
+Client frames are limited to 64 KiB. The proxy allows up to ten minutes
+(600,000 ms) for recording from relay attachment. A valid `session.close` before
+that deadline replaces the recording timer with a separate, bounded 60-second
+window for final transcripts. Keep the WebSocket open during finalization.
+`config.session_ttl_ms` accepts 1–600,000 and is forwarded unchanged; it does not
+set the proxy's recording timer (existing clients may still send 300,000).
+These are OpenCodex application budgets, not demonstrated official OpenAI limits.
+GPT Live and other audio transports retain their existing lifetimes. Unsupported or
 malformed event/config fields close the stream with code 1008.
 
 `transcript.segment` and `transcript.final` contain `utterance_id`, `revision`, and
 `text`. Replace prior text for the same utterance when its revision increases;
 do not concatenate revisions. Finish with `{"type":"session.close"}` and wait
 for final text and `session.updated` with `session.status="closed"`.
+
+The ScribeTray streaming client uses this additional supported start shape
+(replace the example UUIDs with client-generated identifiers):
+
+```json
+{"type":"session.start","dictation_session_id":"78d201cb-1b49-40e1-a5b5-e06a8f8489a1","attempt_id":"8b3c2e4f-d501-4a66-b123-456789abcdef","config":{"input_audio_format":"pcm16","sample_rate_hz":16000,"num_channels":1,"max_buffer_size_bytes":4194304,"max_utterance_duration_ms":30000,"session_ttl_ms":300000,"provider_mode":"streaming_sse","transcript_delivery_mode":"final_only","session_asset_mode":"none","vad":{"type":"server_vad"}},"client_capabilities":["server_stop_requested"]}
+```
+
+The identifiers are optional, nonblank strings of at most 128 UTF-8 bytes.
+`client_capabilities` is optional and accepts an empty array or just
+`"server_stop_requested"`. Optional `config.language` is a nonblank string of at
+most 64 UTF-8 bytes (for example `"it"`); these strings cannot contain control
+characters. Optional `config.session_asset_mode` accepts only `"none"`.
+VAD needs only `{"type":"server_vad"}`. If supplied, `threshold` must be finite
+and within 0–1, `prefix_padding_ms` an integer within 0–1,000, and
+`silence_duration_ms` an integer within 0–5,000.
+
+After start, `{"type":"audio.flush"}` is also accepted and forwarded unchanged.
+It does not close the session; more audio may follow until `session.close`.
+ScribeTray finishes by sending `audio.flush`, then `session.close`, then waiting
+for final results. This supports that client's sequence without asserting that
+flush is required instead of close alone. No audio or other client events are
+accepted after `session.close`. The earlier start and close-only payloads remain
+supported. Unknown fields and unsupported capability values remain rejected.
 
 ## `POST /v1/responses`
 
@@ -383,8 +436,10 @@ and EOFs keep their existing incomplete behavior.
 Explicit incomplete reasons use the same vocabulary in adapter-backed responses and native
 Responses JSON, SSE, and WebSocket delivery:
 output-limit aliases such as `length` and `max_tokens` become `max_output_tokens`, and refusal/filter
-aliases such as `refusal` become `content_filter`. Other reasons remain unchanged, along with the
-provider's message, retryability, and usage. Direct Chat and Messages encoders apply the same mapping.
+aliases such as `refusal` become `content_filter`. Other reasons remain unchanged, along with
+retryability and usage. Responses and Messages output keep the provider's message; Chat Completions
+failures use a proxy-written message instead. Direct Chat and Messages encoders apply the same
+reason mapping.
 
 On the pending `dev` implementation for #4112, a final upstream HTTP 413 on this surface
 is classified as `invalid_request_error` / `context_length_exceeded`. Non-streaming callers
@@ -504,11 +559,9 @@ Logged `POST /v1/messages` replies carry the same OCX request-history id in **bo
 streaming and JSON, and logged refusals. Claude Code can use its persisted `requestId`
 metadata from `request-id` to join future transcripts to that OCX history row.
 
-On native delivered replies and upstream HTTP errors, an opaque Anthropic upstream
-`request-id` matching `req_[A-Za-z0-9_-]{1,128}` is preserved separately as
-`x-opencodex-upstream-request-id`. It is a provider diagnostic id, not an OCX ledger key.
-Missing or nonconforming upstream ids, and translated adapter ids, are omitted. These
-response headers are readable through CORS alongside existing exposed headers.
+Upstream request IDs are omitted. Logged Messages replies expose only the proxy's
+`request-id` and `x-opencodex-request-id`; these headers remain readable through CORS
+alongside existing exposed headers.
 
 No OCX id is added to authentication, origin, drain or active-turn refusals that have no
 request-log owner, or to count_tokens. Streaming headers identify the turn's eventual
@@ -622,6 +675,14 @@ Non-streaming output has `object: "chat.completion"`. Streaming output uses SSE 
 `data: [DONE]`. Tool-call and usage information are translated back where the source events carry
 them.
 
+Error responses and streamed error frames on this endpoint use proxy-written messages. The proxy
+classifies a provider failure into a fixed condition, such as rate limited, quota or credits
+exhausted, context window exceeded, model unavailable, location not supported, or account
+verification required, and returns the fixed message for that condition. Policy refusals, replay
+refusals, and proxy limits have their own fixed messages. The HTTP status, `error.type`,
+`error.code`, and `Retry-After` keep their meaning, so clients that branch on codes such as
+`context_length_exceeded`, `insufficient_quota`, or `rate_limit_exceeded` behave as before.
+
 If a streaming Chat request receives a complete JSON Responses result upstream, the proxy
 synthesizes SSE from the converted completion. It preserves answer and reasoning content,
 function tool calls (with a separate stream `index` for each call), usage, and the converted
@@ -648,6 +709,23 @@ returned as an error instead of silently changing its meaning.
 These endpoints speak the Anthropic Messages dialect used by Claude Code and compatible clients.
 Most requests are translated to Responses, routed normally, then translated back to Anthropic JSON
 or Anthropic SSE.
+
+Native and caller-forward SSE use error-response normalization only when the first non-comment
+field of a block is exactly `event:error` or `event: error`. Leading comments pass through without
+consuming that slot. Data/id/retry/other-event/unknown-first blocks retain their bytes and delivery timing,
+even if a later field names error; their error data is outside this normalization scope. Final
+contained errors contain only the error declaration, data fields and terminator; id, retry, comment,
+unknown and repeated event fields after the declaration are omitted, also when data is empty.
+No possible-event prefix is delayed. Split CR/LF delimiters preserve delivery of later events and stream completion.
+
+After an eligible declaration, one error suffix is held up to 1 MiB. Within the bound, a later
+non-error rename replays the original suffix unchanged after the boundary decision; that suffix is
+delayed. Otherwise the full selected SDK diagnostic determines fixed error wording and recovery.
+Above the bound, even a later rename forces api_error with no code and the fixed sentence
+`The provider stream reported an error.`, containing no compaction phrase. This OVERSIZE-1M
+exception changes error data/recognition with HTTP status unchanged. The independent FOLD-502
+exception changes native non-stream collected-error envelopes from 200 to 502; it retains their
+existing payload presentation. Buffered successful passthrough bodies retain their original bytes.
 
 On translated Messages requests, reasoning replay shares the request's translation budget.
 Envelope admission includes encoding/decoding copy overhead, not just the original signature
@@ -833,6 +911,12 @@ The custom v1 endpoint capability is independent of v2 `supportsNativeCompaction
 and of `decodesNativeCompactionBlobs` for replay. None grants canonical OpenAI identity or
 caller credential forwarding. Cross-provider overrides remain portable; v2 success alone
 does not establish support for `/responses/compact`. See [provider configuration](/reference/configuration/providers/).
+
+Malformed OpenCodex-owned retained-compaction input (`ocx2:`) on a compact
+request returns HTTP 400 with `error.type: "invalid_request_error"` before
+routing, account selection, credential refresh, or upstream dispatch. This
+caller validation error does not trigger upstream retries or record a failure
+against a pooled Codex account.
 
 If the native compact endpoint returns HTTP 404, OpenCodex retries compaction through a regular
 Responses turn with the same model selector and session headers. Canonical ChatGPT fallback

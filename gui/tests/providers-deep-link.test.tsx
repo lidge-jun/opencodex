@@ -24,7 +24,7 @@ afterEach(() => {
   for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
 });
 
-type Snapshot = { selected: string | null; token: number; provider: string | null };
+type Snapshot = { selected: string | null; token: number; provider: string | null; field?: string | null };
 
 async function mount(names: string[] | null, onAccounts?: (name: string, choose: (name: string | null) => void) => void) {
   const seen: Snapshot[] = [];
@@ -129,5 +129,32 @@ test("without onAccounts an accounts link falls back to the Settings behavior", 
   await hash("providers?provider=alpha&tab=accounts");
   expect(view.last()).toMatchObject({ selected: "alpha", provider: "alpha" });
   expect(view.last().token).toBeGreaterThan(0);
+  await view.unmount();
+});
+
+test("an account-mode link focuses Settings and names the account-mode field (#8501)", async () => {
+  const view = await mount(["alpha", "openai"]);
+  await hash("providers?provider=openai&focus=account-mode");
+  expect(view.last()).toMatchObject({ selected: "openai", provider: "openai", field: "account-mode" });
+  expect(view.last().token).toBeGreaterThan(0);
+  await hash("providers?provider=alpha");
+  expect(view.last()).toMatchObject({ selected: "alpha", provider: "alpha", field: null });
+  await view.unmount();
+});
+
+test("an accounts link wins over a focus field in the same hash", async () => {
+  const opened: string[] = [];
+  const view = await mount(["alpha", "openai"], (name, select) => { opened.push(name); select(name); });
+  await hash("providers?provider=openai&tab=accounts&focus=account-mode");
+  expect(opened).toEqual(["openai"]);
+  expect(view.last()).toMatchObject({ selected: "openai", token: 0, provider: null, field: null });
+  await view.unmount();
+});
+
+test("moving to another provider drops the focus field with the rest of the link", async () => {
+  const view = await mount(["alpha", "openai"]);
+  await hash("providers?provider=openai&focus=account-mode");
+  await view.choose("alpha");
+  expect(testWindow.location.hash).toBe("#providers");
   await view.unmount();
 });

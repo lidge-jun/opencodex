@@ -29,7 +29,7 @@ file, and removes it again. Each client below has its own switch:
 | WorkBuddy AI | `~/.workbuddy-ai/models.json` | JSON | auto reload / new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`); the desktop app needs its own sign-in and opencodex never writes `auth.json` |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
@@ -173,7 +173,7 @@ runs your own `claude` binary with `ANTHROPIC_BASE_URL` set to the proxy, the no
 `opencodex-proxy` marker as `ANTHROPIC_AUTH_TOKEN`, an explicitly empty `ANTHROPIC_API_KEY`, and
 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` so a `settings.json` env block in your Claude config cannot
 re-point it. Each routed model is a custom model keyed by its opencodex selector
-(`provider/model`), which T3 Code sends verbatim. It appears in T3 Code's model picker under
+(`provider/model`), which T3 Code sends verbatim. A model with an effort ladder declares it, so T3 Code offers its effort control and can start a subagent on it at a chosen effort. It appears in T3 Code's model picker under
 **opencodex**. T3 Code reloads the file on its own, so no restart is needed; catalog changes and
 `ocx sync` refresh the instance.
 
@@ -479,11 +479,15 @@ though the managed document does not change.
 
 If the file changes after you review it, the write is refused as stale. The dialog replaces the
 old plan with the updated one and asks you to confirm again; it never retries the write
-automatically. If a preview is temporarily unavailable, reload the page normally and start the
-action again.
+automatically. When a preview reports that no model catalog is loaded yet, the dialog stays open and
+offers **Load catalog and retry**: it reads the integration list again — the ordinary load that
+retains the catalog, never a preview that gathers models — and then asks for the plan once more.
 
-Aside uses the same preview and confirmation flow for one selected profile at a time. **Sync all
-profiles** remains a separate bulk action and is not bound to one combined preview.
+Aside uses the same preview and confirmation flow for one selected profile at a time, and a plan
+describes exactly that profile's file. Because one plan cannot describe several independently
+changing files, the Overview card for a conflicted Aside integration opens **Connect → Aside** with
+**Choose profile** rather than a Replace action; replace the block on the profile's own page. **Sync
+all profiles** remains a separate bulk action and is not bound to one combined preview.
 
 ## What to expect, honestly
 
@@ -997,12 +1001,13 @@ then picks the cheapest model from your picker list that reaches the tier:
 - When two or more of the other models have a published score in the role's domain, those models are
   tiered by distinct score values, without requiring a price; equal scores share a tier, and unscored models are left out. Scores come from
   [Artificial Analysis](https://artificialanalysis.ai) when you add your own API key
-  (below). The response's `capability` block names the source it used.
+  (below). Artificial Analysis no longer publishes a Coding or Agentic Index, so every domain is scored by
+  its Intelligence Index. The response's `capability` block names the source it used.
 - Other models with a known price are ranked by price and split evenly across the three tiers. With only
   one or two priced models, the dearest is frontier and the other, if any, is standard.
 - When tiering falls back to price, models with no price and no listed tier are not proposed. List them to include them.
 
-To use Artificial Analysis, create a free API key at [artificialanalysis.ai](https://artificialanalysis.ai/api-reference)
+To use Artificial Analysis, create a free API key at [artificialanalysis.ai](https://artificialanalysis.ai/data-api/docs)
 and set it as a literal, an `${ENV}` reference or a keychain reference:
 
 ```json
@@ -1013,14 +1018,16 @@ and set it as a literal, an `${ENV}` reference or a keychain reference:
 }
 ```
 
-opencodex reads it once per day, which stays inside the free tier's daily request limit. Its terms allow
+opencodex reads the free language model list (`/api/v2/language/models/free`) once per day, one request
+per page, which stays inside the free tier's daily request limit. Its terms allow
 using the data for your own decisions and forbid passing it on, so auto-assign keeps the scores
 internal: the response carries the tier each model got and the attribution, without the scores. If the
 key is absent or the read fails, auto-assign uses configured tiers and prices; `capability.error` reports
 why and the source attribution fields are null. A retired `huggingFace` setting is ignored.
 
-Artificial Analysis refuses HTTP redirects and limits each response body to 16 MiB with a 30-second
-request timeout. Credentials are sent only to its fixed API endpoint.
+Artificial Analysis refuses HTTP redirects, reads at most ten pages and 16 MiB in total, and gives each
+request a 30-second timeout; a longer list counts as a failed read. Credentials are sent only to its
+fixed API endpoint.
 
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
 it up or down. A role the model could not size clearly is shown as not sized, with the reason, and
@@ -1098,6 +1105,16 @@ whichever one it was written into.
 **The credential form.** The provider is written with `apiKey: false`, the documented
 form for an endpoint that needs no key. A raw string is refused by Command Code, and
 no service-token file is read, referenced, or exported by this integration.
+
+**The desktop app needs its own sign-in.** Command Code Desktop never reads the
+keyless provider form: before it shows a workspace it checks `~/.commandcode/auth.json`
+(or `COMMAND_CODE_API_KEY`) and, finding neither, stops on its sign-in screen. Sign in
+there once — or with `cmd login` — and the app stores its own credential.
+
+opencodex does not write that file. It belongs to Command Code and is shared with real
+logins and every other provider's tokens, so enabling this integration only writes
+`providers.json`; the placeholder is never written to `auth.json`, and Apply, overwrite,
+catalog refresh, and Disable all leave the store byte-for-byte alone.
 
 **Home resolution.** There is no `COMMANDCODE_HOME` override here. The published
 client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.json`;

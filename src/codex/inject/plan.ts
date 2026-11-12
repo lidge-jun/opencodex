@@ -9,8 +9,11 @@
  * post-transition bytes is what keeps the committed file from re-enabling the
  * flag the reconcile just turned off.
  */
+import { existsSync, readFileSync } from "node:fs";
 import { websocketsEnabled } from "../../config";
 import {
+  hasPaginatedOpenaiThreads,
+  HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE,
   HISTORY_RELABEL_STANDS_DOWN,
   preflightCodexHistoryInjection,
 } from "../history-provider";
@@ -22,7 +25,7 @@ import {
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { stripJournaledOpenaiBaseUrl } from "../injected-marker";
-import { CODEX_CONFIG_PATH, resolveCodexStateDbPath } from "../paths";
+import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexStateDbPath } from "../paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../subagent-defaults";
 import type { OcxConfig } from "../../types";
 import type { CodexWriteCandidate } from "../write-coordination";
@@ -35,6 +38,7 @@ import {
   ensureFastModeFeature,
   ensureRootWebSearchDisabled,
   normalizeServiceTier,
+  preserveUnmanagedProfileKeys,
   removeProfileSection,
   setRootModelCatalogPath,
   setRootModelProvider,
@@ -50,7 +54,7 @@ import {
   usesProviderTable,
   type CodexRoutingTarget,
 } from "./routing-target";
-import { applyPaginatedOpenaiCompat } from "./paginated-openai-compat";
+import { applyPaginatedOpenaiCompat, codexLocksResumeProvider } from "./paginated-openai-compat";
 
 /** Everything the plan needs that is not the config.toml input text. */
 export interface CodexInjectionPlanContext {
@@ -60,6 +64,12 @@ export interface CodexInjectionPlanContext {
   readonly catalogPathOption: string | null | undefined;
   /** Journal reads stay read-only while a client guard owns the write channel. */
   readonly journalReadOnly: boolean;
+  /**
+   * The resolved Codex version from a passive read, or null when unknown. From 0.166 a paginated
+   * openai-tagged row can no longer resume under opencodex, so the table transition is refused
+   * instead of retaining the root override (#8191).
+   */
+  readonly codexVersion?: string | null;
 }
 
 /** The ok-variant of the plan: every derived artifact and reportable warning. */
@@ -71,6 +81,11 @@ export interface CodexInjectionPlanOk {
   content: string;
   /** The exact string about to replace the profile file. */
   profileContent: string;
+  /**
+   * The profile bytes `profileContent` preserved keys from (null when absent).
+   * Re-checked under the write lock so an edit landing meanwhile is not overwritten.
+   */
+  profileSource: string | null;
   /** The resolved catalog path, never the raw option. */
   catalogPath: string | null;
   providerTableMode: boolean;
@@ -323,12 +338,16 @@ export function deriveCodexInjectionPlan(
     managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
   }
 
-  const profileContent = buildProfileFileForTarget(
-    routingTarget,
-    catalogPath,
-    websocketsForRoutingTarget(config, routingTarget),
-    config?.fastMode,
-    config?.codexProviderDisplayName,
+  const profileSource = readCodexProfileSource();
+  const profileContent = preserveUnmanagedProfileKeys(
+    profileSource,
+    buildProfileFileForTarget(
+      routingTarget,
+      catalogPath,
+      websocketsForRoutingTarget(config, routingTarget),
+      config?.fastMode,
+      config?.codexProviderDisplayName,
+    ),
   );
   content = applyEol(content, eol);
 
@@ -364,7 +383,17 @@ export function deriveCodexInjectionPlan(
    * existing provider references resolvable. Existing provider definitions are retained
    * before the witness; no post-commit compensation may overwrite a newer native write.
    */
-  const compat = applyPaginatedOpenaiCompat(historyPreflight(), routingTarget, content, eol);
+  // Client compaction relabels nothing, so its preflight scans no rows, yet it still makes
+  // `opencodex` the default provider. On a Codex that locks resume to the creating provider
+  // (#8191), probe the store read-only so the same refusal applies; older or unknown versions
+  // keep the retained override and add no read.
+  let preflight = historyPreflight();
+  if (preflight === null && compactionOnly && preflightTableMode && config?.syncResumeHistory !== false
+    && codexLocksResumeProvider(ctx.codexVersion)
+    && hasPaginatedOpenaiThreads(resolveCodexStateDbPath({ readConfig: () => content })) === true) {
+    preflight = HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE;
+  }
+  const compat = applyPaginatedOpenaiCompat(preflight, routingTarget, content, eol, ctx.codexVersion);
   content = compat.content;
   keepRootOverrideAlongsideTable ||= compat.retainedRootOverride;
   const observedHistoryRefusal = compat.refusal;
@@ -395,6 +424,7 @@ export function deriveCodexInjectionPlan(
     baselineContent,
     content,
     profileContent,
+    profileSource,
     catalogPath,
     providerTableMode,
     keepRootOverrideAlongsideTable,
@@ -413,4 +443,19 @@ export function deriveCodexInjectionPlan(
       catalogPath,
     },
   };
+}
+
+
+/**
+ * Current profile bytes, or null when absent. Read directly: a profile removed between an
+ * existence check and the read is simply absent. If it reappears before the write lock, the
+ * lock-time comparison refuses retryably; other read errors propagate.
+ */
+export function readCodexProfileSource(): string | null {
+  try {
+    return readFileSync(CODEX_PROFILE_PATH, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return null;
+  }
 }

@@ -168,6 +168,24 @@ afterEach(async () => {
 });
 
 describe("Reserve owned auth admission", () => {
+  test("opt-in caller Reserve remains keyless even after ordinary affinity is bound", async () => {
+    const cfg = config();
+    cfg.codexPool = { requestOwnedAffinity: true };
+    const headers = caller();
+    headers.set("session-id", "test-session");
+    headers.set("thread-id", "test-thread");
+    const options = { requestScopedMainCredential: true, primeCodexPoolQuotas: async () => {} };
+    const first = await resolveCodexAuthContext(headers, cfg, "pool", options);
+    const second = await resolveCodexAuthContext(headers, cfg, "pool", options);
+    expect(first.affinityDecision?.move).toBe("new_bind");
+    expect(second.affinityDecision?.move).toBe("reused");
+    const reserve = await resolveCodexAuthContext(headers, cfg, "pool", { ...reserveOptions, ...options });
+    expect(reserve.kind).toBe("main");
+    expect(reserve.affinityKey).toBeUndefined();
+    expect(reserve.affinityDecision).toBeUndefined();
+    const { getThreadAffinity } = await import("../../src/codex/routing/thread-affinity");
+    expect(getThreadAffinity(first.affinityKey!, "reserve")).toBeUndefined();
+  });
   test("unqualified Reserve pins stored main, requires capability WHAM, and carries private proof", async () => {
     const cfg = config();
     const ctx = await resolveCodexAuthContext(new Headers(), cfg, "direct", reserveOptions);

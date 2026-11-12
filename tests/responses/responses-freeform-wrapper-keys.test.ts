@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { unwrapFreeformToolInput } from "../../src/responses/apply-patch-envelope";
 import { MAX_FREEFORM_WRAPPER_SCAN_CHARS } from "../../src/responses/freeform-wrapper-scan";
-import { progressiveFreeformInput } from "../../src/responses/progressive-freeform-input";
+import { ProgressiveFreeformInputReader, progressiveFreeformInput } from "../../src/responses/progressive-freeform-input";
 
 /**
  * #5151. The progressive decoder matched the buffer against the literal wrapper opening
@@ -47,6 +47,77 @@ const emissions = (body: string, toolName: string) => stream(body, toolName).del
 const published = (body: string, toolName: string) => emissions(body, toolName).join("");
 
 describe("freeform wrapper keys the literal matcher could not see", () => {
+  test.each(["exec", "apply_patch"])("holds a possible extra %s wrapper at every prefix", tool => {
+    const source = tool === "exec" ? 'text("nested");' : "*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch";
+    for (const body of [
+      JSON.stringify({ input: JSON.stringify({ input: source }) }),
+      JSON.stringify({ code: JSON.stringify({ input: source }) }),
+      JSON.stringify({ input: ' \n { "\\u0069nput": ' + JSON.stringify(source) + " }" }),
+    ]) {
+      // The alternate field is recognized only by exec; apply_patch uses patch.
+      const args = tool === "apply_patch" ? body.replace('{"code":', '{"patch":') : body;
+      expect(unwrapFreeformToolInput(args, tool)).toBe(source);
+      expect(stream(args, tool)).toEqual({ deltas: [], retractions: [] });
+      expect(progressiveFreeformInput(args, tool)).toBeNull();
+    }
+    const foreign = JSON.stringify({ input: JSON.stringify({ input: source }) });
+    expect(published(foreign, "")).toBe(JSON.stringify({ input: source }));
+    // A valid JS block can begin like an object too; it streams once it cannot be a wrapper.
+    const block = "{ let x = 1; return x; }";
+    const wrappedBlock = JSON.stringify({ input: block });
+    expect(unwrapFreeformToolInput(wrappedBlock, tool)).toBe(block);
+    expect(published(wrappedBlock, tool)).toBe(block);
+  });
+
+  // The extra-wrapper hold covers only prefixes that can still become {"input":<string>}.
+  test.each(["exec", "apply_patch"])("object-leading %s bodies keep streaming progressively", tool => {
+    for (const body of [
+      "{ let x = 1; text(x); }",
+      '({ a: 1, b: "two" }).b.length;\ntext("done");',
+      '{"inputs": 1}; text("not a wrapper");',
+      '{}; text("empty object first");',
+    ]) {
+      const args = JSON.stringify({ input: body });
+      const { deltas, retractions } = stream(args, tool);
+      expect(retractions).toEqual([]);
+      expect(deltas.length, body).toBeGreaterThan(body.length / 2);
+      expect(deltas.join("")).toBe(body);
+      expect(unwrapFreeformToolInput(args, tool)).toBe(body);
+    }
+  });
+
+  test.each(["exec", "apply_patch"])("a real double-wrapped %s body is unwrapped once and never previewed", tool => {
+    const source = tool === "exec" ? "text(" + JSON.stringify("x".repeat(400)) + ");" : "*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch";
+    for (const nested of [
+      JSON.stringify({ input: source }),
+      ' \t{ "in\\u0070ut" :\n' + JSON.stringify(source) + " } \n",
+      '{"input":"first","input":' + JSON.stringify(source) + "}",
+    ]) {
+      const args = JSON.stringify({ input: nested });
+      expect(stream(args, tool)).toEqual({ deltas: [], retractions: [] });
+      expect(unwrapFreeformToolInput(args, tool)).toBe(source);
+    }
+  });
+
+  test.each(["exec", "apply_patch"])("late divergence from the wrapper shape flushes then streams (%s)", tool => {
+    const long = "y".repeat(600);
+    for (const [nested, divergeAt] of [
+      ['{"input":"' + long + '","extra":true}', 14 + long.length],
+      ['{"input":"' + long + '"} + text(2);', 14 + long.length],
+      ['{"input":"' + long + "\\q" + long + '"}', 12 + long.length],
+      ['{"inputs":"' + long + '"}', 8],
+    ] as const) {
+      const args = JSON.stringify({ input: nested });
+      const { deltas, retractions } = stream(args, tool);
+      expect(retractions).toEqual([]);
+      // Everything held until the divergence arrives in one flush, then streaming resumes.
+      expect(deltas[0], nested.slice(0, 20)).toBe(nested.slice(0, divergeAt));
+      expect(deltas.length).toBeGreaterThan(1);
+      expect(deltas.join("")).toBe(nested);
+      expect(unwrapFreeformToolInput(args, tool)).toBe(nested);
+    }
+  });
+
   // `progressive` records whether the value can be previewed before the object closes. It is
   // the liveness half of the contract and it is asserted, because holding everything until
   // completion would satisfy the agreement half on its own while quietly ending progressive
@@ -213,5 +284,64 @@ describe("freeform wrapper keys the literal matcher could not see", () => {
     const lateInvalid = '{"metadata":1,"input":"safe\\q"}';
     expect(published(lateInvalid, "exec")).toBe("safe");
     expect(unwrapFreeformToolInput(lateInvalid, "exec")).toBe(lateInvalid);
+  });
+
+  test("streaming a long nested wrapper one character at a time scans linearly", () => {
+    // Each delta used to decode the whole accumulated value and walk the whole decoded body
+    // again for a possible nested wrapper, so one-character deltas cost quadratic work. The
+    // reader resumes where the previous delta stopped; count what it scans instead of timing it.
+    const scanned = (length: number): { chars: number; args: number } => {
+      const source = Array.from({ length }, (_, i) =>
+        i % 17 === 0 ? "\n" : i % 13 === 0 ? '"' : i % 11 === 0 ? "\\" : i % 7 === 0 ? "\u00e9" : "a").join("");
+      const args = JSON.stringify({ input: JSON.stringify({ input: source }) });
+      expect(unwrapFreeformToolInput(args, "exec")).toBe(source);
+      const reader = new ProgressiveFreeformInputReader();
+      for (let end = 1; end <= args.length; end++) {
+        // The wrapper stays hidden at every prefix, including the complete one.
+        expect(reader.update(args.slice(0, end), "exec")).toBeNull();
+      }
+      return { chars: reader.scannedChars, args: args.length };
+    };
+    for (const length of [4_000, 16_000]) {
+      const { chars, args } = scanned(length);
+      expect({ length, linear: chars <= 3 * args }).toEqual({ length, linear: true });
+    }
+  });
+
+  test("a non-string nested input holds only while a later duplicate can still unwrap it", () => {
+    const wrap = (body: string) => JSON.stringify({ input: body });
+    // Once text after the object rules a wrapper out, the held prefix flushes and streams on.
+    for (const body of ['{"input":1}.input', '{"input":[1,"]"]} + 1', '{"input":"a","input":2}']) {
+      expect({ body, completed: unwrapFreeformToolInput(wrap(body), "exec") }).toEqual({ body, completed: body });
+      const { deltas, retractions } = stream(wrap(body), "exec");
+      expect({ body, streamed: deltas.join(""), retractions }).toEqual({ body, streamed: body, retractions: [] });
+    }
+    expect(emissions(wrap('{"input":1}.input + more()'), "exec").length).toBeGreaterThan(1);
+    // A later duplicate replaces the non-string value, so this one stays hidden throughout.
+    const replaced = wrap('{"input":1,"input":{"a":"}"},"input":"x"}');
+    expect(unwrapFreeformToolInput(replaced, "exec")).toBe("x");
+    expect(stream(replaced, "exec")).toEqual({ deltas: [], retractions: [] });
+  });
+
+  test("a reader resumed across deltas answers like a fresh read of each prefix", () => {
+    const bodies = [
+      JSON.stringify({ input: JSON.stringify({ input: 'text("\\u00e9\\n")' }) }),
+      JSON.stringify({ input: '{"input":1}.input' }),
+      JSON.stringify({ input: "{ let x = 1; }\uD83D\uDE00" }).replace("\u{1F600}", "\\ud83d\\ude00"),
+      '{"input":"a\\ud83dX"}',
+      '{"metadata":1,"input":"cmd\\q"}',
+      '{"code":"cmd"} ',
+      "plain body",
+    ];
+    for (const tool of ["exec", "apply_patch", ""]) {
+      for (const body of bodies) {
+        const reader = new ProgressiveFreeformInputReader();
+        for (let end = 1; end <= body.length; end++) {
+          const prefix = body.slice(0, end);
+          expect({ prefix, tool, resumed: reader.update(prefix, tool) })
+            .toEqual({ prefix, tool, resumed: progressiveFreeformInput(prefix, tool) });
+        }
+      }
+    }
   });
 });

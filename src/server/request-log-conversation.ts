@@ -75,7 +75,9 @@ export function unwrapLogConversationQuery(query: string): string {
 export function logConversationQueryCandidates(query: string): string[] {
   const trimmed = query.trim();
   const unwrapped = unwrapLogConversationQuery(trimmed);
-  return unwrapped === trimmed ? [unwrapped] : [unwrapped, trimmed];
+  // A pasted Claude Code metadata.user_id is stored without its per-turn `tk`.
+  const session = trimmed.length > LOG_CONVERSATION_ID_INPUT_MAX ? trimmed : claudeSessionUserId(trimmed);
+  return [...new Set([unwrapped, trimmed, session])];
 }
 
 /**
@@ -222,14 +224,33 @@ export function fillHermesLogConversationFallback(slot: LogConversationSlot, hea
 }
 
 /**
+ * Remote Claude Code adds a per-turn attribution token (`tk`) to its metadata.user_id JSON
+ * blob. Drop it, as Claude Code itself does, so every turn of one session keeps one identity.
+ * Any other user_id, including one that is nothing but `tk`, is returned unchanged.
+ */
+export function claudeSessionUserId(userId: string): string {
+  if (!userId.trimStart().startsWith("{")) return userId;
+  try {
+    const parsed: unknown = JSON.parse(userId);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "tk" in parsed) {
+      const { tk: _tk, ...rest } = parsed as Record<string, unknown>;
+      if (Object.keys(rest).length > 0) return JSON.stringify(rest);
+    }
+  } catch { /* not JSON */ }
+  return userId;
+}
+
+/**
  * Claude Code metadata.user_id only — never the system-hash Desktop fallback.
- * Hashes the raw user_id once (same opacity goal as inbound prompt_cache_key).
+ * Hashes the session's user_id once (same opacity goal as inbound prompt_cache_key).
  */
 export function conversationIdFromClaudeMetadata(
   metadata: { user_id?: unknown } | null | undefined,
 ): string | undefined {
   if (!metadata || typeof metadata.user_id !== "string") return undefined;
-  return normalizeLogConversationId(metadata.user_id);
+  // Too long to persist: skip parsing a blob normalizeLogConversationId rejects anyway.
+  if (metadata.user_id.trim().length > LOG_CONVERSATION_ID_INPUT_MAX) return undefined;
+  return normalizeLogConversationId(claudeSessionUserId(metadata.user_id));
 }
 
 /** @deprecated Prefer conversationIdFromClaudeMetadata; kept for call-site clarity. */

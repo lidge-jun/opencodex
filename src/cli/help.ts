@@ -49,8 +49,9 @@ Usage:
   ocx connect <url>           Connect this machine to a remote OpenCodex hub (credential via stdin)
   ocx remote-workspace <sub>  Pair/run an OCX-only remote execution computer
   ocx disconnect              Restore local state and clear the hub connection
-  ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
+  ocx sync [--local-only] [--json] [--restart-codex]  Sync models and linked Children
                               --expect-link <id> | --expect-hub-key <id>: only from that Home/hub key (exit 5 otherwise)
+                              --child <id>: only those Children; --restart-children[=app-server | =codex --yes]: restart their Codex
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog
   ocx catalog pull <https-url> Install a validated remote catalog and refresh the Codex cache
@@ -67,12 +68,12 @@ Usage:
                               Open the dashboard or create a single-use remote pairing grant
   ocx hub invite [--json]     Print a ready-to-run \`ocx connect\` line for one more machine
                               (hub only; see \`ocx help hub\` for the one-port topology)
-  ocx link <sub>              Machine links over SSH (port|issue|revoke|status)
+  ocx link <sub>              Machine links over SSH (port|issue|revoke|status|check)
   ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|keep-native-v1|threads|mode-hint)
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
-  ocx capabilities [--json]    List declared capabilities and the API routes they drive
+  ocx capabilities [--json] [--contracts]  List capabilities and contracts
   ocx ready [--json] [--wait [--timeout <s>]]  Check post-sync readiness (exit 0 only when ready)
   ocx resolve [--json]        Config home, effective port, and liveness (JSON for shells)
   ocx provider <sub>          Providers, connectivity, quota, and selected models
@@ -102,6 +103,7 @@ Usage:
   ocx config [sub]            Validated configuration show/get/set/import/export
   ocx advisor <status|on|off|set|consent>  Advisor sidecar settings and context-sharing consent
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
+  ocx telemetry <sub>         Anonymous usage telemetry status, preview, enable, and disable
   ocx lab <sub>               Inspect Lab evidence and control local automation
   ocx codex-provider <sub>    Confirm custom Codex provider routing: status|allow|revoke
   ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)

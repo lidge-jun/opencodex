@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { serviceStayOutExitCode, WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
+import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
 import { isSupervisedServiceChild, serviceChildOwnershipDecisionForClassifiedChild } from "../service/service-child-ownership";
-import { SERVICE_MANAGED_ENV } from "../service/state";
+import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 import { raiseWindowsProxyPriority } from "../service/windows-process-priority";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
@@ -13,7 +13,7 @@ import { getCodexHome } from "../codex/paths";
 import { admitUpdateRestartChild } from "./update-restart-child";
 import { HEALTH_SENTINEL_STANDALONE_ARG, startServiceHealthSentinel } from "../service/health-sentinel-launch";
 import { UpdateRestartRequired } from "./update-restart-candidate";
-import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
+import { reportUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 // Best-effort recovery for runtime execution and spawned children if launched
@@ -89,11 +89,11 @@ import {
   restartStartOutcome,
   waitForProxyReplacement,
   runTrayProxyStart,
-  type ProxyRestartLive,
+  type ProxyRestartIo, type ProxyRestartLive,
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
 import { duplicateRuntimeMessage, runDesktopAwareProxyRestart } from "./desktop-runtime-guidance";
-import { reportRestartFailure } from "./restart-failure";
+import { deferSupervisedRestart, reportRestartFailure, type RestartSupervisor } from "./restart-failure";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
@@ -160,6 +160,7 @@ import { productionDesktopColdStartDeps, runDesktopColdStart } from "./ensure-de
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
 import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
+import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
@@ -210,6 +211,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+if (process.argv[2] === "__update-orchestrated-identity") process.exit(await (await import("../update/orchestrated-identity-probe-entry")).runIdentityProbe(process.argv.slice(2)));
 if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
@@ -604,8 +606,9 @@ async function handleStart(options: { block?: boolean } = {}) {
       writeRuntime: bound => { updateRestartChild?.check(bound.port, bound.config.hostname ?? ""); writeRuntimePort({
         pid: process.pid,
         port: bound.port,
-        hostname: bound.config.hostname,
+        hostname: bound.server.hostname,
         attestationSecret: bound.localAttestationSecret,
+        command: currentServingCommand(),
         ...siblingRuntimeField(),
       }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
@@ -803,15 +806,13 @@ async function handleStart(options: { block?: boolean } = {}) {
 }
 
 function detachedStartEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);
+  const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));
   // Only a real service wrapper may claim supervision. A detached ensure/tray child is an
   // ordinary owner, never a sibling: while live it maintains routing, and on exit restores it.
   // The supervisor markers ride along whenever this runs inside a service child's
   // environment, so they must leave with OCX_SERVICE — otherwise the child would
   // answer the ownership gate as a managed job it is not.
   delete env.OCX_SERVICE;
-  delete env[SERVICE_MANAGED_ENV];
-  delete env[WINDOWS_WRAPPER_PROTOCOL_ENV];
   return withProcessRuntimeProvenance(env);
 }
 
@@ -952,13 +953,12 @@ async function handleTrayProxyStart(existingIsSuccess = true): Promise<boolean> 
 }
 
 const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + 15_000;
-
 /** Reserve confirmation time within the shared restart deadline. */
 async function handleProxyRestart(
-  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
+  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void, bindIo: (io: ProxyRestartIo, deadlineAt: number) => ProxyRestartIo = io => io,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
-  const result = await runDesktopAwareProxyRestart({
+  const result = await runDesktopAwareProxyRestart({ ...bindIo({
     findLive: () => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt, attempts: 2, acceptPackageTreeFenced: true }),
       expired: () => Date.now() >= deadlineAt,
@@ -975,16 +975,17 @@ async function handleProxyRestart(
     recheckAfterFailedStart: () => recheckRestartFailedStart(end => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
     })),
-  });
+  }, deadlineAt) });
   if (!result.ok && result.phase === "request" && result.error instanceof UpdateRestartRequired) {
     const candidate = result.error.candidate();
     console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
     const update = await restartFromCurrentInstallation(candidate, deadlineAt, detachedStartEnvironment());
     if (update.ok) console.log(`✅ Proxy updated to ${update.live.version} (PID ${update.live.pid}).`);
-    else console.error(`❌ ${describeUpdateRestartFailure(update.code, update.reason)} (${update.code})`);
+    else reportUpdateRestartFailure(update);
     process.exitCode = update.ok ? 0 : 1;
     return update.ok;
   }
+  if (onSupervised && deferSupervisedRestart(result, onSupervised)) return false;
   if (!result.ok) reportRestartFailure(result);
   process.exitCode = result.ok ? 0 : 1;
   return result.ok;
@@ -1137,7 +1138,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
   // #7423: an update that restarts the proxy asks this stop to leave Codex routing for the replacement.
-  const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig())) && !stoppingSibling && !connectedClientSkip;
+  // Client start never discharges a standalone update-handover receipt or reapplies routing.
+  const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig()))
+    && !stoppingSibling && readClientConnectionState().kind !== "connected";
   let deferralHonoredByProxy = false;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || stoppingSibling) return;
@@ -1525,6 +1528,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
 }
 
 async function handleUninstall() {
+  // Before every teardown step: an elevated run must not act on a home another account can change.
+  const privilegeRefusal = uninstallPrivilegeRefusal(getConfigDir());
+  if (privilegeRefusal) { console.error(`❌ ${privilegeRefusal}`); process.exit(1); }
   /** Definitive "nothing is answering" on the endpoint this home would serve. */
   const proxyEndpointProvenDown = async (): Promise<boolean> => {
     try {
@@ -1679,7 +1685,8 @@ async function handleUninstall() {
   try {
     const { uninstallCodexShimAsync } = await import("../codex/shim");
     const r = await uninstallCodexShimAsync();
-    console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
+    if (r.refused) { failures.push("Codex autostart shim removed"); console.error(`⚠️  Codex autostart shim removed failed: ${r.message}`); }
+    else console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
   } catch (err) {
     failures.push("Codex autostart shim removed");
     console.error(`⚠️  Codex autostart shim removed failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1970,7 +1977,7 @@ process.exit(await dispatchCommand(head, {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-      env: withProcessRuntimeProvenance(withoutSiblingMarker(process.env)),
+      env: withProcessRuntimeProvenance(withoutSupervisorMarkers(withoutSiblingMarker(process.env))),
     });
     child.unref();
   },

@@ -5,16 +5,17 @@
 <h3 align="center">AI kodlama araçlarınız ve modelleriniz için tek bir yerel ağ geçidi.</h3>
 <p align="center"><b>Seçtiğiniz modelleri Codex, Claude Code, Claude Desktop ve Grok Build ile kullanın;<br>OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code ve diğerlerini yönetilen yapılandırmalarla bağlayın.</b><br>
 <a href="https://opencodex.me/tr/reference/client-support/">Desteklenen tüm araçları görün →</a></p>
+<p align="center">GOAT'un bir parçası: kodlama ajanlarınızı herhangi bir modelde, herhangi bir makinede çalıştırın → <a href="https://trygoat.ai">trygoat.ai</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X üzerinde @claudeebum hesabını takip et"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm sürümü"></a>
-  <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="lisans"></a>
+  <a href="https://github.com/lidge-jun/opencodex/blob/dev/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="lisans"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node sürümü">
 </p>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start
 ```
 
@@ -80,14 +81,14 @@ Sol oturumu yürütüyor ve bir Kimi K3 alt ajanını çağırıyor.
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <b>Türkçe</b> · 📖 <a href="https://opencodex.me/tr/"><b>Tüm dokümantasyon →</b></a>
 </p>
 
-opencodex, kodlama araçlarınızla model sağlayıcılarınız arasında çalışan hafif bir yerel ağ geçididir. Responses, Chat Completions ve Anthropic Messages API isteklerini kabul edip sağlayıcınızın protokolüne çevirir; istemci, model ve sağlayıcı desteklediğinde akış, araç çağrıları, akıl yürütme ve görselleri aktarır. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama ve diğer sağlayıcıları Codex, Claude Code, Claude Desktop, Grok Build ve [istemci desteği sayfasındaki](https://opencodex.me/tr/reference/client-support/) araçlarla kullanın. Codex kimlik doğrulaması için bir **ChatGPT hesap havuzunu** da yönetebilir: hesap ekleyip kotalarını panelde yenileyin; yeni oturumlar kullanımı en düşük sağlıklı hesaba otomatik yönlendirilirken mevcut diziler başladıkları hesaba bağlı kalır.
+opencodex, kodlama araçlarınızla model sağlayıcılarınız arasında çalışan hafif bir yerel ağ geçididir. Responses, Chat Completions ve Anthropic Messages API isteklerini kabul edip sağlayıcınızın protokolüne çevirir; istemci, model ve sağlayıcı desteklediğinde akış, araç çağrıları, akıl yürütme ve görselleri aktarır. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama ve diğer sağlayıcıları Codex, Claude Code, Claude Desktop, Grok Build ve [istemci desteği sayfasındaki](https://opencodex.me/tr/reference/client-support/) araçlarla kullanın.
 
 ## Hızlı başlangıç
 
 ### Kişisel kurulum (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; Bun çalışma zamanı otomatik olarak paketlenir
+npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18+; Bun çalışma zamanı otomatik olarak paketlenir
 ocx start                         # proxy + kontrol paneli, localhost:10100
 ```
 
@@ -139,18 +140,6 @@ anlatır; [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)
 şeyi listeler.
 
 </details>
-
-### ChatGPT hesap havuzu
-
-opencodex, Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** da yönetebilir. Birden fazla
-ChatGPT / Codex hesabı ekleyin, 5 saatlik / haftalık / 30 günlük kotalarını panelden tazeleyin. Kota
-yönlendirmesinde yeni oturumlar en az kullanılan sağlıklı hesabı kullanabilir; round-robin ve
-fill-first kendi politikalarını izler. Mevcut Codex dizileri normalde onları başlatan hesaba bağlı
-kalır, böylece uzun SSH, tmux ya da mobil oturumlar konuşmanın ortasında hesap değiştirmez — ancak
-kota yeniden değerlendirmesi, failover, hesabın devre dışı bırakılması, bağlılığın süresinin dolması
-ya da 401/403 ve 429 toparlanması bu bağı yeniden kurabilir. Yalnızca diğerleri tükendiğinde
-kullanılmasını istediğiniz bir hesap varsa — genellikle Codex Desktop girişiniz — hesaplara bir seçim
-sırası verin.
 
 ### Sponsorlar
 
@@ -213,7 +202,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:
@@ -259,7 +248,7 @@ iyileştirmeleri ve henüz yayımlanmamış düzeltmeler npm paketine ulaşmadan
 <summary>Ajanlar için</summary>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start     # ya da `ocx service`
 ocx init      # etkileşimli kurulum: ~/.opencodex/config.json yazar ve Codex'i bağlar
 ```
@@ -293,16 +282,6 @@ betiklerini engellediyse [kurulum belgelerine](https://opencodex.me/tr/getting-s
 
 - **Codex, Claude Code, Claude Desktop ve Grok Build ile istediğiniz LLM** — kutudan çıktığı gibi 40'tan
   fazla sağlayıcı, her biri kendi yerel arayüzünü korur.
-- **ChatGPT hesaplarını havuzlayın** — dizi bağlılığı, kota farkındalıklı otomatik geçiş, bekleme süresi ve
-  fail-closed kimlik doğrulama davranışı.
-
-  > **Sağlayıcı politikası notu:** Hesap havuzu yalnızca yönlendirme ve işletimsel dayanıklılık içindir;
-  > sağlayıcının hız sınırlarından, yaptırımlarından, askıya almalarından ya da diğer hesap işlemlerinden
-  > korunmayı garanti etmez. OpenCodex, sağlayıcı sınırlarını aşmak için ek hesap kullanılmasını ya da hesap
-  > kimlik bilgilerinin kişiler arasında paylaşılmasını onaylamaz. Her sağlayıcının güncel koşullarına
-  > uymak sizin sorumluluğunuzdadır. Bkz.
-  > [Codex Auth hesap havuzu rehberi](https://opencodex.me/tr/guides/web-dashboard/)
-  > ve [OpenAI'nin güncel Kullanım Koşulları](https://openai.com/policies/terms-of-use/).
 - **Kombolar** — sağlayıcılar arasında failover ya da ağırlıklı round-robin yapan tek bir sanal model
   kimliği. [Kombo rehberine](https://opencodex.me/tr/guides/combos/) bakın.
 - **Her modelde alt ajanlar** — yönlendirilmiş modelleri Codex'in alt ajan seçicisinde gösterin, v1/v2
@@ -456,6 +435,33 @@ Geri döngünün dışına bağlanmak (`"hostname": "0.0.0.0"`) bir bearer belir
 `x-opencodex-api-key` olarak taşımalıdır. Ayrıntılar:
 [yapılandırma başvurusu](https://opencodex.me/tr/reference/configuration/).
 
+## Gelişmiş kullanım
+
+İleri düzey kullanıcılar için kendi barındırdığınız seçenekler. Etkinleştirmeden önce her sağlayıcının koşullarını inceleyin.
+
+### ChatGPT hesap havuzu
+
+opencodex, Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** da yönetebilir. Birden fazla
+ChatGPT / Codex hesabı ekleyin, 5 saatlik / haftalık / 30 günlük kotalarını panelden tazeleyin. Kota
+yönlendirmesinde yeni oturumlar en az kullanılan sağlıklı hesabı kullanabilir; round-robin ve
+fill-first kendi politikalarını izler. Mevcut Codex dizileri normalde onları başlatan hesaba bağlı
+kalır, böylece uzun SSH, tmux ya da mobil oturumlar konuşmanın ortasında hesap değiştirmez — ancak
+kota yeniden değerlendirmesi, failover, hesabın devre dışı bırakılması, bağlılığın süresinin dolması
+ya da 401/403 ve 429 toparlanması bu bağı yeniden kurabilir. Yalnızca diğerleri tükendiğinde
+kullanılmasını istediğiniz bir hesap varsa — genellikle Codex Desktop girişiniz — hesaplara bir seçim
+sırası verin.
+
+- **ChatGPT hesaplarını havuzlayın** — dizi bağlılığı, kota farkındalıklı otomatik geçiş, bekleme süresi ve
+  fail-closed kimlik doğrulama davranışı.
+
+  > **Sağlayıcı politikası notu:** Hesap havuzu yalnızca yönlendirme ve işletimsel dayanıklılık içindir;
+  > sağlayıcının hız sınırlarından, yaptırımlarından, askıya almalarından ya da diğer hesap işlemlerinden
+  > korunmayı garanti etmez. OpenCodex, sağlayıcı sınırlarını aşmak için ek hesap kullanılmasını ya da hesap
+  > kimlik bilgilerinin kişiler arasında paylaşılmasını onaylamaz. Her sağlayıcının güncel koşullarına
+  > uymak sizin sorumluluğunuzdadır. Bkz.
+  > [Codex Auth hesap havuzu rehberi](https://opencodex.me/tr/guides/web-dashboard/)
+  > ve [OpenAI'nin güncel Kullanım Koşulları](https://openai.com/policies/terms-of-use/).
+
 ## Belgeler
 
 Herkese açık belgeler — kurulum, sağlayıcılar, yönlendirme, kombolar, alt ajanlar, yardımcı süreçler,
@@ -498,7 +504,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 - Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
 - Approvers: [lidge-jun](https://github.com/lidge-jun)
-- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+- Privacy: opencodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, release channel, platform, install channel, provider kind, coarse model family, active minutes and request, token and error counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer ("Send anonymous usage statistics", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Only project-wide aggregates of this anonymous data are public. A separate public leaderboard profile is off unless you connect one yourself (dashboard Home or ocx telemetry profile connect); it shares only a chosen handle, display name and colour and your daily request, token and model-family totals, never your anonymous telemetry ID, and disconnecting deletes it. Everything else goes only to the providers and services you configure. See the [telemetry guide](https://opencodex.me/tr/guides/telemetry/).
 
 ## Sorumluluk reddi
 

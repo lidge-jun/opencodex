@@ -62,13 +62,38 @@ multi-call pairing, overlap and lifecycle release.
 - Fetch-based web-search turns: full manual support. `createAdvisorSidecarStep` shares the same
   consultation and continuation bounds with the normal guard. The search scanner consumes advisor
   calls alongside `web_search`, fulfills them in worker order, and replays paired results without
-  exposing the synthetic call to the client. Mixed real client calls still end interception. Search
-  and Advisor iterations have independent allowances within one hard loop cap; consultation waits
-  emit heartbeats and share the loop's cancellation signal. `advisor-responses-wiring.test.ts`
+  exposing the synthetic call to the client. The synthetic tool and scanner are enabled only when
+  the request's effective `tool_choice` permits Advisor; an `allowed_tools` scope that permits only
+  web search cannot be widened into an expert consultation. Without an active Advisor sidecar,
+  an emitted `advisor` call is refused before its ID or arguments reach the client unless that
+  iteration declares and permits it as an ordinary client tool. Partial calls are refused at
+  their start, and the terminal refusal retains worker usage. Synthetic permission is also
+  iteration-scoped: tools-disabled empty-answer recovery refuses Advisor even when the original
+  turn installed the sidecar; ordinary exhausted-Advisor iterations retain paired limit handling.
+  Mixed real client calls still end
+  interception. Search and Advisor iterations have independent allowances within one hard loop cap;
+  consultation waits emit heartbeats and share the loop's cancellation signal. `advisor-responses-wiring.test.ts`
   covers search-enabled, mixed-call, real-client-call and repeated-consultation paths. The limit
   reports accumulated worker usage once, without attaching it again to the terminal error;
   `tests/advisor/advisor-web-search.test.ts` covers the accounting and independent allowances.
 - Turns claimed by the image/video sidecar loops keep the advisor tool un-injected; preflight still applies.
+
+## Claude Code's typed Advisor server tool
+
+Claude Code also declares Anthropic's own Advisor server tool (`advisor_YYYYMMDD`, beta
+`advisor-tool-2026-03-01`), which Anthropic runs server-side under the same wire name `advisor`.
+The two never share a turn. When this sidecar injects its synthetic tool,
+`src/server/responses/sidecar-execution.ts` removes the declaration for the whole turn, so a later
+web-search iteration without the synthetic tool cannot forward it either, and records the protocol
+reason `advisor-tool-shadowed-by-proxy-advisor` for a destination that would otherwise receive it.
+`planAnthropicServerTools` (`src/adapters/anthropic/advisor-tool.ts`) also withholds the completed
+Advisor history and the beta while a function tool named `advisor` owns the name, the same rule that
+keeps the web-search sidecar's `web_search` ahead of a typed search. With
+this sidecar off, the declaration reaches first-party Anthropic, or a gateway with
+`forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
+rules are in [providers and adapters](providers-and-adapters.md);
+`tests/claude-integration/claude-translated-advisor-tool.test.ts` covers both sides of the precedence
+through the Responses core.
 
 ## Recursion fence (server-owned authority)
 
@@ -139,6 +164,24 @@ native combo dispatch, early capture, external forgeries and worker-unavailable 
 `advisor-caller-policy-sidecar-authority.test.ts` covers sidecar capability admission and registration lifetime.
 
 ## Context and safety boundaries
+
+`advisor.contextMode` defaults to `context`. With `question-only`, the consultation sends only a
+fixed question-only system instruction and the worker's trimmed `question` (at most 2,000 Unicode
+code points plus a truncation notice). No task, transcript, tool catalog, worker identity or repair
+evidence is attached. The protocol guard and builder share `src/server/responses/advisor-question.ts`:
+clipping preserves surrogate pairs, scans only through the first excess code point and is idempotent.
+`buildAdvisorUserPrompt` returns before reading parsed task state. The
+synthetic tool requires a self-contained string question. Its schema omits length constraints so
+Google's `reject-lossy` policy can accept it; the runtime enforces nonempty input and the shared bound.
+Both the runtime and low-level consultation
+executor reject empty questions without dispatch. The runtime re-reads the mode before dispatch.
+Its synchronous admission hook also prevents invalid question-only calls from consuming the guard's
+consultation allowance. Worker continuations retain their independent hard limit, including invalid calls.
+Automatic preflight and adaptive repair consultation are disabled in this mode because they have
+no worker-written question. Existing consent, request limits and adaptive task budgets still apply.
+The management API, CLI `--context-mode` and dashboard checkbox configure the same field.
+The CLI capability registry publishes the flag and automation exception in the generated `skills/ocx/` operating reference.
+`tests/advisor/advisor-consult.test.ts` checks real loopback request equality across history sizes.
 
 **Context-sharing consent is required before any of that transfer.** `advisor.enabled` does not
 grant it. The operator records `advisor.contextSharingConsent: "v1"` from the dashboard checkbox,

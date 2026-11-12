@@ -1,5 +1,6 @@
 import { inheritAccountAutoPauseResponse } from "../lib/account-auto-pause-response";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { providerErrorTypeOf, withProviderFailureFacts } from "../lib/failure-detail";
 import { redactSecretString } from "../lib/redact";
 
 const ABSOLUTE_PATH_PATTERN = /(?:\/Users\/[^ "';,]+|\/home\/[^ "';,]+|\/root\/[^ "';,]*|[A-Za-z]:\\Users\\[^ "';,]+)/g;
@@ -41,9 +42,10 @@ export async function normalizeUpstreamHttpErrorResponse(
   const headers = new Headers(res.headers);
   headers.delete("content-encoding");
   headers.delete("content-length");
-  return inheritAccountAutoPauseResponse(res, new Response(await opts.formatMessage(payloadText), {
+  // The rewritten body is display text; keep the provider's closed error class for the request log (#8446).
+  return withProviderFailureFacts(inheritAccountAutoPauseResponse(res, new Response(await opts.formatMessage(payloadText), {
     status: res.status,
     statusText: res.statusText,
     headers,
-  }));
+  })), { type: providerErrorTypeOf(parseUpstreamJsonPayload(payloadText)) });
 }

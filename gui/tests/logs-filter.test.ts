@@ -80,10 +80,9 @@ describe("rich Logs filtering", () => {
     expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, provider: "anthropic" }, NOW).map(row => row.id)).toEqual(["claude"]);
   });
 
-  test("composes surface, status, interception, and conversation filters", () => {
+  test("composes status, interception, and conversation filters", () => {
     expect(filterLogs(logs, {
       ...DEFAULT_LOG_FILTER_STATE,
-      surface: "claude",
       status: "success",
       conversationId: "conv-123",
     }, NOW).map(row => row.id)).toEqual(["claude"]);
@@ -92,6 +91,15 @@ describe("rich Logs filtering", () => {
       status: "success",
       interceptedOnly: true,
     }, NOW).map(row => row.id)).toEqual(["helper"]);
+  });
+
+  test("ignores obsolete surface selections rather than hiding rows without a visible control", () => {
+    for (const surface of ["claude", "codex", "grok", "invalid"]) {
+      const obsolete = { ...DEFAULT_LOG_FILTER_STATE, surface };
+      expect(filterLogs(logs, obsolete, NOW)).toEqual(logs);
+      expect(hasActiveLogFilters(obsolete)).toBe(false);
+    }
+    expect(DEFAULT_LOG_FILTER_STATE).not.toHaveProperty("surface");
   });
 
   test("accepts only finite integer HTTP statuses in status buckets", () => {
@@ -194,6 +202,15 @@ test("exact model choices distinguish prefix siblings and compose with a provide
 
 const digest32 = (raw: string) => createHash("sha256").update(raw).digest("hex").slice(0, 32);
 const CODEX_THREAD_ID = "019f6482-67d5-77c2-a643-02daddaa7115";
+
+test("a pasted Claude Code user_id finds its session despite the per-turn tk", async () => {
+  const session = JSON.stringify({ device_id: "d", session_id: "s" });
+  const turn = JSON.stringify({ device_id: "d", session_id: "s", tk: "turn-3" });
+  const rows = [{ id: "session", conversationId: digest32(session) }, { id: "old", conversationId: digest32(turn) }];
+  const queryHash = await hashLogConversationQuery(turn);
+  expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, conversationId: turn, conversationQueryHash: queryHash }, NOW)
+    .map(row => row.id)).toEqual(["session", "old"]);
+});
 
 describe("codex://threads paste in the conversation filter", () => {
   test("unwraps the deep link to the bare thread id and hashes the unwrapped value", async () => {

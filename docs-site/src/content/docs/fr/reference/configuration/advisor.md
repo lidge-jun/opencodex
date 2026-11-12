@@ -14,6 +14,16 @@ Cela se distingue de la surface des sous-agents (voir
 délégation initiée par le worker via les outils de collaboration de Codex. Le conseiller est un
 sidecar côté proxy invisible du client — même un worker qui ne spawn jamais peut être conseillé.
 
+## Question uniquement
+
+Pour réduire les entrées répétées, activez l’option correspondante dans la page Advisor ou exécutez :
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+Ce mode envoie uniquement une instruction fixe et la question du worker (2 000 caractères conservés, puis un avis de troncature). Aucun historique, tâche, résultat d’outil, catalogue, identité du worker ou preuve de réparation n’est ajouté. Le worker doit fournir les informations nécessaires. Les questions vides sont refusées sans appel au fournisseur. Les consultations automatiques preflight et adaptive sont suspendues ; le consentement et les limites existantes restent requis. Le mode par défaut `context` conserve le comportement décrit ci-dessous. `--context-mode context` le rétablit.
+
 ## Configuration
 
 Sur la page **Advisor**, choisissez le modèle dans le catalogue. Le sélecteur conserve exactement les identifiants natifs, de fournisseur, de compte, personnalisés et de combo. Les modèles désactivés ou en attente de sélection initiale ne sont pas proposés. Un identifiant enregistré absent du catalogue reste visible avec un avertissement, jusqu’à son remplacement ou sa suppression. Un échec de chargement conserve la sélection et propose de réessayer. Choisissez un modèle capable de fournir des conseils textuels : le catalogue ne garantit pas la compatibilité des consultations. La CLI et l’API acceptent toujours les chaînes de modèle prises en charge par le routeur.
@@ -36,6 +46,7 @@ Sur la page **Advisor**, choisissez le modèle dans le catalogue. Le sélecteur 
 | `model?` | `string` | — | Le modèle expert. Toute chaîne de modèle acceptée par le routeur : modèle natif seul (`gpt-6-astra`), `provider/model` explicite (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) ou modèle natif qualifié par compte. Inter-fournisseurs entièrement pris en charge. |
 | `effort?` | `string` | `"max"` | Intensité de raisonnement de l'appel conseiller (`low`–`ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Quand consulter le conseiller. |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | Partage du contexte. `question-only` exige une question explicite du worker et suspend les consultations automatiques. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Budget adaptatif par tâche (1 à 3 tentatives, appels manuels compris). |
 | `timeoutMs?` | `number` | `120000` | Délai de la consultation en boucle locale. |
 | `contextSharingConsent?` | `"v1"` | absent | Consentement de l'opérateur pour envoyer le contexte de la tâche au fournisseur conseiller configuré. Seul `"v1"` est courant. Une valeur absente, périmée ou autre n'autorise aucun envoi. `enabled: true` n'est pas ce consentement. |
@@ -86,6 +97,8 @@ OpenCodex n'insère pas dans ce prompt de clés d'API de fournisseur, d'en-tête
 ## Autorité
 
 Le conseil manuel est le résultat d'outil de l'appel `advisor` que le worker a lui-même émis. Ce résultat est un objet JSON. Le champ `advice` est le texte du modèle conseiller. Le champ `status` est écrit par le runtime.
+
+Lors des tours de recherche web basés sur fetch, la boucle de recherche n'expose l'outil synthétique `advisor` et n'intercepte ses appels de consultation manuelle que si le `tool_choice` effectif l'autorise. Un choix `allowed_tools` limité à `web_search` exclut les consultations manuelles du conseiller. Activer la recherche hébergée n'élargit pas cette autorisation.
 
 Le conseil automatique est un objet JSON cité dans un message consultatif de rôle user distinct. Seule l’instruction fixe du runtime reste dans le message developer ; le texte généré par le conseiller ne passe jamais dans developer/system. Cela fonctionne avec OpenAI Chat et Anthropic sans inventer un appel d’outil. Les guillemets empêchent la rupture structurelle et les champs falsifiés, pas toute injection en langage naturel. Un protocole dédié pourrait mieux distinguer le conseil d’une demande utilisateur. Chaque requête permet au plus trois consultations et quatre continuations du worker. À la limite, l’outil advisor est retiré ; un nouvel appel reçoit une dernière continuation avec un résultat de limite, puis un autre appel termine avec 502 advisor_continuation_limit sans nouvel envoi. La limite est partagée avec les reprises de complétion vide.
 

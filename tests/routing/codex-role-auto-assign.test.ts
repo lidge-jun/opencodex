@@ -195,7 +195,7 @@ describe("capability response bounds", () => {
 });
 
 describe("capabilityTableFromArtificialAnalysis", () => {
-  test("reads each domain's index, falls back to the intelligence index, and matches catalog slugs", () => {
+  test("scores every domain by the intelligence index, ignores retired indexes, and matches catalog slugs", () => {
     const table = capabilityTableFromArtificialAnalysis({
       status: 200,
       data: [
@@ -205,8 +205,9 @@ describe("capabilityTableFromArtificialAnalysis", () => {
       ],
     });
     expect(table.source?.redistributable).toBe(false);
-    expect([candidateModelKey("cpa/claude-opus-5-5"), candidateModelKey("gpt-6.1-sol")].map(key => table.domains.coding!.get(key))).toEqual([66, 61]);
+    expect([candidateModelKey("cpa/claude-opus-5-5"), candidateModelKey("gpt-6.1-sol")].map(key => table.domains.coding!.get(key))).toEqual([71, 73]);
     expect(table.domains.agentic!.get(candidateModelKey("gpt-6.1-sol"))).toBe(73);
+    expect(table.domains.reasoning!.get(candidateModelKey("gpt-6.1-sol"))).toBe(73);
     expect(() => capabilityTableFromArtificialAnalysis({ error: "API key is required" })).toThrow();
   });
 });

@@ -28,7 +28,9 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-実行中のプロキシを (PID によって) 停止し、PID ファイルを削除します。スタンドアロンの所有者ではネイティブ Codex を復元します。マネージド バックグラウンド サービスがインストールされている場合、`ocx stop` はそれを最初に停止するため、プロキシを再起動できません。Web ダッシュボードの **停止** ボタンは同じ処理 (`POST /api/stop`) を実行しますが、Windows タスク スケジューラだけは例外です。タスク終了後もラッパーがプロキシを再起動しうるため、ダッシュボードは `respawnable_service` で拒否し、何も変更せずに `ocx stop` の実行を促します。
+監督プロセスのない Link Child は終了シグナル時、各書き込みで接続を再確認し、リスナーを閉じる前に Codex と管理対象 Grok を復元します。サービス・Desktop、sibling、再起動の引き継ぎ、親 stop 記録がある場合は設定を保持します。終了中の再起動は `409 runtime_stopping` です。強制終了はシグナル処理を省略する場合があり、親 `ocx stop` の復元も必要です。
+
+実行中のプロキシを (PID によって) 停止し、PID ファイルを削除します。スタンドアロンの所有者ではネイティブ Codex を復元します。マネージド バックグラウンド サービスがインストールされている場合、`ocx stop` はそれを最初に停止するため、プロキシを再起動できません。Web ダッシュボードのサイドバーにあるプロキシ レバーを下まで引く停止操作は同じ処理 (`POST /api/stop`) を実行しますが、Windows タスク スケジューラだけは例外です。タスク終了後もラッパーがプロキシを再起動しうるため、ダッシュボードは `respawnable_service` で拒否し、何も変更せずに `ocx stop` の実行を促します。
 
 接続済みの hub クライアントでは、`ocx stop`（成功した API 停止を含む）は接続が所有する Codex のルーティング、モデルカタログ、Grok 設定を保持します。`ocx start` はルーティングを再注入せず、その設定で再び処理します。Codex を自身のアカウントへ戻すには `ocx disconnect`、既にネイティブルーティングへ戻した後の再適用には `ocx sync --restart-codex` を使います。
 
@@ -78,6 +80,10 @@ ocx eject back
 ### `ocx uninstall`・`ocx remove`
 
 すべての復元手順が成功した場合にのみ、サービスとプロキシを停止し、サービスと Codex シムを削除し、ネイティブ Codex を復元してから、opencodex ローカル設定を削除します。 `remove` は `uninstall` の別名です。設定のクリーンアップには、新規インストールによって作成された所有権メタデータが必要です。従来のディレクトリまたは共有ディレクトリはそのまま残ります。
+
+`ocx uninstall` を root または管理者として昇格した Windows プロンプトで実行すると、まず他のアカウントが設定ディレクトリ、その上位ディレクトリ、その中のどのディレクトリも変更できないこと、そして設定ディレクトリ内のリンクがその外を指していないこと (Windows ではリンクがまったくないこと) を確認します。どちらかを満たさない場合は、何も変更する前に停止し、理由を表示します。設定ディレクトリを所有するアカウントで `sudo` や管理者権限なしに `ocx uninstall` を実行するか、それらのディレクトリをそのアカウントだけに制限してそのようなリンクを削除してから、もう一度実行してください。昇格しているかどうかを判別できない Windows ARM64 でも同じ確認を行います。確認を完了できない場合は、opencodex を停止してから設定ディレクトリを手動で削除してください。
+
+設定ディレクトリ内で親ディレクトリがリンク (シンボリックリンクまたはジャンクション) になっている記録済みの項目はそのまま残され、残ったパスとして表示され、実行は部分的なアンインストールとして終了します。そのリンクを実際のディレクトリに置き換えるか削除してから、`ocx uninstall` をもう一度実行すると完了します。
 
 ## ステータスと健康状態
 
@@ -164,9 +170,13 @@ ocx status --json
 
 ## カタログの同期
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
 
-> **Remote Link Child:** `ocx sync` は Home の Codex 設定も適用し、クライアントランタイムがその適用より前に起動していた場合は、再起動フラグなしでもランタイムを再起動します。再起動に失敗した場合は以前のランタイムが動作し続け、コマンドは 0 以外で終了します。`ocx status --json` と `ocx link status --json` の関連フィールドは [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英語）を参照してください。
+Remote Link の Home では、最新のカタログが正常にコミットされた後、`ocx sync` は対象となるリンク済み Child にも同期を伝播します。`--local-only` はこの伝播を無効にします。`--json` は Home の結果と各 Child の状態を含む単一の `ocx.sync.fanout/1` 文書を出力し、スキップされた Child の理由も示します。Home 自体の終了コードが 0 以外の場合は、そのコードを変更せずに返します。Home が成功した場合、接続された Child の同期スキップ、失敗、タイムアウト、またはリンクストアの読み取り不能は終了コード 6 となります。クライアント主導リンクや `--local-only` などの意図的なスキップは従来どおりです。スキップされた接続済み Child には対処方法を示す `hint` が付きます。リンクストアを読み取れない場合、テキスト表示ではパスを含まないエラーを出します。コード 7 は更新処理中のために予約されています。JSON モードで Home の同期が例外を送出した場合も、stdout は単一の結果文書を保ち、stderr に無害化された診断を出力します。 `--child` で除外したリンク（`not-selected`）と Child 操作中の Child（`child-busy`）も意図的なスキップで、終了コード 6 にはなりません。要求した Child の再起動が確実に行われなかった場合は終了コード 6 になります。
+
+伝播は、`--restart-children`（app-server）または `--restart-children=codex --yes`（Codex デスクトップアプリ。進行中の会話が終了し、そのマシンでサインイン済みのデスクトップセッションが必要です）を指定しない限り、Child の Codex 再起動を要求しません。Home は選択した各 Child をまず同期し、その Child のアクティビティを読み直してから、2 回目の固定先同期で再起動を送ります。その時点でモデルリクエストを中継している Child（`restart-skipped:link-active`）、アクティビティを読み取れない Child（`restart-skipped:activity-unknown`）、Windows Child（`restart-skipped:windows`）、`ocx-child`（`restart-unsupported:ocx-child`）では、同期は行い再起動だけをスキップし、終了コード 6 で終了します。Child の種類が記録されていないリンクにも 2 回目の同期で再起動フラグが送られ、Home はそれによって `ocx-child` であることを知ります。`ocx-child` はこのフラグを無視します。再起動を送れなかった場合や、送ったものの結果が不明な場合、その Child の行は `restart-not-run` または `restart-result-unknown` となり、終了コードは同じく 6 です。`ocx link restart-codex` と同様にこの保護はベストエフォートで、読み取りから再起動までの間に始まったリクエストは中断されることがあります。`--child <linkId>`（複数指定可）を指定すると、そのリンクにだけ伝播し、他は `not-selected` と報告されます。`ocx link update` などの Child 操作中の Child は `child-busy` としてスキップされます。ただし、Child の固定先同期は、変更された Home 設定を適用した後、自身の OpenCodex クライアントランタイムを再起動することがあります。Home がタイムアウトしてローカルの SSH プロセスを停止しても、すでに開始されたリモート同期は Child 上で続くことがあります。
+
+> **Remote Link Child:** フル `ocx` Child では `ocx sync` が Home の Codex 設定も適用し、クライアントランタイムがその適用より前に起動していた場合は再起動フラグなしでも再起動します。再起動に失敗しても以前のランタイムは動作し続け、コマンドは 0 以外で終了します。軽量 `ocx-child` ホストでは `ocx-child sync` が未起動時に `ocx-child serve` を起動し、`runtimeStartedAt < lastApplyAt` のときにローテーションして非 `stale` 同期時にベストエフォートで parity を報告します（ローテーション失敗時は旧リレー停止後に 0 以外で終了するため再実行で復旧し、Codex デスクトップや `app-server` の再起動は別途行ってください）。Child の `ocx status --json`（または `ocx-child status --json`）と Home の `ocx link status --json` の関連フィールドは [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英語）を参照してください。 Home では `ocx link check (--link-id <id> | --all)` が SSH 経由の `ocx update --plan`（Child ごとに 60 秒、インストールは変更しません）で Home から追加した各 Child のインストール済みバージョンと更新経路を読み取り、`ocx link status --json` は各行に `child` ブロックを追加します。詳しくは [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英語）を参照してください。`ocx link sync`、`ocx link restart-codex --yes`、`ocx link update --yes` はこれらの Child で同期、Codex 再起動、更新のジョブを実行し、`ocx.link.child-job/1` ドキュメントを出力します。詳しくは [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英語）を参照してください。`ocx link policy` は Home の Child ポリシーを読み、または変更します。カタログの自動配信は既定で有効で、Home のカタログが変わると対象の Child を SSH で同期します。詳しくは [Automatic catalog fan-out and the Child policy](/guides/remote-link/#automatic-catalog-fan-out-and-the-child-policy)（英語）を参照してください。
 
 再起動フラグを明示した場合、カタログとキャッシュのバイト列が変わらなくても、`config.toml` の変更が正常にコミットされれば再起動します。設定だけを扱う操作が変更なし、拒否、事前検証、ロールバックとなった場合は再起動しません。再起動フラグがなければ、sync が Codex を自動的に再起動することはありません。
 
@@ -218,6 +228,12 @@ Windows タスク スケジューラでインストールするサービスは�
 Linux では、systemd ユニットはインストール時に `PATH` 上で見つかった最初の通常の実行可能な `ocx` ファイルを呼び出します。インストール済みパッケージ ツリー内の Bun と CLI のパスは使用しません。**mise** や **asdf** などのバージョン マネージャーはバージョン付きディレクトリにインストールし、アップグレード時に古いディレクトリを削除しますが、安定した shim によりユニットは引き続き解決できます。`ocx` ランチャーのないソース チェックアウトでは、直接の Bun + CLI 形式が維持されます。Bun 起動前に選択された信頼済みの `OPENCODEX_BUN_PATH` は shim を通じて保持され、パッケージ同梱の Bun パスはアップグレード後に再検出されます。
 
 macOS では、launchd は代わりにインストールまたは修復時に選択されたパッケージ内の Bun と CLI のパスを使用します。これにより、可変の PATH shim が後の再起動時にサービス API トークンや設定済みプロキシ環境を受け取ることを防ぎます。バージョン マネージャーによるインストールをアップグレードした後は、サービスを再起動する前に `ocx service repair` を実行してこれらのパスを更新してください。
+
+macOS のエージェントは `ProcessType=Interactive` を使用し、負荷が高い場合もヘルスチェックに応答できるよう、既定の daemon の CPU・I/O 制限を避けます。既存のインストールをアップグレードした後は、`ocx service repair` を実行してこのポリシーも適用してください。
+
+定義の読み込みを確認できなかった場合、トークンが変わっても未確認状態は次の修復に引き継がれます。登録の再試行は、最初の launchd 状態確認が可能な場合だけ行われ、GUI ログインセッションが必要なことがあります。作成に成功した元のバックアップは、bootstrap の受け入れと一致するジョブの確認がそろうまで保持されます。バックアップ作成はベストエフォートで、新規インストールには以前の定義がありません。
+
+最初の launchd 状態確認ができない場合、repair は新しい plist やバックアップを書き込む前に失敗します。変更した定義の bootstrap が拒否され、状態を確認できる場合は以前の定義の復元を試みます。bootstrap 後に状態を確認できなくなった場合は追加の解除や復元を行わず、bootstrap が受け入れられた場合は未検証の再読み込みとして警告し、拒否された場合は失敗します。再試行前に `launchctl print gui/$(id -u)/com.opencodex.proxy` で確認してください。新規インストールは孤立した復旧ファイルを削除し、完全アンインストールは plist がなくても削除します。新規インストールの復旧ファイル整理、未確認マーカーの削除、アンインストールの整理では、既に存在しないファイルだけを無視します。それ以外のエラーは失敗として報告し、インストール状態を削除しません。検証済みの修復がインストール状態を書き込んだ後の `.prev` バックアップ削除はベストエフォートで、その失敗によって修復の成功結果は変わりません。
 
 この変更より前にインストールされた定義は、古いバージョン付きパスを保持したままで、自分自身を移行できません。古い実行ファイルが削除されると、修復する opencodex コードは実行されません。アップグレード後に一度 `ocx service repair` を実行してください。その後、Linux のサービス起動はランチャーに従い、macOS の repair は新しいパッケージ パスを launchd 定義に書き込みます。外部アップグレードによって実行中のプロキシが置き換えられることはありません。インストール済み CLI が実行中のプロキシより新しい場合は、新しいビルドが提供されるよう `ocx service restart` を実行してください。macOS では、この場合 `repair` だけでは不十分です。定義は変更されていないため、何も変更しない repair は何もリロードしません。逆にプロキシの方が新しい場合は、[`ocx status`](#ocx-status---json) の説明に従って CLI のインストールと `PATH` を確認してください。
 

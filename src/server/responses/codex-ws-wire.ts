@@ -203,13 +203,29 @@ export function codexWsPreOutputRefusalHold(connectMs: number, now = Date.now())
 
 /**
  * A lifecycle frame that commits nothing the client could see or act on (#6969): created,
- * in-progress or queued, carrying a response object whose output is absent or empty. A snapshot
- * with any output item, an unknown event, or a frame addressed to another stream is not one.
+ * in-progress or queued, carrying a response object whose output is absent or empty, or the
+ * heartbeat that only keeps the connection alive. A snapshot with any output item,
+ * an unknown event, or a frame addressed to another stream is not one.
+ *
+ * A heartbeat qualifies only while it carries no output, no field this contract does not know, and
+ * at most its numeric sequence marker. A replay-unsafe mark already ran a side effect and is never
+ * held; only an absent mark or the boolean false proves there was none, so any other value fails
+ * closed rather than trusting a malformed type.
  */
 export function isEmptyCodexWsLifecycleEvent(payload: Record<string, unknown>): boolean {
+  if (payload.stream_id !== undefined) return false;
+  if (payload.type === "response.heartbeat") {
+    if ((Object.hasOwn(payload, "replayUnsafe") && payload.replayUnsafe !== false)
+      || Object.keys(payload).some(key =>
+      key !== "type" && key !== "response" && key !== "replayUnsafe" && key !== "sequence_number")) return false;
+    if (payload.sequence_number !== undefined
+      && !(typeof payload.sequence_number === "number" && Number.isSafeInteger(payload.sequence_number)
+        && payload.sequence_number >= 0)) return false;
+    return payload.response === undefined
+      || (plainRecord(payload.response) && emptyOutput(payload.response));
+  }
   if (payload.type !== "response.created" && payload.type !== "response.in_progress"
     && payload.type !== "response.queued") return false;
-  if (payload.stream_id !== undefined) return false;
   return plainRecord(payload.response) && emptyOutput(payload.response);
 }
 

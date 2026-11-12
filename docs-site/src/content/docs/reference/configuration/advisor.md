@@ -14,6 +14,16 @@ This is distinct from the subagent surface (see
 delegation through Codex's collaboration tools. The advisor is a proxy-side sidecar the client
 never sees — even a worker that never spawns anything can be advised.
 
+## Question-only mode
+
+To reduce repeated input, select **Send only the worker’s question** in the Advisor page, or run:
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+This opt-in setting sends only a fixed advisor instruction and the worker’s question (up to 2,000 retained characters plus a truncation notice). OpenCodex does not attach the task, conversation history, tool results, tool catalog, worker identity or repair evidence. The worker must write a self-contained question with essential background. Empty questions are rejected without a provider call. Automatic preflight and adaptive repair consultations are paused; manual calls, consent and existing consultation limits still apply. The default `context` mode keeps the context-sharing behavior described below. Use `--context-mode context` to restore it.
+
 ## Configuration
 
 On the dashboard **Advisor** page (under the **Subagents** sidebar row), choose the expert model from the catalog selector. It saves the exact catalog identifier, including native, provider, account-qualified, custom and combo selectors. Disabled models and models awaiting initial selection are not offered as new choices. A saved identifier missing from the selectable catalog remains visible with a warning and is preserved until you choose another model or clear it. Catalog loading failures preserve the selection and provide Retry. Choose a model that can return text advice: the catalog does not guarantee consultation compatibility. The CLI and API continue to accept router-supported model strings.
@@ -36,6 +46,7 @@ On the dashboard **Advisor** page (under the **Subagents** sidebar row), choose 
 | `model?` | `string` | — | The expert model. Any model string the router accepts: a bare native model (`gpt-6-astra`), an explicit `provider/model` (`anthropic/claude-sonnet-4-6`, `xai/grok-...`), or an account-qualified native model. Cross-provider is fully supported: the worker and the advisor do not need to share a provider. |
 | `effort?` | `string` | `"max"` | Reasoning effort for the advisor call (`low` through `ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | When the advisor is consulted. |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | Context sharing. `question-only` requires an explicit worker question and pauses automatic consultations. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Adaptive task allowance (1–3 attempts), including manual calls. |
 | `timeoutMs?` | `number` | `120000` | Loopback consultation timeout. |
 | `contextSharingConsent?` | `"v1"` | absent | Operator consent to send task context to the configured Advisor provider. Only `"v1"` is current. Absent, stale, or any other value means no task context is sent. |
@@ -157,10 +168,15 @@ After consultation exhaustion the `advisor` tool is removed. A repeated call rec
 paired limit result; if the worker calls it again, typed 502 `advisor_continuation_limit` ends the
 request without another hidden worker call. The bound is shared with empty-completion retries.
 
-Fetch-based web-search turns support the same manual consultation path. The search loop intercepts
-`web_search` and `advisor` calls in worker order, so enabling hosted search does not hide the
-advisor tool. Search and Advisor iterations have separate allowances, and a real client tool call
-still returns control to the client. Run-turn and image/video sidecar turns remain subject to their existing limitations.
+Fetch-based web-search turns support the same manual consultation path when the effective
+`tool_choice` permits the synthetic `advisor` tool. The search loop exposes and intercepts
+`advisor` calls only within that scope; an `allowed_tools` choice restricted to `web_search`
+excludes manual Advisor consultations. Permitted `web_search` and `advisor` calls are handled in
+worker order. Search and Advisor iterations have separate allowances,
+and a real client tool call still returns control to the client. Run-turn and image/video sidecar turns remain subject to their existing limitations.
+If the worker emits an excluded `advisor` call, the turn fails with `undeclared_tool_call`
+before that call reaches the client. A normal client tool named `advisor` remains available
+only while the current iteration declares and permits it; a tools-disabled recovery cannot reuse an earlier declaration.
 Usage accounting includes each worker turn once, including the leg rejected by the Advisor continuation limit.
 
 Suppression does not read Advisor strings. Automatic dedup is the server-owned ledger. A

@@ -37,13 +37,48 @@ password manager can offer to save and autofill it. The dashboard itself still k
 in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
-**Remember this device** is off by default. On a direct HTTPS dashboard (or local loopback), it exchanges the admin token for a server-issued HttpOnly, SameSite=Strict device cookie plus a separate device proof stored in this site's localStorage. HTTPS cookies are Secure and host-only. Neither the cookie nor the proof is the admin token, and neither works alone. Cookies are shared across ports of the same hostname; the origin-scoped proof binds the remembered device to this dashboard origin. Still prefer a dedicated hostname. The admin token is never written to localStorage or sessionStorage. If browser storage is unavailable or cannot save the proof, Remember reports unavailable.
+**Remember this device** is off by default. On a direct HTTPS dashboard (or local loopback), it exchanges the admin token for a server-issued HttpOnly, SameSite=Strict device cookie plus a separate device proof stored in this site's localStorage. HTTPS cookies are Secure and host-only. Neither the cookie nor the proof is the admin token, and neither works alone. Cookies are shared across ports of the same hostname; the origin-scoped proof binds the remembered device to this dashboard origin. Still prefer a dedicated hostname. The admin token is never written to localStorage or sessionStorage. If browser storage is unavailable or cannot save the proof, Remember reports unavailable. On a standalone dashboard behind a TLS-terminating reverse proxy, OpenCodex sees a plain HTTP request, so by default it refuses Remember for that address; the sign-in dialog says so and turns the option off, and signing in without Remember still works. To allow it, name that one proxy with `dashboardTrustedProxy` (see [Remember behind a reverse proxy](#remember-behind-a-reverse-proxy)). A trusted Hub management listener can also remember devices.
 
 The private dashboard-sessions.json stores hashes of the cookie, proof, admin credential and browser identity, the server origin and a fixed 30-day expiry. Relaunching the Safari home-screen app resumes a short-lived GUI session while that device record is valid. Remembered sessions cannot approve consent actions: GitHub stars, reset-credit consumption, prompt-layer edits, Meta Muse sign-in, desktop compatibility changes or quota validation. Use a fresh local or paired session for those actions. Cross-origin/relayed dashboards and remote plaintext HTTP do not support Remember. Expiry, a browser identity change, or rotating the admin token and restarting the server requires sign-in again.
 
 Successful **Forget this device** in the sidebar or mobile action bar (and session logout) immediately revokes the record and all sessions resumed from it, and removes the browser proof. Failed logout keeps the proof so you can retry. The server syncs the record contents before publishing the change; directory-entry durability after a crash is best effort. Older remembered bearer-token keys are removed without being read or migrated. Use only on a device you trust. This does not make Safari offer password AutoFill.
 
 An already-issued session that is otherwise valid can still **Forget this device** after a browser User-Agent change; ordinary access and resumption continue to require the original browser identity.
+
+### Remember behind a reverse proxy
+
+This is opt-in and applies to a standalone instance only. Tell OpenCodex the exact origin the browser
+uses and the addresses the proxy connects from:
+
+```json
+"dashboardTrustedProxy": {
+  "origin": "https://ocx.example.com",
+  "proxyAddresses": ["192.168.1.20"],
+  "trustHeaders": ["x-forwarded-proto"]
+}
+```
+
+- `origin` must be one exact `https://` origin. An `http://` origin, a wildcard, a path or
+  credentials are refused.
+- `proxyAddresses` are the proxy's own IP addresses as this machine sees them (`127.0.0.1` when the
+  proxy runs on the same host). Ranges, wildcards and host names are refused. A request from any
+  other address is never treated as proxied, whatever headers it carries.
+- By default the browser's host is read from `Host`, so the proxy must pass the original `Host`
+  through (Caddy does by default). List `x-forwarded-host` in `trustHeaders` to read it from
+  `X-Forwarded-Host` instead, and `x-forwarded-proto` to also require `X-Forwarded-Proto: https`.
+- An `X-Forwarded-Host` or `X-Forwarded-Proto` value that contradicts the configured origin, or that
+  lists more than one hop, refuses the request even when that header is not trusted.
+- If the origin carries a non-default port and you trust `x-forwarded-host`, the proxy must forward
+  the port as well (in nginx, `$http_host` rather than `$host`); otherwise the request is refused.
+- If the same proxy also answers plain HTTP for this host, trust `x-forwarded-proto` so a plaintext
+  request is refused instead of being treated as the HTTPS origin.
+- The setting is honored only on a non-loopback bind, where the admin token is required. A Hub
+  ignores it and uses its management listener instead.
+
+Remember still needs the admin token; a client certificate checked by the proxy grants nothing on its
+own. The Origin checks, the 30-day expiry, Forget and the consent restrictions above are unchanged.
+`ocx config set` refuses a malformed value with the reason, and a malformed hand edit disables the
+setting. Restart OpenCodex after changing it.
 
 ### Finding the admin token
 
@@ -79,6 +114,23 @@ missing credential — the proxy did not recognise the request as loopback. Open
 the address the proxy prints on startup (usually `http://127.0.0.1:<port>`), and prefer that exact
 host and port over a LAN IP or an alias.
 
+## Classic dashboard
+
+The dashboard was redesigned: its sidebar now groups pages into **Everyday**, **Set up** and
+**Fine-tuning**, and it opens on a Home page. The previous design stays available as the
+**classic dashboard** at `/classic/` on the same proxy, for example `http://127.0.0.1:10100/classic/`.
+
+- To switch, select the clock icon (**Classic dashboard**) beside the theme switch at the foot of
+  the sidebar. The classic sidebar has **New dashboard** at the top of its foot to come back.
+- The choice is remembered per browser, so opening `/` later lands on the dashboard you picked.
+  The desktop app follows the same choice. The tray popover always uses the new design.
+- The classic dashboard is a snapshot of the previous design. It talks to the same proxy and
+  changes the same settings, but pages and settings added after the redesign appear only in the
+  new dashboard.
+
+The sidebar rows described under [Dashboard layout](#dashboard-layout) are the classic
+dashboard's.
+
 ## Dashboard layout
 
 The sidebar has eight rows, in order: **Dashboard**, **Connect**, **Codex**, **Providers**, **Models**, **Subagents**, **Usage & Logs**, and **Remote Link**. **Connect** opens the page headed **Connect**, with its tab strip ordered **Codex**, **Claude**, **Claude Desktop**, **Grok Build**, then the remaining integrations. Claude has no sub-tabs; it shows the Claude Code settings directly. Claude Desktop is a separate Connect tab at `#claude/desktop`. Connect has no section switcher. **Subagents** opens Subagents and groups Subagents and Advisor (`#advisor`) with a pill-shaped section switcher. **Usage & Logs** opens Usage and groups Usage, Logs & Debug, and Storage with a pill-shaped section switcher. The last row, **Remote Link**, groups Remote Link (`#remote`) and Remote Workspace (`#remote-workspace`, when available) with the same switcher. **Codex** is the renamed **Codex Set** row; the preserved URLs include `#codex-set`, `#claude`, `#claude/code`, and `#claude/desktop`; the former `#claude/settings` bookmark opens Code. The former `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Startup (`#startup`) stays outside the sidebar.
@@ -102,6 +154,8 @@ is visible) and never forces an upstream refresh.
 
 - Each chip shows the preferred reported window: weekly first, then monthly, then 5-hour, then a
   provider-named window or prepaid credits.
+- Critical prepaid credits (90% or more used) take the headline when the preferred regular window
+  is not critical. If that window is also critical, it remains the headline.
 - A chip turns amber at 70% used and red at 90% used.
 - Hover or keyboard-focus a chip to see every reported window with its reset time and the time the
   reading was taken. The details stay open as the pointer moves from the chip into the popover,
@@ -128,7 +182,8 @@ is visible) and never forces an upstream refresh.
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
-| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. Refreshing quota skips paused OAuth accounts and disabled API keys; skipped rows without a cached reading remain unavailable but do not affect the refresh result. Refreshing reports failure when an unpaused OAuth account or enabled API key that supports quota reads has an unavailable reading. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. |
+| **Telemetry** | Toggle **Share anonymous usage statistics** and inspect **Preview the JSON** under **Proxy details** (`#proxy-telemetry`). On first run or after an update while undecided, the consent popup saves a choice only when **Continue** is clicked (`PUT /api/telemetry`); dismissing it records nothing. See [Telemetry and Privacy](/guides/telemetry/). |
+| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. Refreshing quota skips paused OAuth accounts and disabled API keys; skipped rows without a cached reading remain unavailable but do not affect the refresh result. Refreshing reports failure when an unpaused OAuth account or enabled API key that supports quota reads has an unavailable reading. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. Unsaved Settings and JSON edits are kept in memory per logical dashboard server: switching servers parks the draft, saving writes only to the server where editing began, and a changed saved configuration asks you to keep your draft or use the saved values. Keeping a JSON draft merges only your changes into the latest config and names any field changed on both sides; Settings saves only the fields you changed. On a relay that predates target-bound saves, the dashboard checks the target immediately before sending but cannot verify it atomically, and says so once; update the proxy for the stronger guarantee. Closing or reloading the dashboard discards these drafts. |
 | **Add provider** | One search above the tabs reaches all four at once — Accounts, Free, Local, Paid. While a query is live the results are grouped by tab with a count each, and the selected tab stays put rather than jumping. Press ArrowDown in the search box to focus the first available result action, skipping disabled buttons; if no action is available, focus stays in the search box. Local runtimes (Ollama, vLLM, LM Studio, LiteLLM) have their own tab, and a long provider note clamps to two lines with the full text one click away. Claude Code CLI (subscription) sits under Paid with a Subscription CLI badge, and selecting it warns that it bills the signed-in Claude subscription through `claude -p` and never uses an API key (use `anthropic-apikey` for key billing). |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. The **Workflow limits for subagents** panel sets how many turns one task may run in parallel and how many model requests and distinct subagents it may use per 10-minute window. See [workflow limits](/reference/configuration/server/#workflow-limits). |
@@ -145,6 +200,10 @@ to save an incomplete snapshot; choose another order or repair the history befor
 
 ### Account selection
 
+For a provider's OAuth accounts, finish the current sign-in or account removal before starting
+the other operation. If the account list and sign-in status cannot be refreshed, the status remains
+unverified and **Log out** is available to explicitly retry recovery.
+
 Account selection is shared with request routing. Selecting an OAuth account takes effect on the
 next request even when a pool is enabled. A healthy selection is not replaced merely because
 another generic OAuth account has more unused quota. If the account returns 429, automatic
@@ -152,9 +211,23 @@ failover can still select another usable account with the pool off. A committed 
 selection updates the dashboard immediately; account changes do not wait for the quota refresh
 timer. Requests already sent upstream retain their original credentials.
 
+### Usage by app
+
+Usage opens with **All apps**, **All devices**, and **30d** selected within
+the current access scope. You can narrow the app, device, or time range while the page is
+open; reopening it restores these defaults.
+
+With **All apps** selected, **Apps** appears after Models and Providers. It shows each app's
+share of total tokens, token count, estimated API list-price cost, request count, and measured
+request count for the selected devices and time range. Codex CLI, desktop, and IDE usage is
+grouped under Codex. Historical records without client attribution appear as **Unclassified**,
+separately from **Unknown** and **Other**. Selecting one app hides this breakdown. A proxy
+that does not supply the breakdown shows it as unavailable; an empty breakdown means no app
+usage in the report.
+
 ### Filtering request logs
 
-Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution.
+Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution. **Upstream reason** shows a classified provider condition (for example rate limited, quota or credits exhausted, context window exceeded, location not supported, account verification required, or model unavailable), and **Failure detail** shows text written by the proxy, such as a stall timeout or byte-cap limit. When the provider names a published error class or finish reason (for example Gemini or Vertex `INVALID_ARGUMENT`, or `MALFORMED_FUNCTION_CALL`), Failure detail also shows that token; new rows do not store the provider's own error text. Older `usage.jsonl` files may still contain it, but the dashboard drops it when reading them.
 
 A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refused`, but
 its request and attempt failure cause is `transport-ambiguous`, with resend permission
@@ -164,7 +237,13 @@ its request and attempt failure cause is `transport-ambiguous`, with resend perm
 A Codex move to another account after HTTP 402 appears as **Account quota exhausted (402)**
 in the attempt's recovery details and counts as a quota recovery in exported metrics.
 
-Logs filters combine surface, intercepted requests, provider, exact model, status, time,
+Logs shows all apps together, with an icon-only client chip on each request instead of
+app tabs. Recognized clients use their SVG logos; unknown or other clients use a neutral
+question-mark icon. App names remain available to screen readers without visible text.
+Missing client attribution does not imply Codex or a request failure. The chip identifies
+the client app, independently of the provider and protocol, and is not an app filter.
+
+Logs filters combine intercepted requests, provider, exact model, status, time,
 speed, and conversation ID over the currently loaded request ring. Provider and model
 choices also include fallback attempts; model matching ignores case and surrounding spaces
 but does not match partial names. Choices that disappear from the ring reset to All.
@@ -172,6 +251,8 @@ The conversation field also accepts a pasted `codex://threads/<id>` deep link, t
 Codex "copy session link" puts on the clipboard — the wrapper and any link metadata such
 as `?hostId=…` are ignored and the bare thread id is matched, the same value an
 `ocx logs filter --conversation` search unwraps.
+It also accepts a remote Claude Code turn's `metadata.user_id`: the per-turn `tk` token
+is ignored, so any turn of a session finds the whole session.
 
 Time windows cover the last 15 minutes, hour, or day and refresh every 30 seconds while the
 Logs tab is active, even with auto-refresh off. Windows use the proxy timestamp from
@@ -196,9 +277,8 @@ Historical logs are not rewritten and missing generation timestamps are not inve
 tok/s column and speed filter above are not affected.
 
 Active filters show the matching count out of the loaded total. Reset filters restores all
-rows and returns keyboard focus to the All surface control; “No matching requests”
-differs from an empty log ring. Use arrow keys or Home/End in
-the surface selector. These controls do not query historical records beyond the loaded ring.
+rows; “No matching requests” differs from an empty log ring. These controls do not query
+historical records beyond the loaded ring.
 
 The language picker includes **Português** (Brazilian Portuguese, `pt-BR`). Portuguese browser languages select it automatically unless a supported language preference is already saved.
 
@@ -300,6 +380,16 @@ they have been synchronized. See
 ## Remote Hub sessions, keys, and usage
 
 In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place. Clicking a key can show its full value with a **Copy** button only from an independently authorized session.
+
+### Applying a Codex CLI update from the dashboard
+
+**Codex → Codex CLI** checks and updates the Codex CLI installation OpenCodex uses, separately from OpenCodex's own updates; it never touches the Codex desktop app. **Check for update** is read-only: it shows who installed the CLI, whether OpenCodex manages it, the installed and available versions, running Codex sessions, and why an update is refused (for example a version-manager install, an active session, or already current). An update is offered only for an applicable plan, and **Update Codex CLI** stays disabled until you tick the confirmation that only this installation changes. The dashboard applies exactly the plan on screen, then follows the job to its result (updated, not updated, refused, or unclear). An unclear result is never retried or rolled back; check the installation yourself. Running **Check for update** again discards the previous plan and confirmation. A dashboard connected to a Remote Hub shows a notice instead, because the update must run on the computer that owns the installation.
+
+The apply route requires a current explicitly paired browser session on trusted loopback ingress, matching Origin and CSRF headers, and `confirmed: true`. Automatic local sign-in, a remembered admin session, an admin token or Tailscale sign-in alone cannot authorize this action; when apply is refused for that reason the tab shows the local pairing form and the equivalent `ocx system codex-cli-update apply` command.
+
+For standalone local pairing, open the dashboard at its configured literal `http://127.0.0.1:<port>` or `http://[::1]:<port>` origin. Use the existing local pairing form in **Connect → API Keys** or Remote Link setup: run the displayed `ocx gui pair --origin "<browser-origin>"` command locally, then redeem its one-time code in that form. Pairing does not apply an update; a subsequent confirmed API request is still required. A server configured with hostname `localhost`, a wildcard bind, or a connected-client role cannot issue this local pairing authority. Remote pairing does not remove the apply route's trusted-loopback requirement.
+
+Without an eligible HTTP pairing path, use `ocx system codex-cli-update plan` followed by `ocx system codex-cli-update apply --plan-id <32-hex> --yes` locally. This uses the same durable job owner without a GUI session. Pairing proves authority to write the protected configuration home, not human identity or protection from unrestricted same-user processes.
 
 ### Reading an existing API key
 
@@ -492,6 +582,8 @@ them. Both switches apply immediately; **Save** never changes them. When interce
 **Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker, a per-model list of what Claude Desktop shows (see [Choose which models Claude Desktop lists](/guides/claude-code/#choose-which-models-claude-desktop-lists)), and model families under **Advanced**. One status row shows whether Claude Desktop runs the profile, with a separate chip for whether dashboard edits are saved, and **Save** and **Save & apply** beside it.
 
 Claude/Anthropic accounts are managed only on **Providers > Anthropic > Accounts**: login and the browser option, the account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Claude no longer has an Account sub-tab. Provider-level controls such as the default provider, removal, and the enabled switch stay on Providers.
+
+If an account change is still in progress, wait for it to finish before retrying logout. After an account removal, the dashboard rechecks the provider's login status; if it cannot verify the result, refresh the account list before retrying the removal.
 
 The bookmarks `#claude` and `#claude/code` open this page, and the former `#claude/settings` redirects to `#claude/code`; `#claude/desktop` selects the separate Claude Desktop tab. The old `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Legacy `#integrations/claude` and `#integrations/claude/desktop` bookmarks still redirect to `#claude/code` and `#claude/desktop`, respectively. Arrow keys move between tabs; Home and End select the first and last tab.
 

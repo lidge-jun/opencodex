@@ -47,6 +47,13 @@ account-qualified model when a request must remain on one account. Pausing the o
 main blocks fallback for its matching caller credential; it does not identify or pause unrelated
 caller-owned logins.
 
+To keep automatic Pool routing off the native main login entirely, set `"codexPool": {"poolOnly": true}`.
+Pool then serves only registered, eligible added accounts: it never orders or keeps main as the
+selection, never uses the caller-main fallback above, and treats a manual pin on main as no pin.
+When every allowed account is cooling down or unavailable, the request is refused instead of
+spending main. Account-qualified models, including a `__main__`-qualified one, and Direct mode are
+explicit choices and still reach main. The setting is off by default.
+
 Adding or reauthenticating a pool account rejects a duplicate of the native main login with
 `Account is already configured as the native Codex main account.` The check compares ChatGPT
 account ID, personal/workspace subscription bucket, and email; a missing email does not prove
@@ -412,6 +419,16 @@ reference/fallback config. On loopback it contains the root keys you can merge m
 injection was removed; on non-loopback it contains the dedicated provider form. External-provider
 mode leaves this profile untouched.
 
+Rebuilding that file keeps the plain root keys OpenCodex does not manage, so a setting you add such as
+`stream_idle_timeout_ms` or `stream_max_retries` survives the next injection. Each kept assignment is
+copied exactly as written, including values that span several lines and 64-bit integers, and is placed
+above the first table. Keys inside tables and dotted root keys such as `a.b = 1` are not kept.
+OpenCodex wins every collision: the root keys it owns (`model_provider`, `model_catalog_json`,
+`openai_base_url`) are rewritten for the routing mode in use, and a root key named like a table the
+profile writes, such as an inline `features = { ... }` when the profile writes `[features]`, is
+dropped. If the file changes while an injection waits for the write lock, the injection stops with a
+retryable error and leaves your edit in place.
+
 :::caution
 Root keys such as `openai_base_url`, `model_provider`, and `model_catalog_json` **must** sit before the
 first `[table]` header. The injector guarantees that placement, removes its own stale/duplicate
@@ -435,7 +452,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-On macOS, opencodex checks the Codex app’s bundled CLI in `/Applications/ChatGPT.app` and then `~/Applications/ChatGPT.app` after explicit selections, shims, PATH, established installs, and the runnable bare `codex` fallback, requires the bundle’s XML `Info.plist` identity to be `com.openai.codex`, and never automatically replaces a runnable persisted selection with an app candidate.
+On macOS, opencodex checks the Codex app’s bundled CLI in `/Applications/ChatGPT.app` and then `~/Applications/ChatGPT.app` after explicit selections, shims, PATH, established installs, and the runnable bare `codex` fallback, requires the bundle’s XML `Info.plist` identity to be `com.openai.codex`, and never automatically replaces a runnable persisted selection with an app candidate. When no Codex CLI is found at all, the catalog probe behind `ocx connect status` readiness also tries those bundled locations, so a Child whose only Codex is the app’s bundled CLI reports its reasoning levels instead of `unverified`; every execution still passes the checks below.
 
 Execution checks also recognize `Codex.app` and `ChatGPT.app` at any location, including relocated
 bundles, explicit `CODEX_CLI_PATH` or configured runtime commands, and symlink aliases. A recognized
@@ -760,6 +777,12 @@ Codex. Native custom calls and converted function calls use the same completion 
 patch previews are held while their executable form is unresolved. JavaScript that merely
 contains patch text and unrelated native custom payloads stay unchanged.
 
+When a routed model double-wraps an executable freeform body, opencodex removes one extra
+JSON object containing only an input string. This repair applies to local exec and apply_patch
+bodies, leaves other tool grammars and ambiguous objects unchanged, and does not decode recursively.
+A body holds its streamed preview only while it can still turn out to be such a wrapper;
+JavaScript that merely starts with an object or block keeps streaming as it arrives.
+
 A routed model can also mistakenly send a shell-argument object such as
 `{"cmd":"git status --short"}` to code-mode `exec`. For a verified code-mode catalog,
 opencodex converts an unambiguous shell object into `tools.exec_command(...)` JavaScript
@@ -961,13 +984,41 @@ or remove it to disable capture. The file is owner-only (`0600`) in the hardened
 and rolls after 200 lines, retaining the newest 100.
 
 Each JSONL record contains the protocol, routed provider/model, cache-counter presence and
-provenance, process-local equality tags for the account, prompt-cache key, and allowlisted session
-headers, plus ordered fingerprints for instructions, tools, and message/input blocks. Prefix
-sections retain at most 128 tags and identify only the first divergent section/index. The
-diagnostic never stores prompt or message text, tool names, raw headers, raw cache/session/account
-identifiers, or a durable tag derived from them. Its random HMAC key is created at process start,
-separate from other debug keys, and is never persisted; tags therefore compare values only within
-one proxy process.
+provenance, and process-local equality tags for the account, prompt-cache key, session headers,
+and ordered instruction/tool/message blocks. It never stores prompt or message text, tool names,
+raw headers, or raw cache/session/account identifiers. The random HMAC key is separate from other
+debug keys, created at process start and never persisted, so tags compare only within one process.
+
+- `session.inboundHeaders` and `outboundHeaders` record `session_id`, `session-id`, `thread-id`,
+  and `x-session-id` independently. Identical values have identical tags across these names and
+  directions. An unobserved side is omitted, distinct from observed absent headers. These headers
+  are diagnostic correlation inputs, not proof of account affinity.
+- `accountAffinity` records a separately tagged key from the shared Codex conversation-identity
+  derivation for each observed header set. `derived-key-not-binding` means exactly that: a key
+  is not evidence that a binding was stored, selected, or reused. Reported route labels are separate.
+- `prefix.comparison` compares the observed inbound and outbound projections. `continuation`
+  compares each side with the previous finalized request having the same complete nonempty inbound
+  session-header identity, authenticated caller scope, protocol, model, and config directory. The
+  caller scope comes from the authenticated admission captured before Chat/Messages bridging, not
+  from rewritten upstream headers. It is used only in private in-memory lookup keys, never serialized.
+  The same admitted key has the same scope across supported authentication headers; different keys
+  remain isolated. Without an authenticated admission identity (including unauthenticated loopback),
+  continuation comparisons are `uncomparable`; per-request inbound/outbound comparisons remain available.
+  Provider changes do not reset this
+  comparison; prompt-key and explicit account-label changes are reported separately. Outbound-only
+  session identifiers and prompt-cache keys never supply a missing correlation identity.
+- Comparisons report `first`, `equal`, `append-only`, `different`, `truncated`, or `uncomparable`.
+  Only message-tail growth is append-only. Top-level instructions and system content precede tools;
+  input/message rows, including system/developer updates, stay in their original order. Missing
+  observations and unsupported shapes are uncomparable, never assumed equal to an empty prefix.
+- Each section retains at most 128 tags. An unobserved common tail reports `truncated`, not equality
+  or an exact first divergence. At most 512 recent correlation histories are retained in memory;
+  an evicted history is `first` on its next observation.
+
+These are parsed-body observations at existing request hooks, not captured network bytes or proof
+of upstream cache reuse. Concurrent requests compare in finalization order, not send order. The
+switch changes diagnostics only, not affinity selection or cache behavior; the existing debug-mode
+bridge requirement for otherwise eligible direct Chat/Messages lanes still applies.
 
 ### Catalog troubleshooting
 
@@ -1314,6 +1365,23 @@ When an account leaves pool selection, the reason travels with the decision inst
 
 A main-account refresh that does not complete still answers `503` with `Retry-After`, because a retry may still succeed. The message now adds that a failure which persists means the main account needs reauthentication, rather than only asking for another attempt.
 
+### Request-owned conversation affinity
+
+`codexPool.requestOwnedAffinity` is an optional boolean, defaulting to `false`. Set it to `true`
+to keep a conversation carrying its own ChatGPT bearer on one eligible account within each quota
+scope. Releases and model detours can still move it. The binding is process-local; restarting the
+proxy or rotating the bearer starts a new binding. Session-less multi-generation subagent chains
+may bind per thread.
+
+Affinity labels describe the binding when selection returns. `unbound` means no binding was stored;
+`request_owned` means the caller-owned credential did not opt in, and `no_conversation` means no
+conversation key was available. A later eligibility change can release a binding after selection.
+
+With or without the option, a request that carries its own bearer records which account served each
+turn under a key scoped to that bearer. When a later turn is served by a different account, including
+after you switch accounts manually, OpenCodex removes `previous_response_id` before sending and
+rejects carried uploaded `file_id` references with HTTP 400, because the new account cannot read them.
+
 ### Optional idle-window steering
 
 `codexPool.startIdleWindows` is an optional boolean and defaults to `false`. When enabled, a new
@@ -1401,6 +1469,8 @@ When returning to the root-override form, OpenCodex retains an existing `[model_
 `ocx restore`, `ocx stop` and `ocx uninstall` no longer refuse on `history_paginated_requires_native_writer`. They take every OpenCodex root routing key out and keep the `[model_providers.opencodex]` definition on disk, so conversations whose rows still name that provider keep resolving while plain `codex` stops pointing at the proxy. The result is reported as a partial restore that names the retained lines, and `ocx restore --remove-codex-provider-table` removes them too, after which those conversations stop opening.
 
 Enabling the integration in its provider-table form on a home whose `openai`-tagged conversations Codex has already paginated used to be refused outright with `history_paginated_openai_requires_native_writer`: nothing was written and the integration stayed disabled. OpenCodex now completes that transition by keeping the managed root `openai_base_url` override beside the `[model_providers.opencodex]` table. Codex merges the override onto its built-in `openai` provider, so those conversations keep reaching the proxy without being relabeled and no rollout byte or thread row is touched. Only a routing form that requires the `x-opencodex-api-key` admission header still refuses, because Codex's built-in provider cannot carry that header; its message names the two settings that resolve it — route Codex through the loopback listener so the override can be retained, or set `syncResumeHistory` to `false` to accept that those conversations resume against Codex's own OpenAI endpoint.
+
+Codex 0.166 and later resume or list a conversation only under the provider it was created with (`This chat uses openai, but your current provider is opencodex`), so the retained override no longer keeps those conversations reachable once the default provider changes. When OpenCodex knows the selected Codex is 0.166 or later (from its runtime check or the saved selection) and finds such conversations, it refuses the provider-table transition with `history_paginated_openai_provider_locked` and writes nothing. The message names the ways out: leave `codexDesktopAuthless` and `codexClientCompaction` off to keep those conversations resumable, or set `syncResumeHistory` to `false` to switch anyway and accept that they stay with the `openai` provider. OpenCodex does not relabel them. When the Codex version is unknown, the transition keeps the retained override as before.
 
 ### Remote thread-list provider filters
 

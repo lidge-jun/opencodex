@@ -11,6 +11,8 @@ import { initializeNodeLauncherContext } from "../../src/cli/launcher-context";
 import { buildNativeClaudeEnv } from "../../src/cli/claude";
 import { observeManagingClis } from "../../src/service/managing-cli";
 import { repoPath } from "../helpers/repo-root";
+import { tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex.mjs";
+import { createLegacyUpdateSession, createOrchestratedChildSession, createOrchestratedResultChannel } from "../../src/update/orchestrated-session.mjs";
 
 // Explicit private fixtures; only temp paths are written by this helper.
 function writeFileSync(path: string, data: Parameters<typeof writeFile>[1]): void {
@@ -64,6 +66,14 @@ function fakeSpawn(error?: string, exitSignal: NodeJS.Signals | null = null) {
 }
 
 describe("Desktop record and handoff policy", () => {
+  test("contract discovery and updates answer from the invoked package even with a Desktop record", () => {
+    for (const argv of [["capabilities", "--contracts", "--json"], ["update", "--plan", "--json"]]) {
+      expect(planDesktopCliHandoff({ platform: "linux", argv, env: {}, recordRead: ready() }, deps))
+        .toEqual({ kind: "continue", reason: "excluded" });
+    }
+    expect(planDesktopCliHandoff({ platform: "linux", argv: ["capabilities", "--json"], env: {}, recordRead: ready() }, deps).kind)
+      .toBe("handoff");
+  });
   test("fixed record location and injected reader path", () => {
     expect(desktopCliRecordPath({ platform: "darwin", home: "/Users/example" })).toBe("/Users/example" + "/.opencodex-desktop/cli.json");
     expect(desktopCliRecordPath({ platform: "win32", env: { USERPROFILE: "C:\\Users\\example" } })).toBe("C:\\Users\\example\\.opencodex-desktop\\cli.json");
@@ -133,10 +143,10 @@ console.log(JSON.stringify(mod.readDesktopCliRecord({recordPath:${JSON.stringify
     expect(planDesktopCliHandoff({ argv: [], env: {}, platform: "linux", recordRead: ready(), selfPaths }, badSelf)).toMatchObject({ issue: "target-unusable" });
     expect(planDesktopCliHandoff({ argv: [], env: {}, platform: "linux", recordRead: ready() }, { ...deps, stat: (() => ({ isFile: () => false })) as unknown as typeof statSync })).toMatchObject({ issue: "target-invalid" });
   });
-  test("target ENOENT resumes and EACCES or other errors fail", () => {
+  test("enabled Desktop target ENOENT and other errors refuse package fallback", () => {
     for (const code of ["ENOENT", "EACCES", "ENOTDIR", "ENOEXEC", "ELOOP"]) {
       const plan = planDesktopCliHandoff({ argv: ["status"], env: {}, platform: "linux", recordRead: ready() }, { ...deps, access: () => { throw coded(code); } });
-      expect(plan.kind).toBe(code === "ENOENT" ? "continue" : "error");
+      expect(plan.kind).toBe("error");
     }
   });
   test("Windows returns before reading valid, unreadable or unsafe records and never selects a spawn", () => {
@@ -170,11 +180,11 @@ describe("async handoff transport", () => {
     expect(called.options.env).toEqual({ PATH: "fixture", OCX_NO_DESKTOP_HANDOFF: "1", OCX_NODE_LAUNCH_CONTEXT: context });
     expect(fake.killed).toEqual(["SIGTERM"]); expect(fake.parent.listenerCount("SIGTERM")).toBe(0);
   });
-  test("child signal is retained and confirmed asynchronous target ENOENT resumes", async () => {
+  test("child signal is retained and asynchronous spawn failures refuse package fallback", async () => {
     for (const error of [undefined, "ENOENT", "EACCES", "ENOEXEC"]) {
       const fake = fakeSpawn(error, "SIGTERM");
-      const result = await runDesktopCliHandoff({ kind: "handoff", target: "/fixture/ocx" }, { argv: [], env: {}, proof, context }, { spawn: fake.run, parent: fake.parent as unknown as NodeJS.Process, lstat: (() => { throw coded("ENOENT"); }) as typeof lstatSync });
-      expect(result.kind).toBe(!error ? "exit" : error === "ENOENT" ? "continue" : "error");
+      const result = await runDesktopCliHandoff({ kind: "handoff", target: "/fixture/ocx" }, { argv: [], env: {}, proof, context }, { spawn: fake.run, parent: fake.parent as unknown as NodeJS.Process });
+      expect(result.kind).toBe(!error ? "exit" : "error");
       if (result.kind === "exit") expect(result.signal).toBe("SIGTERM");
       expect(fake.parent.eventNames()).toHaveLength(0);
     }
@@ -190,10 +200,23 @@ describe("async handoff transport", () => {
     const run = (() => { queueMicrotask(() => { parent.emit("SIGTERM"); child.emit("exit", null, null); }); return child; }) as unknown as typeof spawn;
     expect(await runDesktopCliHandoff({ kind: "handoff", target: "/fixture/ocx" }, { argv: [], env: {}, proof, context }, { spawn: run, parent: parent as unknown as NodeJS.Process })).toEqual({ kind: "exit", code: 1, signal: null });
   });
-  test("synchronous spawn errors have the same confirmed-target ENOENT policy", async () => {
+  test("a signal that lands before spawn returns is forwarded to the child once it exists", async () => {
+    // The child can exec and print its readiness line before spawn() returns in the launcher; a
+    // forwarder registered only afterwards let that signal kill the launcher and orphan the child.
+    const parent = new EventEmitter(), killed: string[] = [];
+    const child = new EventEmitter() as EventEmitter & { kill: (signal: string) => boolean };
+    child.kill = signal => { killed.push(signal); return true; };
+    const run = (() => { parent.emit("SIGTERM"); return child; }) as unknown as typeof spawn;
+    const pending = runDesktopCliHandoff({ kind: "handoff", target: "/fixture/ocx" }, { argv: [], env: {}, proof, context }, { spawn: run, parent: parent as unknown as NodeJS.Process, platform: "linux" });
+    expect(killed).toEqual(["SIGTERM"]);
+    child.emit("exit", 29, null);
+    expect(await pending).toEqual({ kind: "exit", code: 29, signal: null });
+    expect(parent.eventNames()).toHaveLength(0);
+  });
+  test("synchronous spawn errors refuse package fallback", async () => {
     for (const code of ["ENOENT", "EACCES"]) {
       const fail = (() => { throw coded(code); }) as unknown as typeof spawn;
-      expect((await runDesktopCliHandoff({ kind: "handoff", target: "/fixture/ocx" }, { argv: [], env: {}, proof, context }, { spawn: fail, lstat: (() => { throw coded("ENOENT"); }) as typeof lstatSync })).kind).toBe(code === "ENOENT" ? "continue" : "error");
+      expect((await runDesktopCliHandoff({ kind: "handoff", target: "/fixture/ocx" }, { argv: [], env: {}, proof, context }, { spawn: fail })).kind).toBe("error");
     }
   });
   test("proof reaches the real Claude native-env consumer and keeps exported slots", () => {
@@ -226,6 +249,105 @@ function packageFixture() {
 }
 const posixTest = process.platform === "win32" ? test.skip : test;
 const launcher = repoPath("bin", "ocx.mjs");
+posixTest("sync Desktop handoff refuses an update before executing the target", () => {
+  const fixture = packageFixture(), ran = join(fixture.home, "ran");
+  writeFileSync(fixture.target, `#!/bin/sh\necho ran > '${ran}'\n`); chmodSync(fixture.target, 0o700);
+  const lock = tryAcquireUpdateSyncMutex(fixture.env.OPENCODEX_HOME!, "update");
+  if (lock.kind !== "acquired") throw Error("fixture lock");
+  try {
+    const result = spawnSync("node", [launcher, "sync", "--json"], { env: { ...fixture.env, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
+    expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 7, stderr: expect.stringContaining("update-in-flight") });
+    expect(JSON.parse(result.stdout)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit: 7 }, fanout: { state: "not-applicable", reason: "update-in-flight" }, children: [] });
+    expect(lstatExists(ran)).toBe(false);
+  } finally { lock.release(); }
+}, 15000);
+
+posixTest("sync Desktop handoff refuses a malformed lease before executing the target", () => {
+  const fixture = packageFixture(), ran = join(fixture.home, "ran");
+  writeFileSync(fixture.target, `#!/bin/sh\necho ran > '${ran}'\n`); chmodSync(fixture.target, 0o700);
+  const lock = join(fixture.env.OPENCODEX_HOME!, "sync-update.mutation.lock");
+  mkdirSync(lock); writeFileSync(join(lock, "malformed.json"), "{");
+  for (const json of [false, true]) {
+    const result = spawnSync("node", [launcher, "sync", ...(json ? ["--json"] : [])], { env: { ...fixture.env, OCX_TEST_HOME_GUARD: "1", npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
+    expect(result.status).toBe(7); expect(result.stderr.trim()).toBe("update-in-flight");
+    if (json) expect(JSON.parse(result.stdout)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit: 7 }, fanout: { state: "not-applicable", reason: "update-in-flight" }, children: [] });
+    else expect(result.stdout).toBe("");
+    expect(lstatExists(ran)).toBe(false);
+  }
+}, 15000);
+
+function lstatExists(path: string) { try { lstatSync(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }
+
+posixTest("old Desktop sync stays under launcher mutex until it exits", async () => {
+  const fixture = packageFixture();
+  writeFileSync(fixture.target, "#!/bin/sh\necho ready:$OCX_SYNC_MUTEX_HELD_BY\nread line\n"); chmodSync(fixture.target, 0o700);
+  const child = spawn("node", [launcher, "sync"], { env: { ...fixture.env, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: ["pipe", "pipe", "pipe"] });
+  const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  try {
+    const ready = await new Promise<string>((resolve, reject) => { child.stdout!.once("data", data => resolve(String(data))); child.once("error", reject); child.once("exit", () => reject(Error("target exited before ready"))); });
+    expect(ready.trim()).toBe(`ready:${child.pid}`);
+    const session = createLegacyUpdateSession({ home: fixture.env.OPENCODEX_HOME! });
+    expect(session.start()).toEqual({ ok: false, error: "sync-in-progress" });
+    child.stdin!.end("done\n");
+    expect(await exited).toBe(0);
+  } finally { if (child.exitCode === null) child.kill("SIGKILL"); }
+}, 15000);
+posixTest("a killed launcher leaves the live Desktop delegate fenced past the stale interval", async () => {
+  const fixture = packageFixture(), home = fixture.env.OPENCODEX_HOME!;
+  const stop = join(fixture.home, "stop-delegate");
+  writeFileSync(fixture.target, `#!/bin/sh\necho ready\nwhile [ ! -f '${stop}' ]; do sleep 0.1; done\n`); chmodSync(fixture.target, 0o700);
+  const launcherChild = spawn("node", [launcher, "sync"], { env: { ...fixture.env, OCX_TEST_HOME_GUARD: "1", npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: ["pipe", "pipe", "pipe"] });
+  let delegate = 0;
+  try {
+    await new Promise<void>((resolve, reject) => { launcherChild.stdout!.once("data", () => resolve()); launcherChild.once("error", reject); launcherChild.once("exit", () => reject(Error("launcher exited early"))); });
+    const lockPath = join(home, "sync-update.mutation.lock");
+    const deadline = Date.now() + 3000;
+    while (!delegate && Date.now() < deadline) {
+      const entries = readdirSync(lockPath);
+      if (entries.length === 1) delegate = JSON.parse(readFileSync(join(lockPath, entries[0]!), "utf8")).delegatePid ?? 0;
+      if (!delegate) await Bun.sleep(10);
+    }
+    expect(delegate).toBeGreaterThan(0);
+    const exited = new Promise<void>(resolve => launcherChild.once("exit", () => resolve()));
+    launcherChild.kill("SIGKILL"); await exited;
+    const futureTime = Date.now() + 31_000, future = () => futureTime;
+    expect(tryAcquireUpdateSyncMutex(home, "update", { now: future })).toEqual({ kind: "busy", holder: "sync" });
+    const realNow = Date.now;
+    try {
+      Date.now = future;
+      expect(createLegacyUpdateSession({ home }).start()).toEqual({ ok: false, error: "sync-in-progress" });
+      const channel = createOrchestratedResultChannel();
+      try {
+        expect(createOrchestratedChildSession({ home, resultPath: channel.resultPath, resultCapability: channel.capability,
+          expect: { home, cliRoot: home, servingRoot: null, runtimePid: null, planToken: "a".repeat(43) }, verifyIdentity: () => true }).start()).toEqual({ ok: false, error: "sync-in-progress" });
+      } finally { channel.dispose(); }
+    } finally { Date.now = realNow; }
+    writeFileSync(stop, "stop");
+    const end = Date.now() + 3000;
+    let lease = tryAcquireUpdateSyncMutex(home, "update", { now: future });
+    while (lease.kind !== "acquired" && Date.now() < end) { await Bun.sleep(10); lease = tryAcquireUpdateSyncMutex(home, "update", { now: future }); }
+    expect(lease.kind).toBe("acquired");
+    if (lease.kind === "acquired") { delegate = 0; lease.release(); }
+  } finally {
+    if (launcherChild.exitCode === null && launcherChild.signalCode === null) launcherChild.kill("SIGKILL");
+    if (delegate) { try { process.kill(delegate, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
+  }
+}, 15000);
+posixTest("sync launcher releases its mutex after forwarding a signal and waiting for Desktop", async () => {
+  const fixture = packageFixture();
+  writeFileSync(fixture.target, "#!/bin/sh\ntrap 'exit 29' TERM\necho ready\nwhile :; do sleep 1; done\n"); chmodSync(fixture.target, 0o700);
+  const child = spawn("node", [launcher, "sync"], { env: { ...fixture.env, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject); child.once("exit", resolve);
+      child.stdout!.once("data", () => child.kill("SIGTERM"));
+    });
+    expect(code).toBe(29);
+    const lease = tryAcquireUpdateSyncMutex(fixture.env.OPENCODEX_HOME!, "update");
+    expect(lease.kind).toBe("acquired");
+    if (lease.kind === "acquired") lease.release();
+  } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); }
+}, 15000);
 posixTest("real Node launcher regenerates proof, forwards argv/stdin, mirrors exit and bypasses Bun lookup", () => {
   const fixture = packageFixture();
   writeFileSync(fixture.target, `#!/usr/bin/env node\nconst fs = require('node:fs');\nconsole.log(JSON.stringify({ argv: process.argv.slice(2), context: JSON.parse(process.env.OCX_NODE_LAUNCH_CONTEXT), stdin: fs.readFileSync(0, 'utf8'), bypass: process.env.OCX_NO_DESKTOP_HANDOFF }));\nprocess.exit(23);\n`);
@@ -247,14 +369,22 @@ posixTest("real Node launcher regenerates proof, forwards argv/stdin, mirrors ex
   expect(native.ANTHROPIC_API_KEY).toBe("fixture-user-key");
   expect(native.ANTHROPIC_BASE_URL).toBeUndefined();
 });
-posixTest("real target disappearance resumes Bun; EACCES never resumes Bun", () => {
-  const fixture = packageFixture();
-  const absent = spawnSync("node", [launcher, "--version"], { env: fixture.env, encoding: "utf8", timeout: 5000 });
-  expect(absent.stderr).toContain("OPENCODEX_BUN_PATH");
+posixTest("real target disappearance refuses Bun until Desktop is restored or explicitly bypassed", () => {
+  const fixture = packageFixture(), marker = join(fixture.home, "bun-ran"), bun = join(fixture.home, "fixture-bun");
+  writeFileSync(bun, `#!/bin/sh\nprintf ran > '${marker}'\nexit 31\n#${"x".repeat(1_000_000)}\n`); chmodSync(bun, 0o700);
+  const env = { ...fixture.env, OPENCODEX_BUN_PATH: bun };
+  const run = (extra = {}) => spawnSync("node", [launcher, "--version"], { env: { ...env, ...extra }, encoding: "utf8", timeout: 5000 });
+  const absent = run();
+  expect(absent.status).toBe(1); expect(absent.stderr).toContain("target-unusable"); expect(absent.stderr).toContain("Repair"); expect(lstatExists(marker)).toBe(false);
   writeFileSync(fixture.target, "not executable"); chmodSync(fixture.target, 0o600);
-  const denied = spawnSync("node", [launcher, "--version"], { env: fixture.env, encoding: "utf8", timeout: 5000 });
-  expect(denied.status).toBe(1); expect(denied.stderr).toContain("target-unusable"); expect(denied.stderr).not.toContain("OPENCODEX_BUN_PATH");
+  const denied = run();
+  expect(denied.status).toBe(1); expect(denied.stderr).toContain("target-unusable"); expect(lstatExists(marker)).toBe(false);
+  writeFileSync(fixture.target, "#!/bin/sh\necho desktop-restored\nexit 23\n"); chmodSync(fixture.target, 0o700);
+  const restored = run();
+  expect(restored.status).toBe(23); expect(restored.stdout.trim()).toBe("desktop-restored"); expect(lstatExists(marker)).toBe(false);
+  expect(run({ OCX_NO_DESKTOP_HANDOFF: "1" }).status).toBe(31); expect(readFileSync(marker, "utf8")).toBe("ran");
 });
+
 posixTest("real update-help is untouched; opt-out and bad record activate distinct paths", () => {
   const fixture = packageFixture();
   writeFileSync(fixture.target, "#!/usr/bin/env node\nconsole.log('desktop-picked'); process.exit(0);\n"); chmodSync(fixture.target, 0o755);
@@ -297,7 +427,7 @@ test("launcher source anchors preserve exceptions before handoff and handoff bef
   const source = readFileSync(launcher, "utf8");
   const hook = source.indexOf("const desktopPlan =");
   expect(hook).toBeGreaterThan(source.indexOf("const codexCliUpdateInspection ="));
-  expect(hook).toBeLessThan(source.indexOf('if (process.argv[2] === "update" && installMethod === "mise")'));
+  expect(hook).toBeLessThan(source.indexOf('process.argv[2] === "update" && installMethod === "mise"'));
   expect(hook).toBeLessThan(source.indexOf("const probe = bootRestoreProbe("));
   expect(hook).toBeLessThan(source.indexOf("const bunRuntime = resolveBun("));
   expect(source).toContain("const { launchProof, launchContext, inheritedEnv } = createNodeLaunchContext();");
@@ -407,24 +537,17 @@ describe("shared Rust record fixtures and lexical path boundaries", () => {
   });
 });
 
-test("AM-8 spawn ENOENT resumes only after lstat also reports ENOENT", async () => {
+test("AM-8 synchronous and asynchronous spawn failures never resume the package", async () => {
   for (const synchronous of [false, true]) {
-    for (const check of ["exists", "ENOENT", "EACCES", "ELOOP", "ENOTDIR"]) {
-      let checked: string | undefined;
-      const fake = fakeSpawn("ENOENT");
-      const spawnChild = synchronous ? (() => { throw coded("ENOENT"); }) as typeof spawn : fake.run;
-      const lstat = ((target: string) => {
-        checked = target;
-        if (check !== "exists") throw coded(check);
-        return { isFile: () => true };
-      }) as unknown as typeof lstatSync;
+    for (const code of ["ENOENT", "EACCES", "ELOOP", "ENOTDIR"]) {
+      const fake = fakeSpawn(code);
+      const spawnChild = synchronous ? (() => { throw coded(code); }) as typeof spawn : fake.run;
       const result = await runDesktopCliHandoff(
         { kind: "handoff", target: "/fixture/desktop/ocx" },
         { argv: [], env: {}, proof, context },
-        { spawn: spawnChild, parent: fake.parent as unknown as NodeJS.Process, lstat },
+        { spawn: spawnChild, parent: fake.parent as unknown as NodeJS.Process },
       );
-      expect(checked).toBe("/fixture/desktop/ocx");
-      expect(result).toEqual(check === "ENOENT" ? { kind: "continue" } : { kind: "error", issue: "spawn-failed" });
+      expect(result).toEqual({ kind: "error", issue: "spawn-failed" });
       expect(fake.parent.eventNames()).toHaveLength(0);
     }
   }
