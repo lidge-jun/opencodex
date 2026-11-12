@@ -824,3 +824,22 @@ test("a one-route link's orphan flag left by a failed spawn is watched when the 
   for (let waited = 0; waited < 61_000 && h.runs.every(run => run.kind !== "probe"); waited += 1_000) await h.advance(1_000);
   expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
 });
+
+test("a link on a later route stays there until ocx link reconnect starts a round from the first rested route", async () => {
+  let lanDown = true;
+  const h = await started({ probe: route => route === "alpha-lan" && lanDown ? refused("ssh: connect to host 10.0.0.5 port 22: Connection refused") : ok("ocx-link-probe\n") });
+  await h.grant();
+  await h.tick();
+  expect(h.state().routes?.route?.name).toBe("pen-alpha");
+  // The direct route comes back and its rest ends: the link does not move by itself.
+  lanDown = false;
+  await h.advance(60_000);
+  expect(h.state().routes?.route?.name).toBe("pen-alpha");
+  expect(h.runs.filter(run => run.kind === "probe" && run.destination === "alpha-lan")).toHaveLength(1);
+  expect(await h.supervisor.reconnect("${LINK}".replace("${LINK}", LINK))).toBe(true);
+  await h.tick();
+  expect(h.runs.filter(run => run.kind === "probe").at(-1)?.destination).toBe("alpha-lan");
+  await h.grant();
+  await h.tick();
+  expect(h.state().routes?.route?.name).toBe("alpha-lan");
+});
