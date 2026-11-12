@@ -60,6 +60,10 @@ export interface OpenGatewayCompletionGuardOptions {
   readonly recordUsage: (usage: unknown) => void;
   readonly retryEnabled?: boolean;
   readonly stallTimeoutMs?: number;
+  /** This response's real upstream body is already guarded before reset preflight. */
+  readonly initialBodyInactivityGuarded?: boolean;
+  /** Time reset selection already held this response's head; the first hold is shortened by it. */
+  readonly initialHoldSpentMs?: number;
   /** Expiry releases original bytes; it never aborts a healthy upstream. */
   readonly holdTimeoutMs?: number;
 }
@@ -67,19 +71,19 @@ export interface OpenGatewayCompletionGuardOptions {
 type Inspection = { kind: "pass"; response: Response }
   | { kind: "empty" | "invalid"; snapshot: RecordValue; streaming: boolean };
 
-async function inspect(response: Response, options: OpenGatewayCompletionGuardOptions): Promise<Inspection> {
+async function inspect(response: Response, options: OpenGatewayCompletionGuardOptions, alreadyGuarded: boolean, heldMs: number): Promise<Inspection> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const streaming = contentType.includes("text/event-stream")
     || (!contentType && isPlainObject(options.body) && options.body.stream === true);
   if (!response.body || (!streaming && !contentType.includes("application/json"))) return { kind: "pass", response };
-  const guarded = guardResponseBodyInactivity(response, options.signal, streaming ? options.stallTimeoutMs ?? 0 : 0);
+  const guarded = guardResponseBodyInactivity(response, options.signal, streaming && !alreadyGuarded ? options.stallTimeoutMs ?? 0 : 0);
   const reader = guarded.response.body?.getReader();
   if (!reader) return { kind: "pass", response };
   const framer = new BoundedSseFrameBuffer(MAX_BYTES);
   const held: Array<Uint8Array | undefined> = [];
   let bytes = 0, events = 0, transferred = false, cleaned = false;
   let pending: ReturnType<typeof reader.read> | undefined;
-  const holdMs = options.holdTimeoutMs ?? MAX_HOLD_MS;
+  const holdMs = Math.max(0, (options.holdTimeoutMs ?? MAX_HOLD_MS) - heldMs);
   const deadline = performance.now() + holdMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<"expired">(resolve => { timer = setTimeout(() => resolve("expired"), holdMs); });
@@ -217,7 +221,9 @@ export async function guardOpenGatewayCompletion(response: Response, options: Op
     && selfContainedResponsesBody(body) && !isNonReplayableResponse(response);
   let selected = response;
   for (let attempt = 0; ; attempt++) {
-    const inspected = await inspect(selected, options);
+    const initial = attempt === 0;
+    const inspected = await inspect(selected, options, initial && options.initialBodyInactivityGuarded === true,
+      initial ? Math.max(0, options.initialHoldSpentMs ?? 0) : 0);
     if (inspected.kind === "pass") return inspected.response;
     const usage = inspected.snapshot.usage;
     options.recordUsage(usage);

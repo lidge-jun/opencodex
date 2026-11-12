@@ -98,7 +98,31 @@ Home에서 `ocx link check (--link-id <id> | --all)`를 실행하면 Home이 추
 
 ### Home에서 Child 운영하기
 
-`ocx link sync`, `ocx link restart-codex`, `ocx link update`는 Home이 추가한 Child에서 링크의 SSH 연결로 실행되며 작업을 JSON으로 출력합니다. `sync`는 고정된 `ocx sync --expect-link`를 실행합니다(Child 2.93.0 이상). `restart-codex`는 동기화한 뒤 Child의 Codex app-server를 재시작해 실행 중인 Codex가 현재 카탈로그를 읽게 합니다. `--scope codex`는 데스크톱 앱도 다시 실행합니다. 재시작은 링크 하나만 지정합니다. `restart-codex`와 `--restart-codex`에는 `--yes`가 필요하지만 `ocx link sync --link-id <id> --restart-app-server-only`는 확인 없이 app-server를 재시작합니다. Home이 그 Child의 모델 요청을 중계하는 동안에는 재시작을 건너뜁니다(`restart-skipped:link-active`). 2.69보다 오래된 Child에서는 스트리밍이 아닌 요청이 응답이 시작된 뒤에야 보입니다. `update --yes`는 Child 자체 업데이트 도구로 Child의 OpenCodex를 이 Home의 버전으로만 업데이트합니다(Child 2.97.0 이상. npm과 pnpm은 Node 런처로 적용하므로 `ocx link check`도 그곳에서 읽기 전용 `node --version`을 실행합니다). 한 번에 Child 하나씩 처리하며, 적용이 성공, 실패, 롤백된 뒤에는 다시 동기화합니다. 결과를 알 수 없는 적용은 다시 실행하거나 동기화하지 않으므로 `ocx link check`로 확인하세요. 그 Child로 중계 중인 요청은 끝납니다. Windows Child는 `sync`만 지원하고, `ocx-child` Child는 재시작과 업데이트를 지원하지 않는다고 보고합니다. CLI는 루프백에 바인딩된 Home이 필요합니다. 그렇지 않은 Home에서는 이 작업을 실행할 수 없으며, 대시보드에도 이 작업은 없습니다. 자세한 내용과 종료 코드는 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)(영문)를 참고하세요. 이 보호는 최선의 노력일 뿐입니다. 확인과 재시작 사이에 시작된 요청은 끝날 수 있으므로, 턴을 보존해야 하면 그 Child에서 새 요청을 멈추세요. `ocx sync --restart-children`(또는 `--restart-children=codex --yes`)는 Home 동기화를 전파할 때 모든 Child 또는 `--child <linkId>`로 지정한 Child에 같은 규칙을 적용합니다. 각 Child는 동기화되고, 중계 중인 요청이 있는 동안에는 재시작만 건너뜁니다(`restart-skipped:link-active`).
+`ocx link sync`, `ocx link restart-codex`, `ocx link update`는 Home이 추가한 Child에서 링크의 SSH 연결로 실행되며 작업을 JSON으로 출력합니다. `sync`는 고정된 `ocx sync --expect-link`를 실행합니다(Child 2.93.0 이상). `restart-codex`는 동기화한 뒤 Child의 Codex app-server를 재시작해 실행 중인 Codex가 현재 카탈로그를 읽게 합니다. `--scope codex`는 데스크톱 앱도 다시 실행합니다. 재시작은 링크 하나만 지정합니다. `restart-codex`와 `--restart-codex`에는 `--yes`가 필요하지만 `ocx link sync --link-id <id> --restart-app-server-only`는 확인 없이 app-server를 재시작합니다. Home이 그 Child의 모델 요청을 중계하는 동안에는 재시작을 건너뜁니다(`restart-skipped:link-active`). 2.69보다 오래된 Child에서는 스트리밍이 아닌 요청이 응답이 시작된 뒤에야 보입니다. `update --yes`는 Child 자체 업데이트 도구로 Child의 OpenCodex를 이 Home의 버전으로만 업데이트합니다(Child 2.97.0 이상. npm과 pnpm은 Node 런처로 적용하므로 `ocx link check`도 그곳에서 읽기 전용 `node --version`을 실행합니다). 한 번에 Child 하나씩 처리하며, 적용이 성공, 실패, 롤백된 뒤에는 다시 동기화합니다. 결과를 알 수 없는 적용은 다시 실행하거나 동기화하지 않으므로 `ocx link check`로 확인하세요. 그 Child로 중계 중인 요청은 끝납니다. Windows Child는 `sync`만 지원하고, `ocx-child` Child는 재시작과 업데이트를 지원하지 않는다고 보고합니다. CLI는 루프백에 바인딩된 Home이 필요합니다. 그렇지 않은 Home에서는 이 작업을 실행할 수 없으며, 대시보드의 Remote Link 페이지에서는 Home이 추가한 Child에 대해 같은 작업을 제공합니다. 자세한 내용과 종료 코드는 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)(영문)를 참고하세요. 이 보호는 최선의 노력일 뿐입니다. 확인과 재시작 사이에 시작된 요청은 끝날 수 있으므로, 턴을 보존해야 하면 그 Child에서 새 요청을 멈추세요. Home은 Codex가 모델 요청이 아니라 도구를 실행하는 턴 중인지도 알 수 없으므로, 그 Child에서 Codex를 재시작하거나 OpenCodex를 업데이트하기 전에 진행 중인 Codex 턴이 끝나기를 기다리십시오. 수동 업데이트는 그 Child의 OpenCodex를 재시작하며 그 Child를 위해 아직 중계 중인 턴을 끝냅니다. 자동 업데이트는 Child가 유휴 상태가 될 때까지 기다립니다. `ocx sync --restart-children`(또는 `--restart-children=codex --yes`)는 Home 동기화를 전파할 때 모든 Child 또는 `--child <linkId>`로 지정한 Child에 같은 규칙을 적용합니다. 각 Child는 동기화되고, 중계 중인 요청이 있는 동안에는 재시작만 건너뜁니다(`restart-skipped:link-active`).
+
+### Child 버전과 작업
+
+Home에서는 모든 Remote Link 행에 Home이 그 Child에 대해 마지막으로 확인한 내용이 표시되며, Home이 시작한 행에는 그 Child를 제어하는 버튼도 함께 표시됩니다. 배지는 다음을 나타냅니다.
+
+- Child의 버전과 그 옆의 `Behind Home (<home version>)`, `Same version as Home`, `Newer than Home`, 그리고 업데이트를 적용할 수 있을 때의 `Update available: <home version>`. Child가 자체 대시보드에서 시작한 링크라면 버전만 표시되고 버전 차이 배지는 없으며, `ocx-child` Child는 항상 `unknown`으로 표시됩니다.
+- 설치 종류(`Desktop app`, `GOAT`, `Source checkout`), 또는 이 릴리스에서 이름을 붙이지 않는 토큰은 고정폭 글꼴로 표시됩니다.
+- `Catalog current` 또는 `Catalog out of date`. `Codex restart needed (<n>)`와 `Codex not running` 배지는 Child가 자신의 Codex 상태를 보고한 뒤에만 표시되며, 그 보고는 이후 릴리스에서 추가됩니다. 아직 이를 보내는 Child 릴리스가 없으므로 지금은 이 두 배지가 나타나지 않습니다.
+- 마지막 작업을 `Last <operation>: <state>`로 표시하고 그 사유는 고정폭으로 표시하며, 작업이 링크를 점유하는 동안에는 실행 중인 작업을 표시합니다.
+
+Home이 그 Child를 직접 업데이트할 수 없으면 행에 대신 무엇을 해야 하는지 표시됩니다. 그 Child의 OpenCodex Desktop에서 Check for Updates를 사용하거나, 직접 업데이트하거나, `mise`를 통해 업데이트하거나, GOAT가 처리하도록 두십시오. 알 수 없는 사유는 추측한 문장 대신 토큰으로 표시됩니다.
+
+네 가지 작업은 CLI와 같은 작업을 시작하므로 Child에도 같은 버전이 필요합니다.
+
+- **Check**는 `ocx link check`처럼 Child의 설치 정보를 읽습니다.
+- **Sync now**는 `ocx link sync`처럼 고정된 `ocx sync --expect-link`를 실행합니다.
+- **Restart Codex**는 범위를 선택하게 합니다. `Codex app-servers`는 Child의 백그라운드 app-server를 재시작해 현재 카탈로그를 읽게 하며, Codex 데스크톱 앱 자체의 app-server는 새로 고치지 않으므로 그 경우에는 데스크톱 앱을 재시작하십시오. `Codex desktop app`은 데스크톱 앱도 종료하고 다시 실행하며, 그곳에서 열린 대화가 끝납니다.
+- **Update**는 `ocx link update`처럼 Child 자체 업데이트 도구로 Child의 OpenCodex를 이 Home의 버전으로 올립니다. 확인 문구에는 Child의 OpenCodex가 재시작되어 그 Child를 위해 아직 중계 중인 턴이 끝난다는 점과, 자동 업데이트는 Child가 유휴 상태가 될 때까지 기다린다는 점이 나옵니다.
+
+**Check all**과 **Update all**은 대상이 되는 모든 Home 시작 링크에 적용됩니다. Update all도 한 번에 Child 하나씩 실행하며 다른 버전을 대상으로 삼지 않습니다. 실행 중인 작업은 Child마다 한 줄로 상태, 옮겨 간 버전(이전과 이후), 카탈로그 동기화 결과, 재시작 결과를 보여 줍니다. 작업이 끝나면 패널이 사라지고 행이 새로 고쳐집니다. Home이 더 이상 알지 못하는 작업(Home이 재시작된 경우)은 그렇다고 표시하고 각 행의 상태를 답으로 남깁니다. 작업이 링크를 점유하는 동안에는 그 링크의 작업과 Disconnect가 비활성화됩니다. 서버도 어차피 그 요청을 거부합니다.
+
+목록 아래의 **Child automation** 패널은 `ocx link policy`와 같은 정책 파일을 보여 주고 편집합니다. 카탈로그 전파(기본값 자동), Codex 재시작(기본값 안 함), 업데이트(기본값 유휴 시 자동, 이 릴리스에서는 아직 활성화되지 않음), 유휴 기간이 있습니다. 저장할 때는 변경한 값만 씁니다. 정책 파일이 손상된 경우 패널은 자동 카탈로그 전파와 자동 업데이트가 꺼져 있다고 알리고, 그때 저장하면 선택한 모드가 그대로 유지되도록 모든 설정을 씁니다. 이 컨트롤은 서버를 우회하지 않습니다. 서버는 작업마다 정책, 링크 상태, Child 활동을 다시 확인합니다.
+
+소유하지 않은 컴퓨터는 링크하지 마십시오. Home은 여러분의 SSH 키로 그곳에서 명령을 실행합니다.
 
 ### 카탈로그 자동 전파와 Child 정책
 

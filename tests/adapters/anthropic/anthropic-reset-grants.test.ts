@@ -278,6 +278,17 @@ describe("reset-grant journal", () => {
     expect(pendingAnthropicResetOperation("acct-1", { journalPath, now: T0 + ANTHROPIC_RESET_RETRY_WINDOW_MS + 1 })?.operationId).toBe(OP2);
   });
 
+  test("a new id for another grant on the same account is refused while an attempt is unresolved", () => {
+    // The dashboard lets the user pick a grant, so a stale view must not open a second
+    // claim on the account while the first one's outcome is still unknown.
+    beginAnthropicResetOperation(id(OP), { journalPath, now: T0 });
+    releaseAnthropicResetLease(OP, { journalPath, now: T0 + 1 });
+    expect(beginAnthropicResetOperation(id(OP2, { grantId: "grant-b" }), { journalPath, now: T0 + 60_000 }))
+      .toEqual({ kind: "unresolved-prior", operationId: OP });
+    expect(beginAnthropicResetOperation(id(OP2, { accountId: "acct-2", grantId: "grant-b" }), { journalPath, now: T0 + 60_000 }))
+      .toEqual({ kind: "execute", attempt: 1 });
+  });
+
   test("an operation id bound to another account, grant, or organization is refused", () => {
     beginAnthropicResetOperation(id(OP), { journalPath, now: T0 });
     for (const other of [{ accountId: "acct-2" }, { grantId: "grant-b" }, { org: "cbbef438-0000-4000-8000-000000000002" }]) {
