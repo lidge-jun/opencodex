@@ -484,6 +484,7 @@
   "claude-auth-mode.test.ts": "claude-integration", "claude-authmode-migration.test.ts": "claude-integration",
   "claude-cli-adapter.test.ts": "providers", "claude-cli.test.ts": "claude-integration",
   "claude-cli-client-http.test.ts": "providers", "claude-cli-efficiency.test.ts": "providers",
+  "claude-cli-fixture-stdout-flush.test.ts": "providers",
   "claude-cli-tool-capture.test.ts": "providers", "claude-cli-usage-admission.test.ts": "providers",
   "claude-config-first-party.test.ts": "cli", "claude-code-thought-signature-scope.test.ts": "claude-integration",
   "claude-compatibility.test.ts": "claude-integration", "claude-context-windows.test.ts": "claude-integration",
