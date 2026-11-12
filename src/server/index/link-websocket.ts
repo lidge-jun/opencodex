@@ -9,6 +9,7 @@ import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { classifyUsageClient } from "../../usage/client";
 import type { LinkActivity, LinkSocketActivity } from "../../link/child-activity";
 import type { ActivityHolds, FingerprintMark, StoredMark } from "../../link/ws-activity-holds";
+import type { LinkWsCloseReason, LinkWsCounters, LinkWsRefusal } from "../../link/status-projection";
 import type { LinkTurnObserver } from "../link-turn";
 import { resultKeysOf } from "../../codex/websocket-activity";
 import {
@@ -255,6 +256,18 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
   // Upgraded but not yet opened: Bun runs open() after the fetch returns, so a revoke or close() in
   // between must still reach the socket. The value is the close it owes when it opens.
   const pending = new Map<LinkSocketBinding, { code: number; reason: string } | null>();
+  // Design 9.3: display-only counters per link, in memory, reset at restart; reasons are closed sets.
+  const counted = new Map<string, { upgrades: number; refused: Partial<Record<LinkWsRefusal, number>>; closes: Partial<Record<LinkWsCloseReason, number>> }>();
+  const tally = (linkId: string, create: boolean) => {
+    let entry = counted.get(linkId);
+    if (!entry && create) { entry = { upgrades: 0, refused: {}, closes: {} }; counted.set(linkId, entry); }
+    return entry;
+  };
+  // Why the gate itself closed a socket; a close the gate did not start is classified by its code.
+  const fencedBy = new WeakMap<LinkSocketBinding, LinkWsCloseReason>();
+  const FENCE_REASONS = new Map<{ code: number; reason: string }, LinkWsCloseReason>([
+    [LINK_WS_REVOKED_CLOSE, "revoked"], [LINK_WS_DISABLED_CLOSE, "disabled"], [LINK_WS_IDLE_CLOSE, "idle"], [LINK_WS_AGE_CLOSE, "age"],
+  ]);
 
   const authorized = (identity: { keyId: string; linkId: string; fingerprint: string }): boolean => {
     try { return deps.authorized(identity); } catch { return false; }
@@ -264,6 +277,8 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
     const link = ws.data.link;
     if (!link || link.fenced) return;
     link.fenced = true;
+    const why = FENCE_REASONS.get(close);
+    if (why) fencedBy.set(link, why);
     const state = states.get(ws);
     if (state && close === LINK_WS_REVOKED_CLOSE) state.revoked = true;
     if (ws.data.responsesActivity) ws.data.responsesActivity.closing = true;
@@ -430,29 +445,31 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
       if (!on) return { handled: false };
       const leases = new LinkUpgradeLeases(grant.release);
       let binding: LinkSocketBinding | undefined;
-      const refuse = (response: Response): LinkUpgradeOutcome => {
+      const refuse = (response: Response, reason: LinkWsRefusal): LinkUpgradeOutcome => {
         leases.release();
+        const entry = tally(grant.linkId, true)!;
+        entry.refused[reason] = (entry.refused[reason] ?? 0) + 1;
         return { handled: true, response };
       };
       try {
-        if (req.signal.aborted) return refuse(formatErrorResponse(426, "upgrade_required", "The upgrade request was aborted."));
-        if (!accepting || draining()) return refuse(formatErrorResponse(503, "server_error", "The Home is shutting down.", { code: "server_draining" }));
+        if (req.signal.aborted) return refuse(formatErrorResponse(426, "upgrade_required", "The upgrade request was aborted."), "aborted");
+        if (!accepting || draining()) return refuse(formatErrorResponse(503, "server_error", "The Home is shutting down.", { code: "server_draining" }), "draining");
         // S2: the credential on the upgrade is the key the relay proof was made with.
         const admission = resolveResponsesApiAuth(req, deps.policy());
-        if (!admission || admission.kind !== "configured" || admission.keyId !== grant.keyId) return refuse(unauthorized());
-        if (!authorized(grant)) return refuse(unauthorized());
+        if (!admission || admission.kind !== "configured" || admission.keyId !== grant.keyId) return refuse(unauthorized(), "unauthorized");
+        if (!authorized(grant)) return refuse(unauthorized(), "unauthorized");
         // Design 5: the crash fence is durable before any link socket exists; without it, no upgrade.
         if (deps.holds && !deps.holds.arm()) {
-          return refuse(formatErrorResponse(426, "upgrade_required", "Remote Link WebSocket activity cannot be recorded; use HTTP.", { code: "link_websocket_unavailable" }));
+          return refuse(formatErrorResponse(426, "upgrade_required", "Remote Link WebSocket activity cannot be recorded; use HTTP.", { code: "link_websocket_unavailable" }), "unavailable");
         }
         const memory = reserveMemory();
-        if (!memory) return refuse(capacityRefusal());
+        if (!memory) return refuse(capacityRefusal(), "memory");
         leases.add(memory);
         const slot = admitSlot(grant.linkId);
-        if (!slot) return refuse(capacityRefusal());
+        if (!slot) return refuse(capacityRefusal(), "cap");
         leases.add(slot);
         const socketLease = reserveSocket();
-        if (!socketLease) return refuse(capacityRefusal());
+        if (!socketLease) return refuse(capacityRefusal(), "cap");
         leases.add(() => socketLease.release());
         const data = buildResponsesWsData(
           selectForwardHeaders(req.headers),
@@ -464,18 +481,19 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
         binding = { linkId: grant.linkId, keyId: grant.keyId, fingerprint: grant.fingerprint, fenced: false, leases };
         data.nativeControlDisabled = true;
         data.link = binding;
-        if (req.signal.aborted) return refuse(formatErrorResponse(426, "upgrade_required", "The upgrade request was aborted."));
+        if (req.signal.aborted) return refuse(formatErrorResponse(426, "upgrade_required", "The upgrade request was aborted."), "aborted");
         leases.upgrading();
         pending.set(binding, null);
         if (!(server as unknown as Server<WsData>).upgrade(req, { data })) {
           pending.delete(binding);
-          return refuse(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"));
+          return refuse(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), "failed");
         }
         leases.upgraded();
+        tally(grant.linkId, true)!.upgrades += 1;
         return { handled: true, response: undefined };
       } catch {
         if (binding) pending.delete(binding);
-        return refuse(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"));
+        return refuse(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), "failed");
       }
     },
 
@@ -588,11 +606,26 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
             if (link) {
               pending.delete(link);
               untrack(ws, link.linkId);
+              // Counted only for a link still known: a removed link's counters are not recreated by its last closes.
+              const entry = tally(link.linkId, false);
+              const why: LinkWsCloseReason = fencedBy.get(link) ?? (code === 1000 || code === 1001 ? "client" : code === 1006 ? "dropped" : "other");
+              if (entry) entry.closes[why] = (entry.closes[why] ?? 0) + 1;
               link.leases.closed();
             }
           }
         },
       };
+    },
+
+    /** Design 9.3: one link's live counters (display only). */
+    transport(linkId: string): LinkWsCounters {
+      const entry = counted.get(linkId);
+      return { open: sockets.get(linkId)?.size ?? 0, upgrades: entry?.upgrades ?? 0, refused: { ...entry?.refused }, closes: { ...entry?.closes } };
+    },
+
+    /** A removed link's counters go with it. */
+    forgetTransport(linkId: string): void {
+      counted.delete(linkId);
     },
 
     /** The Home's own revoke path, in the same task as its commit. Returns how many were closed. */

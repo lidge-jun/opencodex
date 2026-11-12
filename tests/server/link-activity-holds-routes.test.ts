@@ -40,7 +40,7 @@ function link(id: string): LinkRecord {
     tunnelPort: 41000, apiKeyId: "key-" + id.slice(-4), createdAt: "2026-11-01T00:00:00.000Z", remotePlatform: "posix" };
 }
 
-function harness(options: { runtimeRole?: OcxConfig["runtimeRole"]; withHolds?: boolean; failWrites?: () => boolean; linksReadable?: () => boolean } = {}) {
+function harness(options: { runtimeRole?: OcxConfig["runtimeRole"]; withHolds?: boolean; failWrites?: () => boolean; linksReadable?: () => boolean; withTransport?: boolean } = {}) {
   const store: LinkStore = { version: 1, listenerPort: 18181, links: [link(HELD), link(FREE)] };
   writeFileSync(join(temp, "ocx", "link", "links.json"), JSON.stringify(store));
   const holdsDir = join(temp, "holds");
@@ -55,6 +55,7 @@ function harness(options: { runtimeRole?: OcxConfig["runtimeRole"]; withHolds?: 
     onAuthenticatedCatalog: () => () => {},
     linkActivity: (linkId: string, now: number) => ({ inFlight: holds.count(linkId), lastDataEndAt: now - 700_000, observedSince: now - 900_000 }),
     ...(options.withHolds === false ? {} : { linkHolds: (linkId: string) => holds.summary(linkId), clearLinkHolds: (linkId: string) => holds.clear(linkId) }),
+    ...(options.withTransport ? { linkTransport: (linkId: string) => ({ open: linkId === HELD ? 1 : 0, upgrades: linkId === HELD ? 2 : 0, refused: linkId === HELD ? { cap: 1 } : {}, closes: {} }) } : {}),
   };
   const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: options.runtimeRole ?? "hub", defaultProvider: "mock", providers: {}, apiKeys: [] } as OcxConfig;
   const deps: ManagementApiDeps = {
@@ -149,5 +150,27 @@ describe("status with ?children=1", () => {
     expect(withStore).toBe(without);
     const plain = await (await harness().call("/api/link/status")).text();
     expect(plain).toBe(await (await harness({ withHolds: false }).call("/api/link/status")).text());
+  });
+});
+
+describe("status with ?transport=1 (T5e2, design 9.3)", () => {
+  const rows = async (h: ReturnType<typeof harness>, query: string) =>
+    ((await (await h.call("/api/link/status" + query)).json()) as { links: Array<{ id: string; ws?: unknown }> }).links;
+
+  test("every row carries ws: the live counters and the hold count", async () => {
+    const h = harness({ withTransport: true });
+    h.hold();
+    const [held, free] = await rows(h, "?transport=1");
+    expect(held!.ws).toEqual({ open: 1, upgrades: 2, refused: { cap: 1 }, closes: {}, holds: 1 });
+    expect(free!.ws).toEqual({ open: 0, upgrades: 0, refused: {}, closes: {}, holds: 0 });
+  });
+
+  test("without the query, the default and children documents are byte-identical with or without the counters", async () => {
+    for (const query of ["", "?children=1", "?compatibility=1&diagnostics=1&children=1"]) {
+      const withCounters = await (await harness({ withTransport: true }).call("/api/link/status" + query)).text();
+      const without = await (await harness().call("/api/link/status" + query)).text();
+      expect(withCounters).toBe(without);
+      expect(withCounters).not.toContain('"ws"');
+    }
   });
 });

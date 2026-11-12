@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { runLinkCommand, type LinkCliDeps } from "../../src/cli/link";
 import { RUNTIME_ROLE_CLIENT_MESSAGE, parseChildOpArgs, validateChildJob } from "../../src/cli/link-child-ops";
 import { CliUsageError } from "../../src/cli/runtime-api";
-import { validateChildOps } from "../../src/cli/link-status-child";
+import { validateChildOps, validateLinkWs } from "../../src/cli/link-status-child";
 
 // Lane T5d3a: `ocx link activity clear` and the holds a status row carries (owner decision D8).
 
@@ -111,5 +111,28 @@ describe("--ignore-activity (T5d3b)", () => {
     expect(validateChildJob({ ...doc, ignoreActivity: true }).ignoreActivity).toBe(true);
     expect(validateChildJob(doc)).not.toHaveProperty("ignoreActivity");
     expect(() => validateChildJob({ ...doc, ignoreActivity: "yes" })).toThrow("job ignoreActivity");
+  });
+});
+describe("ocx link status ws block (T5e2, design 9.3)", () => {
+  test("the counters pass through; unknown reason keys are kept, wrong types are rejected", () => {
+    const ws = { open: 1, upgrades: 2, refused: { cap: 1, "future-reason": 3 }, closes: { idle: 1 }, holds: 0 };
+    expect(validateLinkWs(ws, 0)).toEqual(ws);
+    for (const bad of [null, { ...ws, open: -1 }, { ...ws, refused: [] }, { ...ws, closes: { idle: "1" } }, { ...ws, holds: 1.5 }]) {
+      expect(() => validateLinkWs(bad, 0)).toThrow("link 0 ws");
+    }
+  });
+
+  test("ocx link status asks for transport=1 and prints the block", async () => {
+    const row = { id: LINK, alias: "a", direction: "client-initiated", state: "connected", since: "2026-11-12T00:00:00.000Z", reason: null, tunnelPort: 2222,
+      ws: { open: 1, upgrades: 1, refused: {}, closes: {}, holds: 0 } };
+    const d = deps(() => ({ body: { role: "home", listener: { state: "listening", port: 19100 }, links: [row], child: null } }));
+    const stdout: string[] = [];
+    const log = console.log;
+    console.log = (...parts: unknown[]) => { stdout.push(parts.map(String).join(" ")); };
+    let code: number;
+    try { code = await runLinkCommand(["status", "--json"], d.value); } finally { console.log = log; }
+    expect(code).toBe(0);
+    expect(d.calls[0]!.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1");
+    expect(JSON.parse(stdout[0]!).links[0].ws).toEqual(row.ws);
   });
 });

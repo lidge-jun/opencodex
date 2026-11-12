@@ -1697,6 +1697,7 @@
   "cli-link-activity.test.ts": "cli",
   "link-child-ops-ignore-activity.test.ts": "clients",
   "link-request-log-fields.test.ts": "server",
+  "link-websocket-transport-status.test.ts": "server",
   "link-websocket-drain.test.ts": "server",
   "link-websocket-pump.test.ts": "server",
   "link-websocket-rss.test.ts": "e2e-style",

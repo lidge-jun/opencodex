@@ -33,6 +33,8 @@ export interface LinkStatusDto {
     tunnel?: LinkTunnelDiagnostics;
     /** Home rows on request (`?children=1`): versions, update route, catalog freshness, activity and operations. */
     child?: LinkChildOpsStatus;
+    /** Rows on request (`?transport=1`): the live link WebSocket counters (design T4 section 9.3). */
+    ws?: LinkWsStatus;
   }>;
   child: null | {
     alias: string;
@@ -58,6 +60,29 @@ export interface LinkTunnelDiagnostics {
 
 function iso(at: number): string {
   return new Date(at).toISOString();
+}
+
+/** Why the Home refused a link WebSocket upgrade, as counted (design T4 section 9.3). */
+export type LinkWsRefusal = "aborted" | "draining" | "unauthorized" | "unavailable" | "memory" | "cap" | "failed";
+/** Why a link WebSocket closed: the Home's own fence, or the peer's close code. */
+export type LinkWsCloseReason = "revoked" | "disabled" | "idle" | "age" | "client" | "dropped" | "other";
+/** In memory, display only, reset at restart. */
+export interface LinkWsCounters {
+  open: number;
+  upgrades: number;
+  refused: Partial<Record<LinkWsRefusal, number>>;
+  closes: Partial<Record<LinkWsCloseReason, number>>;
+}
+export interface LinkWsStatus extends LinkWsCounters { holds: number }
+
+/** `?transport=1`: every row gets `ws`; a Home without counters reports zeros. Rows are the current links only. */
+export function attachLinkTransport(dto: LinkStatusDto, counters: (linkId: string) => LinkWsCounters | null,
+  holds: (linkId: string) => number): LinkStatusDto {
+  for (const link of dto.links) {
+    const current = counters(link.id) ?? { open: 0, upgrades: 0, refused: {}, closes: {} };
+    link.ws = { open: current.open, upgrades: current.upgrades, refused: { ...current.refused }, closes: { ...current.closes }, holds: holds(link.id) };
+  }
+  return dto;
 }
 
 /** Add `tunnel` to each Home-initiated link the supervisor reports. */

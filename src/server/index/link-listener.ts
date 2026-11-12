@@ -9,6 +9,7 @@ import type { StoredMark } from "../../link/ws-activity-holds";
 import { LINK_TURN_HEADER, registerLinkTurnToken, releaseLinkTurnToken } from "../link-turn";
 import { LINK_WS_LIMITS, linkWebsocketTransportReady } from "./link-websocket-limits";
 import { createActivityHolds, type ClearHoldsResult, type LinkHoldsSummary } from "../../link/ws-activity-holds";
+import type { LinkWsCounters } from "../../link/status-projection";
 import { resultKeysOf } from "../../codex/websocket-activity";
 import { dirname } from "node:path";
 import {
@@ -81,6 +82,8 @@ export interface LinkListenerLifecycle<T> {
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
   /** The Home's own revoke path closes this link's WebSockets (4401) in the same task. */
   closeLinkSockets(linkId: string): number;
+  /** Design 9.3: the link's live WebSocket counters (display only, reset at restart). */
+  linkTransport(linkId: string): LinkWsCounters;
   /** The link's WebSocket activity holds and their reasons; null when nothing holds it (D8). */
   linkHolds(linkId: string): LinkHoldsSummary | null;
   /** The operator's clear of one link's activity holds (D8); never called automatically. */
@@ -336,7 +339,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     peerObservation: linkId => peers.get(linkId),
     linkActivity: (linkId, now) => activity.snapshot(linkId, now),
     // Only the Home's link removal calls this: the link's sockets close and its holds go with it.
-    closeLinkSockets: linkId => { const closed = websocketGate.closeLink(linkId); holds.removeLink(linkId); return closed; },
+    closeLinkSockets: linkId => { const closed = websocketGate.closeLink(linkId); holds.removeLink(linkId); websocketGate.forgetTransport(linkId); return closed; },
+    linkTransport: linkId => websocketGate.transport(linkId),
     linkHolds: linkId => holds.summary(linkId),
     clearLinkHolds: linkId => holds.clear(linkId),
     async activityHoldsSettled() { await Promise.all([...holdObservations]); },

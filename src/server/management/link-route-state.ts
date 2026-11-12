@@ -39,6 +39,8 @@ export interface LinkRouteListener {
   linkActivity?(linkId: string, now: number): import("../../link/child-activity").LinkActivitySnapshot;
   /** Optional: closes the link's Responses WebSockets after a revoke commits (route fakes omit it). */
   closeLinkSockets?(linkId: string): number;
+  /** Optional: the link's live WebSocket counters (design 9.3); without it every row reports zeros. */
+  linkTransport?(linkId: string): import("../../link/status-projection").LinkWsCounters;
   /** Optional: the link's WebSocket activity holds and their reasons; null when nothing holds it (D8). */
   linkHolds?(linkId: string): import("../../link/ws-activity-holds").LinkHoldsSummary | null;
   /** Optional: the operator's clear of one link's activity holds (D8). */

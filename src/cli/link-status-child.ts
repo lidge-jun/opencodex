@@ -115,3 +115,23 @@ function validateHolds(value: unknown, fail: (field: string) => never): LinkHold
     unknown: value.unknown === null ? null : typeof value.unknown === "string" && value.unknown.length <= 64 ? value.unknown : fail("holds.unknown"),
   };
 }
+
+/** A row's `ws` block (design 9.3) as this CLI reads it: counts are checked, reason keys are kept as sent (G1). */
+export interface LinkWsView { open: number; upgrades: number; refused: Record<string, number>; closes: Record<string, number>; holds: number }
+
+export function validateLinkWs(value: unknown, index: number): LinkWsView {
+  const fail = (field: string): never => { throw new Error(`invalid link API response: link ${index} ws ${field}`); };
+  if (!isRecord(value)) return fail("object");
+  const count = (target: unknown, field: string): number => typeof target === "number" && Number.isSafeInteger(target) && target >= 0 ? target : fail(field);
+  const tally = (target: unknown, field: string): Record<string, number> => {
+    if (!isRecord(target)) return fail(field);
+    const out: Record<string, number> = {};
+    for (const [key, raw] of Object.entries(target)) {
+      if (key.length > 32) fail(field);
+      out[key] = count(raw, `${field}.${key}`);
+    }
+    return out;
+  };
+  return { open: count(value.open, "open"), upgrades: count(value.upgrades, "upgrades"), refused: tally(value.refused, "refused"),
+    closes: tally(value.closes, "closes"), holds: count(value.holds, "holds") };
+}
