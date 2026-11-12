@@ -80,5 +80,65 @@ describe("normalizeAnthropicInputSchema", () => {
     const properties = normalized.properties as Record<string, unknown>;
     expect(JSON.parse(JSON.stringify(properties.action))).toEqual({ enum: ["write"] });
   });
+
+  test("keeps referenced and sibling properties when a $ref has siblings", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: {
+        Base: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+      allOf: [{
+        $ref: "#/$defs/Base",
+        properties: { mode: { type: "string" } },
+        required: ["mode"],
+      }],
+    });
+    const properties = normalized.properties as Record<string, unknown>;
+    expect(Object.keys(properties).sort()).toEqual(["mode", "path"]);
+    expect(normalized.required).toEqual(["path", "mode"]);
+  });
+
+  test("conjoins constraints when a $ref sibling redeclares a property", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: {
+        Base: {
+          type: "object",
+          properties: { path: { type: "string", minLength: 1 } },
+          required: ["path"],
+        },
+      },
+      allOf: [{
+        $ref: "#/$defs/Base",
+        properties: { path: { type: "string", maxLength: 10 } },
+      }],
+    });
+    const properties = normalized.properties as Record<string, unknown>;
+    expect(JSON.parse(JSON.stringify(properties.path))).toEqual({
+      allOf: [
+        { type: "string", minLength: 1 },
+        { type: "string", maxLength: 10 },
+      ],
+    });
+  });
+
+  test("unions required members from a $ref and its siblings without duplicates", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: {
+        Base: {
+          type: "object",
+          properties: { path: { type: "string" }, mode: { type: "string" } },
+          required: ["path", "mode"],
+        },
+      },
+      allOf: [{
+        $ref: "#/$defs/Base",
+        required: ["mode"],
+      }],
+    });
+    expect(normalized.required).toEqual(["path", "mode"]);
+  });
 });
 

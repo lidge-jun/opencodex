@@ -28,6 +28,48 @@ function resolveLocalPointer(root: Record<string, unknown>, pointer: string): Re
     : undefined;
 }
 
+function asSchemaMap(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+/**
+ * JSON Schema applies a `$ref` sibling's keywords alongside the referenced schema rather than
+ * replacing them. Spread would let a sibling that adds one parameter drop the referenced ones, so
+ * merge both `properties` maps, union `required`, and keep both constraints under `allOf` when a
+ * property appears on both sides.
+ */
+function mergeRefSiblings(
+  resolved: Record<string, unknown>,
+  siblings: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...resolved, ...siblings };
+
+  const resolvedProperties = asSchemaMap(resolved.properties);
+  const siblingProperties = asSchemaMap(siblings.properties);
+  if (resolvedProperties || siblingProperties) {
+    // Null prototype keeps a parameter named "__proto__" as data instead of replacing the prototype.
+    const properties: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const [name, schema] of Object.entries(resolvedProperties ?? {})) properties[name] = schema;
+    for (const [name, schema] of Object.entries(siblingProperties ?? {})) {
+      const existing = properties[name];
+      properties[name] = existing === undefined ? schema : { allOf: [existing, schema] };
+    }
+    merged.properties = properties;
+  }
+
+  const required = new Set<string>();
+  for (const source of [resolved.required, siblings.required]) {
+    if (!Array.isArray(source)) continue;
+    for (const item of source) if (typeof item === "string") required.add(item);
+  }
+  if (required.size > 0) merged.required = [...required];
+  else delete merged.required;
+
+  return merged;
+}
+
 /** Inline a local `#/...` reference so root-composition branches keep their definitions. */
 function dereferenceLocal(
   node: unknown,
@@ -44,7 +86,7 @@ function dereferenceLocal(
   nextSeen.add(ref);
   const resolved = dereferenceLocal(target, root, nextSeen) ?? target;
   const { $ref: _ignored, ...siblings } = record;
-  return { ...resolved, ...siblings };
+  return mergeRefSiblings(resolved, siblings);
 }
 
 export function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
