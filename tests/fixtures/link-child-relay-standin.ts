@@ -21,7 +21,11 @@ interface Data { home: LinkWireClient }
 
 export interface RelayStandin {
   port: number;
-  /** "upgrade" for an admitted link socket, "upgrade-refused:<status>", "http:<status>", in order. */
+  /**
+   * In order: "upgrade" for an admitted link socket, "upgrade-refused:<status>", "ws-create:<bytes>" for each
+   * response.create Codex sent on a link socket, "ws-oversize:<bytes>" for a Codex message over the limit (closed 1009),
+   * and "http:<status>" for each relayed HTTP request.
+   */
   events: string[];
   stop(): Promise<void>;
 }
@@ -32,6 +36,8 @@ export function startRelayStandin(options: {
   bearer: string;
   /** Called once the Home answered an upgrade with 101, before Codex's own 101 is sent. */
   onUpgrade?: () => void;
+  /** Advertise the 8 MiB limit in Codex's 101 (default). Off only for the control run that shows the header matters. */
+  advertiseLimit?: boolean;
 }): RelayStandin {
   const events: string[] = [];
   const homes = new Set<LinkWireClient>();
@@ -63,7 +69,8 @@ export function startRelayStandin(options: {
         }
         events.push("upgrade");
         options.onUpgrade?.();
-        if (srv.upgrade(req, { data: { home }, headers: { "x-codex-websocket-max-message-bytes": String(STANDIN_MAX_MESSAGE_BYTES) } })) return undefined;
+        const headers = options.advertiseLimit === false ? {} : { "x-codex-websocket-max-message-bytes": String(STANDIN_MAX_MESSAGE_BYTES) };
+        if (srv.upgrade(req, { data: { home }, headers })) return undefined;
         home.destroy();
         return new Response(null, { status: 426 });
       }
@@ -77,7 +84,8 @@ export function startRelayStandin(options: {
       return new Response(head.body, { status: head.status, headers: { "content-type": head.headers.get("content-type") ?? "text/event-stream" } });
     },
     websocket: {
-      maxPayloadLength: STANDIN_MAX_MESSAGE_BYTES,
+      // Accepts more than the limit so an oversized message is observed and closed here (1009), never forwarded.
+      maxPayloadLength: 4 * STANDIN_MAX_MESSAGE_BYTES,
       open(ws: ServerWebSocket<Data>) {
         void (async () => {
           for (;;) {
@@ -88,7 +96,13 @@ export function startRelayStandin(options: {
           }
         })();
       },
-      message(ws: ServerWebSocket<Data>, raw) { ws.data.home.sendText(typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8")); },
+      message(ws: ServerWebSocket<Data>, raw) {
+        const text = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8");
+        const bytes = Buffer.byteLength(text);
+        if (bytes > STANDIN_MAX_MESSAGE_BYTES) { events.push("ws-oversize:" + bytes); ws.close(1009, "message too large"); return; }
+        if (text.includes('"response.create"')) events.push("ws-create:" + bytes);
+        ws.data.home.sendText(text);
+      },
       close(ws: ServerWebSocket<Data>) { ws.data.home.destroy(); },
     },
   });

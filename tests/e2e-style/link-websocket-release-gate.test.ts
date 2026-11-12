@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import type { OcxConfig } from "../../src/types";
 import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -13,14 +14,23 @@ import { STANDIN_MAX_MESSAGE_BYTES, startRelayStandin, type RelayStandin } from 
 
 // Lane T5f: the link WebSocket release gate of design T4 11.1 item 13, with the pinned Codex binary as the client (U13).
 // The pinned binary is codex-rs built at openai/codex 88c5856 (design section 0). These tests run only when
-// OCX_LINK_GATE_CODEX names it; otherwise each is skipped with that reason. Codex reaches the Home through a test-only
+// OCX_LINK_GATE_CODEX names an executable; otherwise each is skipped with that reason. A run is release evidence only
+// when OCX_LINK_GATE_CODEX_SHA256 is set to the digest recorded with that build and the binary matches it; any other
+// executable runs as a smoke check, and every test title says which. Codex reaches the Home through a test-only
 // stand-in for the Child's relay (tests/fixtures/link-child-relay-standin.ts), because the Child's relay is lane T6.
 // Codex is an external process with no clock to inject, so each test carries a per-test bound instead of sleeps.
 
 const BIN = process.env.OCX_LINK_GATE_CODEX ?? "";
 const usable = (() => { if (!BIN) return false; try { accessSync(BIN, constants.X_OK); return true; } catch { return false; } })();
-const SKIP = " [skipped: pinned Codex binary absent (U13); set OCX_LINK_GATE_CODEX to codex-rs built at openai/codex 88c5856]";
-const gate = (title: string, body: () => Promise<void>) => test.skipIf(!usable)(title + (usable ? "" : SKIP), body, 180_000);
+const PINNED_SHA256 = (process.env.OCX_LINK_GATE_CODEX_SHA256 ?? "").trim().toLowerCase();
+const digest = usable ? createHash("sha256").update(readFileSync(BIN)).digest("hex") : "";
+const mode: "absent" | "gate" | "smoke" = !usable ? "absent" : PINNED_SHA256 && digest === PINNED_SHA256 ? "gate" : "smoke";
+const LABEL = {
+  absent: " [skipped: pinned Codex binary absent (U13); set OCX_LINK_GATE_CODEX to codex-rs built at openai/codex 88c5856]",
+  gate: " [release gate: Codex sha256 " + digest + ", the recorded build of openai/codex 88c5856]",
+  smoke: " [smoke only, not release evidence: Codex sha256 " + digest + " is unverified; set OCX_LINK_GATE_CODEX_SHA256 to the digest recorded with the build of openai/codex 88c5856]",
+}[mode];
+const gate = (title: string, body: () => Promise<void>) => test.skipIf(!usable)(title + LABEL, body, 180_000);
 
 const KEY_ID = "gate-key"; const SECRET = "gate-secret-0123456789abcdef"; const LINK = "lnk_9a9a9a9a9a9a9a9a";
 const identity = { keyId: KEY_ID, linkId: LINK, fingerprint: serviceApiTokenFingerprint(SECRET) };
@@ -108,6 +118,11 @@ function expectCompleted(result: { code: number; stdout: string; stderr: string 
 }
 
 describe("link WebSocket release gate (design 11.1 item 13)", () => {
+  test.skipIf(!PINNED_SHA256)("the Codex binary matches the digest recorded with its build" + (PINNED_SHA256 ? "" : " [skipped: OCX_LINK_GATE_CODEX_SHA256 not set]"), () => {
+    expect(usable).toBe(true);
+    expect(digest).toBe(PINNED_SHA256);
+  });
+
   gate("drain: the switch goes off after the upgrade, the socket drains, and the turn ends on HTTP", async () => {
     const h = await home((_body, index) => new Response(completed("resp_" + index), { headers: { "content-type": "text/event-stream" } }));
     let turnedOff = false;
@@ -128,15 +143,31 @@ describe("link WebSocket release gate (design 11.1 item 13)", () => {
     standin = startRelayStandin({ linkPort: h.linkPort, identity, bearer: SECRET });
     const result = await runCodex(standin.port, { argument: "say gate-ok" }, { instructionsBytes: STANDIN_MAX_MESSAGE_BYTES + 1024 });
     expectCompleted(result);
-    expect(standin.events).toContain("http:200");
     expect(Math.max(...sizes)).toBeGreaterThan(STANDIN_MAX_MESSAGE_BYTES);
+    // The socket was admitted first, then the oversized request went over HTTP: Codex never sent it on the socket (C7).
+    const events = standin.events;
+    expect(events.indexOf("upgrade")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("upgrade")).toBeLessThan(events.findIndex(event => event.startsWith("http:")));
+    expect(events.some(event => event.startsWith("ws-oversize:"))).toBe(false);
+    expect(events.filter(event => event.startsWith("ws-create:")).every(event => Number(event.split(":")[1]) <= STANDIN_MAX_MESSAGE_BYTES)).toBe(true);
+    expect(events.at(-1)).toBe("http:200");
+  });
+
+  gate("control: without the advertised limit, Codex does send the oversized request on the socket", async () => {
+    const h = await home((_body, index) => new Response(completed("resp_" + index), { headers: { "content-type": "text/event-stream" } }));
+    standin = startRelayStandin({ linkPort: h.linkPort, identity, bearer: SECRET, advertiseLimit: false });
+    await runCodex(standin.port, { argument: "say gate-ok" }, { instructionsBytes: STANDIN_MAX_MESSAGE_BYTES + 1024 });
+    // What Codex does after the 1009 is not claimed (design 6.1); only that the header is what kept it off the socket above.
+    expect(standin.events.some(event => event.startsWith("ws-oversize:"))).toBe(true);
   });
 
   gate("a Home restart mid-turn: the turn completes after Codex reconnects", async () => {
     let firstSeen!: () => void;
     const first = new Promise<void>(resolve => { firstSeen = resolve; });
+    let atFirst: string[] = [];
     const h = await home((_body, index) => {
       if (index === 0) {
+        atFirst = [...(standin?.events ?? [])];
         firstSeen();
         // The first request starts and never finishes: the Home restarts under it.
         return new Response(new ReadableStream<Uint8Array>({ start(controller) {
@@ -149,12 +180,17 @@ describe("link WebSocket release gate (design 11.1 item 13)", () => {
     const result = runCodex(standin.port, { argument: "say gate-ok" });
     await first;
     await server!.stop(true);
+    standin.events.push("restart");
     await h.start();
     const done = await result;
     expectCompleted(done);
-    // The cut turn ran on the link WebSocket; what Codex used after the restart is its own retry policy (C4, C5).
-    expect(standin.events[0]).toBe("upgrade");
-    expect(standin.events.length).toBeGreaterThan(1);
+    // The stalled request was the one Codex sent on the admitted link socket: nothing had gone over HTTP yet.
+    expect(atFirst[0]).toBe("upgrade");
+    expect(atFirst.some(event => event.startsWith("ws-create:"))).toBe(true);
+    expect(atFirst.some(event => event.startsWith("http:"))).toBe(false);
+    // Completion came from a request after the restart; which transport Codex used for it is its own retry policy (C4, C5).
+    const after = standin.events.slice(standin.events.indexOf("restart") + 1);
+    expect(after.some(event => event.startsWith("ws-create:") || event === "http:200")).toBe(true);
   });
 
   test.skip("a 503 sequence while the Child's tunnel reconnects, recovering on WebSocket and, separately, ending on HTTP [skipped: the Child's tunnel and 503 sequence are lane T6]", () => {});
