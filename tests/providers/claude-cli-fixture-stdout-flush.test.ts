@@ -69,6 +69,11 @@ interface Tracked {
   /** Exit code once closed, matching `close`'s argument. */
   exitCode: () => number | null;
   spawnError: () => Error | undefined;
+  /**
+   * Stdin write failures recorded since spawn. A case that expects its request to arrive asserts
+   * this is empty; the case that deliberately provokes EPIPE asserts the code it contains.
+   */
+  stdinErrors: () => NodeJS.ErrnoException[];
 }
 
 /**
@@ -97,12 +102,24 @@ function track(child: ChildProcess): Tracked {
     // A launch failure has no process to reap and is not guaranteed to emit `close`.
     if (child.pid === undefined) finish();
   });
+  /**
+   * Subscribe to stdin failures here, before any caller writes.
+   *
+   * A child that exits without draining stdin fails the outstanding write with EPIPE. With no
+   * listener, Bun raises that as an uncaught error against whichever test happens to be running when
+   * it fires — which can be a later, unrelated one. Subscribing at spawn keeps the failure
+   * attributed to the test that owns the child, and the cases that expect their request to arrive
+   * assert the list is empty, so this listener records rather than swallows.
+   */
+  const stdinErrors: NodeJS.ErrnoException[] = [];
+  child.stdin?.on("error", error => { stdinErrors.push(error as NodeJS.ErrnoException); });
   return {
     child,
     closed: done,
     isClosed: () => closed,
     exitCode: () => code ?? child.exitCode,
     spawnError: () => spawnError,
+    stdinErrors: () => stdinErrors,
   };
 }
 
@@ -233,6 +250,9 @@ test("the default fixture path delivers every frame and the whole replay through
 
     expect(readError).toBeUndefined();
     expect(exitCode).toBe(0);
+    // The request reached the child: a write the child never read would have failed here instead of
+    // producing these frames, and this case would be reporting a pipe error as a parse error.
+    expect(tracked.stdinErrors()).toEqual([]);
     expect(frames.map(frame => frame.type)).toEqual(["system", "stream_event", "result"]);
     // Exact equality against the requested text is the completeness proof: a truncated frame either
     // fails to parse or carries a prefix of it, and both are distinguished here.
@@ -388,6 +408,30 @@ test("a child that never reads stdin fails the parent's write with EPIPE instead
     // condition free assertion would also accept.
     expect(writeError.code).toBe("EPIPE");
     expect(streamErrors.map(error => error.code)).toContain("EPIPE");
+  } finally {
+    await reap(probe);
+  }
+}, 60_000);
+
+/**
+ * The early exit the writer cannot prevent: this child never reads stdin and leaves immediately, so
+ * the request written in the spawn tick has no reader and the pipe closes under it. The failure is
+ * asserted here, as a code, rather than left to surface wherever it happens to be noticed — an
+ * unhandled stdin `error` fails whichever test is running when it fires, which can be a later one.
+ *
+ * The exit status is checked alongside the pipe error so the two claims stay separate: the child
+ * really reached its exit point (9), and the outstanding write really failed as a closed pipe.
+ */
+test("an early child exit fails the request write with EPIPE in the case that wrote it", async () => {
+  const probe = spawnProbe("exit-before-read", replayContent(REPLAY_CHARS));
+  try {
+    // The fixture marks the exit point before leaving, so an arriving mark rules out a child that
+    // died on startup, which would be a different failure with its own listener.
+    await probe.waitForMark("exiting");
+    await probe.closed;
+
+    expect(probe.exitCode()).toBe(9);
+    expect(probe.stdinErrors().map(error => error.code)).toContain("EPIPE");
   } finally {
     await reap(probe);
   }

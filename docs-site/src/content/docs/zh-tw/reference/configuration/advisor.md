@@ -98,6 +98,7 @@ Advisor 失敗是 fail-open 的：已經發出的諮詢若失敗（模型不可�
 ## PR1 限制
 
 - 原生 OpenAI passthrough 回合（ChatGPT 池 Worker）不會獲得合成工具；advisor 支援覆蓋路由（translated）provider。preflight 諮詢適用於 run-turn 介面卡；工具不適用。
+- 翻譯後的 `/v1/messages` 請求（例如將 Claude Code 路由至翻譯 provider）與 `/v1/responses`、`/v1/chat/completions` 一樣取得合成工具與 preflight 諮詢。`policy` 與上下文共享同意遵循相同規則，設定從目前組態讀取，因此撤銷同意會阻止已進行但尚未送出的請求發起諮詢；它不會取消已送出的諮詢，也無法收回已離開代理的上下文。
 - 不提供語義卡住偵測、任務完成複核、升級分層、多專家或投票；自適應觸發只使用已觀察到的工具證據。
 - preflight 去重帳本是行程內的；代理重啟後，進行中的任務可能再收到一次 preflight 諮詢。
 

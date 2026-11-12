@@ -30,6 +30,14 @@ if (probeMode === "no-read") {
   mark({ phase: "ready" });
   await new Promise(() => { /* the test kills this child and reads the write's failure */ });
 }
+// This mode exits before stdin is touched, which is the early-exit shape the parent's request write
+// has to survive: the write it issued in the spawn tick has no reader left, so the pipe closes under
+// it. The mark is written synchronously first, so the parent has a record that this child reached the
+// exit point rather than failing to start.
+if (probeMode === "exit-before-read") {
+  mark({ phase: "exiting" });
+  process.exit(9);
+}
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
 const frame = JSON.parse(input.trim());

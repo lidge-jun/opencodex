@@ -125,6 +125,13 @@ codage, et une consultation ne change jamais le modèle principal de la session.
 - Les tours natifs OpenAI en passthrough (workers du pool ChatGPT) ne reçoivent pas l'outil
   synthétique ; le conseiller couvre les fournisseurs routés (traduits). La consultation
   preflight s'applique aux adaptateurs run-turn ; l'outil non.
+- Les requêtes `/v1/messages` traduites (par exemple Claude Code routé vers un fournisseur
+  traduit) reçoivent l'outil synthétique et la consultation preflight comme `/v1/responses` et
+  `/v1/chat/completions`. Les mêmes règles de `policy` et de consentement au partage de contexte
+  s'appliquent, et les réglages sont lus dans la configuration active : une révocation du
+  consentement bloque donc les consultations des requêtes déjà en cours qui n'ont pas encore été
+  envoyées. Elle n'annule pas une consultation déjà envoyée et ne retire pas le contexte déjà
+  sorti du proxy.
 - Pas de détection sémantique de blocage, de revue finale, de niveaux d’escalade, de conseillers multiples ou de vote.
 - Le registre de déduplication preflight vit dans le processus ; après un redémarrage du proxy,
   une tâche en cours peut recevoir une tentative preflight de plus.
