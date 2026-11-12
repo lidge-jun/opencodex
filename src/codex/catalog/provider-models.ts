@@ -100,7 +100,11 @@ import {
   type ProviderModelsApiItem,
   type ResolvedProviderModelDiscovery,
 } from "../../providers/model-discovery";
-import { extractGoogleNativeModelItems, resolveObservedVertexDiscoveryToken } from "../../providers/google-vertex-model-discovery";
+import {
+  extractGoogleNativeModelItems,
+  resolveObservedVertexDiscoveryToken,
+  resolveVertexDiscoveryToken,
+} from "../../providers/google-vertex-model-discovery";
 import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
@@ -296,7 +300,12 @@ export async function fetchProviderModelsWithAuth(
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
         }))
         .catch(() => ({ apiKey: undefined, observed: false }))
-      : { apiKey: await resolveModelsAuthToken(name, prov), observed: false }
+      : {
+        apiKey: effectiveGoogleMode(name, prov) === "vertex"
+          ? await resolveVertexDiscoveryToken(prov)
+          : await resolveModelsAuthToken(name, prov),
+        observed: false,
+      }
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
   if ((prov.authMode === "oauth" && !apiKey) || isProviderApiKeyPaused(prov)) {

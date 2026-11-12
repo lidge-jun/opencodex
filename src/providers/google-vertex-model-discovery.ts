@@ -10,9 +10,17 @@ import { extractGoogleAiStudioModelItems } from "./google-ai-studio-model-discov
 import {
   extractModelEnvelopeRows,
   isValidModelDiscoveryModelId,
+  resolveProviderModelDiscoveryUrl,
   type ProviderModelItemsResult,
   type ProviderModelsApiItem,
 } from "./model-discovery";
+import {
+  effectiveGoogleMode,
+  getProviderRegistryEntry,
+  mergeRegistryStaticHeaders,
+  providerMatchesRegistryTransport,
+} from "./registry";
+import { resolveProviderTransport } from "./xai-transport";
 
 const VERTEX_PUBLISHER_MODEL_PREFIX = "publishers/google/models/";
 const VERTEX_GENERATIVE_MODEL_ID = /^(?:gemini|gemma)-/i;
@@ -117,6 +125,33 @@ export function buildVertexModelsDiscoveryRequest(
     url: resolveUrl(`${base}/v1beta1/publishers/google/models?pageSize=300`),
     headers,
   };
+}
+
+/**
+ * Build a Vertex AI Publisher Models request when the provider row resolves to non-OAuth `vertex` mode,
+ * or return `undefined` so callers delegate to the default `buildModelsRequest` builder.
+ */
+export function buildVertexProviderModelsRequest(
+  providerName: string,
+  prov: OcxProviderConfig,
+  apiKey: string | undefined,
+): { method?: "POST"; url: string; headers: Record<string, string> } | undefined {
+  if (prov.authMode === "oauth") return undefined;
+  const effectiveProvider = resolveProviderTransport(providerName, prov);
+  if (effectiveGoogleMode(providerName, effectiveProvider) !== "vertex") return undefined;
+  const registryStaticHeaders = providerMatchesRegistryTransport(providerName, effectiveProvider)
+    ? getProviderRegistryEntry(providerName)?.staticHeaders
+    : undefined;
+  const headers: Record<string, string> = {
+    ...(mergeRegistryStaticHeaders(registryStaticHeaders, effectiveProvider.headers) ?? {}),
+  };
+  const resolveUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(
+    providerName,
+    prov,
+    effectiveProvider.baseUrl,
+    defaultUrl,
+  );
+  return buildVertexModelsDiscoveryRequest(effectiveProvider, apiKey, headers, resolveUrl);
 }
 
 /**

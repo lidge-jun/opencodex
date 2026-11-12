@@ -71,7 +71,11 @@ import {
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
-import { extractGoogleNativeModelItems } from "../../providers/google-vertex-model-discovery";
+import {
+  buildVertexProviderModelsRequest,
+  extractGoogleNativeModelItems,
+  resolveVertexDiscoveryToken,
+} from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
@@ -1671,7 +1675,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const snapshot = prov.authMode === "oauth" && mayResolveModelsOAuth(name, config.providers[name])
       ? await getModelsOAuthAccessSnapshot(name, prov).catch(() => undefined)
       : undefined;
-    const apiKey = prov.authMode === "oauth" ? snapshot?.accessToken : await resolveModelsAuthToken(name, prov);
+    const apiKey = prov.authMode === "oauth"
+      ? snapshot?.accessToken
+      : effectiveGoogleMode(name, prov) === "vertex"
+        ? await resolveVertexDiscoveryToken(prov)
+        : await resolveModelsAuthToken(name, prov);
     if ((prov.authMode === "oauth" || effectiveGoogleMode(name, prov) === "vertex") && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
@@ -1728,9 +1736,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (antigravity && !project) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
-    const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name, {
-      oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy,
-    });
+    const { method, url: modelsUrl, headers } = buildVertexProviderModelsRequest(name, prov, apiKey)
+      ?? buildModelsRequest(prov, apiKey, name, { oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy });
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
