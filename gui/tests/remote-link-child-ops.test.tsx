@@ -41,7 +41,7 @@ async function settleUntil(done: () => boolean, limitMs = 3_000): Promise<void> 
 
 type Call = { method: string; path: string; body?: Record<string, unknown> };
 /** Every request the page makes, with a parsed JSON body, routed by path prefix. */
-function installFetch(handle: (call: Call) => Response): Call[] {
+function installFetch(handle: (call: Call) => Response | Promise<Response>): Call[] {
   const calls: Call[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -572,4 +572,93 @@ test("parsers reject a malformed child block and keep an unknown job state", () 
   expect(parsed.state).toBe("running");
   expect(parsed.items[0]?.state).toBe("running");
   expect(() => parseChildJob({ schema: "ocx.link.child-job/1" })).toThrow();
+});
+
+test("a two-item job releases a row as soon as its own item finishes", async () => {
+  const twoItemJob = (first: string) => job({ jobId: "ljob_twoitems00000000", state: "running", items: [
+    { linkId: "l1", alias: "box-one", state: first, reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+    { linkId: "l2", alias: "box-two", state: "running", reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+  ] });
+  let reads = 0;
+  installFetch(call => {
+    // No status row carries activeJob: the page's accepted job is the only signal, as right after the POST.
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock()), row("l2", "box-two", childBlock())]));
+    if (call.path === "/api/link/children/operations") return response({ job: twoItemJob("running") }, 202);
+    if (call.path === "/api/link/children/jobs/ljob_twoitems00000000") {
+      reads += 1;
+      return response({ job: twoItemJob(reads === 1 ? "running" : "succeeded") });
+    }
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await click(button(host, "Check all"));
+  await settleUntil(() => host.querySelectorAll(".remote-link-job").length === 1);
+  const check = (index: number) => [...host.querySelectorAll(".remote-link-row")[index]!.querySelectorAll("button")].find(item => item.textContent === "Check") as HTMLButtonElement;
+  // Both items are still running, so both rows are held.
+  expect(check(0).disabled).toBe(true);
+  expect(check(1).disabled).toBe(true);
+  await pollJobs();
+  await settleUntil(() => reads >= 2);
+  // The first item reached a terminal state; the page must release that row without waiting for the second.
+  await settleUntil(() => !check(0).disabled);
+  expect(check(0).disabled).toBe(false);
+  expect(check(1).disabled).toBe(true);
+});
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(res => { resolve = res; });
+  return { promise, resolve };
+}
+
+test("a policy GET in flight when a save starts never overwrites the saved values", async () => {
+  const stale = deferred<Response>();
+  let reads = 0;
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path === "/api/link/children/policy" && call.method === "GET") {
+      reads += 1;
+      return reads === 1 ? response({ policy: POLICY, warning: null }) : stale.promise;
+    }
+    if (call.path === "/api/link/children/policy" && call.method === "PUT") return response({ policy: { ...POLICY, catalogFanout: "manual" }, warning: null });
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await settleUntil(() => host.querySelector(".remote-link-policy") !== null);
+  await click(button(host, "Refresh"));
+  await settleUntil(() => reads === 2);
+  await click(openSelect(host, 0));
+  await chooseOption("Manual");
+  await click(button(host, "Save"));
+  expect(host.querySelector(".remote-link-policy")!.textContent).toContain("Saved");
+  // The reload that began before the save lands afterwards: it must not replace what the save wrote.
+  await act(async () => { stale.resolve(response({ policy: { ...POLICY, catalogFanout: "auto", updates: "off" }, warning: null })); await flush(); });
+  expect(openSelect(host, 0).textContent).toContain("Manual");
+  expect(host.querySelector(".remote-link-policy")!.textContent).toContain("Saved");
+  expect(calls.filter(call => call.method === "PUT")).toHaveLength(1);
+});
+
+test("an edit made during a policy reload survives it", async () => {
+  const slow = deferred<Response>();
+  let reads = 0;
+  const calls = installFetch(call => {
+    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path === "/api/link/children/policy" && call.method === "GET") {
+      reads += 1;
+      return reads === 1 ? response({ policy: POLICY, warning: null }) : slow.promise;
+    }
+    if (call.path === "/api/link/children/policy" && call.method === "PUT") return response({ policy: { ...POLICY, catalogFanout: "manual" }, warning: null });
+    return response({ error: { code: "not_found" } }, 404);
+  });
+  const host = await mount();
+  await settleUntil(() => host.querySelector(".remote-link-policy") !== null);
+  await click(button(host, "Refresh"));
+  await settleUntil(() => reads === 2);
+  await click(openSelect(host, 0));
+  await chooseOption("Manual");
+  // The reload lands after the edit; the operator's choice must stay, and the save must carry it.
+  await act(async () => { slow.resolve(response({ policy: POLICY, warning: null })); await flush(); });
+  expect(openSelect(host, 0).textContent).toContain("Manual");
+  await click(button(host, "Save"));
+  expect(calls.filter(call => call.method === "PUT").at(-1)?.body).toEqual({ catalogFanout: "manual" });
 });

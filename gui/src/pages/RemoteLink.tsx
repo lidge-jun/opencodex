@@ -463,6 +463,11 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
     setChildJobs(current => current.filter(job => job.jobId !== jobId));
     void refreshStatus();
   }, [refreshStatus]);
+  // Each polled snapshot replaces the page's copy, so a row is released when its own item ends, not when the
+  // whole bulk job does.
+  const updateJob = useCallback((job: ChildJobView) => {
+    setChildJobs(current => current.map(item => item.jobId === job.jobId ? job : item));
+  }, []);
   useEffect(() => {
     for (const row of status?.links ?? []) {
       const active = row.child?.activeJob;
@@ -548,7 +553,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
             {showChildOps && (
               <>
                 <ChildBulkBar apiBase={apiBase} rows={statusRows} onJob={trackJob} onError={setActionError} onRun={setChildOpBusy} />
-                {childJobs.map(job => <ChildJobProgress key={job.jobId} apiBase={apiBase} job={job} onDone={() => finishJob(job.jobId)} />)}
+                {childJobs.map(job => <ChildJobProgress key={job.jobId} apiBase={apiBase} job={job} onDone={() => finishJob(job.jobId)} onJobUpdate={updateJob} />)}
               </>
             )}
             {uiState === "restart-waiting" ? (

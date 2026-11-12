@@ -272,7 +272,7 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
   );
 }
 
-function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJobView; missing: boolean } {
+function useChildJob(apiBase: string, job: ChildJobView, onSnapshot?: (job: ChildJobView) => void): { job: ChildJobView; missing: boolean } {
   // Both states are keyed by job id so a new job renders its own prop without a reset effect: an effect that
   // synchronously reset them would cascade renders (react-compiler EffectSetState), and a stale snapshot would
   // otherwise leak across jobs.
@@ -280,6 +280,10 @@ function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJobView; m
   const [missingFor, setMissingFor] = useState<string | null>(null);
   const snapshot = polled?.jobId === job.jobId ? polled.value : job;
   const missing = missingFor === job.jobId;
+  // The page holds rows from its own job snapshot, so each poll is handed up as it lands: a finished item must
+  // release its row while the rest of the job is still running, not only when the whole job ends.
+  const notify = useRef(onSnapshot);
+  useEffect(() => { notify.current = onSnapshot; }, [onSnapshot]);
   useEffect(() => {
     if (job.state === "done") return;
     let stopped = false;
@@ -288,7 +292,7 @@ function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJobView; m
       if (document.visibilityState === "hidden") return;
       try {
         const next = await getChildJob(apiBase, job.jobId, controller.signal);
-        if (!stopped) setPolled({ jobId: job.jobId, value: next });
+        if (!stopped) { setPolled({ jobId: job.jobId, value: next }); notify.current?.(next); }
       } catch (error) {
         if (stopped) return;
         if (error instanceof LinkApiError && (error.code === "job_not_found" || error.status === 404)) {
@@ -306,9 +310,9 @@ function useChildJob(apiBase: string, job: ChildJobView): { job: ChildJobView; m
   return { job: snapshot, missing };
 }
 
-export function ChildJobProgress(props: { apiBase: string; job: ChildJobView; onDone(): void }): ReactElement {
+export function ChildJobProgress(props: { apiBase: string; job: ChildJobView; onDone(): void; onJobUpdate?(job: ChildJobView): void }): ReactElement {
   const t = useT();
-  const { job, missing } = useChildJob(props.apiBase, props.job);
+  const { job, missing } = useChildJob(props.apiBase, props.job, props.onJobUpdate);
   const done = job.state === "done" || missing;
   const fired = useRef(false);
   useEffect(() => { if (done && !fired.current) { fired.current = true; props.onDone(); } }, [done, props]);
@@ -359,19 +363,31 @@ export function ChildPolicyPanel(props: { apiBase: string; busy: boolean; reload
   const [loadError, setLoadError] = useState<LinkActionErrorView | null>(null);
   const [attempt, setAttempt] = useState(0);
   const { apiBase, reloadSignal } = props;
+  // A save and a reload race on the same document. Each save bumps the generation, so a GET that began before it
+  // cannot apply afterwards; and a reload only takes over the draft when nothing was edited while it was in flight.
+  const generation = useRef(0);
+  const saving = useRef(false);
+  const draftRef = useRef<ChildPolicyView | null>(draft);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
   // Revision 6: load once per mount, after a save, and on an explicit page Refresh. A status poll never re-reads,
   // so an edit survives it.
   const load = useCallback(async (signal?: AbortSignal) => {
+    const startedAt = generation.current;
+    const startedDraft = draftRef.current;
     try {
       const value = await getChildPolicy(apiBase, signal);
       if (signal?.aborted) return;
-      setRead(value); setDraft(value.policy);
+      if (generation.current !== startedAt) return;   // a save started after this GET began; it owns the values now
+      setRead(value);
+      // The operator changed a knob while this reload ran: keep their draft and take only the server's baseline.
+      if (draftRef.current === startedDraft) setDraft(value.policy);
       setLoadError(null);
     } catch (error) { if (!signal?.aborted) setLoadError(linkActionError(error)); }
   }, [apiBase]);
   // Deferred a microtask so the fetch starts after mount commits; calling the loader directly trips
   // react-compiler's EffectSetState rule even though its state writes land after the await.
   useEffect(() => {
+    if (saving.current) return;   // a reload never interrupts a save, including the page Refresh's policy part
     const controller = new AbortController();
     void Promise.resolve().then(() => load(controller.signal));
     return () => controller.abort();
@@ -390,13 +406,15 @@ export function ChildPolicyPanel(props: { apiBase: string; busy: boolean; reload
   const changed = changedPolicyKeys(read.policy, draft);
   const damaged = read.warning === "policy-file-invalid";
   const save = async () => {
+    saving.current = true;
+    generation.current += 1;
     props.onBusy(true); props.onError(null); setSaved(false);
     try {
       // Over a damaged file the server merges onto FAIL_CLOSED; send every knob so the visible choices persist.
       const value = await putChildPolicy(apiBase, damaged ? draft : changed);
       setRead(value); setDraft(value.policy); setSaved(true);
     } catch (error) { props.onError(linkActionError(error)); }
-    finally { props.onBusy(false); }
+    finally { saving.current = false; props.onBusy(false); }
   };
   const minutes = Math.round(draft.idleAfterMs / 60_000);
   const set = <K extends keyof ChildPolicyView>(key: K, value: ChildPolicyView[K]) => { setSaved(false); setDraft({ ...draft, [key]: value }); };
