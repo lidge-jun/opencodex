@@ -29,6 +29,7 @@ import {
   windowsStopAdmission,
   windowsStopRemainingMs,
 } from "./windows-service-stop";
+import { WINDOWS_STOP_CAPS } from "./windows-stop-budget";
 
 export interface WindowsServiceStopCommandIo {
   ownsSharedTeardown?: () => boolean;
@@ -88,6 +89,7 @@ export async function windowsServiceStopBeforeRestore(io: WindowsServiceStopComm
   await (io.stopTracked ?? stopTrackedProxyForServiceCommand)({
     ...(nonce ? { deferSharedTeardownNonce: nonce } : {}),
     skipPortWait: partA.outcome === "stopped",
+    orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery,
   });
   if (partA.outcome === "absent") {
     const survivor = await (io.survivor ?? proxyStillLiveAfterStop)();
@@ -145,6 +147,7 @@ export async function windowsServiceRemovalStop(
   await (io.stopTracked ?? stopTrackedProxyForServiceCommand)({
     ...(nonce ? { deferSharedTeardownNonce: nonce } : {}),
     skipPortWait: partA.outcome === "stopped",
+    orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery,
   });
   if (partA.outcome !== "stopped") return withNonce(nonce);
   const partB = await confirmWindowsServiceStop({ port, remainingMs: windowsStopRemainingMs() });

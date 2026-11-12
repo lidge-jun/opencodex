@@ -34,11 +34,12 @@ import {
   windowsStopReason,
   windowsStopRemainingMs,
 } from "../service/windows-service-stop";
+import { WINDOWS_STOP_CAPS } from "../service/windows-stop-budget";
 import type { StopRunRecord } from "./stop-report";
 
 const EVIDENCE_SNAPSHOT_TIMEOUT_MS = 5_000;
 const SCHEDULE_PID_TIMEOUT_MS = 2_000;
-const ORPHAN_DISCOVERY_CAP_MS = 3_000;
+const ORPHAN_DISCOVERY_CAP_MS = WINDOWS_STOP_CAPS.orphanDiscovery;
 
 interface WindowsStopState {
   platform: NodeJS.Platform;

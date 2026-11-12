@@ -17,6 +17,7 @@ import type { ServiceBackend } from "./state";
 import { unitPath, isSystemd, installSystemd, startSystemd, stopSystemd, statusSystemd, uninstallSystemd, systemdServiceInstallCleanupOps } from "./systemd";
 import { writeWindowsSchedulerAssets, stageWindowsSchedulerRegistrationXml, removeWindowsSchedulerRegistrationStage, registerFreshWindowsSchedulerTask, recordWindowsSchedulerOwnership, removeNativeWindowsServiceForScheduler, commitWindowsInstall, commitWindowsNativeInstall, type WindowsServiceInstallDeps, startWindows, isWindowsSchedulerEndBenign, stopWindows, statusWindows, statusWindowsXml, uninstallWindows } from "./windows-ops";
 import type { WindowsCheckedStopResult } from "./windows-checked-stop";
+import { WINDOWS_STOP_CAPS } from "./windows-stop-budget";
 import type { WindowsStopConfirmResult } from "./windows-stop-confirm";
 import { confirmWindowsServiceStop, describeWindowsPartA, describeWindowsPartB, runWindowsServiceStopPartA, serviceStopOutcomeFromWindows, windowsServiceStopPort, windowsStopAdmission, windowsStopRemainingMs, type WindowsPartARequest } from "./windows-service-stop";
 import { schtasks, probeWindowsSchedulerTask, rollbackWindowsSchedulerTaskOwnedByAttempt, settleDelay } from "./windows-scheduler";
@@ -193,12 +194,29 @@ export async function proxyStillLiveAfterStop(deps: {
   }
 }
 
+/**
+ * How long orphan discovery may take when the caller does not name a cap.
+ *
+ * Seven seconds is the legacy multi-candidate window. It stays the default so macOS and
+ * Linux stops behave exactly as before; a Windows caller that admitted a budget
+ * (030 "Time budget") passes its own 3 s cap instead.
+ */
+export const DEFAULT_ORPHAN_DISCOVERY_MS = 7_000;
+
 /** How the tracked proxy is stopped: the deferral receipt and the Windows port wait. */
 export interface TrackedProxyStopIo {
   /** ocx service stop on Windows: the claimed receipt, so the proxy defers its teardown. */
   deferSharedTeardownNonce?: string;
   /** Part B follows and owns the port wait (030), so stopProxy skips its own. */
   skipPortWait?: boolean;
+  /**
+   * Cap on the identity-checked orphan discovery that follows the tracked stop.
+   *
+   * The checked Windows stop admits `WINDOWS_STOP_CAPS.orphanDiscovery` (3 s) for this step
+   * (030 "Time budget"), and Part B runs inside the same deadline: discovery that spent the
+   * legacy 7 s would overrun the budget admission had just proven. Omitted keeps 7 s.
+   */
+  orphanDiscoveryCapMs?: number;
 }
 
 async function stopTrackedProxyIfRunning(io: TrackedProxyStopIo = {}): Promise<TrackedProxyCleanupResult> {
@@ -216,10 +234,11 @@ async function stopTrackedProxyIfRunning(io: TrackedProxyStopIo = {}): Promise<T
   }
   // Orphan recovery: the pid file can be missing/stale while the service wrapper keeps
   // a live proxy running — mirror `ocx stop`'s identity-checked findLiveProxy fallback.
-  // Cap multi-candidate discovery so stop cleanup cannot hang for three full retry budgets.
+  // Cap multi-candidate discovery so stop cleanup cannot hang for three full retry budgets,
+  // and let a caller that admitted a budget name its own cap (#7771).
   const live = await findLiveProxy({
     ...SERVICE_STOP_LIVENESS,
-    deadlineAt: Date.now() + 7000,
+    deadlineAt: Date.now() + (io.orphanDiscoveryCapMs ?? DEFAULT_ORPHAN_DISCOVERY_MS),
     acceptPackageTreeFenced: true,
   });
   const liveKillPid = verifiedKillTarget(live?.pid);
@@ -283,7 +302,10 @@ export async function prepareServiceInstall(
       throw new Error(`The installed Windows service could not be proven stopped (${partA.outcome}); nothing was replaced. ${describeWindowsPartA(partA)}`);
     }
     // Part B owns the port wait after a stopped manager (030 "Time budget").
-    await (deps.stopTrackedProxy ?? (() => stopTrackedProxyIfRunning({ skipPortWait: partA.outcome === "stopped" })))();
+    await (deps.stopTrackedProxy ?? (() => stopTrackedProxyIfRunning({
+      skipPortWait: partA.outcome === "stopped",
+      orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery,
+    })))();
     if (partA.outcome === "stopped") {
       const partB = await (deps.windowsPartB ?? confirmWindowsServiceStop)({
         port: windowsServiceStopPort(),

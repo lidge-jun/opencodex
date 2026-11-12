@@ -141,7 +141,9 @@ describe("ocx service stop on Windows", () => {
       stopTracked: async io => { children.push(io); return "stopped"; },
     });
     expect(result).toEqual({ ok: true });
-    expect(children).toEqual([{ skipPortWait: true }]);
+    // #7771: the stop also names the admitted discovery cap, so the helper cannot spend 7 s
+    // of a budget whose 3 s for this step was already proven at admission.
+    expect(children).toEqual([{ skipPortWait: true, orphanDiscoveryCapMs: 3_000 }]);
   });
 
   test("Part B failure keeps the receipt (no restore); a foreign listener does not fail the stop", async () => {
@@ -235,7 +237,9 @@ describe("ocx service uninstall / remove on Windows", () => {
       stopTracked: async io => { children.push(io); return "stopped"; },
     });
     expect(result).toEqual({ ok: true });
-    expect(children).toEqual([{ skipPortWait: true }]);
+    // #7771: the stop also names the admitted discovery cap, so the helper cannot spend 7 s
+    // of a budget whose 3 s for this step was already proven at admission.
+    expect(children).toEqual([{ skipPortWait: true, orphanDiscoveryCapMs: 3_000 }]);
   });
 });
 
