@@ -1,3 +1,5 @@
+import { aliasTemplateError } from "../providers/alias-template";
+import { parseDashboardTrustedProxy } from "./dashboard-trusted-proxy";
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { validRemainingQuotaAccountIds } from "../codex/account-use-remaining";
@@ -49,6 +51,7 @@ import {
   malformedQuotaResetNotifyWarning,
   malformedCatalogAutoRefreshWarning,
   malformedCodexPoolWarning,
+  malformedTelemetryWarning,
   malformedSpendWarning,
   rawConfigRecord,
   malformedNativeSubagentFields,
@@ -81,6 +84,7 @@ import {
   compactionRoutingSchema,
   reasoningRetentionSchema,
   skillsConfigSchema,
+  telemetryConfigSchema,
   memoryModelsSchema,
 } from "./schema/leaf-validators";
 
@@ -175,6 +179,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (catalogRefreshWarning) warnings.push(catalogRefreshWarning);
   const codexPoolWarning = malformedCodexPoolWarning(rawParsed);
   if (codexPoolWarning) warnings.push(codexPoolWarning);
+  const telemetryWarning = malformedTelemetryWarning(rawParsed);
+  if (telemetryWarning) warnings.push(telemetryWarning);
   const spendWarning = malformedSpendWarning(rawParsed);
   if (spendWarning) warnings.push(spendWarning);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, normalized);
@@ -622,6 +628,30 @@ export function loopbackCompanionBindError(
     + "loopback bind already admits local callers without a credential.";
 }
 
+/** #8338: the persisted schema drops a malformed trusted-proxy block; a live write gets the reason. */
+function dashboardTrustedProxyConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "dashboardTrustedProxy") || raw.dashboardTrustedProxy === undefined) return null;
+  const parsed = parseDashboardTrustedProxy(raw.dashboardTrustedProxy);
+  return typeof parsed === "string" ? `schema_invalid: dashboardTrustedProxy: ${parsed}` : null;
+}
+
+/**
+ * #7705: load drops a hand-edited template that does not validate; a live write that carries one
+ * (a provider-wide save, `ocx config set`) gets the same reason the alias-template route gives.
+ */
+function providerAliasTemplateConfigError(value: unknown): string | null {
+  const providers = rawConfigRecord(rawConfigRecord(value)?.providers);
+  if (!providers) return null;
+  for (const [name, provider] of Object.entries(providers)) {
+    const template = rawConfigRecord(provider)?.aliasTemplate;
+    if (template === undefined) continue;
+    const problem = typeof template === "string" ? aliasTemplateError(template) : "template must be a string";
+    if (problem) return `schema_invalid: providers.${name}.aliasTemplate: ${problem}`;
+  }
+  return null;
+}
+
 /**
  * Validate the hub management ingress at the live-write boundary.
  *
@@ -709,6 +739,16 @@ function skillsConfigError(value: unknown): string | null {
   return "schema_invalid: skills" + (field ? "." + field : "") + ": " + (issue?.message ?? "invalid configuration");
 }
 
+export function telemetryConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "telemetry") || raw.telemetry === undefined) return null;
+  const result = telemetryConfigSchema.safeParse(raw.telemetry);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return "schema_invalid: telemetry" + (field ? "." + field : "") + ": " + (issue?.message ?? "invalid configuration");
+}
+
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const chatgptDesktop = rawConfigRecord(value)?.chatgptDesktop;
   if (chatgptDesktop !== undefined && !chatgptDesktopSchema.safeParse(chatgptDesktop).success) {
@@ -771,8 +811,11 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? clientRolePairError(value)
     ?? loopbackListenerPortError(value)
     ?? managementIngressConfigError(value)
+    ?? providerAliasTemplateConfigError(value)
+    ?? dashboardTrustedProxyConfigError(value)
     ?? metricsExportConfigError(value)
     ?? serviceHealthRecoveryConfigError(value)
+    ?? telemetryConfigError(value)
     ?? skillsConfigError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);

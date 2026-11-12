@@ -70,7 +70,7 @@ bağlanmış olarak Claude Code'u başlatır:
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; abonelikle başlatmada ayarlanmamışsa yerel `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex'in yönlendirilmiş bir takma ada ayarladığı katman yuvasının `/model` etiketi (örneğin `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). Aynı çift launchd sistem ortamına ve kabuk kancasına da yazılır. Model kimliği takma ad olarak kalır. Kendi ayarladığınız yuva veya etiket değiştirilmez |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` açık olduğunda `1` (koşullu) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` ayarlandığında (koşullu; varsayılan olarak kapalı) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` ayarlandığında (koşullu; varsayılan olarak eklenmez, Claude Code'un kendi varsayılanı geçerlidir) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` ayarlandığında eski bağlam geçersiz kılma (koşullu) |
 
 Kendi dışa aktardığınız değişkenler her zaman önceliklidir. Ekstra argümanlar
@@ -777,10 +777,10 @@ bir önceki kullanıcı mesajı için önbellek kesme noktalarını ve ayrıca �
 otomatik `cache_control` yönetimini sağlar. Kararlı turlar normalde yaklaşık
 %99,9 önbellek isabet oranı üretir.
 
-**Yerel OpenAI/ChatGPT yönlendirmesi:** önbellek bağlılığı için oturum kapsamlı
-bir `prompt_cache_key` (varsa `metadata.user_id`'den türetilir, bir sistem
-içeriği karmasına geri döner) ve `session_id` başlığı türetir. Önbellek anahtarı
-modeli ve tam araç şemalarını içerir.
+**Yerel OpenAI/ChatGPT yönlendirmesi:** önbellek bağlılığı için
+bir `prompt_cache_key` (dize olarak varsa `metadata.user_id`'den türetilir, bir sistem
+içeriği karmasına geri döner) ve yalnızca bir oturum kimliğinden (paylaşılan yedek anahtardan asla) `session_id` başlığı türetir. Sistem içeriği
+karmasından türetilen yedek anahtar (yalnızca sistem içeriği varsa kullanılır) ayrıca modeli ve tam araç şemalarını içerir.
 
 **Token matematiği:** Anthropic çıktısı `cached_tokens` ve `cache_write_tokens`
 değerlerini `input_tokens`'tan çıkararak bunları `cache_read_input_tokens` ve

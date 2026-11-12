@@ -55,7 +55,7 @@ reset is expected to recover as `+N% pool capacity`. **Incomplete coverage** mea
 accounts could not safely contribute to the estimate, for example because their plan or quota is
 unknown, their reading is stale, or the account is paused or needs reauthentication.
 
-Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed.
+Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed. An enabled Anthropic OAuth account pool with two or more accounts gets the same kind of estimate, every routable account weighted equally: inactive accounts use their last measured reading (no extra usage requests), paused, reauthenticating or stale accounts count as incomplete coverage, and with the pool off or one account the row shows the active account's own reading as before.
 
 A **partial window coverage** warning means some included accounts reported one quota window but
 not another. The overview keeps those windows separate and marks each affected window incomplete
@@ -65,9 +65,9 @@ This estimate is display-only. It does not change account selection, session aff
 switching, cooldowns, or any other routing decision. Use the [Codex Auth account pool](/guides/web-dashboard/#codex-auth-and-account-pools)
 for the individual account state and routing controls.
 
-Shipped v1 configs migrate automatically to marker 2 and one option-aware row. The original config
-is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
-`cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
+Shipped v1 configs migrate automatically to marker 2 and one option-aware row. The original config is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
+
+[Claude OAuth client-version errors](/guides/claude-code/#claude-oauth-client-version-errors)
 
 ## Claude Opus 5.5 progress updates
 
@@ -152,7 +152,13 @@ chance of reuse, but does not guarantee a cache hit or remove token-throughput l
 
 Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances
 are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys);
-the proxy does not infer a subscription tier from the key. For every model, explicit upstream
+the proxy does not infer a subscription tier from the key. At `https://api.mistral.ai/v1`, the dashboard
+reads API and Vibe budgets from `/v1/billing/budget` and the plan from `/v1/billing/subscription`,
+using the inference credential and egress. Measured windows show usage, total and recognized plan name.
+Budgets are display-only: they do not rank keys, route or pause traffic, or enter the quota pool.
+Missing, malformed or non-positive budgets, malformed currencies and out-of-range percentages are unknown;
+unknown plan names are omitted. Fresh last-good readings survive 402, 408, 429, 5xx and transport failures,
+but 401, 403 and other non-retryable client refusals suppress them. For every model, explicit upstream
 `Retry-After` deadlines are shared between calls on the same credential and model. A 429
 without a retry time can activate a conservative 60-second recovery wait when valid minute
 counters show exhausted capacity, or the refused query's measured cost exceeds the remaining
@@ -779,7 +785,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 106 built-in presets: 85 key-based, 17 OAuth, three local, and one default
+opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -872,6 +878,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
+| cheapaimodel | `https://api.cheapaimodel.ai/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -915,7 +922,9 @@ Exhausted output budgets produce `incomplete` with `max_output_tokens`; the prox
 the requested budget. A replay-safe empty completion with budget remaining may retry once, within
 the existing send limit. Explicit `emptyCompletionRetry: false` or `OCX_EMPTY_COMPLETION_RETRY=0`
 disables that retry. Text, refusals, tool activity, and unknown stream events prevent replay and
-retain the original stream. The protection does not change other providers or their retry defaults.
+retain the original stream, as does a response snapshot that already carries aggregate `output_text`
+(an absent, `null` or empty `output_text` still allows the retry).
+The protection does not change other providers or their retry defaults.
 Replay requires explicit `store: false`, complete input, and client-executed tools only; a hosted
 tool such as `web_search` prevents automatic replay even if no tool event was observed.
 
@@ -986,6 +995,21 @@ response header names the model that answered. Routing modes declare a 262,144-t
 output tokens, which hold for any model the router picks. The router accepts text only, so for a
 routing mode or pinned model at the preset destination the proxy hands images to the vision sidecar instead of sending them. Its Anthropic
 Messages endpoint is a passthrough to Anthropic without routing, so the preset does not use it.
+
+**cheapaimodel** is a pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and
+Grok, operated by LINKOVA PTE. LTD. Create an [API key](https://console.cheapaimodel.ai/keys) on a
+prepaid USD balance, then select **cheapaimodel** in `ocx init` or the dashboard's **Add provider**
+picker, or run `ocx provider add cheapaimodel`, and give it the key directly or as the reference
+`${CHEAPAIMODEL_API_KEY}`. The preset uses [Chat Completions](https://cheapaimodel.ai/docs/api/create-chat-completion)
+for every client and discovers models from the authenticated
+[`GET /v1/models`](https://cheapaimodel.ai/docs/api/list-models), which answers 401 without a valid
+key. The seeded models are `deepseek-v4-1-flash` (the default), `glm-5.3`, `glm-5.3-flash`, `kimi-k3`
+and `grok-4.7`; `glm-5.3` is text only, so images for it go to the vision sidecar. `kimi-k3` accepts
+only its own sampling values, so the preset does not forward `temperature` or `top_p` to it. The
+preset sends every request through Chat Completions, the one interface every catalog model supports;
+it does not use the gateway's Responses or Anthropic Messages endpoints. cheapaimodel's
+[terms](https://cheapaimodel.ai/terms) and [privacy policy](https://cheapaimodel.ai/privacy) apply to
+requests sent to this service.
 
 The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
 `text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
@@ -1294,7 +1318,14 @@ prove your Muse Code plan covers Muse Wonder.
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
 outside its own client, how these calls settle is not observable from the API, and you
-should treat every call as billable against your account. The key, imported or pasted, is copied into
+should treat every call as billable against your account. Meta can also refuse the request
+outright with HTTP 403 and *"This API key is billed to a Muse Code subscription. Muse Code
+subscriptions cover requests from the Muse Code client only. Use it in Muse Code, or use a
+pay-as-you-go API key for other clients."* OpenCodex reports that as a
+plan restriction on a valid credential, not a rejected or expired one, because no re-login
+can lift it: a Muse Code subscription key cannot serve any request outside the Muse Code
+client, and a pay-as-you-go Meta API key with the `meta-model` provider is the supported
+path. The key, imported or pasted, is copied into
 OpenCodex's auth store (`~/.opencodex/auth.json`, mode 0600) like every other OAuth
 credential. The dashboard shows a Terms-of-Service warning before the first login and
 before any reauthentication — the same treatment Anthropic and Google Antigravity get.
@@ -1664,6 +1695,16 @@ Key-based providers can also keep multiple keys. Adding a key through the Provid
 under `provider.apiKeyPool`, makes it active, and mirrors it to `provider.apiKey` so routing and
 adapters continue to read the same field as before. The same dropdown can switch or remove keys; the
 management API is `/api/providers/keys` and returns masked keys only.
+
+Each configured key row in the dashboard provides dedicated Pause and Resume controls (along with
+`ocx account pause` and `ocx account resume` in the CLI). A paused key is excluded from automatic
+request routing, failover, and cooldown recovery (a media call the Responses xAI image/video bridge has
+already planned keeps the key it was planned with). If another enabled row shares the same key reference, it remains usable. When the last enabled row for the active reference is paused, OpenCodex
+automatically selects the next usable unpaused key in the pool in ring order. If all keys in the pool
+are paused, requests that need that provider return HTTP 403 `permission_error` until a key is
+resumed. The built-in Images route can still use another eligible upstream. Selecting a paused
+key row resumes and activates it. Resume clears the pause while preserving a healthy active key;
+the resumed key becomes active when no usable key is currently selected.
 
 ### Switching accounts from the terminal
 

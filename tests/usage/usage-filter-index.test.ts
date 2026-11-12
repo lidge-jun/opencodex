@@ -4,8 +4,10 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -15,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { resetAppOwnedMemoryForTests } from "../../src/lib/app-owned-memory";
+import { initializeConfigOwnership } from "../../src/lib/config-ownership";
 import { runPassiveRead } from "../../src/lib/passive-read";
 import {
   getFilteredUsageAggregate,
@@ -35,9 +38,12 @@ import {
 } from "../../src/usage/source-filter";
 import {
   setUsageFilterIndexTestHooksForTests,
+  USAGE_FILTER_INDEX_INSERT_BATCH,
   usageFilterCandidatePlan,
   usageFilterIndexPath,
+  UsageFilterIndexPageError,
 } from "../../src/usage/filter-index";
+import * as filterIndexModule from "../../src/usage/filter-index";
 import {
   currentUsageLogRevision,
   resetUsageReadCacheForTests,
@@ -208,6 +214,55 @@ describe("filtered usage candidate index", () => {
     const result = await expectMatchesFullScan({}, window);
     expect(result.filterIndex).toMatchObject({ totalRows: rows.length, candidateRows: inside });
     expect(summary(result).summary.requests).toBe(inside);
+  });
+
+  test("a broad filter consumes bounded candidate pages with a yield between them", async () => {
+    writeRows(Array.from({ length: SYNTHETIC_ROWS }, (_, index) => syntheticRow(index)));
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    resetUsageAggregateCacheForTests();
+
+    const originalRead = ledgerScannerModule.readUsageLedgerRowsAtOffsets;
+    const pageSizes: number[] = [];
+    // Deterministic yield proof. The accumulator yields between pages with a zero-delay macrotask
+    // timer; observing the scheduled timer needs no wall clock, so this cannot flake on a slow
+    // runner the way waiting for a real timer to fire between two reads does.
+    const realSetTimeout = globalThis.setTimeout;
+    const yieldsScheduled: number[] = [];
+    const readSpy = spyOn(ledgerScannerModule, "readUsageLedgerRowsAtOffsets")
+      .mockImplementation(async options => {
+        pageSizes.push(options.offsets.length);
+        return await originalRead(options);
+      });
+    globalThis.setTimeout = ((handler: TimerHandler, timeout?: number) => {
+      // Only count yields requested after a page has been consumed: that is the page loop's own
+      // yield, not any timer the ingest path happens to schedule first.
+      if (pageSizes.length > 0 && (timeout ?? 0) === 0) yieldsScheduled.push(pageSizes.length);
+      return realSetTimeout(handler as () => void, timeout);
+    }) as typeof globalThis.setTimeout;
+    try {
+      const result = await getFilteredUsageAggregate({});
+      expect(result.filterIndex?.candidateRows).toBe(SYNTHETIC_ROWS);
+      expect(pageSizes).toEqual([2_000, 2_000]);
+      // Exactly one macrotask yield between the two pages, requested after the first page.
+      expect(yieldsScheduled).toContain(1);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+      readSpy.mockRestore();
+    }
+  });
+
+  test("a broad provider filter answers complete totals across bounded pages", async () => {
+    // More matching candidates than one page (2,000) forces late pages; each must still seek
+    // from the page cursor rather than re-reading the candidates before it.
+    const rows = Array.from({ length: 4_100 }, (_, index) => ({
+      ...syntheticRow(index),
+      provider: "openai",
+    }));
+    writeRows(rows);
+    const result = await getFilteredUsageAggregate({ provider: "openai" });
+    expect(result.filterIndex?.candidateRows).toBe(rows.length);
+    expect(summary(result)).toEqual((await fullScan({ provider: "openai" })).summarize("all", NOW));
+    expect(summary(result).summary.requests).toBe(rows.length);
   });
 
   test("an append ingests only new bytes and a retained filter folds only new matches", async () => {
@@ -590,7 +645,11 @@ describe("filtered usage index crash and multi-writer safety", () => {
   });
 
   test("two processes rebuilding the same ledger both report every row", async () => {
-    const rows = Array.from({ length: 30_000 }, (_, index) => syntheticRow(index));
+    // Sixteen insert batches each: enough for the two ingests to interleave under the write lock
+    // without making two cold Bun processes spend seconds of a loaded runner on ingest.
+    // Coverage, not a reproducible regression: whether the first opens collide is up to the
+    // scheduler. The deterministic regression is the still-creating case below.
+    const rows = Array.from({ length: 16 * USAGE_FILTER_INDEX_INSERT_BATCH }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const expected = rows.filter(row => row.provider === "openai").length;
     const scriptPath = join(testDir, "child.ts");
@@ -619,6 +678,36 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     }
     expect(indexGenerations()).toHaveLength(1);
     expect(indexRowCount(publishedGeneration())).toBe(rows.length);
+    // Two processes contend on one 30k-row rebuild; the loser's busy-retry backoff plus the
+    // double scan legitimately exceeds the default 5s timeout.
+  }, 30_000);
+
+  test("a projection another process is still creating is waited for, not taken as foreign", async () => {
+    const rows = Array.from({ length: 20 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    // The empty file a concurrent first open leaves, held under that process's write lock.
+    const creator = new Database(usageFilterIndexPath(testDir), { create: true });
+    creator.exec("BEGIN EXCLUSIVE");
+    // Released from the reader's own busy back-off, so the case cannot pass without the reader
+    // meeting the lock. Classifying the busy file as foreign used to give up the index at once,
+    // and never reached this back-off.
+    const busyAttempts: number[] = [];
+    setUsageFilterIndexTestHooksForTests({
+      beforeBusyRetry: ({ attempt }) => {
+        busyAttempts.push(attempt);
+        if (creator.inTransaction) creator.exec("ROLLBACK");
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests).toBe(rows.filter(row => row.provider === "openai").length);
+      expect(busyAttempts).toEqual([0]);
+      expect(result.filterIndex?.totalRows).toBe(rows.length);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+      if (creator.inTransaction) creator.exec("ROLLBACK");
+      creator.close();
+    }
   });
 
   test("crashed and abandoned staging never accumulates", async () => {
@@ -733,7 +822,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     expect(read.entries).toHaveLength(1);
     expect(read.unreadableOffsets).toHaveLength(49);
   });
-+
+
   test("a rewritten indexed row makes the next append rebuild instead of streaming forever", async () => {
     const rows = Array.from({ length: 200 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -780,7 +869,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
       setUsageFilterIndexTestHooksForTests(null);
     }
   });
-+
+
   test("a same-size rewrite before the trailing boundary forces a rebuild", async () => {
     // Large enough that row zero sits far outside the trailing 64 KiB digest window.
     const rows = Array.from({ length: 4000 }, (_, index) => syntheticRow(index));
@@ -866,7 +955,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     for (const seen of observed) expect(seen).toBe("none/none");
     expect(totalIndexRows()).toBe(ledgerRowCount());
   });
-+
+
   test("a replaced ledger between the index refresh and the read is caught", async () => {
     const rows = Array.from({ length: 20 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -953,7 +1042,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
       probe.close();
     }
   });
-+
+
   test("an unchanged retained projection still validates the ledger", async () => {
     const rows = Array.from({ length: 40 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -977,7 +1066,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
       setUsageFilterIndexTestHooksForTests(null);
     }
   });
-+
+
   test("a torn suffix does not let a same-size rewrite masquerade as an append", async () => {
     const rows = Array.from({ length: 1000 }, (_, index) => (
       index === 0 ? { ...syntheticRow(index), provider: "kimi" } : syntheticRow(index)
@@ -1075,8 +1164,80 @@ describe("filtered usage index availability", () => {
     expect(existsSync(`${indexPath}-wal`)).toBe(false);
   });
 
-  test("an unwritable home degrades to the streaming read", async () => {
+  test("a transient foreign classification recovers on the open retry", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const indexPath = usageFilterIndexPath(testDir);
+    const foreign = "this is not a sqlite database\n";
+    writeFileSync(indexPath, foreign);
+
+    // Deterministic: the retry hook clears the foreign file at a known attempt instead of a
+    // timer racing the retry schedule.
+    setUsageFilterIndexTestHooksForTests({
+      beforeRetryDelay: ({ attempt }) => {
+        if (attempt === 0) rmSync(indexPath, { force: true });
+        return true;
+      },
+    });
+    const request = getFilteredUsageAggregate({ provider: "openai" });
+    try {
+      const result = await request;
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex?.totalRows).toBe(rows.length);
+      expect(result.filterIndex?.candidateRows).toBe(expected);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+  });
+
+  test("a transient unsafe sidecar recovers on the open retry", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const indexPath = usageFilterIndexPath(testDir);
+    const sidecar = `${indexPath}-wal`;
+    // A directory at a sidecar path is not a private regular file, so the open refuses it.
+    mkdirSync(sidecar);
+
+    // Deterministic: clear the unsafe sidecar at the first retry rather than on a timer.
+    setUsageFilterIndexTestHooksForTests({
+      beforeRetryDelay: ({ attempt }) => {
+        if (attempt === 0) rmSync(sidecar, { recursive: true, force: true });
+        return true;
+      },
+    });
+    const request = getFilteredUsageAggregate({ provider: "openai" });
+    try {
+      const result = await request;
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex?.totalRows).toBe(rows.length);
+      expect(result.filterIndex?.candidateRows).toBe(expected);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+  });
+
+  test("a permanently unsafe sidecar still falls back without being modified", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const indexPath = usageFilterIndexPath(testDir);
+    const sidecar = `${indexPath}-wal`;
+    mkdirSync(sidecar);
+
+    const result = await getFilteredUsageAggregate({ provider: "openai" });
+    expect(summary(result).summary.requests).toBe(expected);
+    expect(result.filterIndex).toBeUndefined();
+    expect(statSync(sidecar).isDirectory()).toBe(true);
+    expect(existsSync(indexPath)).toBe(false);
+  });
+
+  // chmod cannot make a Windows directory unwritable, so there this would build the index and
+  // assert nothing about permissions. The degrade itself is the platform-neutral catch-all in
+  // readUsageFilterCandidates, which the vanishing-after-refresh case below reaches on every
+  // platform; contention and the foreign file cover the busy and explicit fallbacks.
+  test.skipIf(process.platform === "win32")("an unwritable home degrades to the streaming read", async () => {    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const expected = rows.filter(row => row.provider === "openai").length;
     chmodSync(testDir, 0o555);
@@ -1087,6 +1248,72 @@ describe("filtered usage index availability", () => {
     } finally {
       chmodSync(testDir, 0o755);
     }
+  });
+
+  test("filtered queries after the first leave the config directory's entries unchanged", async () => {
+    // On Windows a changed config directory re-runs its ACL harden, which moves usage.jsonl's
+    // ChangeTime and forces whole-ledger rebuilds; SQLite deleting its WAL sidecars on every
+    // close changed the directory on each filtered query.
+    // Discriminates only on stock SQLite (Linux, Windows): macOS's system SQLite already keeps
+    // the sidecars, so a local macOS pass is not evidence for this guard.
+    writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
+    const first = await getFilteredUsageAggregate({ provider: "openai" });
+    const observeHome = () => {
+      const stat = statSync(testDir);
+      return { entries: readdirSync(testDir).sort(), mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
+    };
+    const before = observeHome();
+    const other = await getFilteredUsageAggregate({ provider: "kimi" });
+    // An append makes the refresh open the index for writing again.
+    appendRows([{ ...syntheticRow(99), requestId: "late" }]);
+    const appended = await getFilteredUsageAggregate({ provider: "openai" });
+    expect(observeHome()).toEqual(before);
+    for (const result of [first, other, appended]) expect(result.filterIndex).toBeDefined();
+    // The append really went through a writable refresh, not a retained answer.
+    expect(appended.filterIndex?.totalRows).toBe(21);
+    // The kept WAL is empty after the writer's clean close.
+    expect(statSync(`${usageFilterIndexPath(testDir)}-wal`).size).toBe(0);
+  });
+
+  test("a projection whose sidecars are not in the uninstall manifest is repaired on the next write", async () => {
+    // Sidecars now persist, so any that exist beside this projection must be owned, or uninstall
+    // leaves them behind.
+    expect(initializeConfigOwnership(testDir)).toBe(true);
+    writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
+    await getFilteredUsageAggregate({ provider: "openai" });
+    const indexPath = usageFilterIndexPath(testDir);
+    const manifestPath = join(testDir, ".opencodex-uninstall.json");
+    const owned = () => (JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] }).paths;
+    const sidecars = ["usage-filter-index.sqlite-wal", "usage-filter-index.sqlite-shm"];
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] };
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, paths: manifest.paths.filter(path => !sidecars.includes(path)) }, null, 2));
+    for (const suffix of ["-wal", "-shm"]) rmSync(`${indexPath}${suffix}`, { force: true });
+    resetUsageAggregateCacheForTests();
+    resetAppOwnedMemoryForTests();
+    expect(owned().filter(path => sidecars.includes(path))).toEqual([]);
+
+    appendRows([{ ...syntheticRow(99), requestId: "after-upgrade" }]);
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
+    expect(owned().filter(path => sidecars.includes(path)).sort()).toEqual([...sidecars].sort());
+  });
+
+  test("a 0-byte projection left by a crash and its sidecars are registered once they appear", async () => {
+    // A crash between the private create and the first open leaves an empty file, so the next open
+    // sees an existing projection and skips creation-time registration. The sidecars only appear
+    // once SQLite uses the WAL, after this open checked, so a later open in the same process must
+    // still register them.
+    expect(initializeConfigOwnership(testDir)).toBe(true);
+    writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
+    const indexPath = usageFilterIndexPath(testDir);
+    writeFileSync(indexPath, "", { mode: 0o600 });
+    const manifestPath = join(testDir, ".opencodex-uninstall.json");
+    const projection = ["usage-filter-index.sqlite", "usage-filter-index.sqlite-wal", "usage-filter-index.sqlite-shm"];
+    const ownedSidecars = () => (JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] }).paths
+      .filter(path => projection.includes(path)).sort();
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
+    appendRows([{ ...syntheticRow(99), requestId: "after-crash" }]);
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
+    expect(ownedSidecars()).toEqual([...projection].sort());
   });
 
   test("a passive read never creates or writes index files", async () => {
@@ -1128,15 +1355,95 @@ describe("filtered usage index availability", () => {
       lock.exec("ROLLBACK");
       lock.close();
     }
+    // Sustained contention exhausts the extended busy-retry window before degrading to the
+    // streaming read, which takes several seconds by design; the default 5s timeout is too tight.
+  }, 20_000);
+
+  test("an unchanged filtered read releases its index reader", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "openai" });
+
+    const realRead = filterIndexModule.readUsageFilterCandidates;
+    let closeCalls = 0;
+    const spy = spyOn(filterIndexModule, "readUsageFilterCandidates").mockImplementation(async (query) => {
+      const read = await realRead(query);
+      if (read) {
+        const originalClose = read.close;
+        read.close = () => {
+          closeCalls += 1;
+          originalClose();
+        };
+      }
+      return read;
+    });
+    try {
+      // The retained projection is unchanged, so this exercises the branch that validates the
+      // ledger without paging and must still release the reader it opened.
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(result.update).toBe("unchanged");
+      expect(closeCalls).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
-  test("a projection that vanishes before the read is not recreated", async () => {
+  test("a candidate page failure falls back to the streaming read", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "openai" });
+    resetUsageAggregateCacheForTests();
+
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const spy = spyOn(filterIndexModule, "readUsageFilterCandidates").mockImplementation(async () => ({
+      snapshot: {
+        revision: null,
+        identityKey: "",
+        generation: "",
+        indexedOffset: 0,
+        processedThroughDigest: "",
+        indexedRows: 0,
+        invalidRows: 0,
+        oversizedRows: 0,
+        minTimestamp: null,
+        maxTimestamp: null,
+        ingestPasses: 0,
+        ingestedRows: 0,
+      },
+      candidateRows: 0,
+      nextPage() {
+        throw new UsageFilterIndexPageError(new Error("SQLITE_CORRUPT"));
+      },
+      close() {},
+    }));
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  /** Delete the projection at one point of a filtered query and expect a streaming answer. */
+  async function expectVanishedProjectionNotRecreated(hooks: (remove: (dbPath: string) => void) =>
+    Parameters<typeof setUsageFilterIndexTestHooksForTests>[0]): Promise<void> {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const indexPath = usageFilterIndexPath(testDir);
-    setUsageFilterIndexTestHooksForTests({
-      afterPublish: ({ dbPath }) => { rmSync(dbPath, { force: true }); },
-    });
+    let removed = false;
+    setUsageFilterIndexTestHooksForTests(hooks(dbPath => {
+      const existed = existsSync(dbPath);
+      // A scanner can hold a just-closed file on Windows for a moment; that is not the subject.
+      for (let attempt = 0; ; attempt += 1) {
+        try { rmSync(dbPath, { force: true }); break; } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (attempt >= 4 || (code !== "EBUSY" && code !== "EPERM")) throw error;
+          Bun.sleepSync(25);
+        }
+      }
+      removed = existed && !existsSync(dbPath);
+    }));
     try {
       const result = await getFilteredUsageAggregate({ provider: "openai" });
       expect(summary(result).summary.requests)
@@ -1145,7 +1452,204 @@ describe("filtered usage index availability", () => {
     } finally {
       setUsageFilterIndexTestHooksForTests(null);
     }
+    // Without this the streaming fallback would satisfy every assertion even if the hook never ran.
+    expect(removed).toBe(true);
     expect(existsSync(indexPath)).toBe(false);
+  }
+
+  test("page fallback retries a concurrent ledger replacement", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "openai" });
+    resetUsageAggregateCacheForTests();
+
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const spy = spyOn(filterIndexModule, "readUsageFilterCandidates").mockImplementation(async () => ({
+      snapshot: {
+        revision: null,
+        identityKey: "",
+        generation: "",
+        indexedOffset: 0,
+        processedThroughDigest: "",
+        indexedRows: 0,
+        invalidRows: 0,
+        oversizedRows: 0,
+        minTimestamp: null,
+        maxTimestamp: null,
+        ingestPasses: 0,
+        ingestedRows: 0,
+      },
+      candidateRows: 0,
+      nextPage() {
+        throw new UsageFilterIndexPageError(new Error("SQLITE_CORRUPT"));
+      },
+      close() {},
+    }));
+    const realScan = ledgerScannerModule.scanUsageLedgerCooperatively;
+    let scans = 0;
+    const scanSpy = spyOn(ledgerScannerModule, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      if (++scans === 1) throw new ledgerScannerModule.UsageLedgerRebuildRequiredError("content_changed");
+      return realScan(options);
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex).toBeUndefined();
+      expect(scans).toBe(2);
+    } finally {
+      spy.mockRestore();
+      scanSpy.mockRestore();
+    }
+  });
+
+  test("page fallback retries an overlay change", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "openai" });
+    resetUsageAggregateCacheForTests();
+
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const spy = spyOn(filterIndexModule, "readUsageFilterCandidates").mockImplementation(async () => ({
+      snapshot: {
+        revision: null,
+        identityKey: "",
+        generation: "",
+        indexedOffset: 0,
+        processedThroughDigest: "",
+        indexedRows: 0,
+        invalidRows: 0,
+        oversizedRows: 0,
+        minTimestamp: null,
+        maxTimestamp: null,
+        ingestPasses: 0,
+        ingestedRows: 0,
+      },
+      candidateRows: 0,
+      nextPage() {
+        throw new UsageFilterIndexPageError(new Error("SQLITE_CORRUPT"));
+      },
+      close() {},
+    }));
+    const realScan = ledgerScannerModule.scanUsageLedgerCooperatively;
+    let scans = 0;
+    const scanSpy = spyOn(ledgerScannerModule, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      const result = await realScan(options);
+      if (++scans === 1) refreshUserCostOverlays({ providers: { openai: {} } } as unknown as OcxConfig);
+      return result;
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex).toBeUndefined();
+      expect(scans).toBe(2);
+    } finally {
+      spy.mockRestore();
+      scanSpy.mockRestore();
+    }
+  });
+
+  for (const passive of [false, true]) {
+    test(`real SQLite page failure rolls back and wraps the error (passive=${passive})`, async () => {
+      writeRows(Array.from({ length: 5 }, (_, i) => syntheticRow(i)));
+      await getFilteredUsageAggregate({ provider: "openai" });
+      // Explicit nulls match the normalized query shape; a bare `{}` is not a valid caller query.
+      const query = { provider: null, model: null, apiKeyId: null };
+      const read = await (passive
+        ? filterIndexModule.readUsageFilterCandidatesPassive(query)
+        : filterIndexModule.readUsageFilterCandidates(query));
+      expect(read).not.toBeNull();
+      const writer = new Database(usageFilterIndexPath(testDir));
+      writer.exec("DROP TABLE usage_rows");
+      writer.close();
+      const realExec = Database.prototype.exec;
+      let rolledBack = false;
+      const execSpy = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql: string) {
+        const result = realExec.call(this, sql);
+        if (sql === "ROLLBACK") rolledBack = !this.inTransaction;
+        return result;
+      });
+      try {
+        let caught: unknown;
+        try { read!.nextPage(); } catch (error) { caught = error; }
+        expect(caught).toBeInstanceOf(UsageFilterIndexPageError);
+        expect(String((caught as UsageFilterIndexPageError).pageError)).toContain("no such table");
+        expect(rolledBack).toBe(true);
+      } finally {
+        execSpy.mockRestore();
+        read!.close();
+      }
+    });
+  }
+
+  test("a generation change between pages keeps the rebuild retry and correct totals", async () => {
+    const rows = Array.from({ length: 2_500 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({});
+
+    // Explicit nulls match the normalized query shape; a bare `{}` is not a valid caller query.
+    const read = await filterIndexModule.readUsageFilterCandidates({
+      provider: null, model: null, apiKeyId: null,
+    });
+    expect(read).not.toBeNull();
+    // A full first page proves this reader has another page left to validate.
+    expect(read!.nextPage()).toHaveLength(2_000);
+
+    try {
+      // Publish a new generation under the open reader through the normal rebuild flow.
+      filterIndexModule.requestUsageFilterIndexRebuild();
+      await getFilteredUsageAggregate({});
+      let caught: unknown;
+      try { read!.nextPage(); } catch (error) { caught = error; }
+      expect(caught).toBeInstanceOf(ledgerScannerModule.UsageLedgerRebuildRequiredError);
+      expect(caught).not.toBeInstanceOf(UsageFilterIndexPageError);
+    } finally {
+      read!.close();
+    }
+
+    // The retried aggregate still answers from the fresh generation, matching the oracle.
+    resetUsageAggregateCacheForTests();
+    await expectMatchesFullScan({});
+  });
+
+  test("a rebuild mid-aggregate restarts paging with fresh totals", async () => {
+    const rows = Array.from({ length: 2_500 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({});
+    resetUsageAggregateCacheForTests();
+
+    const realReadRows = ledgerScannerModule.readUsageLedgerRowsAtOffsets;
+    let rebuilt = false;
+    const rowsSpy = spyOn(ledgerScannerModule, "readUsageLedgerRowsAtOffsets").mockImplementation(async options => {
+      if (!rebuilt) {
+        rebuilt = true;
+        // Publish a new generation between the first and second candidate pages.
+        filterIndexModule.requestUsageFilterIndexRebuild();
+        const fresh = await filterIndexModule.readUsageFilterCandidates({
+          provider: null, model: null, apiKeyId: null,
+        });
+        fresh?.close();
+      }
+      return realReadRows(options);
+    });
+    try {
+      const result = await getFilteredUsageAggregate({});
+      const oracle = await fullScan({});
+      expect(summary(result)).toEqual(oracle.summarize("all", NOW));
+      // The retry consumed the rebuilt generation end to end, not partial old-generation rows.
+      expect(result.filterIndex?.candidateRows).toBe(rows.length);
+    } finally {
+      rowsSpy.mockRestore();
+    }
+  });
+
+  // Windows refuses to delete a file SQLite holds open: there the projection can only vanish once
+  // the refresh has closed it, which the next case covers on every platform.
+  test.skipIf(process.platform === "win32")("a projection that vanishes before the read is not recreated", async () => {
+    await expectVanishedProjectionNotRecreated(remove => ({ afterPublish: ({ dbPath }) => remove(dbPath) }));
+  });
+
+  test("a projection that vanishes after the refresh closed it is not recreated by the read", async () => {
+    await expectVanishedProjectionNotRecreated(remove => ({ afterRefresh: ({ dbPath }) => remove(dbPath) }));
   });
 
   test("a home change during a refresh never mixes installations", async () => {
@@ -1177,7 +1681,7 @@ describe("filtered usage index availability", () => {
     // The original home's projection was not advanced with another home's ledger.
     expect(publishedOffset()).toBe(offsetBefore);
   });
-+
+
   test("a passive read does not report a published generation that lost its rows", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -1194,7 +1698,7 @@ describe("filtered usage index availability", () => {
     expect(summary(passive).summary.requests)
       .toBe(rows.filter(row => row.provider === "openai").length);
   });
-+
+
   test("a foreign SQLite file with a coincidental meta table is not adopted", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -1282,8 +1786,34 @@ describe("filtered usage index selection evidence", () => {
       sourceFilter: { client: "all", device: { kind: "unconfigured" } },
       configuredApiKeyIds: [],
     })).toContain("idx_usage_rows_admission");
+    // The window is a residual predicate on a byte-offset-ordered index. A timestamp-ordered
+    // index cannot also return ascending offsets, so it would sort the whole match set per page.
     expect(plan({ provider: null, model: null, apiKeyId: null, window: { since: NOW - 60_000, until: NOW } }))
-      .toContain("idx_usage_rows_ts");
+      .toContain("idx_usage_rows_window");
+  });
+
+  test("the paged candidate select seeks each branch from the page cursor", async () => {
+    writeRows(Array.from({ length: 50 }, (_, index) => syntheticRow(index)));
+    await getFilteredUsageAggregate({ provider: "openai" });
+
+    const paged = (query: Parameters<typeof usageFilterCandidatePlan>[0]) =>
+      usageFilterCandidatePlan(query, { paged: true }).join("\n");
+    // Every branch carries the `byte_offset > cursor` bound and its own LIMIT, so a late page
+    // seeks from the cursor instead of re-materializing the candidates before it.
+    const providerOnly = paged({ provider: "openai", model: null, apiKeyId: null });
+    expect(providerOnly).toContain("idx_usage_attr_provider");
+    expect(providerOnly).toContain("idx_usage_rows_unattributable");
+    expect(providerOnly).toContain("byte_offset>");
+    // A lone provider has no model equality to complete the index prefix, so it pages from the
+    // offset-ordered attribution index rather than sorting its whole match set on every page.
+    expect(providerOnly).toContain("idx_usage_attr_provider_offset");
+    expect(paged({ provider: null, model: "m-0", apiKeyId: null }))
+      .toContain("idx_usage_attr_model_offset");
+    // A provider+model pair keeps both equalities in the prefix of the tight index.
+    expect(paged({ provider: "openai", model: "m-0", apiKeyId: null }))
+      .toContain("idx_usage_attr_provider (generation=? AND provider=? AND model=? AND byte_offset>");
+    expect(paged({ provider: null, model: null, apiKeyId: null }))
+      .toContain("idx_usage_rows_window (generation=? AND byte_offset>");
   });
 
   test("every source filter selects exactly the rows matchesUsageSource keeps", async () => {

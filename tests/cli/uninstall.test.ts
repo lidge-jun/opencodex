@@ -172,8 +172,7 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
 
   test("a removal failure is distinguishable from nothing being installed", async () => {
     const { setUninstallServiceHooksForTests, uninstallServiceDetailed } = await import("../../src/service");
-    // Windows is the platform whose hooks are injectable; the darwin/linux catch arms that
-    // returned the same false as absence are now typed outcomes rather than a boolean.
+    // An absent Windows service remains distinguishable from a failed removal.
     setUninstallServiceHooksForTests({
       platform: "win32",
       assertEnvironment: () => {},
@@ -186,8 +185,8 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(uninstallServiceDetailed()).toBe("absent");
 
     const serviceSource = await readText("src/service/orchestration.ts");
-    // The darwin and linux arms return "failed", not the absence value.
-    expect(serviceSource).toContain('try { uninstallLaunchd(); removeServiceInstallState(); return "removed"; } catch { return "failed"; }');
+    // Darwin removal failure is exercised through the real cleanup in launchd-repair.test.ts.
+    // Keep the unchanged Linux fallback's failure outcome covered here.
     expect(serviceSource).toContain('try { unlinkSync(unitPath()); removeServiceInstallState(); return "removed"; } catch { return "failed"; }');
   });
 

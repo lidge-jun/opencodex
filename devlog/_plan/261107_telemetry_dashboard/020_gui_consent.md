@@ -1,6 +1,7 @@
 # 020 — GUI consent popup, post-update popup and Advanced toggle
 
-Stack layer 3. Depends on 010 (`GET /api/telemetry`, `PUT /api/telemetry`, `POST /api/telemetry/notice`).
+Stack layer 3. Depends on 010 (`GET /api/telemetry`, `PUT /api/telemetry`). There is no notice-only
+endpoint (060 D13).
 
 ## Behaviour
 
@@ -13,9 +14,10 @@ Stack layer 3. Depends on 010 (`GET /api/telemetry`, `PUT /api/telemetry`, `POST
   `reason === "awaiting-notice"` or `"default-on"` without a decision. That covers first run and
   installs that update into this version (they have no decision yet): the post-update popup.
 - The checkbox is **pre-checked**. Continue sends `PUT /api/telemetry { decision: checked ? "accepted" :
-  "declined" }` (this also records the notice server-side). Escape/backdrop without a decision sends
-  `POST /api/telemetry/notice`: the user saw the disclosure and the default (on) applies. Opening the
-  dialog alone records nothing, so an unread or automated page load never enables sending.
+  "declined" }` (this also records the notice server-side). Escape and the backdrop record nothing,
+  and the install stays undecided for the next start (060 D13). Opening the dialog alone records
+  nothing, so an unread or automated page load never enables sending. Focus is moved to the heading
+  right after `showModal()`, so a stray Enter cannot press Continue.
 - The card lists what is sent and what is never sent and has a "What is sent" disclosure with the
   exact preview JSON from the status endpoint.
 - `TelemetrySettingsPanel` renders in Proxy details (`SettingsSection id="proxy-telemetry"` in
@@ -45,7 +47,7 @@ utilities.
 
 - `gui/tests/telemetry-consent-card.test.tsx`: waits for star onboarding; shows only when undecided
   and no env override; checkbox pre-checked; nothing recorded on open; Continue sends accepted /
-  declined; Escape sends notice only; hidden once decided.
+  declined; Escape records nothing; hidden once decided.
 - `gui/tests/telemetry-settings-panel.test.tsx`: switch mirrors effective state, toggles via PUT,
   disabled with env notice and in read-only mode, preview dialog shows the JSON.
 - `gui/tests/desktop-star-onboarding.test.tsx` extended for `onSettled`.

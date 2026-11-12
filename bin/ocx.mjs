@@ -13,7 +13,7 @@ import { probeSpawn, probeSpawnSync } from "../src/update/mutation-guard.mjs";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
 import { planDesktopCliHandoff, runDesktopCliHandoff } from "../src/lib/desktop-cli-handoff.mjs";
 import { forwardLauncherSignals } from "../src/lib/launcher-signal-forwarding.mjs";
-import { acquireSyncGuard } from "../src/update/sync-update-mutex.mjs";
+import { acquireSyncGuard, staleUpdateMarkerHint } from "../src/update/sync-update-mutex.mjs";
 import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
@@ -275,7 +275,11 @@ async function runPackageManagerSelfUpdate(manager, child) {
   } else {
     session = createLegacyUpdateSession({ home: configDir() });
     const started = session.start();
-    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exit(1); }
+    if (!started.ok) {
+      console.error(`opencodex: ${started.error}`);
+      if (started.staleMarker) for (const line of staleUpdateMarkerHint(configDir())) console.error(line);
+      process.exit(1);
+    }
     process.once("exit", () => {
       try { if (enteredMutation) session.finish(childOutcome); else session.finishPreflight(); }
       catch (error) { console.error(`Update outcome write failed: ${error?.message ?? error}`); process.exitCode = 1; }
@@ -572,6 +576,8 @@ async function runPackageManagerSelfUpdate(manager, child) {
     }
     const env = mutationChildEnvironment();
     delete env.OCX_SERVICE;
+    // Not launched by a supervisor: none of its markers (src/lib/supervisor-markers.ts) may ride along.
+    for (const name of ["OCX_DESKTOP_SUPERVISED", "OCX_SERVICE_MANAGED", "OCX_WINDOWS_WRAPPER_PROTOCOL"]) delete env[name];
     // The restarted proxy is an ordinary owner; only a sibling's own replacement carries this.
     delete env.OCX_SIBLING_OF_PORT;
     delete env.OCX_SIBLING_HANDOFF_NONCE;
@@ -1017,6 +1023,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
               if (session) session.noteUntrackedInstaller();
               return runNpmInstall(invocation, {
                 authorizeMutation: homePolicy.authorizeMutation,
+                ...(session ? { markerPath: join(configDir(), "update-orchestrated.json") } : {}),
                 env: unprivilegedOwnershipMutationEnvironment(invocation?.options?.env ?? process.env),
               }).then(result => {
                 if (session && result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
@@ -1079,7 +1086,8 @@ async function runPackageManagerSelfUpdate(manager, child) {
               const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env));
               if (process.platform === "win32") {
                 session.noteUntrackedInstaller();
-                const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation });
+                const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation,
+                  markerPath: join(configDir(), "update-orchestrated.json") });
                 if (result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
                 else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
                 return result;

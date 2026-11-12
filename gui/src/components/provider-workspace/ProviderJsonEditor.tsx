@@ -13,16 +13,24 @@ export interface JsonEditorState {
   onSave: () => Promise<boolean>;
   onClose: () => void;
   onRestore?: () => void;
+  /** Saved values moved under this draft; the user must choose a side before saving. */
+  conflict?: boolean;
+  /** Paths both sides changed; the user must edit the draft or use saved values. */
+  conflicts?: string[];
+  onUseSaved?: () => void;
+  onKeepDraft?: () => void;
 }
 
 export default function ProviderJsonEditor({
-  editor, providerName, saving, onSave, message,
+  editor, providerName, saving, onSave, message, targetLabel,
 }: {
   editor: JsonEditorState;
   providerName: string;
   saving: boolean;
   onSave: () => void;
   message?: { ok: boolean; text: string } | null;
+  /** Dashboard server this editor writes to; shown so the save target is explicit. */
+  targetLabel?: string;
 }) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -42,12 +50,28 @@ export default function ProviderJsonEditor({
             <button type="button" className="btn btn-ghost btn-sm" onClick={editor.onRestore}>{t("pws.jsonRestore")}</button>
           )}
           <button type="button" className="btn btn-ghost btn-sm" onClick={editor.onClose}>{t("common.cancel")}</button>
-          <button type="button" className="btn btn-primary btn-sm" onClick={onSave} disabled={saving || !editor.isDirty}>
+          <button type="button" className="btn btn-primary btn-sm" onClick={onSave} disabled={saving || !editor.isDirty || editor.conflict === true}>
             {saving ? t("pws.saving") : t("pws.jsonSave")}
           </button>
         </div>
       </div>
       <p className="pwi-json-panel-desc muted">{t("pws.jsonEditorDesc")}</p>
+      {targetLabel && <p className="pwi-json-panel-target muted">{t("pws.draftTarget", { target: targetLabel })}</p>}
+      {editor.conflict && (
+        <div className="pwi-settings-conflict" role="alert">
+          <p>{t("pws.draftConflict")}</p>
+          {editor.conflicts && editor.conflicts.length > 0 && (
+            <div className="pwi-settings-conflict-fields">
+              <p>{t("pws.draftConflictFields")}</p>
+              <ul>{editor.conflicts.map(path => <li key={path}><code>{path}</code></li>)}</ul>
+            </div>
+          )}
+          <div className="pwi-settings-sticky-bar-actions">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={editor.onUseSaved} disabled={saving}>{t("pws.draftConflictUseSaved")}</button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={editor.onKeepDraft} disabled={saving}>{t("pws.draftConflictKeepDraft")}</button>
+          </div>
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         className="input pwi-json-textarea"

@@ -29,7 +29,7 @@ file, and removes it again. Each client below has its own switch:
 | WorkBuddy AI | `~/.workbuddy-ai/models.json` | JSON | auto reload / new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`); the desktop app needs its own sign-in and opencodex never writes `auth.json` |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
@@ -173,7 +173,7 @@ runs your own `claude` binary with `ANTHROPIC_BASE_URL` set to the proxy, the no
 `opencodex-proxy` marker as `ANTHROPIC_AUTH_TOKEN`, an explicitly empty `ANTHROPIC_API_KEY`, and
 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` so a `settings.json` env block in your Claude config cannot
 re-point it. Each routed model is a custom model keyed by its opencodex selector
-(`provider/model`), which T3 Code sends verbatim. It appears in T3 Code's model picker under
+(`provider/model`), which T3 Code sends verbatim. A model with an effort ladder declares it, so T3 Code offers its effort control and can start a subagent on it at a chosen effort. It appears in T3 Code's model picker under
 **opencodex**. T3 Code reloads the file on its own, so no restart is needed; catalog changes and
 `ocx sync` refresh the instance.
 
@@ -1105,6 +1105,16 @@ whichever one it was written into.
 **The credential form.** The provider is written with `apiKey: false`, the documented
 form for an endpoint that needs no key. A raw string is refused by Command Code, and
 no service-token file is read, referenced, or exported by this integration.
+
+**The desktop app needs its own sign-in.** Command Code Desktop never reads the
+keyless provider form: before it shows a workspace it checks `~/.commandcode/auth.json`
+(or `COMMAND_CODE_API_KEY`) and, finding neither, stops on its sign-in screen. Sign in
+there once — or with `cmd login` — and the app stores its own credential.
+
+opencodex does not write that file. It belongs to Command Code and is shared with real
+logins and every other provider's tokens, so enabling this integration only writes
+`providers.json`; the placeholder is never written to `auth.json`, and Apply, overwrite,
+catalog refresh, and Disable all leave the store byte-for-byte alone.
 
 **Home resolution.** There is no `COMMANDCODE_HOME` override here. The published
 client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.json`;

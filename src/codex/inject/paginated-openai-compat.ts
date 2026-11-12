@@ -22,7 +22,12 @@
  * this proxy — the same guarantee the injector already makes everywhere else about a line
  * it does not own.
  */
-import { HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE, HISTORY_RELABEL_STANDS_DOWN } from "../history-provider";
+import {
+  HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE,
+  HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED,
+  HISTORY_RELABEL_STANDS_DOWN,
+} from "../history-provider";
+import { compareCodexVersions, loadPersistedCodexRuntime, peekCodexRuntimeProcessCache } from "../runtime";
 import { applyEol, setRootOpenaiBaseUrlForTarget, stripInjectedOpenaiBaseUrl } from "./config-toml";
 import type { CodexRoutingTarget } from "./routing-target";
 
@@ -60,6 +65,42 @@ function admissionTokenRefusal(): string {
 }
 
 /**
+ * The resolved Codex version without running anything: the process memo when it is fresh, else
+ * the persisted selection (`selectedVersion`; the record's `version` field is its schema number).
+ * Null when neither knows, which keeps the pre-0.166 behavior.
+ */
+export function passiveCodexVersion(): string | null {
+  try {
+    const peek = peekCodexRuntimeProcessCache();
+    if (peek.kind === "available" && peek.value.runtime.version) return peek.value.runtime.version;
+    return loadPersistedCodexRuntime()?.selectedVersion ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The first Codex that refuses to resume a thread under another provider (codex-cli 0.166.0-alpha). */
+export const CODEX_PROVIDER_LOCKED_SINCE = "0.166.0-alpha.0";
+
+/** True when the known Codex refuses to resume a thread under another provider. */
+export function codexLocksResumeProvider(codexVersion?: string | null): boolean {
+  return Boolean(codexVersion) && compareCodexVersions(codexVersion!, CODEX_PROVIDER_LOCKED_SINCE) >= 0;
+}
+
+/**
+ * Named next actions for a home where the retained override cannot work any more. Each is a
+ * configuration key the operator already owns; none touches the threads.
+ */
+function providerLockedRefusal(codexVersion: string): string {
+  return `Codex config injection refused: ${HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED}. `
+    + "Existing provider definitions and conversation files were preserved. "
+    + `This home has conversations tagged openai whose history Codex has already migrated to its paginated format, and Codex ${codexVersion} (0.166 or later) resumes a conversation only under the provider it was created with. `
+    + "Switching the default provider to opencodex would leave those conversations unable to resume, so nothing was changed. "
+    + "To keep them resumable, leave codexDesktopAuthless and codexClientCompaction off. "
+    + "To switch anyway and accept that those conversations stay with the openai provider, set syncResumeHistory to false.";
+}
+
+/**
  * Resolve the transition, retaining the root override when this routing form can own one.
  *
  * `content` is the fully assembled provider-table candidate: OpenCodex's own root override
@@ -71,9 +112,21 @@ export function applyPaginatedOpenaiCompat(
   target: CodexRoutingTarget,
   content: string,
   eol: "\r\n" | "\n",
+  /** The resolved Codex version when known; null or absent keeps the pre-0.166 retention. */
+  codexVersion?: string | null,
 ): PaginatedOpenaiCompatDecision {
   if (refusal !== HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE) {
     return { refusal, content, retainedRootOverride: false, message: refusal ? genericRefusal(refusal) : "" };
+  }
+  // Checked before every other branch: on 0.166+ neither the retained override, an admission
+  // token nor a user-owned root line keeps an openai-tagged thread resumable under opencodex.
+  if (codexVersion && codexLocksResumeProvider(codexVersion)) {
+    return {
+      refusal: HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED,
+      content,
+      retainedRootOverride: false,
+      message: providerLockedRefusal(codexVersion),
+    };
   }
   if (target.requiresAdmissionToken === true) {
     return { refusal, content, retainedRootOverride: false, message: admissionTokenRefusal() };

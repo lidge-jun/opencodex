@@ -16,11 +16,12 @@ import {
   kiroUsageContextForAccount,
 } from "./kiro-usage";
 import { mapQuotaRoster, readProviderApiKeyQuotas, type ProviderApiKeyQuota } from "./quota-key-accounts";
+import { mistralUnknownBudgetWindows } from "./quota-mistral-budget";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isPassiveRead } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent,
+  accountReportCurrent, observedQuotaFor,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -33,7 +34,7 @@ import {
   isProviderQuotaReportCurrent,
   LAST_GOOD_MAX_AGE_MS,
   providerQuotaBeforePublishForTests,
-  routingEvidence, publishCollectedDecisionQuota,
+  routingEvidence, publishCollectedDecisionQuota, keyReportCredentialIds, keyReportCredentialCurrent, validateJoinedReports,
   setProviderQuotaReportCache,
   TERMINAL_QUOTA_FAILURE,
   type CodexAuthAccountsSnapshotPromise,
@@ -175,15 +176,17 @@ let pendingProviderObservation: Promise<void> = Promise.resolve();
 /**
  * Stable per-account observation key for one provider report.
  *
- * OAuth providers key by active account id. Key-auth providers have NO account set, so
- * every key in `apiKeyPool` would collapse onto "default" and rotating from a spent key to
- * a fresh one would read as a reset (measured: 97% -> 12% fired a false surprise). The
- * cache key already discriminates these at cacheKey() via apiKeyPoolEntryId, so this
- * mirrors that discriminator instead of inventing a second notion of identity.
+ * OAuth providers key by active account id. A probe-bound key report instead carries the
+ * full digest of the credential it actually sent (report-cache), because the 8-character
+ * apiKeyPoolEntryId is a cache discriminator, not an identity: two distinct keys can share
+ * it, and that collision must not hand one key's baseline to another. Providers without
+ * that binding keep the legacy id byte for byte, so their persisted baselines survive.
  */
-function providerObservationAccountKey(provider: string, config: OcxConfig): string {
+function providerObservationAccountKey(provider: string, config: OcxConfig, report?: ProviderQuotaReport): string {
   const oauthAccountId = getAccountSet(provider)?.activeAccountId;
   if (oauthAccountId !== undefined) return `${provider}\u0000${oauthAccountId}`;
+  const probed = report && keyReportCredentialIds.get(report);
+  if (probed) return `${provider}\u0000key:${probed}`;
   const providerConfig = config.providers[provider];
   const resolvedKey = typeof providerConfig?.apiKey === "string"
     ? resolveEnvValue(providerConfig.apiKey)?.trim()
@@ -207,8 +210,9 @@ function notifyProviderQuotaSnapshot(
   // Claude CLI rows are display-only: one reset key would span every account that signs in.
   const observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
     scope: report.provider,
-    accountKey: providerObservationAccountKey(report.provider, config),
-    quota: report.quota,
+    accountKey: providerObservationAccountKey(report.provider, config, report),
+    quota: observedQuotaFor.get(report) ?? report.quota,
+    ...(report.source === "mistral:budget" ? { retainUnknownWindows: mistralUnknownBudgetWindows(report.quota) } : {}),
   }));
   if (observations.length === 0) return;
   pendingProviderObservation = pendingProviderObservation
@@ -216,13 +220,7 @@ function notifyProviderQuotaSnapshot(
       const observer = await import("../quota/reset-observer");
       if (!observer.hasQuotaResetSink()) return;
       const { providerWindowObservations } = await import("../quota/window-mapping");
-      for (const observation of observations) {
-        observer.observeQuotaSnapshot({
-          scope: observation.scope,
-          accountKey: observation.accountKey,
-          windows: providerWindowObservations(observation.quota),
-        });
-      }
+      for (const observation of observations) observer.observeQuotaSnapshot({ scope: observation.scope, accountKey: observation.accountKey, windows: providerWindowObservations(observation.quota), ...(observation.retainUnknownWindows ? { retainUnknownWindows: observation.retainUnknownWindows } : {}) });
     })
     .catch(() => {
       // Detection is best-effort: a quota refresh must never fail because of it. Swallowing
@@ -238,7 +236,7 @@ export function flushProviderQuotaObservationsForTests(): Promise<void> {
 /** Collect provider quota reports, using the cache unless refresh is forced, and publish the secret-free decision evidence from the collected reports. */
 export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {
   // A passive read (a Remote Link Child's, #6959) shows the held reports and starts nothing.
-  if (isPassiveRead()) { const held = heldProviderQuotaReports(Object.keys(config.providers)); return { ...held, reports: refreshHeldClaudeCliReports(config, held.reports) }; }
+  if (isPassiveRead()) { const held = heldProviderQuotaReports(config); return { ...held, reports: refreshHeldClaudeCliReports(config, held.reports) }; }
   // A Pool report's cache signature and provider fetch must share one account snapshot.
   // Preserve force semantics when deciding whether that snapshot refreshes upstream data.
   const prefetchedCodexSnapshot = hasCodexPoolProvider(config)
@@ -258,16 +256,18 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   // configured passive provider makes this predicate permanently false, so every dashboard
   // poll re-probes every OTHER provider upstream instead of serving the 5-minute cache.
   const currentCache = getProviderQuotaReportCache();
+  // The cache key is a cheap discriminator, not an identity: the stored response is
+  // re-validated against this caller's configuration before it is served.
   const cacheFresh = currentCache && currentCache.key === key && now - currentCache.ts < CACHE_TTL_MS
     && currentCache.response.reports.every(item =>
       (item.observed === true || now - item.updatedAt < LAST_GOOD_MAX_AGE_MS)
-      && (config.providers[item.provider]?.adapter === "claude-cli" || isProviderQuotaReportCurrent(item)));
+      && (config.providers[item.provider]?.adapter === "claude-cli" || isProviderQuotaReportCurrent(item)) && keyReportCredentialCurrent(item, config.providers[item.provider]));
   if (!forceRefresh && cacheFresh) {
     const response = currentCache!.response, reports = refreshHeldClaudeCliReports(config, response.reports);
     return reports === response.reports ? response : { ...response, reports };
   }
   const joinable = inflight.get(key);
-  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return joinable.promise;
+  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return validateJoinedReports(await joinable.promise, config);
   // A forced probe takes commit authority: older in-flight probes must not overwrite its result.
   if (forceRefresh) bumpProviderQuotaInvalidationEpoch();
   const epoch = invalidationEpoch;
@@ -309,11 +309,11 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       // Same exemption as the fast path. A passive row reaching `previous` is not a probe
       // that went quiet — there is no probe — so age cannot condemn it.
       if (item.observed !== true && item.updatedAt < cutoff) continue;
-      if (isProviderQuotaReportCurrent(item)) byProvider.set(item.provider, item);
+      if (isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, config.providers[item.provider])) byProvider.set(item.provider, item);
       else generationMismatchedProviders.add(item.provider);
     }
     for (const item of fresh) {
-      if (isProviderQuotaReportCurrent(item)) {
+      if (isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, config.providers[item.provider])) {
         byProvider.set(item.provider, item);
         generationMismatchedProviders.delete(item.provider);
       } else {

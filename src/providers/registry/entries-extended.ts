@@ -522,7 +522,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: NVIDIA_NIM_KIMI_THINKING_MODELS,
     note: "Free tier on NVIDIA NIM — API key still required (get a free key at build.nvidia.com).",
   },
-  { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api" },
+  // Venice returns 400 for any image under 64x64, which a wide screenshot hits after
+  // the shared normalizer floors older images to a 320px long edge (320x25).
+  { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api", minImageEdge: 64 },
   // 260710 GLM-5.2 context and path-specific ids: Tier-2 evidence in
   // devlog/_plan/260710_provider_hardening/002_research_cn.md.
   // 260814: glm-5.3 / glm-5.3[1m] added per docs.z.ai/devpack/latest-model, which lists them as
@@ -1344,6 +1346,42 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // answers an image, audio or file part with 400 `unsupported_content`.
     inputModalities: ["text"],
     note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
+  },
+  {
+    // cheapaimodel, operated by LINKOVA PTE. LTD. (Singapore). Contract checked 2026-10-28:
+    // https://cheapaimodel.ai/docs/api/create-chat-completion and
+    // https://cheapaimodel.ai/docs/api/list-models. GET /v1/models answers 401 without a valid key,
+    // so the default discovery URL doubles as key validation. Chat Completions is the one interface
+    // every catalog model supports, so every inbound stays on Chat and the preset does not use the
+    // gateway's Responses or Anthropic Messages endpoints. Context windows and
+    // input modalities are from the live catalog at https://cheapaimodel.ai/models. kimi-k3 rejects
+    // any temperature other than 0.6 or 1 and rejects top_p 0.9 and 1.0, so both are dropped for it.
+    // deepseek-v4-1-flash takes reasoning_effort none, low, high and max, and an omitted effort runs
+    // at high (https://cheapaimodel.ai/blog/deepseek-v4-1-flash-reasoning-effort), so it keeps the
+    // DeepSeek Flash ladder and sends an explicit none instead of dropping it.
+    // The env reference derived from the id is ${CHEAPAIMODEL_API_KEY}.
+    id: "cheapaimodel",
+    label: "cheapaimodel",
+    adapter: "openai-chat",
+    baseUrl: "https://api.cheapaimodel.ai/v1",
+    authKind: "key",
+    dashboardUrl: "https://console.cheapaimodel.ai/keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "deepseek-v4-1-flash",
+    models: ["deepseek-v4-1-flash", "glm-5.3", "glm-5.3-flash", "kimi-k3", "grok-4.7"],
+    modelContextWindows: {
+      "deepseek-v4-1-flash": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "kimi-k3": 1_000_000, "grok-4.7": 500_000,
+    },
+    modelInputModalities: {
+      "deepseek-v4-1-flash": ["text", "image"], "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"],
+      "kimi-k3": ["text", "image"], "grok-4.7": ["text", "image"],
+    },
+    noTemperatureModels: ["kimi-k3"],
+    noTopPModels: ["kimi-k3"],
+    modelReasoningEfforts: { "deepseek-v4-1-flash": deepseekThinkingEffortsFor("deepseek-v4-1-flash") },
+    modelReasoningEffortMap: { "deepseek-v4-1-flash": { ...deepseekReasoningMapFor("deepseek-v4-1-flash"), none: "none" } },
+    note: "Pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and Grok, billed from a prepaid USD balance. Create an API key at console.cheapaimodel.ai. Live discovery lists the models your key can call; deepseek-v4-1-flash is the default. Chat Completions only.",
   },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.

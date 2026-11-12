@@ -15,6 +15,19 @@ Kontrol paneli çözümlenen yerel proxy uç noktasından sunulur (varsayılan p
 
 `OpenCodex.app` sürüm derlemeleri Developer ID ile imzalanır ve Apple tarafından noterleştirilir. Dolayısıyla ilk açılışta macOS normalde yalnızca indirilen uygulamalar için standart onayı ister. macOS yine de engellerse **System Settings → Privacy & Security → Open Anyway** yolunu kullanın.
 
+#### Homebrew (masaüstü uygulaması)
+
+Masaüstü uygulamasını alternatif olarak Homebrew Cask ile de yükleyebilirsiniz:
+
+```bash
+brew install --cask opencodex
+```
+
+- **Uygulama içi güncellemeler (`auto_updates`)**: Masaüstü uygulamasının yerleşik bir güncelleyicisi vardır ve Cask `auto_updates true` bildirir. Belirli Cask için `brew upgrade --cask opencodex` veya greedy yükseltme, uygulama içinde daha yeni bir sürüme güncellenmiş uygulamanın yerini alabilir. Homebrew ile yükseltmeden önce yüklü uygulamanın ve Cask’in sürümlerini kontrol edin.
+- **CLI ve arka plan servisi**: Cask yalnızca kendi CLI ve proxy çalışma ortamını içeren `OpenCodex.app` uygulamasını kurar. Bağımsız CLI veya arayüzsüz servis için `ocx` npm ya da sürüm arşivleriyle ayrıca kurulabilir; ikisi de `~/.opencodex` yapılandırmasını paylaşır. Servisi ayrı CLI’ye devretmek için OpenCodex’ten çıkın, ayrı CLI’yi açıkça seçin (etkinse [Desktop paket başlatıcısı devrini](/getting-started/installation/) de atlayın) ve `ocx service install` çalıştırın. [Terminal komutu seçimine](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) ve [çalışma ortamı sahipliğine](/reference/cli/lifecycle/#runtime-ownership) bakın.
+- **Cask yükseltmesinden sonra servis**: Cask’in kaldırma adımı, ayrı CLI’ye ait olsa bile `com.opencodex.proxy` launchd işini ve plist dosyasını kaldırarak arka plan servisini durdurabilir. Yükseltmeden sonra OpenCodex’ten çıkın ve macOS grafik oturumunda yukarıda açıkça seçilen ayrı CLI ile `ocx service status` çalıştırın. Servis yoksa `ocx service install`, kurulu ancak yüklenmemişse `ocx service repair` çalıştırın. Ardından `ocx service status` ile tekrar kontrol edin. `ocx service install` bağlantı noktasını kaldırılan işten değil, `OCX_BAKE_PORT` veya `config.port` değerinden alır; hizmet kaydedildikten sonra bunlardan biri değiştiyse eski bağlantı noktasını gösteren istemcileri güncelleyin. Aynı kaldırma adımı Desktop'ın kendi Start at Login öğesini (`OpenCodex` launchd işi) de kaldırır; kullanıyorsanız OpenCodex'te **Start at Login** seçeneğini yeniden açın.
+- **`--zap` ile veri silme**: `brew uninstall --zap --cask opencodex`, `~/.opencodex` ve `~/.opencodex-desktop` dizinlerini siler. Bu dizinlerdeki CLI ve Desktop tarafından paylaşılan yapılandırma ve durum verileri de silinir. `--zap` kullanmadan önce saklamak istediğiniz verileri yedekleyin. 2.97.0 öncesi Cask tanımları bu iki dizini listelemiyordu ve Homebrew kaldırma işlemini kurulum sırasında kaydedilen tanımla yapabilir; `--zap` sonrasında dizinlerin kalıp kalmadığını kontrol edin ve isterseniz kendiniz silin.
+
 ### Windows
 
 `OpenCodex-<version>-windows-x64.msi` dosyasını indirip yükleyiciyi çalıştırın. Yükleyici henüz kod imzalı olmadığından Windows SmartScreen uyarı verebilir; sürüm sayfasından indirdiğinizi doğruladıktan sonra **More info → Run anyway** seçeneğini seçin.

@@ -1,4 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { queueMcpRpc } from "../../src/messaging/mcp-queue-rpc";
 import { queueMcpReadReply } from "../../src/messaging/mcp-reply-tools";
 import { QUEUE_MCP_TARGET, REPLY_MCP_CLIENT, REPLY_MCP_TURN, queueMcpFixture } from "../helpers/messaging-mcp-queue";
@@ -166,6 +168,37 @@ describe.skipIf(process.platform === "win32")("opt-in MCP stored turn replies", 
       expect(f.calls().filter(c=>c.frame.method === "thread/turns/list")).toHaveLength(0);
     } finally {expire?.();await pending;timer.mockRestore();await f.close();}
   });
+
+  test("a complete snapshot reports its own arrival timeliness, not a later frame's", async () => {
+    const f = queueMcpFixture("reply-wait-timely-close");
+    try {
+      const waitMs = 6_000, seen: boolean[] = [], started = performance.now();
+      writeFileSync(join(f.root, "deadline"), String(Date.now() + waitMs));
+      const result = payload(await queueMcpReadReply({ ...f.options, allowReplyRead: true }, input, undefined, {
+        onObservedFailure: () => { throw new Error("unexpected failure"); },
+        outcomeIsTimely: () => performance.now() < started + waitMs,
+        onObservedSuccess: timely => { seen.push(timely); },
+      }));
+      expect(result).toMatchObject({ available: true, status: "observed", replies: [{ text: "fixture answer" }] });
+      expect(seen).toEqual([true]);
+    } finally { await f.close(); }
+  }, 20_000);
+
+  test("a snapshot whose reads finish after the caller deadline reports a late completion", async () => {
+    const f = queueMcpFixture("reply-wait-late-frame");
+    try {
+      const waitMs = 4_000, seen: boolean[] = [];
+      writeFileSync(join(f.root, "deadline"), String(Date.now() + waitMs));
+      const started = performance.now();
+      const result = payload(await queueMcpReadReply({ ...f.options, allowReplyRead: true }, input, undefined, {
+        onObservedFailure: () => { throw new Error("unexpected failure"); },
+        outcomeIsTimely: () => performance.now() < started + waitMs,
+        onObservedSuccess: timely => { seen.push(timely); },
+      }));
+      expect(result).toMatchObject({ available: true, status: "observed" });
+      expect(seen).toEqual([false]);
+    } finally { await f.close(); }
+  }, 20_000);
 
   test("cancelled reads reap their helper and do not retry or mutate the queue",async()=>{
     const f=queueMcpFixture("hang");const abort=new AbortController();

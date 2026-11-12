@@ -29,3 +29,22 @@ Neither the OAuth account token nor an imported email is reused by a manual-key 
 `tests/providers/meta-muse-keychain.test.ts` exercises the subprocess deadline and cleanup
 without invoking the real Keychain. `tests/oauth/oauth-meta-muse-login-diagnostics.test.ts`
 covers public projection, shape refusals, cancellation and explicit paste recovery.
+
+`src/providers/meta-muse-plan-refusal.ts` recognizes Meta's runtime refusal (#8352): a 403
+whose OpenAI-compatible `error.message` is the whole "This API key is billed to a Muse Code
+subscription" sentence, at most 8,192 UTF-16 code units, where `type` and `code` may be absent or
+`null` and any other value must be on an allowlist. After HTTP error formatting the same verdict
+also accepts the `Provider error 403: ` framing of that envelope, the bare sentence, and the
+proxy's own replacement message, so a later formatting pass keeps the class. The match is
+deliberately narrow, in the shape of `src/providers/anthropic-billing-refusal.ts` — a missed
+match relays Meta's own text, while a loose one would relabel an unrelated permission denial.
+`classifyError` in `src/lib/errors.ts` answers `subscription_required` with one fixed sentence
+naming the restriction and the `meta-model` pay-as-you-go alternative, so the request-log code,
+the dashboard diagnostics and the client body all agree that this is a plan restriction on a
+valid credential rather than a rejected or expired one. `src/server/responses/passthrough-error.ts`
+replaces the relayed body, and both `src/server/responses/passthrough-delivery.ts` and
+`src/server/responses/adapter-dispatch.ts` stamp the `quota-exhausted` failure cause, whose
+resend verdict is `refused-futile`. The refusal is never retried, never rotates a key or
+account, never reaches the account auto-pause roster, and never impersonates the Muse Code
+client. `tests/providers/meta-muse-plan-refusal.test.ts` covers the bounded match, the
+classification, the diagnostic code, the client sentence and the registry/docs wording.

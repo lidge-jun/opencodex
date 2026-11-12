@@ -318,6 +318,8 @@ Proxy нормализует upstream-join URL и затем прозрачно 
 
 ## `POST /v1/responses/compact`
 
+Если compact-запрос содержит некорректные данные retained-compaction в формате OpenCodex (`ocx2:`), возвращается HTTP 400 с `error.type: "invalid_request_error"`. Порядок проверки и влияние на состояние аккаунта описаны в [каноническом справочнике на английском языке](/reference/proxy-formats/#post-v1responsescompact).
+
 Compaction возвращает replacement history для клиентов, которым нужно сократить длинный Responses
 conversation.
 

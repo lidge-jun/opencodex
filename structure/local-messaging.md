@@ -248,3 +248,37 @@ rejects immediate repeats, not arbitrary multi-page cycles. The actual CLI
 opt-in handshake is exercised by `tests/cli/cli-message-mcp.test.ts`; existing inert
 activation and default-tool tests remain in force. Offline helpers prove protocol
 contracts, not native app processing, goal behavior or cross-client registration.
+
+## Bounded stored reply waits
+
+`src/messaging/mcp-reply-wait.ts` composes the existing stored read under one
+caller-owned waitMs budget (integer 1..20000, default 20000). The host exposes
+codex_wait_reply only with --allow-reply-read and shares its four pending slots.
+Each wait holds its slot until completion; four waits can make send/metadata
+calls return busy for up to 20 seconds of waiting plus helper termination time. Admission refuses rather than queues,
+and the tool description documents that no send slot is reserved.
+One wait attempts at most three snapshots, with a cancellable two-second pause
+between them and at most nine sequential owned helpers. It adds no RPC method,
+persistent state, background poll, lifecycle control or automatic delivery.
+The wait composes stored reads independently of resume capability. Execution of
+an unloaded recipient belongs to its native client/owner; no resume grant is
+needed to read already stored replies or call this bounded wait.
+
+Existing final text returns immediately, ambiguity returns without text, and a
+required next page returns to the caller. Other snapshots refresh the matched
+turn or repeat the supplied search position. Stored turnStatus is not live
+execution authority and never causes an early terminal decision. A deadline or
+attempt limit preserves the last successful observation with its age, measured from that snapshot's start; a deadline
+before any observation is unavailable. A snapshot is successful only when every
+read behind it completed before the deadline: helper cleanup that outlives the
+deadline keeps such a snapshot, while a snapshot whose reads completed late is
+expired even if its data looks valid and cannot be authorized by an earlier
+timely snapshot. Read failures remain unavailable and
+parent cancellation takes precedence over a stale success. Owned pause timers
+and helpers are cancelled on disconnect. Same-turn association and pagination,
+UTF-8 truncation and cursor revalidation retain the read owner's contract.
+
+`tests/codex-integration/messaging-mcp-wait.test.ts` exercises immediate, late and
+absent final text, stored terminal summaries, pagination, ambiguity, invalid input,
+read failures and inherited deadlines/cancellation. The CLI test checks exposure
+and invocation; imports remain inert. These fixtures do not prove client wake-up.

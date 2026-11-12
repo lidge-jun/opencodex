@@ -352,13 +352,13 @@ bulk-pause and recovery suites `tests/codex-integration/codex-routing.test.ts`,
 cache when its stored reset instant has elapsed. Seconds and milliseconds are accepted;
 future or missing deadlines remain carried, and explicit incoming short readings remain stored.
 This stops partial weekly/Spark or credits-only refreshes from renewing obsolete Spark-derived
-5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows.
+5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows. An omitted weekly tuple is retired from the same cache when its stored `weeklyResetAt` has elapsed or the reset-ticket count dropped (a redeemed ticket zeroed the window); a missing or invalid stored deadline never expires it by the clock, and a ticket grant or unchanged count is ignored. An observation that carries the weekly window, including a later deadline, replaces the tuple directly (`tests/codex-integration/codex-quota-weekly-rollover.test.ts`).
 
 The separately retained main-policy snapshot preserves omitted blocking short evidence even after
 its reset clock passes. Credits-only, partial weekly-only, and metadata-only updates cannot remove an
 existing blocking short usage reading or release its hard lock; a fresh short reading can replace
 it. A validated complete WHAM snapshot can also retire the short tuple as described below.
-Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking weekly reading.
+Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking weekly reading. None of the weekly expiry signals above apply to this snapshot: a blocking weekly reading there is released only by an observed lower reading or a governing monthly-primary observation, because a predicted reset is not recovery evidence.
 
 The Codex writer explicitly asks `src/quota/reset-observer.ts` to retain an absent short window
 in `src/quota/reset-seen-store.ts`, with its original observation time. Detection compares only
@@ -371,7 +371,7 @@ Regression coverage lives in `tests/codex-integration/codex-quota-parser-parity.
 
 Codex pool display capacity in `src/providers/codex-capacity.ts` calibrates the observed Business Premium plan
 `self_serve_business_prolite` at five Standard-seat units. This estimate does not drive routing or create a
-missing five-hour window; unknown plans keep the conservative baseline and are counted in `unknownPlanAccounts`. The same weights (`codexCapacityWeight`) weight the Codex `pooled` windows of [`GET /api/quota-pool`](../quota-pool.md#pooled-windows).
+missing five-hour window; unknown plans keep the conservative baseline and are counted in `unknownPlanAccounts`. An account given an explicit `weight` (the pooled Anthropic report, where every routable seat weighs 1) bypasses the plan table and is not counted there. The same weights (`codexCapacityWeight`) weight the Codex `pooled` windows of [`GET /api/quota-pool`](../quota-pool.md#pooled-windows).
 
 `codexMainAccountHardLock` is a local admission policy that is **on by default** since #5694, at
 short 90% and long `MAIN_ACCOUNT_HARD_LOCK_PERCENT` = 98%, overridden by ordered integer

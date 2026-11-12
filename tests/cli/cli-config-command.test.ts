@@ -116,6 +116,42 @@ describe("ocx config display redaction", () => {
     }
   });
 
+  test("#8319: a key the running proxy reads only at startup says a restart is needed", () => {
+    const dir = freshConfig();
+    try {
+      const cors = runCli(["config", "set", "corsAllowOrigins", '["http://localhost:10100"]'], { OPENCODEX_HOME: dir });
+      expect(cors.status).toBe(0);
+      expect(cors.stdout).toContain("Set corsAllowOrigins.");
+      expect(cors.stdout).toContain("restart");
+
+      const hub = runCli(["config", "set", "hub", '{"managementPublicOrigin":"https://hub.test"}'], { OPENCODEX_HOME: dir });
+      expect(hub.status).toBe(0);
+      expect(hub.stdout).toContain("restart");
+      // The nested paths take the same note (#8495 review): the management listener and its origin
+      // are created when the hub starts.
+      const origin = runCli(["config", "set", "hub.managementPublicOrigin", '"https://hub2.test"'], { OPENCODEX_HOME: dir });
+      expect(origin.status).toBe(0);
+      expect(origin.stdout).toContain("restart");
+      const ingress = runCli(["config", "set", "hub.managementIngress", '{"enabled":false}'], { OPENCODEX_HOME: dir });
+      expect(ingress.status).toBe(0);
+      expect(ingress.stdout).toContain("restart");
+
+      // The JSON payload keeps its shape; the note is for people reading the terminal.
+      const json = runCli(["config", "set", "corsAllowOrigins", '["http://localhost:9999"]', "--json"], { OPENCODEX_HOME: dir });
+      expect(json.status).toBe(0);
+      expect(Object.keys(JSON.parse(json.stdout)).sort()).toEqual(["ok", "path", "value"]);
+
+      // Nothing is said for an unchanged value or for an unrelated key.
+      const again = runCli(["config", "set", "corsAllowOrigins", '["http://localhost:9999"]'], { OPENCODEX_HOME: dir });
+      expect(again.stdout).not.toContain("restart");
+      const other = runCli(["config", "set", "defaultProvider", '"blsc"'], { OPENCODEX_HOME: dir });
+      expect(other.status).toBe(0);
+      expect(other.stdout).not.toContain("restart");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("config show --json never prints secret-shaped modelCosts keys", () => {
     const dir = freshConfig();
     try {

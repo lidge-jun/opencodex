@@ -227,8 +227,9 @@ export async function loginAnthropic(
   const importLocal = opts?.codeMode ? "off" : opts?.importLocal ?? "off";
   if (opts?.instance === "anthropic2" && importLocal !== "off") throw new AnthropicLocalCliImportError();
   if (importLocal !== "off") {
-    const { detectClaudeCodeToken } = await import("./local-token-detect");
-    const local = detectClaudeCodeToken();
+    const { detectClaudeCodeTokenAsync } = await import("./local-token-detect");
+    const local = await detectClaudeCodeTokenAsync();
+    ctrl.signal?.throwIfAborted();
     if (local) {
       ctrl.onProgress?.("Found Claude Code token, importing automatically");
       if (local.expires >= Date.now() + 60_000) {

@@ -78,19 +78,25 @@ describe("combo partial update and decision selector CLI", () => {
     for (const args of [
       ["--strategy", "jev", "--decision-provider", "decision", "--decision-model", "a/m1"],
       ["--strategy", "failover", "--decision-model", "a/m1"],
+      ["--strategy", "failover", "--jev-effort-mode", "client"],
     ]) {
       const r = runtime();
       expect(await handleComboCommand(["set", "auto", "--targets", "a/m1", ...args], r.deps)).toBe(2);
       expect(r.requests).toHaveLength(0);
     }
+    // A stored non-JEV combo is refused once its row is read, before any PUT.
+    const stored = runtime({ ...original, strategy: "failover", decisionProvider: null, decisionTimeoutMs: null });
+    expect(await handleComboCommand(["set", "auto", "--jev-effort-mode", "client"], stored.deps)).toBe(2);
+    expect(stored.requests.filter(request => request.method === "PUT")).toHaveLength(0);
   });
 
   test("strategy change removes all carried JEV settings", async () => {
     quiet();
-    const r = runtime({ ...original, decisionModel: "a/m1" });
+    const r = runtime({ ...original, decisionModel: "a/m1", jevEffortMode: "client" });
     expect(await handleComboCommand(["set", "auto", "--strategy", "failover"], r.deps)).toBe(0);
     expect(r.body()?.combo.strategy).toBe("failover");
-    for (const field of ["decisionProvider", "decisionModel", "decisionTimeoutMs"]) expect(r.body()?.combo).not.toHaveProperty(field);
+    for (const field of ["decisionProvider", "decisionModel", "decisionTimeoutMs", "decisionQuotaSignals",
+      "decisionQuotaTiers", "sessionPin", "jevEffortMode"]) expect(r.body()?.combo).not.toHaveProperty(field);
     expect(r.body()?.combo.targets).toEqual(original.targets);
   });
 

@@ -94,24 +94,24 @@ test("a Home tunnel refused by a stale remote forward keeps retrying and records
     expect(h.supervisor.status()[0]!.state).toEqual({
       kind: "failed", since: 11_500, reason: "forward", retryAt: 71_500, inFlight: false, detail: "remote_forward_conflict",
     });
-    // Every later attempt meets the same held port; the link keeps retrying on a doubling delay.
+    // Every later attempt meets the same held port; the Home keeps retrying every minute (#8470).
     h.at(71_500);
     h.clock.now = 72_000;
     await h.exitWith(2, STALE_FORWARD);
-    expect(h.supervisor.status()[0]!.state).toMatchObject({ kind: "failed", retryAt: 192_000, retries: 1 });
+    expect(h.supervisor.status()[0]!.state).toMatchObject({ kind: "failed", retryAt: 132_000, retries: 1 });
     const failing = dto(h.supervisor, store).links[0]!;
     expect(failing).toMatchObject({ state: "failed", reason: "forward" });
     expect(failing.tunnel).toEqual({
       attempt: 2,
-      nextRetryAt: new Date(192_000).toISOString(),
+      nextRetryAt: new Date(132_000).toISOString(),
       lastTransition: { from: "failed", to: "failed", at: new Date(72_000).toISOString(), cause: "remote_forward_conflict" },
       lastFailure: { cause: "remote_forward_conflict", at: new Date(72_000).toISOString() },
     });
     // sshd dropped the dead session; the next retry holds the port and outlives its grace.
-    h.at(192_000);
+    h.at(132_000);
     expect(dto(h.supervisor, store).links[0]!.tunnel?.nextRetryAt).toBeNull();
-    h.at(207_000);
-    expect(h.supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 207_000 });
+    h.at(147_000);
+    expect(h.supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 147_000 });
     expect(dto(h.supervisor, store).links[0]!.tunnel).toMatchObject({
       attempt: 0, nextRetryAt: null, lastTransition: { from: "failed", to: "connected", cause: null },
       lastFailure: { cause: "remote_forward_conflict" },
@@ -122,7 +122,7 @@ test("a Home tunnel refused by a stale remote forward keeps retrying and records
       ["connecting", "connected", "connected", 0, undefined],
       ["connected", "reconnecting", "network", 0, 1_000],
       ["reconnecting", "failed", "remote_forward_conflict", 1, 60_000],
-      ["failed", "failed", "remote_forward_conflict", 2, 120_000],
+      ["failed", "failed", "remote_forward_conflict", 2, 60_000],
       ["failed", "connected", "connected", 0, undefined],
     ]);
     expect(h.records.every(record => record.event === "tunnel_transition" && record.tunnelPort === 19002)).toBe(true);
@@ -141,7 +141,7 @@ test("a Home link without a listener port is retried instead of failing for good
     expect(h.children).toHaveLength(0);
     expect(h.supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 0, reason: "forward", retryAt: 60_000, inFlight: false });
     h.at(60_000);
-    expect(h.supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 0, reason: "forward", retryAt: 180_000, inFlight: false, retries: 1 });
+    expect(h.supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 0, reason: "forward", retryAt: 120_000, inFlight: false, retries: 1 });
     expect(h.records.map(record => record.outcome)).toEqual(["listener_unavailable", "listener_unavailable"]);
     // The listener comes back: the changed record starts a fresh attempt at once.
     h.setStore({ ...store, listenerPort: 19001 });

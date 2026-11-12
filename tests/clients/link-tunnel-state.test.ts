@@ -3,7 +3,9 @@ import {
   classifySshStderr,
   CLIENT_TUNNEL_RETRY_POLICY,
   dueForSpawn,
+  failedRetryDelayMs,
   FAILED_AFTER_MS,
+  HOME_TUNNEL_RETRY_POLICY,
   IDLE,
   nextDelayMs,
   reduceTunnel,
@@ -12,6 +14,25 @@ import {
 
 const POLICY = CLIENT_TUNNEL_RETRY_POLICY;
 const HOUR_MS = 60 * 60_000;
+
+test("#8470: the Home retries a timed-out or refused-forward Child every minute, and auth every five", () => {
+  // A Child that slept comes back inside a minute instead of waiting out a five-minute backoff.
+  // A sleeping host never reaches sshd, so these retries add no authentication attempts.
+  for (const reason of ["timeout", "forward"] as const) {
+    for (let retries = 0; retries <= 6; retries++) {
+      expect(failedRetryDelayMs(reason, retries, HOME_TUNNEL_RETRY_POLICY)).toBe(60_000);
+    }
+  }
+  // Authentication keeps its five-minute cadence: still no more than 12 attempts an hour.
+  for (let retries = 0; retries <= 6; retries++) {
+    expect(failedRetryDelayMs("auth", retries, HOME_TUNNEL_RETRY_POLICY)).toBe(5 * 60_000);
+  }
+  expect(HOUR_MS / failedRetryDelayMs("auth", 3, HOME_TUNNEL_RETRY_POLICY)!).toBe(12);
+  expect(failedRetryDelayMs("hostkey", 0, HOME_TUNNEL_RETRY_POLICY)).toBeUndefined();
+  // The Child's own tunnel keeps the doubling backoff.
+  expect([0, 1, 2, 3].map(retries => failedRetryDelayMs("timeout", retries, CLIENT_TUNNEL_RETRY_POLICY)))
+    .toEqual([60_000, 120_000, 240_000, 300_000]);
+});
 
 test("tunnel lifecycle reaches connected from idle", () => {
   let state = IDLE;

@@ -57,6 +57,7 @@ import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
+import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal";
 import {
   resolvePassthroughWebSearchBridgeAuth,
   planPassthroughWebSearchBridge,
@@ -642,7 +643,11 @@ export async function deliverPassthroughResponse(
         // "captures passthrough failed usage from its original bounded body exactly once").
         // Attaching a guard would be a second `.body` access and break that contract for no
         // gain, since the bounded reader owns settlement on this path.
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
+        // Only the plan-refusal cause is carried to this leg's row (#8352); a throwaway holder
+        // keeps the other diagnostics this path has never recorded off it.
+        const comboCause: Pick<typeof logCtx, "causeHint"> = {};
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause);
+        if (comboCause.causeHint) logCtx.causeHint = comboCause.causeHint;
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
@@ -665,6 +670,8 @@ export async function deliverPassthroughResponse(
         turnAdmissionLease: options.turnAdmissionLease,
       });
       if (policyRefusal) return policyRefusal;
+      // Meta's Muse Code refusal is a plan restriction, not a rejected credential (#8352).
+      stampMetaMusePlanRefusal(logCtx, upstreamResponse.status, errorText);
       return carryPolicyCandidateRefusal(upstreamResponse, carryProxyError(upstreamResponse, formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
