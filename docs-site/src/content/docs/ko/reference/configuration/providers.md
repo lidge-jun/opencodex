@@ -185,6 +185,8 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 레거시 불리언입니다. 더 새로운 필드가 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 로컬 실행 정책입니다. 기본값은 `off`입니다. `codex-sandbox`는 현재 `off`처럼 실패를 닫습니다. |
 
+네이티브 Responses에서는 같은 선택 설정이 라이프사이클 이벤트만 받은 뒤 정상 EOF로 끝난 경우에도 적용됩니다. 자기완결 요청과 교체 횟수 제한은 그대로 적용됩니다. 이 제한을 벗어난 요청은 검사하지 않으므로 스트림이 보류되지 않습니다. 직접 스트림은 업스트림이 아직 조용하더라도 200밀리초 안에 원본 응답 헤더를 받습니다. 그 헤더를 반환하기 전에 리셋이나 EOF가 발생하면 교체 응답의 헤더를 최대 15초(정지 시간 제한이 더 짧으면 그 시간)까지 기다리며, 클라이언트는 교체 응답을 그 응답의 상태와 헤더 그대로 받습니다. JSON으로 모으는 비스트리밍 요청과 콤보 대상은 응답을 모으거나 선택하기 전까지 클라이언트에 헤더가 전달되지 않으므로 헤더 선택을 같은 시간까지 기다릴 수 있습니다. 헤더를 반환한 뒤 교체 여부는 스트림이 어떻게 끝났는지에 따라 달라집니다. 읽기 오류는 리셋 경로의 기존 동작을 그대로 유지하여 교체 본문을 원본 헤더 뒤에 발행합니다. 라이프사이클 이벤트만 받은 뒤 정상 EOF로 끝난 경우는 같은 턴에 대한 다른 시도이므로 더 엄격합니다. 교체 응답은 커밋된 헤더와 상태, 상태 텍스트, content-type 미디어 타입, `openai-model`, `x-codex-turn-state`에서 일치해야 합니다. 변동성 및 홉 단위 헤더(`date`, 요청 id, `cf-ray`, `server-timing`, `x-ratelimit-*`, `openai-processing-ms`, `content-length`, `transfer-encoding`, `connection`, `keep-alive`)는 일치할 필요가 없습니다. 클라이언트가 이미 원본 헤더의 값을 갖고 있고 실제 업스트림은 시도마다 이 값을 바꾸기 때문입니다. 일치하지 않으면 원본 스트림과 그 오류를 유지합니다. 그 뒤에도 검사 중인 직접 스트림은 헤더와 함께 SSE keepalive 주석을 받고 그 뒤 15초마다 다시 받으며, 콤보 사전 검사는 응답을 선택할 때까지 이 주석을 보류합니다.
+
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 
 
