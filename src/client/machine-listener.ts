@@ -284,10 +284,12 @@ export function startMachineListener(
           const status = projectClientLinkChild(sidecar, deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
           // Opt-in (#3023): this Child's link as a row, with the bytes its relay carried and its SSH path.
           if (url.searchParams.get("traffic") === "1" && connection.link) {
-            status.links = [projectClientLinkRow({ ...connection, link: connection.link }, sidecar, status.child)];
+            const { row, sshAlias } = projectClientLinkRow({ ...connection, link: connection.link }, sidecar, status.child, Date.now());
+            status.links = [row];
             pathResolver ??= createLinkPathResolver({ runner: () => deps.linkSshRunner ?? createSshRunner() });
             const resolver = pathResolver;
-            await attachLinkTraffic(status, { traffic: id => childLinkTraffic.snapshot(id), resolvePath: alias => resolver.resolve(alias) });
+            await attachLinkTraffic(status, { traffic: id => childLinkTraffic.snapshot(id),
+              resolvePath: alias => alias === sshAlias ? resolver.resolve(alias) : Promise.resolve({ via: "unknown" }) });
           }
           return Response.json({ ...status, joinAvailable: false }, { headers: { "Cache-Control": "no-store" } });
         }

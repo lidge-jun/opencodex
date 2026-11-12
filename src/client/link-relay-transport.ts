@@ -1,6 +1,6 @@
 import { Agent, request, type IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import { serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { clearableDeadline } from "../lib/abort";
@@ -145,11 +145,19 @@ async function responseOnConnection(
   if (encoding && encoding !== "identity" && !decoder) {
     throw new Error("unsupported link response encoding");
   }
+  // Counted as the bytes leave the socket's stream, before any adapter queue or decoder, so a
+  // cancel after they were read still counts them; pipe() keeps the caller's backpressure.
+  const counter = flow ? new Transform({
+    transform(chunk: Buffer, _encoding, done) { flow.fromHome(chunk.byteLength); done(null, chunk); },
+  }) : undefined;
+  if (counter) {
+    incoming.on("error", error => counter.destroy(error));
+    source = incoming.pipe(counter);
+  }
   if (decoder) {
-    incoming.on("error", error => decoder.destroy(error));
-    // pipe() already reads in flowing mode, so observing its chunks changes no backpressure.
-    if (flow) incoming.on("data", (chunk: Buffer) => flow.fromHome(chunk.byteLength));
-    source = incoming.pipe(decoder);
+    const upstream = source;
+    upstream.on("error", error => decoder.destroy(error));
+    source = upstream.pipe(decoder);
   }
   const reader = (Readable.toWeb(source) as unknown as ReadableStream<Uint8Array>).getReader();
   let finished = false;
@@ -157,6 +165,7 @@ async function responseOnConnection(
     if (finished) return agent.close();
     finished = true;
     if (source !== incoming) source.destroy();
+    counter?.destroy();
     await agent.close();
     try { reader.releaseLock(); } catch { /* a cancelled read may still be settling */ }
   };
@@ -165,10 +174,7 @@ async function responseOnConnection(
       try {
         const next = await reader.read();
         if (next.done) { flow?.end(true); await finish(); controller.close(); }
-        else {
-          if (!decoder) flow?.fromHome(next.value.byteLength);
-          controller.enqueue(next.value);
-        }
+        else controller.enqueue(next.value);
       } catch (error) { flow?.end(false); await finish(); controller.error(error); }
     },
     async cancel(reason) {
@@ -177,6 +183,10 @@ async function responseOnConnection(
     },
   }, { highWaterMark: 0 }), { status, headers });
 }
+
+/** Test seam: the response half alone, over any readable that looks like an IncomingMessage. */
+export const linkResponseOnConnectionForTests = (incoming: IncomingMessage, close: () => Promise<void>, method: string, flow?: LinkTrafficFlow) =>
+  responseOnConnection(incoming, { close } as SingleConnectionAgent, method, flow);
 
 let peerReport: Record<string, string> | undefined;
 

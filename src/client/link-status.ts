@@ -46,24 +46,30 @@ function childState(sidecar: ClientLinkSidecarRead, supervisor: ClientLinkSuperv
 
 /**
  * The connected Child's own link as a status row, for `?traffic=1` (#3023), which attaches its
- * counters and path to it. A Child that initiated the link names its SSH alias from the sidecar; a
- * Home-initiated Child has no sidecar, owns no tunnel and reads idle since it connected, as the
- * management projection reads it. Parity fields are the Home's view and stay empty here.
+ * counters and path to it. Only a Child-initiated link writes a sidecar, so:
+ * - a sidecar for this link names the SSH alias, the direction and the tunnel state;
+ * - an unreadable sidecar, or one naming another link, leaves the alias unknown and the row failed
+ *   (`sidecar_invalid`, `sidecar_mismatch`), and nothing is resolved for it;
+ * - no sidecar is a Home-initiated link, which owns no tunnel here and reads idle since it
+ *   connected, as the management projection reads it.
+ * Parity fields are the Home's view and stay empty. `sshAlias` is the alias this Child may resolve.
  */
 export function projectClientLinkRow(
   connection: Pick<OcxClientConnectionConfig, "serverUrl" | "connectedAt"> & { link: { linkId: string; tunnelPort: number } },
   sidecar: ClientLinkSidecarRead,
   child: LinkStatusDto["child"],
-): LinkStatusDto["links"][number] {
-  const own = sidecar && sidecar !== "invalid" && sidecar.linkId === connection.link.linkId ? sidecar : null;
-  return {
-    id: connection.link.linkId,
-    alias: own?.alias ?? child?.alias ?? connection.serverUrl,
-    direction: own ? "client-initiated" : "hub-initiated",
-    ...(own && child ? { state: child.state, since: child.since, reason: child.reason } : { state: "idle" as const, since: connection.connectedAt, reason: null }),
-    tunnelPort: connection.link.tunnelPort,
-    ...EMPTY_LINK_CHILD_PARITY,
-  };
+  now: number,
+): { row: LinkStatusDto["links"][number]; sshAlias: string | null } {
+  const base = { id: connection.link.linkId, tunnelPort: connection.link.tunnelPort, ...EMPTY_LINK_CHILD_PARITY };
+  if (sidecar === null) {
+    return { row: { ...base, alias: connection.serverUrl, direction: "hub-initiated", state: "idle", since: connection.connectedAt, reason: null }, sshAlias: null };
+  }
+  if (sidecar === "invalid" || sidecar.linkId !== connection.link.linkId) {
+    const reason = sidecar === "invalid" ? "sidecar_invalid" : "sidecar_mismatch";
+    return { row: { ...base, alias: "unknown", direction: "client-initiated", state: "failed", since: new Date(now).toISOString(), reason }, sshAlias: null };
+  }
+  const state = child ?? { state: "idle" as const, since: new Date(now).toISOString(), reason: null };
+  return { row: { ...base, alias: sidecar.alias, direction: "client-initiated", state: state.state, since: state.since, reason: state.reason }, sshAlias: sidecar.alias };
 }
 
 /** Only client-owned evidence can establish who owns the tunnel. Unreadable evidence stays unknown. */
