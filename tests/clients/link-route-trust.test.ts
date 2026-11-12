@@ -21,7 +21,6 @@ test.each([
   ["the alias with another key", "pen-alpha ssh-ed25519 " + KEY_B, "pin_mismatch"],
   ["two lines for the alias", "pen-alpha ssh-ed25519 " + KEY_A + "\npen-alpha ssh-rsa " + KEY_B, "pin_mismatch"],
   ["a case variant with another key", "pen-alpha ssh-ed25519 " + KEY_A + "\nPEN-ALPHA ssh-ed25519 " + KEY_B, "pin_mismatch"],
-  ["a case variant with the same key", "pen-alpha ssh-ed25519 " + KEY_A + "\nPen-Alpha ssh-ed25519 " + KEY_A, "pin_mismatch"],
   ["a wildcard line", "pen-alpha ssh-ed25519 " + KEY_A + "\n* ssh-ed25519 " + KEY_B, "trust_file_unexpected"],
   ["a host list", "pen-alpha,other ssh-ed25519 " + KEY_A, "trust_file_unexpected"],
   ["a hashed line", "|1|abc=|def= ssh-ed25519 " + KEY_B + "\npen-alpha ssh-ed25519 " + KEY_A, "trust_file_unexpected"],
@@ -82,4 +81,21 @@ test("removing an alias's lines also removes a hashed line for it, and keeps ano
   const mine = hashedHost("pen-alpha") + " ssh-ed25519 " + KEY_A;
   const theirs = hashedHost("beta-host", Buffer.alloc(20, 9)) + " ssh-ed25519 " + KEY_B;
   expect(withoutAliasLines(mine + "\n" + theirs + "\n", "PEN-ALPHA")).toEqual([theirs]);
+});
+
+test("a case variant with the same key is the same pin", () => {
+  expect(checkRouteTrust("pen-alpha ssh-ed25519 " + KEY_A + "\nPen-Alpha ssh-ed25519 " + KEY_A, "pen-alpha", FP_A)).toEqual({ ok: true, line: "pen-alpha ssh-ed25519 " + KEY_A });
+});
+
+test("several lines for the alias pass when they all carry the pinned key, as legacy files hold them", () => {
+  // Releases before 2.89 appended a hashed line on every confirmation, and a later release appends a plain one beside it.
+  const first = hashedHost("pen-alpha") + " ssh-ed25519 " + KEY_A;
+  const second = hashedHost("pen-alpha", Buffer.alloc(20, 3)) + " ssh-ed25519 " + KEY_A;
+  const plain = "pen-alpha ssh-ed25519 " + KEY_A;
+  expect(checkRouteTrust(first + "\n" + second + "\n", "pen-alpha", FP_A)).toEqual({ ok: true, line: first });
+  expect(checkRouteTrust(first + "\n" + plain + "\n", "pen-alpha", FP_A)).toEqual({ ok: true, line: first });
+  expect(confirmedLineTrust(first + "\n" + plain + "\n", "pen-alpha", plain)).toBe("trusted");
+  // A second, different key for the alias still fails, whatever its form.
+  expect(checkRouteTrust(first + "\n" + hashedHost("pen-alpha", Buffer.alloc(20, 4)) + " ssh-ed25519 " + KEY_B + "\n", "pen-alpha", FP_A)).toEqual({ ok: false, code: "pin_mismatch" });
+  expect(checkRouteTrust(first + "\npen-alpha ssh-rsa " + KEY_A + "\n", "pen-alpha", FP_A)).toEqual({ ok: false, code: "pin_mismatch" });
 });

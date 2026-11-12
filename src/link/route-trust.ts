@@ -5,8 +5,8 @@
  * on a Home whose ssh_config hashes known_hosts. With HostKeyAlias=<alias>, OpenSSH looks a key up
  * under the alias alone: it compares plain names without case, and it lowercases the alias before
  * hashing it, so a hashed line matches exactly when it is HMAC-SHA1(salt, lowercased alias). A link
- * trusts exactly its record's key only when one line matches the alias that way and no line is a
- * pattern, list, [host]:port form or marker that could match it too.
+ * trusts exactly its record's key only when every line matching the alias that way carries that key
+ * and no line is a pattern, list, [host]:port form or marker that could match it too.
  */
 import { createHash, createHmac } from "node:crypto";
 import { isSshAlias } from "./ssh-argv";
@@ -40,9 +40,10 @@ function meaningful(line: string): boolean {
 }
 
 /**
- * Whole-file check, then exactly one match for alias (plain without case, or hashed): the one line
- * OpenSSH can use for it. Any pattern, host list, [host]:port form, marker or malformed hashed field
- * fails the whole file; a well-formed hashed line for another name is another host's line.
+ * Whole-file check, then the lines that match alias (plain without case, or hashed), which must all
+ * carry one key: the key OpenSSH will accept for it. Any pattern, host list, [host]:port form, marker
+ * or malformed hashed field fails the whole file; a well-formed hashed line for another name is
+ * another host's line.
  */
 export function aliasTrustLine(text: string, alias: string): RouteTrustCheck {
   const lines = text.split(/\r?\n/).filter(meaningful);
@@ -52,7 +53,12 @@ export function aliasTrustLine(text: string, alias: string): RouteTrustCheck {
     if (!host || !type || !key || !(isSshAlias(host) || HASHED.test(host)) || !KEY_TYPE.test(type) || !BASE64.test(key)) return { ok: false, code: "trust_file_unexpected" };
   }
   const matches = lines.filter(line => hostMatches(hostField(line), alias));
-  return matches.length === 1 ? { ok: true, line: matches[0]!.trim() } : { ok: false, code: "pin_mismatch" };
+  if (matches.length === 0) return { ok: false, code: "pin_mismatch" };
+  // OpenSSH accepts any matching line, so several lines are one pin only when they all carry the same
+  // key: legacy files hold a hashed line per confirmation, or a hashed line beside a later plain one.
+  const keyOf = (line: string) => line.trim().split(/\s+/).slice(1, 3).join(" ");
+  const pinned = keyOf(matches[0]!);
+  return matches.every(line => keyOf(line) === pinned) ? { ok: true, line: matches[0]!.trim() } : { ok: false, code: "pin_mismatch" };
 }
 
 /** aliasTrustLine, and that one line's key has the pinned fingerprint. */

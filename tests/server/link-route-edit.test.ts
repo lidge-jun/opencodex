@@ -309,3 +309,13 @@ test("a link whose pin an older release recorded hashed still proves and stores 
   expect(response).toEqual({ status: 200, body: { linkId: LINK, pin: "pen-alpha", routes: ["alpha-lan", "pen-alpha"] } });
   expect(h.probes[0]!.knownHostsText).toBe(hashed + "\n");
 });
+
+test("a pin recorded hashed and later again in plain form, with one key, still proves and stores a new route", async () => {
+  const salt = Buffer.alloc(20, 6);
+  const hashed = "|1|" + salt.toString("base64") + "|" + createHmac("sha1", salt).update("pen-alpha").digest("base64") + " ssh-ed25519 " + KEY;
+  const h = harness({ knownHosts: hashed + "\npen-alpha ssh-ed25519 " + KEY + "\n" });
+  const response = await h.edit({ op: "add", route: "alpha-lan" });
+  expect(response).toEqual({ status: 200, body: { linkId: LINK, pin: "pen-alpha", routes: ["alpha-lan", "pen-alpha"] } });
+  // The probe trusts the one key, from one line.
+  expect(h.probes[0]!.knownHostsText).toBe(hashed + "\n");
+});
