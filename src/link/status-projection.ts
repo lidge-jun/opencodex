@@ -10,6 +10,7 @@ import { isLinkIdle, type LinkActivitySnapshot } from "./child-activity";
 import { catalogVerdict, type CatalogPull, type CatalogRevision, type CatalogState } from "./child-catalog-freshness";
 import type { ChildObservation, ChildOp, ChildOperationSummary } from "./child-observations";
 import type { InstallKind, UpdateRoute } from "./child-update-contract";
+import type { LinkHoldsSummary } from "./ws-activity-holds";
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 
 export type LinkWireState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
@@ -99,6 +100,8 @@ export interface LinkChildOpsStatus {
   activity: { idle: boolean; inFlight: number; lastDataEndAt: number | null };
   activeJob: { jobId: string; op: ChildOp; state: "queued" | "running" } | null;
   lastOperation: ChildOperationSummary | null;
+  /** Link WebSocket activity holds and their reasons (D8); present only while something holds the link. */
+  holds?: LinkHoldsSummary;
 }
 
 export interface LinkChildOpsSources {
@@ -106,6 +109,8 @@ export interface LinkChildOpsSources {
   peerVersion(linkId: string): string | null; observation(linkId: string): ChildObservation | null;
   activity(linkId: string): LinkActivitySnapshot | null; catalogPull(linkId: string): CatalogPull | null;
   revision: CatalogRevision | null; activeJob(linkId: string): LinkChildOpsStatus["activeJob"];
+  /** Optional: a Home without link WebSocket holds omits the key on every row. */
+  holds?(linkId: string): LinkHoldsSummary | null;
 }
 
 function versionSkew(version: string | null, homeVersion: string): LinkChildOpsStatus["versionSkew"] {
@@ -139,6 +144,7 @@ export function attachLinkChildOps(dto: LinkStatusDto, sources: LinkChildOpsSour
     const ocxChild = installKind === "ocx-child" || link.childKind === "ephemeral";
     const pull = latestPull(sources.catalogPull(link.id), cached);
     const snapshot = sources.activity(link.id);
+    const held = sources.holds?.(link.id) ?? null;
     link.child = {
       homeVersion: sources.homeVersion, runningVersion, installedVersion, installKind,
       versionSkew: ocxChild ? "unknown" : versionSkew(installedVersion ?? runningVersion, sources.homeVersion),
@@ -150,6 +156,7 @@ export function attachLinkChildOps(dto: LinkStatusDto, sources: LinkChildOpsSour
         : { idle: false, inFlight: 0, lastDataEndAt: null },
       activeJob: sources.activeJob(link.id),
       lastOperation: cached?.lastOperation ?? null,
+      ...(held ? { holds: held } : {}),
     };
   }
   return dto;

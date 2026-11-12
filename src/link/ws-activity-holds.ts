@@ -21,6 +21,16 @@ import { linkDir } from "./paths";
 
 export type UnknownReason = "crash" | "unreadable" | "overflow" | "write-failed" | "key-rotated" | "key-unavailable";
 
+/** Why a hold keeps a link in flight (the operator's view, D8). */
+export type HoldReason = "pending-results" | "running-turn" | "running-unknown" | "untracked" | "no-thread";
+
+/** One hold as the operator sees it: reasons and counts only, no hash, key or id. */
+export interface HoldSummary { since: number; reasons: HoldReason[]; pendingResults: number; runningTurns: number; runningUnknown: number }
+
+export interface LinkHoldsSummary { holds: HoldSummary[]; unknown: UnknownReason | null }
+
+export type ClearHoldsResult = { ok: true; cleared: LinkHoldsSummary | null } | { ok: false; reason: "write-failed" | "links-unreadable" };
+
 export interface HoldInput {
   /** HMAC of the socket's own thread id; null when it had none (operator only). */
   threadHash: string | null;
@@ -194,11 +204,12 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
 
   const total = (): number => [...links.values()].reduce((sum, value) => sum + value.holds.length, 0);
 
-  const persist = (): boolean => {
+  /** Writes every link's holds; `without` leaves one link out (the operator's clear writes before it forgets). */
+  const persist = (without?: string): boolean => {
     let id: string | null = null;
     try { id = key ? keyId() : null; } catch { return false; }
     const out: HoldsFile = { version: 1, keyId: id, links: {} };
-    for (const [linkId, value] of links) if (value.holds.length || value.unknown) out.links[linkId] = value;
+    for (const [linkId, value] of links) if (linkId !== without && (value.holds.length || value.unknown)) out.links[linkId] = value;
     return write(HOLDS, out);
   };
 
@@ -345,10 +356,41 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
       return links.get(linkId)?.holds.some(hold => hold.threadHash !== null && hold.pendingKeys.length > 0) ?? false;
     },
 
-    /** The operator's override (D8). */
-    clear(linkId: string): boolean {
+    /** The operator's view of one link (D8); null when nothing holds it. */
+    summary(linkId: string): LinkHoldsSummary | null {
+      const value = links.get(linkId);
+      const unknown = value?.unknown ?? allUnknown;
+      if (!value?.holds.length && !unknown) return null;
+      return {
+        holds: (value?.holds ?? []).map(hold => {
+          const reasons: HoldReason[] = [];
+          if (hold.pendingKeys.length) reasons.push("pending-results");
+          if (hold.marks.length) reasons.push("running-turn");
+          if (hold.runningMarks) reasons.push("running-unknown");
+          if (hold.untracked) reasons.push("untracked");
+          if (hold.threadHash === null) reasons.push("no-thread");
+          return { since: hold.createdAt, reasons, pendingResults: hold.pendingKeys.length, runningTurns: hold.marks.length, runningUnknown: hold.runningMarks };
+        }),
+        unknown,
+      };
+    },
+
+    /**
+     * The operator's override (D8): forgets every hold and the unknown state of one link, durably. The
+     * file is written without the link first; memory changes only once that write succeeded. An
+     * all-links unknown state (links unreadable at start) is first written per link, which needs the
+     * links to be listable; until then nothing is cleared.
+     */
+    clear(linkId: string): ClearHoldsResult {
+      const cleared = this.summary(linkId);
+      if (!cleared) return { ok: true, cleared: null };
+      if (allUnknown) {
+        if (!markAll(allUnknown)) return { ok: false, reason: "links-unreadable" };
+        allUnknown = null;
+      }
+      if (!persist(linkId)) return { ok: false, reason: "write-failed" };
       links.delete(linkId);
-      return persist();
+      return { ok: true, cleared };
     },
 
     removeLink(linkId: string): void {

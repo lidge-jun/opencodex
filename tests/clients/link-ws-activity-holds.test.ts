@@ -63,7 +63,7 @@ describe("fence and inertness", () => {
     expect(JSON.parse(readFileSync(join(dir, "ws-run-state.json"), "utf8"))).toMatchObject({ state: "clean" });
     const again = store();
     expect(again.describe(B).unknown).toBe("crash");
-    expect(again.clear(B)).toBe(true);
+    expect(again.clear(B).ok).toBe(true);
     expect(store().count(B)).toBe(0);
     expect(store().describe(A).unknown).toBe("crash");
   });
@@ -117,7 +117,7 @@ describe("holds", () => {
     holds.add(A, hold(holds, "thread-a", ["k1"], { runningMarks: 1 }));
     holds.observe(A, holds.threadHash("thread-a"), ["k1"]);
     expect(holds.count(A)).toBe(3);
-    expect(holds.clear(A)).toBe(true);
+    expect(holds.clear(A).ok).toBe(true);
     expect(holds.count(A)).toBe(0);
   });
 

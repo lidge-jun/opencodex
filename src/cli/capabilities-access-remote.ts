@@ -240,4 +240,13 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
     mutates: true, json: "payload",
     details: ["Without flags it reads the policy; with flags it changes only those knobs. Stored in <configDir>/link/child-policy.json on the Home, never in config.json. An invalid file turns automatic catalog fan-out and updates off; saving merges onto that, so pass --catalog-fanout auto and an --updates mode to turn them back on.", "--updates stores the update mode only; this release starts no automatic update (notify and auto-when-idle take effect when the automatic update sweep ships). Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it."],
   },
+  {
+    command: ["link", "activity", "clear"], summary: "Clear one link's held activity so automatic and activity-gated Child restarts may run again.",
+    usage: "ocx link activity clear --link-id <id> [--json]",
+    routes: [{ method: "POST", path: "/api/link/children/activity/clear" }],
+    flags: [{ name: "--link-id", value: "string", required: true, summary: "The link whose holds to clear." },
+      { name: "--json", value: "boolean", summary: "Emit {linkId, cleared} as JSON." }],
+    mutates: true, json: "payload",
+    details: ["A link Responses WebSocket that closes while Codex was busy leaves a hold, and so does a Home that stopped without a clean shutdown; a hold keeps the Child in flight so automatic and activity-gated restarts wait. ocx link status lists each held link's holds and their reasons under child.holds. Holds that only the operator can release (an unknown running turn, untracked results, no thread id, or an unknown state after a crash) end here.", "Clears every hold of that one link and nothing else; nothing clears holds automatically. The holds file is saved before anything is forgotten, so a failed save clears nothing (503). It does not touch live sockets or relayed requests."],
+  },
 ];

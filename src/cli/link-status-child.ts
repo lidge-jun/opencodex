@@ -12,12 +12,16 @@ export interface LinkChildCodexView {
  * A row's `child` block as this CLI reads it. Tolerant (G1): a later Home may add keys or enum values, so unknown keys
  * are dropped and an unknown enum value reads "unknown"; a known key with the wrong type is still rejected.
  */
-export type LinkChildOpsView = Omit<LinkChildOpsStatus, "update" | "codex" | "activeJob" | "lastOperation"> & {
+export type LinkChildOpsView = Omit<LinkChildOpsStatus, "update" | "codex" | "activeJob" | "lastOperation" | "holds"> & {
   update: { route: UpdateRoute | "unknown" | null; reason: string | null; observedAt: string | null };
   codex: LinkChildCodexView | null;
   activeJob: { jobId: string; op: ChildOp | string; state: "queued" | "running" | "unknown" } | null;
   lastOperation: (Omit<ChildOperationSummary, "op"> & { op: ChildOp | string }) | null;
+  /** Link WebSocket activity holds (D8); absent while nothing holds the link. Unknown reasons read "unknown". */
+  holds?: LinkHoldsView;
 };
+
+export interface LinkHoldsView { holds: Array<{ since: number; reasons: string[]; pendingResults: number; runningTurns: number; runningUnknown: number }>; unknown: string | null }
 
 const INSTALL_KINDS: ReadonlySet<string> = new Set<InstallKind>(["npm", "pnpm", "bun", "source", "mise", "desktop-app", "goat", "standalone", "ocx-child", "unknown"]);
 const ROUTES: ReadonlySet<string> = new Set<UpdateRoute>(["orchestrated", "desktop-request", "owner-action", "replant", "none"]);
@@ -75,6 +79,7 @@ export function validateChildOps(value: unknown, index: number): LinkChildOpsVie
         finishedAt: text(last.finishedAt, "lastOperation.finishedAt"),
       };
     })(),
+    ...(child.holds === undefined ? {} : { holds: validateHolds(child.holds, fail) }),
   };
 }
 
@@ -91,4 +96,22 @@ function validateCodex(codex: Record<string, unknown>, fail: (field: string) => 
   if (codex.catalogSyncedAt !== undefined) view.catalogSyncedAt = nullableCount(codex.catalogSyncedAt, "codex.catalogSyncedAt");
   if (codex.reportedAt !== undefined) view.reportedAt = nullableCount(codex.reportedAt, "codex.reportedAt");
   return view;
+}
+
+const HOLD_REASONS: ReadonlySet<string> = new Set(["pending-results", "running-turn", "running-unknown", "untracked", "no-thread"]);
+
+/** The tolerant reader of a row's `child.holds` (G1): unknown reasons read "unknown"; a wrong type is rejected. */
+function validateHolds(value: unknown, fail: (field: string) => never): LinkHoldsView {
+  if (!isRecord(value) || !Array.isArray(value.holds)) return fail("holds");
+  const count = (target: unknown, field: string): number => typeof target === "number" && Number.isFinite(target) && target >= 0 ? target : fail(field);
+  return {
+    holds: value.holds.map((raw, index) => {
+      if (!isRecord(raw) || !Array.isArray(raw.reasons)) return fail(`holds.${index}`);
+      return { since: count(raw.since, `holds.${index}.since`),
+        reasons: raw.reasons.map(reason => typeof reason === "string" && HOLD_REASONS.has(reason) ? reason : "unknown"),
+        pendingResults: count(raw.pendingResults, `holds.${index}.pendingResults`), runningTurns: count(raw.runningTurns, `holds.${index}.runningTurns`),
+        runningUnknown: count(raw.runningUnknown, `holds.${index}.runningUnknown`) };
+    }),
+    unknown: value.unknown === null ? null : typeof value.unknown === "string" && value.unknown.length <= 64 ? value.unknown : fail("holds.unknown"),
+  };
 }

@@ -141,7 +141,33 @@ export function attachLinkChildOpsForState(dto: LinkStatusDto, state: LinkRouteS
     catalogPull: linkId => state.listener.catalogPull?.(linkId) ?? null,
     // The shared engine: a job the wp5 scheduler started shows on a status read that never submitted one.
     activeJob: linkId => childOpsEngineFor(state).activeJob(linkId),
+    // D8: present only on a row whose link WebSocket activity holds keep it in flight.
+    holds: linkId => state.listener.linkHolds?.(linkId) ?? null,
   });
+}
+
+/**
+ * D8: the operator's clear of one link's WebSocket activity holds, including an unknown state left by a crash. Never
+ * automatic. Exactly {linkId}; the link must exist in links.json. The holds file is written before anything is forgotten.
+ */
+async function clearActivityHolds(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
+  if (ctx.config.runtimeRole === "client") return fail("runtime_role_client", "A Child runtime does not operate other Children.", 409);
+  const body = await readManagementJsonBodyOr(ctx.req, null);
+  if (!isRecord(body) || Object.keys(body).some(key => key !== "linkId") || typeof body.linkId !== "string" || !LINK_ID.test(body.linkId)) {
+    return fail("invalid_body", "The body must be exactly {linkId}.", 400);
+  }
+  const linkId = body.linkId;
+  let store: LinkStore;
+  try { store = readStoreFor(ctx); } catch { return fail("link_unavailable", "The link store could not be read.", 503); }
+  if (!store.links.some(link => link.id === linkId)) return fail("link_not_found", "The link was not found.", 404);
+  const result = state.listener.clearLinkHolds?.(linkId) ?? { ok: true as const, cleared: null };
+  if (!result.ok) {
+    return result.reason === "links-unreadable"
+      ? fail("link_unavailable", "The links could not be listed, so every link stays held; try again once links.json is readable.", 503)
+      : fail("activity_holds_write_failed", "The activity holds could not be saved; nothing was cleared.", 503);
+  }
+  if (result.cleared) console.log(`[link] activity holds cleared by the operator linkId=${linkId} holds=${result.cleared.holds.length} unknown=${result.cleared.unknown ?? "none"}`);
+  return Response.json({ linkId, cleared: result.cleared }, { headers: NO_STORE });
 }
 
 export async function handleLinkChildOpsRoutes(ctx: ManagementContext, state: LinkRouteState): Promise<Response | null> {
@@ -168,6 +194,10 @@ export async function handleLinkChildOpsRoutes(ctx: ManagementContext, state: Li
     if (!patch) return fail("invalid_body", "Send one or more of catalogFanout, childCodexRestart, updates, idleAfterMs with valid values.", 400);
     try { return Response.json({ policy: updateChildPolicy(patch), warning: null }, { headers: NO_STORE }); }
     catch { return fail("policy_write_failed", "The Child policy could not be saved.", 503); }
+  }
+  // D8: the operator clears one link's WebSocket activity holds.
+  if (url.pathname === "/api/link/children/activity/clear" && req.method === "POST") {
+    return clearActivityHolds(ctx, state);
   }
   const jobPath = req.method === "GET" ? JOB_PATH.exec(path) : null;
   if (jobPath) {

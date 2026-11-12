@@ -43,6 +43,7 @@ export const LINK_CHILD_OPS_USAGE = [
   "  ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]",
   "  ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]",
   "  ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]",
+  "  ocx link activity clear --link-id <id> [--json]",
 ] as const;
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -281,3 +282,29 @@ export async function runLinkPolicy(args: string[], deps: LinkCliDeps, request: 
     ...(read.warning ? ["The policy file is invalid; automatic catalog fan-out and updates are off. To turn them back on, pass --catalog-fanout auto and an --updates mode; a setting you do not name stays off."] : []),
   ]);
 }
+
+
+/**
+ * `ocx link activity clear --link-id <id>` (D8): the operator forgets one link's WebSocket activity holds, including an
+ * unknown state left by a Home crash, so automatic and activity-gated Child restarts may run again. Never automatic.
+ */
+export async function runLinkActivity(args: string[], deps: LinkCliDeps, request: LinkRequest, usage: string): Promise<void> {
+  const verb = args.shift();
+  if (verb !== "clear") throw new CliUsageError("link activity requires: clear --link-id <id>", usage);
+  const json = takeJsonFlag(args);
+  const linkId = takeOption(args, "--link-id");
+  if (!linkId || !LINK_ID.test(linkId)) throw new CliUsageError("link activity clear requires a valid --link-id", usage);
+  rejectArgs(args, usage);
+  let response: unknown;
+  try {
+    response = await request<unknown>("/api/link/children/activity/clear", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ linkId }) }, deps);
+  } catch (error) { childOpsRefusal(error, null); }
+  if (!isRecord(response) || response.linkId !== linkId || (response.cleared !== null && !isRecord(response.cleared))) throw new Error("invalid link API response: activity clear");
+  const cleared = response.cleared as { holds?: unknown; unknown?: unknown } | null;
+  const holds = cleared && Array.isArray(cleared.holds) ? cleared.holds.length : 0;
+  const unknown = cleared && typeof cleared.unknown === "string" ? cleared.unknown : null;
+  printData({ linkId, cleared }, json, [cleared === null
+    ? `Nothing held ${linkId}.`
+    : `Cleared ${holds} activity hold${holds === 1 ? "" : "s"}${unknown ? ` and the unknown state (${unknown})` : ""} on ${linkId}; automatic and activity-gated restarts of this Child may run again.`]);
+}
+

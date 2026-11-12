@@ -39,6 +39,10 @@ export interface LinkRouteListener {
   linkActivity?(linkId: string, now: number): import("../../link/child-activity").LinkActivitySnapshot;
   /** Optional: closes the link's Responses WebSockets after a revoke commits (route fakes omit it). */
   closeLinkSockets?(linkId: string): number;
+  /** Optional: the link's WebSocket activity holds and their reasons; null when nothing holds it (D8). */
+  linkHolds?(linkId: string): import("../../link/ws-activity-holds").LinkHoldsSummary | null;
+  /** Optional: the operator's clear of one link's activity holds (D8). */
+  clearLinkHolds?(linkId: string): import("../../link/ws-activity-holds").ClearHoldsResult;
   /** Optional: without it only the cached pull in child-observations.json is known. */
   catalogPull?(linkId: string): import("../../link/child-catalog-freshness").CatalogPull | null;
   /** Optional: persist pulls held inside the recorder's 30 s write window (best effort). */

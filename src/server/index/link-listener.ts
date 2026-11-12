@@ -8,7 +8,7 @@ import { createLinkWebsocketGate, marksResent, upstreamCompleted, type LinkWebso
 import type { StoredMark } from "../../link/ws-activity-holds";
 import { LINK_TURN_HEADER, registerLinkTurnToken, releaseLinkTurnToken } from "../link-turn";
 import { LINK_WS_LIMITS, linkWebsocketTransportReady } from "./link-websocket-limits";
-import { createActivityHolds } from "../../link/ws-activity-holds";
+import { createActivityHolds, type ClearHoldsResult, type LinkHoldsSummary } from "../../link/ws-activity-holds";
 import { resultKeysOf } from "../../codex/websocket-activity";
 import { dirname } from "node:path";
 import {
@@ -81,6 +81,10 @@ export interface LinkListenerLifecycle<T> {
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
   /** The Home's own revoke path closes this link's WebSockets (4401) in the same task. */
   closeLinkSockets(linkId: string): number;
+  /** The link's WebSocket activity holds and their reasons; null when nothing holds it (D8). */
+  linkHolds(linkId: string): LinkHoldsSummary | null;
+  /** The operator's clear of one link's activity holds (D8); never called automatically. */
+  clearLinkHolds(linkId: string): ClearHoldsResult;
   /** Resolves once relayed requests already seen have been checked against activity holds. */
   activityHoldsSettled(): Promise<void>;
   /** A Child read a whole 200 `GET /v1/catalog` body through the relay. */
@@ -330,6 +334,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     linkActivity: (linkId, now) => activity.snapshot(linkId, now),
     // Only the Home's link removal calls this: the link's sockets close and its holds go with it.
     closeLinkSockets: linkId => { const closed = websocketGate.closeLink(linkId); holds.removeLink(linkId); return closed; },
+    linkHolds: linkId => holds.summary(linkId),
+    clearLinkHolds: linkId => holds.clear(linkId),
     async activityHoldsSettled() { await Promise.all([...holdObservations]); },
     onCatalogServed(listener) {
       catalogServedListeners.add(listener);

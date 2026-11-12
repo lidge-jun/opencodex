@@ -11,7 +11,7 @@ import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
-import { LINK_CHILD_OPS_USAGE, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
+import { LINK_CHILD_OPS_USAGE, runLinkActivity, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
 import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
 import { validateChildOps, type LinkChildOpsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
@@ -420,7 +420,8 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "update" || command === "sync" || command === "restart-codex") verdictExit = await runLinkChildOp(command, args, deps, linkRequest, LINK_USAGE);
     else if (command === "capture") await runLinkCapture(args, deps, LINK_USAGE);
     else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, cleanup, check, update, sync, restart-codex, capture, policy", LINK_USAGE);
+    else if (command === "activity") await runLinkActivity(args, deps, linkRequest, LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
   });
   return code === 0 ? verdictExit : code;
 }
