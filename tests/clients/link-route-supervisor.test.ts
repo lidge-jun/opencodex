@@ -127,6 +127,8 @@ function harness(options: {
   return {
     supervisor, runs, tunnels, kills, proofs, removed,
     advance: async (ms: number) => { now += ms; tick(); await flush(); },
+    /** Move the clock without a tick (a delayed timer). */
+    skip: (ms: number) => { now += ms; },
     tick: async () => { tick(); await flush(); },
     now: () => now,
     state: () => supervisor.status()[0] as Extract<ReturnType<LinkSupervisor["status"]>[number], { direction: "hub-initiated" }>,
@@ -537,5 +539,90 @@ test("a proof that settles after the candidate's exit was observed does not prom
   expect(h.state().state.kind).not.toBe("connected");
   held.release?.();
   await flush();
+  expect(h.state().routes?.route).toBeNull();
+});
+
+test("a blocking earlier tunnel without proven identity is watched without signals and the link starts once it is gone", async () => {
+  let alive = true;
+  const legacy = await started({
+    pidfile: { version: 1, linkId: LINK, pid: 4242, argv: ["ssh"] },
+    processArgv: () => alive ? ["ssh"] : null, processAlive: () => alive,
+  });
+  expect(legacy.state().orphan).toBe("orphan-unverified");
+  await legacy.advance(10_000);
+  expect(legacy.kills).toEqual([]);
+  alive = false;
+  await legacy.advance(1_000);
+  expect(legacy.state().orphan).toBeUndefined();
+  await legacy.tick();
+  expect(legacy.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+
+  let readable = true;
+  let present = true;
+  const unreadable = await started({
+    pidfile: { version: 1, linkId: LINK, pid: 4343, argv: ["ssh"], startTime: 5 },
+    processArgv: () => present && readable ? ["ssh"] : null, processStart: () => present && readable ? 5 : null, processAlive: () => present,
+  });
+  expect(unreadable.kills).toEqual([{ pid: 4343, signal: "SIGTERM" }]);
+  readable = false;
+  await unreadable.advance(5_000);
+  expect(unreadable.kills).toEqual([{ pid: 4343, signal: "SIGTERM" }]);
+  expect(unreadable.state().orphan).toBe("orphan-unverified");
+  present = false;
+  await unreadable.advance(1_000);
+  expect(unreadable.state().orphan).toBeUndefined();
+  await unreadable.tick();
+  expect(unreadable.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+});
+
+async function busyWithDeferredProbe(answer: SshRunResult) {
+  const other = "lnk_fedcba9876543210";
+  let resolveProbe!: (result: SshRunResult) => void;
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"]), record(["beta-lan", "pen-alpha"], other, 19004)] };
+  const opts: Parameters<typeof harness>[0] = {
+    stubborn: true,
+    store: () => current,
+    probe: (route, attempt) => route === "beta-lan" && attempt === 1 ? new Promise<SshRunResult>(resolve => { resolveProbe = resolve; }) : ok("ocx-link-probe\n"),
+  };
+  const h = await started(opts);
+  current = { ...current, links: [record(["alpha-lan", "pen-alpha"], LINK, 19005), current.links[1]!] };
+  const reload = h.supervisor.reload();
+  await flush();
+  const settledAt = h.now();
+  resolveProbe(answer);
+  await flush();
+  // Lifecycle work stays busy well past the probe bound.
+  for (let i = 0; i < 15; i += 1) await h.advance(1_000);
+  const beforeRelease = h.supervisor.status().find(status => status.linkId === other) as ReturnType<Harness["state"]>;
+  h.tunnels[0]!.exit(143);
+  await reload;
+  await h.tick();
+  const after = h.supervisor.status().find(status => status.linkId === other) as ReturnType<Harness["state"]>;
+  opts.stubborn = false;
+  return { h, settledAt, beforeRelease, after };
+}
+
+test("a probe that succeeded while lifecycle work ran is neither timed out nor failed, and its tunnel starts afterwards", async () => {
+  const { h, beforeRelease, after } = await busyWithDeferredProbe(ok("ocx-link-probe\n"));
+  expect(beforeRelease.routes?.routes[0]?.lastOutcome).toBeNull();
+  expect(after.routes?.routes[0]?.lastOutcome).toBeNull();
+  expect(h.tunnels.map(tunnel => tunnel.argv.at(-1))).toContain("beta-lan");
+});
+
+test("a probe that failed while lifecycle work ran counts once, at the time it settled", async () => {
+  const { h, settledAt, after } = await busyWithDeferredProbe(refused("Connection refused"));
+  expect(after.routes?.routes[0]?.lastOutcome).toEqual({ class: "transient", at: settledAt });
+  expect(h.runs.filter(run => run.kind === "probe" && run.destination === "beta-lan")).toHaveLength(1);
+});
+
+test("a proof admitted in time whose answer settles after its deadline, before the next tick, does not promote", async () => {
+  let finishCatalog!: (result: SshRunResult) => void;
+  const h = await started({ catalog: (_route, _id, admit) => { admit(); return new Promise<SshRunResult>(resolve => { finishCatalog = resolve; }); } });
+  await h.grant();
+  await h.tick();
+  h.skip(READY_PROOF_MS);
+  finishCatalog(ok(JSON.stringify({ models: [] }) + "\n200"));
+  await flush();
+  expect(h.state().state.kind).not.toBe("connected");
   expect(h.state().routes?.route).toBeNull();
 });

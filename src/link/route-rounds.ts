@@ -94,7 +94,9 @@ type Phase =
     grantedAt?: number; refused?: boolean; failure?: RouteOutcomeClass; stopAt?: number; killed?: boolean;
     abort: AbortController; proof: Proof;
   }
-  | { kind: "halted"; route: string; child: SshChild; failure: RouteOutcomeClass };
+  | { kind: "halted"; route: string; child: SshChild; failure: RouteOutcomeClass }
+  /** A probe that settled while lifecycle work ran: no deadline applies; round.resume continues it. */
+  | { kind: "deferred" };
 
 interface Round {
   token: number;
@@ -181,7 +183,11 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
 
   const next = (linkId: string, link: LinkRoutes, round: Round): void => {
     if (!current(linkId, round)) return;
-    if (host.busy()) { round.resume = () => next(linkId, link, round); return; }
+    if (host.busy()) {
+      round.phase = { kind: "deferred" };
+      round.resume = () => next(linkId, link, round);
+      return;
+    }
     const record = host.record(linkId);
     if (!record) { link.round = undefined; return; }
     const route = round.queue.shift();
@@ -207,8 +213,13 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
       if (result.code === 0 && result.stdout.trim() === "ocx-link-probe") {
         const book = link.books.get(route);
         if (book) book.probeFailures = 0;
-        if (host.busy()) round.resume = () => { if (current(linkId, round) && round.phase === phase) candidate(linkId, link, round, route); };
-        else candidate(linkId, link, round, route);
+        if (host.busy()) {
+          const deferred: Phase = { kind: "deferred" };
+          round.phase = deferred;
+          round.resume = () => { if (current(linkId, round) && round.phase === deferred) candidate(linkId, link, round, route); };
+        } else {
+          candidate(linkId, link, round, route);
+        }
         return;
       }
       fail(link, route, result.code === 0 ? "transient" : routeOutcomeOfStderr(result.stderr), "probe");
@@ -319,7 +330,12 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
       let body: unknown = null;
       try { body = catalog.code === 0 ? parseChildHttp(catalog.stdout) : null; } catch { body = null; }
       const handle = proof.handle;
-      if (isCatalog(body) && handle?.admitted()) { proven(linkId, link, round, phase); return; }
+      // Both deadlines hold at promotion too: a result that settles late, before the next tick, does not count.
+      const settledAt = host.now();
+      if (isCatalog(body) && handle?.admitted() && settledAt <= attemptDeadline && settledAt < candidateDeadline) {
+        proven(linkId, link, round, phase);
+        return;
+      }
     } catch { /* a failed or aborted step; retried below while time remains */ }
     finally {
       proof.inFlight = false;
@@ -395,7 +411,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
         }
         return;
       }
-      if (phase.kind === "halted") return;
+      if (phase.kind === "halted" || phase.kind === "deferred") return;
       if (phase.stopAt !== undefined) {
         if (!phase.killed && now - phase.stopAt >= CANDIDATE_KILL_GRACE_MS) {
           phase.killed = true;
@@ -460,9 +476,10 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
       if (!link) return;
       linkFor(record);
       const round = link.round;
-      if (round?.phase.kind === "probe" || round?.phase.kind === "client") {
+      if (round?.phase.kind === "probe" || round?.phase.kind === "client" || round?.phase.kind === "deferred") {
         // Nothing carries traffic yet: start over on the new list.
         if (round.phase.kind === "probe") round.phase.abort.abort();
+        round.resume = undefined;
         round.queue = effectiveLinkRoutes(record).filter(name => (link.books.get(name)?.eligibleAt ?? 0) <= host.now());
         proceed(record.id, link, round);
         return;

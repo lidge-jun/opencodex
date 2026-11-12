@@ -60,6 +60,14 @@ export interface LinkSupervisor {
   stop(): Promise<void>;
 }
 
+interface OrphanWatch {
+  pid: number;
+  argv: readonly string[];
+  startTime?: number;
+  /** Set while this supervisor is stopping the process it identified. */
+  signal?: { at: number; killed: boolean };
+}
+
 interface Pidfile {
   version: 1;
   linkId: string;
@@ -226,8 +234,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   /** The generation of the child whose exit is still being classified, per link. */
   const exiting = new Map<string, number>();
   const recordInstances = new Map<string, string>();
-  /** Multi-route links whose earlier tunnel is being stopped: identity captured from the pidfile. */
-  const orphanReaps = new Map<string, { pid: number; argv: readonly string[]; startTime: number; at: number; killed: boolean }>();
+  /** Multi-route links blocked by an earlier tunnel, watched until it is gone (src/link/route-rounds.ts relies on it). */
+  const orphanWatches = new Map<string, OrphanWatch>();
   const history = createTunnelHistoryBook({
     diagnostic: deps.diagnostic,
     tunnelPort: linkId => store.links.find(link => link.id === linkId)?.tunnelPort,
@@ -304,43 +312,53 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
    * A multi-route link never starts a candidate while an earlier tunnel of it may live: the readiness
    * proof's attribution relies on that. Only a process proven to be the pidfile's own (pid, argv and
    * the start time written at spawn) is signalled, and its identity is re-read before every signal.
+   * Every blocked pidfile stays watched without signals, and the block lifts once the process is shown
+   * gone (or its pid now names another process); the link's first round then starts.
    */
   const reapMultiRouteOrphan = (record: LinkRecord, pidfile: Pidfile): void => {
     const path = pidfilePath(record.id);
-    if (platform !== "linux") { orphanUnverified.add(record.id); return; }
-    if (pidfile.startTime === undefined) {
-      if (processAlive(pidfile.pid) === false) removePidfile(path);
-      else orphanUnverified.add(record.id);
-      return;
-    }
-    const identity = processIdentity(pidfile.pid, pidfile.argv, pidfile.startTime);
-    if (identity === "gone" || identity === "different") { removePidfile(path); return; }
+    const watch = { pid: pidfile.pid, argv: pidfile.argv, ...(pidfile.startTime === undefined ? {} : { startTime: pidfile.startTime }) };
+    if (orphanState(watch) === "gone") { removePidfile(path); return; }
     orphanUnverified.add(record.id);
-    if (identity === "unreadable") return;
+    const identity = platform === "linux" && pidfile.startTime !== undefined ? processIdentity(pidfile.pid, pidfile.argv, pidfile.startTime) : "unreadable";
+    if (identity === "different") { orphanUnverified.delete(record.id); removePidfile(path); return; }
+    if (identity !== "same") { orphanWatches.set(record.id, watch); return; }
     killProcess(pidfile.pid, "SIGTERM");
-    orphanReaps.set(record.id, { pid: pidfile.pid, argv: pidfile.argv, startTime: pidfile.startTime, at: now(), killed: false });
+    orphanWatches.set(record.id, { ...watch, signal: { at: now(), killed: false } });
   };
 
-  const tickOrphanReaps = (current: number): void => {
-    for (const [linkId, reap] of [...orphanReaps]) {
-      const identity = processIdentity(reap.pid, reap.argv, reap.startTime);
-      if (identity === "gone" || identity === "different") {
-        orphanReaps.delete(linkId);
+  /** gone when the watched process has exited (or its pid names another process); otherwise still there. */
+  const orphanState = (watch: OrphanWatch): "gone" | "there" => {
+    if (watch.startTime !== undefined && platform === "linux") {
+      const identity = processIdentity(watch.pid, watch.argv, watch.startTime);
+      return identity === "gone" || identity === "different" ? "gone" : "there";
+    }
+    return processAlive(watch.pid) === false ? "gone" : "there";
+  };
+
+  const tickOrphanWatches = (current: number): void => {
+    for (const [linkId, watch] of [...orphanWatches]) {
+      if (orphanState(watch) === "gone") {
+        orphanWatches.delete(linkId);
         orphanUnverified.delete(linkId);
         const path = pidfilePath(linkId);
-        if (readPidfile(path)?.pid === reap.pid) removePidfile(path);
+        if (readPidfile(path)?.pid === watch.pid) removePidfile(path);
         // The link was waiting for this: start its first round now.
         const record = store.links.find(link => link.id === linkId);
         if (record && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
-      } else if (identity === "unreadable") {
-        // Cannot tell it is ours any more: no further signal, the link stays blocked.
-        orphanReaps.delete(linkId);
-      } else if (!reap.killed && current - reap.at >= 2_000) {
-        reap.killed = true;
-        killProcess(reap.pid, "SIGKILL");
-      } else if (current - reap.at >= 4_000) {
-        // Still there: the link stays blocked as orphan-unverified, and nothing is signalled again.
-        orphanReaps.delete(linkId);
+        continue;
+      }
+      const signal = watch.signal;
+      if (!signal || watch.startTime === undefined) continue;
+      if (processIdentity(watch.pid, watch.argv, watch.startTime) !== "same") {
+        // Cannot tell it is ours any more: no further signal; the watch goes on.
+        delete watch.signal;
+      } else if (!signal.killed && current - signal.at >= 2_000) {
+        signal.killed = true;
+        killProcess(watch.pid, "SIGKILL");
+      } else if (current - signal.at >= 4_000) {
+        // Still there: nothing is signalled again; the link stays blocked until the watch sees it gone.
+        delete watch.signal;
       }
     }
   };
@@ -494,7 +512,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     for (const record of store.links) if (rounds.isMultiRoute(record) && !holds.has(record.id)) rounds.tick(record.id);
     if (lifecycleFlight) return;
     const current = now();
-    tickOrphanReaps(current);
+    tickOrphanWatches(current);
     for (const record of store.links) {
       if (record.direction !== "hub-initiated") continue;
       if (holds.has(record.id)) continue;
