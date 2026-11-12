@@ -181,6 +181,31 @@ describe("ocx service uninstall / remove on Windows", () => {
     }
   });
 
+  test("an absent Part A is not proof the proxy is down: a live endpoint still refuses removal", async () => {
+    // Part A "absent" only says no manager is registered. `findLiveProxy` can return null
+    // when its discovery cap runs out while the endpoint is live, so removal / the shared
+    // restore must ask the endpoint itself before deleting the task. No respawn hold is
+    // needed — nothing can relaunch it — but the answer still has to be definitive.
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent") });
+    const survivors: unknown[] = [];
+    const refused = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => false,
+      stopTracked: async () => "none",
+      survivor: async io => { survivors.push(io); return { port: 10100 }; },
+    });
+    expect(refused.ok).toBe(false);
+    // The hold would be meaningless here; asking for it would spend 7 s for nothing.
+    expect(survivors).toEqual([{ canRespawn: false }]);
+
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent") });
+    const absent = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => false,
+      stopTracked: async () => "none",
+      survivor: async () => null,
+    });
+    expect(absent).toEqual({ ok: true });
+  });
+
   test("claims a receipt carrying the Part A record before the POST, so the route does not answer 409", async () => {
     // Deleting the registration leaves the scheduler task's receipt-less POST answering
     // respawnable_service, which fails the uninstall. `ocx service stop` already claims;

@@ -124,7 +124,7 @@ export function completeWindowsServiceStopReceipt(nonce: string | undefined, cle
  * `ocx service stop` does, and kept until the caller's restore succeeds.
  */
 export async function windowsServiceRemovalStop(
-  io: Pick<WindowsServiceStopCommandIo, "stopTracked" | "ownsSharedTeardown" | "claim"> = {},
+  io: Pick<WindowsServiceStopCommandIo, "stopTracked" | "ownsSharedTeardown" | "claim" | "survivor"> = {},
 ): Promise<{ ok: boolean; nonce?: string }> {
   const port = windowsServiceStopPort();
   const partA = await runWindowsServiceStopPartA({ admission: windowsStopAdmission({ orphanDiscovery: true }) });
@@ -149,7 +149,17 @@ export async function windowsServiceRemovalStop(
     skipPortWait: partA.outcome === "stopped",
     orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery,
   });
-  if (partA.outcome !== "stopped") return withNonce(nonce);
+  if (partA.outcome === "absent") {
+    // "absent" says no manager is registered, not that nothing is serving. `findLiveProxy`
+    // inside the tracked stop can return null when its discovery cap runs out while the
+    // endpoint is live, so ask the endpoint itself before the task is deleted. No respawn
+    // hold: with no manager there is nothing to relaunch the proxy.
+    const survivor = await (io.survivor ?? proxyStillLiveAfterStop)({ canRespawn: false });
+    if (!survivor) return withNonce(nonce);
+    console.error("❌ Service uninstall refused: a proxy is still listening on port " + survivor.port + ".");
+    console.error("   The task was not deleted. Stop that proxy, then re-run 'ocx service uninstall'.");
+    return { ok: false };
+  }
   const partB = await confirmWindowsServiceStop({ port, remainingMs: windowsStopRemainingMs() });
   if (partB.outcome === "freed") return withNonce(nonce);
   if (partB.outcome === "port-held-by-foreign") {
