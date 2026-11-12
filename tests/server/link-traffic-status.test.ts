@@ -62,7 +62,7 @@ function harness(book = createLinkTrafficBook("content-length")) {
 }
 
 describe("GET /api/link/status?traffic=1 (#3023)", () => {
-  test("without the query the document is unchanged; with it every existing field stays and two blocks are added", async () => {
+  test("without the query the document is unchanged; with it every existing field stays and a traffic block is added", async () => {
     const h = harness();
     const plain = await h.call("/api/link/status");
     for (const row of plain.links) expect(Object.keys(row)).not.toContain("traffic");
