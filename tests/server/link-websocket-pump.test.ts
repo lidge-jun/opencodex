@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
-import { pumpResponsesSseToWebSocket, type WsData } from "../../src/server/ws-bridge";
+import { pumpResponsesSseToWebSocket, sendResponseToWebSocket, type WsData } from "../../src/server/ws-bridge";
 import { BoundedSseFrameBuffer } from "../../src/server/sse-frame-buffer";
 import { LINK_WS_LIMITS, setLinkPumpTimerForTests } from "../../src/server/index/link-websocket-limits";
 import { createLinkWebsocketGate } from "../../src/server/index/link-websocket";
@@ -181,5 +181,56 @@ describe("drain callbacks above the threshold (T5c-R1-01)", () => {
     socket.drain();
     await pump;
     expect(socket.peak()).toBeLessThanOrEqual(5 * MiB);
+  });
+});
+describe("T5g: synthesized JSON events are paced like SSE events on a link socket (final review area b, finding 4)", () => {
+  test("a bounded JSON response to a stalled link reader keeps the buffer bounded and delivers every frame and the terminal", async () => {
+    const socket = stalledSocket(true);
+    const item = (index: number) => ({ type: "message", id: "m" + index, role: "assistant", status: "completed",
+      content: [{ type: "output_text", text: "x".repeat(1.5 * MiB), annotations: [] }] });
+    const response = Response.json({ id: "r", status: "completed", output: [item(0), item(1), item(2)] });
+    let terminal: string | undefined;
+    const pump = sendResponseToWebSocket(socket.ws, response, () => true, { onTerminal: status => { terminal = status; } });
+    let finished = false;
+    void pump.then(() => { finished = true; });
+    while (!finished) {
+      await Promise.race([socket.nextSend(), pump]);
+      socket.drain();
+    }
+    await pump;
+    // The terminal repeats the output (about 4.5 MiB); nothing else may sit beside it in the buffer.
+    expect(socket.peak()).toBeLessThanOrEqual(LINK_WS_LIMITS.sendThresholdBytes + 5 * MiB);
+    expect(JSON.parse(socket.sent.at(-1)!).type).toBe("response.completed");
+    expect(terminal).toBe("completed");
+  });
+
+  test("a local socket keeps the synchronous JSON delivery (unchanged)", async () => {
+    const socket = stalledSocket(false);
+    await sendResponseToWebSocket(socket.ws, Response.json({ id: "r", status: "completed", output: [] }), () => true, {});
+    expect(socket.sent.length).toBeGreaterThan(0);
+    expect(JSON.parse(socket.sent.at(-1)!).type).toBe("response.completed");
+  });
+});
+describe("T5g: a stalled link reader of a JSON response closes 1011 like the SSE pump", () => {
+  test("the stall deadline closes the socket and stops delivery", async () => {
+    const fired: Array<{ callback: () => void; ms: number }> = [];
+    setLinkPumpTimerForTests({ start(callback, ms) { const entry = { callback, ms }; fired.push(entry); return entry; }, stop() {} });
+    restores.push(() => setLinkPumpTimerForTests(null));
+    const socket = stalledSocket(true);
+    const closes: number[] = [];
+    (socket.ws as unknown as { close: (code: number) => void }).close = code => { closes.push(code); };
+    const item = (index: number) => ({ type: "message", id: "m" + index, role: "assistant", status: "completed",
+      content: [{ type: "output_text", text: "x".repeat(2 * MiB), annotations: [] }] });
+    let terminal: string | undefined;
+    const pump = sendResponseToWebSocket(socket.ws, Response.json({ id: "r", status: "completed", output: [item(0), item(1)] }), () => true,
+      { onTerminal: status => { terminal = status; } });
+    while (fired.length === 0) await socket.nextSend();
+    expect(fired.map(entry => entry.ms)).toEqual([LINK_WS_LIMITS.sendStallMs]);
+    const sentBefore = socket.sent.length;
+    fired[0]!.callback();
+    await expect(pump).rejects.toThrow();
+    expect(closes).toEqual([1011]);
+    expect(socket.sent).toHaveLength(sentBefore);
+    expect(terminal).toBeUndefined();
   });
 });

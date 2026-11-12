@@ -469,6 +469,57 @@ export function sendResponsesJsonAsEvents(
   onTerminal?.(finalStatus);
 }
 
+/**
+ * Remote Link sockets only (design T4 6.2): wait until the send buffer is at or below the threshold, re-checking on
+ * every drain callback, under one stall deadline for the whole wait. A stall closes the socket with 1011 and throws,
+ * as the SSE pump does; a closed socket ends the wait.
+ */
+async function waitForLinkSendRoom(ws: ServerWebSocket<WsData>): Promise<void> {
+  const link = ws.data.link;
+  if (!link || ws.getBufferedAmount() <= LINK_WS_LIMITS.sendThresholdBytes) return;
+  let stalled = false;
+  const observer = linkPumpWaitObserver();
+  observer?.(true);
+  await new Promise<void>(resolve => {
+    const clock = linkPumpTimer();
+    const timer = clock.start(() => { stalled = true; done(); }, LINK_WS_LIMITS.sendStallMs);
+    function done(): void {
+      clock.stop(timer);
+      if (link!.drained === drained) link!.drained = undefined;
+      resolve();
+    }
+    function drained(): void {
+      if (ws.readyState === OPEN && ws.getBufferedAmount() > LINK_WS_LIMITS.sendThresholdBytes) return;
+      done();
+    }
+    link.drained = drained;
+  });
+  observer?.(false);
+  if (stalled) {
+    try { ws.close(1011, "link websocket send stalled"); } catch { /* already closing */ }
+    throw new WsSendDroppedError();
+  }
+}
+
+/** sendResponsesJsonAsEvents for a link socket: each synthesized event waits for send room first. */
+async function sendResponsesJsonAsLinkEvents(
+  ws: ServerWebSocket<WsData>,
+  response: Record<string, unknown>,
+  isCurrent: () => boolean,
+  onTerminal?: ResponsesTerminalReporter,
+  onPayload?: ResponsesPayloadObserver,
+): Promise<void> {
+  const finalStatus = response.status === "failed" || response.status === "incomplete" ? response.status : "completed";
+  for (const frame of responsesJsonEventSequence(response)) {
+    await waitForLinkSendRoom(ws);
+    if (!isCurrent() || ws.readyState !== OPEN) return;
+    const text = JSON.stringify(frame);
+    try { onPayload?.(text); } catch { /* payload observation must not affect WebSocket delivery */ }
+    sendTextFrame(ws, text);
+  }
+  onTerminal?.(finalStatus);
+}
+
 function errorPayloadFromText(text: string): Record<string, unknown> {
   try {
     const json = JSON.parse(text) as { error?: unknown };
@@ -534,7 +585,8 @@ export async function sendResponseToWebSocket(
     const text = await response.text();
     if (!isCurrent()) return;
     const json = JSON.parse(text) as Record<string, unknown>;
-    sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
+    if (ws.data.link) await sendResponsesJsonAsLinkEvents(ws, json, isCurrent, options.onTerminal, options.onSsePayload);
+    else sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
     return;
   }
 
@@ -558,7 +610,8 @@ export async function sendResponseToWebSocket(
   const trimmed = text.trim();
   if (trimmed.startsWith("{")) {
     const json = JSON.parse(trimmed) as Record<string, unknown>;
-    sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
+    if (ws.data.link) await sendResponsesJsonAsLinkEvents(ws, json, isCurrent, options.onTerminal, options.onSsePayload);
+    else sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
     return;
   }
 
