@@ -26,8 +26,8 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | Chapter | Declared capabilities |
 |---|---|
 | [lifecycle](01_surface_lifecycle.md) | 14 |
-| [providers-models](01_surface_providers-models.md) | 53 |
-| [accounts](01_surface_accounts.md) | 43 |
+| [providers-models](01_surface_providers-models.md) | 54 |
+| [accounts](01_surface_accounts.md) | 44 |
 | [agents-routing](01_surface_agents-routing.md) | 68 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 105 |
@@ -483,6 +483,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_providers-models.md#ocx-models-new-arrivals)
 
+### `ocx models discover`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-discover)
+
 ### `ocx models context status`
 
 [Read-oriented task](01_surface_providers-models.md#ocx-models-context-status)
@@ -614,6 +618,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx account add-key`
 
 [State-changing task](01_surface_accounts.md#ocx-account-add-key)
+
+### `ocx account probe`
+
+[Read-oriented task](01_surface_accounts.md#ocx-account-probe)
 
 ### `ocx account import`
 
@@ -1629,6 +1637,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 395
-- of those, state-changing: 247
+- declared capabilities: 397
+- of those, state-changing: 248
 - head-resolved invocations: 2

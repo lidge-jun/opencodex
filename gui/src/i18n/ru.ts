@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -133,6 +134,7 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Не удалось сохранить лимиты рабочих процессов.",
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
+  ...accountProbeCopy("ru"),
   ...shellV2Copy("ru"),
   ...codexCliUpdateCopy("ru"),
   ...remoteLinkDiagnosticsCopy("ru"),

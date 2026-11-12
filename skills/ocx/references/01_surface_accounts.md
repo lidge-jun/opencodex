@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 43.
+Declared capabilities: 44.
 
 ### `ocx account login`
 
@@ -556,6 +556,25 @@ State-changing: yes. JSON mode: `envelope`.
 | `--json` | boolean | Emit a redacted receipt containing the key ID, never the key. |
 
 - API-key providers only. Requires non-TTY stdin and reads one secret line; never put plaintext keys in command arguments or agent transcripts. This imports an upstream credential, not an OpenCodex access-key creation workflow.
+
+### `ocx account probe`
+
+Usage: `ocx account probe google-antigravity [<account-id|alias>] [--json]`
+
+Test stored accounts one by one with their own tokens, read-only.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/oauth/accounts` |
+| POST | `/api/oauth/accounts/probe` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit per-account status, HTTP code, reason and quota windows. |
+
+- Statuses: ok, token_expired, suspended, verification_required, rate_limited, permission_denied, error. Sends one retrieveUserQuotaSummary request per account with its stored token; expired tokens are reported, never refreshed, and paused accounts stay paused. Only google-antigravity is supported.
 
 ### `ocx account import`
 

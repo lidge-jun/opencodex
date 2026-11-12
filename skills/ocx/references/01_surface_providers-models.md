@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 53.
+Declared capabilities: 54.
 
 ### `ocx models price`
 
@@ -649,6 +649,24 @@ State-changing: no. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit recentArrivals grouped by provider. |
+
+### `ocx models discover`
+
+Usage: `ocx models discover <provider> [--json]`
+
+Re-fetch one provider's live model list now and report new arrivals.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/model-discovery/refresh` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit discovery status, newArrivals and recentArrivals. |
+
+- Clears the provider's model cache and runs catalog convergence; new models follow the configured new-model policy. Providers with liveModels off report applicable:false.
 
 ### `ocx models context status`
 

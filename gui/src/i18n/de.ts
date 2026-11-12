@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Workflow-Limits konnten nicht gespeichert werden.",
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
+  ...accountProbeCopy("de"),
   ...shellV2Copy("de"),
   ...codexCliUpdateCopy("de"),
   ...remoteLinkDiagnosticsCopy("de"),

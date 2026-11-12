@@ -85,6 +85,13 @@ export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
     details: ["API-key providers only. Requires non-TTY stdin and reads one secret line; never put plaintext keys in command arguments or agent transcripts. This imports an upstream credential, not an OpenCodex access-key creation workflow."],
   },
   {
+    command: ["account", "probe"], summary: "Test stored accounts one by one with their own tokens, read-only.",
+    usage: "ocx account probe google-antigravity [<account-id|alias>] [--json]",
+    routes: [{ method: "GET", path: "/api/oauth/accounts" }, { method: "POST", path: "/api/oauth/accounts/probe" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit per-account status, HTTP code, reason and quota windows." }], mutates: false, json: "payload",
+    details: ["Statuses: ok, token_expired, suspended, verification_required, rate_limited, permission_denied, error. Sends one retrieveUserQuotaSummary request per account with its stored token; expired tokens are reported, never refreshed, and paused accounts stay paused. Only google-antigravity is supported."],
+  },
+  {
     command: ["account", "import"], summary: "Import Google Antigravity accounts from a bounded Cockpit Tools document.",
     usage: "ocx account import google-antigravity --format cockpit-tools (--file <path>|--stdin) [--json]",
     routes: [{ method: "POST", path: "/api/oauth/accounts/import" }],

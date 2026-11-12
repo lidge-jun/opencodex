@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saveFailed": "İş akışı sınırları kaydedilemedi.",
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
+  ...accountProbeCopy("tr"),
   ...shellV2Copy("tr"),
   ...codexCliUpdateCopy("tr"),
   ...remoteLinkDiagnosticsCopy("tr"),
