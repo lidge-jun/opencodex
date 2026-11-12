@@ -1051,7 +1051,7 @@ export async function deliverPassthroughResponse(
         let raw: BufferedResponsesSseResult | undefined = await collectBufferedResponsesSse(
           passthroughSseBody,
           upstream,
-          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true },
+          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true, maskCredential },
         );
         if (!raw.ok) {
           if (raw.kind === "aborted" || signal.aborted) {
@@ -1083,7 +1083,7 @@ export async function deliverPassthroughResponse(
           )
           : replayBufferedSse(rawBytes);
         const client = await collectBufferedResponsesSse(bufferedClientBody, upstream, {
-          signal,
+          signal, maskCredential,
           read: bufferedRead,
           retainTranscript: false,
         });

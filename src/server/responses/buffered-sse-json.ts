@@ -220,6 +220,8 @@ export async function collectBufferedResponsesSse(
     terminalBoundary?: CodexSafetyBufferingFilterOptions;
     read?: BufferedReadOptions;
     retainTranscript?: boolean;
+    /** Per-request outbound mask, applied to upstream copy before the boundary bounds it. */
+    maskCredential?: (text: string) => string;
   } = {},
 ): Promise<BufferedResponsesSseResult> {
   const maxBytes = options.read?.maxBytes ?? MAX_UPSTREAM_JSON_BODY_BYTES;
@@ -238,6 +240,7 @@ export async function collectBufferedResponsesSse(
   const reader = body.getReader();
   const boundary = createSseTerminalOutputBoundary({
     ...options.terminalBoundary,
+    maskCredential: options.maskCredential,
     maxInputBytes: maxBytes,
     maxOutputBytes: maxBytes,
     maxFrames,

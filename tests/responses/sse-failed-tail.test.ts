@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { httpStatusForRequestLogTerminal, inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
+import { collectBufferedResponsesSse } from "../../src/server/responses/buffered-sse-json";
+import { bareUpstreamError } from "../../src/server/bare-upstream-error";
 import { consumeForInspection, consumeForResponseLogMetadata, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
 import { teeWithBoundedInspection } from "../../src/server/inspection-tee";
 import { classifyCodexUpstreamOutcome } from "../../src/codex/routing/cooldown-math";
@@ -108,6 +110,32 @@ describe("relaySseWithFailedTail", () => {
       const synthesized = out.split("\n").filter(line => line.includes('"response.failed"')).join("\n");
       expect([name, synthesized.length > 0, synthesized.includes(longCredential.slice(0, 64))]).toEqual([name, true, false]);
     }
+  });
+
+  test("the buffered collector never keeps a prefix of a long selected credential", async () => {
+    const maskCredential = createOutboundCredentialMask({ authorization: `Bearer ${longCredential}` });
+    for (const [name, payload] of longFrames) {
+      const src = sourceStream([`event: error\ndata: ${JSON.stringify(payload)}\n\n`]);
+      const result = await collectBufferedResponsesSse(src, new AbortController(), { maskCredential });
+      const kept = JSON.stringify(result);
+      expect([name, kept.includes(longCredential.slice(0, 64))]).toEqual([name, false]);
+    }
+  });
+
+  test("bare copy is refused while the registry cannot vouch for every sent credential", () => {
+    const oversized = `fixtureoversized${"Z9".repeat(9000)}`;
+    const registry = new OutboundCredentialRegistry();
+    registry.remember({ authorization: `Bearer ${oversized}` });
+    expect(registry.complete()).toBe(false);
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      // The verdict every client boundary bounds: without a per-request mask it must not keep a prefix.
+      const verdict = bareUpstreamError({ error: { code: "mystery_code", message: oversized } });
+      expect([verdict?.message, verdict?.terminalStatus]).toEqual(["[REDACTED]", 502]);
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      inspectResponseLogSsePayload(log, JSON.stringify({ error: { code: "mystery_code", message: oversized } }));
+      expect([log.upstreamError, log.terminalHttpStatus]).toEqual(["[REDACTED]", 502]);
+    } finally { restore(); }
   });
 
   test("the row keeps no prefix of a long credential this process sent", () => {

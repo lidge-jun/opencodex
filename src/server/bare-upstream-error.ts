@@ -29,12 +29,14 @@ const classField = (value: JsonRecord | undefined, key: string): string | undefi
 /**
  * Masks upstream copy before anything bounds it. A bound applied first can keep a prefix of a long
  * credential that a later full-value mask no longer recognizes. The relay passes its per-request
- * outbound mask; every reader also refuses copy that contains a credential this process sent.
+ * outbound mask; every reader also refuses copy that contains a credential this process sent, and
+ * refuses all copy while the registry cannot vouch for every sent credential (one too large to keep).
  */
 export type BareCopyMask = (text: string) => string;
 export function guardBareCopy(raw: string, mask?: BareCopyMask): string {
   const masked = mask ? mask(raw) : raw;
-  return outboundCredentials().matches(masked) ? "[REDACTED]" : masked;
+  const registry = outboundCredentials();
+  return !registry.complete() || registry.matches(masked) ? "[REDACTED]" : masked;
 }
 
 /** Codes this proxy's own transport layer assigns to a delivery failure, not a provider verdict. */
