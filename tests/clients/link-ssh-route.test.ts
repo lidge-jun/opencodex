@@ -100,3 +100,33 @@ describe("ssh_config reading, review round 5 (#3023)", () => {
     expect(tree.reads.filter(path => path === join(HOME, ".ssh", "config"))).toHaveLength(1);
   });
 });
+
+describe("ssh_config reading, review round 6 (#3023)", () => {
+  test("host patterns full of wildcards match in linear time", () => {
+    const alias = "a".repeat(255);
+    const pattern = "*a".repeat(200) + "*b";
+    expect(resolveLinkPathFromConfig(alias, user(`Host ${pattern}\n  ProxyCommand x\n`).deps)).toBe("direct");
+    expect(resolveLinkPathFromConfig(alias + "b", user(`Host ${pattern}\n  ProxyCommand x\n`).deps)).toBe("proxy-command");
+  });
+
+  test("a named pipe, a wildcard directory, or a huge directory read unknown without blocking or walking a tree", () => {
+    if (process.platform === "win32") return;
+    const dir = mkdtempSync(join(tmpdir(), "ocx-ssh-route-"));
+    try {
+      mkdirSync(join(dir, ".ssh", "big"), { recursive: true });
+      expect(Bun.spawnSync(["mkfifo", join(dir, ".ssh", "config")]).exitCode).toBe(0);
+      expect(resolveLinkPathFromConfig("home", { home: dir, systemConfig: null })).toBe("unknown");
+      rmSync(join(dir, ".ssh", "config"));
+      writeFileSync(join(dir, ".ssh", "config"), "Include */config\n");
+      expect(resolveLinkPathFromConfig("home", { home: dir, systemConfig: null })).toBe("unknown");
+      for (let i = 0; i < 1100; i++) writeFileSync(join(dir, ".ssh", "big", `skip-${i}`), "");
+      writeFileSync(join(dir, ".ssh", "config"), "Include big/match-*\nHost home\n  ProxyJump b\n");
+      expect(resolveLinkPathFromConfig("home", { home: dir, systemConfig: null })).toBe("unknown");
+      writeFileSync(join(dir, ".ssh", "config"), "Include conf.d/*.conf\n");
+      mkdirSync(join(dir, ".ssh", "conf.d"));
+      writeFileSync(join(dir, ".ssh", "conf.d", "pen.conf"), "Host home\n  ProxyCommand pen pipe %h\n");
+      writeFileSync(join(dir, ".ssh", "conf.d", ".hidden.conf"), "Host home\n  ProxyJump b\n");
+      expect(resolveLinkPathFromConfig("home", { home: dir, systemConfig: null })).toBe("proxy-command");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

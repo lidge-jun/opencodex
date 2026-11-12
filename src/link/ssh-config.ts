@@ -149,22 +149,12 @@ function normalizeIncludeGlob(pattern: string): string {
   return normalized;
 }
 
-/**
- * Expand one absolute Include pattern the way OpenSSH globs it; a pattern without a wildcard is
- * itself. With `limit`, enumeration stops after `limit + 1` matches, so a caller that refuses more
- * than `limit` files never materializes a huge directory listing.
- */
-export function expandSshIncludeGlob(pattern: string, limit = Number.POSITIVE_INFINITY): string[] {
+function defaultGlob(pattern: string): string[] {
   if (!/[*?[]/.test(pattern)) return [pattern];
   const base = dirname(pattern.slice(0, pattern.search(/[*?[]/) + 1));
   // Only native Windows separators become slashes; POSIX backslash escapes stay intact.
   const relative = pattern.slice(base.length + 1).split(sep).join("/");
-  const matches: string[] = [];
-  for (const path of new Bun.Glob(normalizeIncludeGlob(relative)).scanSync({ cwd: base, absolute: true, onlyFiles: true })) {
-    matches.push(path);
-    if (matches.length > limit) break;
-  }
-  return matches.sort();
+  return [...new Bun.Glob(normalizeIncludeGlob(relative)).scanSync({ cwd: base, absolute: true, onlyFiles: true })].sort();
 }
 
 /**
@@ -177,7 +167,7 @@ export function loadHostCandidates(options: LoadHostCandidatesOptions = {}): Hos
   const home = options.home ?? homedir();
   const sshDir = join(home, ".ssh");
   const read = options.readFile ?? ((path: string) => readFileSync(path, "utf8"));
-  const glob = options.glob ?? (pattern => expandSshIncludeGlob(pattern));
+  const glob = options.glob ?? defaultGlob;
   const safeRead = (path: string): string | null => {
     try { return read(path); } catch { return null; }
   };
