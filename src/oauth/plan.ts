@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { OAuthCredentials } from "./types";
 
 /** Display-only upstream tier; never infer a plan from normalized quota percentages. */
@@ -26,12 +25,12 @@ function sameAccount(a: OAuthCredentials, b: OAuthCredentials): boolean | undefi
   return undefined;
 }
 
-/** The proof's organization, only while it is bound to this exact bearer. */
+/**
+ * The proof's organization. This module is also bundled into the browser GUI, so it cannot hash
+ * the bearer; callers pass store-normalized credentials, whose proofs are already bearer-bound.
+ */
 function boundOrganization(credential: OAuthCredentials): string | undefined {
-  const proof = credential.anthropicIdentity;
-  if (!proof?.organizationUuid || !credential.access
-    || proof.bearerSha256 !== createHash("sha256").update(credential.access).digest("hex")) return undefined;
-  return proof.organizationUuid.toLowerCase();
+  return credential.anthropicIdentity?.organizationUuid?.toLowerCase();
 }
 
 /** An observed unknown clears old metadata; an account replacement cannot inherit a plan. */
