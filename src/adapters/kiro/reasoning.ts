@@ -53,12 +53,24 @@ const KIRO_LUNA_TERRA_NATIVE_EFFORTS = new Set(["low", "medium", "high", "max"])
 // Kiro rejects a native xhigh for these two (HTTP 400, live probe 2026-11-07); it stays emulated.
 const KIRO_NO_XHIGH_NATIVE_MODELS = new Set(["claude-opus-4.6", "claude-sonnet-4.6"]);
 // These models used the emulated block for every effort before native effort was verified, so
-// `minimal` — the only value outside the native ladder that reaches a Kiro request — keeps that
-// block rather than becoming an error. `ultra` is not a case here: the Responses parser, the
-// Messages translator and combo resolution all fold it to `max` before the adapter sees it.
-// Models absent from this set still reject `minimal`: it is an enumerated compatibility set, not
-// a general unknown-effort fallback. The value check is what keeps it that way: an effort this
-// file has never seen still throws instead of silently dropping reasoning.
+// `minimal` — the one value outside the native ladder that arrives as the caller's own request —
+// keeps that block rather than becoming an error. Models absent from this set still reject
+// `minimal`: it is an enumerated compatibility set, not a general unknown-effort fallback. The
+// value check is what keeps it that way: an effort this file has never seen still throws instead
+// of silently dropping reasoning.
+//
+// `ultra` is a separate case, and the inbound fold is not the whole story. Caller-supplied
+// `ultra` is folded to `max` before the adapter — the Responses parser
+// (`src/responses/parser.ts`) does it for both surfaces, because the Messages translator
+// (`src/claude/inbound.ts`) copies `output_config.effort` through verbatim and then hands the
+// translated body to that same parser — but an operator pin is applied later, in
+// `applyPinnedEffort` (`src/server/effort-policy.ts`), which runs after parsing and accepts
+// `ultra` because it is a declared effort. So a `pinnedReasoningEffort: "ultra"` — or a
+// `modelPinnedReasoningEfforts` / `modelPinnedEfforts` value — does reach this file. Every model
+// in the native table then throws,
+// and the request becomes HTTP 400 `invalid_request_error` before anything is sent. Models
+// outside the table keep the emulated path, where `kiroThinkingBudget` has no `ultra` entry, so
+// the pin is dropped and no reasoning signal goes out at all.
 const KIRO_EMULATED_EXTRA_EFFORT_MODELS = new Set([
   "claude-opus-4.8",
   "claude-opus-4.7",

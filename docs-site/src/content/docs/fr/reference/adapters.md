@@ -162,8 +162,19 @@ Kiro n’a pas de niveau `minimal`. Sur les neuf modèles ci-dessus sauf `claude
 `claude-opus-5.5`, `minimal` conserve le bloc émulé au lieu de faire échouer une requête qui
 fonctionnait avant l’activation de l’effort natif. Ces deux modèles Opus 5, ainsi que les modèles GPT
 qui portent un effort natif, rejettent `minimal` par une erreur 400 `invalid_request_error`
-nommant le modèle et le niveau. `ultra` n’atteint jamais Kiro : les chemins Responses et Messages
-le réduisent tous deux à `max` avant que l’adaptateur ne construise la requête.
+nommant le modèle et le niveau.
+
+`ultra` demande une distinction. Le `ultra` envoyé par l’appelant est réduit à `max` avant que
+l’adaptateur ne construise la requête, sur les chemins Responses et Messages. Un pin configuré, non :
+`pinnedReasoningEffort`, `modelPinnedReasoningEfforts` et `modelPinnedEfforts` acceptent `ultra` et
+s’appliquent après l’analyse de la requête, donc l’adaptateur le reçoit. Pour chaque modèle à effort
+natif Kiro — les identifiants Claude ci-dessus et les modèles GPT — ce pin fait échouer la requête
+par une erreur 400 `invalid_request_error` nommant le modèle et le niveau, car `ultra` n’est pas un
+palier que Kiro accepte. Pour un modèle qui utilise
+l’émulation, le pin est abandonné et la requête part sans aucun signal de raisonnement. Si vous avez
+fait passer l’un de ces identifiants Claude en effort natif, un pin `ultra` autrefois ignoré échoue
+désormais : épinglez `max`.
+
 `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5`, ainsi que tout modèle Kiro non
 listé ci-dessus, utilisent une émulation à chaque niveau ; un réglage d’effort ne prouve pas une
 prise en charge native.

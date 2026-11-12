@@ -178,8 +178,16 @@ Kiro 對 `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-
 Kiro 沒有 `minimal` 檔位。除 `claude-opus-5` 和 `claude-opus-5.5` 外的上述九個模型在
 `minimal` 時保留模擬區塊，而不是讓啟用原生 effort 之前可用的請求失敗。這兩個 Opus 5 模型以及使用
 原生 effort 的 GPT 模型會以 400 `invalid_request_error` 拒絕 `minimal`，並在錯誤中標明模型和
-effort。`ultra` 永遠不會到達 Kiro：Responses 和 Messages 路徑都會在適配器建置請求前把它降為
-`max`。`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro
+effort。
+
+`ultra` 需要區分。呼叫方自己送出的 `ultra` 會在適配器建置請求前被降為 `max`，Responses 和
+Messages 路徑都是如此。設定的 pin 則不同：`pinnedReasoningEffort`、`modelPinnedReasoningEfforts`
+和 `modelPinnedEfforts` 接受 `ultra`，並在請求解析之後才套用，因此會到達適配器。對所有使用原生
+Kiro effort 的模型（即上面的 Claude id 與 GPT 模型），這個 pin 都不是 Kiro 接受的檔位，請求會以
+400 `invalid_request_error` 失敗，並在錯誤中標明模型和 effort。對使用模擬推理的模型，pin 會被靜默丟棄，請求在沒有推理訊號的情況下送出。如果你已把其中
+某個 Claude id 升級為原生 effort，那麼以前會被丟棄的 `ultra` pin 現在會失敗；請改用 `max`。
+
+`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro
 模型在每個 effort 上都使用模擬推理；提供 effort 選項不代表原生支援。
 
 ## `cursor`

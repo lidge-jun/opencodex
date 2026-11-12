@@ -366,14 +366,36 @@ routes that rung to the emulated block instead.
 `KIRO_NATIVE_EFFORTS` is `low`, `medium`, `high`, `xhigh`, `max`. For `minimal`
 `buildKiroPayload` throws, and the request becomes HTTP 400 `invalid_request_error` before
 anything is sent, unless `kiroEmulatesUnsupportedEffort` accepts the model. `minimal` is the only
-outside-ladder value that reaches a Kiro request: the Responses parser folds `ultra` to `max`, as
-does the Messages translator, and combo resolution draws from the catalog's `low`..`max` ladder.
-The emulation set is the seven Claude ids #8451 moved to native effort — `claude-opus-4.8`,
-`claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`,
+outside-ladder value a caller's own request can deliver: the Responses parser folds `ultra` to
+`max` for both surfaces — the Messages translator copies `output_config.effort` through verbatim
+and hands the translated body to the same parser — and combo resolution draws from the catalog's
+`low`..`max` ladder. The emulation set is the seven Claude ids #8451 moved to native effort —
+`claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`,
 `claude-sonnet-4.6`, `claude-haiku-5.5` — and they emulated every effort before the change, so
 they keep the emulated block for `minimal` instead of failing a request they used to serve.
 `claude-opus-5` and `claude-opus-5.5` are deliberately absent: they had native effort before the
 change, so `minimal` stays an error for them, as it is for the GPT models with native effort.
+
+An operator pin is not a caller request, and it is not folded. `applyPinnedEffort`
+(`src/server/effort-policy.ts`) runs after the body is parsed and writes the configured value over
+the folded one; it accepts `ultra` because `pinnedReasoningEffort` and both pinned maps validate
+against `isDeclaredReasoningEffort`, which includes the whole Codex ladder. So a pin of `ultra`
+does reach `buildKiroPayload`, and what happens there depends on the model:
+
+- A model in `KIRO_NATIVE_EFFORT_FIELDS` throws, because `ultra` is outside `KIRO_NATIVE_EFFORTS`
+  and `kiroEmulatesUnsupportedEffort` only ever admits `minimal`. The request becomes HTTP 400
+  `invalid_request_error` naming the model and the effort, on both the Responses and the Messages
+  surfaces, and nothing is sent upstream.
+- A model outside the table keeps the emulated path. `kiroThinkingBudget` has no `ultra` entry, so
+  the pin is silently dropped and the request goes out with no reasoning signal — neither the
+  native field nor the thinking block.
+
+This is a real upgrade effect for the seven Claude ids above, not an accident of this table. On a
+base that predates them they were outside the native table, so a pinned `ultra` was dropped the
+same way `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5` and the non-Claude emulated
+models still are. Becoming native on this branch turned that silent drop into a 400. The GPT
+models and Opus 5 / Opus 5.5 already rejected a pinned `ultra` on that base, so nothing changed
+for them. `tests/providers/kiro/kiro-pinned-effort-ultra.test.ts` holds both halves of the split.
 
 The split is operator-visible. A `minimal` request reaches the seven as the emulated thinking
 block with no error, while the same request to Opus 5, Opus 5.5 or a native GPT model is a 400

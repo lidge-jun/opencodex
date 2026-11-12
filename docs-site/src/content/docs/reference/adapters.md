@@ -591,7 +591,8 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 - Strips the JSON Schema keywords Kiro's validator rejects (`pattern`, `minLength`, `maximum`,
   `additionalProperties` and 25 others) from tool and structured-output schemas, except the
   keywords a probe measured a model taking. `claude-opus-4.5` keeps all of them. `claude-opus-5.5`
-  and `claude-sonnet-5.5` keep `pattern` and `maximum`; their other keywords stay stripped, because the PR does not report them. Every other Kiro
+  and `claude-sonnet-5.5` keep `pattern` and `maximum`; their other keywords stay stripped, because no
+  probe sent them to those models. Every other Kiro
   model, including the other Claude ids, keeps the full strip. The exception is per model and per
   keyword because this wire already separates Claude models on reasoning effort, and a keyword
   Kiro rejects fails the whole request rather than just costing the model a hint.
@@ -750,9 +751,19 @@ reject native `xhigh`, so that rung keeps the emulated thinking block.
 Kiro has no `minimal` rung. On all nine models except `claude-opus-5` and `claude-opus-5.5`,
 `minimal` keeps the emulated block instead of failing a request that worked before native effort
 was enabled. Those two Opus 5 models, and the GPT models that carry native effort, reject
-`minimal` with a 400 `invalid_request_error` naming the model and the effort. `ultra` never
-reaches Kiro: the Responses and Messages paths both reduce it to `max` before the adapter builds
-a request. `claude-haiku-4.5`, `claude-opus-4.5` and `claude-sonnet-4.5`, along with any Kiro
+`minimal` with a 400 `invalid_request_error` naming the model and the effort.
+
+`ultra` needs a distinction. A caller's own `ultra` is reduced to `max` before the adapter builds
+a request, on both the Responses and Messages paths. A configured pin is not: `pinnedReasoningEffort`,
+`modelPinnedReasoningEfforts` and `modelPinnedEfforts` accept `ultra` and are applied after the
+request is parsed, so the adapter does receive it. For every model with native Kiro effort — the
+Claude ids above and the GPT models — that pin fails the request with a 400
+`invalid_request_error` naming the model and the effort, because `ultra` is not a rung Kiro
+accepts. For a model that uses emulated reasoning the pin is dropped instead, and the request goes
+out with no reasoning signal at all. If you upgraded onto native effort for one of these Claude
+ids, a pin of `ultra` that used to be dropped now fails: pin `max` instead.
+
+`claude-haiku-4.5`, `claude-opus-4.5` and `claude-sonnet-4.5`, along with any Kiro
 model not listed above, use emulated reasoning at every effort; an advertised effort control is
 not proof of native support.
 

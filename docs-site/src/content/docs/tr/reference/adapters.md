@@ -231,7 +231,7 @@ model listesi kanıtı bulunmayabilir.
   `maximum`, `additionalProperties` ve 25 diğeri) araç ve yapılandırılmış çıktı şemalarından
   çıkarır, ancak bir testin o modelde ölçtüğü anahtar sözcükleri bırakır. `claude-opus-4.5`
   hepsini korur. `claude-opus-5.5` ve `claude-sonnet-5.5` yalnızca `pattern` ve `maximum` anahtar sözcüklerini korur;
-  diğerleri çıkarılmış kalır, çünkü hiçbir test bunları o modellere göndermedi. Diğer Claude
+  diğerleri çıkarılmış kalır, çünkü hiçbir test bunları bu modellere göndermedi. Diğer Claude
   kimlikleri dahil öteki Kiro modelleri tam çıkarmayı korur. İstisna model ve anahtar sözcük
   bazındadır, çünkü bu hat akıl yürütme çabasında Claude modellerini zaten ayırıyor ve Kiro'nun
   reddettiği bir anahtar sözcük yalnızca bir ipucunu kaybettirmekle kalmayıp tüm isteği
@@ -317,8 +317,19 @@ Kiro'da `minimal` seviyesi yoktur. Yukarıdaki dokuz modelden `claude-opus-5` ve
 dışındakiler, yerel çaba açılmadan önce çalışan bir isteği başarısız kılmamak için `minimal`
 seviyesinde öykünülen bloğu korur. Bu iki Opus 5 modeli ve yerel çaba kullanan GPT modelleri
 `minimal` seviyesini modeli ve seviyeyi belirten 400 `invalid_request_error` ile reddeder.
-`ultra` Kiro'ya hiç ulaşmaz: hem Responses hem Messages yolu, adaptör isteği kurmadan önce onu
-`max` seviyesine indirir. `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5` ve
+
+`ultra` için bir ayrım gerekir. Çağıranın kendi gönderdiği `ultra`, hem Responses hem Messages
+yolunda adaptör isteği kurmadan önce `max` seviyesine indirilir. Yapılandırılmış pin ise böyle
+değildir: `pinnedReasoningEffort`, `modelPinnedReasoningEfforts` ve `modelPinnedEfforts` `ultra`
+değerini kabul eder ve istek ayrıştırıldıktan sonra uygulanır, dolayısıyla adaptör onu gerçekten
+alır. Yerel Kiro çabası kullanan her modelde, yani yukarıdaki Claude kimliklerinde ve GPT
+modellerinde, bu pin `ultra` Kiro'nun kabul ettiği bir seviye olmadığı için isteği modeli ve
+seviyeyi belirten 400 `invalid_request_error` ile başarısız kılar. Öykünme kullanan bir modelde ise
+pin sessizce düşürülür ve istek hiçbir akıl yürütme sinyali olmadan gider. Bu Claude
+kimliklerinden birini yerel çabaya yükselttiyseniz, önceden düşürülen bir `ultra` pin artık
+başarısız olur: `max` pinleyin.
+
+`claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5` ve
 yukarıda listelenmeyen Kiro modelleri her seviyede öykünme kullanır; çaba seçeneği yerel desteğin
 kanıtı değildir.
 

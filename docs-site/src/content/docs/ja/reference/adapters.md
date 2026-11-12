@@ -191,8 +191,17 @@ Kiro は `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-
 Kiro には `minimal` の段階がありません。`claude-opus-5` と `claude-opus-5.5` を除く上記の 9 モデルは、
 ネイティブ effort を有効にする前から動作していたリクエストを失敗させないよう、`minimal` でエミュレーションの
 ブロックを維持します。この 2 つの Opus 5 モデルとネイティブ effort を持つ GPT 系は、`minimal` を
-モデルと effort を示す 400 `invalid_request_error` で拒否します。`ultra` は Kiro に届きません。
-Responses と Messages のどちらの経路も、アダプターがリクエストを組み立てる前に `max` へ下げます。
+モデルと effort を示す 400 `invalid_request_error` で拒否します。
+
+`ultra` には区別が必要です。呼び出し元が送った `ultra` は、Responses と Messages のどちらの経路でも
+アダプターがリクエストを組み立てる前に `max` へ下げます。設定した pin は違います。
+`pinnedReasoningEffort`、`modelPinnedReasoningEfforts`、`modelPinnedEfforts` は `ultra` を受け付け、
+リクエストを解析した後に適用するため、アダプターまで届きます。ネイティブ Kiro effort を持つすべての
+モデル、つまり上記の Claude id と GPT モデルでは、この pin が Kiro の受け付けない段階であるため、
+モデルと effort を示す 400 `invalid_request_error` でリクエストが失敗します。エミュレーションを使うモデルでは pin は黙って捨てられ、推論シグナルのないままリクエストが
+送られます。これらの Claude id のいずれかをネイティブ effort に上げた後では、以前は捨てられていた
+`ultra` の pin が失敗します。`max` を pin してください。
+
 `claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` と、上記にない Kiro モデルは
 すべての effort でエミュレーションを使います。effort の選択肢だけではネイティブ対応を意味しません。
 
