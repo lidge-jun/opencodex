@@ -1026,6 +1026,9 @@ const QUOTE_PAIRS: Record<string, string> = {
 /** The classification text the combo path bounds a body to (src/server/responses/core-errors.ts). */
 const MODERATION_EVIDENCE_LIMIT = 500;
 
+/** Structured codes that can stand beside a moderation verdict without being evidence of their own. */
+const MODERATION_COMPATIBLE_CODES = new Set(["moderation_refusal", "content_filter", "invalid_request_error", "400", "422"]);
+
 /**
  * A moderation phrase echoed inside quotes is a reflected parameter value (Invalid enum value
  * 'blocked by moderation'), not a verdict, so verdict evidence must appear in prose. One pass
@@ -1108,7 +1111,8 @@ const HARD_STOP_TOKEN =
  * Underscores count as separators, so a token nested in a longer identifier still matches.
  */
 function namesHardStopToken(text: string): boolean {
-  return HARD_STOP_TOKEN.test(withJsonEscapesDecoded(text).replace(/[-.\s]+/g, "_"));
+  // A raw JSON body spells whitespace as \n, \t or \r; fold those escapes as well.
+  return HARD_STOP_TOKEN.test(withJsonEscapesDecoded(text).replace(/\\[ntr]/g, "_").replace(/[-.\s]+/g, "_"));
 }
 
 /** JSON \\uXXXX escapes decoded, so an escaped nested code cannot slip past {@link HARD_STOP_TOKEN}. */
@@ -1133,6 +1137,9 @@ function namesModerationRefusal(text: string): boolean {
 /** Whether the caller's status and structured code leave room for a moderation hop at all. */
 function moderationCodeAllowsHop(status: number, normalizedCode: string): boolean {
   if (status !== 400 && status !== 422) return false;
+  // Any other structured code (rate limit, quota, overload, model scope...) is its own evidence
+  // with its own cooldown; moderation prose beside it does not turn it into a free hop.
+  if (normalizedCode !== "" && !MODERATION_COMPATIBLE_CODES.has(normalizedCode)) return false;
   return !(
     isCyberPolicyCode(normalizedCode)
     || isTerminalRefusalCode(normalizedCode)
@@ -1174,7 +1181,9 @@ export function isProviderModerationRefusal(
     || safetyRefusalCodeFromMessage(message) !== undefined || isCyberPolicyMessage(message)
     || lower.includes(CYBER_POLICY_FALLBACK_MESSAGE.toLowerCase())
     || lower.includes(TERMINAL_REFUSAL_FALLBACK_MESSAGE.toLowerCase())
-    || classifyError(status, "upstream_error", message).code !== "invalid_request_error")) {
+    // Classified as a 400: the moderation hop covers 422 too, and classifyError maps an untyped
+    // 422 to upstream_error rather than invalid_request_error.
+    || classifyError(400, "upstream_error", message).code !== "invalid_request_error")) {
     return false;
   }
   if (!message) {
@@ -1257,6 +1266,7 @@ export function isProviderModerationRefusal(
         || isNonReplayableUpstreamCode(c)
         || c === "origin_rejected"
         || c === "content_policy_violation"
+        || (c !== "" && !MODERATION_COMPATIBLE_CODES.has(c))
       ) {
         return false;
       }

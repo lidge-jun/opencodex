@@ -1776,3 +1776,36 @@ describe("provider moderation refusal: any spelling of a verdict, terminal prose
     expect(isProviderModerationRefusal(400, message, "content_filter")).toBe(true);
   });
 });
+
+describe("provider moderation refusal: escaped whitespace, 422, rate-limit codes, policy path", () => {
+  test("a JSON-escaped whitespace spelling of a hard code stops", async () => {
+    for (const sep of ["\n", "\t", "\r\n"]) {
+      for (const hard of ["content_policy_violation", "upstream_no_response", "client_cancelled", "client_closed_request"]) {
+        const raw = JSON.stringify({ error: { message: "The input was refused by moderation." + sep + hard } });
+        const failure = await consumeComboFailure(new Response(raw, { status: 400 }));
+        expect({ hard, verdict: failure.providerModerationRefusal }).toEqual({ hard, verdict: false });
+        expect(isProviderModerationRefusal(400, raw)).toBe(false);
+      }
+    }
+  });
+
+  test("a genuine 422 moderation refusal hops without cooling", () => {
+    for (const body of [
+      { error: { code: "content_filter", message: "The input was refused by moderation." } },
+      { error: { message: "The prompt was blocked by moderation. Categories: violence" } },
+    ]) {
+      const message = JSON.stringify(body);
+      expect(comboFailureDecision(422, message)).toBe("hop");
+      expect(comboFailureCooldownScope(422, message)).toBe("none");
+    }
+  });
+
+  test("a structured rate-limit or overload code beside moderation prose keeps its own decision", () => {
+    for (const code of ["rate_limit_exceeded", "slow_down", "server_is_overloaded"]) {
+      const message = JSON.stringify({ error: { code, message: "The input was refused by moderation." } });
+      expect(isProviderModerationRefusal(400, message, code)).toBe(false);
+      expect(isProviderModerationRefusal(400, message)).toBe(false);
+      expect(comboFailureCooldownScope(400, message, { code })).not.toBe("none");
+    }
+  });
+});
