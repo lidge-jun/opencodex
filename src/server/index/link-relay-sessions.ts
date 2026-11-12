@@ -3,10 +3,11 @@ import { createHash } from "node:crypto";
 import {
   LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION, LINK_RELAY_CONNECTION_HEADER,
   LINK_RELAY_CONNECTION_PROOF_HEADER, LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkConnectionProof,
-  linkRelayProof, linkRelayProofMatches,
+  linkRelayProof, linkRelayProofMatches, LINK_RELAY_WS_STATE_HEADER, LINK_RELAY_WS_STATE_PROOF_HEADER, linkWebsocketStateProof,
 } from "../../link/relay-auth";
 import { parseLinkPeerReport, type LinkPeerObservations } from "../../link/peer-report";
 import { linkActivityCounts, type LinkActivity } from "../../link/child-activity";
+import type { LinkSessionGrant, LinkUpgradeOutcome } from "./link-websocket";
 import type { LinkTrafficBook } from "../../link/traffic";
 import { LINK_HOME_FEATURES_HEADER } from "../../link/request-compression";
 
@@ -39,6 +40,22 @@ export interface LinkRelaySessionOptions {
    * bytes served, the same value as `catalogEtag(body)`. Cancel, abort, a read error and HEAD report nothing.
    */
   catalogServed?: (served: LinkCatalogServed) => void;
+  /**
+   * The Responses WebSocket over the link (link-websocket.ts). Called only for a request with an
+   * Upgrade header on a session this book has just consumed and verified; it owns the session's
+   * lease when it handles the request. Absent, or answering handled: false, the request keeps
+   * today's path.
+   */
+  upgrade?: (req: Request, server: Server<unknown>, grant: LinkSessionGrant) => LinkUpgradeOutcome;
+  /** Whether verified answers advertise the link WebSocket; the header pair is sent only while on. */
+  websocketAdvertised?: () => boolean;
+  /**
+   * A relayed POST /v1/responses on a verified session, before dispatch: it may return results a
+   * closed link WebSocket of the same link and own thread was waiting for (link-websocket.ts holds).
+   * Must not consume the request body. The returned decision is called once with true only when the
+   * handler answered below 400, so a request refused before or after reading its body releases nothing.
+   */
+  observeResponsesRequest?: (linkId: string, req: Request) => ((accepted: boolean) => void) | void;
   /**
    * Per-link body bytes of verified relay-session requests (#3023), owned by the listener lifecycle.
    * The response side is counted as it streams; the request side is its declared Content-Length,
@@ -113,12 +130,16 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         let generation: string | undefined;
         try { generation = options.connectionGeneration?.(linkId); } catch { generation = undefined; }
         const connectionProof = generation === undefined ? null : linkConnectionProof(fingerprint, keyId, linkId, nonce, generation);
+        let advertised = false;
+        try { advertised = options.websocketAdvertised?.() === true; } catch { advertised = false; }
+        const websocketProof = advertised ? linkWebsocketStateProof(fingerprint, keyId, linkId, nonce, "on") : null;
         const features = options.homeFeatures?.() ?? [];
         const answer = () => new Response(null, { status: 204, headers: {
           "x-opencodex-link-proof": linkRelayProof(fingerprint, "listener", keyId, linkId, nonce)!,
           "cache-control": "no-store",
           ...(features.length > 0 ? { [LINK_HOME_FEATURES_HEADER]: features.join(",") } : {}),
           ...(connectionProof ? { [LINK_RELAY_CONNECTION_HEADER]: generation!, [LINK_RELAY_CONNECTION_PROOF_HEADER]: connectionProof } : {}),
+          ...(websocketProof ? { [LINK_RELAY_WS_STATE_HEADER]: "on", [LINK_RELAY_WS_STATE_PROOF_HEADER]: websocketProof } : {}),
         } });
         // A readiness probe closes after this answer and sends no data request, so it reserves
         // nothing: no session to consume, no capacity and no drain lease held until expiry.
@@ -142,7 +163,12 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           release(); return refuse();
         }
         // Keep the native Request identity: Bun's requestIP/timeout APIs need the original request.
-        try { req.headers.delete(LINK_RELAY_SESSION_HEADER); } catch { release(); return refuse(); }
+        // The link turn header is ours alone (src/server/link-turn.ts): never accepted from a peer.
+        try { req.headers.delete(LINK_RELAY_SESSION_HEADER); req.headers.delete("x-opencodex-link-turn"); } catch { release(); return refuse(); }
+        if (options.upgrade && req.headers.has("upgrade")) {
+          const outcome = options.upgrade(req, server as Server<unknown>, { keyId: session.keyId, linkId: session.linkId, fingerprint: session.fingerprint, release });
+          if (outcome.handled) return outcome.response as Response;
+        }
       } else {
         if (closing) return new Response(null, { status: 503 });
         // Older peers may still use the ordinary key admission. Its response also owns a drain lease.
@@ -159,6 +185,10 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         release = () => { end(); lease(); };
       };
       if (countsActivity && sessionLink !== null) beginActivity();
+      let decideObservation: ((accepted: boolean) => void) | undefined;
+      if (sessionLink !== null && req.method === "POST" && url.pathname === "/v1/responses") {
+        try { decideObservation = options.observeResponsesRequest?.(sessionLink, req) ?? undefined; } catch { /* observation never blocks the request */ }
+      }
       const flow = sessionLink !== null ? options.traffic?.begin(sessionLink) : undefined;
       if (flow) {
         const declared = req.headers.get("content-length");
@@ -167,11 +197,13 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
       }
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
-      const beforeHeadersAbort = () => { flow?.end(false); release(); };
+      // An abort before headers also decides a pending body observation (not accepted) and drops its unclaimed turn token.
+      const beforeHeadersAbort = () => { decideObservation?.(false); flow?.end(false); release(); };
       req.signal.addEventListener("abort", beforeHeadersAbort, { once: true });
       if (req.signal.aborted) beforeHeadersAbort();
       try {
         const response = await dispatch(req, server);
+        decideObservation?.(response.status < 400 && !req.signal.aborted);
         req.signal.removeEventListener("abort", beforeHeadersAbort);
         if (countsActivity && sessionLink === null && response.status < 400 && !req.signal.aborted) beginActivity();
         if (!response.body || req.method === "HEAD") { flow?.end(true); release(); return response; }
@@ -215,7 +247,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           cancel,
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-      } catch (error) { req.signal.removeEventListener("abort", beforeHeadersAbort); flow?.end(false); release(); throw error; }
+      } catch (error) { decideObservation?.(false); req.signal.removeEventListener("abort", beforeHeadersAbort); flow?.end(false); release(); throw error; }
     },
   };
 }
