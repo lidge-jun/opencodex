@@ -11,7 +11,12 @@ const emit = (value: unknown) => process.stdout.write(JSON.stringify(value) + "\
 if (process.argv[4] === "image-replay") {
   emit({ type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] });
   emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: JSON.stringify(frame.message.content) } } });
-  emit({ type: "result", subtype: "success", usage: { input_tokens: 2, output_tokens: 4 } });
+  // The synthetic replay can exceed a pipe buffer. Drain the final write before exit
+  // so the parent never receives a truncated JSON text delta on a busy CI runner.
+  await new Promise<void>((resolve, reject) => process.stdout.write(
+    JSON.stringify({ type: "result", subtype: "success", usage: { input_tokens: 2, output_tokens: 4 } }) + "\n",
+    error => error ? reject(error) : resolve(),
+  ));
   process.exit(0);
 }
 const current = frame.message.content.at(-1).text as string;

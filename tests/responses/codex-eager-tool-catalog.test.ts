@@ -11,6 +11,7 @@ import type { OcxConfig } from "../../src/types";
 import { clearResponseStateForTests, rememberResponseState } from "../../src/responses/state";
 import { createTempHome } from "../helpers/temp-home";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
+import { ownedResponseStateOptions, responseReplayFixtureApiKeys } from "../helpers/response-replay-owner";
 
 /**
  * An eagerly expanded Codex MCP catalog is a diagnostic, never a refusal (#8133, ADR-0022): every
@@ -96,6 +97,7 @@ beforeEach(() => {
   });
   saveConfig({
     port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "fixture",
+    apiKeys: responseReplayFixtureApiKeys.map(key => ({ ...key, name: "Replay fixture", createdAt: "2026-01-01T00:00:00.000Z" })),
     providers: { fixture: { adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href, apiKey: "fixture-key", liveModels: false, allowPrivateNetwork: true } },
     combos: { catalog: { strategy: "failover", targets: [{ provider: "fixture", model: "model" }] } },
   } as OcxConfig);
@@ -117,7 +119,7 @@ function codexHeaders(session = `catalog-session-${++sessionCounter}`): Record<s
 async function send(path: string, tools: unknown[], headers: Record<string, string>, extra: Record<string, unknown> = {}) {
   const response = await fetch(new URL(path, server.url), {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: "Bearer fixture-client", ...headers },
+    headers: { "content-type": "application/json", authorization: `Bearer ${responseReplayFixtureApiKeys[0]!.key}`, ...headers },
     body: JSON.stringify({ model: "fixture/model", input: "hello", stream: false, tools, ...extra }),
   });
   const text = await response.text();
@@ -212,8 +214,9 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
       { model: "fixture/model", input: storedInput },
       { id: "resp_catalog_restored", status: "completed",
         output: [{ type: "message", id: "msg_catalog_restored", role: "assistant", content: "Earlier response" }] },
+      undefined, ownedResponseStateOptions("catalog-restored"),
     );
-    const result = await send("/v1/responses", [], codexHeaders(), {
+    const result = await send("/v1/responses", [], { ...codexHeaders(), "thread-id": "catalog-restored" }, {
       previous_response_id: "resp_catalog_restored",
       input: [message("user", "Current request")],
     });
@@ -231,8 +234,9 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
       { model: "fixture/model", input: storedInput },
       { id: "resp_catalog_replay", status: "completed",
         output: [{ type: "message", id: "msg_catalog_replay", role: "assistant", content: "Earlier response" }] },
+      undefined, ownedResponseStateOptions("catalog-replay"),
     );
-    const result = await send("/v1/responses", [], codexHeaders(), {
+    const result = await send("/v1/responses", [], { ...codexHeaders(), "thread-id": "catalog-replay" }, {
       previous_response_id: "resp_catalog_replay",
       input: [...storedInput,
         { type: "message", id: "msg_catalog_replay", role: "assistant", content: "Earlier response" },
@@ -298,7 +302,7 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
   test("a Codex WebSocket turn is diagnosed from its handshake identity and still served", async () => {
     const url = new URL("/v1/responses", server.url);
     url.protocol = "ws:";
-    const socket = new WebSocket(url, { headers: { authorization: "Bearer fixture-client", ...codexHeaders() } } as unknown as string[]);
+    const socket = new WebSocket(url, { headers: { authorization: `Bearer ${responseReplayFixtureApiKeys[0]!.key}`, ...codexHeaders() } } as unknown as string[]);
     try {
       const terminal = new Promise<string>((resolve, reject) => {
         socket.addEventListener("message", event => {
