@@ -28,6 +28,7 @@ import { createCatalogPullRecorder, type CatalogPull, type CatalogPullRecorder }
 import type { LinkActivitySnapshot } from "../../link/child-activity";
 import type { CatalogRevisionMonitor } from "../../link/child-catalog-freshness";
 import type { ChildOpsHostBinding } from "../../link/child-ops-host";
+import { createRouteProofRegistry } from "../../link/route-proof";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
 import { linkHomeFeatures } from "../../remote/features";
@@ -50,8 +51,8 @@ export interface OptionalListenerSet<T> {
   ingressOf(server: Server<T>): ServerIngress | undefined;
   linkRouteAllowed(url: URL, req: Request): boolean;
   linkAdmissionKeyIds(): ReadonlySet<string>;
-  onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
-  notifyAuthenticatedCatalog(apiKeyId: string): void;
+  onAuthenticatedCatalog(listener: (apiKeyId: string, routeProofId?: string) => void): () => void;
+  notifyAuthenticatedCatalog(apiKeyId: string, routeProofId?: string): void;
   peerObservation(linkId: string): import("../../link/peer-report").LinkPeerEntry;
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
   /** Close one link's Responses WebSockets with 4401; the revoke route calls it after its commit. */
@@ -102,10 +103,14 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
   const localControl = createLocalControlListener<T>();
   let activeConfig: OcxConfig | undefined;
   let stopJevQuotaActivation: (() => void) | undefined;
+  // Readiness proofs of multi-route candidates: registered by the supervisor, admitted by the
+  // hub-link catalog admission below, valid only under the link's current tunnel generation.
+  const routeProofs = createRouteProofRegistry({ generationOf: linkId => supervisor.connectionGeneration?.(linkId) });
   const supervisor = createLinkSupervisor({
     // Tunnel state changes and their causes reach <configDir>/link/diagnostics.jsonl (bounded).
     diagnostic: recordLinkDiagnostic,
     flushDiagnostics: flushLinkDiagnostics,
+    routeProof: routeProofs,
     apiKeys: () => activeConfig?.apiKeys ?? [],
     revokeApiKey: id => {
       if (!activeConfig) return false;
@@ -123,6 +128,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
     },
   });
   let unregisterSupervisorAdmission: (() => void) | undefined;
+  let unregisterRouteProofs: (() => void) | undefined;
   let supervisorStop: (() => Promise<void>) | undefined;
   let catalogPulls: CatalogPullRecorder | undefined;
   let unregisterCatalogPulls: (() => void) | undefined;
@@ -176,7 +182,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
       || linkChildParityRouteAllowed(url, req),
     linkAdmissionKeyIds: () => linkListener.linkAdmissionKeyIds(),
     onAuthenticatedCatalog: listener => linkListener.onAuthenticatedCatalog(listener),
-    notifyAuthenticatedCatalog: apiKeyId => linkListener.notifyAuthenticatedCatalog(apiKeyId),
+    notifyAuthenticatedCatalog: (apiKeyId, routeProofId) => linkListener.notifyAuthenticatedCatalog(apiKeyId, routeProofId),
     peerObservation: linkId => linkListener.peerObservation(linkId),
     linkActivity: (linkId, now) => linkListener.linkActivity(linkId, now),
     closeLinkSockets: linkId => linkListener.closeLinkSockets(linkId),
@@ -210,6 +216,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
         },
       });
       unregisterSupervisorAdmission ??= linkListener.onAuthenticatedCatalog(apiKeyId => supervisor.notifyAuthenticatedRequest?.(apiKeyId));
+      unregisterRouteProofs ??= linkListener.onAuthenticatedCatalog((apiKeyId, routeProofId) => {
+        if (routeProofId !== undefined) routeProofs.admit(apiKeyId, routeProofId);
+      });
       // Only the hub-link relay fires this, so a Home without links records nothing.
       catalogPulls ??= createCatalogPullRecorder({ storePath: linkDeps.storePath });
       unregisterCatalogPulls ??= linkListener.onCatalogServed(served => catalogPulls!.record(served));
@@ -260,6 +269,8 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
       try { await claudeIntercept.stop(); } catch (error) { failure ??= error; }
       unregisterSupervisorAdmission?.();
       unregisterSupervisorAdmission = undefined;
+      unregisterRouteProofs?.();
+      unregisterRouteProofs = undefined;
       unregisterCatalogPulls?.();
       unregisterCatalogPulls = undefined;
       catalogPulls?.flush();

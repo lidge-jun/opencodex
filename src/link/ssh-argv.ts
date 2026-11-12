@@ -96,6 +96,11 @@ function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "a
 
 export interface TunnelArgvOptions {
   alias: string;
+  /**
+   * Where ssh connects, when it is another route to the same machine. HostKeyAlias stays alias, so
+   * the route is checked against the key pinned for the link. Omitted: alias (today's argv).
+   */
+  destination?: string;
   /** "R": listen on the remote host and reach this host. "L": listen here and reach the remote host. */
   direction: TunnelDirection;
   /** Port the forward listens on (remote for "R", local for "L"). */
@@ -109,6 +114,7 @@ export interface TunnelArgvOptions {
 
 export function buildTunnelArgv(options: TunnelArgvOptions): string[] {
   const alias = assertSshAlias(options.alias);
+  const destination = assertSshAlias(options.destination ?? alias);
   const bind = assertPort(options.bindPort, "bindPort");
   const target = assertPort(options.targetPort, "targetPort");
   if (options.direction !== "R" && options.direction !== "L") throw new LinkSshArgumentError("direction must be R or L");
@@ -119,12 +125,14 @@ export function buildTunnelArgv(options: TunnelArgvOptions): string[] {
     ...commonOptions(alias, options.knownHostsFile, "yes", logLevel),
     "-o", "ExitOnForwardFailure=yes",
     `-${options.direction}`, `127.0.0.1:${bind}:127.0.0.1:${target}`,
-    "--", alias,
+    "--", destination,
   ];
 }
 
 export interface ExecArgvOptions {
   alias: string;
+  /** Another route to the same machine; HostKeyAlias stays alias. Omitted: alias. */
+  destination?: string;
   /** Remote argv. The command must be sh; its arguments are quoted for the remote shell. */
   argv: readonly string[];
   knownHostsFile: string;
@@ -132,12 +140,13 @@ export interface ExecArgvOptions {
 
 export function buildExecArgv(options: ExecArgvOptions): string[] {
   const alias = assertSshAlias(options.alias);
+  const destination = assertSshAlias(options.destination ?? alias);
   if (options.argv.length === 0) throw new LinkSshArgumentError("remote argv must not be empty");
   return [
     "ssh", "-T",
     ...commonOptions(alias, options.knownHostsFile, "yes"),
     "-o", "ClearAllForwardings=yes",
-    "--", alias,
+    "--", destination,
     quoteRemote(options.argv),
   ];
 }
@@ -282,6 +291,32 @@ export function buildProbeArgv(options: ProbeArgvOptions): string[] {
   ];
 }
 
+export interface RouteProbeArgvOptions {
+  /** The link's alias: the name its host key is pinned under. */
+  alias: string;
+  /** The route being tried. */
+  destination: string;
+  /** The link known_hosts file. It is only read: the route must offer the key already pinned. */
+  knownHostsFile: string;
+}
+
+/**
+ * Does this route reach the pinned machine and accept our key? Strict host-key checking against
+ * the link file under HostKeyAlias=alias: a route that answers with any other key fails with "Host
+ * key verification failed" and nothing is learned or written. Success prints exactly ocx-link-probe.
+ */
+export function buildRouteProbeArgv(options: RouteProbeArgvOptions): string[] {
+  const alias = assertSshAlias(options.alias);
+  const destination = assertSshAlias(options.destination);
+  return [
+    "ssh", "-T",
+    ...commonOptions(alias, options.knownHostsFile, "yes"),
+    "-o", "ClearAllForwardings=yes",
+    "--", destination,
+    "echo ocx-link-probe",
+  ];
+}
+
 /**
  * Locale-independent Windows check for a host whose SSH shell is cmd.exe or PowerShell. Both run
  * `cmd /c echo %OS%`, and cmd expands it to `Windows_NT` regardless of display language. The
@@ -290,13 +325,14 @@ export function buildProbeArgv(options: ProbeArgvOptions): string[] {
 export const WINDOWS_OS_PROBE = "cmd /c echo %OS%";
 
 /** Run WINDOWS_OS_PROBE against an already trusted (pinned or just-probed) host key only. */
-export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string }): string[] {
+export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string; destination?: string }): string[] {
   const alias = assertSshAlias(options.alias);
+  const destination = assertSshAlias(options.destination ?? alias);
   return [
     "ssh", "-T",
     ...commonOptions(alias, options.knownHostsFile, "yes"),
     "-o", "ClearAllForwardings=yes",
-    "--", alias,
+    "--", destination,
     WINDOWS_OS_PROBE,
   ];
 }
