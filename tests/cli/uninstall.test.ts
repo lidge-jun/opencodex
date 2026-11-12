@@ -162,10 +162,12 @@ describe("full uninstall command", () => {
     expect(uninstallBody).toContain('runStep("service removed"');
     // #7771 round 7: the stop itself lives in `uninstall-stop`, which the step calls.
     expect(uninstallBody).toContain("await stopUninstallProxy({");
-    expect(uninstallBody).toContain("uninstallServiceDetailed()");
+    // The removal runs through the gate that keeps a Part A failure from deleting the
+    // registration; the gate's rule is exercised in the removal test below.
+    expect(uninstallBody).toContain("uninstallServiceRemoval(observed, uninstallServiceDetailed)");
     expect(uninstallBody.indexOf('runStep("service stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("proxy stopped"'));
     expect(uninstallBody.indexOf('runStep("proxy stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("service removed"'));
-    expect(uninstallBody.indexOf("await stopUninstallProxy({")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
+    expect(uninstallBody.indexOf("await stopUninstallProxy({")).toBeLessThan(uninstallBody.indexOf("uninstallServiceRemoval(observed, uninstallServiceDetailed)"));
   });
 
   test("Windows uninstall leaves the port wait to Part B instead of stopProxy's legacy 15 s", async () => {
@@ -311,8 +313,16 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     }
     const fn = await uninstallFn();
     const step = fn.slice(fn.indexOf('runStep("service removed"'), fn.indexOf('runStep("service removed"') + 800);
-    expect(step).toContain("serviceRemovalAllowed(observed)");
-    expect(step.indexOf("serviceRemovalAllowed(observed)")).toBeLessThan(step.indexOf("uninstallServiceDetailed()"));
+    // The command body calls the gate; the rule itself is exercised above.
+    expect(step).toContain("uninstallServiceRemoval(observed, uninstallServiceDetailed)");
+    // A refused gate throws before the removal runs, and the step records the failure.
+    const { uninstallServiceRemoval } = await import("../../src/cli/uninstall-plan");
+    let removed = 0;
+    expect(() => uninstallServiceRemoval({ serviceStop: "failed" }, () => { removed++; return "removed"; }, "win32"))
+      .toThrow("could not be proven stopped");
+    expect(removed).toBe(0);
+    expect(uninstallServiceRemoval({ serviceStop: "stopped" }, () => { removed++; return "removed"; }, "win32")).toBe("removed");
+    expect(removed).toBe(1);
   });
 
   test("the detailed outcome is consumed, not the boolean collapse", async () => {

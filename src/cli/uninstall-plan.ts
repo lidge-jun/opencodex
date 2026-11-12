@@ -72,6 +72,27 @@ export function sharedTeardownAuthorized(o: UninstallObservation, platform: Node
   return o.proxyProvenDown;
 }
 
+/**
+ * The "service removed" step: gate, then remove.
+ *
+ * Kept beside the rule so the command body stays a call, and so the refusal is testable
+ * without reading `handleUninstall`. A refused gate throws, which the step records as a
+ * failure and which keeps the shared teardown blocked.
+ */
+export function uninstallServiceRemoval(
+  o: Pick<UninstallObservation, "serviceStop">,
+  remove: () => "absent" | "removed" | "failed",
+  platform: NodeJS.Platform = process.platform,
+): "absent" | "removed" | "failed" {
+  if (!serviceRemovalAllowed(o, platform)) {
+    throw new Error(
+      "the service manager could not be proven stopped, so its registration was left in place; "
+      + "resolve the 'service stopped' failure, then rerun 'ocx uninstall'",
+    );
+  }
+  return remove();
+}
+
 /** An endpoint an uninstall must account for before shared config comes down. */
 export type ProbeEndpoint = { hostname: string; port: number };
 

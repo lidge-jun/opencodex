@@ -80,7 +80,7 @@ import {
 } from "../config/pending-teardown";
 import { collectStatus, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, runtimeSupervisorLine, statusDeadProxyLines, statusProxyUp, statusUnusedProxyLines } from "./status";
 import { stopUninstallProxy } from "./uninstall-stop";
-import { endpointsToProve, everyEndpointProvenDownAsync, respawnWindowRequired, serviceRemovalAllowed, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
+import { endpointsToProve, everyEndpointProvenDownAsync, respawnWindowRequired, sharedTeardownAuthorized, uninstallServiceRemoval, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
 
@@ -1609,14 +1609,7 @@ async function handleUninstall() {
     // its registration would remove the evidence without stopping the wrapper, and
     // `ocx service uninstall` refuses in the same states. The failure stays recorded so the
     // shared teardown below stays blocked.
-    if (!serviceRemovalAllowed(observed)) {
-      observed.serviceRemoval = "failed";
-      throw new Error(
-        "the service manager could not be proven stopped, so its registration was left in place; "
-        + "resolve the 'service stopped' failure, then rerun 'ocx uninstall'",
-      );
-    }
-    const outcome = uninstallServiceDetailed();
+    const outcome = uninstallServiceRemoval(observed, uninstallServiceDetailed);
     observed.serviceRemoval = outcome;
     // "absent" and "removed" are both fine; a failure is not, and it used to look like
     // absence on darwin and linux.
