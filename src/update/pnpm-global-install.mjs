@@ -330,17 +330,34 @@ export function pnpmHomeAnchor(env = process.env, platform = process.platform) {
   return anchor && isAbsolutePath(anchor, platform) && !/[\u0000-\u001f\u007f]/.test(anchor) ? anchor : null;
 }
 
-/** True when any existing component of the anchor is a symbolic link (or junction); throws when missing. */
-function pathHasLinkComponent(path) {
-  const absolute = resolve(path);
-  const { root } = parse(absolute);
+/**
+ * Classify a spelling used as a confinement root (pnpm home, store path, global group). It is trusted
+ * only when it is already canonical: no "." or ".." segment (path.resolve would delete them without
+ * visiting the links they cross), no link or junction component, and realpath returns the same path.
+ * Case is folded for the last comparison only; a case-only symlink is caught by the component walk.
+ * Returns "link", "noncanonical" or "ok"; throws when the path is missing or not a directory.
+ */
+function spellingTrust(path) {
+  const raw = String(path);
+  const { root } = parse(raw);
+  const parts = raw.slice(root.length).split(/[\\/]+/).filter(Boolean);
+  if (!root || parts.some(part => part === "." || part === "..")) return "noncanonical";
   let current = root;
-  for (const part of absolute.slice(root.length).split(sep).filter(Boolean)) {
+  for (const part of parts) {
     current = join(current, part);
-    if (lstatSync(current).isSymbolicLink()) return true;
+    if (lstatSync(current).isSymbolicLink()) return "link";
   }
-  if (!statSync(absolute).isDirectory()) throw new Error("pnpm home is not a directory");
-  return false;
+  if (!statSync(raw).isDirectory()) throw new Error("not a directory");
+  const fold = value => resolve(value).replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  return fold(realpathSync.native(raw)) === fold(raw) ? "ok" : "noncanonical";
+}
+
+/** Map a spelling's trust to the refusal reason for the named root, or null when trusted. */
+function spellingRefusal(path, label) {
+  const trust = spellingTrust(path);
+  if (trust === "link") return label + " has a symbolic link component";
+  if (trust === "noncanonical") return label + " is not a canonical path";
+  return null;
 }
 
 /** Store-proof failures are configuration facts, not package-tree failures. */
@@ -371,7 +388,8 @@ function readPnpmStore(runPnpm, owner, platform, env = process.env) {
   const homeAnchor = owner?.homeAnchor ?? pnpmHomeAnchor(env, platform);
   if (!homeAnchor) return { ok: false, reason: "pnpm home could not be determined" };
   try {
-    if (pathHasLinkComponent(homeAnchor)) return { ok: false, reason: "pnpm home has a symbolic link component" };
+    const refusal = spellingRefusal(homeAnchor, "pnpm home");
+    if (refusal) return { ok: false, reason: refusal };
   } catch {
     return { ok: false, reason: "pnpm home could not be resolved" };
   }
@@ -386,7 +404,8 @@ function readPnpmStore(runPnpm, owner, platform, env = process.env) {
   if (!storePath) return { ok: false, reason: "pnpm store path is not one absolute versioned path" };
   // A link inside the store spelling would widen the root every later hop is confined to.
   try {
-    if (pathHasLinkComponent(storePath)) return { ok: false, reason: "pnpm store path has a symbolic link component" };
+    const refusal = spellingRefusal(storePath, "pnpm store path");
+    if (refusal) return { ok: false, reason: refusal };
   } catch {
     return { ok: false, reason: "pnpm store path could not be resolved" };
   }
@@ -495,7 +514,8 @@ export function readPnpmGlobalPackage(
     if (!storeResult.ok) return storeResult;
     // The global group is the other hop root; a link in its spelling would widen it the same way.
     try {
-      if (!rootPath || pathHasLinkComponent(rootPath)) return { ok: false, reason: "pnpm global group has a symbolic link component" };
+      const refusal = rootPath ? spellingRefusal(rootPath, "pnpm global group") : "pnpm global group has a symbolic link component";
+      if (refusal) return { ok: false, reason: refusal };
     } catch { return { ok: false, reason: "pnpm global group could not be resolved" }; }
     try {
       if (!isPackageInGlobalStore(packagePath, storeResult.store)) return { ok: false, reason: "pnpm global-store package is outside the selected store" };

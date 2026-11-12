@@ -164,16 +164,23 @@ function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
   throw new Error("pnpm package symlink chain is too long");
 }
 
-/** True when an existing component of this absolute spelling is a symbolic link (or junction). */
+/**
+ * True unless this root spelling is canonical: no "." or ".." segment (path.resolve would delete them
+ * without visiting the links they cross), no link or junction component, and realpath returns the same
+ * path (case folded; a case-only symlink is caught by the component walk).
+ */
 function spellingHasLinkComponent(path) {
-  const absolute = resolve(path);
-  const { root } = parse(absolute);
+  const raw = String(path);
+  const { root } = parse(raw);
+  const parts = raw.slice(root.length).split(/[\\/]+/).filter(Boolean);
+  if (!root || parts.some(part => part === "." || part === "..")) return true;
   let current = root;
-  for (const part of absolute.slice(root.length).split(sep).filter(Boolean)) {
+  for (const part of parts) {
     current = join(current, part);
     if (lstatSync(current).isSymbolicLink()) return true;
   }
-  return false;
+  const fold = value => resolve(value).replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  return fold(realpathSync.native(raw)) !== fold(raw);
 }
 
 /**
@@ -593,7 +600,7 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store, global
     for (const root of [lexicalStore, globalRoot]) {
       // A missing group authorizes nothing (see below), so only an existing spelling is inspected.
       if (!root || !existsSync(root)) continue;
-      try { if (spellingHasLinkComponent(root)) return { ok: false, failures: ["pnpm store or global group path has a symbolic link component"] }; }
+      try { if (spellingHasLinkComponent(root)) return { ok: false, failures: ["pnpm store or global group path is not canonical"] }; }
       catch { return { ok: false, failures: ["pnpm store or global group path could not be resolved"] }; }
     }
     // Every hop from the reported spelling to the package must stay inside the selected global group

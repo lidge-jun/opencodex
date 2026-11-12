@@ -510,7 +510,7 @@ describe("#4202 install-tree dependency ownership", () => {
     rmSync(bun); symlinkSync(bunTarget, bun, "dir");
     // A linked spelling would let its target, and any relay beneath it, count as inside the store.
     expect(verifyPnpmInstallTree(exposed, "2.0.0", store, exposingGroup(exposed), alias))
-      .toEqual({ ok: false, failures: ["pnpm store or global group path has a symbolic link component"] });
+      .toEqual({ ok: false, failures: ["pnpm store or global group path is not canonical"] });
   });
 
   test("refuses a dangling package-local dependency link despite a valid group link", () => {

@@ -230,6 +230,26 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global links are outside the selected store" });
   });
 
+  test("a .. segment in pnpm home, the printed store path or a verifier root cannot hide a link", () => {
+    // <root>/link -> <root>/elsewhere/deep, so <root>/link/../pnpm-home resolves to <root>/elsewhere/pnpm-home
+    // on disk while path.resolve would read it as <root>/pnpm-home.
+    const layout = globalStoreLayout(root);
+    mkdirSync(join(root, "elsewhere", "deep"), { recursive: true });
+    mkdirSync(join(root, "elsewhere", "pnpm-home"), { recursive: true });
+    link(join(root, "elsewhere", "deep"), join(root, "link"));
+    const dotted = join(root, "link") + "/../pnpm-home";
+    layout.env = { PNPM_HOME: dotted };
+    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm home is not a canonical path" });
+    expect(storeCalls(layout)).toEqual([]);
+
+    layout.env = { PNPM_HOME: layout.home };
+    layout.storeOutput = () => layout.home + "/../pnpm-home/store/v11";
+    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm store path is not a canonical path" });
+
+    expect(verifyPnpmInstallTree(layout.exposed, "1.0.0", layout.store, layout.globalRoot, layout.home + "/../pnpm-home/store/v11"))
+      .toEqual({ ok: false, failures: ["pnpm store or global group path is not canonical"] });
+  });
+
   test("a pnpm home containing a control character refuses before pnpm runs a store query", () => {
     const layout = globalStoreLayout(root);
     layout.env = { PNPM_HOME: layout.home + "\nrm" };
