@@ -1421,7 +1421,8 @@ describe("provider moderation refusal", () => {
 
     const body = JSON.stringify({ error: { message: directValidation } });
     expect(isProviderModerationRefusal(400, body)).toBe(false);
-    expect(isProviderModerationRefusal(400, directValidation, "content_filter")).toBe(true);
+    // A validation error is evidence of its own: even with a caller's code it is not refusal copy.
+    expect(isProviderModerationRefusal(400, directValidation, "content_filter")).toBe(false);
   });
 
   test("accepts indexed content parameter paths in coded moderation refusals", () => {
@@ -1477,12 +1478,12 @@ describe("provider moderation refusal", () => {
   });
 
   test("a coded refusal over 500 characters hops on the whole body, never on the cut text", async () => {
-    const padding = "x".repeat(600);
+    const requestId = "req_" + "x".repeat(600);
     const raw = JSON.stringify({
       error: {
         code: "content_filter",
         message: "The input was refused by moderation. Categories: harassment.",
-        padding,
+        request_id: requestId,
       },
     });
     // A cut envelope does not parse, so it carries no structured verdict of its own.

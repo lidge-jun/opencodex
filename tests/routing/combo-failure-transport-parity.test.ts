@@ -390,10 +390,42 @@ describe("every prose field beside a coded verdict must describe the moderation 
       JSON.stringify({ error: { code: "content_filter", message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry.", innererror: { code: "ResponsibleAIPolicyViolation" } } }),
       JSON.stringify({ error: { code: "moderation_refusal", message: "Your request was flagged by moderation." } }),
       coded("The input was refused by moderation.", { request_id: "req_abc123" }),
-      coded("The input was refused by moderation.", { param: "input", details: ["harassment"] }),
+      coded("The input was refused by moderation.", { param: "input" }),
+      coded("The input was refused by moderation. Categories: sexual, hate. Please modify your prompt and retry."),
+      coded("The input was refused by moderation. Categories: hate, harassment, self-harm."),
+      coded("The input was refused by moderation. Categories: sexual and hate."),
+      coded("filtered"),
+      coded("Content filtered by moderation."),
       JSON.stringify({ error: { code: "content_filter", message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry. To learn more about our content filtering policies please read our documentation: https://go.microsoft.com/fwlink/?linkid=2198766" } }),
     ]) {
       expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: true });
+    }
+  });
+
+  test("only known refusal copy and known fields pass beside a coded verdict", async () => {
+    for (const body of [
+      // Evidence joined by separators other than a sentence break.
+      coded("Refused by moderation \u2014 your account is past due."),
+      coded("Refused by moderation: your account is past due."),
+      coded("Filtered by moderation (your account is past due)."),
+      coded("Filtered by moderation / your account is past due."),
+      coded("Filtered by moderation\tyour account is past due."),
+      coded("Filtered by moderation;your account is past due."),
+      coded("Filtered by moderation so your account is past due."),
+      // Follow-up clauses that carry evidence of their own.
+      coded("Content filtered by moderation. Learn more: the model gpt-9 does not exist."),
+      coded("Content filtered by moderation. For more information about your suspended account."),
+      coded("Content filtered by moderation. Retry with model gpt-9 which does not exist."),
+      coded("Content filtered by moderation. Please modify your input for the suspended account."),
+      coded("The input was refused by moderation. Categories: model gpt-9 does not exist."),
+      // Bare tokens under fields a refusal does not carry.
+      coded("The input was refused by moderation.", { metadata: { account: "suspended" } }),
+      coded("The input was refused by moderation.", { state: "past_due" }),
+      coded("The input was refused by moderation.", { account_status: "disabled" }),
+    ]) {
+      expect({ body, verdict: isProviderModerationRefusal(400, body, undefined, true) }).toEqual({ body, verdict: false });
+      const failure = await consumeComboFailure(new Response(body, { status: 400 }));
+      expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).not.toBe("none");
     }
   });
 
@@ -428,6 +460,7 @@ describe("every prose field beside a coded verdict must describe the moderation 
       { metadata: { raw: "Your account is past due" } },
       { metadata: { httpStatus: 503 } },
       { metadata: { safety_violation: true } },
+      { metadata: { client: "my app v2" } },
     ]) {
       const frame = { type: "response.failed", response: { status: "failed", ...extra, error } };
       const result = await preflightComboStreamResponse(new Response(
@@ -438,5 +471,13 @@ describe("every prose field beside a coded verdict must describe the moderation 
       const scope = comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal });
       expect({ extra, scope }).not.toEqual({ extra, scope: "none" });
     }
+  });
+
+  test("a long whitespace run in upstream prose is judged in linear time", () => {
+    // The clause splitter once backtracked across whitespace runs: about 2 s for this body.
+    const body = JSON.stringify({ error: { code: "content_filter", message: "moderation" + " ".repeat(60_000) + "x" } });
+    const started = performance.now();
+    expect(isProviderModerationRefusal(400, body, undefined, true)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(250);
   });
 });

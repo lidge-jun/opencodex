@@ -1004,60 +1004,65 @@ const MODERATION_COMPATIBLE_VALUES = new Set([
   "invalid_request_error", "error", "ai_apicallerror", "responsibleaipolicyviolation", "400", "422",
 ]);
 
-/** Keys whose values are structured verdicts rather than prose. */
-// Keys are compared folded: lowercase with underscores and hyphens removed (errorCode, error_code).
-const MODERATION_VERDICT_KEYS = new Set(["code", "type", "errorcode", "errortype", "reason", "kind", "category"]);
-
-/** Keys that state an HTTP status; any stated status other than 400/422 is evidence of its own. */
-const MODERATION_STATUS_KEYS = new Set(["status", "statuscode", "httpstatus", "httpstatuscode"]);
-
-/** Keys whose string values are the body's prose. */
-const MODERATION_PROSE_KEYS = new Set(["message", "error", "detail", "details", "msg", "description", "errormessage"]);
-
-/**
- * Every prose string beside a coded verdict must itself describe the moderation refusal. A body
- * that also says something else (a parameter error, a missing model, an inactive account) carries
- * evidence of its own, so the verdict is not the whole story and the body keeps dev's decision.
- */
-const MODERATION_PROSE = /moderat|content[\s_-]*(?:filter|management|safety)|\bfiltered\b|responsible[\s_-]*ai/i;
-
-/**
- * Clauses a refusal may carry beside its verdict without adding evidence of its own: the category
- * list, the advice to change the prompt and retry, and the pointer to documentation.
- */
-const MODERATION_PROSE_FOLLOW_UP =
-  /^(?:categor(?:y|ies)\b.*|(?:please\s+)?(?:modify|revise|rephrase|change|adjust|edit|update)\s+(?:your|the)\s+(?:prompt|input|request|message|content)s?\b.*|(?:please\s+)?(?:try|retry)(?:\s+again)?\b.*|.*\b(?:learn\s+more|more\s+information|documentation)\b.*)$/i;
-
-/**
- * Whether a prose string only describes the moderation refusal. Each clause (split at sentence
- * ends, semicolons, commas and joining words) must name the refusal or be a known follow-up, so a
- * string that also reports an account, model, parameter or billing problem keeps dev's decision.
- */
-function describesOnlyModeration(text: string): boolean {
-  const clauses = text.split(/(?<=[.!?;,])\s+|\s+(?:and|but|however|while|although|because)\s+|\n+/i)
-    .map(clause => clause.trim()).filter(clause => clause !== "");
-  return clauses.some(clause => MODERATION_PROSE.test(clause))
-    && clauses.every(clause => MODERATION_PROSE.test(clause) || MODERATION_PROSE_FOLLOW_UP.test(clause));
-}
+/** Keys whose values are structured verdicts; folded (lowercase, underscores and hyphens removed). */
+const MODERATION_VERDICT_KEYS = new Set(["code", "type", "errorcode", "errortype", "reason"]);
 
 /** Fold a key for comparison: lowercase, underscores and hyphens removed. */
 function foldKey(key: string): string {
   return key.toLowerCase().replace(/[_-]/g, "");
 }
 
-/** Response-object fields that echo the caller's request rather than describe the failure. */
+/** Keys that state an HTTP status; any stated status other than 400/422 is evidence of its own. */
+const MODERATION_STATUS_KEYS = new Set(["status", "statuscode", "httpstatus", "httpstatuscode"]);
+
+/** Identifier fields a refusal envelope may carry: a bare token or number, never prose. */
+const MODERATION_ID_KEYS = new Set(["id", "requestid", "object", "model", "name", "sequencenumber", "createdat"]);
+
+/**
+ * Keys a gateway's routing metadata (providerMetadata) must not use: a field that names a state,
+ * status, code or safety verdict is evidence of its own, so only plain routing tokens pass.
+ */
+const ROUTING_METADATA_EVIDENCE_KEY = /safety|violation|block|polic|account|suspend|disabl|deactivat|ban|status|state|error|code|reason|quota|billing|limit|credit|payment/i;
+
+/** Azure's per-category filter results: the moderation verdict's own detail, read only for codes. */
+const MODERATION_RESULT_KEY = /^(?:contentfilterresults?|promptfilterresults)$/;
+
+/**
+ * Response-object fields of a Responses terminal event (`response.failed`) that echo the caller's
+ * request or report usage. They say nothing about the failure and are not read.
+ */
 const RESPONSE_REQUEST_ECHO_KEYS = new Set([
-  "instructions", "tools", "tool_choice", "text", "reasoning", "input", "output", "prompt", "include",
-  "user", "safety_identifier", "prompt_cache_key", "previous_response_id", "conversation",
+  "instructions", "tools", "toolchoice", "text", "reasoning", "input", "output", "prompt", "include",
+  "user", "safetyidentifier", "promptcachekey", "promptcacheretention", "previousresponseid", "conversation",
+  "temperature", "topp", "toplogprobs", "maxoutputtokens", "maxtoolcalls", "paralleltoolcalls", "truncation",
+  "store", "servicetier", "background", "usage",
 ]);
 
 /**
- * Structured safety or policy flags (`safety_violation`, `blocked`, `policy_violation`). A
- * flag is the upstream's own safety verdict; only Azure's per-category content-filter results,
- * which describe the moderation verdict itself, may carry such fields.
+ * The whole prose a moderation refusal may carry, after whitespace is collapsed: one verdict
+ * sentence (the gateway's own refusal copy, OpenAI's and Azure's included), optionally followed by
+ * the category list, the advice to change the prompt and retry, and Azure's documentation pointer.
+ * Any other wording (an account, model, parameter or billing problem, in any phrasing) does not
+ * match, so the body keeps dev's decision; only known shapes are admitted.
  */
-const SAFETY_FLAG_KEY = /safety|violation|block|polic|account|suspend|disabl|deactivat|banned/i;
-const MODERATION_RESULT_KEY = /^content_filter_results?$|^prompt_filter_results?$/i;
+const MODERATION_REFUSAL_PROSE = new RegExp("^(?:"
+  + "(?:content )?(?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter))?\\.?"
+  + "|(?:(?:the|your) )?(?:input|request|prompt|content|message|response|output)(?: (?:was|has been|is))?"
+  + " (?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter)(?: system)?)?\\.?"
+  + "|the response was filtered due to the prompt triggering azure openai'?s content management policy\\.?"
+  + "|(?:your )?(?:input|request|prompt|content) violated (?:the )?content (?:safety|management|filtering) polic(?:y|ies)\\.?"
+  + ")(?:"
+  + " categor(?:y|ies): [a-z][a-z/_-]*(?:(?:,? and |, )[a-z][a-z/_-]*)*\\.?"
+  + "| please (?:modify|revise|rephrase|change|adjust|edit) (?:your|the) (?:prompt|input|request|message)(?: and (?:retry|try again))?\\.?"
+  + "| (?:please )?(?:retry|try again)(?: later)?\\.?"
+  + "| to learn more about our content filtering policies please read our documentation: https://[^ ]+"
+  + ")*$", "i");
+
+/** Whether a prose string is a known moderation refusal copy and nothing else (bounded, linear). */
+function isModerationRefusalProse(text: string): boolean {
+  if (text.length > 2_000) return false;
+  return MODERATION_REFUSAL_PROSE.test(text.replace(/\s+/g, " ").trim());
+}
 
 /**
  * Safety-system wording in any of its upstream phrasings ("rejected as a result of our safety
@@ -1133,67 +1138,91 @@ function moderationEnvelope(message: string): unknown {
 }
 
 /**
- * Walk every structured verdict field (bounded). Returns whether a moderation code was seen, or
- * null when any field states something else, a field holds a non-string value we cannot vouch
- * for, or the body is deeper or wider than a refusal envelope.
+ * Walk a refusal envelope (bounded) against the closed shape of a moderation refusal. Returns whether
+ * a moderation code was seen, or null when the body carries anything else: an unknown field, prose
+ * that is not refusal copy, a param outside the prompt or input, a stated status other than 400/422,
+ * an incompatible code, or more nesting than a refusal envelope has. Only known shapes hop; anything
+ * unrecognized keeps dev's decision.
  */
 function moderationVerdictFields(payload: unknown): boolean | null {
   let seen = false;
   let nodes = 0;
-  const visit = (value: unknown, depth: number, insideFilterResult: boolean): boolean => {
+  const verdict = (field: unknown, key: string, depth: number): boolean => {
+    if (field === null || field === undefined) return true;
+    // A Responses terminal event names itself in its root `type` (`response.failed`): that is the
+    // transport's label for the carrier, not the upstream's verdict.
+    if (depth === 0 && key === "type" && typeof field === "string" && /^response\.[a-z_.]+$/.test(field)) return true;
+    if (typeof field !== "string" && typeof field !== "number") return false;
+    const normalized = normalizedFailureCode(field);
+    if (normalized === "") return typeof field === "string";
+    if (!MODERATION_COMPATIBLE_VALUES.has(normalized)) return false;
+    if (MODERATION_REFUSAL_CODES.has(normalized)) seen = true;
+    return true;
+  };
+  // Inside Azure's filter results only codes are read; the per-category flags are the verdict itself.
+  const visitFilterResult = (value: unknown, depth: number): boolean => {
     if (++nodes > 512 || depth > 8) return false;
-    if (Array.isArray(value)) {
-      // A string item is prose like any other field (`details: ["..."]`).
-      return value.every(item => typeof item === "string"
-        ? insideFilterResult || !/\s/.test(item.trim()) || describesOnlyModeration(item)
-        : visit(item, depth + 1, insideFilterResult));
-    }
+    if (Array.isArray(value)) return value.every(item => visitFilterResult(item, depth + 1));
     if (!value || typeof value !== "object") return true;
+    return Object.entries(value as Record<string, unknown>).every(([key, field]) =>
+      MODERATION_VERDICT_KEYS.has(foldKey(key)) ? verdict(field, key, depth) : visitFilterResult(field, depth + 1));
+  };
+  // A gateway's routing metadata: plain tokens, numbers and flags only, under keys that name no state.
+  const visitRoutingMetadata = (value: unknown, depth: number): boolean => {
+    if (++nodes > 512 || depth > 8) return false;
+    if (value === null || typeof value === "number" || typeof value === "boolean") return true;
+    if (typeof value === "string") return !/\s/.test(value);
+    if (Array.isArray(value)) return value.every(item => visitRoutingMetadata(item, depth + 1));
+    if (typeof value !== "object") return false;
+    return Object.entries(value as Record<string, unknown>).every(([key, field]) =>
+      !ROUTING_METADATA_EVIDENCE_KEY.test(key) && visitRoutingMetadata(field, depth + 1));
+  };
+  const visit = (value: unknown, depth: number, responseObject: boolean): boolean => {
+    if (++nodes > 512 || depth > 8) return false;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     const record = value as Record<string, unknown>;
-    // A Responses terminal event (`response.failed`) carries the whole response object, which echoes
-    // the caller's request (instructions, tools, text format...). Those echoes say nothing about the
-    // verdict; every other field of the response object is still read.
     const responseCarrier = depth === 0 && typeof record.type === "string" && /^response\.[a-z_.]+$/.test(record.type);
     for (const [key, field] of Object.entries(record)) {
-      if (responseCarrier && key === "response" && field && typeof field === "object" && !Array.isArray(field)) {
-        const verdictFields = Object.fromEntries(Object.entries(field as Record<string, unknown>)
-          .filter(([responseKey]) => !RESPONSE_REQUEST_ECHO_KEYS.has(responseKey)));
-        if (!visit(verdictFields, depth + 1, insideFilterResult)) return false;
-        continue;
-      }
-      // A param names what the filter inspected: the prompt or input. Any other param, on any
-      // record, marks a validation error.
-      if (key.toLowerCase() === "param" && typeof field === "string" && field.trim() !== "" && !isAllowedModerationParam(field)) {
-        return false;
-      }
-      if (MODERATION_STATUS_KEYS.has(foldKey(key))) {
+      const folded = foldKey(key);
+      if (responseObject && RESPONSE_REQUEST_ECHO_KEYS.has(folded)) continue;
+      if (MODERATION_VERDICT_KEYS.has(folded)) {
+        if (!verdict(field, key, depth)) return false;
+      } else if (MODERATION_STATUS_KEYS.has(folded)) {
+        if (field === null) continue;
         const stated = typeof field === "number" ? field
           : typeof field === "string" && /^\d{3}$/.test(field.trim()) ? Number(field) : undefined;
-        if (stated !== undefined && stated >= 400 && stated !== 400 && stated !== 422) return false;
-        if (typeof field !== "object" || field === null) continue;
-      }
-      if (!insideFilterResult && SAFETY_FLAG_KEY.test(key)) return false;
-      // Prose beside the verdict, under any key (message, hint, note, metadata.raw...), must itself
-      // describe the moderation refusal; a bare token (an id, an enum) is not prose.
-      if (typeof field === "string" && field.trim() !== "" && !insideFilterResult
-        && key.toLowerCase() !== "param" && !MODERATION_VERDICT_KEYS.has(foldKey(key))
-        && (MODERATION_PROSE_KEYS.has(foldKey(key)) || /\s/.test(field.trim()))
-        && !describesOnlyModeration(field)) {
+        if (stated !== undefined ? stated !== 400 && stated !== 422
+          : !(typeof field === "string" && /^(?:failed|incomplete|error)$/i.test(field.trim()))) return false;
+      } else if (folded === "message") {
+        if (field !== null && field !== "" && !(typeof field === "string" && isModerationRefusalProse(field))) return false;
+      } else if (folded === "param") {
+        // A param names what the filter inspected: the prompt or input. Any other param is a
+        // validation error.
+        if (field !== null && typeof field === "object" && !Array.isArray(field)) {
+          // An SDK error object in the param slot (an AI gateway's wrapped error) is read as a record.
+          if (!visit(field, depth + 1, false)) return false;
+        } else if (field !== null && field !== "" && !(typeof field === "string" && isAllowedModerationParam(field))) return false;
+      } else if (MODERATION_ID_KEYS.has(folded)) {
+        if (field !== null && typeof field !== "number" && !(typeof field === "string" && !/\s/.test(field))) return false;
+      } else if (folded === "isretryable") {
+        if (field !== null && typeof field !== "boolean") return false;
+      } else if (depth === 0 && folded === "providermetadata") {
+        if (!visitRoutingMetadata(field, depth + 1)) return false;
+      } else if (MODERATION_RESULT_KEY.test(folded)) {
+        if (!visitFilterResult(field, depth + 1)) return false;
+      } else if (folded === "error") {
+        if (field === null) continue;
+        if (typeof field === "string" ? !isModerationRefusalProse(field) : !visit(field, depth + 1, false)) return false;
+      } else if (folded === "innererror" || (responseObject && folded === "incompletedetails")) {
+        if (field !== null && !visit(field, depth + 1, false)) return false;
+      } else if (responseObject && folded === "metadata") {
+        // The caller's own request metadata; a refusal never needs it, so only an empty one passes.
+        if (field !== null && !(typeof field === "object" && !Array.isArray(field) && Object.keys(field).length === 0)) return false;
+      } else if (responseCarrier && key === "response") {
+        if (!visit(field, depth + 1, true)) return false;
+      } else {
         return false;
       }
-      if (MODERATION_VERDICT_KEYS.has(foldKey(key))) {
-        if (field === null || field === undefined) continue;
-        // A Responses terminal event names itself in its root `type` (`response.failed`): that is
-        // the transport's label for the carrier, not the upstream's verdict.
-        if (depth === 0 && key === "type" && typeof field === "string" && /^response\.[a-z_.]+$/.test(field)) continue;
-        const normalized = normalizedFailureCode(typeof field === "number" || typeof field === "string" ? field : null);
-        if (normalized === "" && typeof field !== "string") return false;
-        if (normalized === "") continue;
-        if (!MODERATION_COMPATIBLE_VALUES.has(normalized)) return false;
-        if (MODERATION_REFUSAL_CODES.has(normalized)) seen = true;
-        continue;
-      }
-      if (!visit(field, depth + 1, insideFilterResult || MODERATION_RESULT_KEY.test(key))) return false;
     }
     return true;
   };
@@ -1248,7 +1277,7 @@ export function isProviderModerationRefusal(
   if (envelope === undefined) {
     // Plain text carries no structured fields; only the caller's code can state the verdict, and a
     // body that looks like JSON but does not parse (cut or malformed) never hops.
-    return callerStatesModeration && !/^\s*(?:data:\s*)?[[{]/.test(message) && describesOnlyModeration(message);
+    return callerStatesModeration && !/^\s*(?:data:\s*)?[[{]/.test(message) && isModerationRefusalProse(message);
   }
   // An envelope root that states a verdict code of its own (invalid_request_error, origin,
   // context length, cancellation...) keeps it, as everywhere else in this file.
