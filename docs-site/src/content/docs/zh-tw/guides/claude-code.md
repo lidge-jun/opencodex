@@ -98,6 +98,8 @@ Claude Code 需要在 `ANTHROPIC_AUTH_TOKEN` 中有 token 才能與閘道器通�
 | 完全沒有 Claude 認證 | 注入佔位 token，讓 Claude Code 不再要求登入，並經由代理路由 |
 | 無法判斷（keychain 無法讀取、檔案損毀） | 假設為訂閱並印出警告——讀取失敗時絕不會把付費訂閱者改成走代理 |
 
+鎖住的 macOS keychain 視為「無法判斷」。opencodex 最多等待 keychain 回應 1.5 秒，絕不取消解鎖提示；執行中的代理在一次查詢逾時後 60 秒內不再詢問 keychain，因此重新整理儀表板不會疊加提示。每個新的 `ocx claude` 程序會各自詢問一次。若手動將 `authMode` 設為 proxy 或 subscription，則完全不查詢 keychain。
+
 此判斷會在每次啟動時重新計算，不會被記住，因此登入或登出會在下一次 `ocx claude` 時自動生效，
 無需重新設定。
 

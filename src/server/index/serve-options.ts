@@ -879,13 +879,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         // Role gate AFTER admission, deliberately: answering an unauthenticated caller would
         // turn this into a free "is that machine a hub?" probe. A standalone or client install
-        // gains no surface at all — the route simply does not exist there.
+        // gains no public surface — only a hub or an active `hub-link` listener serves it.
         //
         // Built, not formatErrorResponse'd, for the same reason /v1/catalog builds its 404: the
         // code has to distinguish "this route exists and this host is not a hub" from "this
         // build has no such route", which is the difference between admission proof and a
         // vacuous pass in tests/server/api-key-attribution.test.ts.
-        if (config.runtimeRole !== "hub") {
+        if (config.runtimeRole !== "hub" && ingress !== "hub-link") {
           return withCors(
             new Response(JSON.stringify({
               error: {

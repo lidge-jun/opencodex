@@ -8,6 +8,11 @@
  * - Under the desktop app or a viable service supervisor the restart is refused (409
  *   `restart_supervised`) and the runtime keeps serving. The supervisor owns this process and its
  *   port; handing off to it means exiting before anything proves the replacement can start.
+ * - Unless the connection it serves is no longer the durable one (`ocx disconnect`, or a newer
+ *   connect). Then there is nothing to keep, and under every owner the restart hands off to the
+ *   standalone recycle, which exits the way that owner relaunches (desktop 75, service 1) or spawns
+ *   its own replacement. Without this a Home-driven leave over SSH could not finish under the
+ *   desktop app or a service: `ocx restart` refused and the stale client runtime kept serving.
  * - Otherwise the listener drains, a replacement `ocx start` is spawned and must answer within the
  *   budget. Success exits this process. A replacement that exited, or never answered and was then
  *   stopped, leaves this process to bind the port again, start a fresh tunnel supervisor and
@@ -22,11 +27,22 @@ import {
   isDesktopSupervised,
 } from "../lib/system-restart-contract";
 import type { OcxClientConnectionConfig } from "../types";
+import { isMarkedSupervisedServiceChild } from "../service/service-child-ownership";
 import { sameClientConnectionOwner, type readClientConnectionState } from "./state";
 
 type ClientConnectionState = ReturnType<typeof readClientConnectionState>;
 
-export type ClientRestartSupervisor = "service" | "desktop";
+/**
+ * `service-unproven`: a service manager's marker shows it launched and owns this process, but its
+ * relaunch cannot be proven (for example a systemd unit started by hand while disabled). Neither
+ * exiting for it nor detaching from it is safe, so the restart is refused.
+ */
+export type ClientRestartSupervisor = "service" | "desktop" | "service-unproven";
+
+/** Verdicts that keep the runtime: an owner exists, but exiting for it or detaching is not proven safe. */
+export function restartRefusedByOwner(supervisor: ClientRestartSupervisor | null): supervisor is "service-unproven" {
+  return supervisor === "service-unproven";
+}
 
 export type ClientRestartAdmission =
   | { kind: "accepted"; alreadyRestarting: boolean }
@@ -38,6 +54,18 @@ export interface ClientRestartIo {
   stopping?: () => boolean;
   /** Which supervisor owns this process, or null when it starts its own replacement. */
   supervisor(): Promise<ClientRestartSupervisor | null>;
+  /** The durable connection is no longer the one this runtime serves. */
+  connectionChanged?: () => boolean;
+  /**
+   * Positive evidence of who owns this process ({@link restartOwnerProven}). Without it the
+   * ended-connection recycle is never reached and the restart is origin/dev's.
+   */
+  ownerProven?: () => boolean;
+  /**
+   * Hand off to what the durable state now calls for; exits the process for its owner to relaunch.
+   * Receives the same supervisor verdict as the refusal path (a service only when it is viable).
+   */
+  recycle?: (supervisor: ClientRestartSupervisor | null) => Promise<void>;
   /** Stop the tunnel supervisor and the listener, giving in-flight requests up to `drainMs`. */
   stop(drainMs: number): Promise<void>;
   /** Start the replacement; resolves once it answers, rejects when none survives. */
@@ -97,6 +125,26 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
     hasHandoff: () => flight !== null,
     async request() {
       if (io.stopping?.()) return { kind: "stopping" };
+      // Only positive ownership evidence opens the ended-connection recycle; without it (a bare
+      // OCX_SERVICE=1) the request takes origin/dev's path below.
+      if (io.recycle && (io.ownerProven?.() ?? true) && io.connectionChanged?.()) {
+        if (flight) return { kind: "accepted", alreadyRestarting: true };
+        // An owner that cannot be proven to relaunch this process keeps it, connection ended or not.
+        const owner = await io.supervisor();
+        if (io.stopping?.()) return { kind: "stopping" };
+        if (restartRefusedByOwner(owner)) return { kind: "supervised", supervisor: owner };
+        if (flight) return { kind: "accepted", alreadyRestarting: true };
+        const recycle = io.recycle, changed = io.connectionChanged;
+        // Let the 202 reach the CLI before the listener closes, then confirm the connection is
+        // still ended: a connect that committed meanwhile keeps this runtime (the CLI reports kept).
+        // The recheck is the last step before the recycle, after the (asynchronous) supervisor lookup.
+        flight = sleep(200).then(async () => {
+          const supervisor = await io.supervisor();
+          if (restartRefusedByOwner(supervisor)) { warn("[client] restart: this runtime's owner could not be proven to relaunch it; it keeps serving"); return; }
+          if (changed()) await recycle(supervisor);
+        }).finally(() => { flight = null; });
+        return { kind: "accepted", alreadyRestarting: false };
+      }
       const supervisor = await io.supervisor();
       if (io.stopping?.()) return { kind: "stopping" };
       if (supervisor) return { kind: "supervised", supervisor };
@@ -112,11 +160,59 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
 
 /** Production supervision check: the desktop app, then a service that will really relaunch us. */
 export async function clientRestartSupervisor(): Promise<ClientRestartSupervisor | null> {
-  if (isDesktopSupervised()) return "desktop";
-  if (process.env.OCX_SERVICE !== "1") return null;
-  // Same viability test as the standalone restart: stale service assets would not relaunch.
+  const { diagnoseService } = await import("../service/diagnostics");
   const { isServiceViable } = await import("../service/orchestration");
-  return isServiceViable() ? "service" : null;
+  return classifyClientRestartSupervisor({ desktop: isDesktopSupervised(), env: process.env, diagnose: diagnoseService, legacyServiceViable: isServiceViable });
+}
+
+/**
+ * Positive evidence of who owns this process: the desktop app, a service manager's marker
+ * (OCX_SERVICE_MANAGED or the Windows wrapper's protocol marker, read from the environment only),
+ * or no OCX_SERVICE at all (every service OpenCodex registers sets it). No inference: a legacy
+ * Windows service recognised only from its parent's command line counts as a bare OCX_SERVICE=1.
+ * A bare OCX_SERVICE=1 is none of these: a service registered before the manager marker existed
+ * and the proxies of ocx claude, ocx codex and ocx opencode all carry it.
+ */
+export function restartOwnerProven(input: { desktop: boolean; env: NodeJS.ProcessEnv; managed?: (env: NodeJS.ProcessEnv) => boolean }): boolean {
+  return restartOwnerEvidence(input) !== null;
+}
+
+/** The owners this change handles, as a client runtime states them in its record (`restartOwner`). */
+export type RestartOwner = "desktop" | "service-manager" | "none";
+export const RESTART_OWNERS: readonly RestartOwner[] = ["desktop", "service-manager", "none"];
+
+/** The classified owner from positive evidence, or null for a bare OCX_SERVICE=1 ({@link restartOwnerProven}). */
+export function restartOwnerEvidence(input: { desktop: boolean; env: NodeJS.ProcessEnv; managed?: (env: NodeJS.ProcessEnv) => boolean }): RestartOwner | null {
+  if (input.desktop) return "desktop";
+  if ((input.managed ?? isMarkedSupervisedServiceChild)(input.env)) return "service-manager";
+  return input.env.OCX_SERVICE !== "1" ? "none" : null;
+}
+
+/**
+ * Ownership and relaunch are separate facts. With a manager's marker, only a service diagnostic
+ * that is viable and running lets this process exit for the manager to relaunch it; otherwise it is
+ * `service-unproven` and keeps the runtime. A bare OCX_SERVICE=1 keeps origin/dev's decision
+ * unchanged (b1148220574917c8 src/client/runtime-restart.ts:114-119): a viable service, else none.
+ */
+export function classifyClientRestartSupervisor(input: {
+  desktop: boolean;
+  env: NodeJS.ProcessEnv;
+  diagnose: () => { viable: boolean; running: boolean };
+  /** origin/dev's check for a bare OCX_SERVICE=1: src/service/orchestration.ts isServiceViable. */
+  legacyServiceViable: () => boolean;
+  /** Manager-launched evidence; defaults to the current markers only (isMarkedSupervisedServiceChild). */
+  managed?: (env: NodeJS.ProcessEnv) => boolean;
+}): ClientRestartSupervisor | null {
+  if (input.desktop) return "desktop";
+  // The managed marker (launchd, systemd, WinSW) or the Windows wrapper's protocol marker.
+  if (!(input.managed ?? isMarkedSupervisedServiceChild)(input.env)) {
+    if (input.env.OCX_SERVICE !== "1") return null;
+    return input.legacyServiceViable() ? "service" : null;
+  }
+  // Relaunch needs positive evidence: viable AND running (launchd's viable also covers an
+  // unknown load state for its other callers; running there means loaded).
+  const diagnostic = input.diagnose();
+  return diagnostic.viable && diagnostic.running ? "service" : "service-unproven";
 }
 
 /**
@@ -132,4 +228,16 @@ export function clientRestartRollbackAction(
     && current.value.link?.linkId === served.link?.linkId
     ? "resume"
     : "recycle";
+}
+
+/**
+ * Whether the served connection has provably ended: the durable state is disconnected, or names a
+ * different connection. Unreadable or mismatched state is not proof, so a supervised restart keeps
+ * refusing on it instead of exiting a runtime whose link may still work.
+ */
+export function clientConnectionEnded(served: OcxClientConnectionConfig, current: ClientConnectionState): boolean {
+  // Callers pass readClientConnectionStateWithEvidence(): "disconnected" then means a saved config
+  // with no client, never a missing file.
+  if (current.kind === "disconnected") return true;
+  return current.kind === "connected" && clientRestartRollbackAction(served, current) === "recycle";
 }

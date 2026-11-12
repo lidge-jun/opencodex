@@ -14,7 +14,9 @@ import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { getObservedMainQuotaIdentityKey, mainDecisionQuotaWriterGeneration, isMainQuotaWriterLive, type MainQuotaWriter } from "./main-account-cache";
 
 import { CodexQuotaHistory, QUOTA_HISTORY_LIMITS, type QuotaHistoryWindow } from "./quota-history";
-import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity } from "./account-store";
+import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity, poolQuotaHistoryIdentityOf } from "./account-store";
+import type { CodexAccountCredentialRecord } from "../types";
+import { detectWeeklyWindowConflicts, type WeeklyWindowConflict } from "./quota-window-conflict";
 import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT, hasSpendableCodexCredits, resetAtToMs } from "./quota-types";
 import type { PoolQuotaWriter, StoredAccountQuota, WhamUsageResponse, WhamUsageWindow } from "./quota-types";
 
@@ -1300,4 +1302,24 @@ export function getAccountQuotaHistory(accountId: string, limit: number = QUOTA_
 export function latestCodexQuotaObservationSource(accountId: string): "wham" | "response-header" | undefined {
   hydrateAccountQuotasFromDisk();
   return quotaHistory.peekLatestSource(accountId, poolQuotaHistoryIdentity(accountId));
+}
+
+/**
+ * Live weekly windows the current credential generation has reported in contradiction (#8574),
+ * read from the cached history only. Display evidence: admission, routing and credit consent
+ * never read it.
+ *
+ * The caller passes the account's credential record, normally one entry of a single store
+ * snapshot, so a roster listing costs no store read per account. The history is peeked, never
+ * pruned or cleared, because a passive read (`/api/quota-pool`) reaches this.
+ */
+export function getAccountWeeklyQuotaConflicts(
+  accountId: string,
+  record: CodexAccountCredentialRecord | null | undefined,
+  now = Date.now(),
+): WeeklyWindowConflict[] {
+  hydrateAccountQuotasFromDisk();
+  const identity = poolQuotaHistoryIdentityOf(record);
+  if (!identity || !record) return [];
+  return detectWeeklyWindowConflicts(quotaHistory.peekSamples(accountId, identity), record.generation, now);
 }

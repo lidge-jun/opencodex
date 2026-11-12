@@ -1534,9 +1534,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     // Auto is a RESOLUTION, recomputed per request — never stored state. Detection is
     // daemon-side, so it cannot see a key exported only in the user's terminal; the
     // GUI labels the badge with detectionScope for exactly that reason.
-    const { defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens } = await import("../../claude/auth-detect");
+    const { defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens, resolveClaudeKeychainPresence } = await import("../../claude/auth-detect");
     const { authModeIntent, resolveClaudeAuthMode } = await import("../../claude/auth-mode");
-    const authDetection = detectClaudeAuth(defaultAuthDetectDeps(process.env, ownAdmissionTokens(config)));
+    // Awaited, never spawned synchronously: a blocked Keychain lookup must not stall /healthz (#8161).
+    const keychainPresence = await resolveClaudeKeychainPresence(config.claudeCode?.authMode);
+    const authDetection = detectClaudeAuth(defaultAuthDetectDeps(process.env, ownAdmissionTokens(config), keychainPresence));
     const resolvedAuthMode = resolveClaudeAuthMode(config, authDetection);
     const contextWindows = buildClaudeContextWindows(
       [...visibleNativeSlugs(config)],

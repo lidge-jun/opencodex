@@ -439,7 +439,7 @@ export async function deliverPassthroughResponse(
 ): Promise<Response> {
   const { route } = requestState;
   // The proof must belong to the response whose headers are published.
-  const arrivalMainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider);
+  const arrivalMainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider, nativeExchange.upstreamResponse);
   const { logCtx, config, options, req } = requestContext;
   const {
     codexSafetyBufferingOptions,

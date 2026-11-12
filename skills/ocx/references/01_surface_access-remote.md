@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 42.
+Declared capabilities: 43.
 
 ### `ocx link probe`
 
@@ -846,3 +846,27 @@ Drives no management route.
 | `--json` | boolean | Emit the capture status as JSON. |
 
 - Reads the local capture directory. It also applies retention: capture files 72 h past their last write and an expired control file are deleted, and the count is reported as removed.
+
+### `ocx link policy`
+
+Usage: `ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]`
+
+Read or change how this Home keeps its Children current.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/link/children/policy` |
+| PUT | `/api/link/children/policy` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--updates` | string | off, notify, or auto-when-idle (default). |
+| `--catalog-fanout` | string | auto (default) or manual. |
+| `--child-codex-restart` | string | never (default) or app-server-when-idle. |
+| `--idle-after-minutes` | number | Minutes without a relayed model request before a Child counts as idle; default 10. |
+| `--json` | boolean | Emit {policy, warning} as JSON. |
+
+- Without flags it reads the policy; with flags it changes only those knobs. Stored in <configDir>/link/child-policy.json on the Home, never in config.json. An invalid file turns automatic catalog fan-out and updates off; saving merges onto that, so pass --catalog-fanout auto and an --updates mode to turn them back on.
+- --updates stores the update mode only; this release starts no automatic update (notify and auto-when-idle take effect when the automatic update sweep ships). Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it.

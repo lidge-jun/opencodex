@@ -100,6 +100,32 @@ Home üzerinde `ocx link check (--link-id <id> | --all)`, Home'un eklediği her 
 
 `ocx link sync`, `ocx link restart-codex` ve `ocx link update`, Home'un eklediği Child'larda bağlantının SSH bağlantısı üzerinden çalışır ve işi JSON olarak yazdırır. `sync`, sabitlenmiş `ocx sync --expect-link` komutunu çalıştırır (Child 2.93.0 veya üstü). `restart-codex` önce eşitler, ardından çalışan Codex'in güncel kataloğu yüklemesi için Child'daki Codex app-server süreçlerini yeniden başlatır; `--scope codex` masaüstü uygulamasını da yeniden açar. Yeniden başlatma tek bir bağlantıyı hedefler; `restart-codex` ve `--restart-codex` için `--yes` gerekir, `ocx link sync --link-id <id> --restart-app-server-only` ise app-server süreçlerini onay istemeden yeniden başlatır. Home o Child için bir model isteği aktarırken yeniden başlatma atlanır (`restart-skipped:link-active`). 2.69'dan eski bir Child'da akış olmayan bir istek ancak yanıtı başladığında görülür. `update --yes`, Child'ın kendi güncelleyicisiyle Child'ın OpenCodex sürümünü bu Home'un sürümüne getirir, asla başka bir sürüme değil (Child 2.97.0 veya üstü; npm ve pnpm kurulumları Node başlatıcısı üzerinden güncellenir, bu yüzden `ocx link check` orada salt okunur `node --version` da çalıştırır). Her seferinde bir Child güncellenir; başarılı, başarısız veya geri alınmış bir uygulamadan sonra yeniden eşitlenir. Sonucu bilinmeyen bir uygulama tekrarlanmaz ve eşitlenmez; `ocx link check` ile denetleyin. O Child için aktarılan istekler sona erer. Windows Child'ları yalnızca `sync` destekler; `ocx-child` Child'ları yeniden başlatmayı ve güncellemeyi desteklenmiyor olarak bildirir. CLI, loopback'e bağlı bir Home gerektirir; başka bir Home'da bu işlemler kullanılamaz ve panoda da bu işlemler yoktur. Ayrıntılar ve çıkış kodları: [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home) (İngilizce). Bu koruma en iyi çaba esaslıdır: kontrol ile yeniden başlatma arasında başlayan bir istek yine de sonlandırılabilir; turların korunması gerekiyorsa o Child'da yeni istekleri duraklatın. `ocx sync --restart-children` (veya `--restart-children=codex --yes`), bir Home eşitlemesi dağıtılırken aynı kuralı tüm Child'lara ya da `--child <linkId>` ile belirtilenlere uygular: her Child eşitlenir ve aktarılan bir istek sürerken yalnızca yeniden başlatması atlanır (`restart-skipped:link-active`).
 
+### Otomatik katalog dağıtımı ve Child politikası
+
+Katalog dağıtımı varsayılan olarak açıktır. Home'un kataloğu değiştiğinde (katalog otomatik yenilemesi bir değişiklik bildirdiğinde ya da 5 dakikada bir yapılan kontrol panelde veya yönetim API'sinde yapılan bir düzenlemeyi fark ettiğinde) Home, düzenlemelerin durulması için 60 saniye bekler (ilk değişiklikten en fazla 5 dakika sonra). Ardından sizden hiçbir işlem beklemeden her uygun Child'a arka planda bir SSH oturumu açar ve `ocx link sync` ile aynı sabitlenmiş `ocx sync --expect-link` komutunu çalıştırır; siz etkinleştirmedikçe Codex'i yeniden başlatmaz (aşağıdaki `childCodexRestart`). Uygun Child; bağlantısını Home'un başlattığı, tüneli bağlı olan, üzerinde başka işlem çalışmayan ve bu Home'un orada çalıştırdığı son eşitlemesi değişiklikten önce olan Child'dır. Kataloğu yalnızca indirmiş bir Child hâlâ geride sayılır. Model isteklerini aktaran bir Child, yalnızca Codex ayarları zaten Home ile aynıysa ve OpenCodex istemci çalışma zamanı bu ayarlar uygulandıktan sonra yeniden başlamışsa eşitlenir, çünkü aksi hâlde eşitleme o çalışma zamanını yeniden başlatır; aksi hâlde boşta kaldığında eşitlenir. Başarısız bir eşitleme 5 dakika sonra yeniden denenir, aralık 6 saate kadar ikiye katlanır; 2.93.0'dan eski bir Child başka bir sürüm bildirene kadar yeniden denenmez. Bu işler diğer işler gibi görünür ve `trigger: "auto"` taşır. Bağlantısı olmayan bir Home bunların hiçbirini çalıştırmaz.
+
+Dağıtım, Child'ın katalog dosyasını düzeltir. Child'da zaten çalışan bir Codex app-server, yeniden başlayana kadar yüklediği listeyi kullanır: `ocx link restart-codex --link-id <id> --yes` veya `ocx sync --restart-children` kullanın ya da `ocx link policy --child-codex-restart app-server-when-idle` ile app-server'ları Home'un yeniden başlatmasına izin verin; Home bunu yalnızca eşitleme çalıştığında hâlâ boşta olan bir Child'da yapar. Bu ayar bir sonraki otomatik eşitlemeden itibaren geçerlidir; kataloğu zaten güncel olan bir Child eşitlenmez, dolayısıyla yeniden başlatılmaz; o Child'ı kendiniz yeniden başlatın.
+
+Politika Home'da `<configDir>/link/child-policy.json` içinde tutulur, asla `config.json` içinde değil:
+
+| Ayar | Varsayılan | Değerler |
+|---|---|---|
+| `catalogFanout` | `auto` | `auto`, `manual` |
+| `childCodexRestart` | `never` | `never`, `app-server-when-idle` |
+| `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
+| `idleAfterMs` | `600000` (10 dakika) | 1 ile 60 dakika arası |
+
+`updates` varsayılan olarak boştaki Child'ları otomatik olarak Home'un sürümünde tutar. Otomatik güncellemeler bu sürümde henüz etkin değildir; ayar şimdiden kaydedilir, böylece `ocx link policy --updates notify` veya `--updates off` ile yapılan bir vazgeçme, güncellemeler geldiğinde de geçerli kalır. `idleAfterMs`, bir Child'ın boşta sayılması için aktarılan model isteği olmadan geçmesi gereken süredir; `ocx link status` içindeki `activity.idle` değerini de belirler.
+
+```text
+ocx link policy                                    # politikayı oku
+ocx link policy --catalog-fanout manual            # otomatik katalog dağıtımını kapat
+ocx link policy --child-codex-restart app-server-when-idle
+ocx link policy --updates off --idle-after-minutes 20 --json
+```
+
+`GET` ve `PUT /api/link/children/policy` aynı ayarları okur ve değiştirir (loopback üzerinde yönetici belirteci veya bir panel oturumu); bir `PUT` yalnızca değiştirdiği ayarları gönderir. Dosya bozuksa veya bilinmeyen bir değer içeriyorsa, otomatik katalog dağıtımı ve güncellemeler kapalı kalır ve `ocx link policy` bunu bildirir. Kaydetmek uyarıyı temizler ama adını vermediğiniz her ayarı kapalı bırakır; bunları açıkça açın, örneğin `ocx link policy --catalog-fanout auto --updates auto-when-idle`. Home dosyayı kendiliğinden asla yeniden yazmaz.
+
 Size ait olmayan bir makineyi bağlamayın: Home orada sizin SSH anahtarınızla komut çalıştırır.
 
 ## İlgili kılavuzlar

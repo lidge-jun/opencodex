@@ -1,5 +1,6 @@
 import type { ChildItemState, ChildJob, ChildJobItem, ChildOp } from "../link/child-ops-types";
-import { CliUsageError, RuntimeApiError, rejectArgs, takeFlag, takeJsonFlag, takeOption } from "./runtime-api";
+import { CATALOG_FANOUT, CHILD_CODEX_RESTART, CHILD_UPDATES, type ChildPolicyRead } from "../link/child-policy";
+import { CliUsageError, RuntimeApiError, printData, rejectArgs, takeFlag, takeIntegerOption, takeJsonFlag, takeOption } from "./runtime-api";
 import type { LinkCliDeps } from "./link";
 
 type LinkRequest = <T>(path: string, init: RequestInit, deps: LinkCliDeps) => Promise<T>;
@@ -41,6 +42,7 @@ export const LINK_CHILD_OPS_USAGE = [
   "  ocx link sync (--link-id <id> | --all) [--no-wait] [--json]",
   "  ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]",
   "  ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]",
+  "  ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]",
 ] as const;
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -137,20 +139,13 @@ async function waitForChildJob(job: ChildJob, deps: LinkCheckDeps, request: Link
   return { job, done: true };
 }
 
-/** POST one operation, then wait for it unless told not to; prints the job document and returns the verdict exit. */
-async function submitChildJob(body: { op: ChildOp; linkIds: string[] | "all"; restart?: "app-server" | "codex" }, wait: boolean,
-  deps: LinkCheckDeps, request: LinkRequest): Promise<number> {
-  let job: ChildJob;
-  try {
-    job = readJob(await request<unknown>("/api/link/children/operations", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-    }, deps));
-  } catch (error) {
+/** The Child-operation routes' refusals as operator messages; a request that is not a Child operation passes nothing in op. */
+function childOpsRefusal(error: unknown, op: ChildOp | null): never {
     if (error instanceof RuntimeApiError) {
       // A new Home answers link_not_found for a mistyped id; an older Home has no such route at all.
       if (error.status === 404 && errorCode(error) !== "link_not_found") throw new RuntimeApiError(OLD_HOME_MESSAGE, 404, error.body);
       // Revision 6 F3: a Home with observe only (wp2) refuses every other op as invalid_body; this CLI always sends a valid body.
-      if (error.status === 400 && body.op !== "observe" && errorCode(error) === "invalid_body") throw new RuntimeApiError(OLD_HOME_MESSAGE, 404, error.body);
+      if (error.status === 400 && op !== null && op !== "observe" && errorCode(error) === "invalid_body") throw new RuntimeApiError(OLD_HOME_MESSAGE, 404, error.body);
       // Every 409 still exits 5; the conflicts that are not "another operation holds the link" say what happened.
       if (error.status === 409) {
         const code = errorCode(error);
@@ -161,7 +156,17 @@ async function submitChildJob(body: { op: ChildOp; linkIds: string[] | "all"; re
       if (error.status === 403) throw new RuntimeApiError(LOOPBACK_REQUIRED_MESSAGE, 403, error.body);
     }
     throw error;
-  }
+}
+
+/** POST one operation, then wait for it unless told not to; prints the job document and returns the verdict exit. */
+async function submitChildJob(body: { op: ChildOp; linkIds: string[] | "all"; restart?: "app-server" | "codex" }, wait: boolean,
+  deps: LinkCheckDeps, request: LinkRequest): Promise<number> {
+  let job: ChildJob;
+  try {
+    job = readJob(await request<unknown>("/api/link/children/operations", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }, deps));
+  } catch (error) { childOpsRefusal(error, body.op); }
   if (!wait) {
     console.log(JSON.stringify(job));
     return job.state === "done" ? linkCheckExitCode(job) : 0;
@@ -232,4 +237,47 @@ export function parseChildOpArgs(verb: LinkChildVerb, args: string[], usage: str
 export async function runLinkChildOp(verb: LinkChildVerb, args: string[], deps: LinkCheckDeps, request: LinkRequest, usage: string): Promise<number> {
   const parsed = parseChildOpArgs(verb, args, usage);
   return submitChildJob(parsed.body, parsed.wait, deps, request);
+}
+
+/** Exactly {policy: {four knobs}, warning}; anything else is an invalid response (strict, like the policy file). */
+export function validatePolicyRead(value: unknown): ChildPolicyRead {
+  const fail = (): never => { throw new Error("invalid link API response: child policy"); };
+  if (!isRecord(value) || Object.keys(value).length !== 2 || !isRecord(value.policy)) return fail();
+  const { policy, warning } = value;
+  if (warning !== null && warning !== "policy-file-invalid") return fail();
+  const keys = Object.keys(policy);
+  if (keys.length !== 4 || !(CATALOG_FANOUT as readonly unknown[]).includes(policy.catalogFanout)
+    || !(CHILD_CODEX_RESTART as readonly unknown[]).includes(policy.childCodexRestart) || !(CHILD_UPDATES as readonly unknown[]).includes(policy.updates)
+    || typeof policy.idleAfterMs !== "number" || !Number.isSafeInteger(policy.idleAfterMs) || policy.idleAfterMs <= 0) return fail();
+  return { policy: { catalogFanout: policy.catalogFanout, childCodexRestart: policy.childCodexRestart, updates: policy.updates,
+    idleAfterMs: policy.idleAfterMs } as ChildPolicyRead["policy"], warning: warning as ChildPolicyRead["warning"] };
+}
+
+/** `ocx link policy`: read the Home's Child policy, or change the knobs named by flags (one PUT of only those keys). */
+export async function runLinkPolicy(args: string[], deps: LinkCliDeps, request: LinkRequest, usage: string): Promise<void> {
+  const json = takeJsonFlag(args);
+  const patch: Record<string, string | number> = {};
+  const pick = (flag: string, key: string, allowed: readonly string[]): void => {
+    const value = takeOption(args, flag);
+    if (value === undefined) return;
+    if (!allowed.includes(value)) throw new CliUsageError(`${flag} must be one of ${allowed.join(", ")}`, usage);
+    patch[key] = value;
+  };
+  pick("--updates", "updates", CHILD_UPDATES);
+  pick("--catalog-fanout", "catalogFanout", CATALOG_FANOUT);
+  pick("--child-codex-restart", "childCodexRestart", CHILD_CODEX_RESTART);
+  const minutes = takeIntegerOption(args, "--idle-after-minutes", { min: 1, max: 60 });
+  if (minutes !== undefined) patch.idleAfterMs = minutes * 60_000;
+  rejectArgs(args, usage);
+  let read: ChildPolicyRead;
+  try {
+    read = validatePolicyRead(Object.keys(patch).length === 0
+      ? await request<unknown>("/api/link/children/policy", {}, deps)
+      : await request<unknown>("/api/link/children/policy", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }, deps));
+  } catch (error) { childOpsRefusal(error, null); }
+  printData(read, json, [
+    `catalog fan-out: ${read.policy.catalogFanout}`, `Child Codex restart: ${read.policy.childCodexRestart}`,
+    `updates: ${read.policy.updates}`, `idle after: ${read.policy.idleAfterMs / 60_000} min`,
+    ...(read.warning ? ["The policy file is invalid; automatic catalog fan-out and updates are off. To turn them back on, pass --catalog-fanout auto and an --updates mode; a setting you do not name stays off."] : []),
+  ]);
 }

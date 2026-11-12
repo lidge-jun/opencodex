@@ -327,3 +327,26 @@ describe("link reservation (link removal)", () => {
   });
 });
 
+
+describe("whenDone (wp5)", () => {
+  test("a job that finished at submit resolves at once; a running job after its last item; an unknown id with null", async () => {
+    const gated = gatedRunners();
+    const { env } = fakeEnv(() => [record(ids[0]!), record(ids[1]!)]);
+    const engine = createChildOpsEngine({ runners: gated.runners });
+    const running = submitted(engine, manual("sync", [ids[0]!, ids[1]!]), env);
+    const busy = submitted(engine, manual("sync", [ids[0]!, ids[1]!]), env);
+    const busyDone = await engine.whenDone(busy.jobId);
+    expect(busyDone?.state).toBe("done");
+    expect(busyDone?.items.map(item => item.state)).toEqual(["busy", "busy"]);
+    let resolved: Awaited<ReturnType<ChildOpsEngine["whenDone"]>> | undefined;
+    void engine.whenDone(running.jobId).then(job => { resolved = job; });
+    const second = engine.whenDone(running.jobId);
+    await gated.release("sync:" + ids[0]!);
+    expect(resolved).toBeUndefined();
+    await gated.release("sync:" + ids[1]!);
+    expect(resolved?.state).toBe("done");
+    expect(resolved?.items.map(item => item.state)).toEqual(["succeeded", "succeeded"]);
+    expect((await second)?.jobId).toBe(running.jobId);
+    expect(await engine.whenDone("ljob_ffffffffffffffff")).toBeNull();
+  });
+});
