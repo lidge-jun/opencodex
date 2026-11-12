@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,9 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient, frameType, type WireMessage } from "../helpers/link-ws-client";
 import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
+import * as nativeControl from "../../src/server/responses/native-response-control";
+
+const originalMode = nativeControl.nativeResponseControlMode;
 
 // The Home side of the Responses WebSocket over a Remote Link (lane T5a). Every case drives a real
 // Home: the relay-auth challenge, the session request and the upgrade share one TCP connection.
@@ -288,6 +291,29 @@ describe("link Responses WebSocket switched on", () => {
     const turn = await runTurn(wire);
     expect(turn.map(frameType)).toContain("response.completed");
     expect(upstreamRequests).toHaveLength(1);
+  });
+
+  test("a link response.create never reaches native mode selection, while a local socket with the same config does (R2-01)", async () => {
+    const port = await startHome({ codexNativeSteering: true, codexNativeInjection: true });
+    const mode = spyOn(nativeControl, "nativeResponseControlMode");
+    try {
+      const wire = await openSocket(port);
+      const turn = await runTurn(wire);
+      expect(turn.map(frameType)).toContain("response.completed");
+      expect(mode).not.toHaveBeenCalled();
+      // Control: the same frame on the Home's own listener does reach the decision, and it selects
+      // steering, so the assertion above is not vacuous.
+      const local = new WebSocket(new URL("/v1/responses", server!.url).href.replace("http:", "ws:"));
+      await new Promise<void>((resolve, reject) => { local.onopen = () => resolve(); local.onerror = () => reject(new Error("local websocket failed")); });
+      const decided = new Promise<void>(resolve => { mode.mockImplementation((...args) => { resolve(); return originalMode(...args); }); });
+      local.send(JSON.stringify(create()));
+      await decided;
+      expect(mode).toHaveBeenCalledTimes(1);
+      expect(originalMode(create(), { codexNativeSteering: true, codexNativeInjection: true })).toBe("steering");
+      local.close();
+    } finally {
+      mode.mockRestore();
+    }
   });
 
   test("a revoked socket's inject is refused by the authorization check, not answered (11.1-5a)", async () => {
