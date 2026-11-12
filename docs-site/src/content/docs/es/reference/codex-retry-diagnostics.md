@@ -11,7 +11,7 @@ OpenCodex [Adaptador Devin](/es/reference/adapters/#devin) conserva una pista de
 
 Con `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` sin configurar o `0`, el adaptador Devin no mantiene una solicitud rechazada para el enfriamiento indicado. Codex recibe el fallo final y posee su política de reintentos limitada. Un valor positivo opta por la espera existente de propiedad de proxy; retrasa la entrega del fallo final y puede combinarse con reintentos de clientes. Esta asignación de compatibilidad no cambia ese ajuste ni el recuento de reintentos de Codex. Una anulación de solo proceso no necesita sobrevivir al reinicio.
 
-`rate_limit_exceeded` plus `Please try again in Ns.` es un consejo de reintento, no un evento de cuenta atrás. Codex 's propia política de reintento, cancelación y ciclo de vida todavía se aplican. No agregues elementos sintéticos de razonamiento, herramienta, asistente o éxito para hacer visible la espera: esos elementos pueden contaminar la historia o implicar que el trabajo sucedió. No acorte el retraso del proveedor ni provoque una solicitud adicional para avanzar en el contador de reintentos del cliente.
+`rate_limit_exceeded` junto con `Please try again in Ns.` es un consejo de reintento, no un evento de cuenta atrás. La propia política de reintento, cancelación y ciclo de vida de Codex todavía se aplican. No agregues elementos sintéticos de razonamiento, herramienta, asistente o éxito para hacer visible la espera: esos elementos pueden contaminar el historial o implicar que el trabajo sucedió. No acorte el retraso del proveedor ni provoque una solicitud adicional para avanzar en el contador de reintentos del cliente.
 
 ## Triage: `exceeded retry limit, last status: 429 Too Many Requests`
 

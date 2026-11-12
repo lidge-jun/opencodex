@@ -62,7 +62,7 @@ ocx agent sidecar status --json
 
 Ejecutar escribe solo para el cambio solicitado. La inyección `--sync-codex-defaults on|off` actualiza `syncCodexSubagentDefaults`; modelo/esfuerzo/pronta/orientación omitido permanece intacto, y `-` borra modelo/esfuerzo/pronta. El recibo ha normalizado realmente `model`, `effort`, `prompt`, `multiAgentGuidanceEnabled` y `syncCodexSubagentDefaults`, no un resultado de catálogo fabricado.
 
-Web `--reasoning` sigue siendo compatible. `--max-descriptions` y `--timeout-ms` son solo de visión; el tiempo de espera acepta enteros de 1 a 2147483647 milisegundos. `--stream-routed-output` es solo web. Las escrituras parciales conservan la configuración de hermanos. El recibo de nueva opción expone solo el estado público seleccionado `webSearch` o `vision` y `codexWebSearch` aplica el informe. `{applied:false, reason, retryable}` distingue el aplazamiento/rechazo de aplicación nativa de una configuración guardada; una nueva configuración faltante o no coincidente no está verificada y no es cero. Lee el estado para ver los ajustes completos observados, incluido el razonamiento web. No vuelvas a intentar ciegamente el rechazo de la propiedad.
+Web `--reasoning` sigue siendo compatible. `--max-descriptions` y `--timeout-ms` son solo de visión; el tiempo de espera acepta enteros de 1 a 2147483647 milisegundos. `--stream-routed-output` es solo web. Las escrituras parciales conservan la configuración de hermanos. El recibo de nueva opción expone solo el estado público seleccionado `webSearch` o `vision` y `codexWebSearch` aplica el informe. `{applied:false, reason, retryable}` distingue el aplazamiento/rechazo de aplicación nativa de una configuración guardada; una nueva configuración faltante o no coincidente queda sin verificar y devuelve un código distinto de cero. Lee el estado para ver los ajustes completos observados, incluido el razonamiento web. No vuelvas a intentar ciegamente el rechazo de la propiedad.
 
 <a id="memory-and-compaction-routing-overrides"></a>
 
@@ -132,7 +132,7 @@ El subcomando `mode` escribe `multiAgentMode` a la configuración opencodex y vu
 
 Codex resuelve una anulación global habilitada de `multi_agent_v2` antes del pin de catálogo del modelo seleccionado. Por lo tanto, el contrato híbrido `keep-native-v1` mantiene esa anulación global apagada; de lo contrario, una fila nativa estampada `v1` aún comenzaría en V2 y produciría tareas secundarias cifradas en el backend.
 
-`mode-hint` escribe `features.multi_agent_v2.multi_agent_mode_hint_text` en Codex 's `$CODEX_HOME/config.toml` incluso cuando `multi_agent_v2` está actualmente deshabilitado. El comando solo persiste la anulación; no habilita ni deshabilita la función, por lo que la sugerencia tiene efecto cuando una superficie coincidente Codex está activa. La sugerencia anula la política multiagente derivada de esfuerzo de codex-rs, por lo que cualquier modelo y cualquier esfuerzo de razonamiento recibe el mensaje de delegación proactiva. **no** cambia el esfuerzo de razonamiento en sí. Se rechaza un argumento faltante o un valor de solo espacio en blanco; solo `--clear` elimina la sugerencia. El modo Ultra **on** del panel de Subagents tiene una puerta más estricta: requiere que la función nativa esté habilitada con una superficie v2 explícita ( `ocx v2 mode v2` ); `ocx v2 on` por sí solo no satisface esa puerta del tablero.
+`mode-hint` escribe `features.multi_agent_v2.multi_agent_mode_hint_text` en el `$CODEX_HOME/config.toml` de Codex incluso cuando `multi_agent_v2` está actualmente deshabilitado. El comando solo persiste la anulación; no habilita ni deshabilita la función, por lo que la sugerencia tiene efecto cuando una superficie coincidente Codex está activa. La sugerencia anula la política multiagente derivada de esfuerzo de codex-rs, por lo que cualquier modelo y cualquier esfuerzo de razonamiento recibe el mensaje de delegación proactiva. **no** cambia el esfuerzo de razonamiento en sí. Se rechaza un argumento faltante o un valor de solo espacio en blanco; solo `--clear` elimina la sugerencia. El modo Ultra **on** del panel de Subagents tiene una puerta más estricta: requiere que la función nativa esté habilitada con una superficie v2 explícita ( `ocx v2 mode v2` ); `ocx v2 on` por sí solo no satisface esa puerta del tablero.
 
 <a id="explicit-v2-target-and-outcome"></a>
 
@@ -153,9 +153,9 @@ Para el texto literal reservado, pase un operando citado después de `--`:
 ocx v2 mode-hint --live --json -- '--clear'
 ```
 
-Esto almacena literal `--clear`; sin `--`, `mode-hint --clear` elimina la pista. El sufijo no se escanea en busca de ayuda, en vivo, JSON o controles claros; los controles pertenecen antes de `--`. Los operandos adicionales y las banderas duplicadas se niegan antes de la mutación.
+Esto almacena el literal `--clear`; sin `--`, `mode-hint --clear` elimina la pista. El sufijo no se analiza en busca de los controles de ayuda, en vivo, JSON o borrado; los controles van antes de `--`. Los operandos adicionales y los indicadores duplicados se rechazan antes de la mutación.
 
-El local JSON es `{ok, target:"local", action, changed, state, sync}` usando el estado post-escritura real. Modo/mantenimiento-nativo y modificado on/off mantienen su intento de sincronización real incluso sin un puerto descubierto; hilos/sugerencias y on/off sin cambios no agregan sincronización. Un resultado de sincronización ausente/malformado no se verifica con la salida 1, no con éxito. `changed` o estado puede ser desconocido después de la falla; no reclame la reversión. Los informes de estado en vivo validaron el estado/asesor/recomendación con `target:"live"`; escribe añadir `ok:true` y `catalogRefresh`. Solo la actualización comprometida y no degradada sale 0. HTTP 502 puede significar un estado nativo parcialmente aplicado: inspeccionar antes de volver a intentarlo. Los errores de uso local retienen la salida 1; los nuevos errores de uso en vivo usan la salida 2.
+El JSON local es `{ok, target:"local", action, changed, state, sync}` y usa el estado real posterior a la escritura. Modo/mantener-nativo y on/off con cambio conservan su intento de sincronización real incluso sin un puerto descubierto; hilos/sugerencias y on/off sin cambios no añaden sincronización. Un resultado de sincronización ausente o mal formado queda sin verificar, con código de salida 1, no como éxito. `changed` o el estado pueden ser desconocidos después de un fallo; no afirme que hubo reversión. Los informes de estado en vivo validan estado/asesoramiento/recomendación con `target:"live"`; las escrituras añaden `ok:true` y `catalogRefresh`. Solo una actualización confirmada y no degradada sale con 0. Un HTTP 502 puede significar un estado nativo aplicado en parte: inspeccione antes de reintentar. Los errores de uso local conservan el código de salida 1; los nuevos errores de uso en vivo usan el código de salida 2.
 
 <a id="combo-routing"></a>
 
@@ -244,7 +244,7 @@ ocx route policy dry-run reliable --model-context 128000 --tools --image --struc
 
 Solo ejecute esta evaluación con autoridad para activar Lab en el destino. La administración POST puede activar Lab e iniciar la automatización que ya está habilitada allí, incluidas las sondas ascendentes. Use list/show para la observación sin ese efecto de activación.
 
-Reemplazar `reliable` con un ID listado. `evaluate` es un alias para `dry-run`; ambos envían requisitos al evaluador del perfil guardado sin una solicitud de inferencia. La creación, actualización y eliminación utilizan el flujo de trabajo explícito de archivo/revisión a continuación. Combo escribe editar un recurso separado. Los perfiles faltantes devuelven la salida 4 y los operandos faltantes devuelven 2.
+Reemplazar `reliable` con un ID listado. `evaluate` es un alias para `dry-run`; ambos envían requisitos al evaluador del perfil guardado sin una solicitud de inferencia. La creación, actualización y eliminación utilizan el flujo de trabajo explícito de archivo/revisión a continuación. Combo escribe editar un recurso separado. Los perfiles faltantes devuelven 4 y los operandos faltantes, 2.
 
 <a id="edit-a-routing-profile-with-its-observed-revision"></a>
 
@@ -267,7 +267,7 @@ ocx route policy show reliable --json
 
 Utilice la revisión opaca original explícitamente. HTTP 409 / exit 5 significa volver a leer show, revisar los cambios concurrentes y reconstruir la edición. Nunca busque silenciosamente una revisión de reemplazo, vuelva a intentar o convierta la actualización en crear. Para un nuevo ID autorizado, utilice `ocx route policy create <new-id> --file profile.next.json --json` sin revisión. La eliminación autorizada es `ocx route policy remove <id> --yes --json` y no tiene guardia de revisión.
 
-Create/update devuelve `{success, id, model, profile, catalogRefresh}` con el nuevo `profile.revision`; quita `{success, id, catalogRefresh}`. Solo la actualización comprometida y no degradada sale 0. Un recibo guardado con salidas de actualización saltadas/fallidas/degradadas 1: inspeccione antes de la recuperación en lugar de repetir la escritura de configuración.
+Crear/actualizar devuelve `{success, id, model, profile, catalogRefresh}` con el nuevo `profile.revision`; eliminar devuelve `{success, id, catalogRefresh}`. Solo una actualización confirmada y no degradada sale con 0. Un recibo guardado con una actualización omitida, fallida o degradada sale con 1: inspeccione antes de recuperarse en lugar de repetir la escritura de configuración.
 
 <a id="compatibility-lab"></a>
 
@@ -284,7 +284,7 @@ ocx lab automation runs --limit 10 --json
 ocx lab public community --json
 ```
 
-`subject`, `observations`, `event`, `artifact` y `production-signals` siguen el linaje de evidencia local. La familia pública ofrece vista previa/exportación por `--event <id>` repetido, verificación/importación a través de `--file <bundle.json>`, y contexto comunitario. Exportar e importar escribe evidencia local. La verificación puede imprimir su resultado y aún salir de no cero cuando el paquete no es criptográficamente válido.
+`subject`, `observations`, `event`, `artifact` y `production-signals` siguen el linaje de evidencia local. La familia pública ofrece vista previa/exportación por `--event <id>` repetido, verificación/importación a través de `--file <bundle.json>`, y contexto comunitario. Exportar e importar escribe evidencia local. La verificación puede imprimir su resultado y aún salir con un código distinto de cero cuando el paquete no es criptográficamente válido.
 
 El manual `lab run` selecciona una capa y un escenario y puede gastar la cuota ascendente. Lea `ocx help lab` y la hoja correspondiente antes de estas operaciones autorizadas. Una política local guardada no prueba que un programador de proxy que ejecuta por separado la haya adoptado. Estos controles CLI no exponen la edición de políticas de automatización completa ni la cancelación de ejecución.
 
@@ -370,7 +370,7 @@ ocx usage --range 7d --search 'model-a' --json
 
 Una consulta en blanco explícita (`--search=`) selecciona la vista top-100; la omisión de la búsqueda conserva el resultado existente. Exacto `--provider` / `--model` todavía alcance el informe subyacente. La búsqueda no amplía el auto alcance de la clave seleccionada o del cliente conectado y nunca se envía como un nuevo parámetro de consulta de Hub API.
 
-`ocx usage --top 25` (también `ocx observe usage --top 25`) establece el límite de la tabla del modelo humano a un número entero de 1 a 1000. El valor predeterminado es 10, o 100 con `--search`; el límite se aplica después del filtrado de búsqueda. Solo cambia la visualización local: los totales de los informes, las filas de proveedores/cuentas y los parámetros API permanecen sin cambios. Con `--json`, se ignora un `--top` válido; JSON conserva su informe completo existente o vista de búsqueda de 100 filas. Límites no válidos devuelven la salida 2 antes de buscar.
+`ocx usage --top 25` (también `ocx observe usage --top 25`) establece el límite de la tabla del modelo humano a un número entero de 1 a 1000. El valor predeterminado es 10, o 100 con `--search`; el límite se aplica después del filtrado de búsqueda. Solo cambia la visualización local: los totales de los informes, las filas de proveedores/cuentas y los parámetros API permanecen sin cambios. Con `--json`, se ignora un `--top` válido; JSON conserva su informe completo existente o vista de búsqueda de 100 filas. Límites no válidos devuelven el código de salida 2 antes de buscar.
 
 <a id="saved-companion-usage-totals"></a>
 
@@ -383,7 +383,7 @@ ocx companion usage --json
 
 El segundo comando lee los ajustes complementarios guardados, luego hoy y el uso de 30d secuencialmente en el mismo entorno de ejecución de administración. Aplica las preferencias guardadas `models` y `hiddenProviders` y conserva los costos y tokens desconocidos / no medidos. La selección de modelo nulo significa todo; una selección vacía significa nada. No cambia la configuración, opera ventanas nativas o retransmite a través de un cliente conectado.
 
-JSON devuelve `schemaVersion:1`, `filters`, `settingsUpdatedAt`, `settingsCorrupt`, `settingsFallback`, `ranges` y `partial`. Cada rango tiene `status:"available"` con `data` filtrado, o `status:"unavailable"`. Un rango no disponible establece el parcial y la salida 1 mientras que retiene el otro rango. Los datos incompletos disponibles conservan sus propios metadatos; no se mide en cero. Los valores predeterminados válidos del servidor retienen una marca de tiempo de configuración nula y establecen un retroceso; los valores predeterminados del archivo corrupto también establecen corruptos y advierten en la salida humana. Los ajustes incorrectos se detienen antes de que se lea el uso. Estas lecturas no son una instantánea atómica. Cada GET tiene una fecha límite de búsqueda/cuerpo de 10 segundos después del descubrimiento y un límite de respuesta de 32 MiB; esta no es una fecha límite de comando completo. Las señales salen 130/143 sin resultados tardíos.
+El JSON devuelve `schemaVersion:1`, `filters`, `settingsUpdatedAt`, `settingsCorrupt`, `settingsFallback`, `ranges` y `partial`. Cada rango tiene `status:"available"` con `data` filtrado, o `status:"unavailable"`. Un rango no disponible establece `partial` y el código de salida 1 mientras conserva el otro rango. Los datos disponibles pero incompletos conservan sus propios metadatos; no se miden como cero. Los valores predeterminados válidos del servidor conservan una marca de tiempo de configuración nula y activan el respaldo; los valores predeterminados de un archivo corrupto además marcan la configuración como corrupta y advierten en la salida humana. Una configuración mal formada detiene el proceso antes de leer el uso. Estas lecturas no son una instantánea atómica. Cada GET tiene un plazo de 10 segundos para la búsqueda y el cuerpo tras el descubrimiento y un límite de respuesta de 32 MiB; no es un plazo para todo el comando. Las señales salen con 130/143 sin resultados tardíos.
 
 <a id="follow-request-windows-or-injection-sequences"></a>
 
@@ -406,7 +406,7 @@ ocx observe injection --follow --jsonl --limit 500
 
 La inyección emite `{seq,at,line}` filas ordenadas, donde `at` es milisegundos de época; el `after` interno avanza con seq. El límite de seguimiento es 1-2000, por defecto 500. JSON es one-shot y JSONL requiere seguir. La observación no permite la captura. Las encuestas vacías no identifican la captura de desactivados ni prueban la ausencia de brechas. La deriva en entorno de ejecución detectable se detiene; no se pueden excluir intervalos de reinicio/última N indetectables sin un marcador de época/intervalo API.
 
-Ambos bucles de seguimiento utilizan esperas de un segundo en serie, fechas límite de búsqueda/cuerpo de 10 segundos y límites de respuesta de 32 MiB. Errores de malformado/sobredimensionado/transporte se detienen con stderr y salida 1, sin reintento/reconexión automática. Reducir el límite para ventanas de gran tamaño. SIGINT/Ctrl-C sale 130, SIGTERM 143, sin encuestas/salida posteriores. Inspeccione el estado de salida y las filas retenidas en lugar de tratar la cancelación como un historial completo.
+Ambos bucles de seguimiento usan esperas en serie de un segundo, plazos de 10 segundos para la búsqueda y el cuerpo, y límites de respuesta de 32 MiB. Los errores de formato, tamaño o transporte se detienen con stderr y código de salida 1, sin reintento ni reconexión automáticos. Reduzca el límite para ventanas demasiado grandes. SIGINT/Ctrl-C sale con 130 y SIGTERM con 143, sin sondeos ni salida posteriores. Inspeccione el estado de salida y las filas retenidas en lugar de tratar la cancelación como un historial completo.
 
 <a id="companion-timeline-and-key-scoped-usage"></a>
 
@@ -466,7 +466,7 @@ ocx access key rename key-example 'Research client' --json
 ocx access key list --json
 ```
 
-Utilice un ID único real o un nombre inequívoco. Renombrar envía solo `{id,name}` y conserva los alcances del proveedor/modelo; no rota/elimina una clave. La respuesta contiene id/name/createdAt y allowedProviders / allowedModels opcional, nunca texto sin formato o un prefijo. La lista sigue enmascarada. Los nombres están libres de control, recortados, no vacíos y como máximo 64 unidades de cadena JavaScript. La secuencia de lectura/cambio de nombre no es CAS; inspeccione la lista enmascarada después de un resultado desconocido antes de volver a intentarlo. El alias raíz `api-key rename` utiliza el mismo comando.
+Use un ID único real o un nombre inequívoco. Renombrar solo envía `{id,name}` y conserva los ámbitos de proveedor/modelo; no rota ni elimina una clave. La respuesta contiene id/name/createdAt y, opcionalmente, allowedProviders/allowedModels, nunca texto sin formato ni un prefijo. La lista sigue enmascarada. Los nombres no contienen caracteres de control, se recortan, no están vacíos y ocupan como máximo 64 unidades de cadena de JavaScript. La secuencia de lectura y renombrado no es CAS; inspeccione la lista enmascarada tras un resultado desconocido antes de reintentar. El alias raíz `api-key rename` usa el mismo comando.
 
 <a id="explicit-key-model-and-audio-checks"></a>
 
@@ -498,7 +498,7 @@ Los objetivos son el origen de servicio local comprobado o el origen de concentr
 
 Los protocolos son chat (predeterminado), respuestas o mensajes. El modo de clave seleccionada primero envía un control mal formado sin credenciales: JSON a ese punto final. Solo la clave nativa requerida 401 avanza a una solicitud de modelo de 16 tokens fija usando la clave suministrada. El control tiene un presupuesto de respuesta de 5 segundos/4096 bytes; la solicitud tiene un presupuesto de respuesta de 60 segundos/2 MiB que incluye lecturas del cuerpo. Los controles sin autorización/no reconocidos se detienen antes de la inferencia. La contabilidad de registro/admisión local puede seguir ocurriendo.
 
-JSON es `{schemaVersion:1,control:{outcome,status?},request:{outcome,status?},response?}`. La respuesta segura contiene el protocolo, el texto ordenado, la finalización completa/limitada y los recuentos de tokens medidos opcionales. Una respuesta de longitud limitada utilizable es `limited`; las respuestas de rechazo / filtro de contenido / herramienta o mal formadas no son compatibles, incluso con HTTP 2xx. Los metadatos de error, ID, herramientas y razonamiento no se imprimen. El fallo operativo retiene un informe versionado más stderr/salida 1 fijo; salidas de entrada de gramática/clave no válidas 2 sin un informe fabricado.
+JSON es `{schemaVersion:1,control:{outcome,status?},request:{outcome,status?},response?}`. La respuesta segura contiene el protocolo, el texto ordenado, la finalización completa/limitada y los recuentos de tokens medidos opcionales. Una respuesta de longitud limitada utilizable es `limited`; las respuestas de rechazo / filtro de contenido / herramienta o mal formadas no son compatibles, incluso con HTTP 2xx. Los metadatos de error, ID, herramientas y razonamiento no se imprimen. El fallo operativo retiene un informe versionado más stderr/código de salida 1 fijo; la entrada de gramática o clave no válida sale con 2 sin un informe fabricado.
 
 El éxito solo dice: "La solicitud sin credenciales fue rechazada; la solicitud del modelo que usa la clave suministrada tuvo éxito". Los cambios de política del oyente entre las llamadas siguen siendo posibles; esto no certifica el alcance de la clave, la admisión atómica o la identidad de facturación. Sin `--api-key-stdin`, la prueba heredada JSON sigue siendo su carga útil original y no dice nada sobre una clave recién seleccionada.
 
@@ -532,7 +532,7 @@ ocx api explain --model combo/main --inbound chat --feature request.seed,request
 ocx api policy --rollout shadowPlan=on
 ```
 
-Los errores de uso salen 2 antes de que se envíe cualquier solicitud. `--json` imprime el cuerpo de gestión API tal cual.
+Los errores de uso salen con 2 antes de que se envíe cualquier solicitud. `--json` imprime el cuerpo de gestión API tal cual.
 
 <a id="client-integrations"></a>
 
@@ -567,7 +567,7 @@ ocx integration client restore --op op-example --preview --json
 
 Droid aplica/sobrescribe los soportes repetidos `--reasoning-default MODEL=EFFORT` para el reemplazo completo del mapa, o el exclusivo `--clear-reasoning-defaults` para `{}`. La omisión preserva el mapa. Repita el mapa exacto en vista previa y confirmación; ver [Droid valores predeterminados](/es/guides/integrations/#factory-droid).
 
-La eliminación de historial es irreversible y requiere un opId exacto más `--yes`: `ocx integration client history remove --op op-example --yes --json` aborda la revista global. Sólo `--client aside` y opcional `--profile N` proporcionan alcances de eliminación más estrechos. La última fila está protegida. `snapshotRemoved:false` sale 1 después de la jubilación con la limpieza incompleta; no vuelva a intentar la eliminación o la reversión de la reclamación.
+La eliminación del historial es irreversible y requiere un opId exacto más `--yes`: `ocx integration client history remove --op op-example --yes --json` apunta al diario global. Solo `--client aside` y el opcional `--profile N` ofrecen ámbitos de eliminación más estrechos. La fila más reciente está protegida. `snapshotRemoved:false` sale con 1 tras la retirada con la limpieza incompleta; no reintente la eliminación ni afirme una reversión.
 
 `ocx integration client sync --client aside --json` actualiza los perfiles elegibles a través del propietario certificado, sin selector de perfil o reserva local. El vacío `results` es una observación exitosa de perfiles no elegibles; una fila fallida hace que el agregado sea distinto de cero mientras conserva otros éxitos. Lea los hechos de estado y recuperación antes de volver a intentarlo; [Los controles de Aside](/es/guides/integrations/#aside-profile-controls) explican la intención del perfil versus el estado del archivo.
 
@@ -580,7 +580,7 @@ ocx integration native cursor status --json
 ocx integration native cursor local-installer --json
 ```
 
-El estado puede recopilar el inventario del modelo; la búsqueda del instalador puede obtener un manifiesto público. No se descargan/instalan ni cambian el Cursor. El estado distingue la credencial del modo de puerta de enlace de marcador de posición; el marcador de posición no es una credencial de acceso. El instalador `{available:false,url:null,version:null,reason:null}` es válido, incluso cuando Private Inference ya está instalado. Una lectura no disponible válida sale de 0.
+El estado puede recopilar el inventario del modelo; la búsqueda del instalador puede obtener un manifiesto público. No descargan ni instalan nada ni modifican Cursor. El estado distingue la credencial del modo de puerta de enlace de marcador de posición; el marcador de posición no es una credencial de acceso. El instalador `{available:false,url:null,version:null,reason:null}` es válido, incluso cuando Private Inference ya está instalado. Una lectura no disponible válida sale con 0.
 
 ### `ocx integration <claude|grok> ...`
 
@@ -975,7 +975,7 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 
 `attest` es un opt-in, observación de solo lectura de una instalación Windows x64 npm. Sin opciones, identifica el candidato seleccionado a partir de la instantánea del lanzador de prueba: el `CODEX_CLI_PATH` configurado o el primer `codex` en el PATH capturado, con un envoltorio OpenCodex que resuelve su respaldo `codex.opencodex-real.cmd` npm renombrado. Suministrar los cuatro caminos absolutos anula el descubrimiento; el descubrimiento solo propone caminos y la observación manual sigue siendo la autoridad. `--candidate` debe nombrar el estándar npm `<prefix>/codex.cmd` o `<prefix>/node_modules/@openai/codex/bin/codex.js`. `--npm-cli` debe terminar en `node_modules/npm/bin/npm-cli.js`; `--node` nombra un `node.exe` explícito. Los paquetes de aplicaciones, los diseños de administradores de versiones reconocidos, las shims opencodex sin su respaldo npm y los envoltorios personalizados son rechazados.
 
-Los controladores nativos mantienen los directorios y archivos antecesores durante las lecturas limitadas. Las plataformas no soportadas, los puntos/secciones de análisis, los escritores en conflicto, las rutas inseguras y los archivos de gran tamaño son rechazados. El informe fijo no contiene rutas: `status` es `observed` o `refused`, con `installationIdentityObserved`; `selectionAttested`, `managed` y `applyAllowed` permanecen `false`. Compruebe `status`, no solo el código de salida del proceso: un rechazo informado puede salir 0.
+Los controladores nativos mantienen los directorios y archivos antecesores durante las lecturas limitadas. Las plataformas no soportadas, los puntos/secciones de análisis, los escritores en conflicto, las rutas inseguras y los archivos de gran tamaño son rechazados. El informe fijo no contiene rutas: `status` es `observed` o `refused`, con `installationIdentityObserved`; `selectionAttested`, `managed` y `applyAllowed` permanecen `false`. Compruebe `status`, no solo el código de salida del proceso: un rechazo informado puede salir con 0.
 
 Una identidad o resumen observado describe esos archivos durante esta observación. No es un permiso de actualización duradero y no prueba el entorno de ejecución seleccionado, el instalador anterior, la configuración efectiva del npm o la autenticidad de la herramienta. El ejecutable Node suministrado solo se observa; no se ha demostrado que sea el que seleccionaría un lanzador. No se ejecuta ningún destino; no se produce ninguna solicitud de registro, instalación, escritura de configuración o control de procesos. Los criterios independientes de `check`/`plan` para Windows descritos antes pueden establecer evidencia de planificación de solo lectura; `attest` sigue limitado a la observación.
 
@@ -1005,7 +1005,7 @@ La salida `ocx logs` humana incluye `id=<request-id>`. Pase ese valor a `ocx log
 
 ## Estado de búsqueda del perfil de enrutamiento
 
-`ocx route policy show <id>` sale 4 cuando el perfil no existe. Faltan o no son válidos los argumentos de comando. Los scripts pueden distinguir un perfil que falta del uso incorrecto.
+`ocx route policy show <id>` sale con 4 cuando el perfil no existe. Faltan o no son válidos los argumentos de comando. Los scripts pueden distinguir un perfil que falta del uso incorrecto.
 
 <a id="upstream-error-details"></a>
 

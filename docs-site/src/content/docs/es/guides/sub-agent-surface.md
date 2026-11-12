@@ -49,15 +49,15 @@ Los sobres mal formados, vacíos, opacos o incompletos aún fallan en la validac
 
 ## Cómo funciona
 
-El modo seleccionado controla el campo `multi_agent_version` en cada entrada de catálogo Codex dice:
+El modo seleccionado controla el campo `multi_agent_version` en cada entrada del catálogo que lee Codex:
 
-- **v1** sellos `multi_agent_version = "v1"` en cada modelo.
+- **v1** marca `multi_agent_version = "v1"` en todos los modelos.
 - **base** restaura los pines de aguas arriba. Las entradas sin pines siguen la bandera de la característica nativa `multi_agent_v2`.
-- **v2** sellos `multi_agent_version = "v2"` en todos los modelos, excepto cuando **Mantener ChatGPT en v1** está habilitado: ChatGPT -las filas nativas permanecen `"v1"` y las filas enrutadas o combinadas permanecen `"v2"`.
+- **v2** marca `multi_agent_version = "v2"` en todos los modelos, excepto cuando **Mantener ChatGPT en v1** está habilitado: las filas nativas de ChatGPT permanecen en `"v1"` y las filas enrutadas o de combo permanecen en `"v2"`.
 
 opencodex aplica esto como el pase final tanto al catálogo en vivo `/v1/models` como al catálogo sincronizado al disco. Es por eso que un cambio de modo afecta a las nuevas sesiones de App, CLI y TUI creadas de manera consistente.
 
-Para una lista v2, la elegibilidad tiene tres estados: una entrada sellada `"v2"`, explícitamente establecida en `null`, o con ningún campo `multi_agent_version` es elegible. Se excluye un pin genuino `"v1"` porque establece que el modelo pertenece a la otra superficie de colaboración.
+Para una lista v2, la elegibilidad tiene tres estados: es elegible una entrada marcada como `"v2"`, establecida explícitamente en `null` o sin campo `multi_agent_version`. Se excluye un pin genuino `"v1"` porque establece que el modelo pertenece a la otra superficie de colaboración.
 
 <a id="which-models-spawn_agent-advertises"></a>
 
@@ -297,12 +297,12 @@ Solo un cambio real cuenta. Una sincronización cuyo resultado es idéntico en b
 
 ### Esfuerzo de razonamiento
 
-`injectionEffort` afecta solo a la orientación del trabajador delegado y, cuando está explícitamente habilitada, a los valores predeterminados del subagente Codex nativo. No cambia el esfuerzo de la sesión de padres. `ultra` es un nivel superior orientado al cliente que Codex convierte a `max`; opencodex luego mapea o fija el valor para el proveedor seleccionado.
+`injectionEffort` afecta solo a la orientación del trabajador delegado y, cuando está explícitamente habilitada, a los valores predeterminados del subagente nativo de Codex. No cambia el esfuerzo de la sesión principal. `ultra` es un nivel superior orientado al cliente que Codex convierte a `max`; opencodex luego asigna o limita el valor para el proveedor seleccionado.
 
 <a id="context-cap"></a>
 
-### Cap. de contexto
+### Límite de contexto
 
 El límite de contexto del modelo es independiente del modo de subagente. Configure en la página Modelos; los modelos nativos OpenAI conservan sus ventanas de contexto real.
 
-El campo experimental `plaintextV2AgentMessages` no se establece en una nueva configuración y se ejecuta solo cuando se establece en `true`. La persona que llama debe usar el cable Responses y el destino final debe usar `adapter: "openai-responses"`, `authMode: "forward"` y la URL base exacta `https://chatgpt.com/backend-api/codex`. OpenAI API - proveedores clave, pasarelas compatibles personalizadas, rutas a otros proveedores, y no Responses personas que llaman están excluidos. Para una nueva llamada a la herramienta ChatGPT v2 nativa elegible, la opción asigna alias con alcance de solicitud al espacio de nombres y tres nombres reservados de la herramienta de mensajes, elimina el marcador de mensajes y restaura las identidades originales en la respuesta. Maneja `spawn_agent`, `send_message` y `followup_task` y no agrega ninguna petición de recuperación. HTTPS permanece encriptado, pero el texto de la tarea se puede conservar en el historial Codex, las solicitudes del proveedor de rutas y el estado de respuesta/depuración local. El texto cifrado existente no cambia, y la opción depende del comportamiento indocumentado ChatGPT y Codex. Véase [Configuración del agente: Mensajes de agente de texto sin formato v2](/es/reference/configuration/agents/#plaintext-v2-agent-messages). Si una respuesta de flujo continuo ChatGPT no lleva ningún tipo de contenido, o una que no es ni `application/json` ni un flujo de eventos reconocible, opencodex comprueba un prefijo de evento Responses limitado antes de restaurar los nombres de herramienta de mensaje. Una respuesta `application/json` toma el camino JSON limitado en su lugar. La sonda espera como máximo `stallTimeoutSec` por su prefijo, y un cuerpo que permanece silencioso, no reconocido o ilegible falla en cerrarse en lugar de alcanzar Codex como una respuesta exitosa.
+El campo experimental `plaintextV2AgentMessages` no se establece en una nueva configuración y se ejecuta solo cuando se establece en `true`. La persona que llama debe usar el cable Responses y el destino final debe usar `adapter: "openai-responses"`, `authMode: "forward"` y la URL base exacta `https://chatgpt.com/backend-api/codex`. Quedan excluidos los proveedores de clave API de OpenAI, las pasarelas compatibles personalizadas, las rutas a otros proveedores y los llamantes que no usan Responses. Para una nueva llamada a la herramienta ChatGPT v2 nativa elegible, la opción asigna alias con alcance de solicitud al espacio de nombres y tres nombres reservados de la herramienta de mensajes, elimina el marcador de mensajes y restaura las identidades originales en la respuesta. Maneja `spawn_agent`, `send_message` y `followup_task` y no agrega ninguna petición de recuperación. HTTPS permanece cifrado, pero el texto de la tarea se puede conservar en el historial de Codex, las solicitudes del proveedor enrutado y el estado de respuesta/depuración local. El texto cifrado existente no cambia, y la opción depende del comportamiento no documentado de ChatGPT y Codex. Véase [Configuración del agente: Mensajes de agente de texto sin formato v2](/es/reference/configuration/agents/#plaintext-v2-agent-messages). Si una respuesta de flujo continuo ChatGPT no lleva ningún tipo de contenido, o una que no es ni `application/json` ni un flujo de eventos reconocible, opencodex comprueba un prefijo de evento Responses limitado antes de restaurar los nombres de herramienta de mensaje. Una respuesta `application/json` toma el camino JSON limitado en su lugar. La sonda espera como máximo `stallTimeoutSec` por su prefijo, y un cuerpo que permanece silencioso, no reconocido o ilegible falla en cerrarse en lugar de alcanzar Codex como una respuesta exitosa.

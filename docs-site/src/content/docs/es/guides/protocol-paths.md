@@ -11,7 +11,7 @@ Los ajustes de esta página están desactivados de forma predeterminada excepto 
 
 ## Modos de entrega
 
-Una ruta es una lista de saltos desde el cliente API al cable ascendente. Los saltos son los tres API nombres, `ir` (petición de adaptador-neutral de opencodex y formulario de evento), y `responses-internal` (Responses JSON o SSE producido sólo como un puente interno, nunca visto por un cliente).
+Una ruta es una lista de saltos desde el cliente API al cable ascendente. Los saltos son los tres nombres de API, `ir` (petición neutral respecto del adaptador y forma de evento de opencodex) y `responses-internal` (Responses JSON o SSE producido sólo como un puente interno, nunca visto por un cliente).
 
 | Modo | Descripción | Ruta de solicitud de ejemplo |
 | --- | --- | --- |

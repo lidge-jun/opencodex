@@ -110,7 +110,7 @@ Cada tecla combinada es una identificación que coincide con `[A-Za-z0-9][A-Za-z
 | `jevEffortMode?` | `"decide" \| "client"` | `"decide"` | Solo JEV. `"decide"` aplica al primer hijo el esfuerzo decidido, por encima del cliente. `"client"` conserva el destino decidido y usa la política Combo habitual: esfuerzo del cliente, escala del destino y `defaultEffort`/`defaultEffortMode`; `"force"` aún prevalece. Solo se guarda `"client"`. Consulta [límites y estado compartidos](/es/guides/combos/#shared-limits-state-and-statistics). |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` publica imágenes solo cuando cada objetivo admite imágenes; `"disabled"` fuerza el texto solo (cae la imagen de las modalidades publicadas y rechaza las solicitudes que llevan imágenes antes del envío). |
 | `alias?` | `string` | — | id modelo público opcional en lugar de la identificador selector canónica. |
-| `nativeAlias?` | `boolean` | `false` | Deje que un id nativo desnudo actualmente soportado tenga prioridad solo para ese id no calificado. Los identificadores de Bare `gpt-5.6-*` usan las credenciales Codex Pool / Direct. Las rutas calificadas para la cuenta siguen siendo distintas. Las rutas calificadas por el proveedor como `openai-apikey/gpt-5.6-*` usan su ruta API -key configurada y nunca pasan al alias nativo. |
+| `nativeAlias?` | `boolean` | `false` | Permite que un id nativo sin calificar actualmente soportado tenga prioridad solo para ese id. Los ids `gpt-5.6-*` sin calificar usan las credenciales de grupo/directas de Codex. Las rutas calificadas por cuenta siguen siendo distintas. Las rutas calificadas por proveedor como `openai-apikey/gpt-5.6-*` usan su ruta de clave API configurada y nunca pasan al alias nativo. |
 | `displayName?` | `string` | — | Etiqueta de catálogo solo para mostrar, requerida y no vacía para un alias nativo. |
 | `decisionProvider?` | `string` | `"jev"` | `strategy: "jev"` solamente. `"jev"` (lo mismo que omitirlo y almacenarlo como omisión) es el servicio de decisión TypeSafe, válido sin una fila de proveedor; cualquier otro valor debe nombrar un proveedor configurado con `adapter: "jev-decision"` y una decisión completa HTTPS `baseUrl` (cualquier ruta) o un punto final local HTTP `/systemone`. Userinfo, cadenas de consulta y fragmentos son rechazados. |
 | `decisionModel?` | `string` | Sin configurar | `strategy: "jev"` solamente, mutuamente excluyentes con `decisionProvider`. Una ruta ordinaria opencodex (por ejemplo `ollama/qwen3:4b`) pidió elegir una opción ofrecida como JSON. Se ejecuta con las credenciales almacenadas del proveedor seleccionado, nunca con las de la persona que llama, y no puede resolver este combo, ningún combo JEV o una fila `jev-decision`. |
@@ -146,7 +146,7 @@ La estrategia `jev` es opcional. Solo el método TypeSafe, utilizado cuando no s
 
 ### Modelo de decisión autoalojado (e.g. Ollama tev1)
 
-`decisionProvider` puede apuntar un JEV Combo en un modelo de decisión compatible con Jev-API autoalojado como Ollama 's `tev1` (Ollama 0.35 +, `POST /v1/systemone`, no API clave):
+`decisionProvider` puede apuntar un combo JEV a un modelo de decisión autoalojado compatible con Jev-API, como `tev1` de Ollama (Ollama 0.35 +, `POST /v1/systemone`, sin clave API):
 
 ```json
 {
@@ -205,7 +205,7 @@ del combo JEV, en **Modelos → Combos**. Seleccione la fila y configure
 
 Los perfiles de política de enrutamiento son la capa de selección de Inteligencia de Enrutador: un `policy/<id>` solicitado explícitamente (o alias configurado) selecciona entre una lista de permisos candidata fija utilizando requisitos de capacidad dura y puntuación explicable y determinista. Una solicitud explícita `policy/<id>` (o un alias configurado) ejecuta el evaluador y encamina al candidato seleccionado. Los identificadores de modelo existentes son **nunca** enrutados a través de un perfil implícitamente: el espacio de nombres `policy/` y los alias de perfil son los únicos puntos de entrada, y ambos se validan contra el orden de resolución del modelo anterior.
 
-Cada llave es un id que empareja `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, siempre direccionable como `policy/<id>`, con un `alias` opcional. Los alias deben ser únicos y no pueden colisionar con proveedores configurados, el espacio de nombres de enrutamiento `<provider>/<model>`, combos, espacios de nombres de cuentas de códices, el espacio de nombres `policy/` o familias nativas desnudas reservadas (`gpt-*`, `o1-*`, `o3-*`, `o4-*`, `codex-*`).
+Cada clave es un id que coincide con `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, siempre direccionable como `policy/<id>`, con un `alias` opcional. Los alias deben ser únicos y no pueden colisionar con proveedores configurados, el espacio de nombres de enrutamiento `<provider>/<model>`, los combos, los espacios de nombres de cuentas de Codex, el espacio de nombres `policy/` ni las familias nativas sin calificar reservadas (`gpt-*`, `o1-*`, `o3-*`, `o4-*`, `codex-*`).
 
 | Clave | Tipo | Predeterminado | Descripción |
 | --- | --- | --- | --- |

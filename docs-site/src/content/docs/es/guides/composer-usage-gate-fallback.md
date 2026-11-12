@@ -69,7 +69,7 @@ Desde una comprobación del repositorio, el ayudante Windows puede descubrir el 
 .\scripts\codex-queue.ps1 -Thread 'my-project-review' -Message 'continue with the next step'
 ```
 
-En macOS / Linux, utilice Bash (incluyendo macOS 's Bash 3.2):
+En macOS / Linux, utilice Bash (incluido el Bash 3.2 de macOS):
 
 ```bash
 bash scripts/codex-queue.sh --thread 'my-project-review' --message 'continue with the next step'

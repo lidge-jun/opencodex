@@ -131,7 +131,7 @@ Los puntos finales Chat Completions y Messages honran catálogos de herramientas
 
 Native Messages también reconoce definiciones de herramientas de mensajes de sistema en línea junto con `tools: []`. Esos nombres permanecen accesibles hasta que se eliminen permanentemente; una declaración en línea no autoriza herramientas de cliente no relacionadas. Alojado MCP llamadas y servidor-herramienta argumento arroyos conservan su forma nativa.
 
-Por separado, en cada cable de entrada, un proveedor `default.`-namespace call está normalizado de nuevo al nombre de la herramienta desnuda que declaró la solicitud (`default.Read` → `Read`).
+Por separado, en cada cable de entrada, una llamada con espacio de nombres `default.` del proveedor se normaliza de nuevo al nombre de la herramienta desnuda que declaró la solicitud (`default.Read` → `Read`).
 
 <a id="endpoint-overview"></a>
 
@@ -182,7 +182,7 @@ opencodex-audio
 opencodex-key.<canonical-base64url-of-UTF8-proxy-key>
 ```
 
-Solo `opencodex-audio` es seleccionado en la respuesta. La codificación es la sintaxis de transporte, no el cifrado. Las cabeceras de credenciales explícitas HTTP tienen prioridad. ChatGPT tokens permanecen en el proxy; un API-clave-solo aguas arriba no puede servir este protocolo de dictado.
+Solo `opencodex-audio` es seleccionado en la respuesta. La codificación es la sintaxis de transporte, no el cifrado. Las cabeceras de credenciales explícitas HTTP tienen prioridad. Los tokens de ChatGPT permanecen en el proxy; un flujo ascendente que solo admita clave API no puede servir este protocolo de dictado.
 
 Después de conectar, envíe:
 
@@ -222,7 +222,7 @@ Use 1-128 letras ASCII, dígitos, `.`, `_`, `:` o `-`, comenzando con una letra 
 
 Utilice marcadores distintos para conversaciones distintas. Esto preserva la continuidad de la conversación para los consumidores intermedios, pero no garantiza un éxito de caché ascendente o ahorros medidos. WebSocket marcos, compactos, y count_tokens no utilizan esta promoción.
 
-En el despacho canónico ChatGPT -respaldado Responses, un `session_id` explícito no vacío gana. De lo contrario, el primer alias no vacío entre `session-id`, luego `thread-id`, suministra `session_id` si su valor es seguro; un alias ganador no válido suprime la identidad más débil. Los valores de cabecera vacíos se eliminan antes de este paso en cada ruta (selección de cabecera de autenticación Responses y los puentes Claude Messages y Chat Completions), por lo que una cabecera vacía cuenta como ausente: una `session-id` vacía permite una victoria `thread-id` válida. La sesión derivada de metadatos Claude solo se aplica cuando no queda ninguna cabecera canónica no vacía o alias. Los alias mantienen sus nombres originales en el cable; sus valores de llamada sin procesar validados se reenvían como un `session_id` explícito, sin el alcance principal utilizado para el `x-session-id` promocionado. Esta conversión de salida no cambia la afinidad de entrada. Los destinos personalizados y API clave no cambian, y no se inventa ninguna identidad para las solicitudes sin un marcador de conversación.
+En el despacho canónico de Responses respaldado por ChatGPT, un `session_id` explícito no vacío gana. De lo contrario, el primer alias no vacío entre `session-id`, luego `thread-id`, suministra `session_id` si su valor es seguro; un alias ganador no válido suprime la identidad más débil. Los valores de cabecera vacíos se eliminan antes de este paso en cada ruta (selección de cabecera de autenticación Responses y los puentes Claude Messages y Chat Completions), por lo que una cabecera vacía cuenta como ausente: una `session-id` vacía permite una victoria `thread-id` válida. La sesión derivada de metadatos Claude solo se aplica cuando no queda ninguna cabecera canónica no vacía o alias. Los alias mantienen sus nombres originales en el cable; sus valores de llamada sin procesar validados se reenvían como un `session_id` explícito, sin el alcance principal utilizado para el `x-session-id` promocionado. Esta conversión de salida no cambia la afinidad de entrada. Los destinos personalizados y los de clave API no cambian, y no se inventa ninguna identidad para las solicitudes sin un marcador de conversación.
 
 Para clientes de terceros, mantenga un marcador de propiedad de la persona que llama por conversación, incluidas las solicitudes repetidas de `curl`. Un prefijo de sistema/herramientas compartido `prompt_cache_key` o idéntico es una cohorte de caché, no prueba de que dos solicitudes pertenezcan a una conversación. Las solicitudes sin un marcador de conversación no reciben una sesión estable inventada. OpenCodex tampoco se hace pasar por Codex sintetizando un `originator`; un originador suministrado por la persona que llama conserva sus reglas de reenvío normales. La continuidad del encabezado no establece un éxito de caché: compare los tokens de entrada en caché informados del flujo ascendente para sus propias solicitudes de prefijo repetido. Un recuento de escritura en caché omitido no es evidencia de no escritura.
 
@@ -373,7 +373,7 @@ Cuando WebSockets está desactivado, un intento de actualización recibe HTTP 42
 
 ## `POST /v1/chat/completions`
 
-Este punto final acepta OpenAI -compatible Chat Completions solicitudes con un requerido `model` y un no vacío `messages` matriz. Traduce los mensajes del sistema, usuario, asistente y herramienta en los elementos internos Responses; traduce las herramientas de función, la elección de herramientas, imágenes, esfuerzo de razonamiento y formatos de respuesta compatibles; ejecuta el canal de enrutamiento Responses normal; luego traduce el resultado de nuevo.
+Este punto final acepta solicitudes de Chat Completions compatibles con OpenAI con un `model` obligatorio y un array `messages` no vacío. Traduce los mensajes del sistema, usuario, asistente y herramienta en los elementos internos Responses; traduce las herramientas de función, la elección de herramientas, imágenes, esfuerzo de razonamiento y formatos de respuesta compatibles; ejecuta el canal de enrutamiento Responses normal; luego traduce el resultado de nuevo.
 
 Las URL de imagen y las URL de datos base64 usan partes de contenido de Chat `image_url`. La traducción conserva los valores soportados `detail` (`auto`, `low`, `high`). En las rutas traducidas, OpenCodex también acepta matrices de resultados de herramientas portadoras de imágenes como una extensión de compatibilidad: Responses rutas retienen la salida estructurada, mientras que el adaptador `openai-chat` envía imágenes de herramientas en un mensaje de usuario siguiente porque el contenido de la herramienta de chat es de solo texto. Otros adaptadores posteriores tienen su propia ubicación específica del proveedor. Los resultados de texto sin formato siguen siendo cadenas. El passthrough nativo sigue su contrato ascendente; el soporte de imágenes aún depende del modelo seleccionado y la configuración del proveedor.
 
@@ -391,7 +391,7 @@ Las respuestas y tramas de error de este endpoint usan mensajes redactados por e
 
 Si una solicitud de Chat de flujo continuo recibe un resultado JSON Responses completo aguas arriba, el proxy sintetiza SSE desde la finalización convertida. Conserva el contenido de respuesta y razonamiento, las llamadas de herramienta de función (con un flujo separado `index` para cada llamada), el uso y el convertido `finish_reason`, incluidos `tool_calls` y `length`. Este respaldo entrega el resultado completado en trozos; no puede proporcionar entrega token por token antes de que llegue la respuesta JSON aguas arriba. No emite una solicitud de inferencia adicional. Una respuesta incompleta causada por el límite de token de salida o el filtrado de contenido retiene `length` o `content_filter`, incluso si incluye la salida de la herramienta. Otros límites incompletos devuelven un error ascendente en lugar de reclamar un final normal.
 
-El texto de rechazo permanece separado del texto de respuesta: las terminaciones JSON usan `message.refusal` nullable, y los fragmentos de transmisión usan `delta.refusal`. Chat nativo JSON -a- SSE y SSE -a- JSON conversiones preservan ese campo; relé de transmisión nativa conserva deltas de rechazo del proveedor. En los flujos traducidos Responses, las partes de rechazo se almacenan en memoria intermedia hasta el evento terminal y se emiten una vez en su orden de salida/contenido original. Las instantáneas repetidas o dispersas compatibles no duplican ni borran el texto. Las instantáneas de rechazo contradictorias y el desbordamiento del búfer producen un error escrito sin un acabado exitoso o `[DONE]`. Esto preserva el rechazo ascendente; no introduce una decisión de política de proxy.
+El texto de rechazo permanece separado del texto de respuesta: las finalizaciones JSON usan `message.refusal` anulable, y los fragmentos de transmisión usan `delta.refusal`. Las conversiones nativas de Chat de JSON a SSE y de SSE a JSON conservan ese campo; el relé de transmisión nativa conserva los deltas de rechazo del proveedor. En los flujos traducidos de Responses, las partes de rechazo se almacenan en búfer hasta el evento terminal y se emiten una vez en su orden original de salida y contenido. Las instantáneas repetidas o dispersas compatibles no duplican ni borran el texto. Las instantáneas de rechazo contradictorias y el desbordamiento del búfer producen un error tipado sin una finalización exitosa ni `[DONE]`. Esto preserva el rechazo ascendente; no introduce una decisión de política de proxy.
 
 Debido a que la ruta de ejecución interna está basada en Responses, un adaptador de proveedor puede imponer un conjunto de características más estrecho. Por ejemplo, una característica de solicitud que no puede ser representada por el adaptador seleccionado se devuelve como un error en lugar de cambiar silenciosamente su significado.
 
@@ -421,7 +421,7 @@ El pase nativo Anthropic solo es elegible cuando todos estos son verdaderos:
 - en un oyente que no es de bucle de retorno, la solicitud también incluye una admisión de proxy válida solo en `x-opencodex-api-key`; y
 - ningún alias configurado o mapa de modelo reclama ese id de modelo para un destino encaminado.
 
-Una solicitud elegible se reenvía en el dialecto Anthropic para que los encabezados beta nativos, las firmas de pensamiento y la identidad de suscripción permanezcan de extremo a extremo. De lo contrario, toma el Responses ida y vuelta.
+Una solicitud elegible se reenvía en el dialecto Anthropic para que los encabezados beta nativos, las firmas de pensamiento y la identidad de suscripción se conserven de extremo a extremo. De lo contrario, la solicitud hace el recorrido de ida y vuelta de Responses.
 
 El encabezado de admisión dedicado nunca se reenvía. También se eliminan los secretos de admisión proxy encontrados en `Authorization` o `x-api-key`; se conserva una credencial Anthropic genuina separada. Las cabeceras de credenciales unidas por coma ambiguas fallan en lugar de ser reenviadas.
 
@@ -489,7 +489,7 @@ Después de la creación de la llamada, los clientes pueden unirse a una banda l
 - `/v1/realtime/calls/{callId}`
 - `/v1/realtime?call_id={callId}`
 
-El proxy normaliza la URL de unión ascendente y luego retransmite de forma transparente el texto y los marcos binarios en ambas direcciones. Las cabeceras de protocolo de cliente se conservan mientras que la autenticación ascendente sigue siendo propiedad de proxy.
+El proxy normaliza la URL de conexión aguas arriba y luego retransmite de forma transparente el texto y los marcos binarios en ambas direcciones. Los encabezados de protocolo del cliente se conservan, mientras que la autenticación aguas arriba sigue siendo propiedad del proxy.
 
 La creación de la llamada y la conexión de banda lateral deben usar la misma cuenta de OpenAI; de lo contrario, el servidor de origen rechaza la conexión (`404`). Ambas operaciones llevan los encabezados `session-id` y `thread-id` de Codex. En Pool, la cuenta queda vinculada a ese par dentro del proceso: la conexión reutiliza la cuenta que creó la llamada. Direct reenvía la credencial bearer actual de quien realiza la solicitud en ambas operaciones. Los encabezados de cliente retransmitidos son exactamente `openai-alpha`, `x-session-id`, `session-id`, `thread-id`, `originator`, `x-oai-attestation`, `x-codex-turn-metadata` y `voice-session-id`, que identifica la sesión de voz del cliente y es distinto del `x-session-id` de tiempo real (`LIVE_CLIENT_PROTOCOL_HEADERS` en `src/server/live.ts`). Cada encabezado solo se retransmite si lo envió el cliente; no se inventa ninguno. El proxy controla `Authorization` y el ID de cuenta de ChatGPT en sus rutas: Pool usa la cuenta guardada y Direct la credencial validada del cliente; un proveedor con clave API usa su propia credencial bearer. Codex solo envía esta conexión al proxy cuando `experimental_realtime_ws_base_url` apunta a él. `ocx start` inyecta esa clave junto con `openai_base_url`; consulta [Integración con Codex](/es/guides/codex-integration/).
 
@@ -511,7 +511,7 @@ La compactación devuelve el historial de reemplazo para los clientes que necesi
 
 La capacidad de punto final v1 personalizada es independiente de la v2 `supportsNativeCompactionTrigger` y de la `decodesNativeCompactionBlobs` para la reproducción. Ninguno otorga la identidad canónica OpenAI o el reenvío de credenciales de llamada. Las anulaciones de proveedores cruzados siguen siendo portátiles; el éxito v2 solo no establece soporte para `/responses/compact`. Véase [configuración del proveedor](/es/reference/configuration/providers/).
 
-Si el punto final compacto nativo devuelve HTTP 404, OpenCodex vuelve a intentar la compactación a través de un giro regular Responses con el mismo selector de modelo y encabezados de sesión. Canonical ChatGPT giros de reserva utilizan aguas arriba SSE; el llamante compacto todavía recibe JSON. Se conserva un elemento de compactación opaco nativo completo, mientras que un resumen `ocx1:` se decodifica en el historial de usuario de reemplazo. Los giros de reserva fallidos o incompletos devuelven un error en lugar del historial de reemplazo. Otros estados compactos nativos conservan su manejo existente.
+Si el punto final compacto nativo devuelve HTTP 404, OpenCodex vuelve a intentar la compactación a través de un giro regular Responses con el mismo selector de modelo y encabezados de sesión. Los turnos de reserva de Canonical ChatGPT usan SSE aguas arriba; quien llama a la compactación sigue recibiendo JSON. Un elemento de compactación opaco nativo completado se conserva, mientras que un resumen `ocx1:` se decodifica en el historial de usuario de reemplazo. Los turnos de reserva fallidos o incompletos devuelven un error en lugar del historial de reemplazo. Otros estados compactos nativos conservan su manejo existente.
 
 Codex nombra un modelo de la familia OpenAI (por ejemplo `gpt-5.6-sol`) para sus vueltas de compactación, independientemente de a qué proveedor se dirija el operador. Las solicitudes ordinarias reservan dichos identificadores para el proveedor canónico `openai`. En la superficie de compactación solamente - `POST
 /v1/responses/compact` y un giro `POST /v1/responses` que lleva un `compaction_trigger` - un modelo nativo desnudo sin un proveedor canónico `openai` habilitado vuelve al `defaultProvider` configurado como el resumen en lugar de devolver 404. La alternativa se aplica solo cuando el proveedor predeterminado está habilitado y no es en sí mismo una entrada de la familia OpenAI; los selectores calificados para la cuenta como `side/gpt-5.6-sol` aún fallan. El proxy registra un aviso por proveedor cuando se activa esta reserva. Las configuraciones con un proveedor canónico `openai` habilitado no cambian.
@@ -546,28 +546,27 @@ Las respuestas compactas nativas se almacenan en búfer con un máximo separado 
 
 ## Matriz de autenticación
 
-En un enlace de solo retorno de bucle, la admisión del plano de datos no requiere una clave configurada. En un aprieto remoto, utilizar la matriz de abajo. "Dedicado" significa `X-OpenCodex-API-Key`Las otras columnas significan
-`Authorization: Bearer ...` y `x-api-key`.
+En un enlace de solo loopback, la admisión del plano de datos no requiere una clave configurada. En un enlace remoto, utilice la matriz siguiente. "Dedicado" significa `X-OpenCodex-API-Key`; las demás columnas significan `Authorization: Bearer ...` y `x-api-key`.
 
-| Superficie | Dedicado | Portador | `x-api-key` |
+| Superficie | Dedicado | Bearer | `x-api-key` |
 | --- | --- | --- | --- |
 | `/v1/responses` HTTP y WebSocket | Aceptado | Aceptado | Rechazado |
 | `/v1/responses/compact` | Aceptado | Aceptado | Rechazado |
 | `/v1/chat/completions` | Aceptado | Aceptado | Rechazado |
 | `/v1/messages` y `/v1/messages/count_tokens` | Aceptado | Aceptado | Aceptado |
 | `/v1/models` | Aceptado | Aceptado | Aceptado |
-| `/v1/live`, `/v1/realtime/calls`, y la banda lateral se une | Aceptado | Aceptado | Aceptado |
+| `/v1/live`, `/v1/realtime/calls` y las uniones por banda lateral | Aceptado | Aceptado | Aceptado |
 
-Responses -las solicitudes de familia y chat aceptan una clave proxy en el encabezado dedicado o el campo Portador. En rutas nativas, la credencial Codex almacenada seleccionada reemplaza al portador de admisión; en otras rutas se elimina. Nunca es una credencial ascendente. Utilice la cabecera dedicada cuando también suministre un portador de proveedor separado.
+Las solicitudes de la familia Responses y de Chat aceptan una clave del proxy en el encabezado dedicado o en el campo Bearer. En las rutas nativas, la credencial Codex almacenada y seleccionada sustituye al bearer de admisión; en las demás rutas se elimina. Nunca es una credencial aguas arriba. Utilice el encabezado dedicado cuando también envíe un bearer de proveedor distinto.
 
-Una ruta sin llave, no OAuth Cursor puede usar ese portador de llamante separado, pero nunca un secreto proxy o enriquecimiento principal automático ChatGPT. La selección combinada/de políticas y las reescrituras reales de sombra/encadenamiento de hilos no transfieren credenciales de llamadas sin procesar a nuevos objetivos. El encaminamiento canónico OpenAI puede restaurar el portador no proxy único del llamante después de un cambio de ruta interno solo cuando su JWT lleva una reclamación de cuenta ChatGPT y cualquier cabecera de cuenta explícita coincide con esa reclamación. Reenviar la autenticación del llamante a los sidecars opcionales OpenAI requiere un único JWT y un `chatgpt-account-id` explícito coincidente. Los portadores opacos no se restauran a través de los cambios de ruta, incluso con un encabezado de cuenta explícito. De lo contrario, el destino final necesita su propia credencial configurada, OAuth o almacenada; de lo contrario, falla localmente. Un marcador de creación de hilo por sí solo no elimina las credenciales.
+Una ruta de Cursor sin clave y que no usa OAuth puede utilizar ese bearer del llamante distinto, pero nunca un secreto del proxy ni el enriquecimiento automático con la cuenta principal de ChatGPT. La selección de Combo o de política y las reescrituras reales de shadow/creación de hilos no transfieren las credenciales sin procesar del llamante a los nuevos destinos. El enrutamiento canónico de OpenAI puede restaurar el único bearer no perteneciente al proxy del llamante tras un cambio de ruta interno solo cuando su JWT lleva una reclamación de cuenta de ChatGPT y cualquier encabezado de cuenta explícito coincide con esa reclamación. Reenviar la autenticación del llamante a los sidecars opcionales de OpenAI exige un único JWT y un `chatgpt-account-id` explícito que coincida. Los bearers opacos no se restauran tras los cambios de ruta, ni siquiera con un encabezado de cuenta explícito. De lo contrario, el destino final necesita su propia credencial configurada, OAuth o almacenada; si no la tiene, falla localmente. Un marcador de creación de hilo por sí solo no elimina las credenciales.
 
-El enriquecimiento principal almacenado opcional del chat para una solicitud Cursor sin clave se aplaza hasta que se planifique realmente un ayudante OpenAI y esté disponible un candidato canónico Direct. Una solicitud de Cursor no relacionada no adquiere una reivindicación principal nativa a través de este enriquecimiento, por lo que no retrasa la conmutación de perfil. Las credenciales de ayuda siguen obedeciendo a las vallas de inicio y de conmutación y permanecen separadas del portador Cursor. Pool y los ayudantes calificados para la cuenta conservan su selección de cuenta existente.
+El enriquecimiento opcional con la cuenta principal almacenada para una solicitud de Cursor sin clave de Chat se aplaza hasta que de verdad se planifique un ayudante de OpenAI y haya un candidato Direct canónico disponible. Una solicitud de Cursor no relacionada no adquiere una reclamación de cuenta principal nativa mediante este enriquecimiento, así que no retrasa el cambio de perfil. Las credenciales del ayudante siguen obedeciendo las barreras de inicio y de cambio y permanecen separadas del bearer de Cursor. Los ayudantes de Pool y los cualificados por cuenta conservan su selección de cuenta existente.
 
-La repetición Claude retiene la autenticación principal solo como una instantánea en memoria reclamada por turnos y la reconstruye solo para una ruta canónica final ChatGPT.
+La repetición de Claude retiene la autenticación principal solo como una instantánea en memoria reclamada por el turno y la reconstruye únicamente para una ruta canónica final de ChatGPT.
 
 :::caution
-Las claves del plano de datos no son credenciales de gestión. La administración API utiliza un secreto de administración separado; ver [API de administración](/es/reference/management-api/). Nunca reutilices un secreto para ambos aviones.
+Las claves del plano de datos no son credenciales de administración. La API de administración usa un secreto de administrador distinto; consulte [API de administración](/es/reference/management-api/). Nunca reutilice un mismo secreto para ambos planos.
 :::
 
 <a id="common-error-vocabulary"></a>
@@ -584,7 +583,7 @@ Los errores usan la envolvente del dialecto del cliente cuando es necesario, per
 | 400 | `unreadable_encrypted_agent_task` | Una tarea de trabajador encriptada v2 no tiene un objetivo canónico ChatGPT elegible o un objetivo de autenticación de clave directa Responses explícitamente confiable con `allowEncryptedV2AgentTasks: true` que puede consumirlo |
 | 426 | `upgrade_required` | El Responses WebSocket transporte está desactivado o la actualización falló; use HTTP |
 
-Anthropic -los fallos de origen se representan en la envolvente de error de Anthropic, por lo que el rechazo de origen es un 403 `permission_error` en ese dialecto en lugar del cuerpo OpenAI -estilo `origin_rejected`.
+Los fallos de origen de Anthropic se representan con la envolvente de error de Anthropic, por lo que un rechazo de origen es un 403 `permission_error` en ese dialecto en lugar del cuerpo `origin_rejected` al estilo de OpenAI.
 
 <a id="encrypted-content-hygiene"></a>
 

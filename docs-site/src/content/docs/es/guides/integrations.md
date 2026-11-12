@@ -28,8 +28,8 @@ La página **Conectar** escribe el bloque de proveedor de opencodex en el archiv
 | WorkBuddy AI | `~/.workbuddy-ai/models.json` | JSON | Recarga automática o nuevas sesiones | marcador de posición loopback |
 | Cline CLI | `~/.cline/data/settings/providers.json` y hermano `models.json` | JSON pareja | después de detener y reiniciar Cline | marcador de posición loopback |
 | Kilo | primero existente `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, o `config.json` bajo `~/.config/kilo` | JSONC | Nuevas sesiones | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (en Windows con el inicio predeterminado: usar `HOME ?? USERPROFILE` solo si no está en blanco y Windows-absoluto, de lo contrario `homedir()`; se conserva una vivienda suministrada por separado; adjuntar `.commandcode\providers.json`) | JSON | Lanzamiento del Command Code | Ninguno - Loopback sin llave ( `apiKey: false` ) |
-| Factory Droid | `~/.factory/settings.json` ( `%USERPROFILE%\.factory\settings.json` en Windows) | JSON | inmediatamente a través de la observación de archivos | ninguno - sin llave |
+| Command Code | `~/.commandcode/providers.json` (en Windows con el home predeterminado: use `HOME ?? USERPROFILE` solo si no está en blanco y es una ruta absoluta de Windows; de lo contrario, `homedir()`; un home proporcionado por separado se respeta; añada `.commandcode\providers.json`) | JSON | el siguiente lanzamiento de Command Code | ninguno: bucle de retorno sin clave (`apiKey: false`); la aplicación de escritorio necesita su propio inicio de sesión y opencodex nunca escribe `auth.json` |
+| Factory Droid | `~/.factory/settings.json` ( `%USERPROFILE%\.factory\settings.json` en Windows) | JSON | inmediatamente a través de la observación de archivos | ninguno: bucle local sin clave |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (por defecto `~/.t3/userdata/settings.json`) | JSON | inmediatamente — T3 Code observa el archivo | marcador loopback no secreto |
 
 <a id="gentle-shell"></a>
@@ -219,7 +219,7 @@ opencodex lee esto desde su propio entorno. Si su puerta de enlace se ejecuta co
 
 ## Las otras cinco superficies no son interruptores
 
-**API Llaves** administra las credenciales propias de opencodex y no es un cliente en absoluto. **Codex CLI** es cableado por el propio servicio proxy - a partir de opencodex se aplica, deteniéndolo restaura el enrutamiento nativo - por lo que no hay nada que cambiar por archivo. **Claude** mantiene su propio indicador de habilitación y el flujo Guardar/Aplicar del Escritorio, y **Grok Build** mantiene su valla de modelo select-then-apply. Esas semánticas son anteriores a esta característica y no cambian. **Cursor** no escribe nada en absoluto: su pestaña muestra la detección, los valores de la puerta de enlace y la última solicitud vista, y el resto ocurre dentro de Cursor Private Inference.
+**Claves API** administra las credenciales propias de opencodex y no es un cliente en absoluto. **Codex CLI** lo conecta el propio servicio proxy: iniciar opencodex lo aplica y detenerlo restaura el enrutamiento nativo, así que no hay nada que activar por archivo. **Claude** mantiene su propio indicador de habilitación y el flujo Guardar/Aplicar del Escritorio, y **Grok Build** mantiene su modelo de seleccionar y luego aplicar. Esas semánticas son anteriores a esta característica y no cambian. **Cursor** no escribe nada en absoluto: su pestaña muestra la detección, los valores de la puerta de enlace y la última solicitud vista, y el resto ocurre dentro de Cursor Private Inference.
 
 <a id="rollback"></a>
 
@@ -422,9 +422,9 @@ ocx integration client history remove --op op-example --client aside --profile 1
 ocx integration client history --client aside --profile 1 --json
 ```
 
-Utilice el opId seleccionado. Ningún selector se dirige a la revista global; `--client aside`
-direcciones agregar el historial de Aside y opcional `--profile` Lo acorta. Otro cliente Los selectores son rechazados para su eliminación. La última fila está protegida. Un recibo con
-`snapshotRemoved:false` se ha comprometido la jubilación con limpieza incompleta y salida 1; no es reversión y no debe desencadenar la eliminación repetida. `journal remove` Es un alias.
+Use el opId realmente seleccionado. Ningún selector se dirige al diario global; `--client aside`
+se dirige al historial agregado de Aside y el `--profile` opcional lo acota. Los selectores de otros clientes se rechazan para la eliminación. La fila más reciente está protegida. Un recibo con
+`snapshotRemoved:false` es una retirada confirmada con limpieza incompleta y sale con 1; no es una reversión y no debe desencadenar eliminaciones repetidas. `journal remove` es un alias.
 
 `--overwrite-conflict` es la forma terminal de **Sustituir**:
 
@@ -454,7 +454,7 @@ ocx mmx text chat --model anthropic/claude-opus-5 --message "Hello"
 ocx mmx text repl --model openai/gpt-5.6-sol
 ```
 
-Sólo `mmx text chat` y `mmx text repl` están representados. Ejecute los comandos `mmx` para MiniMax -native image, video, speech, music, visión, search, quota, auth, config, file y update. El contenedor utiliza una configuración temporal que contiene solo un marcador de posición de bucle de retroceso no secreto; nunca carga sus credenciales `~/.mmx` OAuth o API -clave, y rechaza las anulaciones `--api-key`, `--base-url` y `--region`. Consulte [MiniMax clientes](/es/guides/minimax/) para conocer el flujo de trabajo y los límites completos.
+Sólo están representados `mmx text chat` y `mmx text repl`. Ejecute los comandos `mmx` para imagen, vídeo, voz, música, visión, búsqueda, cuota, autenticación, configuración, archivos y actualización nativos de MiniMax. El contenedor utiliza una configuración temporal que contiene solo un marcador de posición de loopback no secreto; nunca carga sus credenciales OAuth o de clave API de `~/.mmx`, y rechaza las anulaciones `--api-key`, `--base-url` y `--region`. Consulte [clientes MiniMax](/es/guides/minimax/) para conocer el flujo de trabajo y los límites completos.
 
 `--confirm-drift` nunca se asume. Si el archivo cambió después de la operación que está restaurando, el comando se niega y le dice, porque reemplazar sus ediciones más recientes es su decisión de hacer.
 
@@ -487,7 +487,7 @@ ocx integration client sync --client aside --json
 ocx integration client status --client aside --json
 ```
 
-Esto utiliza el propietario certificado existente de Aside y no tiene un selector de perfil o reserva local. `{results:[]}` sale de 0 y significa que no hay perfiles elegibles, no escrituras aplicadas. Cualquier fila fallida devuelve la salida 1 mientras los perfiles exitosos permanecen actualizados. Preservar el rechazo por perfil, residual y por separado etiquetaron la información de copia de seguridad redactada; inspeccionar el perfil afectado antes de volver a intentar. Esta actualización es independiente del flujo de trabajo de previsualización/mutación vinculado de cada perfil.
+Esto utiliza el propietario atestado existente de Aside y no tiene selector de perfil ni reserva local. `{results:[]}` sale con 0 y significa que no hay perfiles elegibles, no que se hayan aplicado escrituras. Cualquier fila fallida devuelve 1 mientras los perfiles correctos permanecen actualizados. Conserve el rechazo por perfil, la información residual y la información de copia de seguridad redactada etiquetada por separado; inspeccione el perfil afectado antes de reintentar. Esta actualización es independiente del flujo de trabajo vinculado de previsualización/mutación de cada perfil.
 
 Sincronizar actualiza solo los perfiles cuya preferencia de sincronización está activada, por lo que un resultado vacío no es un error. Si `ocx integration client status --client aside` muestra un perfil como `off (stale)`, el estado imprime los comandos para volver a conectarlo: revise `ocx integration client preview --client aside
 --operation apply --profile N` y ejecute `ocx integration client enable --client aside --profile N` solo si la vista previa permite el cambio y usted lo acepta. Nada se vuelve a habilitar automáticamente. Un bloque `asideProfileSync` mal formado en `config.json` desactiva cada perfil y registra una advertencia cuando se carga la configuración.
@@ -555,7 +555,7 @@ La aplicación de escritorio GitHub Copilot puede usar opencodex como proveedor 
    |---|---|
    | Nombre | cualquier etiqueta, por ejemplo `OpenCodex` |
    | URL base | `http://127.0.0.1:10100/v1` (ajustar el puerto a su enlace) |
-   | API clave | Dejar en blanco en loopback |
+   | Clave API | Dejar en blanco en loopback |
 
 3. Sincronice modelos desde el punto final, o agregue uno por su id `provider/model`, y selecciónelo.
 
@@ -665,17 +665,19 @@ ocx export --client kilo --out ./kilo.jsonc
 
 Command Code mantiene sus proveedores personalizados en `~/.commandcode/providers.json`. Esta integración escribe `provider.opencodex` en ese archivo y es solo loopback.
 
-**La raíz que escribe.** El Command Code resuelve su mapa de proveedor como
-`document.provider ?? document.providers`, así que la raíz singular gana siempre que existe. Por lo tanto, la integración lee primero el archivo de destino y escribe en el raíz que el archivo ya utiliza: un documento que ya lleva una `providers` mapa mantiene y sus otros proveedores se mantienen legibles. Un archivo fresco obtiene el singular `provider`
-raíz. Ambas raíces se declaran como rutas administradas, por lo que Deshabilitar elimina el bloque de Cualquiera que sea el texto en el que fue escrito.
+**Qué raíz escribe.** Command Code resuelve su mapa de proveedores como
+`document.provider ?? document.providers`, así que la raíz singular gana siempre que exista. Por eso la integración lee primero el archivo de destino y escribe en la raíz que ese archivo ya usa: un documento que ya lleva un mapa `providers` lo conserva y tus otros proveedores siguen siendo legibles. Un archivo nuevo recibe la raíz singular `provider`.
+Ambas raíces se declaran como rutas administradas, de modo que Deshabilitar elimina el bloque de aquella en la que se escribió.
 
 **La forma de credencial.** El proveedor está escrito con `apiKey: false`, la forma documentada para un punto final que no necesita clave. Command Code rechaza una cadena sin procesar, y esta integración no lee, hace referencia ni exporta ningún archivo de token de servicio.
 
-**Resolución Home.** No hay ninguna `COMMANDCODE_HOME` Anular aquí. El publicado El cliente resuelve `HOME ?? USERPROFILE` y luego añade `/.commandcode/providers.json`; no consulta esa variable. Una anulación de esta integración honrada, pero la cliente ignorado haría Aplicar éxito del informe en una ruta Command Code nunca se abre, por lo que El camino es siempre `~/.commandcode/providers.json`. En Windows con el hogar predeterminado, la integración utiliza `HOME ?? USERPROFILE`
-solo cuando el valor seleccionado no está en blanco y Windows-absolute; de lo contrario, usa
-`homedir()`. Se conserva una casa suministrada por separado. A `HOME` establecido por Git para Por lo tanto, Windows o MSYS2 solo se respetan cuando pasan esas comprobaciones.
+**Resolución del home.** Aquí no hay ninguna anulación `COMMANDCODE_HOME`. El cliente publicado resuelve `HOME ?? USERPROFILE` y luego añade `/.commandcode/providers.json`; no consulta esa variable. Una anulación que esta integración respetara pero el cliente ignorara haría que Aplicar informara de un éxito en una ruta que Command Code nunca abre, así que la ruta es siempre `~/.commandcode/providers.json`.
+En Windows con el home predeterminado, la integración usa `HOME ?? USERPROFILE`
+solo cuando el valor seleccionado no está en blanco y es una ruta absoluta de Windows; de lo contrario, usa
+`homedir()`. Un home proporcionado por separado se conserva. Por lo tanto, un `HOME` establecido por Git para
+Windows o MSYS2 solo se respeta cuando pasa esas comprobaciones.
 
-Pegue la clave usted mismo si luego mueve el proveedor fuera del bucle de retroceso: Command Code almacena las claves en `~/.commandcode/auth.json` (a través de `/connect`), no en `providers.json`.
+Pegue la clave usted mismo si más adelante saca el proveedor de loopback: Command Code almacena las claves en `~/.commandcode/auth.json` (a través de `/connect`), no en `providers.json`.
 
 ```bash
 ocx integration client enable --client commandcode
@@ -686,7 +688,7 @@ ocx export --client commandcode --out ./providers.json
 
 ## Factory Droid
 
-Ejecute Droid una vez para crear `~/.factory`, luego habilite explícitamente esta integración con `ocx integration client enable --client droid`. OpenCodex agrega solo `customModels` entradas documentadas a su `settings.json` personal, utilizando un punto final Chat Completions local sin llave. Elija una fila de Droid 's `/model` selector. Deshabilitar elimina las filas administradas; Deshacer restaura el archivo guardado exacto. Otros ajustes y modelos personalizados siguen siendo suyos. Si Droid normaliza una fila `customModels` agregando `id` o `index`, OpenCodex ignora esos dos campos de cliente al verificar la propiedad, por lo que los valores predeterminados de razonamiento guardados permanecen disponibles.
+Ejecute Droid una vez para crear `~/.factory`, luego habilite explícitamente esta integración con `ocx integration client enable --client droid`. OpenCodex agrega solo `customModels` entradas documentadas a su `settings.json` personal, utilizando un punto final Chat Completions local sin llave. Elija una fila del selector `/model` de Droid. Deshabilitar elimina las filas administradas; Deshacer restaura el archivo guardado exacto. Otros ajustes y modelos personalizados siguen siendo suyos. Si Droid normaliza una fila `customModels` agregando `id` o `index`, OpenCodex ignora esos dos campos de cliente al verificar la propiedad, por lo que los valores predeterminados de razonamiento guardados permanecen disponibles.
 
 Abra **Conectar → Factory Droid** (`/#integrations/droid`) para establecer un razonamiento predeterminado para cada modelo conectado. Elija entre los esfuerzos compatibles del modelo, revise los cambios y luego confirme. **Sin valores predeterminados** borra la configuración de borrador de ese modelo; use **Guardar / revisar cambios** y confirme para aplicar la eliminación. Los modelos sin una lista de esfuerzo declarada muestran que no hay ningún valor predeterminado disponible.
 
@@ -704,7 +706,7 @@ ocx integration client enable --client droid --reasoning-default example/model-a
 ocx integration client status --client droid --json
 ```
 
-Repita `--reasoning-default MODEL=EFFORT` para enviar el mapa de reemplazo completo. El último signo igual separa el modelo y el esfuerzo; se conservan los identificadores de caso y exactos. Las claves de modelo duplicadas se rechazan. Las banderas omitidas preservan los valores predeterminados; `--clear-reasoning-defaults` explícitamente envía un mapa vacío. Para borrar, previsualizar con ese indicador y repetirlo en el comando de habilitación de coincidencia. Borrar y las entradas no se pueden combinar. Estos indicadores son Droid -only y no se aplican para deshabilitar/restaurar. Repita el mismo mapa en la vista previa y confirmación; el servidor valida los esfuerzos específicos del modelo y rechaza la vinculación obsoleta en lugar de aceptar silenciosamente un mapa cambiado.
+Repita `--reasoning-default MODEL=EFFORT` para enviar el mapa de reemplazo completo. El último signo igual separa el modelo y el esfuerzo; se conservan las mayúsculas y minúsculas y los ids exactos. Las claves de modelo duplicadas se rechazan. Las banderas omitidas preservan los valores predeterminados; `--clear-reasoning-defaults` envía explícitamente un mapa vacío. Para borrar, previsualice con esa bandera y repítala en el comando de habilitación correspondiente. Borrar y añadir entradas no se pueden combinar. Estos indicadores son exclusivos de Droid y no se aplican a deshabilitar/restaurar. Repita el mismo mapa en la vista previa y confirmación; el servidor valida los esfuerzos específicos del modelo y rechaza la vinculación obsoleta en lugar de aceptar silenciosamente un mapa cambiado.
 
 Para una clara intención completa, previsualizar esa acción separada:
 

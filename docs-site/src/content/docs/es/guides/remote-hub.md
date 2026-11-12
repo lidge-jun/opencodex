@@ -178,9 +178,9 @@ ocx config set unauthenticatedLoopbackListener '{"enabled":true,"port":10104}'
 
 La forma portada es la misma superficie no autenticada: la advertencia de host dedicado anterior también se aplica a este comando.
 
-Con un conjunto `port`, las integraciones locales siguen al oyente y escriben `http://127.0.0.1:10104` en su lugar. El puerto debe diferir del puerto proxy y nunca está asignado al sistema operativo: un puerto efímero cambiaría en los reinicios mientras que los servidores de aplicaciones que ya se ejecutan conservarían el anterior `base_url`.
+Con un `port` definido, las integraciones locales siguen al oyente y escriben `http://127.0.0.1:10104` en su lugar. El puerto debe ser distinto del puerto del proxy y nunca lo asigna el sistema operativo: un puerto efímero cambiaría entre reinicios mientras los servidores de aplicaciones ya en marcha conservarían el `base_url` anterior.
 
-**Reinicie el proxy después de cambiar este campo.** Los sockets se unen una vez al iniciarse y los archivos de cliente local se escriben a partir del valor resuelto, de modo que un concentrador en ejecución mantiene su respuesta antigua. En un concentrador portado que es la diferencia entre `ocx claude` llegar al oyente y obtener un `404` de él. En un servicio de fondo el verbo es `ocx service restart`, que siempre se reinicia - ver [macOS operaciones de servicio](#macos-service-operations). `ocx restart` es un verbo diferente: rebota el proceso proxy que usted mismo comenzó, no el servicio que supervisa el gerente.
+**Reinicie el proxy tras cambiar este campo.** Los sockets se enlazan una sola vez al arrancar y los archivos de cliente local se escriben con el valor resuelto, así que un hub en ejecución conserva su respuesta antigua. En un hub con puerto, esa es la diferencia entre que `ocx claude` llegue al oyente o reciba un `404` de él. En un servicio en segundo plano el verbo es `ocx service restart`, que siempre reinicia; consulte [operaciones del servicio en macOS](#macos-service-operations). `ocx restart` es otro verbo: reinicia el proceso del proxy que usted mismo inició, no el servicio que supervisa el gestor.
 
 <a id="the-hubs-own-local-clients"></a>
 
@@ -330,7 +330,7 @@ Cada invitación exitosa también imprime el **origen del navegador vinculado** 
 
 `invite` rechaza *antes* acuñando cualquier cosa cuando la configuración no puede funcionar: un `runtimeRole` que no es `hub`, un `hub.managementPublicOrigin` faltante, un origen de gestión sin bucle de retorno de texto plano, un `--data-url` mal formado, un origen de datos que sería el propio bucle de retorno de esta máquina, o ningún proxy certificado en ejecución. Una condición previa merece su propio párrafo.
 
-**`corsAllowOrigins` tiene que nombrar el origen del navegador local de la máquina de unión.** `ocx connect` envía `Origin: http://localhost:<its own proxy port>` cuando intercambia la concesión, y las concesiones están vinculadas al origen, por lo que solo el propio `hub.managementPublicOrigin` o una entrada de bucle de `corsAllowOrigins` pueden coincidir. Sin ninguno presente, `invite` sale no cero, no acuña nada y nombra el comando exacto:
+**`corsAllowOrigins` tiene que nombrar el origen del navegador local de la máquina de unión.** `ocx connect` envía `Origin: http://localhost:<its own proxy port>` cuando intercambia la concesión, y las concesiones están vinculadas al origen, por lo que solo el propio `hub.managementPublicOrigin` o una entrada de bucle de `corsAllowOrigins` pueden coincidir. Sin ninguno presente, `invite` sale con un código distinto de cero, no acuña nada y nombra el comando exacto:
 
 ```bash
 ocx config set corsAllowOrigins '["http://localhost:10100"]'

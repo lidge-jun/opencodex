@@ -13,7 +13,7 @@ Reclaim es **Nunca programado automáticamente** y nunca se ejecuta simplemente 
 
 OpenCodex realiza una secuencia de mantenimiento sin conexión limitada:
 
-1. resolver el canónico `logs_2.sqlite` a través de Codex 's efectiva `sqlite_home`;
+1. resolver el canónico `logs_2.sqlite` a través del `sqlite_home` efectivo de Codex;
 2. verificar la identidad del archivo y el esquema de registro Codex conocido;
 3. Verificar que la enumeración del proceso se haya realizado correctamente y que no se esté ejecutando ningún proceso de escritura Codex compatible;
 4. adquirir la cerradura dedicada de proceso cruzado Log Guard;
