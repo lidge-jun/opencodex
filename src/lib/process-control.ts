@@ -366,7 +366,10 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<b
     await waitForStoppedPort(runtime, pid);
     return false;
   }
-  (io.forceKill ?? killProxy)(pid);
+  // Written as a literal killProxy(pid) call so the refusal-before-kill ordering stays
+  // checkable in source (tests/providers/xai/grok-lifecycle.test.ts); the seam only swaps it.
+  if (io.forceKill) io.forceKill(pid);
+  else killProxy(pid);
   await waitForStoppedPort(runtime, pid);
   return false;
 }
