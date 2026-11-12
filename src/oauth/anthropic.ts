@@ -48,6 +48,7 @@ interface AnthropicTokenResponse {
   refresh_token: string;
   expires_in: number;
   account?: { uuid?: string; email_address?: string };
+  organization?: { uuid?: string };
 }
 
 export class AnthropicTokenError extends Error {
@@ -155,7 +156,7 @@ function credsFrom(data: AnthropicTokenResponse, refreshFallback?: string): OAut
     refresh: data.refresh_token || refreshFallback || "",
     access: data.access_token,
     expires,
-    anthropicIdentity: bindAnthropicIdentity(data.access_token, accountUuid),
+    anthropicIdentity: bindAnthropicIdentity(data.access_token, accountUuid, data.organization?.uuid),
     accountId: typeof accountUuid === "string" && accountUuid.length > 0 ? accountUuid : undefined,
     email: typeof email === "string" && email.length > 0 ? email : undefined,
   };
@@ -167,7 +168,10 @@ async function withAccountProfile(credential: OAuthCredentials, signal?: AbortSi
   // Token-response identity remains authoritative here; enrichment changes display metadata only.
   const identity = normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access);
   if (identity && identity.accountUuid !== profile.accountUuid) return credential;
-  return { ...credential, plan: profile.plan ?? null };
+  // The same bearer's profile names the grant's organization when the token response did not.
+  const organization = identity && !identity.organizationUuid && profile.organizationUuid
+    ? { anthropicIdentity: { ...identity, organizationUuid: profile.organizationUuid } } : {};
+  return { ...credential, ...organization, plan: profile.plan ?? null };
 }
 
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {
