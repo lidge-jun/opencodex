@@ -124,11 +124,11 @@ describe("full uninstall command", () => {
     expect(uninstallBody).toContain('runStep("service stopped"');
     expect(uninstallBody).toContain('runStep("proxy stopped"');
     expect(uninstallBody).toContain('runStep("service removed"');
-    expect(uninstallBody).toContain("await stopProxy(pid, { skipPortWait: windowsPartBDue() });");
+    expect(uninstallBody).toContain("await stopProxy(pid, { skipPortWait: windowsPartBOwnsPortWait() });");
     expect(uninstallBody).toContain("uninstallServiceDetailed()");
     expect(uninstallBody.indexOf('runStep("service stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("proxy stopped"'));
     expect(uninstallBody.indexOf('runStep("proxy stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("service removed"'));
-    expect(uninstallBody.indexOf("await stopProxy(pid, { skipPortWait: windowsPartBDue() });")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
+    expect(uninstallBody.indexOf("await stopProxy(pid, { skipPortWait: windowsPartBOwnsPortWait() });")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
   });
 
   test("Windows uninstall leaves the port wait to Part B instead of stopProxy's legacy 15 s", async () => {
@@ -136,9 +136,13 @@ describe("full uninstall command", () => {
     const uninstallBody = cli.slice(cli.indexOf("async function handleUninstall()"), cli.indexOf("type HealthCheck"));
     // #7771: after a stopped Part A on Windows the respawn-window step IS Part B, which
     // owns the port wait; running stopProxy's 15 s waitForStoppedPort on top of it spends
-    // the stop budget twice. Both tracked and orphan stops pass the same predicate.
-    expect(uninstallBody).toContain("await stopProxy(pid, { skipPortWait: windowsPartBDue() });");
-    expect(uninstallBody).toContain("await stopProxy(live.pid, { skipPortWait: windowsPartBDue() });");
+    // the stop budget twice. Both tracked and orphan stops pass the port-wait predicate
+    // itself (not `windowsPartBDue`, which additionally gates the legacy re-poll): the
+    // uninstall step must keep asking the question it means, so a later change to the
+    // snapshotless rule cannot silently bring the 15 s wait back.
+    expect(uninstallBody).toContain("await stopProxy(pid, { skipPortWait: windowsPartBOwnsPortWait() });");
+    expect(uninstallBody).toContain("await stopProxy(live.pid, { skipPortWait: windowsPartBOwnsPortWait() });");
+    expect(uninstallBody).not.toContain("skipPortWait: windowsPartBDue()");
     const checked = await readText("src/cli/stop-windows-checked.ts");
     // The predicate is about the port wait only; the legacy re-poll key stays snapshotless.
     const portWait = checked.slice(checked.indexOf("export function windowsPartBOwnsPortWait"));

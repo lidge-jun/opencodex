@@ -1597,12 +1597,14 @@ async function handleUninstall() {
         throw new Error(`a proxy is answering on port ${live.port} but no process id could be resolved for it; stop it from the home that started it, then rerun`);
       }
       // #7771: on Windows the respawn-window step below is Part B, which owns the port
-      // wait; the legacy 15 s waitForStoppedPort must not run on top of it.
-      await stopProxy(live.pid, { skipPortWait: windowsPartBDue() });
+      // wait; the legacy 15 s waitForStoppedPort must not run on top of it. Ask the
+      // port-wait question itself: `windowsPartBDue` also gates the legacy re-poll and is
+      // snapshotless-only, which is a different rule.
+      await stopProxy(live.pid, { skipPortWait: windowsPartBOwnsPortWait() });
       observed.proxyProvenDown = true;
       return true;
     }
-    await stopProxy(pid, { skipPortWait: windowsPartBDue() });
+    await stopProxy(pid, { skipPortWait: windowsPartBOwnsPortWait() });
     removePid(pid);
     removeRuntimePort(pid);
     observed.proxyProvenDown = true;
