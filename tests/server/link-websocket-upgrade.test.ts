@@ -165,7 +165,8 @@ describe("link Responses WebSocket switched off (characterization)", () => {
     const wire = await client(port);
     const { nonce, head } = await wire.challenge(identityA);
     expect(head.status).toBe(204);
-    expect([...head.headers.keys()].filter(name => name.startsWith("x-opencodex-")).sort()).toEqual(["x-opencodex-link-proof"]);
+    // Today's 204: the proof and the Home's features (#8594), and no WebSocket state pair.
+    expect([...head.headers.keys()].filter(name => name.startsWith("x-opencodex-")).sort()).toEqual(["x-opencodex-link-home-features", "x-opencodex-link-proof"]);
     const answer = await wire.upgrade({ nonce, bearer: KEY_A });
     expect(answer.status).toBe(404);
     expect(JSON.parse(answer.body)).toMatchObject({ error: { code: "not_found" } });
