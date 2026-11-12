@@ -113,7 +113,7 @@ test("chooser starts native login, shows code and safe link, then confirms done"
   await tick();
   expect(settled).toEqual(["added"]);
   expect(host.textContent).toContain("Kiro account added");
-  expect(closed).toBeGreaterThan(0);
+  expect(closed).toBe(1);
 });
 
 test("a success carrying a warning stays open and offers Close, not Cancel", async () => {

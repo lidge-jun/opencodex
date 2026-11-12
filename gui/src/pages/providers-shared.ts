@@ -35,6 +35,22 @@ export function providerModelsSettled(config: ProvidersConfig | null, provider: 
   return !!entry?.models?.length && status !== "pending" && status !== "all-off";
 }
 
+/**
+ * After a login settles: always reveal the provider's accounts, and open the models notice only when
+ * there is still a model choice to make. Reads the config when called, so a refresh that landed after
+ * the handler was created is honoured.
+ */
+export function loginSettledHandler(
+  currentConfig: () => ProvidersConfig | null,
+  revealAccounts: (provider: string) => void,
+  openModelsNotice: (provider: string, auto: boolean) => void,
+): (provider: string) => void {
+  return provider => {
+    revealAccounts(provider);
+    if (!providerModelsSettled(currentConfig(), provider)) openModelsNotice(provider, false);
+  };
+}
+
 export interface OAuthStatus {
   loggedIn: boolean;
   email?: string;

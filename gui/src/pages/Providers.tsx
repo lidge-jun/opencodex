@@ -18,7 +18,7 @@ import { createProviderDraftStore, providerDraftTargetLabel } from "../provider-
 import { useLegacyTargetPreflightNotice } from "./use-legacy-target-preflight-notice";
 import { useKeyedClientResource } from "../client-resource";
 import { readSessionListCache } from "../session-list-cache";
-import { providerModelsSettled, type ProvidersConfig } from "./providers-shared";
+import { loginSettledHandler, type ProvidersConfig } from "./providers-shared";
 import { useProvidersOAuth } from "./use-providers-oauth";
 import { useProvidersCrud } from "./use-providers-crud";
 import { useProvidersFetch } from "./use-providers-fetch";
@@ -380,8 +380,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
   const settledConfigRef = useRef(config);
   useEffect(() => { settledConfigRef.current = config; }, [config]);
   const onProviderLoginSettled = useCallback((provider: string) => {
-    revealProviderAccounts(provider);
-    if (!providerModelsSettled(settledConfigRef.current, provider)) openModelsNotice(provider, false);
+    loginSettledHandler(() => settledConfigRef.current, revealProviderAccounts, openModelsNotice)(provider);
   }, [revealProviderAccounts, openModelsNotice]);
 
   // WP3: one Codex account controller for the whole Providers page, shared by the

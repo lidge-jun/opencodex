@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { useT } from "../i18n/shared";
 import { useModalDialog } from "../pages/dashboard-shared";
 import { kiroVerificationLink } from "../kiro-device-login-helpers";
@@ -35,7 +35,12 @@ export default function KiroDeviceLoginDialog({ apiBase, targetKey, triggerRef, 
   const finished = state.phase === "done" || state.phase === "failed" || state.phase === "expired" || state.phase === "ended";
   // A clean success has nothing left to read, and this modal would sit over the models notice and block it.
   const cleanSuccess = state.phase === "done" && !view?.warning;
-  useEffect(() => { if (cleanSuccess) onClose(); }, [cleanSuccess, onClose]);
+  const autoClosed = useRef(false);
+  useEffect(() => {
+    if (!cleanSuccess || autoClosed.current) return;
+    autoClosed.current = true;
+    onClose();
+  }, [cleanSuccess, onClose]);
   return (
     <dialog ref={dialogRef} className="kiro-device-dialog" aria-modal="true" aria-labelledby={titleId}
       onCancel={event => { event.preventDefault(); cancel(); }}>
