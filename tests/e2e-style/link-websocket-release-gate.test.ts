@@ -11,24 +11,26 @@ import { writeLinkStore, type LinkStore } from "../../src/link/store";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { STANDIN_MAX_MESSAGE_BYTES, startRelayStandin, type RelayStandin } from "../fixtures/link-child-relay-standin";
+import { fixturePath } from "../helpers/repo-root";
 
 // Lane T5f: the link WebSocket release gate of design T4 11.1 item 13, with the pinned Codex binary as the client (U13).
 // The pinned binary is codex-rs built at openai/codex 88c5856 (design section 0). These tests run only when
 // OCX_LINK_GATE_CODEX names an executable; otherwise each is skipped with that reason. A run is release evidence only
-// when OCX_LINK_GATE_CODEX_SHA256 is set to the digest recorded with that build and the binary matches it; any other
-// executable runs as a smoke check, and every test title says which. Codex reaches the Home through a test-only
+// when the binary's sha256 equals the digest recorded for that revision in tests/fixtures/link-gate-codex.json, a file
+// that changes only through review; any other executable runs as a smoke check, and every test title says which. Codex reaches the Home through a test-only
 // stand-in for the Child's relay (tests/fixtures/link-child-relay-standin.ts), because the Child's relay is lane T6.
 // Codex is an external process with no clock to inject, so each test carries a per-test bound instead of sleeps.
 
 const BIN = process.env.OCX_LINK_GATE_CODEX ?? "";
 const usable = (() => { if (!BIN) return false; try { accessSync(BIN, constants.X_OK); return true; } catch { return false; } })();
-const PINNED_SHA256 = (process.env.OCX_LINK_GATE_CODEX_SHA256 ?? "").trim().toLowerCase();
+const PIN = JSON.parse(readFileSync(fixturePath("link-gate-codex.json"), "utf8")) as { revision: string; sha256: string | null };
+const PINNED_SHA256 = typeof PIN.sha256 === "string" ? PIN.sha256.toLowerCase() : "";
 const digest = usable ? createHash("sha256").update(readFileSync(BIN)).digest("hex") : "";
 const mode: "absent" | "gate" | "smoke" = !usable ? "absent" : PINNED_SHA256 && digest === PINNED_SHA256 ? "gate" : "smoke";
 const LABEL = {
   absent: " [skipped: pinned Codex binary absent (U13); set OCX_LINK_GATE_CODEX to codex-rs built at openai/codex 88c5856]",
-  gate: " [release gate: Codex sha256 " + digest + ", the recorded build of openai/codex 88c5856]",
-  smoke: " [smoke only, not release evidence: Codex sha256 " + digest + " is unverified; set OCX_LINK_GATE_CODEX_SHA256 to the digest recorded with the build of openai/codex 88c5856]",
+  gate: " [release gate: Codex sha256 " + digest + " matches the reviewed digest for openai/codex " + PIN.revision.slice(0, 7) + " in tests/fixtures/link-gate-codex.json]",
+  smoke: " [smoke only, not release evidence: Codex sha256 " + digest + " is not the reviewed digest for openai/codex " + PIN.revision.slice(0, 7) + " (tests/fixtures/link-gate-codex.json" + (PINNED_SHA256 ? "" : " records none yet") + ")]",
 }[mode];
 const gate = (title: string, body: () => Promise<void>) => test.skipIf(!usable)(title + LABEL, body, 180_000);
 
@@ -118,9 +120,9 @@ function expectCompleted(result: { code: number; stdout: string; stderr: string 
 }
 
 describe("link WebSocket release gate (design 11.1 item 13)", () => {
-  test.skipIf(!PINNED_SHA256)("the Codex binary matches the digest recorded with its build" + (PINNED_SHA256 ? "" : " [skipped: OCX_LINK_GATE_CODEX_SHA256 not set]"), () => {
-    expect(usable).toBe(true);
-    expect(digest).toBe(PINNED_SHA256);
+  test("the reviewed pin names the design's Codex revision and a digest of the right shape, or none yet", () => {
+    expect(PIN.revision).toBe("88c58562580aa4abe2da6ce4d7676bf171682230");
+    expect(PIN.sha256 === null || /^[0-9a-f]{64}$/.test(PIN.sha256)).toBe(true);
   });
 
   gate("drain: the switch goes off after the upgrade, the socket drains, and the turn ends on HTTP", async () => {
