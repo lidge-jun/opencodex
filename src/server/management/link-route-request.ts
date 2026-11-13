@@ -41,7 +41,7 @@ export function identityFileRefusal(route: ExplicitRoute | null, platform: NodeJ
   const problem = route?.identityFile === undefined ? null : identityFileProblem(route.identityFile, platform);
   if (!problem) return null;
   if (problem === "identity_file_unsupported_platform") return fail("invalid_identity_file", "A Windows Home does not support explicitRoute.identityFile yet.", 400, problem);
-  return fail("invalid_identity_file", "explicitRoute.identityFile must be a regular file (not a symlink) that this user owns and can read, with no group or other permissions.", 400, problem);
+  return fail("invalid_identity_file", "explicitRoute.identityFile must be a regular file (not a symlink) that this user owns and can read, with no group or other permissions, in a directory owned by this user or root that group and others cannot write.", 400, problem);
 }
 
 /** The route a pending or confirmed host was probed with. */

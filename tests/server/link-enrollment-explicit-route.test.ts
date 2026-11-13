@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -208,6 +208,16 @@ function keyFile(mode = 0o600, name = "goat_hub_ed25519"): string {
   chmodSync(path, mode);
   return path;
 }
+/** A private key file in its own directory with the given mode: another user who can write there could replace the key. */
+function keyInDirectory(directoryMode: number): string {
+  const dir = join(root, "keys");
+  mkdirSync(dir);
+  const path = join(dir, "goat_hub_ed25519");
+  writeFileSync(path, KEY_CANARY + "\n");
+  chmodSync(path, 0o600);
+  chmodSync(dir, directoryMode);
+  return path;
+}
 
 test("every SSH command of an enrollment with an identity file offers that key alone, and the link keeps the path", async () => {
   const h = harness();
@@ -248,6 +258,8 @@ test.each([
   ["a directory", () => root, "identity_file_not_regular"],
   ["a file group or others can read", (path: string) => { chmodSync(path, 0o640); return path; }, "identity_file_permissions"],
   ["a file this user cannot read", (path: string) => { chmodSync(path, 0o200); return path; }, "identity_file_unreadable"],
+  ["in a directory its group can write", () => keyInDirectory(0o770), "identity_file_directory"],
+  ["in a directory others can write", () => keyInDirectory(0o707), "identity_file_directory"],
 ] as const)("a probe whose identity file is %s is refused before any SSH, without reading it", async (_label, pick, hint) => {
   if (hint === "identity_file_unreadable" && process.getuid?.() === 0) return;
   const h = harness();
@@ -303,4 +315,13 @@ test("a Windows Home refuses an identity file with a fixed hint, whatever the fi
   expect({ status: refused.status, body: await refused.json() }).toEqual({ status: 400, body: { error: { code: "invalid_identity_file",
     message: "A Windows Home does not support explicitRoute.identityFile yet.", hint: "identity_file_unsupported_platform" } } });
   expect(identityFileRefusal(ROUTE, "win32")).toBeNull();
+});
+test("a key whose directory is private, or owned by this user and only readable by others, is accepted", async () => {
+  const h = harness();
+  for (const mode of [0o700, 0o755]) {
+    rmSync(join(root, "keys"), { recursive: true, force: true });
+    const identityFile = keyInDirectory(mode);
+    const probed = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile }, exclusive: true });
+    expect({ mode: mode.toString(8), status: probed.status }).toEqual({ mode: mode.toString(8), status: 200 });
+  }
 });

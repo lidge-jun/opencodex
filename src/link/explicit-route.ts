@@ -1,4 +1,5 @@
-import { accessSync, constants, lstatSync } from "node:fs";
+import { accessSync, constants, lstatSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 /**
  * An explicit SSH route for a Home-initiated link (structure/remote-link.md, "Explicit route"): the
  * ProxyCommand, user and port ssh uses for the link's alias. ssh-argv passes them on the command line,
@@ -98,13 +99,16 @@ export function explicitRouteSshOptions(route: ExplicitRoute): string[] {
   ];
 }
 
-export type IdentityFileProblem = "identity_file_missing" | "identity_file_not_regular" | "identity_file_permissions" | "identity_file_unreadable" | "identity_file_unsupported_platform";
+export type IdentityFileProblem = "identity_file_missing" | "identity_file_not_regular" | "identity_file_permissions" | "identity_file_directory" | "identity_file_unreadable" | "identity_file_unsupported_platform";
 
 /**
  * Whether an identity file is usable as the link's key, decided from its metadata alone: the file is never opened or read.
  * It must be a regular file (a symlink is refused, so the path names the key itself), owned by this user with no group or
  * other permission bits (ssh ignores a key file of its owner that others can read, and the link would then fail public-key
- * authentication with nothing pointing at the cause), and readable by this user. Null when usable.
+ * authentication with nothing pointing at the cause), and readable by this user. Its directory must be owned by this user or
+ * root and not writable by group or others, so no other user can rename another file into the key's name after this check
+ * (a world-writable sticky directory such as /tmp is refused too). Only the directory that holds the file is checked, after
+ * symlinks in its path resolve. Null when usable.
  * A Windows Home refuses every identity file before looking at it: the accepted form is a POSIX path, which Windows resolves
  * against the current drive, and owner and mode bits there say nothing about the file's ACL.
  */
@@ -118,6 +122,10 @@ export function identityFileProblem(path: string, platform: NodeJS.Platform = pr
   if (stat.isSymbolicLink() || !stat.isFile()) return "identity_file_not_regular";
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) return "identity_file_permissions";
   if ((stat.mode & 0o077) !== 0) return "identity_file_permissions";
+  let directory;
+  try { directory = statSync(dirname(path)); } catch { return "identity_file_unreadable"; }
+  if (typeof process.getuid === "function" && directory.uid !== process.getuid() && directory.uid !== 0) return "identity_file_directory";
+  if ((directory.mode & 0o022) !== 0) return "identity_file_directory";
   try { accessSync(path, constants.R_OK); } catch { return "identity_file_unreadable"; }
   return null;
 }
