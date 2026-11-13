@@ -158,20 +158,17 @@ describe("ssh argv", () => {
     }
   });
 
-  test("without a route every builder emits the argv it emitted before", () => {
-    const tunnel = buildTunnelArgv({ alias: "pen-7f3a9c", direction: "R", bindPort: 19002, targetPort: 19001, knownHostsFile: KNOWN_HOSTS, route: null });
-    expect(tunnel).toEqual([
-      "ssh", "-N", "-T",
-      "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
-      "-o", "StrictHostKeyChecking=yes", "-o", "HostKeyAlias=pen-7f3a9c", "-o", "UserKnownHostsFile=" + KNOWN_HOSTS,
-      "-o", "HashKnownHosts=no", "-o", "GlobalKnownHostsFile=none", "-o", "KnownHostsCommand=none", "-o", "VerifyHostKeyDNS=no",
-      "-o", "CheckHostIP=no", "-o", "UpdateHostKeys=no", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ForwardAgent=no",
-      "-o", "ForwardX11=no", "-o", "PermitLocalCommand=no", "-o", "LogLevel=ERROR",
-      "-o", "ExitOnForwardFailure=yes", "-R", "127.0.0.1:19002:127.0.0.1:19001", "--", "pen-7f3a9c",
-    ]);
-    for (const argv of Object.values(builders(null))) {
-      expect(options(argv, "ProxyCommand").length + options(argv, "User").length + options(argv, "Port").length).toBe(0);
-    }
+  // The argv each builder produced on origin/dev e85a97556, before explicit routes existed: a drift in any option fails.
+  const BEFORE_EXPLICIT_ROUTES: Record<string, string[]> = {
+    tunnel: ["ssh","-N","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ExitOnForwardFailure=yes","-R","127.0.0.1:19002:127.0.0.1:19001","--","pen-7f3a9c"],
+    exec: ["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ClearAllForwardings=yes","--","pen-7f3a9c","sh '-c' 'true'"],
+    probe: ["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=accept-new","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ClearAllForwardings=yes","--","pen-7f3a9c","echo ocx-link-probe"],
+    routeProbe: ["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ClearAllForwardings=yes","--","pen-7f3a9c","echo ocx-link-probe"],
+    windowsProbe: ["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ClearAllForwardings=yes","--","pen-7f3a9c","cmd /c echo %OS%"],
+  };
+
+  test("without a route every builder emits exactly the argv it emitted before explicit routes", () => {
+    expect(builders(null)).toEqual(BEFORE_EXPLICIT_ROUTES);
   });
 
   test("a builder refuses a route object that is not an accepted form, before any process starts", () => {
