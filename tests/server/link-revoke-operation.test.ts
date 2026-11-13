@@ -85,7 +85,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     const response = await handleLinkRoutes(context, state);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   }
-  return { revoke, ssh, config, journalPath, stops, closedSockets, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
+  return { revoke, state, ssh, config, journalPath, stops, closedSockets, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
@@ -211,6 +211,16 @@ test("a recorded revoke entry pruned between the read and the replay falls throu
   expect(revoked.status).toBe(200);
   expect(revoked.body).toMatchObject({ linkId: LINK, operationId: OP, outcome: "committed" });
   expect(h.store.links).toEqual([]);
+});
+
+test("an invalid body on a link a Child job holds answers 409 as before journalling, not 400", async () => {
+  const h = harness();
+  const { childOpsEngineFor } = await import("../../src/server/management/link-child-ops-routes");
+  const release = childOpsEngineFor(h.state).reserve(LINK);
+  try {
+    const refused = await h.revoke({ force: "yes" });
+    expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "link_operation_in_progress" });
+  } finally { release?.(); }
 });
 
 describe("journal write failures during a revoke", () => {

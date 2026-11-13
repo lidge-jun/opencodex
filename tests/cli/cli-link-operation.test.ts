@@ -94,6 +94,15 @@ test.each([
   } finally { h.restore(); }
 });
 
+test("a plain add refused by another operation on the alias names a link operation, not an enrollment or revoke", async () => {
+  const h = harness([{ body: probe }, { body: confirm }, { status: 409, body: { error: { code: "link_operation_in_progress", message: "x" } } }]); try {
+    expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
+    const message = h.err.join("\n");
+    expect(message).toContain("Another link operation for this alias is running");
+    expect(message).not.toContain("enrollment or revoke");
+  } finally { h.restore(); }
+});
+
 test("revoke --operation-id sends it and prints the outcome and the purge receipt", async () => {
   const h = harness([{ body: { linkId: LINK, operationId: "detach-1", outcome: "committed", purged: true } }]); try {
     expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-1", "--json"], h.deps)).toBe(0);

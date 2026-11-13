@@ -41,7 +41,8 @@ const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const OPERATION_REFUSALS: Record<string, string> = {
   operation_mismatch: "This operation id was already used with other parameters; use a new operation id.",
   link_operation_open: "An unfinished enrollment holds this alias; repeat it with its own operation id to settle it first.",
-  link_operation_in_progress: "Another enrollment or revoke of this alias is running; retry when it ends.",
+  // The same 409 answers a concurrent probe, confirmation, route edit, enrollment or revoke of the alias.
+  link_operation_in_progress: "Another link operation for this alias is running; retry when it ends.",
   full_install_present: "A full OpenCodex install is on the Child; --require-ephemeral refused it before any change.",
   full_install_census_failed: "The Child could not be checked for a full OpenCodex install; nothing was changed.",
   require_ephemeral_unsupported: "--require-ephemeral is not supported for a Windows Child.",
