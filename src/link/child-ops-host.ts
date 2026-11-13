@@ -94,7 +94,7 @@ export function hostChildOpsEnv(binding: ChildOpsHostBinding, runner: Pick<SshRu
       return snapshot ? { inFlight: snapshot.inFlight, idle: isLinkIdle(snapshot, now, idleAfterMs()) } : null;
     },
     observe: record => observeChild(record, { runner, knownHostsFile: hosts, homeVersion: version, peer: binding.peer,
-      platformOf: link => requireRemotePlatform(runner, link.alias, hosts), inspect: inspectRemoteChildRuntime,
+      platformOf: link => requireRemotePlatform(runner, link.alias, link.explicitRoute ?? null, hosts), inspect: inspectRemoteChildRuntime,
       now: () => new Date() }),
     readObservation: linkId => readChildObservations(childObservationsPath()).children[linkId] ?? null,
     // ChildOpsEnv contract: never throws (child-ops-types.ts); same shape as childOpsEnvFor.

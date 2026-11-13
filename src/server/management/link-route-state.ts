@@ -20,6 +20,9 @@ export interface PendingLinkHost {
   remotePlatform?: "posix" | "windows";
   runtimeKind?: "full" | "ephemeral" | "missing";
   targetTriple?: import("../../link/child-binary-source").ChildTargetTriple | null;
+  /** The explicit route every SSH command of this enrollment uses; the record keeps it (link-route-request.ts). */
+  explicitRoute?: import("../../link/explicit-route").ExplicitRoute;
+  exclusive?: true;
 }
 
 export interface ConfirmedLinkHost extends PendingLinkHost {
