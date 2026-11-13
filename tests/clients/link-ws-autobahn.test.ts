@@ -10,8 +10,10 @@ import { fixturePath } from "../helpers/repo-root";
 
 // The Autobahn fuzzingserver client conformance run for the Child's Home-facing link WebSocket leg (design T4 3.3,
 // R2-06; a condition of the Child's release gate, src/client/link-websocket-limits.ts). Opt-in: it runs only when
-// OCX_LINK_WS_AUTOBAHN_URL names a running fuzzingserver (for example http://127.0.0.1:9001) and
-// OCX_LINK_WS_AUTOBAHN_REPORTS names the host directory the server writes its reports to.
+// OCX_LINK_WS_AUTOBAHN_URL names a running fuzzingserver on loopback (any other host is refused) and
+// OCX_LINK_WS_AUTOBAHN_REPORTS names the host directory the server writes its reports to. The recorded run is
+// tests/fixtures/link-ws-autobahn/run.sh: the pinned image, the spec next to it (every case), published on
+// 127.0.0.1:9001 only.
 //
 // What is under test is the code the relay runs against a Home: the Child's own upgrade answer check
 // (validLinkUpgradeAnswer), then a real HomeLeg (frame reader, masked client frames, ping answers, close handshake,
@@ -113,6 +115,8 @@ interface CaseReport {
 describe.skipIf(!ENABLED)("link WebSocket Child leg: Autobahn fuzzingserver client conformance (design 3.3)"
   + (ENABLED ? "" : " [skipped: set OCX_LINK_WS_AUTOBAHN_URL and OCX_LINK_WS_AUTOBAHN_REPORTS to a running fuzzingserver]"), () => {
   test("every case lands in the class its reviewed expectation names", async () => {
+    // The server is a local fixture: a fuzzingserver anywhere else is not the recorded run.
+    expect(["127.0.0.1", "localhost", "[::1]"]).toContain(new URL(BASE).hostname);
     const count = Number(await control("/getCaseCount"));
     expect(count).toBeGreaterThan(0);
     const ends: Record<string, number> = {};
