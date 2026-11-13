@@ -54,6 +54,8 @@ También establecen `compat.supportsDeveloperRole` en `false`, para que Pi enví
 
 Los identificadores son los selectores canónicos del proxy. Los modelos enrutados aparecen como `provider/model` (`anthropic/claude-opus-5`), y los modelos nativos de OpenAI conservan su identificador sin prefijo (`gpt-5.6-sol`). El sufijo de `name` —`(anthropic)`, `(native)` o `(routed)`— permite distinguir modelos con el mismo nombre de distintos proveedores en el selector de Pi.
 
+Para un ID de modelo ascendente anidado, la exportación de Pi usa el selector sin codificar y con sus barras cuando el proxy en ejecución demuestra que llega al mismo modelo. Por ejemplo, `openrouter/openrouter/free` selecciona el modelo `openrouter/free` de OpenRouter y su fila Fast es `openrouter/openrouter/free--fast`. Un modelo que el proxy no puede verificar así, porque aún no ha cargado su inventario o porque otro modelo ya posee esa forma sin codificar, conserva su selector codificado. Los alias personalizados conservan sus nombres. Cuando el proxy usa el modo Codex Direct, los modelos nativos de OpenAI se excluyen de la exportación de Pi: ese modo reenvía la credencial OpenAI de cada cliente y Pi envía una clave de marcador.
+
 <a id="where-it-goes"></a>
 
 ## Dónde se guarda

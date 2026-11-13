@@ -87,6 +87,29 @@ En un Child, `GET /healthz` solo indica que OpenCodex se está ejecutando. `GET 
 
 Para confirmar qué Home atiende a un Child, compara el encabezado `x-opencodex-served-by` de `GET /v1/models` del Child con `instanceId` de `GET /healthz` del Home. El Child retransmite el encabezado sin cambios, por lo que los valores coinciden mientras el enlace funciona. Es un identificador opaco, nunca un nombre de equipo; consulta [Identidad del Home y encabezado served-by](/es/reference/management-api/#home-identity-and-the-served-by-header).
 
+<a id="several-routes-to-one-child"></a>
+
+## Varias rutas a un Child
+
+Un Child añadido desde Home puede alcanzarse por varias rutas SSH, por ejemplo un alias directo en la misma LAN o tailnet y un alias de relay accesible desde cualquier lugar. Home mantiene una lista ordenada y se conecta por la primera ruta que funciona: el tráfico usa la ruta directa si está disponible al conectar y, en caso contrario, el relay.
+
+```text
+ocx link routes --link-id <id>
+ocx link routes add --link-id <id> --route <alias> [--position <n>]
+ocx link routes remove --link-id <id> --route <alias>
+ocx link routes order --link-id <id> --routes <alias,alias,...>
+```
+
+- **Todas las rutas llegan al mismo equipo.** El alias del enlace fija la clave: su clave de host confirmada es la única que puede presentar cualquier ruta y permanece en la lista. Antes de guardar una ruta con `ocx link routes add`, Home conecta con comprobación estricta de esa clave. Si presenta otra clave, rechaza el inicio de sesión o no responde, no se guarda (`route_unproven` con causa `hostkey`, `auth`, `forward` o `transient`). También se rechaza si el archivo privado `known_hosts` del enlace confía en otra clave para el alias (`pin_mismatch`, `trust_file_unexpected`). Al añadir un Child se comprueba el mismo archivo: una línea con comodín, lista de hosts o marcador, que OpenCodex nunca escribe, provoca `trust_file_unexpected`; elimina esa línea y vuelve a probar y confirmar el host. Las líneas hash son válidas: versiones anteriores a 2.89 las registraban cuando SSH las configuraba, y cada una cuenta para el alias correspondiente. Puede haber varias si todas tienen la clave del enlace. Confirmar otra clave para un alias ya usado por un enlace iniciado en Home se rechaza con `link_pin_conflict`; para confiar en un equipo sustituido, elimina y vuelve a añadir el enlace. Si el cambio se guarda pero los túneles activos no lo recargan, el comando devuelve `routes_stored_reload_failed`; el cambio se conserva y reiniciar OpenCodex en Home lo aplica.
+- **Orden.** Una ruta nueva va antes del alias salvo que se indique `--position`, para que las rutas directas precedan al alias de relay.
+- **Elección.** En cada conexión Home prueba las rutas en orden (10 segundos cada una). Una ruta solo funciona cuando sshd del Child acepta el túnel y el Child obtiene por él el catálogo de Home con su clave; hasta entonces aparece **Connecting**. Cada ruta dispone de 30 segundos para que sshd acepte el túnel y otros 30 para esa comprobación. Una ruta fallida espera unos segundos tras un error de red, un minuto tras un rechazo de reenvío, cinco tras un fallo de autenticación o diez tras una clave incorrecta; Home pasa a la siguiente. El enlace falla por clave de host solo si todas presentan una clave incorrecta.
+- **Túnel obsoleto.** Si Home se detuvo sin detener el ssh del enlace, este muestra **failed** y «stale tunnel may hold the port» hasta que termine ese ssh; detenlo (su pid está en `<config dir>/link/<link id>.pid`). Si ese pid pertenece ahora a otro programa, comprueba primero que ningún ssh del enlace siga activo, elimina el archivo `.pid` y reinicia OpenCodex en Home.
+- **Volver a una ruta mejor.** Añadir o reordenar rutas no mueve un túnel activo; una ruta posterior se conserva mientras funcione. Home vuelve a probar desde el principio al caer el túnel o al ejecutar `ocx link reconnect --link-id <id>`, que interrumpe las solicitudes activas de ese enlace.
+- **Estado.** `ocx link status --json` muestra `route` (ruta en uso y desde cuándo), `routes` (cada ruta, cuándo puede reintentarse y último resultado) y `routeBlocked`.
+- **Requisitos.** El `ssh` de Home debe ser OpenSSH o el enlace falla con `ssh_client_unsupported`. El Child necesita lo habitual para añadirlo: `curl` en macOS y Linux o Windows PowerShell en Windows. Los comandos usan la API de gestión de Home con token administrativo en loopback, como `ocx link reconnect`; no están disponibles por el socket privado de control que abre un Hub con bind no loopback para `ocx link status`.
+- **Relay y privacidad.** Si la ruta directa está bloqueada, se usa el relay, que solo transporta bytes cifrados por SSH. Los nombres son alias SSH: aparecen en `ocx link status` de Home y en los comandos de rutas, nunca en diagnósticos ni registros.
+- **Volver a una versión anterior.** Un Home antiguo rechaza un almacén de enlaces con rutas. Elimina las rutas adicionales con `ocx link routes remove` antes de usarlo.
+
 <a id="what-a-child-shows-and-manages"></a>
 
 ## Lo que un Child muestra y administra
@@ -112,6 +135,12 @@ ocx disconnect   # or ~/.cache/opencodex/bin/ocx-child detach on a lightweight C
 ```
 
 Para desconectar un enlace iniciado por Child, ejecute `ocx disconnect` en el Child. Desconecta el túnel del cliente y revoca el enlace en Home sobre SSH. Si la revocación Home falla, se imprime: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
+
+Para medir el tráfico, ejecuta `ocx link status --json`. Cada enlace incluye `traffic`: bytes de cuerpos de solicitud hacia Home (`toHomeBytes`), bytes de cuerpos de respuesta (`fromHomeBytes`), número de solicitudes y solicitudes terminadas antes de tiempo (`incomplete`), desde el inicio del conteo (`since`, con `epoch` y `generation`). Compara lecturas solo si coinciden `epoch` y `generation`; si cambia cualquiera, el conteo comenzó de nuevo, y un reinicio siempre cambia `epoch`. En Child se cuentan los bytes transportados por el enlace, incluidas sus propias lecturas de Home. Una carga de cuerpo incompleta también cuenta en `incomplete`; si este es mayor que cero, `toHomeBytes` puede omitir parte de un cuerpo interrumpido y es un mínimo. Una carga en curso solo se cuenta al terminar su escritura, por lo que la lectura puede ir detrás de lo ya recibido por Home; la diferencia entre lecturas cuenta escrituras completas. Child muestra estas cifras en el estado del dashboard, pues `ocx link status` allí solo lee archivos locales. En Home, las respuestas se cuentan al enviarse y las solicitudes por su longitud declarada (`toHomeSource: "content-length"`); las que no la declaran se cuentan en `toHomeUncounted`. Hay contadores para hasta 256 enlaces; las solicitudes sin espacio para medir se cuentan en `untrackedRequests`. No se incluyen encabezados, sobrecarga SSH ni lo añadido por un relay, y el reinicio reinicia el conteo. OpenCodex no infiere si una ruta es directa o de relay. Un enlace de una ruta usa su alias; con varias, el estado muestra la ruta en uso y desde cuándo (`route.name`, `route.since`), y su nombre indica el tipo. Cada fila de `ocx logs --json` incluye `requestBody`: tamaño recibido (`wireBytes`), `encoding` y tamaño decodificado (`decodedBytes`).
+
+Cuando Child y Home ejecutan esta versión, Child comprime individualmente con zstd las solicitudes de modelo mayores de 1 KiB y de hasta 16 MiB que no tengan codificación propia antes de enviarlas por el enlace. Solo lo hace cuando Home anuncia por el enlace que las acepta; con un Home antiguo las envía como antes. Home rechaza solicitudes comprimidas que se expandirían más de 200 veces por encima de 8 MiB para protegerse de bombas de compresión. La conexión SSH no se comprime.
+
+Para desactivarlo, configura `"linkRequestCompression": false` en el `config.json` de Home y reinicia Home. Deja de ofrecer compresión y sus Children envían las solicitudes sin comprimir. La compresión implica una decisión de privacidad: quien pueda insertar texto elegido junto a un secreto en una solicitud y observar el tamaño de muchas solicitudes puede adivinar el secreto según cuánto se compriman. En un enlace esto incluye al operador del relay o a cualquiera en la ruta de red: el túnel oculta el contenido, pero no el tamaño. Está activada por defecto porque el ataque requiere controlar texto de la conversación y observar el tamaño de cada solicitud, mientras que reduce en más de la mitad los bytes enviados hacia Home.
 
 <a id="troubleshooting"></a>
 
@@ -177,6 +206,10 @@ ocx link status [--json]
 ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link routes --link-id <id> [--json]
+ocx link routes add --link-id <id> --route <alias> [--position <n>] [--json]
+ocx link routes remove --link-id <id> --route <alias> [--json]
+ocx link routes order --link-id <id> --routes <alias,alias,...> [--json]
 ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
 ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
