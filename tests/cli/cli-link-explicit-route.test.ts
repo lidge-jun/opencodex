@@ -118,7 +118,7 @@ test.each([
   const refusal = Response.json({ error: { code: "invalid_identity_file", message: "SERVER-TEXT", hint: "identity_file_ancestor" } }, { status: 400 });
   const h = harness([refusal]); try {
     const exit = await runLinkCommand([...command, ...ROUTE_FLAGS, "--ssh-identity-file", KEY], h.deps);
-    expect(exit).not.toBe(0);
+    expect(exit).toBe(1);
     const printed = h.err.join("\n");
     expect(printed).toContain("Every directory above the identity file must be owned by this user or root");
     expect(printed).toContain("(code invalid_identity_file, hint identity_file_ancestor)");
