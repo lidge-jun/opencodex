@@ -692,6 +692,17 @@ describe("ocx disconnect --expect-link (a Home's revoke)", () => {
     expect(readClientConnectionState()).toEqual(before);
   });
 
+  test("an unreadable Child-initiated marker refuses as invalid_state, never as a client-initiated link", async () => {
+    writeClient({ transport: "link" });
+    const { childLinkMarkerPath } = await import("../../src/client/link-state");
+    mkdirSync(dirname(childLinkMarkerPath()), { recursive: true, mode: 0o700 });
+    writeFileSync(childLinkMarkerPath(), "{not json", { mode: 0o600 });
+    const before = readClientConnectionState();
+    const run = await refusedDisconnect(["--expect-link", LINK_ID, "--keep-catalog"]);
+    expect(run).toEqual({ exit: 5, last: { phase: "child_link_mismatch", reason: "invalid_state" } });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
   test("an unreadable sidecar beside this link's own unfinished disconnect answers disconnect_pending", async () => {
     writeClient({ transport: "link" });
     const value = clientBlock({ transport: "link" }) as unknown as OcxClientConnectionConfig;

@@ -52,7 +52,7 @@ function recoverRefusal(error: RuntimeApiError): RuntimeApiError {
   const code = typeof body?.code === "string" && /^[a-z_]{1,64}$/.test(body.code) ? body.code : null;
   if (!code) return error;
   const hint = typeof body?.hint === "string" && /^[a-z0-9_-]{1,64}$/.test(body.hint) ? body.hint : null;
-  const known = RECOVER_REFUSALS[code];
+  const known = Object.hasOwn(RECOVER_REFUSALS, code) ? RECOVER_REFUSALS[code] : undefined;
   const message = "Link recover refused (" + error.status + "): " + code + (hint ? " (" + hint + ")" : "") + (known ? ": " + known : "");
   return new RuntimeApiError(message, error.status, error.body);
 }

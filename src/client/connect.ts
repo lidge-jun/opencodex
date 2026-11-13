@@ -101,7 +101,7 @@ import {
   type LinkHomeDeps,
 } from "./link-home";
 import { hubStateCachePath } from "./hub-state";
-import { ClientLinkStateError, clearClientLinkState, isChildInitiatedLink, readClientLinkState } from "./link-state";
+import { ClientLinkStateError, clearClientLinkState, readChildLinkMarker, readClientLinkState } from "./link-state";
 import { isLinkPort } from "../link/ports";
 import { assertRouteIntentPort, clientSyncRuntimeGuard, ClientSyncRuntimeError } from "./sync-runtime";
 import { prepareConnectedRouteIntent, initialConnectRouteIntent, connectedRouteSelectedClients, applyConnectedRouteIntent } from "../integrations/route-intent-connected";
@@ -1285,8 +1285,12 @@ export function assertDisconnectExpectation(linkId: string, deps: Pick<ClientCon
 function assertHomeInitiatedDisconnect(linkId: string): void {
   assertDisconnectLinkExpectation(linkId);
   let reason: "client_initiated_link" | "invalid_state" | null;
-  try { reason = readClientLinkState()?.linkId === linkId || isChildInitiatedLink(linkId) ? "client_initiated_link" : null; }
-  catch { reason = "invalid_state"; }
+  // An unreadable sidecar or marker refuses as invalid_state: it proves nothing about who joined.
+  try {
+    const marker = readChildLinkMarker();
+    reason = marker.kind === "unreadable" ? "invalid_state"
+      : readClientLinkState()?.linkId === linkId || (marker.kind === "link" && marker.linkId === linkId) ? "client_initiated_link" : null;
+  } catch { reason = "invalid_state"; }
   if (!reason) return;
   const receipt = readDesktopDisconnectReceipt();
   throw new ClientSyncExpectationError({ kind: "link", linkId }, receipt.kind === "valid" && receipt.value.phase !== "complete" ? "disconnect_pending" : reason);

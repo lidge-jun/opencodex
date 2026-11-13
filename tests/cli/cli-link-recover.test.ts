@@ -98,6 +98,13 @@ describe("ocx link recover", () => {
     }
   });
 
+  test("a code that names an Object prototype key prints only the code", async () => {
+    const f = fixture({ error: { code: "constructor", message: "server text" } }, 409);
+    await runLinkCommand(["recover", "--link-id", ID], f.deps);
+    expect(stderr()).toContain("constructor");
+    expect(stderr()).not.toContain("native code");
+  });
+
   test.each([
     [409, "child_residual", "codex-home-owner", "child_residual (codex-home-owner)"],
     [502, "remote_recover_failed", "ssh_failed", "remote_recover_failed (ssh_failed)"],
