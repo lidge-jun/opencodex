@@ -134,5 +134,6 @@ Un fallo del asesor permite que la tarea continúe. Si una consulta ya enviada f
 ## Limitaciones
 
 - Los turnos nativos OpenAI passthrough —modelos del pool ChatGPT— no reciben la herramienta sintética. El asesor cubre proveedores enrutados mediante traducción. La consulta `preflight` se aplica a los adaptadores de ejecución de turnos; la herramienta no.
+- Las solicitudes traducidas de `/v1/messages` (por ejemplo, Claude Code enrutado a un proveedor traducido) reciben la herramienta sintética y la consulta preflight igual que `/v1/responses` y `/v1/chat/completions`. Se aplican las mismas reglas de `policy` y consentimiento para compartir contexto, y los ajustes se leen de la configuración vigente. Por ello, revocar el consentimiento bloquea las consultas de solicitudes ya en curso que aún no se hayan enviado. No cancela una consulta ya enviada ni retira el contexto que ya salió del proxy.
 - No hay detección semántica de bloqueo, revisión de finalización, escalada de niveles, varios asesores ni votación. La consulta adaptativa exige la evidencia estructurada de validación, edición y reintento descrita arriba.
 - El registro de deduplicación `preflight` pertenece al proceso. Tras reiniciar el proxy, una tarea en curso puede recibir un intento adicional.
