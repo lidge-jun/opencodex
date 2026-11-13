@@ -1855,6 +1855,21 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     expect([log.terminalHttpStatus, log.upstreamErrorCode, log.upstreamError]).toEqual([503, "server_is_overloaded", "fixture overloaded"]);
   });
 
+  test("a terminal that replaces a verdict's copy cannot store an echoed credential", () => {
+    const credential = "fixture-terminal-echo-CANARY8415";
+    const registry = new OutboundCredentialRegistry();
+    registry.remember({ authorization: `Bearer ${credential}` });
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      inspectResponseLogSsePayload(log, typedFrame("rate_limit_exceeded", "typed quota"));
+      inspectResponseLogSsePayload(log, JSON.stringify({ type: "response.failed",
+        response: { status: "failed", error: { code: "server_is_overloaded", message: `echo ${credential}` } } }));
+      expect(log.upstreamError ?? "").not.toContain(credential);
+      expect(log.terminalHttpStatus).toBe(503);
+    } finally { restore(); }
+  });
+
   test("a bare frame after a genuine terminal does not supply the row copy", () => {
     const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
     inspectResponseLogSsePayload(log, JSON.stringify({ type: "response.failed", response: { status: "failed", error: { code: "server_error" } } }));

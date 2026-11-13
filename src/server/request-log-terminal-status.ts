@@ -170,6 +170,12 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
       delete logCtx.upstreamErrorCode;
       delete logCtx.upstreamErrorType;
       delete logCtx.upstreamError;
+      // The replacement copy holds the same guard as the verdict copy it displaces: a terminal
+      // echoing a credential must not reach the row through the pattern-only message fallback.
+      const message = upstreamErrorMessageFromPayload(json);
+      if (typeof message === "string" && message.trim()) {
+        logCtx.upstreamError = diagnosticValueAllowed(message) ? redactSecretString(message).slice(0, 500) : "[REDACTED]";
+      }
     }
     // The classifier retires the provisional status it owns; clearing the map first would
     // hide that ownership from it and leave the stale status on the row.
