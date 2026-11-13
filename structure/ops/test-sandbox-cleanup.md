@@ -155,3 +155,38 @@ handoff log, including when the parent is terminated before its probe returns.
 The fixture bundles the product graph once into the recognized source-launch entry before
 spawning. Cold module resolution and transpilation count as setup, not handoff work. The
 18-second handoff watchdog starts after spawn; bundling counts against the outer test budget.
+
+## Git environment isolation
+
+A test process can inherit GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and the rest of git's
+`--local-env-vars` from a hook, `git rebase --exec`, `git bisect run` or a
+`--git-dir/--work-tree` wrapper. Every git command the suite spawns then runs against THAT
+repository whatever its cwd: a fixture's `git init` reinitialises it (writing core.worktree when
+GIT_WORK_TREE is set), `git config` writes its .git/config, and add/commit land in it. A shared
+checkout once gained user.name/user.email from a fixture helper and a core.worktree pointing at a
+deleted temp tree, which re-authored every later commit and broke `--show-toplevel` in every
+linked worktree on that host.
+
+- `scripts/git-repository-env.ts` owns the variable list (git's own `--local-env-vars` plus the
+  numbered GIT_CONFIG_KEY/VALUE pairs). `createIsolatedTestEnvironment` drops them, so a wrapped
+  `bun run test` starts every test process clean. `inspectChangedRun`, the test-layout move/verify
+  tooling, `structure-ssot.ts` and `file-size-ratchet.ts` pass a scrubbed env because each reads a
+  root it was given.
+- `tests/preload.ts` deletes them from process.env and warns with their names. That reaches
+  node:child_process and spread envs only: Bun.spawn / Bun.spawnSync without an `env` option keep
+  the environment the process started with (Bun 1.4.4), so a bare `bun test` cannot be fully
+  cleaned in-process.
+- Hence every test-side git call passes an env from `tests/helpers/git-fixture.ts`:
+  `fixtureGitEnv()` for throwaway repositories (no inherited repository, no system or global
+  config, commit identity in GIT_AUTHOR_*/GIT_COMMITTER_*, so no fixture writes user.* to any
+  config file) or `repositoryGitEnv()` for reads of this checkout (keeps the global config so
+  safe.directory still applies). `initFixtureRepo` writes no config.
+- `tests/helpers/git-config-guard.ts`, armed by the preload for each test file, compares the
+  checkout's common .git/config bytes after every case and, when they change, asks git for
+  core.bare, core.hookspath, core.worktree, user.email and user.name. A changed key fails that
+  case by name (never by value); a missing or unparsable config is reported once. Limits: a change
+  undone before the next check is invisible, another worktree's legitimate change to a guarded key
+  fails one case per worker, and config.worktree is not watched.
+
+Enforced by `tests/ci-workflows/test-git-isolation.test.ts`, whose fixture and script cases were
+red against the pre-fix helpers.

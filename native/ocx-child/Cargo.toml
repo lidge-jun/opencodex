@@ -10,9 +10,18 @@ publish = false
 name = "ocx-child"
 path = "src/main.rs"
 
+[[test]]
+name = "link_websocket"
+required-features = ["link-ws-test-gate"]
+
 [lib]
 name = "ocx_child"
 path = "src/lib.rs"
+
+[features]
+# Test-only: lets the binary read OCX_CHILD_TEST_LINK_WS_READY and open the link WebSocket gate.
+# Distribution builds ("cargo build --release --locked", build:ocx-child) never pass it.
+link-ws-test-gate = []
 
 [dependencies]
 base64 = "=0.22.1"

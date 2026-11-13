@@ -175,6 +175,9 @@ export function boundLinkHint(value: unknown): string | null {
 }
 
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+// The store's own link-id form (src/link/store.ts). The dashboard copies an id into shell commands, so nothing else passes.
+const LINK_ID = /^lnk_[0-9a-f]{16}$/;
+function isLinkId(value: unknown): value is string { return typeof value === "string" && LINK_ID.test(value); }
 function isLinkState(value: unknown): value is LinkWireState { return typeof value === "string" && LINK_STATES.includes(value as LinkWireState); }
 
 export function parseRemoteLinkStatus(value: unknown): RemoteLinkStatusWire {
@@ -183,7 +186,7 @@ export function parseRemoteLinkStatus(value: unknown): RemoteLinkStatusWire {
   if (!isRecord(listener) || !["off", "listening", "failed"].includes(String(listener.state)) || (listener.port !== null && typeof listener.port !== "number")) throw new Error("invalid listener");
   if (!Array.isArray(value.links)) throw new Error("invalid links");
   const links = value.links.map(item => {
-    if (!isRecord(item) || !nonEmpty(item.id) || !nonEmpty(item.alias) || !["hub-initiated", "client-initiated"].includes(String(item.direction)) || !isLinkState(item.state) || !nonEmpty(item.since) || (item.reason !== null && typeof item.reason !== "string") || typeof item.tunnelPort !== "number") throw new Error("invalid link");
+    if (!isRecord(item) || !isLinkId(item.id) || !nonEmpty(item.alias) || !["hub-initiated", "client-initiated"].includes(String(item.direction)) || !isLinkState(item.state) || !nonEmpty(item.since) || (item.reason !== null && typeof item.reason !== "string") || typeof item.tunnelPort !== "number") throw new Error("invalid link");
     const childKind: "full" | "ephemeral" | null = item.childKind === "full" || item.childKind === "ephemeral" ? item.childKind : null;
     const appliedCodexSettingsDigest = nonEmpty(item.appliedCodexSettingsDigest) ? item.appliedCodexSettingsDigest : null;
     return { id: item.id, alias: item.alias, direction: item.direction as LinkWireDirection, state: item.state, since: item.since, reason: item.reason as string | null, tunnelPort: item.tunnelPort, childKind, appliedCodexSettingsDigest,

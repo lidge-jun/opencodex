@@ -6,6 +6,9 @@ const fingerprint = "SHA256:abcdefghijklmnop";
 const probe = { alias: "child-a", fingerprint, keyType: "ED25519", ocxVersion: "2.83.0" };
 const confirm = { alias: probe.alias, fingerprint, ocxVersion: probe.ocxVersion };
 const linkId = "lnk_0123456789abcdef";
+// Written out here, not imported: the test pins the sentence an operator reads.
+const CHILD_OWNERSHIP_CHECK = "Before the next step, check the Child with ocx connect status (ocx-child connect status --json on a lightweight Child). "
+  + "This attempt's link id is not shown, so treat any link you do not recognise as another's: if the Child shows such a link, a hub or another Home, leave it as it is and skip the next step.";
 function harness(bodies: unknown[] = [probe, confirm, { linkId }], status = 200) {
   const calls: { url: string; init?: RequestInit }[] = [], out: string[] = [], err: string[] = [];
   const log = console.log, error = console.error;
@@ -90,6 +93,7 @@ describe("CLI Remote Link enrollment", () => {
       expect(await runLinkCommand(["add", "child-a", "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
       const message = h.err.join("\n");
       expect(message).toContain("Run ocx disconnect and ocx restart on the Child before retrying.");
+      expect(message).toContain(CHILD_OWNERSHIP_CHECK);
       expect(message).not.toContain("no link key was issued");
     } finally { h.restore(); }
   });
@@ -99,6 +103,10 @@ describe("CLI Remote Link enrollment", () => {
       h.deps.fetchImpl = async () => ++i < 3 ? Response.json(i === 1 ? probe : confirm) : Response.json({ error: { code: "child_restart_failed", message: "ocx_data_secret", hint: "ocx_data_secret" }, residual: true, recovery: "ocx_data_secret" }, { status: 502 });
       expect(await runLinkCommand(["add", "child-a", "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
       expect(h.err.join("\n")).toContain("Run ocx disconnect and ocx restart on the Child before retrying.");
+      // The step can be read long after the attempt, when the Child may belong to another link it would remove.
+      expect(h.err.join("\n")).toContain(CHILD_OWNERSHIP_CHECK);
+      // The check comes before the step it guards.
+      expect(h.err.join("\n").indexOf(CHILD_OWNERSHIP_CHECK)).toBeLessThan(h.err.join("\n").indexOf("Run ocx disconnect and ocx restart"));
       expect(h.err.join("\n")).not.toContain("ocx_data_secret"); expect(h.out).toEqual([]);
     } finally { h.restore(); }
   });
@@ -187,6 +195,8 @@ describe("CLI Remote Link enrollment", () => {
         // A Child that may still be connected was not shown as unlinked.
         expect(message).not.toContain("was not linked");
         if (!residual) expect(message).not.toContain("may still be connected");
+        if (residual) expect(message).toContain(CHILD_OWNERSHIP_CHECK);
+        else expect(message).not.toContain(CHILD_OWNERSHIP_CHECK);
         expect(message).toContain("(code " + code + ")");
         expect(message).not.toContain("ocx_data_secret");
         expect(message).not.toContain("Link management request failed");
