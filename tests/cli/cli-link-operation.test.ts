@@ -224,6 +224,8 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
     ["link_operation_open", 409, 5, "unfinished revoke holds this link"],
     ["link_operation_in_progress", 409, 5, "Another link operation"],
     ["operation_journal_unreadable", 500, 1, "journal"],
+    // A forced revoke of an ephemeral Child refused before its tombstone, its first intent and the tunnel stop (#8612).
+    ["tombstone_limit", 409, 5, "waiting for cleanup"],
   ])("%s prints local text that nothing was changed, with the code", async (code, status, exit, text) => {
     const h = harness([{ status, body: { error: { code, message: "server-chosen text" } } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-5"], h.deps)).toBe(exit);
@@ -235,11 +237,12 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
     } finally { h.restore(); }
   });
 
-  test("a code this CLI does not know makes no claim that nothing was changed", async () => {
-    const h = harness([{ status: 409, body: { error: { code: "tombstone_limit", message: "server-chosen text" } } }]); try {
-      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-6"], h.deps)).toBe(5);
+  // tombstone_write_failed can come after the tombstone file was written (its permissions step failed), so it stays generic.
+  test("a code that cannot promise nothing changed makes no such claim", async () => {
+    const h = harness([{ status: 503, body: { error: { code: "tombstone_write_failed", message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-6"], h.deps)).toBe(1);
       const printed = [...h.out, ...h.err].join("\n");
-      expect(printed).toContain("(code tombstone_limit)");
+      expect(printed).toContain("(code tombstone_write_failed)");
       expect(printed).not.toContain("Nothing was changed");
     } finally { h.restore(); }
   });

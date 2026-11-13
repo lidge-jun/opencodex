@@ -517,11 +517,14 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
 
   test("forced revokes beyond the bound are refused, never dropped, and the link stays", async () => {
     for (let i = 0; i < MAX_TOMBSTONES; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
-    const h = harness([link()]);
+    // The CLI says nothing was changed for this refusal (src/cli/link.ts REVOKE_REFUSALS): no stop, no key revoke.
+    let stops = 0, keyRevokes = 0;
+    const h = harness([link()], { duringStop: () => { stops += 1; }, duringKeyRevoke: () => { keyRevokes += 1; } });
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
     expect([res.status, (await errorOf(res)).code]).toEqual([409, "tombstone_limit"]);
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
     expect(tombstones()).toHaveLength(MAX_TOMBSTONES);
+    expect({ stops, keyRevokes }).toEqual({ stops: 0, keyRevokes: 0 });
   });
 
   test("a newer Home's field under ext is kept verbatim and does not refuse forced revokes", async () => {
