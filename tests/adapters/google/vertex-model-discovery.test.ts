@@ -376,3 +376,70 @@ describe("Vertex discovery credential stays bound to its selection", () => {
     clearModelCache();
   });
 });
+
+describe("Vertex discovery ADC token stays bound to the authority that minted it", () => {
+  function tokenServer(): void {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      if (url !== OAUTH_TOKEN_URL) return new Response("unexpected", { status: 404 });
+      const assertion = new URLSearchParams(String(init?.body ?? "")).get("assertion") ?? "";
+      const issuer = JSON.parse(Buffer.from(assertion.split(".")[1] ?? "", "base64url").toString("utf8")).iss;
+      return Response.json({ access_token: `token-for-${issuer}`, expires_in: 3600, token_type: "Bearer" });
+    }) as typeof fetch;
+  }
+  const serviceAccount = (email: string): string =>
+    JSON.stringify({ ...JSON.parse(readFileSync(saPath, "utf8")), client_email: email });
+
+  test("a replaced host ADC file or a credential replaced behind the same marker invalidates the token before send", async () => {
+    const hostFile = join(tmp, "rotating-host.json");
+    writeFileSync(hostFile, serviceAccount("host-a@example.test"));
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = hostFile;
+    process.env.CLOUDSDK_CONFIG = join(tmp, "no-gcloud");
+    delete process.env.GOOGLE_CLOUD_API_KEY;
+    tokenServer();
+    const host = await resolveVertexDiscoveryAuth(vertex());
+    expect(host?.token).toBe("token-for-host-a@example.test");
+    const hostHeaders = { Authorization: `Bearer ${host!.token}` };
+    expect(vertexDiscoveryAuthIsCurrent(vertex(), host!, hostHeaders)).toBe(true);
+    writeFileSync(hostFile, serviceAccount("host-b@example.test"));
+    expect(vertexDiscoveryAuthIsCurrent(vertex(), host!, hostHeaders)).toBe(false);
+
+    const stored: Record<string, string> = { "rotating-marker": serviceAccount("marker-a@example.test") };
+    setProviderKeychainEntryFactoryForTests((_service, account) => ({
+      getPassword: () => stored[account] ?? null, setPassword: () => {}, deletePassword: () => true,
+    }));
+    const markerRow = vertex({ apiKey: "gcp-sa:rotating-marker" });
+    const marker = await resolveVertexDiscoveryAuth(markerRow);
+    expect(marker?.token).toBe("token-for-marker-a@example.test");
+    const markerHeaders = { Authorization: `Bearer ${marker!.token}` };
+    expect(vertexDiscoveryAuthIsCurrent(markerRow, marker!, markerHeaders)).toBe(true);
+    stored["rotating-marker"] = serviceAccount("marker-b@example.test");
+    expect(vertexDiscoveryAuthIsCurrent(markerRow, marker!, markerHeaders)).toBe(false);
+  });
+
+  test("an ADC file replaced between pages stops the walk before the next page is sent", async () => {
+    const hostFile = join(tmp, "rotating-pages.json");
+    writeFileSync(hostFile, serviceAccount("pages-a@example.test"));
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = hostFile;
+    process.env.CLOUDSDK_CONFIG = join(tmp, "no-gcloud");
+    delete process.env.GOOGLE_CLOUD_API_KEY;
+    const pageRequests: string[] = [];
+    tokenServer();
+    const tokens = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      if (url === OAUTH_TOKEN_URL) return tokens(input, init);
+      pageRequests.push(new URL(url).searchParams.get("pageToken") ?? "first");
+      // The host credential is replaced after page one is served.
+      writeFileSync(hostFile, serviceAccount("pages-b@example.test"));
+      return Response.json({ publisherModels: [{ name: "publishers/google/models/gemini-4-carbon" }], nextPageToken: "page-2" });
+    }) as typeof fetch;
+    const rows = await gatherRoutedModels(withStubbedProviderFetch({ providers: { "rotating-vertex": {
+      adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com",
+      project: "rotating-project", location: "global", liveModels: true, models: ["configured-only"],
+    } } } as OcxConfig));
+    expect(pageRequests).toEqual(["first"]);
+    expect(rows.filter(row => row.provider === "rotating-vertex").map(row => row.id)).not.toContain("gemini-4-carbon");
+    clearModelCache();
+  });
+});

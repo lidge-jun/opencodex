@@ -1,8 +1,10 @@
 import { getModelMetadata, getModelMetadataCaseInsensitive } from "../generated/model-metadata";
 import {
+  bindVertexRequestAuthority,
   GCP_CREDENTIAL_MARKER_PREFIX,
   gcpCredentialMarkerAccount,
   getVertexAccessTokenWithAuthority,
+  vertexRequestAuthorityIsCurrent,
 } from "../lib/gcp-adc";
 import type { OcxProviderConfig } from "../types";
 import { resolveProviderApiKey } from "./api-key-resolve";
@@ -170,6 +172,9 @@ function sameVertexSelection(left: VertexDiscoveryCredential, right: VertexDisco
  * references and malformed `gcp-sa:` markers return `undefined` and never reach ambient credentials.
  * The selection is taken again after the exchange: if it changed meanwhile (an ambient key appeared,
  * a reference now resolves elsewhere) the token is discarded rather than sent under the new selection.
+ * An ADC token is bound to the source and generation that minted it through the same
+ * `bindVertexRequestAuthority` record inference uses, so a replaced host ADC file or a credential
+ * replaced behind the same `gcp-sa:` marker invalidates it before the next send.
  */
 export async function resolveVertexDiscoveryAuth(
   provider: OcxProviderConfig,
@@ -178,15 +183,21 @@ export async function resolveVertexDiscoveryAuth(
   if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
   const selection = selectVertexDiscoveryCredential(provider);
   if (selection.kind === "api-key") return selection.key ? { token: selection.key, kind: "api-key" } : undefined;
-  let token: string;
+  let authority: Awaited<ReturnType<typeof getVertexAccessTokenWithAuthority>>;
   try {
     const markerAccount = gcpCredentialMarkerAccount(selection.marker);
-    ({ token } = await getVertexAccessTokenWithAuthority({ signal, ...(markerAccount ? { markerAccount } : {}) }));
+    authority = await getVertexAccessTokenWithAuthority({ signal, ...(markerAccount ? { markerAccount } : {}) });
   } catch {
     return undefined;
   }
   if (!sameVertexSelection(selection, selectVertexDiscoveryCredential(provider))) return undefined;
-  return { token, kind: "adc", ...(selection.marker ? { marker: selection.marker } : {}) };
+  const auth: VertexDiscoveryAuth = { token: authority.token, kind: "adc", ...(selection.marker ? { marker: selection.marker } : {}) };
+  bindVertexRequestAuthority(auth, "", `Bearer ${authority.token}`, {
+    source: authority.source,
+    generation: authority.generation,
+    ...(authority.markerAccount ? { markerAccount: authority.markerAccount } : {}),
+  });
+  return auth;
 }
 
 /** The token from `resolveVertexDiscoveryAuth`, for callers that only need to know one exists. */
@@ -199,9 +210,10 @@ export async function resolveVertexDiscoveryToken(
 
 /**
  * Send-time check, run before every discovery request (`beforeSend`): the row still selects the
- * credential this token came from, and the outgoing headers carry it in that scheme's header and
- * not the other one. A selection that changed after resolution, or headers built for a different
- * selection, cancel the send so a token never reaches a scheme it was not issued for.
+ * credential this token came from, an ADC token's source and generation are still current (the
+ * check inference runs before dispatch), and the outgoing headers carry it in that scheme's header
+ * and not the other one. Any change cancels the send, first page and follow-up pages alike, so a
+ * token never reaches a scheme or an authority it was not issued for.
  */
 export function vertexDiscoveryAuthIsCurrent(
   provider: OcxProviderConfig,
@@ -214,6 +226,7 @@ export function vertexDiscoveryAuthIsCurrent(
     ? { kind: "api-key", key: auth.token }
     : { kind: "adc", ...(auth.marker ? { marker: auth.marker } : {}) };
   if (!sameVertexSelection(issued, current)) return false;
+  if (auth.kind === "adc" && !vertexRequestAuthorityIsCurrent(auth)) return false;
   const header = (name: string): string | undefined =>
     Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
   const bearer = `Bearer ${auth.token}`;
