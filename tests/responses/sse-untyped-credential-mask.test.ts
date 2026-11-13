@@ -5,6 +5,7 @@ import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/rel
 import { createForwardedEvidenceRedaction, createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
 import { OutboundCredentialRegistry, createSentValueGuard, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
 import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../../src/server/request-log-terminal-status";
+import { reduceBareUpstreamEvidence } from "../../src/server/bare-upstream-error";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -576,5 +577,27 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     const elapsed = performance.now() - startedAt;
     expect([repeatedOut.includes("aaaaaaaa"), overlapping.some(value => distinctOut.includes(value))]).toEqual([false, false]);
     expect(elapsed).toBeLessThan(1_500);
+  });
+
+  test("exact masking stays linear with thousands of distinct credential components", () => {
+    // One native search per distinct component, each over the whole text: thousands of components
+    // of one header over ~4 MB took seconds. One lookup pass over the text finds them all.
+    const components = Array.from({ length: 20_000 }, (_, i) => `c${String(i).padStart(8, "0")}`);
+    const rewrite = createTerminalErrorRedactionBlockRewrite({ "x-api-key": components.join(" ") });
+    const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message: `${components.slice(0, 50).join(" ")} ${"q".repeat(3_900_000)}` } } };
+    const startedAt = performance.now();
+    const out = rewrite(`event: response.failed\ndata: ${JSON.stringify(failed)}`).join("\n");
+    const elapsed = performance.now() - startedAt;
+    expect(components.slice(0, 50).some(value => out.includes(value))).toBe(false);
+    expect(elapsed).toBeLessThan(1_500);
+  });
+
+  test("classifying an untyped envelope stays linear in its message size", () => {
+    // Pattern redaction of the full message rescanned an unterminated line from every multipart
+    // candidate, so a 176 KB message stalled the boundary for seconds.
+    const startedAt = performance.now();
+    const evidence = reduceBareUpstreamEvidence(undefined, { error: { code: "rate_limit_exceeded", message: "name=token ".repeat(16_000) } });
+    expect(evidence?.verdict.terminalStatus).toBe(429);
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
   });
 });

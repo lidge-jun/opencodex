@@ -430,6 +430,17 @@ describe("redactSecretString", () => {
     }
   });
 
+  test("multipart part headers on an unterminated line are rejected in linear time", () => {
+    // As one regex, every `name=token` candidate on a line with no line break rescanned the rest
+    // of that line: 16,000 of them in one 176 KB message took seconds.
+    const unterminated = "name=token ".repeat(16_000);
+    const startedAt = performance.now();
+    expect(redactSecretString(unterminated)).toBe(unterminated);
+    expect(redactSecretString(`${unterminated}\rname=authorization\r\nsecret-body-123456`))
+      .toBe(`${unterminated}\rname=authorization\r\n${REDACTED_SECRET}`);
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
+  });
+
   test("a quoted form value is masked too", () => {
     expect(redactSecretString('authorization="Basic%20dXNlcjpwYXNz"&model=gpt-5.5'))
       .toBe(`authorization=${REDACTED_SECRET}&model=gpt-5.5`);

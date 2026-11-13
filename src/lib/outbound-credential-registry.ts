@@ -185,34 +185,70 @@ export function maskSecretSpans(text: string, replacement: string, substrings: I
 }
 
 function markSubstringSpans(text: string, substrings: Iterable<string>, initial: Uint8Array | undefined): Uint8Array | undefined {
-  let covered = initial;
-  // Self-overlapping secrets need a scan of their own; together they may read the text a bounded
-  // number of times, past which the whole text is covered (fail closed) so the work stays linear.
-  const budget = { steps: OVERLAP_SCAN_PASSES * text.length };
+  // One pass over the text finds every secret, however many there are: secrets of 8+ characters are
+  // looked up by the 8 characters at each position, shorter ones by a slice of their own length (at
+  // most seven passes). Confirming a candidate and the scan of a self-overlapping secret are charged
+  // to a budget proportional to the text; past it the whole text is covered (fail closed), so a
+  // frame that repeats near-copies of a secret at every position cannot make the work superlinear.
+  const n = text.length;
+  const byPrefix = new Map<string, string[]>();
+  const shortByLength = new Map<number, Set<string>>();
   for (const secret of new Set(substrings)) {
-    if (!secret) continue;
-    const first = text.indexOf(secret);
-    if (first < 0) continue;
-    covered ??= new Uint8Array(text.length);
-    if (!markOccurrences(text, secret, first, covered, budget)) {
-      covered.fill(1);
-      return covered;
+    if (!secret || secret.length > n) continue;
+    if (secret.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) {
+      const prefix = secret.slice(0, CREDENTIAL_SUBSTRING_MIN_LENGTH);
+      const group = byPrefix.get(prefix);
+      if (group) group.push(secret);
+      else byPrefix.set(prefix, [secret]);
+    } else {
+      const group = shortByLength.get(secret.length) ?? new Set<string>();
+      group.add(secret);
+      shortByLength.set(secret.length, group);
+    }
+  }
+  let covered = initial;
+  for (const [length, group] of shortByLength) {
+    for (let at = 0; at + length <= n; at++) {
+      if (!group.has(text.slice(at, at + length))) continue;
+      covered ??= new Uint8Array(n);
+      covered.fill(1, at, at + length);
+    }
+  }
+  if (byPrefix.size === 0) return covered;
+  const budget = { steps: MATCH_WORK_PER_CHAR * n + MATCH_WORK_FLOOR };
+  const scanned = new Set<string>();
+  for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= n; at++) {
+    const group = byPrefix.get(text.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
+    if (group === undefined) continue;
+    for (const secret of group) {
+      if (scanned.has(secret)) continue;
+      covered ??= new Uint8Array(n);
+      if (hasBorder(secret)) {
+        // A self-overlapping secret is found from here on by one Knuth-Morris-Pratt scan.
+        scanned.add(secret);
+        budget.steps -= n - at;
+        if (budget.steps < 0) return covered.fill(1);
+        markOverlappingOccurrences(text, secret, at, covered);
+        continue;
+      }
+      budget.steps -= Math.min(secret.length, n - at);
+      if (budget.steps < 0) return covered.fill(1);
+      if (text.startsWith(secret, at)) covered.fill(1, at, at + secret.length);
     }
   }
   return covered;
 }
 
-/** Text reads the self-overlapping secrets of one masking call may share before it fails closed. */
-const OVERLAP_SCAN_PASSES = 8;
+/** Confirmation and scan work one masking call may spend per text character before it fails closed. */
+const MATCH_WORK_PER_CHAR = 8;
+const MATCH_WORK_FLOOR = 65_536;
 
-/**
- * Mark every occurrence of secret from its first one. A secret with no border (no proper prefix that
- * is also a suffix) cannot overlap itself, so the native search resumes past each match. Otherwise
- * one Knuth-Morris-Pratt pass finds overlapping occurrences in linear time (restarting a search one
- * character after each match would recheck a long repetitive secret at every position), charged to
- * the shared budget; false means the budget ran out and coverage is incomplete.
- */
-function markOccurrences(text: string, secret: string, first: number, covered: Uint8Array, budget: { steps: number }): boolean {
+/** Whether a proper prefix of the secret is also its suffix, so two occurrences can overlap. */
+function hasBorder(secret: string): boolean {
+  return borderTable(secret)[secret.length - 1]! > 0;
+}
+
+function borderTable(secret: string): Int32Array {
   const m = secret.length;
   const fail = new Int32Array(m);
   for (let i = 1, k = 0; i < m; i++) {
@@ -220,14 +256,19 @@ function markOccurrences(text: string, secret: string, first: number, covered: U
     if (secret.charCodeAt(i) === secret.charCodeAt(k)) k++;
     fail[i] = k;
   }
-  if (fail[m - 1] === 0) {
-    for (let at = first; at >= 0; at = text.indexOf(secret, at + m)) covered.fill(1, at, at + m);
-    return true;
-  }
-  budget.steps -= text.length - first;
-  if (budget.steps < 0) return false;
+  return fail;
+}
+
+/**
+ * Mark every occurrence of secret at or after from, overlapping ones included, in one
+ * Knuth-Morris-Pratt pass: linear in the text even when a long repetitive secret overlaps itself at
+ * every position (restarting a search one character after each match would recheck it there).
+ */
+function markOverlappingOccurrences(text: string, secret: string, from: number, covered: Uint8Array): void {
+  const m = secret.length;
+  const fail = borderTable(secret);
   let markedTo = 0;
-  for (let i = first, k = 0; i < text.length; i++) {
+  for (let i = from, k = 0; i < text.length; i++) {
     while (k > 0 && text.charCodeAt(i) !== secret.charCodeAt(k)) k = fail[k - 1]!;
     if (text.charCodeAt(i) === secret.charCodeAt(k)) k++;
     if (k === m) {
@@ -237,7 +278,6 @@ function markOccurrences(text: string, secret: string, first: number, covered: U
       k = fail[m - 1]!;
     }
   }
-  return true;
 }
 
 function renderCoveredSpans(text: string, covered: Uint8Array, replacement: string): string {

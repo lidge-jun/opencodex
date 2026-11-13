@@ -108,11 +108,13 @@ const OTHER_FRAMED_CREDENTIALS: Array<[RegExp, string]> = [
   // attacker-controlled text, so a body line starting `--not-the-boundary`
   // ended the mask and exposed everything after it. Consuming the remainder
   // costs trailing context in one framing and closes the bypass.
+  //
+  // Only the part-header name is a regex; the rest of the grammar
+  // (`[^\r\n]*\r?\n(?:\r?\n)?` then a non-empty body) is applied by
+  // maskMultipartOnce in one pass. As a single regex every candidate on a line
+  // without a terminator rescanned that line, quadratic in the input.
   [
-    new RegExp(
-      `(name=["']?(?:${CREDENTIAL_HEADER_LABEL})["']?[^\\r\\n]*\\r?\\n(?:\\r?\\n)?)([\\s\\S]+)`,
-      "gi",
-    ),
+    new RegExp(`name=["']?(?:${CREDENTIAL_HEADER_LABEL})["']?`, "gi"),
     "multipart",
   ],
 ];
@@ -188,6 +190,10 @@ function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): str
 function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
   let current = value;
   for (const [pattern, kind] of OTHER_FRAMED_CREDENTIALS) {
+    if (kind === "multipart") {
+      current = maskMultipartOnce(current, decodeEscapes, pattern);
+      continue;
+    }
     const { folded, map } = foldForMatching(current, decodeEscapes);
     pattern.lastIndex = 0;
     let out = "";
@@ -214,6 +220,40 @@ function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
       if (pattern.lastIndex === match.index) pattern.lastIndex += 1;
     }
     current = out + current.slice(cursor);
+  }
+  return current;
+}
+
+/**
+ * The multipart rule: a credential-named part header, the rest of its line, its line break, an
+ * optional blank line, then a non-empty body masked to the end of the input. Equivalent to the
+ * regex `(name=["']?(?:LABEL)["']?[^\r\n]*\r?\n(?:\r?\n)?)([\s\S]+)`, but linear: when one
+ * candidate's line has no usable terminator, every later candidate on that line fails the same way,
+ * so the search resumes past the line instead of rescanning it from each candidate.
+ */
+function maskMultipartOnce(current: string, decodeEscapes: boolean, partHeader: RegExp): string {
+  const { folded, map } = foldForMatching(current, decodeEscapes);
+  partHeader.lastIndex = 0;
+  let lineEnd = -1;
+  for (let match = partHeader.exec(folded); match !== null; match = partHeader.exec(folded)) {
+    const nameEnd = match.index + match[0].length;
+    if (nameEnd > lineEnd) {
+      lineEnd = nameEnd;
+      while (lineEnd < folded.length && folded[lineEnd] !== "\r" && folded[lineEnd] !== "\n") lineEnd++;
+    }
+    let headEnd = folded[lineEnd] === "\n" ? lineEnd + 1
+      : folded[lineEnd] === "\r" && folded[lineEnd + 1] === "\n" ? lineEnd + 2 : -1;
+    if (headEnd < 0 || headEnd >= folded.length) {
+      partHeader.lastIndex = lineEnd + 1;
+      continue;
+    }
+    const blank = folded[headEnd] === "\n" ? 1 : folded[headEnd] === "\r" && folded[headEnd + 1] === "\n" ? 2 : 0;
+    if (headEnd + blank < folded.length) headEnd += blank;
+    const start = map[match.index] ?? current.length;
+    const end = map[folded.length] ?? current.length;
+    const head = current.slice(start, map[headEnd] ?? end);
+    if (!current.slice(start + head.length, end).trim()) return current;
+    return current.slice(0, start) + head + REDACTED_SECRET;
   }
   return current;
 }
