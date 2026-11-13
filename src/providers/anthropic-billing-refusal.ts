@@ -4,6 +4,10 @@ const MAX_BILLING_REFUSAL_BYTES = 8 * 1024;
 const BILLING_REFUSAL_DEADLINE_MS = 250;
 // Keep the whole-message credit-balance pattern used by anthropic-account-refusal.
 const CREDIT_BALANCE_REFUSAL = /^Your credit balance is too low to access the Anthropic API\.(?: Please go to Plans & Billing to upgrade or purchase credits\.)?$/i;
+// A Claude subscription whose included usage AND extra-usage balance are spent answers with a plain
+// HTTP 400 `invalid_request_error` and this exact sentence, not a 402/429. Without it the combo read
+// the 400 as a bad request, stopped, and never reached the lanes behind the exhausted account.
+const EXTRA_USAGE_REFUSAL = /^You(?:'|’)re out of extra usage\.(?: Add more at claude\.ai\/settings\/usage and keep going\.)?$/i;
 const BILLING_ERROR_TYPES = new Set(["invalid_request_error", "billing_error", "permission_error"]);
 const ACCOUNT_REFUSAL_CODES = new Set(["subscription_required", "insufficient_quota", "permission_denied"]);
 
@@ -19,7 +23,8 @@ export function isAnthropicBillingRefusal(status: number, payload: unknown): boo
   if (typeof error.type !== "string" || !BILLING_ERROR_TYPES.has(error.type)
     || typeof error.message !== "string" || Buffer.byteLength(error.message, "utf8") > MAX_BILLING_REFUSAL_BYTES) return false;
   if (error.code != null && (typeof error.code !== "string" || !ACCOUNT_REFUSAL_CODES.has(error.code))) return false;
-  return CREDIT_BALANCE_REFUSAL.test(error.message.trim());
+  const text = error.message.trim();
+  return CREDIT_BALANCE_REFUSAL.test(text) || EXTRA_USAGE_REFUSAL.test(text);
 }
 
 /** Bounded combo evidence after existing HTTP error formatting, before any output. */

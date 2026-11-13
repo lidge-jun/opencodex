@@ -15,6 +15,16 @@ describe("Anthropic billing refusal evidence", () => {
     });
   }
 
+  test("a spent subscription's 'out of extra usage' 400 is billing evidence", () => {
+    const extra = "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.";
+    expect(isAnthropicBillingRefusal(400, payload("invalid_request_error", extra))).toBe(true);
+    expect(isAnthropicBillingRefusal(400, payload("invalid_request_error", extra.replace("'", "’")))).toBe(true);
+    // Echoed or decorated prose is not authority, same as the credit-balance message.
+    expect(isAnthropicBillingRefusal(400, payload("invalid_request_error", `Diagnostic: ${extra}`))).toBe(false);
+    expect(isAnthropicBillingRefusal(400, payload("invalid_request_error", `${extra} Model access denied.`))).toBe(false);
+    expect(isAnthropicBillingRefusal(429, payload("invalid_request_error", extra))).toBe(false);
+  });
+
   test("unrelated statuses, codes, messages and envelopes are not evidence", () => {
     for (const status of [200, 401, 403, 429, 500]) expect(isAnthropicBillingRefusal(status, payload())).toBe(false);
     for (const type of ["authentication_error", "api_error", "rate_limit_error", "", null]) {
