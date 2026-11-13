@@ -685,18 +685,9 @@ the dashboard Codex account pool also performs. See
 
 ### Kiro request credits
 
-On tool-enabled turns, opencodex holds Kiro's ordinary text until completion is validated.
-If Kiro ends with plain text instead of its private final-answer tool, one bounded retry
-still runs, and only the resulting final answer is displayed. Progress accompanying a real
-tool call remains visible. A normal private final answer needs no completion retry.
-
-When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Claude `BIO` classifier), the request ends as a refusal that clients do not retry: Claude clients see `stop_reason: "refusal"` and Codex sees a failed response carrying Kiro's category and explanation. If the filter stops the bounded retry, no final answer is displayed; the progress held from the first attempt and any partial text from the retry are shown as commentary before the refusal.
-
-When Kiro emits credit metering, request logs preserve the reported spend as
-`usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
-token counts may still be estimated, and the credit value does not replace USD cost estimates.
-Completion fallback requests add their reported credits. An absent value means Kiro did not
-report credit usage; an explicit zero means it reported no spend.
+Kiro's completion guardrails, its safety-filter refusals and the credit metering that lands in
+request logs are covered in [Kiro request credits](/guides/kiro-request-credits/), beside how to
+price those credits in USD.
 
 ### Kiro refresh attention
 

@@ -41,6 +41,7 @@ import { getProviderRegistryEntry, providerMatchesRegistryTransport, providerMod
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import { COST4_RATE_KEYS, isValidCost4Rate, isValidPromptLengthPricing, copyPromptLengthPricing } from "../../usage/user-cost-overlays";
 import { MAX_COST4_RATE } from "../../usage/expected-prices";
+import { isValidCreditPriceBound } from "../../usage/credit-billing";
 import {
   DECLARABLE_HOSTED_TOOL_TYPES,
   declaredUnsupportedHostedTools,
@@ -472,6 +473,16 @@ export const providerConfigSchema = z.object({
 
 
 export { providerRelativeSendPathConfigError } from "../provider-relative-send-path";
+
+/**
+ * A credit price is a finite number of USD per provider credit, zero or more, and small enough
+ * that `credits x price` stays representable for any admissible credit count. Bounding the price
+ * alone is not enough — see `src/usage/credit-billing.ts` — so the bound is chosen to keep the
+ * product inside the safe range rather than merely finite.
+ */
+export function isValidCreditPriceUsd(value: unknown): value is number {
+  return isValidCreditPriceBound(value);
+}
 
 /**
  * Validate `providers.<name>.modelCosts`: a plain object keyed by exact model

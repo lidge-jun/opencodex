@@ -55,6 +55,7 @@ import {
   spendSchema,
   telemetryConfigSchema,
   chatgptDesktopConfigIssue,
+  isValidCreditPriceUsd,
 } from "./schema/leaf-validators";
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
 
@@ -424,6 +425,24 @@ export function sanitizeModelCostsForLoad(parsed: unknown, warn: (message: strin
       delete p.modelCosts;
       warn(`⚠️  config.json providers.${safeProviderName}.modelCosts has no valid rows left — removing the overlay`);
     }
+  }
+}
+
+/**
+ * Load-time degradation for `providers.<name>.creditPriceUsd`, mirroring
+ * {@link sanitizeModelCostsForLoad}: an invalid hand-edited price is dropped with a warning
+ * instead of failing the parse and falling back to defaults. The schema still rejects it on writes.
+ */
+export function sanitizeCreditPriceForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const providers = (parsed as Record<string, unknown>).providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const [name, provider] of Object.entries(providers as Record<string, unknown>)) {
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const p = provider as Record<string, unknown>;
+    if (p.creditPriceUsd === undefined || isValidCreditPriceUsd(p.creditPriceUsd)) continue;
+    delete p.creditPriceUsd;
+    warn(`⚠️  config.json providers.${JSON.stringify(redactSecretString(name))}.creditPriceUsd is invalid — ignoring the credit price`);
   }
 }
 

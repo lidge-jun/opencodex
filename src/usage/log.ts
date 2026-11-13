@@ -621,7 +621,9 @@ function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined 
     ...(typeof usage.cacheCreationInputTokens === "number" ? { cacheCreationInputTokens: usage.cacheCreationInputTokens } : {}),
     ...(typeof usage.cacheCreation1hInputTokens === "number" ? { cacheCreation1hInputTokens: usage.cacheCreation1hInputTokens } : {}),
     ...(typeof usage.reasoningOutputTokens === "number" ? { reasoningOutputTokens: usage.reasoningOutputTokens } : {}),
-    ...(isNonNegativeFiniteNumber(usage.providerCredits) ? { providerCredits: usage.providerCredits } : {}),
+    // Persist invalid readings as a JSON-safe negative sentinel, so they cannot become
+    // indistinguishable from a missing reading after serialization.
+    ...(usage.providerCredits !== undefined ? { providerCredits: isNonNegativeFiniteNumber(usage.providerCredits) ? usage.providerCredits : -1 } : {}),
     ...(usage.estimated ? { estimated: true } : {}),
   };
 }
@@ -666,7 +668,6 @@ function normalizeAttemptUsage(raw: unknown): OcxUsage | null {
     "cacheCreationInputTokens",
     "cacheCreation1hInputTokens",
     "reasoningOutputTokens",
-    "providerCredits",
   ] as const) {
     if (key in usage && !isNonNegativeFiniteNumber(usage[key])) return null;
   }

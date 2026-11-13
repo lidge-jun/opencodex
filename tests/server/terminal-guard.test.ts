@@ -793,3 +793,15 @@ describe("terminal guard lifecycle and accounting", () => {
     });
   }
 });
+
+
+test.each([[undefined, 3], [2, undefined]])("terminal guard marks missing attempt credits incomplete: %s %s", async (first, second) => {
+  const usage = (credits: number | undefined) => credits === undefined ? undefined : { inputTokens: 1, outputTokens: 1, providerCredits: credits };
+  const actual: AdapterEvent[] = [];
+  for await (const event of guardTerminalEventStream({
+    parsed: parsed("请检查这个问题并修复代码"), adapterName: "anthropic",
+    firstEvents: (async function* () { yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent; yield { type: "done", usage: usage(first) } as AdapterEvent; })(),
+    continuation: () => (async function* () { yield { type: "tool_call_start", id: "call_1", name: "exec_command" } as AdapterEvent; yield { type: "done", usage: usage(second) } as AdapterEvent; })(),
+  })) actual.push(event);
+  expect((actual.at(-1) as Extract<AdapterEvent, { type: "done" }>).usage?.providerCredits).toBe(-1);
+});

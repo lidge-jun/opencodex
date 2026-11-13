@@ -11,6 +11,7 @@ import { readUsageEntries, resetUsageReadCacheForTests } from "../../src/usage/l
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { managementFetch } from "../helpers/management-auth";
 
 const enc = new TextEncoder();
 const originalFetch = globalThis.fetch;
@@ -21,6 +22,7 @@ let previousRegion: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
+  clearRequestLogsForTests();
   previousOpenCodexHome = process.env.OPENCODEX_HOME;
   previousRegion = process.env.KIRO_REGION;
   isolatedCodexHome = installIsolatedCodexHome("ocx-kiro-completion-codex-");
@@ -90,7 +92,7 @@ function kiroConfig(baseUrl: string): OcxConfig {
   } as OcxConfig;
 }
 
-function scriptedKiroUpstream(attempts: Uint8Array[][]) {
+function scriptedKiroUpstream(attempts: Array<Uint8Array[] | Response>) {
   const requests: Array<Record<string, any>> = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -99,6 +101,7 @@ function scriptedKiroUpstream(attempts: Uint8Array[][]) {
       requests.push(await req.json() as Record<string, any>);
       const frames = attempts.shift();
       if (!frames) return new Response("unexpected extra Kiro attempt", { status: 500 });
+      if (frames instanceof Response) return frames;
       return new Response(streamOf(frames), {
         headers: { "content-type": "application/vnd.amazon.eventstream" },
       });
@@ -131,6 +134,133 @@ function anthropicEvents(sse: string): Array<{ name: string; data: Record<string
 }
 
 describe("Kiro completion through public server endpoints", () => {
+  test.each([
+    ["first missing", undefined, 0.04582331509121062],
+    ["retry missing", 0.04582331509121062, undefined],
+  ])("incomplete credit metering remains unavailable through persistence and API: %s", async (_label, first, second) => {
+    const meter = (value: number | undefined) => value === undefined ? [] : [eventFrame("meteringEvent", { unit: "credit", usage: value })];
+    const upstream = scriptedKiroUpstream([
+      [textFrame("Checking."), ...meter(first)],
+      [...completionFrames("Done."), ...meter(second)],
+    ]);
+    const config = kiroConfig(upstream.server.url.toString());
+    config.providers!["kiro-test"]!.creditPriceUsd = 1;
+    saveConfig(config);
+    const proxy = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", proxy.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "kiro-test/gpt-5.6-sol", input: "Inspect", stream: true,
+          tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(upstream.requests).toHaveLength(2);
+      const log = getRequestLogEntries().find(entry => entry.provider === "kiro-test");
+      const api = await managementFetch(new URL("/api/logs?tail=20", proxy.url));
+      expect(api.status).toBe(200);
+      const body = await api.json() as { logs: Array<{ requestId: string; displayMetrics: { cost: { kind: string } } }> };
+      expect(body.logs.find(row => row.requestId === log?.requestId)?.displayMetrics.cost.kind).toBe("unavailable");
+      expect(log?.usage?.providerCredits).toBe(-1);
+      resetUsageReadCacheForTests();
+      const persisted = readUsageEntries().find(entry => entry.requestId === log?.requestId);
+      expect(persisted?.usage?.providerCredits).toBe(-1);
+    } finally {
+      await proxy.stop(true);
+      upstream.server.stop(true);
+    }
+  });
+  test("a dispatched retry network failure leaves credit cost unavailable", async () => {
+    const upstream = scriptedKiroUpstream([[textFrame("Checking."), eventFrame("meteringEvent", { unit: "credit", usage: 2 })]]);
+    const config = kiroConfig(upstream.server.url.toString());
+    config.providers!["kiro-test"]!.creditPriceUsd = 1;
+    saveConfig(config);
+    let sends = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith(upstream.server.url.toString()) && ++sends > 1) throw new Error("synthetic network failure");
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const proxy = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", proxy.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "kiro-test/gpt-5.6-sol", input: "Inspect", stream: true,
+          tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }),
+      });
+      await response.text();
+      expect(sends).toBe(2);
+      const log = getRequestLogEntries().find(entry => entry.provider === "kiro-test");
+      resetUsageReadCacheForTests();
+      expect(readUsageEntries().find(entry => entry.requestId === log?.requestId)?.usage?.providerCredits).toBe(-1);
+      const api = await managementFetch(new URL("/api/logs?tail=20", proxy.url));
+      const body = await api.json() as { logs: Array<{ requestId: string; displayMetrics: { cost: { kind: string } } }> };
+      expect(body.logs.find(row => row.requestId === log?.requestId)?.displayMetrics.cost.kind).toBe("unavailable");
+    } finally {
+      await proxy.stop(true);
+      upstream.server.stop(true);
+    }
+  });
+  test("HTTP failure on the retry keeps credit metering incomplete through persistence and API", async () => {
+    const upstream = scriptedKiroUpstream([
+      [textFrame("Checking."), eventFrame("meteringEvent", { unit: "credit", usage: 2 })],
+      new Response("synthetic upstream failure", { status: 500 }),
+    ]);
+    const config = kiroConfig(upstream.server.url.toString());
+    config.providers!["kiro-test"]!.creditPriceUsd = 1;
+    saveConfig(config);
+    const proxy = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", proxy.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "kiro-test/gpt-5.6-sol", input: "Inspect", stream: true,
+          tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }),
+      });
+      await response.text();
+      expect(upstream.requests).toHaveLength(2);
+      const log = getRequestLogEntries().find(entry => entry.provider === "kiro-test");
+      resetUsageReadCacheForTests();
+      expect(readUsageEntries().find(entry => entry.requestId === log?.requestId)?.usage?.providerCredits).toBe(-1);
+      const api = await managementFetch(new URL("/api/logs?tail=20", proxy.url));
+      const body = await api.json() as { logs: Array<{ requestId: string; displayMetrics: { cost: { kind: string } } }> };
+      expect(body.logs.find(row => row.requestId === log?.requestId)?.displayMetrics.cost.kind).toBe("unavailable");
+    } finally {
+      await proxy.stop(true);
+      upstream.server.stop(true);
+    }
+  });
+  test.each([[0, 0, 0], [0.04582331509121062, 0, 0.04582331509121062], [0, 0.01, 0.01]])(
+    "explicit credit readings %s + %s persist as %s", async (first, second, expected) => {
+      const upstream = scriptedKiroUpstream([
+        [textFrame("Checking."), eventFrame("meteringEvent", { unit: "credit", usage: first })],
+        [...completionFrames("Done."), eventFrame("meteringEvent", { unit: "credit", usage: second })],
+      ]);
+      const config = kiroConfig(upstream.server.url.toString());
+      config.providers!["kiro-test"]!.creditPriceUsd = 1;
+      saveConfig(config);
+      const proxy = startServer(0);
+      try {
+        const response = await originalFetch(new URL("/v1/responses", proxy.url), {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "kiro-test/gpt-5.6-sol", input: "Inspect", stream: true,
+            tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }),
+        });
+        expect(response.status).toBe(200);
+        await response.text();
+        expect(upstream.requests).toHaveLength(2);
+        const log = getRequestLogEntries().find(entry => entry.provider === "kiro-test");
+        resetUsageReadCacheForTests();
+        expect(readUsageEntries().find(entry => entry.requestId === log?.requestId)?.usage?.providerCredits).toBe(expected);
+        const api = await managementFetch(new URL("/api/logs?tail=20", proxy.url));
+        const body = await api.json() as { logs: Array<{ requestId: string; displayMetrics: { cost: { kind: string; estimate: { cost: { total: number } } } } }> };
+        const cost = body.logs.find(row => row.requestId === log?.requestId)?.displayMetrics.cost;
+        expect(cost?.kind).toBe("value");
+        expect(cost?.estimate.cost.total).toBe(expected);
+      } finally {
+        await proxy.stop(true);
+        upstream.server.stop(true);
+      }
+    },
+  );
   test("/v1/responses releases only the final answer after bounded validation", async () => {
     const upstream = scriptedKiroUpstream([
       [textFrame("Checking the workspace."), eventFrame("meteringEvent", { unit: "credit", usage: 0.04582331509121062 })],

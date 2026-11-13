@@ -48,7 +48,9 @@ import {
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
   providerRelativeSendPathConfigError,
+  isValidCreditPriceUsd,
 } from "./leaf-validators";
+import { MAX_CREDIT_PRICE_USD } from "../../usage/credit-billing";
 import { isValidProviderName, hasOwnProvider } from "../provider-name";
 import {
   apiKeyTransportConfigError,
@@ -809,6 +811,14 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "minMaxOutputTokens"],
         message: minMaxOutputError,
+      });
+    }
+    const creditPrice = (provider as { creditPriceUsd?: unknown }).creditPriceUsd;
+    if (creditPrice !== undefined && !isValidCreditPriceUsd(creditPrice)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "creditPriceUsd"],
+        message: `creditPriceUsd must be a finite number between 0 and ${MAX_CREDIT_PRICE_USD}`,
       });
     }
     const defaultMaxOutputError = positiveIntegerConfigError(

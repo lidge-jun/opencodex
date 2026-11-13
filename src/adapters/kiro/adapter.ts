@@ -192,6 +192,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     assistantText,
     _sawReasoning,
     budget,
+    onDispatch,
   ) => {
     if (!requestSnapshot) throw new Error("Kiro completion retry lost its request state");
     if (requestAbortSignal?.aborted) {
@@ -258,9 +259,10 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         // And reported nothing, so the sends it paid for were invisible. Its own first send is
         // the completion retry itself: the first attempt produced progress without a final
         // answer, which is the same recovery class the generic empty-completion guard records.
-        ...(requestOnPhysicalSend
-          ? { onPhysicalSend: (send: KiroPhysicalSend) => forwardPhysicalSend(send, fallbackOrdinalBase, "empty-completion") }
-          : {}),
+        onPhysicalSend: (send: KiroPhysicalSend) => {
+          onDispatch?.();
+          if (requestOnPhysicalSend) forwardPhysicalSend(send, fallbackOrdinalBase, "empty-completion");
+        },
       });
       return {
         response,

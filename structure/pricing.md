@@ -58,6 +58,40 @@ rates, compatibility, Combo and Fast/Priority behavior.
 It also verifies Automatic Haiku overrides at 99,999/100,000/100,001 inclusive prompt tokens,
 including cache reads/writes and the inherited catalog band for both Anthropic OAuth pools.
 
+## Credit-billed providers
+
+A provider that bills credits reports a measured count instead of a token allocation, so
+`src/usage/credit-billing.ts` owns the bounds and the billing basis that `src/usage/cost.ts`
+attaches to an estimate. `providers.<name>.creditPriceUsd` is bounded to `0..1_000_000` by the
+same predicate the config schema and load degradation use; a single attempt may report at most
+`1_000_000_000` credits, and one token bucket of a priced row at most `1_000_000_000_000` tokens.
+Bounding only one factor is not enough: `1e308 x 1e308` is `Infinity`, which `JSON.stringify`
+writes as `null`.
+
+A cost estimate therefore carries an optional `billing` field. `{ source: "provider-credits",
+providerCredits, creditPriceUsd }` means the total is `providerCredits x creditPriceUsd` and the
+four token component fields carry no allocation; a Combo reports it only when every attempt shared
+one credit price, and reports `{ source: "mixed" }` when the attempts were billed differently, so
+the parent total is real but its split exists only per attempt. Absent `billing` means a token
+price, which is what every older row reports.
+
+`priorityLowerBound` follows the rate that produced each amount, and a Combo's total is a floor
+when the applicable token-priced legs are. A credit charge is exact for its configured price, so it never
+sets the marker and never vetoes one: `credits x price + >=token` is still `>=` the true total, so
+a mixed Combo keeps the floor any token leg earned. A credit leg's own catalog rate contributes
+nothing, because that rate priced neither the leg nor the total. A credits-only Combo is exact and
+reports no floor. `gui/src/pages/logs-cost-format.ts` applies the same rule to a row seeded by an
+older build or served by an older proxy, where the marker and reasons were already persisted. A
+credit-priced row whose count or price cannot produce a representable amount is unavailable with
+`credit_cost_unrepresentable` rather than falling back to a token estimate. A missing credit reading
+with no output is also unavailable because the charge is unknown. Combined attempts retain incomplete
+credit evidence when any attempt lacks a reading and another has one, including a retry HTTP failure. The empty-completion and terminal guards count sent attempts even when the whole usage object is absent; their initial accumulator is not an attempt.
+A token-priced row whose
+normalized token count exceeds the bound is `invalid_usage`.
+`tests/usage/usage-provider-credit-price.test.ts`, `tests/server/management-api-logs-metrics.test.ts`
+and `gui/tests/logs-cost-credit-billing.test.tsx` cover the bounds, the mixed aggregation and the
+rendered detail.
+
 `src/usage/user-cost-overlays.ts` copies the complete policy into its versioned registry:
 policy-only edits invalidate price memoization and usage caches; identical reloads remain stable.
 `tests/server/model-costs-pricing-cache.test.ts` exercises warmed cache invalidation and reset.
