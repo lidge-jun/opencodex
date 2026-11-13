@@ -13,6 +13,7 @@ import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { readTombstones, removeTombstone, tombstonesPath } from "../../src/link/tombstones";
 
 /**
  * O1: ocx link revoke --operation-id. Every Home-initiated revoke takes the alias lock, so a force revoke waits for a
@@ -85,6 +86,10 @@ function harness(options: { failStoreRead?: () => boolean; stopGate?: Promise<vo
     const url = new URL("http://127.0.0.1:10100/api/link/" + LINK);
     return call(url, new Request(url, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(body), ...(signal ? { signal } : {}) }));
   }
+  async function recover(body: Record<string, unknown>) {
+    const url = new URL("http://127.0.0.1:10100/api/link/recover");
+    return call(url, new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+  }
   async function reconnect() {
     const url = new URL("http://127.0.0.1:10100/api/link/" + LINK + "/reconnect");
     return call(url, new Request(url, { method: "POST" }));
@@ -99,7 +104,7 @@ function harness(options: { failStoreRead?: () => boolean; stopGate?: Promise<vo
     const response = await handleLinkRoutes(context, state);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   }
-  return { revoke, reconnect, state, ssh, config, journalPath, stops, closedSockets, suspendedAtRestart, suspendedAtHoldRelease, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
+  return { revoke, recover, reconnect, state, ssh, config, journalPath, stops, closedSockets, suspendedAtRestart, suspendedAtHoldRelease, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
@@ -1061,4 +1066,25 @@ test("a disowned receipt pins its former owner past retention, so a later failed
   expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: undefined });
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
   expect(h.suspendedAtHoldRelease).toEqual([true]);
+});
+
+test("recover waits for an unfinished removal, and a resumed forced revoke does not recreate a tombstone", async () => {
+  const h = harness();
+  const intent = join(root, "route-intent.json");
+  writeFileSync(intent, "invalid");
+  // A forced revoke of the ephemeral Child removes the record, writes its tombstone, then fails its post-commit cleanup.
+  expect((await h.revoke({ force: true })).status).toBe(503);
+  expect(h.store.links).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).not.toBeNull();
+  expect(readTombstones(tombstonesPath()).tombstones.map(t => t.linkId)).toEqual([LINK]);
+  const ssh = h.ssh.length;
+  const early = await h.recover({ linkId: LINK });
+  expect({ status: early.status, code: code(early) }).toEqual({ status: 409, code: "link_retirement_pending" });
+  expect(h.ssh.length).toBe(ssh);
+  // Had the tombstone been settled meanwhile, finishing the removal must not write a new one for the Child.
+  removeTombstone(LINK, tombstonesPath());
+  unlinkSync(intent);
+  expect((await h.revoke({ force: true })).status).toBe(200);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+  expect(readTombstones(tombstonesPath()).tombstones).toEqual([]);
 });

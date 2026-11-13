@@ -480,7 +480,9 @@ async function removeReserved(
   // A forced revoke leaves an ephemeral Child uncleaned. Its tombstone is durable before the first intent (key_revoked
   // for a force revoke) and before the tunnel stops, so ocx link recover can still reach and clean that machine;
   // without it, refuse with nothing touched.
-  const tombstoned = force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
+  // Only a forced revoke that will remove a still-listed record writes one: a resumed retirement whose record is already
+  // gone relies on the tombstone the original force wrote (#8416), and must not recreate one recover may have settled.
+  const tombstoned = force && listed && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
   // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: a later
   // ordinary revoke would otherwise leave one no recover can settle. Only that exact tombstone, and
   // only while the link still exists: another process may have committed its own forced revoke.
