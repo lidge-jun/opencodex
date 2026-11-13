@@ -143,6 +143,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`clients/claude-desktop.md`](clients/claude-desktop.md) | Claude Desktop profile ownership and config-library resolution. |
 | [`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) | Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots. |
 | [`clients/claude-desktop-model-visibility.md`](clients/claude-desktop-model-visibility.md) | Per-client selection of the rows the Claude Desktop 3P model list carries. |
+| [`clients/antigravity-gateway.md`](clients/antigravity-gateway.md) | One-click connect and disconnect of the Antigravity app and agy CLI to the OpenCodex gateway: files written, stash and restore, override precedence, refusal rules. |
 | [`clients/hermes.md`](clients/hermes.md) | Hermes profile discovery, per-profile selection, ownership stores, and boundaries. |
 | [`clients/qoder.md`](clients/qoder.md) | Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules. |
 | [`clients/client-support-matrix.md`](clients/client-support-matrix.md) | Generated client support page: registry sources, curated protocol and test claims, drift checks. |
@@ -259,6 +260,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/codex-provider.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/cli/desktop-runtime-guidance.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/cli/ensure-desktop-cold-start.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `src/cli/gateway-client-command.ts` | [`clients/antigravity-gateway.md`](clients/antigravity-gateway.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/link-child-ops.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/link-local-control.ts` | [`remote-link.md`](remote-link.md) |
@@ -355,6 +357,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/images/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
 | `src/index.ts` | [`runtime.md`](runtime.md) |
 | `src/integrations/` | [`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`clients/t3code.md`](clients/t3code.md) |
+| `src/integrations/gateway-clients/` | [`clients/antigravity-gateway.md`](clients/antigravity-gateway.md) |
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/lib/abort.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
@@ -472,6 +475,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/codex-cli-update-routes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
 | `src/server/management/consent-session.ts` | [`telemetry.md`](telemetry.md) |
+| `src/server/management/gateway-client-routes.ts` | [`clients/antigravity-gateway.md`](clients/antigravity-gateway.md) |
 | `src/server/management/link-child-ops-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/link-enrollment.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/link-recover-route.ts` | [`remote-link.md`](remote-link.md) |

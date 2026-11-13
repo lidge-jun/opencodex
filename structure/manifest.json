@@ -1148,6 +1148,17 @@
       ]
     },
     {
+      "path": "clients/antigravity-gateway.md",
+      "tier": 5,
+      "title": "Antigravity Gateway Connect",
+      "scope": "One-click connect and disconnect of the Antigravity app and agy CLI to the OpenCodex gateway: files written, stash and restore, override precedence, refusal rules.",
+      "documents": [
+        "src/integrations/gateway-clients/",
+        "src/server/management/gateway-client-routes.ts",
+        "src/cli/gateway-client-command.ts"
+      ]
+    },
+    {
       "path": "clients/hermes.md",
       "tier": 5,
       "title": "Hermes Profiles",
