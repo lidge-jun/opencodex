@@ -842,7 +842,12 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     else expect(["child_link_mismatch", "child_residual", "child_disconnect_pending"]).not.toContain(body.error?.hint);
     // A remedy never sends the operator to disconnect a machine another link owns (#8662 review P2-1).
     expect(body.error?.message ?? "").not.toContain("joined this Home by itself");
-    if (hint === "child_link_mismatch") expect(body.error?.message).toContain("Do not disconnect it there");
+    if (hint === "child_link_mismatch") {
+      expect(body.error?.message).toContain("Do not disconnect it there");
+      // Nothing may be in progress (an unreadable rollback, a dead rotation): a repeat of the same answer ends in --force.
+      expect(body.error?.message).toContain("a connect or key rotation of it may be in progress");
+      expect(body.error?.message).toContain("if the same answer comes back, revoke this link with --force once any enrollment of this link has finished");
+    }
     expect(body.outcome).toBe(outcome);
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
   });
