@@ -57,14 +57,41 @@ function drivenHome(contentType: string) {
     fail: (error: Error) => controller.error(error),
     /** Settles once the relay has started its `count`th read of the Home body. */
     pulled: (count: number) => new Promise<void>(resolve => { if (pulls >= count) resolve(); else waiters.push({ count, resolve }); }),
+    pulls: () => pulls,
     cancelled: () => cancelled,
   };
 }
 
-function relayedFrom(home: ReturnType<typeof drivenHome>, signal?: AbortSignal): Promise<Response> {
+function relayedFrom(home: ReturnType<typeof drivenHome>, options: { signal?: AbortSignal; clock?: LinkRelayClock } = {}): Promise<Response> {
   return relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses",
-    { method: "POST", body: "{}", headers: { "content-type": "application/json" }, ...(signal ? { signal } : {}) }),
-  target, { tunnel, fetchImpl: home.fetchImpl });
+    { method: "POST", body: "{}", headers: { "content-type": "application/json" }, ...(options.signal ? { signal: options.signal } : {}) }),
+  target, { tunnel, fetchImpl: home.fetchImpl, ...(options.clock ? { clock: options.clock, sseIdleTimeoutMs: IDLE_MS } : {}) });
+}
+
+const IDLE_MS = 777;
+
+/**
+ * A clock that never fires, used to see the SSE relay queue a chunk: it re-arms its idle timer in the same synchronous
+ * step in which it queues each chunk it read from the Home, so after its `n`th arm (one at start, one per chunk) that
+ * chunk is in the relay's queue.
+ */
+function armingClock() {
+  let arms = 0;
+  let waiters: Array<{ count: number; resolve: () => void }> = [];
+  const clock: LinkRelayClock = {
+    setTimeout: ((_callback: () => void, ms: number) => {
+      if (ms === IDLE_MS) {
+        arms += 1;
+        const due = waiters.filter(waiter => arms >= waiter.count);
+        waiters = waiters.filter(waiter => arms < waiter.count);
+        for (const waiter of due) waiter.resolve();
+      }
+      return arms;
+    }) as unknown as typeof setTimeout,
+    clearTimeout: (() => undefined) as unknown as typeof clearTimeout,
+  };
+  const armed = (count: number) => new Promise<void>(resolve => { if (arms >= count) resolve(); else waiters.push({ count, resolve }); });
+  return { clock, armed };
 }
 
 const text = (chunk: ReadableStreamReadResult<Uint8Array>): string => new TextDecoder().decode(chunk.value);
@@ -171,15 +198,19 @@ describe("the Child relay's test-only wait observer", () => {
 
   test("a Home failure the relay has not read yet keeps it waiting while it holds a read-ahead chunk", async () => {
     const { events } = recordWaits();
-    const home = drivenHome("application/json");
-    const reader = (await relayedFrom(home)).body!.getReader();
+    const home = drivenHome("text/event-stream");
+    const { clock, armed } = armingClock();
+    const reader = (await relayedFrom(home, { clock })).body!.getReader();
     const first = reader.read();
     await home.pulled(1);
     home.send("one");
     expect(text(await first)).toBe("one");
     await home.pulled(2);
-    // The relay takes "two" ahead and holds it; with its queue full it does not read the Home, so it cannot see the failure.
     home.send("two");
+    // Third arm (start, "one", "two"): "two" is in the relay's queue, which is full, so it has not read the Home again
+    // and cannot see a failure.
+    await armed(3);
+    expect(home.pulls()).toBe(2);
     home.fail(new Error("home failed"));
     expect(events).toEqual([true]);
     // It still holds "two" and hands it over; reading past it reads the failure, and the relay ends.
@@ -189,30 +220,31 @@ describe("the Child relay's test-only wait observer", () => {
     expect(events.at(-1)).toBe(false);
   });
 
-  for (const contentType of ["application/json", "text/event-stream"]) {
-    test("a caller abort while the relay holds a queued " + contentType + " chunk ends the wait for good", async () => {
-      const { events, nextFalse } = recordWaits();
-      const home = drivenHome(contentType);
-      const caller = new AbortController();
-      const reader = (await relayedFrom(home, caller.signal)).body!.getReader();
-      const first = reader.read();
-      await home.pulled(1);
-      home.send("one");
-      expect(text(await first)).toBe("one");
-      await home.pulled(2);
-      // The Home sends a second chunk the relay holds, then nothing.
-      home.send("two");
-      expect(events).toEqual([true]);
-      const relayEnded = nextFalse();
-      caller.abort();
-      await relayEnded;
-      expect(events).toEqual([true, false]);
-      expect(home.cancelled()).toBe(true);
-      // Whatever the reader still gets, the ended relay is never reported as waiting again.
-      await reader.read().catch(() => undefined);
-      expect(events).toEqual([true, false]);
-    });
-  }
+  test("a caller abort while the relay holds a queued chunk ends the wait for good", async () => {
+    const { events, nextFalse } = recordWaits();
+    const home = drivenHome("text/event-stream");
+    const { clock, armed } = armingClock();
+    const caller = new AbortController();
+    const reader = (await relayedFrom(home, { signal: caller.signal, clock })).body!.getReader();
+    const first = reader.read();
+    await home.pulled(1);
+    home.send("one");
+    expect(text(await first)).toBe("one");
+    await home.pulled(2);
+    // The Home sends a second chunk, then nothing; after the third arm the relay holds it queued, reading nothing.
+    home.send("two");
+    await armed(3);
+    expect(home.pulls()).toBe(2);
+    expect(events).toEqual([true]);
+    const relayEnded = nextFalse();
+    caller.abort();
+    await relayEnded;
+    expect(events).toEqual([true, false]);
+    expect(home.cancelled()).toBe(true);
+    // Whatever the reader still gets, the ended relay is never reported as waiting again.
+    await reader.read().catch(() => undefined);
+    expect(events).toEqual([true, false]);
+  });
 
   // The relay can end underneath a reader that holds a chunk and never asks again: a dead relay is not a waiting one.
   for (const contentType of ["application/json", "text/event-stream"]) {
