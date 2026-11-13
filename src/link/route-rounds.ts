@@ -28,7 +28,9 @@ export const ROUTE_PROBE_MS = 10_000;
  * A candidate's budget, twice: from its spawn to the grant of its remote listener, and then from that
  * grant to its proven readiness (discovery, health and every trigger). A slow route that spends most
  * of the first budget on the ssh handshake still has the whole second one for its readiness execs.
- * Not measured on a real slow route; the bound for one candidate is 2 x READY_PROOF_MS.
+ * Not measured on a real slow route. A candidate's readiness deadline is at most 2 x READY_PROOF_MS
+ * after its spawn; the supervisor tick after that deadline stops it (SIGTERM, then SIGKILL after
+ * CANDIDATE_KILL_GRACE_MS).
  */
 export const READY_PROOF_MS = 30_000;
 /** One correlated trigger at most. */
@@ -281,8 +283,8 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
 
   /**
    * Until the grant: READY_PROOF_MS from spawn. After it: READY_PROOF_MS from the grant, and a grant
-   * seen after that first deadline (before the next tick stopped the candidate) counts from it, so a
-   * candidate never lives past 2 x READY_PROOF_MS.
+   * seen after that first deadline (before the next tick stopped the candidate) counts from it, so the
+   * deadline is never later than spawn + 2 x READY_PROOF_MS.
    */
   const readinessDeadline = (phase: Extract<Phase, { kind: "candidate" }>): number =>
     (phase.grantedAt === undefined ? phase.spawnedAt : Math.min(phase.grantedAt, phase.spawnedAt + READY_PROOF_MS)) + READY_PROOF_MS;
