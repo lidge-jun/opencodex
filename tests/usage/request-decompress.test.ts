@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { deflateRawSync, deflateSync } from "node:zlib";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import {
+  attachParsedRequestBody,
   DecompressedBodyTooLargeError,
   decodeRequestBody,
   describeInboundBodyRefusal,
@@ -10,6 +11,7 @@ import {
   MIN_CONFIGURABLE_INBOUND_BODY_BYTES,
   readBoundedJsonRequestBody,
   readJsonRequestBody,
+  takeParsedRequestBody,
   resolveInboundBodyLimitBytes,
   UnsupportedContentEncodingError,
 } from "../../src/server/request-decompress";
@@ -656,5 +658,20 @@ describe("serializedJsonByteLength", () => {
     expect(serializedJsonByteLength(wide)).toBe(Buffer.byteLength(JSON.stringify(wide), "utf8"));
     const mixed = JSON.parse(JSON.stringify({ a: Array.from({ length: 50_000 }, (_, i) => ({ [`k${i}`]: [i, "é", null] })) }));
     expect(serializedJsonByteLength(mixed)).toBe(Buffer.byteLength(JSON.stringify(mixed), "utf8"));
+  });
+});
+
+describe("a parsed body bound to its own request (#8600)", () => {
+  test("goes only with that request, once; a request built from it, as a policy fallback or a compaction recovery builds one, reads its own body", async () => {
+    const original = new Request("http://127.0.0.1/v1/responses", { method: "POST", headers: { "content-type": "application/json" } });
+    const parsed = { model: "a/m", input: "hi" };
+    attachParsedRequestBody(original, parsed);
+    // How policy-fallback.ts and compaction-recovery.ts build their next request: a new Request from the old one's URL and headers.
+    const headers = new Headers(original.headers);
+    const child = new Request(original.url, { method: "POST", headers, body: JSON.stringify({ ...parsed, model: "b/m" }), signal: original.signal });
+    expect(takeParsedRequestBody(child)).toBeUndefined();
+    expect(await child.json()).toEqual({ model: "b/m", input: "hi" });
+    expect(takeParsedRequestBody(original)).toEqual({ body: parsed });
+    expect(takeParsedRequestBody(original)).toBeUndefined();
   });
 });

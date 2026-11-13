@@ -2,12 +2,13 @@ import { createInterface } from "node:readline/promises";
 import { plantUnavailableGuidance } from "../link/child-binary-source";
 import { assertSshAlias } from "../link/ssh-argv";
 import { checkExplicitRoute, type ExplicitRoute } from "../link/explicit-route";
+import { OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED } from "../link/operations-journal";
 import { CliUsageError, RuntimeApiError, runtimeBaseUrl, rejectArgs, takeFlag, takeJsonFlag, takeOption, printData } from "./runtime-api";
 import type { LinkCliDeps } from "./link";
 
 const FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{16,88}={0,2}$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]{1,128})?$/;
-const ENROLLMENT_DEADLINE_MS = 360_000;
+export const ENROLLMENT_DEADLINE_MS = 360_000;
 const PHASES: Record<string, string> = {
   remote_port_failed: "remote port selection", remote_port_timeout: "remote port selection",
   remote_plant_failed: "remote ocx-child planting", remote_plant_timeout: "remote ocx-child planting",
@@ -30,6 +31,10 @@ const HOME_CLEANUP: Record<string, string> = {
   link_cleanup_uncertain: "Enrollment did not complete, and the Home could not undo the attempt: whether the link is stored is unknown and its issued key could not be revoked. Run ocx link status, remove the link if it is listed (ocx link revoke), and revoke the leftover link key under API keys if it remains.",
 };
 const CHILD_MAY_BE_CONNECTED = "The Child may still be connected.";
+// A residual step can be read long after the attempt: the Child may have joined another link since, which the step would remove.
+// A live failure answer carries no link id, so the operator cannot tell this attempt's link from another's by id.
+const CHILD_OWNERSHIP_CHECK = "Before the next step, check the Child with ocx connect status (ocx-child connect status --json on a lightweight Child). "
+  + "This attempt's link id is not shown, so treat any link you do not recognise as another's: if the Child shows such a link, a hub or another Home, leave it as it is and skip the next step.";
 // A journalled answer names the Child's residual as a closed word; a replay never probed, so it cannot infer one.
 const RECOVERY_BY_KIND: Record<string, string> = {
   plant: "Run the planted ocx-child's managed copy with detach --purge on the Child before retrying: ~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux; "
@@ -41,9 +46,12 @@ const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const OPERATION_REFUSALS: Record<string, string> = {
   operation_mismatch: "This operation id was already used with other parameters; use a new operation id.",
   link_operation_open: "An unfinished enrollment holds this alias; repeat it with its own operation id to settle it first.",
-  link_operation_in_progress: "Another enrollment or revoke of this alias is running; retry when it ends.",
-  full_install_present: "A full OpenCodex install is on the Child; --require-ephemeral refused it before any change.",
-  full_install_census_failed: "The Child could not be checked for a full OpenCodex install; nothing was changed.",
+  // The same 409 answers a concurrent probe, confirmation, route edit, enrollment or revoke of the alias.
+  link_operation_in_progress: "Another link operation for this alias is running; retry when it ends.",
+  // The census runs inside the apply before any plant, key or Child change; with --operation-id the apply still records its
+  // entry, and confirm-host already wrote the known_hosts pin, so these name only what the apply left alone.
+  full_install_present: "A full OpenCodex install is on the Child; --require-ephemeral refused it before the apply changed the Child, a key or a link.",
+  full_install_census_failed: "The Child could not be checked for a full OpenCodex install; the apply changed no key, link or Child file.",
   require_ephemeral_unsupported: "--require-ephemeral is not supported for a Windows Child.",
 };
 
@@ -51,6 +59,21 @@ const OPERATION_REFUSALS: Record<string, string> = {
 function operationNote(error: unknown, operationId: string | undefined): string {
   if (operationId === undefined || !(error instanceof RuntimeApiError) || !record(error.body)) return "";
   return error.body.operationId === operationId && typeof error.body.outcome === "string" ? " (operation " + operationId + ": " + error.body.outcome + ")" : "";
+}
+
+/**
+ * The CLI's own text for 409 operation_journal_full, picked by the closed bound field (an older Home sends none). Never
+ * the server's message; the code and the bound ride along for scripts. The refusal comes before the entry is written; for
+ * an add, confirm-host already wrote the known_hosts pin, so only the apply changed nothing.
+ */
+export function journalFullGuidance(body: unknown, kind: "add" | "revoke"): string {
+  const bound = record(body) && (body.bound === "unsettled" || body.bound === "recent") ? body.bound : undefined;
+  const text = bound === "unsettled"
+    ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " open or unresolved operations. Check the Child of each residual or unknown one, then run ocx link operations resolve --operation-id <id> --yes; repeat an open one with its operation id first. ocx link operations lists them."
+    : bound === "recent"
+      ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " operations that settled within the last 2 hours and three minutes; retry once the oldest of them is older than that."
+      : "The link operation journal is full; ocx link operations lists its entries.";
+  return text + (kind === "add" ? " The apply changed nothing." : " Nothing was changed.") + " (code operation_journal_full)" + (bound ? " (bound " + bound + ")" : "");
 }
 type LinkRequest = <T>(path: string, init: RequestInit, deps: LinkCliDeps) => Promise<T>;
 
@@ -221,7 +244,10 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
   const applied = (result: unknown, planted: boolean): void => {
     const keys = record(result) ? Object.keys(result).sort().join(",") : "";
     const shaped = operationId === undefined ? keys === "linkId"
-      : keys === "linkId,operationId,outcome" && record(result) && result.operationId === operationId && result.outcome === "committed";
+      : (keys === "linkId,operationId,outcome" || (keys === "linkId,operationId,outcome,planted" && record(result) && result.planted === true))
+        && record(result) && result.operationId === operationId && result.outcome === "committed";
+    // A replay never probed, so only the journalled answer can say the Child was planted.
+    planted = planted || (record(result) && result.planted === true);
     if (!shaped || !record(result) || typeof result.linkId !== "string" || !/^lnk_[0-9a-f]{16}$/.test(result.linkId)) throw new Error("Invalid link apply response");
     printData({ linkId: result.linkId, alias, state: "connected", childRole: "client", ...(planted ? { planted: true } : {}), ...(routeBody.exclusive ? { exclusive: true } : {}),
       ...(operationId !== undefined ? { operationId, outcome: "committed" } : {}) }, wantsJson, ["Connected " + alias + " as a Child (" + result.linkId + ")."]);
@@ -302,7 +328,7 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       const homeCleanup = typeof code === "string" && Object.hasOwn(HOME_CLEANUP, code) ? HOME_CLEANUP[code] : undefined;
       if (homeCleanup) {
         const kindRecovery = typeof error.body.residualKind === "string" ? RECOVERY_BY_KIND[error.body.residualKind] : undefined;
-        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + (kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL)) : "";
+        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + CHILD_OWNERSHIP_CHECK + " " + (kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL)) : "";
         throw new Error(homeCleanup + childStep + " (code " + code + ")");
       }
       const phase = typeof code === "string" && Object.hasOwn(PHASES, code) ? PHASES[code] : undefined;
@@ -314,7 +340,9 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       const recovery = kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL);
       // The machine-readable code rides along so a script can branch without parsing prose.
       const codeSuffix = (phase || note) && typeof code === "string" ? " (code " + code + ")" : "";
-      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : "") + codeSuffix);
+      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + CHILD_OWNERSHIP_CHECK + " " + recovery : "") + codeSuffix);
+      // Keeps the 409 (exit 5) a full journal always gave.
+      if (code === "operation_journal_full") throw new RuntimeApiError(journalFullGuidance(error.body, "add"), error.status, error.body);
       if (typeof code === "string" && Object.hasOwn(OPERATION_REFUSALS, code)) throw new Error(OPERATION_REFUSALS[code] + " (code " + code + ")");
       if (note && typeof code === "string") throw new Error(error.message + " (code " + code + ")");
     }

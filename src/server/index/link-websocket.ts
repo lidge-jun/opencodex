@@ -9,6 +9,7 @@ import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { classifyUsageClient } from "../../usage/client";
 import type { LinkActivity, LinkSocketActivity } from "../../link/child-activity";
 import type { ActivityHolds, FingerprintMark, StoredMark } from "../../link/ws-activity-holds";
+import type { LinkTrafficBook } from "../../link/traffic";
 import type { LinkWsCloseReason, LinkWsCounters, LinkWsRefusal } from "../../link/status-projection";
 import type { LinkTurnObserver } from "../link-turn";
 import { resultKeysOf } from "../../codex/websocket-activity";
@@ -125,6 +126,12 @@ export interface LinkWebsocketGateDeps {
   activity?: LinkActivity;
   /** Durable holds: a busy close leaves one, and the crash fence is armed before the first upgrade. */
   holds?: ActivityHolds;
+  /**
+   * The Home's per-link traffic book (the HTTP relay's): each link socket is one request in it, counted from open to close
+   * in the Child's units (message payload bytes each way); complete when any close frame ended it, where the Child also
+   * counts its own overload, binary and protocol closes as incomplete.
+   */
+  traffic?: LinkTrafficBook;
 }
 
 /** What the gate keeps per open link socket. */
@@ -512,6 +519,7 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
           const owed = pending.get(link) ?? null;
           pending.delete(link);
           track(ws, link.linkId);
+          link.traffic = deps.traffic?.begin(link.linkId);
           base.open?.(ws);
           const state: SocketState = {
             openedAt: now(), idleSince: null, drainingSince: null, closeAfterTurn: false,
@@ -587,6 +595,8 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
         },
         message(ws, raw) {
           const link = ws.data.link;
+          // Every message that reached the Home counts, as the Child counts every write that completed, fenced or not.
+          link?.traffic?.toHome(typeof raw === "string" ? Buffer.byteLength(raw) : raw.byteLength);
           if (!link || link.fenced) return;
           // S3: every message, of any type, before the shared handler can admit a turn.
           if (!authorized(link)) { fence(ws, LINK_WS_REVOKED_CLOSE); return; }
@@ -620,6 +630,8 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
               const entry = tally(link.linkId, false);
               const why: LinkWsCloseReason = fencedBy.get(link) ?? (code === 1000 || code === 1001 ? "client" : code === 1006 ? "dropped" : "other");
               if (entry) entry.closes[why] = (entry.closes[why] ?? 0) + 1;
+              // Complete when a close ended it, from either side; a socket dropped without one (1006, 1015) is incomplete.
+              try { link.traffic?.end(code !== 1006 && code !== 1015); } catch { /* accounting never keeps a lease */ }
               link.leases.closed();
             }
           }
@@ -678,4 +690,3 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
 }
 
 export type LinkWebsocketGate = ReturnType<typeof createLinkWebsocketGate>;
-

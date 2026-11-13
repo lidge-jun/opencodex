@@ -47,20 +47,26 @@ export function childLinkMarkerPath(configDir?: string): string {
   return join(linkDir(configDir), "child-initiated.json");
 }
 
-/** True when the marker names `linkId`, or when a marker exists but cannot be read. */
-export function isChildInitiatedLink(linkId: string, path: string = childLinkMarkerPath()): boolean {
+/** The Child-initiated marker: absent, naming a link, or present but unreadable. */
+export function readChildLinkMarker(path: string = childLinkMarkerPath()): { kind: "absent" } | { kind: "link"; linkId: string } | { kind: "unreadable" } {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch (error) {
-    return !isMissingPathError(error);
+    return isMissingPathError(error) ? { kind: "absent" } : { kind: "unreadable" };
   }
   try {
     const raw = JSON.parse(text) as { linkId?: unknown };
-    return typeof raw?.linkId !== "string" || raw.linkId === linkId;
+    return typeof raw?.linkId === "string" ? { kind: "link", linkId: raw.linkId } : { kind: "unreadable" };
   } catch {
-    return true;
+    return { kind: "unreadable" };
   }
+}
+
+/** True when the marker names `linkId`, or when a marker exists but cannot be read. */
+export function isChildInitiatedLink(linkId: string, path: string = childLinkMarkerPath()): boolean {
+  const marker = readChildLinkMarker(path);
+  return marker.kind === "unreadable" || (marker.kind === "link" && marker.linkId === linkId);
 }
 
 /**

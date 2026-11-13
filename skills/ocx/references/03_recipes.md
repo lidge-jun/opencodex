@@ -1075,8 +1075,9 @@ ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
 The link ID is fictional; use the selected actual ID. A successful forced revoke
 reports `remoteCleanup:"skipped"`, derived from force intent. Idempotent not-found
 reports `remoteCleanup:"unverified"`; neither proves a remote disconnect attempt.
-Both can exit 0. Follow the receipt's `ocx disconnect` recovery on the remote
-client when authorized. `--force` requires `--yes`; `--yes` alone is invalid.
+Both can exit 0. Follow the receipt's recovery when authorized: for a full Child,
+`ocx disconnect` there only if `ocx connect status --json` shows this link's id or
+no connection; for a lightweight Child, `ocx link recover --link-id <id>` on the Home. `--force` requires `--yes`; `--yes` alone is invalid.
 Ordinary revoke remains unchanged.
 
 ## 25. Follow observed windows without claiming lossless history

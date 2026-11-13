@@ -480,7 +480,7 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
   });
 
 const safeTeardown: UninstallObservation = {
-  serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: false,
+  serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: true,
 };
 const cleanupOwner = {
   serverUrl: "https://hub.example", apiKeyId: "fixture-client", connectedAt: "2026-09-06T00:00:00.000Z",

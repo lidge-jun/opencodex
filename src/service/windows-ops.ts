@@ -61,11 +61,14 @@ export function winswListenPort(deps: { readXml?: () => string } = {}): number |
  * over, since before #2107 these files had no hardening at all and a failure here would
  * regress a user who has no credential to protect.
  */
-export function writeServiceDefinitionFile(path: string, content: string, encoding: "utf8" | "utf16le"): void {
-  writeFileSync(path, content, { encoding, mode: 0o600 });
+/** Bytes are written as they are: a restored snapshot must not be re-encoded through `encoding`. */
+export function writeServiceDefinitionFile(path: string, content: string | Buffer, encoding: "utf8" | "utf16le"): void {
+  if (typeof content === "string") writeFileSync(path, content, { encoding, mode: 0o600 });
+  else writeFileSync(path, content, { mode: 0o600 });
   try { chmodSync(path, 0o600); } catch { /* superseded by the Windows ACL below */ }
   if (process.platform === "win32") {
-    hardenSecretPath(path, { required: definitionCarriesCredential(content) });
+    const text = typeof content === "string" ? content : content.toString(encoding);
+    hardenSecretPath(path, { required: definitionCarriesCredential(text) });
   }
 }
 
@@ -121,6 +124,38 @@ export function writeWindowsSchedulerAssets(runtime: DurableBunRuntime = durable
     buildWindowsTaskXmlDocument(script, windowsLauncherVbsPath()),
     "utf16le",
   );
+}
+
+/**
+ * The on-disk scheduler assets as they are now, so a failed rewrite can put back what the
+ * registered task already runs. The returned restore rewrites only assets whose bytes changed
+ * (one that failed to write is still intact) and removes one that did not exist before.
+ */
+export function snapshotWindowsSchedulerAssets(): () => void {
+  const assets = [
+    { path: windowsServiceScriptPath(), encoding: "utf8" as const },
+    { path: windowsLauncherVbsPath(), encoding: "utf16le" as const },
+    { path: windowsTaskXmlPath(), encoding: "utf16le" as const },
+  ].map(asset => {
+    try { return { ...asset, bytes: readFileSync(asset.path) as Buffer | null }; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...asset, bytes: null };
+      throw error;
+    }
+  });
+  return () => {
+    for (const asset of assets) {
+      let current: Buffer | null;
+      try { current = readFileSync(asset.path); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        current = null;
+      }
+      if (asset.bytes === null) { if (current !== null) unlinkSync(asset.path); continue; }
+      if (current !== null && current.equals(asset.bytes)) continue;
+      writeServiceDefinitionFile(asset.path, asset.bytes, asset.encoding);
+    }
+  };
 }
 
 const WINDOWS_SCHEDULER_STAGE_PREFIX = "opencodex-service-stage-";

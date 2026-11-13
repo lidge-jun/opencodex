@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import { EXPORT_CLIENT_IDS } from "../../clients/client-ids";
 import { accountAutoPausePolicySchema, accountPauseDetailsSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { join } from "node:path";
@@ -990,7 +991,7 @@ export const remoteGuiConfigSchema = z.object({
   allowInsecureHttp: z.boolean().optional(),
 }).strict();
 
-const connectedClientIdSchema = z.enum(["codex", "claude"]);
+const connectedClientIdSchema = z.enum(["codex", "claude", "claude-desktop", "grok", ...EXPORT_CLIENT_IDS]);
 const clientTimestampSchema = z.string().datetime({ offset: true });
 const clientTransportSchema = z.enum(["hub", "link"]);
 const linkTransportSchema = z.object({
@@ -1013,7 +1014,7 @@ export const clientConnectionSchema = z.object({
   managementTransport: z.enum(["direct", "relay"]),
   transport: clientTransportSchema.optional(),
   link: linkTransportSchema.optional(),
-  selectedClients: z.array(connectedClientIdSchema).min(1).max(2).superRefine((clients, ctx) => {
+  selectedClients: z.array(connectedClientIdSchema).superRefine((clients, ctx) => {
     if (new Set(clients).size !== clients.length) {
       ctx.addIssue({ code: "custom", message: "must contain unique client ids" });
     }

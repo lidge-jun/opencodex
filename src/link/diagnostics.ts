@@ -17,8 +17,8 @@ export type LinkDiagnosticRecord = {
     | "connected" | "spawned" | "stopped" | "auth" | "hostkey" | "forward" | "remote_forward_conflict"
     | "timeout" | "network" | "unknown" | "spawn_failed" | "listener_unavailable"
     // link_ws_fallback and link_ws_close reasons.
-    | "origin" | "credential" | "cap" | "memory" | "tunnel_failed" | "tunnel_connecting_timeout" | "preflight"
-    | "not_advertised" | "home_refused" | "handshake" | "aborted"
+    | "local_optout" | "origin" | "credential" | "cap" | "memory" | "tunnel_failed" | "tunnel_connecting_timeout" | "preflight"
+    | "not_advertised" | "home_refused" | "handshake" | "aborted" | "draining"
     | "client" | "home" | "home_dropped" | "binary" | "protocol" | "overload";
   requestId?: string;
   checkId?: string;
@@ -38,8 +38,8 @@ const OUTCOMES = new Set([
   "identity_mismatch", "auth_timeout", "auth_failed", "transport_error", "client_abort", "header_timeout", "recovered",
   "connected", "spawned", "stopped", "auth", "hostkey", "forward", "remote_forward_conflict", "timeout", "network",
   "unknown", "spawn_failed", "listener_unavailable",
-  "origin", "credential", "cap", "memory", "tunnel_failed", "tunnel_connecting_timeout", "preflight",
-  "not_advertised", "home_refused", "handshake", "aborted",
+  "local_optout", "origin", "credential", "cap", "memory", "tunnel_failed", "tunnel_connecting_timeout", "preflight",
+  "not_advertised", "home_refused", "handshake", "aborted", "draining",
   "client", "home", "home_dropped", "binary", "protocol", "overload",
 ]);
 const STATES = new Set<TunnelState["kind"]>(["idle", "connecting", "connected", "reconnecting", "failed"]);

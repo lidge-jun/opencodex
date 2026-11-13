@@ -170,6 +170,8 @@ export interface ManagementApiDeps {
   linkOperationsPath?: () => string;
   /** The per-alias lock (src/link/alias-lock.ts): directory, clock, sleep and wait bound. */
   linkAliasLock?: import("../../link/alias-lock").AliasLockDeps;
+  /** Called before an operation's effect mark is written; a throw stands for a failed journal write (tests). */
+  linkOperationMarkHook?: (effect: string, phase: "intent" | "done") => void;
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
   resolveChildBinarySource?: typeof import("../../link/child-binary-source").resolveChildBinarySource;

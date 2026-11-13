@@ -1,3 +1,4 @@
+import { seedRouteDeviceClients } from "../../routing/home-route-intent";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +17,8 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
-import { enrollOperationDigest, journalInUse, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { enrollOperationDigest, journalInUse, journalOpenFailure, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { tombstoneNamesAlias } from "../../link/tombstones";
 import { isOperationId } from "../../link/operations-journal";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
@@ -258,11 +260,14 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     return fail("invalid_body", "alias and optional fingerprint/plant are required.", 400);
   }
   const alias = body.alias;
+  // A repeat replays without probing, so the fingerprint is what names the operation (the CLI requires it too).
+  if (body.operationId !== undefined && typeof body.fingerprint !== "string") return fail("invalid_body", "operationId requires fingerprint.", 400);
   const resolveBinary = ctx.deps.resolveChildBinarySource ?? resolveChildBinarySource;
   // ocx link add --operation-id (structure/remote-link.md, "Operation journal"): replay, recovery and the reserved ids.
   const operation = typeof body.operationId === "string" ? { id: body.operationId, digest: enrollOperationDigest({ alias,
     ...(typeof body.fingerprint === "string" ? { fingerprint: body.fingerprint } : {}), route: wanted, requireEphemeral: body.requireEphemeral === true }) } : null;
-  return underAliasLock(ctx, alias, operation !== null || journalInUse(ctx), async () => {
+  // A tombstone for this alias means recover can run against the machine; it holds the alias lock, so this does too.
+  return underAliasLock(ctx, alias, operation !== null || journalInUse(ctx) || tombstoneNamesAlias(alias), async () => {
   if (operation) {
     const replay = await replayOperation(ctx, state, operation, "enroll");
     if (replay) return replay;
@@ -282,8 +287,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     }
     let journal: EnrollJournal = NO_ENROLL_JOURNAL;
     if (operation) {
-      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch {
-        return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch (error) {
+        return journalOpenFailure(error);
       }
     }
     return journal.finish(await (async (): Promise<Response> => {
@@ -442,6 +447,9 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
             ? fail("trust_file_unexpected", "The link known_hosts file has a pattern, host-list, marker or malformed line; remove that line, then probe and confirm the host again.", 409)
             : fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409));
       }
+      // An ephemeral ocx-child never reads route intent, so its enrollment saves none: seeding would
+      // also start ocx sync applying route intent to every Home client.
+      if (!ephemeralChild) withConfigMutationLockSync(() => seedRouteDeviceClients(ctx.config, ctx.version, id, undefined, readStoreFor(ctx).links.map(link => link.id)));
       journal.done("link_recorded");
       await state.listener.ensureStarted();
       if (state.listener.status().state !== "listening") return await failed(fail("listener_unavailable", "The link listener is unavailable.", 503));
