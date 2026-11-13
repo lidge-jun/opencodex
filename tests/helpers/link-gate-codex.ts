@@ -15,12 +15,14 @@ import { removeTreeWithRetry } from "./remove-tree";
 
 // OCX_LINK_GATE_CODEX is resolved once to an executable file and copied read-only into a scratch directory; that copy is
 // what is hashed and what every scenario spawns, by absolute path (tests/helpers/link-gate-binary.ts).
-// The scratch copy is removed after each file that drives it (removePinnedCodexCopy from afterAll), and at once when the
-// value is refused or preparing it throws. The fixture is read first, so a fixture error never leaves a copy behind.
+// The copy belongs to the process, not to a file: a plain multi-file "bun test" shares one module registry, so every file
+// that drives the pinned Codex uses the same copy, and it is removed when the process exits (with --isolate, each file's
+// process removes its own). It is removed at once when the value is refused or preparing it throws. The fixture is read
+// first, so a fixture error never leaves a copy behind.
 export const GATE_PIN = JSON.parse(readFileSync(fixturePath("link-gate-codex.json"), "utf8")) as { revision: string; sha256: string | null };
 const BIN_SCRATCH = process.env.OCX_LINK_GATE_CODEX ? mkdtempSync(join(tmpdir(), "ocx-link-gate-bin-")) : "";
-/** Removes the scratch copy of the pinned Codex; each file that drives it calls this from afterAll. */
-export function removePinnedCodexCopy(): void { if (BIN_SCRATCH) removeTreeWithRetry(BIN_SCRATCH); }
+function removePinnedCodexCopy(): void { if (BIN_SCRATCH) removeTreeWithRetry(BIN_SCRATCH); }
+if (BIN_SCRATCH) process.once("exit", removePinnedCodexCopy);
 const PREPARED = (() => {
   if (!BIN_SCRATCH) return null;
   try {

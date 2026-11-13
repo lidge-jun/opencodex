@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { writeLinkStore, type LinkStore } from "../../src/link/store";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { STANDIN_MAX_MESSAGE_BYTES, startRelayStandin, type RelayStandin } from "../fixtures/link-child-relay-standin";
-import { completed, expectCompleted, gate, GATE_PIN as PIN, removePinnedCodexCopy, runGateCodex, toolCall } from "../helpers/link-gate-codex";
+import { completed, expectCompleted, gate, GATE_PIN as PIN, runGateCodex, toolCall } from "../helpers/link-gate-codex";
 import { startChild } from "../helpers/link-ws-child";
 import { probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
 import { forgetLinkWebsocketAdvertisementsForTests } from "../../src/client/link-ws-advertisement";
@@ -43,8 +43,6 @@ let upstream: ReturnType<typeof Bun.serve> | null = null;
 let standin: RelayStandin | null = null;
 let childListener: Server<unknown> | null = null;
 const children: Array<ReturnType<typeof Bun.spawn>> = [];
-
-afterAll(removePinnedCodexCopy);
 
 afterEach(async () => {
   setLinkWebsocketTransportReadyForTests(false);

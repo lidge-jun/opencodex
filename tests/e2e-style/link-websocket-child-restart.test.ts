@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, setDefaultTimeout } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,7 @@ import { forgetLinkWebsocketAdvertisementsForTests, linkWebsocketAdvertised } fr
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { childConnection } from "../helpers/link-ws-child";
-import { completed, expectCompleted, gate, removePinnedCodexCopy, runGateCodex, toolCall } from "../helpers/link-gate-codex";
+import { completed, expectCompleted, gate, runGateCodex, toolCall } from "../helpers/link-gate-codex";
 
 // Measurement for the link WebSocket release gate (design T4 11.2, a Child restart under a running turn; lane G item
 // 3 d-e): the pinned Codex through the real TypeScript Child relay in front of a real Home, while the Child restarts
@@ -49,8 +49,6 @@ let upstream: ReturnType<typeof Bun.serve> | null = null;
 const listeners: Array<Server<unknown>> = [];
 let stopObserving: (() => void) | null = null;
 const children: Array<ReturnType<typeof Bun.spawn>> = [];
-
-afterAll(removePinnedCodexCopy);
 
 afterEach(async () => {
   setLinkWebsocketTransportReadyForTests(false);
