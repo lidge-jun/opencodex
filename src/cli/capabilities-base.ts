@@ -94,7 +94,7 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "envelope",
     usage: "ocx link reconnect --link-id <id> [--json]",
-    details: ["Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.","A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.","Always emits {linkId} JSON."],
+    details: ["Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.","A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.","A link that an unsettled journalled revoke keeps down (ocx link status: failed, reason revoke_unsettled) is refused with link_suspended (exit 5) and nothing is stopped; the message names the revoke's operation id and the next step (ocx link operations resolve, or first repeat a revoke the Home stopped during).","Emits {linkId} JSON when the tunnel was restarted."],
   },
   {
     command: ["link","cleanup"],

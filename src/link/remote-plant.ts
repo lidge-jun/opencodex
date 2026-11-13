@@ -261,7 +261,8 @@ export function parsePurgeDisconnectReport(stdout: string): boolean | null {
 
 export type PurgeDisconnectOutcome =
   | { readonly ok: true }
-  | { readonly ok: false; readonly status: number; readonly code: string; readonly message: string; readonly hint?: string };
+  /** notAttempted: the Child's disconnect never ran (inspection failed, a full install, or no planted binary to run). */
+  | { readonly ok: false; readonly status: number; readonly code: string; readonly message: string; readonly hint?: string; readonly notAttempted?: true };
 
 /**
  * Disconnect with --purge. A link enrolled before childKind existed is inspected first; only an
@@ -276,20 +277,22 @@ export async function purgeDisconnectRemote(
   childKind: "ephemeral" | "full" | undefined,
 ): Promise<PurgeDisconnectOutcome> {
   const failed = (message: string, hint?: string): PurgeDisconnectOutcome => ({ ok: false, status: 502, code: "remote_disconnect_failed", message, ...(hint ? { hint } : {}) });
+  const notAttempted = (message: string, hint?: string): PurgeDisconnectOutcome => ({ ok: false, status: 502, code: "remote_disconnect_failed", message, ...(hint ? { hint } : {}), notAttempted: true });
   let kind = childKind;
   if (kind === undefined) {
     let inspected: ParsedRemoteRuntimeInspection | null;
-    try { inspected = await inspectRemoteChildRuntime(runner, alias, route, knownHostsFile, platform); } catch (error) { return failed("The Child runtime could not be inspected, so --purge was not attempted.", sshRunnerErrorHint(error) ?? "child_kind_unknown"); }
-    if (!inspected || inspected.runtimeKind === "missing") return failed("The Child runtime could not be identified, so --purge was not attempted.", "child_kind_unknown");
+    try { inspected = await inspectRemoteChildRuntime(runner, alias, route, knownHostsFile, platform); } catch (error) { return notAttempted("The Child runtime could not be inspected, so --purge was not attempted.", sshRunnerErrorHint(error) ?? "child_kind_unknown"); }
+    if (!inspected || inspected.runtimeKind === "missing") return notAttempted("The Child runtime could not be identified, so --purge was not attempted.", "child_kind_unknown");
     kind = inspected.runtimeKind;
   }
   if (kind !== "ephemeral") {
-    return { ok: false, status: 409, code: "purge_unsupported", message: "This Child runs a full OpenCodex install; --purge removes only a planted ocx-child. Disconnect without --purge." };
+    return { ok: false, status: 409, code: "purge_unsupported", message: "This Child runs a full OpenCodex install; --purge removes only a planted ocx-child. Disconnect without --purge.", notAttempted: true };
   }
   let result;
   try { result = await runner.run(buildExecArgv({ alias, argv: remoteManagedPurgeDisconnectArgv(platform), knownHostsFile, route }), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
   if (result.code !== 0) {
-    if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) return failed("No planted ocx-child was found in the managed directory, so nothing was purged.", "managed_child_missing");
+    // The script prints the marker and exits before it runs the binary.
+    if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) return notAttempted("No planted ocx-child was found in the managed directory, so nothing was purged.", "managed_child_missing");
     return failed("The remote client could not be disconnected.", sshFailureHint(result.stderr));
   }
   if (parsePurgeDisconnectReport(result.stdout) !== true) return failed("The Child disconnected but did not report removing the planted ocx-child binary.", "purge_incomplete");
