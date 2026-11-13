@@ -3,6 +3,7 @@ import {
   CREDENTIAL_SUBSTRING_MIN_LENGTH,
   SENT_VALUE_GUARD_SCAN_CHARS,
   createSentValueGuard,
+  createSentValueMask,
   credentialComponents,
   maskSecretSpans,
 } from "../../lib/outbound-credential-registry";
@@ -44,6 +45,12 @@ function isPublicClassValue(key: string, value: unknown): boolean {
   return false;
 }
 
+/** An error identity a client acts on (recognized class, refusal code, generic upstream failure). */
+function isPublicErrorVocabulary(value: string): boolean {
+  return value === "upstream_error" || value === "upstream_server_error" || value === "invalid_request_error"
+    || isPublicClassValue("code", value) || isPublicClassValue("type", value);
+}
+
 /**
  * Mask the selected outbound credential even when upstream echoes only its raw value. A secret
  * containing a quote, backslash or control character appears JSON-escaped inside an SSE payload,
@@ -81,6 +88,8 @@ export function createSynthesizedCopyMask(
 ): (text: string) => string {
   const exact = createOutboundCredentialMask(outboundHeaders);
   return (text) => {
+    // Error identities are public protocol vocabulary (buffered presentations pass type and code here).
+    if (isPublicErrorVocabulary(text)) return text;
     const head = text.length > SENT_VALUE_GUARD_SCAN_CHARS ? text.slice(0, SENT_VALUE_GUARD_SCAN_CHARS) : text;
     return repeatsSentValue(head) ? REDACTED_SECRET : exact(head);
   };
@@ -98,18 +107,21 @@ export function createTerminalErrorRedactionBlockRewrite(
   outboundHeaders: Record<string, string>,
   maskCredential = createOutboundCredentialMask(outboundHeaders),
 ): SseBlockRewrite {
-  const repeatsSentValue = createSentValueGuard(outboundHeaders);
+  // Upstream text under a terminal line that is not a Responses terminal has every sent value masked
+  // in place (only the scanned head is emitted), so refusal wording survives for the tee boundary.
+  const maskSentValues = createSentValueMask(outboundHeaders, REDACTED_SECRET);
+  const guardedText = (text: string): string => maskCredential(maskSentValues(text));
   // `refuseSentValues`: a payload under a terminal event line that is not a Responses terminal is
   // upstream copy throughout, so every string in it that repeats a sent value is withheld whole.
   const redactDiagnostic = (value: unknown, refuseSentValues = false): unknown => {
     const maskKnown = (entry: unknown, root = false): unknown => {
-      if (typeof entry === "string") return refuseSentValues && repeatsSentValue(entry) ? REDACTED_SECRET : maskCredential(entry);
+      if (typeof entry === "string") return refuseSentValues ? guardedText(entry) : maskCredential(entry);
       if (Array.isArray(entry)) return entry.map(item => maskKnown(item));
       if (entry && typeof entry === "object") {
         // A key is upstream text too: a rewritten terminal copies extra root fields verbatim. Its
         // sensitivity is decided before masking, which could rename a key such as authorization.
         return Object.fromEntries(Object.entries(entry).map(([key, item]) => [
-          PROTOCOL_KEYS.has(key) ? key : maskCredential(key),
+          PROTOCOL_KEYS.has(key) ? key : refuseSentValues ? guardedText(key) : maskCredential(key),
           SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_SECRET
             : (root && key === "type") || isPublicClassValue(key, item) ? item : maskKnown(item),
         ]));
@@ -120,17 +132,18 @@ export function createTerminalErrorRedactionBlockRewrite(
     // Bearer ...) would otherwise split it and leave a prefix the exact mask can no longer find.
     return redactSecrets(maskKnown(value, true));
   };
-  // SSE comments and extension fields can also carry upstream text; the event name and the data
-  // payload (already masked structurally) are left as they are.
+  // SSE comments and extension fields can also carry upstream text: one that repeats a sent value
+  // becomes a redacted comment. The event name and the data payload (already masked structurally)
+  // are left as they are.
   const maskExtensionLines = (block: string): string => block
     .split("\n")
-    .map(line => /^(?:event|data):/.test(line) ? line : maskCredential(line))
+    .map(line => /^(?:event|data):/.test(line) ? line : guardedText(line))
     .join("\n");
   // A terminal frame this rewrite cannot restructure (unparsable or non-target JSON) still has its
   // data payload masked, as text; only the event line is left as it is.
   const maskTerminalBlock = (block: string, payload: string | null): string => {
     if (payload === null) return maskExtensionLines(block);
-    const masked = repeatsSentValue(payload) ? REDACTED_SECRET : maskCredential(payload);
+    const masked = guardedText(payload);
     return maskExtensionLines(masked === payload ? block : replaceSseDataPayload(block, masked));
   };
   return (block) => {

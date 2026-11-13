@@ -89,6 +89,8 @@ function noteBoundedDiagnostic(
   if (!isSafeDiagnosticToken(value)) return;
   if (field === "upstreamErrorType" && !KNOWN_UPSTREAM_ERROR_TYPES.has(value)) return;
   if (!diagnosticValueAllowed(value)) return;
+  // Closed vocabulary is public; anything else is refused when it repeats a value this request sent.
+  if (!isClosedDiagnosticVocabulary(field, value) && repeatsRequestSentValue(logCtx, value)) return;
   logCtx[field] = value;
   const status = logCtx.terminalHttpStatus;
   if (status === undefined || status >= 500) {
@@ -129,14 +131,19 @@ export function guardedRowCopy(logCtx: TerminalStatusContext, text: string): str
  * The sent-value guard of the request a row belongs to, registered by its delivery path. The global
  * registry can evict a value or miss an excerpt; this request's own headers do not.
  */
-const requestSentValueGuards = new WeakMap<TerminalStatusContext, (text: string) => boolean>();
+const requestSentValueGuards = new WeakMap<object, (text: string) => boolean>();
 
 export function noteRequestSentValueGuard(logCtx: TerminalStatusContext, guard: (text: string) => boolean): void {
   requestSentValueGuards.set(logCtx, guard);
 }
 
-function repeatsRequestSentValue(logCtx: TerminalStatusContext, text: string): boolean {
+function repeatsRequestSentValue(logCtx: object, text: string): boolean {
   return requestSentValueGuards.get(logCtx)?.(text) === true;
+}
+
+function isClosedDiagnosticVocabulary(field: string, value: string): boolean {
+  return (field === "upstreamErrorType" && KNOWN_UPSTREAM_ERROR_TYPES.has(value))
+    || (field === "upstreamErrorCode" && KNOWN_BARE_ERROR_CODES.has(value));
 }
 
 export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: Headers): void {
@@ -317,7 +324,8 @@ export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): U
     const value = logCtx[field];
     if (!value) return undefined;
     sources ??= { registry: outboundCredentials(), configured: configuredCredentials() };
-    return diagnosticValueAllowed(value, sources.registry, sources.configured) ? value : undefined;
+    if (!diagnosticValueAllowed(value, sources.registry, sources.configured)) return undefined;
+    return isClosedDiagnosticVocabulary(field, value) || !repeatsRequestSentValue(logCtx, value) ? value : undefined;
   };
   const code = allowed("upstreamErrorCode");
   const type = allowed("upstreamErrorType");

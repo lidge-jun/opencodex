@@ -54,7 +54,14 @@ function spellings(part: string): string[] {
  * occur whole. Only the first {@link SENT_VALUE_GUARD_SCAN_CHARS} characters are read, so work is
  * bounded; callers emit nothing beyond them.
  */
-export function createSentValueGuard(headers: Record<string, string>): (text: string) => boolean {
+interface SentValueIndex {
+  wholeCredential: Set<string>;
+  credentialWindows: Set<string>;
+  contained: string[];
+  overflow: boolean;
+}
+
+function indexSentValues(headers: Record<string, string>): SentValueIndex {
   const wholeCredential = new Set<string>();
   const credentialWindows = new Set<string>();
   const contained: string[] = [];
@@ -80,14 +87,47 @@ export function createSentValueGuard(headers: Record<string, string>): (text: st
       }
     }
   }
+  return { wholeCredential, credentialWindows, contained, overflow };
+}
+
+function scanHead(text: string): string {
+  return text.length > SENT_VALUE_GUARD_SCAN_CHARS ? text.slice(0, SENT_VALUE_GUARD_SCAN_CHARS) : text;
+}
+
+export function createSentValueGuard(headers: Record<string, string>): (text: string) => boolean {
+  const { wholeCredential, credentialWindows, contained, overflow } = indexSentValues(headers);
   return (text) => {
     if (overflow) return true;
-    const head = text.length > SENT_VALUE_GUARD_SCAN_CHARS ? text.slice(0, SENT_VALUE_GUARD_SCAN_CHARS) : text;
+    const head = scanHead(text);
     if (wholeCredential.has(head)) return true;
     for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= head.length; at++) {
       if (credentialWindows.has(head.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH))) return true;
     }
     return contained.some(part => head.includes(part));
+  };
+}
+
+/**
+ * The span-masking form of {@link createSentValueGuard}: it returns the scanned head of text with
+ * only the characters that repeat a sent value replaced (every matching 8-character window of a
+ * credential token, every contained non-credential value), so the surrounding copy, such as refusal
+ * wording a reader classifies, survives. The whole head is replaced when it equals a credential, and
+ * everything is replaced past the window cap.
+ */
+export function createSentValueMask(headers: Record<string, string>, replacement: string): (text: string) => string {
+  const { wholeCredential, credentialWindows, contained, overflow } = indexSentValues(headers);
+  return (text) => {
+    if (overflow) return replacement;
+    const head = scanHead(text);
+    if (wholeCredential.has(head)) return replacement;
+    const windows: string[] = [];
+    for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= head.length; at++) {
+      const window = head.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH);
+      if (credentialWindows.has(window)) windows.push(window);
+    }
+    return windows.length === 0 && !contained.some(part => head.includes(part))
+      ? head
+      : maskSecretSpans(head, replacement, [...new Set(windows), ...contained]);
   };
 }
 

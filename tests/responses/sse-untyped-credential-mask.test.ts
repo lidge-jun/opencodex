@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
+import { addFinalRequestLog, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
@@ -347,6 +347,56 @@ describe("untyped error envelopes never carry a value this request sent", () => 
       guard("echo ixture-k"),
       guard("echo queCookieVal"),
     ]).toEqual([false, false, true, true]);
+  });
+
+  test("a request row's diagnostic code never keeps an excerpt of a sent credential", () => {
+    const credential = "abcdefghijklmnopqrstuv123456";
+    const headers = { authorization: `Bearer ${credential}` };
+    withRegistry(headers, () => {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      noteRequestSentValueGuard(log, createSentValueGuard(headers));
+      inspectResponseLogSsePayload(log, JSON.stringify({ error: { code: "ijklmnopqrstuv12", message: "fixture" } }));
+      const rows: unknown[] = [];
+      addFinalRequestLog("excerpt-code", 0, log, 502, { terminalStatus: "failed" }, entry => rows.push(entry));
+      expect([log.upstreamErrorCode, JSON.stringify(rows).includes("ijklmnopqrstuv12")]).toEqual([undefined, false]);
+    });
+  });
+
+  test.each([
+    ["tee", "a non-target JSON message"], ["eager", "a non-target JSON message"], ["tee", "unparsable data"], ["eager", "unparsable data"],
+  ] as const)("%s never emits a sent value placed past the guard's scan window in %s", async (mode, shape) => {
+    const sent = "tenantOpaque987654";
+    const headers = { "x-tenant": sent };
+    await withRegistry(headers, async () => {
+      const padded = `${"p".repeat(8_192)}${sent}`;
+      const data = shape === "unparsable data" ? `data: {"message":"${padded}"` : `data: ${JSON.stringify({ type: "other", message: padded })}`;
+      const out = await deliver(mode, headers, [`event: response.failed\n${data}`]);
+      expect(out).not.toContain(sent);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s never emits a sent value as a non-target terminal key or an SSE comment", async mode => {
+    const sent = "tenantOpaque987654";
+    const headers = { "x-tenant": sent };
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, [`event: response.failed\n: ${sent}\ndata: ${JSON.stringify({ type: "other", [sent]: "as a key" })}`]);
+      expect(out).not.toContain(sent);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s keeps refusal copy that repeats a sent value classifiable under a terminal event line", async mode => {
+    const sent = "opaque-secret-12345";
+    const headers = { "x-tenant": sent };
+    await withRegistry(headers, async () => {
+      const frame = { type: "error", message: `This request was blocked by our safety systems. ${sent}` };
+      const out = await deliver(mode, headers, [`event: response.failed\ndata: ${JSON.stringify(frame)}`]);
+      expect([out.includes(sent), out.includes('"code":"invalid_prompt"'), out.includes("upstream_server_error")]).toEqual([false, true, false]);
+    });
+  });
+
+  test("synthesized copy keeps a public error identity that equals a sent value", () => {
+    const mask = createSynthesizedCopyMask({ "x-custom": "rate_limit_exceeded" });
+    expect([mask("rate_limit_exceeded"), mask("rate_limit_error"), mask("echo rate_limit_exceeded")]).toEqual(["rate_limit_exceeded", "rate_limit_error", "[REDACTED]"]);
   });
 
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
