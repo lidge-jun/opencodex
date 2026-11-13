@@ -13,6 +13,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startChildBinaryCacheFill } from "../../src/link/child-binary-cache-start";
 import { CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 import * as ownershipModule from "../../src/lib/config-ownership";
+import * as pathsModule from "../../src/config/paths";
 
 // Lane O2: an updated Home of version V fills ocx-child-builds/V/ from the GitHub release of V, trusting
 // only the digests inside its own installed package, so a packaged Home can plant ocx-child after an update.
@@ -766,5 +767,27 @@ describe("final review: uninstall, startup gates and download edges", () => {
     try {
       await expect(fill(release({}).fetchImpl)).rejects.toThrow("unsafe cache directory");
     } finally { uid.mockRestore(); }
+  });
+});
+
+describe("the reader and the fill resolve the same Home", () => {
+  test("with no Home passed, the reader finds what the startup step filled for a ~ spelling of OPENCODEX_HOME", async () => {
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = "~/ocx-child-reader-home-" + Date.now();
+    const configDir = spyOn(pathsModule, "getConfigDir").mockReturnValue(home);
+    try {
+      expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+      expect(recordOwnedConfigPath(home, join(home, "ocx-child-builds"))).toBe(true);
+      bothDigests();
+      ranBefore();
+      const quiet = { log: () => {}, warn: () => {} };
+      const { fetchImpl } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+      expect((await startChildBinaryCacheFill("standalone", { packageRoot, bundledVersion: VERSION, fetchImpl }, quiet))?.kind).toBe("filled");
+      const found = resolveChildBinarySource("linux-x64", { version: VERSION, repoRoot: empty, execPath: join(empty, "ocx"), allowLocalRelease: false });
+      expect(found.ok && Buffer.from(found.artifact.bytes).toString()).toBe("linux build bytes");
+    } finally {
+      configDir.mockRestore();
+      if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+    }
   });
 });
