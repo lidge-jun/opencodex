@@ -604,12 +604,19 @@ describe("a repeat after the replay window (the documented limit of the guarante
     const h = harness();
     const first = await h.enroll();
     expect(first.status).toBe(202);
-    const firstLink = first.body.linkId;
-    // The link is revoked, and its entry is later pruned (past the floor, with more than 256 settled entries).
-    h.store = { ...h.store, links: [] };
-    h.config.apiKeys = [];
+    const firstLink = first.body.linkId as string;
+    // The link is revoked through the route (forced: no remote step), and the Child serves standalone again.
+    expect((await h.del(firstLink, { force: true })).status).toBe(200);
     h.disconnectChild();
-    writeOperationsJournal(h.journalPath, { version: 1, operations: [] });
+    expect(h.store.links).toEqual([]);
+    // 256 operations settle after it; once it is past the prune floor, the next journal write prunes it.
+    const settled = h.journal().operations;
+    const later = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED }, (_, i) => entry({ operationId: "later-" + i, alias: "pen-later-" + i, state: "committed",
+      finishedAt: new Date(NOW + 1000 + i).toISOString(), digest: "e".repeat(64) }));
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [...settled, ...later] });
+    h.advance(OPERATION_PRUNE_FLOOR_MS + 1000);
+    updateOperationsJournal(h.journalPath, NOW + OPERATION_PRUNE_FLOOR_MS + 1000, () => {});
+    expect(h.journal().operations.map(op => op.operationId)).not.toContain(OP);
     const again = await h.enroll();
     // Not a refusal: callers must not repeat an operation id after the window and expect its old answer.
     expect({ status: again.status, body: again.body }).toMatchObject({ status: 202 });

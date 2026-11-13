@@ -85,7 +85,8 @@ export const OPERATION_JOURNAL_MAX_UNSETTLED = 256;
 /**
  * Settled entries (committed, failed_clean, and resolved residual or unknown ones) past this many are pruned before their
  * 30 days, oldest first (by when they finished or were resolved), but only once they are past OPERATION_PRUNE_FLOOR_MS:
- * a repeat with the same operation id that reaches the journal within 2 hours of the answer gets the recorded outcome
+ * a repeat with the same operation id and the same parameters (another set answers operation_mismatch) that reaches the
+ * journal within 2 hours of the answer gets the recorded outcome
  * (status, code and outcome), whatever else ran meanwhile; a refusal before the journal is read (the alias lock busy past
  * its wait, an unreadable journal) changes nothing and is retried. Later the id may be treated as a new operation: an
  * enrollment whose link is there meets link_exists and a revoke whose link is gone link_not_found, but an enrollment
