@@ -169,6 +169,9 @@ function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
     // instance never contains node_modules/.pnpm below its links directory.
     found ||= linksComponentState(path) !== "isolated"
       && (isInPnpmGlobalStoreLinks(path, existsSync) || Boolean(store && inside(path, join(store, "links"))));
+    // Store markers classify on every effective spelling, not only the final realpath, so a listed path below a
+    // marked store whose package link points elsewhere still demands the store proof.
+    found ||= isInMarkedPnpmCustomStore(path.replaceAll("\\", "/"), existsSync);
     const root = parse(path).root;
     const parts = path.slice(root.length).split(sep).filter(Boolean);
     let prefix = root, changed = false;

@@ -500,6 +500,32 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(storeCalls(layout)).toEqual([["store", "path", "--dir=" + layout.home]]);
   });
 
+  test("a listed path below a marked store whose package link points elsewhere still demands the store proof", () => {
+    const layout = globalStoreLayout(root);
+    mkdirSync(join(layout.store, "files"), { recursive: true });
+    writeFileSync(join(layout.store, "index.db"), "");
+    // A self-contained package outside the store, reached from a slot spelled inside the marked store.
+    const outsideGroup = join(root, "outside", "node_modules"), outside = join(outsideGroup, ...PKG.split("/"));
+    mkdirSync(join(outside, "bin"), { recursive: true });
+    writeFileSync(join(outside, "package.json"), JSON.stringify({ name: PKG, version: "1.0.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(outside, "bin", "ocx.mjs"), "x".repeat(2048));
+    for (const name of ["bun", "zod"]) {
+      mkdirSync(join(outside, "node_modules", name), { recursive: true });
+      writeFileSync(join(outside, "node_modules", name, "package.json"), JSON.stringify({ name }));
+    }
+    writeFileSync(join(outside, "node_modules", "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
+    const slot = join(layout.store, "custom", "slot", "node_modules", ...PKG.split("/"));
+    link(outside, slot);
+    unlinkSync(layout.exposed);
+    link(slot, layout.exposed);
+    expect(verifyPnpmInstallTree(outside, "1.0.0")).toMatchObject({ ok: true });
+    expect(pnpmPackageUsesGlobalStoreLinks(layout.exposed)).toBe(true);
+    const result = resolveOwner(layout);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.endsWith(STORE_HINT)).toBe(true);
+    expect(storeCalls(layout)).toEqual([["store", "path", "--dir=" + layout.home]]);
+  });
+
   test("owner refusals before the store proof also carry the remedy for a store-like install", () => {
     // pnpm reports a different global root than its listing: the group and bin directory cannot be bound.
     const unbound = globalStoreLayout(join(root, "unbound"));

@@ -757,7 +757,7 @@ export function runPnpmGlobalUpdate({
   const storeOwnerRefusal = reason => owner.globalStore === true && typeof reason === "string" ? reason + STORE_PROOF_HINT : reason;
   if (!before.ok) return { ok: false, phase: "preflight", error: storeOwnerRefusal(before.reason) };
   if (currentVersion && before.version !== currentVersion) {
-    return { ok: false, phase: "preflight", error: "pnpm's active package does not match the running package" };
+    return { ok: false, phase: "preflight", error: storeOwnerRefusal("pnpm's active package does not match the running package") };
   }
 
   const requested = targetVersion || tag;

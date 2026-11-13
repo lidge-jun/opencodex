@@ -705,6 +705,13 @@ describe("pnpm global update", () => {
     expect(result).toMatchObject({ ok: false, rolledBack: false, error: "pnpm store path could not be resolved" + STORE_HINT });
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
   });
+  test("a store owner's active-version mismatch at preflight carries the remedy", () => {
+    const owner = storeOwnerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "0.9.0", targetVersion: "2.0.0", tag: "latest", owner,
+      runPnpm: fakePnpm(state, owner), verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
+    expect(result).toMatchObject({ ok: false, phase: "preflight", error: "pnpm's active package does not match the running package" + STORE_HINT });
+    expect(state.calls.some(call => call.args[0] === "add")).toBe(false);
+  });
   test("a store failure in the final rollback readback keeps its reason and the remedy", () => {
     const owner = storeOwnerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     const run = fakePnpm(state, owner); let lists = 0, stores = 0;
