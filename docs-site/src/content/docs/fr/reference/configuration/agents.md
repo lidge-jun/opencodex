@@ -9,9 +9,9 @@ Les paramètres des agents déterminent la surface de collaboration Codex annonc
 
 | Champ | Type | Valeur par défaut | Signification |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` marque tous les modèles du catalogue comme compatibles v1 ; `v2` les marque tous comme compatibles v2. `default` rétablit les choix imposés en amont (Sol/Terra en v2, Luna en v1) et suit sinon l’indicateur natif `multi_agent_v2`. S’applique aux nouvelles sessions. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` marque tous les modèles du catalogue comme compatibles v1 ; `v2` les marque tous comme compatibles v2. `default` rétablit les choix imposés en amont (Sol/Terra en v2, Luna en v1) et suit sinon l’indicateur natif `multi_agent_v2`. `v2-plaintext` active aussi la transmission expérimentale des tâches en clair et désactive la priorité globale. Les choix du catalogue s’appliquent aux nouvelles sessions ; la compilation activée affecte aussi les requêtes ultérieures admissibles des sessions V2 existantes. |
 | `keepNativeChatGptOnV1?` | `boolean` | `false` | Lorsque `multiAgentMode` vaut `"v2"`, marque les lignes natives ChatGPT (Sol/Terra et les autres modèles du backend ChatGPT) comme v1. Les parents routés restent en v2. Utilisez cette option pour qu'un parent ChatGPT puisse encore lancer Grok ou Claude — les tâches enfants v2 natives sont chiffrées par le service en amont ([#92](https://github.com/lidge-jun/opencodex/issues/92)). Ignoré en `v1` et `default`. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Jusqu’à cinq identifiants de modèles natifs non qualifiés, qualifiés par un compte sous la forme `<selector>/<native-openai-model>`, ou routés sous la forme `provider/model`, affichés en tête du sélecteur de sous-agents. Le tableau de bord ne propose que les identifiants natifs non qualifiés et les identifiants routés ; lors de l’enregistrement, il omet les choix exacts qualifiés par un compte. Pour les définir, utilisez `ocx agent subagents set` ou modifiez la configuration. Après la [migration unique vers Astra](/reference/configuration/agents/#astra-roster-upgrade), une liste explicitement vide est conservée. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Jusqu’à cinq identifiants natifs non qualifiés, qualifiés par un compte `<selector>/<native-openai-model>` ou routés `provider/model`, affichés en tête du sélecteur de sous-agents. Le tableau de bord propose les identifiants natifs non qualifiés et routés pour les nouveaux choix. Lors de l’enregistrement, il conserve les identifiants exacts de compte déjà configurés, même absents du catalogue actuel. Pour ajouter un nouvel identifiant exact de compte, utilisez `ocx agent subagents set` ou modifiez la configuration. Après la [migration unique vers Astra](/reference/configuration/agents/#astra-roster-upgrade), une liste explicitement vide est conservée. |
 | `injectionModel?` | `string` | — | Modèle de sous-agent natif ou routé privilégié dans les consignes de délégation v2 produites par le proxy. |
 | `injectionEffort?` | `string` | — | Niveau d’effort privilégié (de `low` à `ultra`), pertinent uniquement avec `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Remplace le corps des consignes v2 intégrées. Accepte `{{model}}`, `{{effort}}`, `{{roster}}` et `{{fallback}}`. La présence d’un `injectionModel` suffit pour produire le prompt personnalisé. |
@@ -22,13 +22,18 @@ Les paramètres des agents déterminent la surface de collaboration Codex annonc
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Durée de mise en cache de la sonde de disponibilité. Les valeurs inférieures à 1000 ms sont remplacées par la valeur par défaut. |
 | `effortCap?` | `string` | — | Plafond strict appliqué aux tours principaux v2 admissibles et aux tours enfants créés qui portent les marqueurs requis. Accepte les valeurs de `low` à `ultra`. |
 | `subagentEffortCap?` | `string` | — | Plafond supplémentaire réservé aux tours enfants créés. Lorsque les deux plafonds s’appliquent, le plus bas l’emporte. |
+| `plaintextV2AgentMessages?` | `boolean` | — (non défini) | Option expérimentale : la valeur explicite `true` ou le mode `multiAgentMode: "v2-plaintext"` active la transmission en clair des arguments de message `spawn_agent`, `send_message` et `followup_task` admissibles. |
 | `agentTaskRecovery?` | `object` | — | Mécanisme expérimental, soumis à activation explicite, pour récupérer les tâches v2 chiffrées par le service en amont lorsqu’elles sont envoyées à des fournisseurs routés. Désactivé sauf si `enabled: true` ; voir [Récupération des tâches v2 chiffrées](#récupération-des-tâches-v2-chiffrées). |
 
-Gérez la surface depuis le tableau de bord ou avec `ocx v2 status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>`. Les changements de mode s’appliquent aux nouvelles sessions. `maxConcurrentThreadsPerSession` est un champ de `PUT /api/v2`, et non une clé de `config.json`. Après l’activation de v2, `ocx v2 threads <n>` écrit `max_concurrent_threads_per_session` sous `[features.multi_agent_v2]` dans le fichier `$CODEX_HOME/config.toml` de Codex.
+Gérez la surface depuis le tableau de bord ou avec `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>`. L’entrée en `v2-plaintext` exige `--acknowledge-plaintext-agent-messages`. Les changements de choix du catalogue s’appliquent aux nouvelles sessions ; le compilateur en clair suit le réglage actuel pour les requêtes admissibles, y compris les requêtes ultérieures des sessions V2 existantes. `maxConcurrentThreadsPerSession` est un champ de `PUT /api/v2`, et non une clé de `config.json`. Après l’activation de v2, `ocx v2 threads <n>` écrit `max_concurrent_threads_per_session` sous `[features.multi_agent_v2]` dans le fichier `$CODEX_HOME/config.toml` de Codex.
 
 Le **mode Ultra** — accessible depuis l’interrupteur Sous-agents du tableau de bord, le champ `multiAgentModeHintText` de `PUT /api/v2` et `ocx v2 mode-hint` — écrit `features.multi_agent_v2.multi_agent_mode_hint_text` dans le fichier `$CODEX_HOME/config.toml` de Codex. La commande CLI `ocx v2 mode-hint` conserve cette clé même lorsque `multi_agent_v2` est désactivé ; elle n’active ni ne désactive la fonctionnalité. Cette indication remplace la politique multi-agents que codex-rs déduit du niveau d’effort : tous les modèles et tous les niveaux d’effort reçoivent alors le prompt de délégation Proactive. Elle ne modifie **pas** le niveau d’effort de raisonnement.
 
-La valeur `null` supprime la clé et rétablit la politique fondée sur l’effort (proactive avec ultra, explicite dans les autres cas). Les valeurs vides ou composées uniquement d’espaces sont rejetées, car une substitution vide mais présente masquerait même le message Proactive associé au niveau ultra. Pour que l’interrupteur du mode Ultra soit **activé** dans la page Sous-agents du tableau de bord, la fonctionnalité native doit être active et la surface v2 doit être explicitement sélectionnée (`multiAgentMode: "v2"`, équivalent à `ocx v2 mode v2`). La seule commande `ocx v2 on` ne satisfait pas cette condition du tableau de bord.
+La valeur `null` supprime la clé et rétablit la politique fondée sur l’effort (proactive avec ultra, explicite dans les autres cas). Les valeurs vides ou composées uniquement d’espaces sont rejetées, car une substitution vide mais présente masquerait même le message Proactive associé au niveau ultra. Pour activer l’interrupteur du mode Ultra, sélectionnez explicitement `multiAgentMode: "v2"` avec la fonctionnalité native active, ou `multiAgentMode: "v2-plaintext"`, qui utilise les choix du catalogue sans priorité globale. La seule commande `ocx v2 on` ne satisfait pas cette condition du tableau de bord.
+
+Sur la route Responses ChatGPT canonique (`adapter: "openai-responses"`, `authMode: "forward"`, `https://chatgpt.com/backend-api/codex`), la valeur explicite `plaintextV2AgentMessages: true` ou le mode `v2-plaintext` active indépendamment le compilateur des messages de tâche admissibles. Les autres destinations et les clients non Responses sont exclus. Le mode `v2-plaintext` sélectionne V2 pour les nouvelles conversations sans modifier la préférence indépendante `plaintextV2AgentMessages`. Le compilateur suit le réglage actuel pour les requêtes admissibles ultérieures, y compris dans les sessions V2 existantes. Il ne déchiffre pas les tâches existantes et ne réécrit pas l’historique. Sa désactivation ne supprime pas les copies déjà conservées dans l’historique, les requêtes du fournisseur ou l’état local de réponse et de débogage.
+
+Une entrée dans ce mode par `PUT /api/v2` exige `plaintextAgentMessagesAcknowledged: true`. Utilisez sinon la confirmation du tableau de bord ou `ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages`.
 
 L’API de gestion expose `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`, `/api/subagent-models` et `/api/subagent-model-fallback`. Les mises à jour du modèle d’injection sont partielles ; le prompt personnalisé correspond au champ `prompt` de cette API.
 
@@ -65,13 +70,13 @@ opencodex ignore les candidats désactivés, non routables, en mauvais état, en
 ```json
 {
   "multiAgentMode": "v2",
-  "subagentModels": ["gpt-5.5", "anthropic/claude-sonnet-5"],
-  "injectionModel": "gpt-5.5",
+  "subagentModels": ["gpt-6.1-sol", "anthropic/claude-sonnet-5"],
+  "injectionModel": "gpt-6.1-sol",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.6-luna"],
+  "subagentModelFallback": ["gpt-6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.6-luna"]
+    "gpt-6.1-sol": ["gpt-6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"

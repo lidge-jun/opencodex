@@ -76,6 +76,8 @@ OpenClaw에는 역할이 서로 다른 여러 설정이 있습니다. `OPENCLAW_
 
 opencodex는 자체 환경에서 이 값을 읽습니다. 게이트웨이가 프로필이나 옮겨진 홈에서 실행된다면 opencodex도 같은 변수를 설정해 시작하세요. 그렇지 않으면 다른 설치를 올바르게 따라가게 됩니다.
 
+CLI의 `ocx integration client enable|disable --client <id>`는 대시보드 토글처럼 이 컴퓨터만 바꿉니다. route 의도를 쓰는 Remote Link Home에서는 이 변경을 Home 자신의 결정으로 기록하므로 `ocx sync`가 유지하고, 연결된 Child는 기본값을 그대로 따릅니다. Child가 상속하는 값을 바꾸려면 `ocx route to <client> on|off`를 사용하세요. Remote Link Child에서는 일반 토글을 거부하고 그 기기용 Home 명령을 출력합니다. 해당 Child만 제외하려면 그곳에서 `ocx route to <client> off --local`을 사용하세요. [Remote Link](/ko/guides/remote-link/)를 참고하세요.
+
 ## 스위치가 아닌 다른 다섯 서피스
 
 **API Keys**는 클라이언트가 아니라 opencodex 자체 자격 증명을 관리합니다. **Codex CLI**는 프록시 서비스가 직접 연결합니다. opencodex를 시작하면 적용되고 멈추면 네이티브 라우팅이 복원되므로 파일별 스위치가 없습니다. **Claude**는 자체 활성화 플래그와 Desktop의 Save/Apply 흐름을 유지하고, **Grok Build**는 모델을 선택한 뒤 적용하는 경계를 유지합니다. 모두 이 기능보다 먼저 있던 동작이며 바뀌지 않았습니다. **Cursor**는 아무 파일도 쓰지 않습니다. 탭에서 탐지 결과, 게이트웨이 값, 마지막 요청을 보여주고 나머지는 Cursor Private Inference 안에서 처리합니다.

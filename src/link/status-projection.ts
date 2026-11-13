@@ -28,6 +28,9 @@ export interface LinkStatusDto {
     reason: string | null;
     tunnelPort: number;
     childKind?: "full" | "ephemeral";
+    /** Exclusive links only (structure/remote-link.md, "Explicit route"); absent on every other row. */
+    exclusive?: true;
+    explicitRoute?: import("./explicit-route").ExplicitRoute;
     /** Home only: what the link carried from this Child, and the compatibility verdict. */
     peer?: LinkPeerStatus;
     /** Home-initiated links on request (`?diagnostics=1`): retry progress and the last failure. */
@@ -258,6 +261,9 @@ function stateDetails(
   if (!status || status.state === "client-owned") {
     return { state: "idle", since: record.createdAt, reason: null };
   }
+  // An unsettled revoke keeps the tunnel down until it is resolved (src/link/operations-journal.ts, revokeSuspendsLink).
+  // It comes first: resolving it is the step to take, and an orphan of that link is reaped like any other meanwhile.
+  if (status.suspended) return { state: "failed", since: status.suspended.since, reason: "revoke_unsettled" };
   if (status.orphan === "orphan-unverified") {
     return { state: "failed", since: record.createdAt, reason: "stale tunnel may hold the port" };
   }
@@ -294,6 +300,8 @@ export function projectLinkStatus(
     ...stateDetails(record, byId.get(record.id), compensation),
     tunnelPort: record.tunnelPort,
     ...(record.childKind ? { childKind: record.childKind } : {}),
+    ...(record.exclusive ? { exclusive: true as const } : {}),
+    ...(record.explicitRoute ? { explicitRoute: { ...record.explicitRoute } } : {}),
     ...parity(record.id),
   }));
   const childRecord = config.runtimeRole === "client"

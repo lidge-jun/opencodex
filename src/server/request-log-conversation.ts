@@ -2,7 +2,9 @@
  * Best-effort chat/session correlation for Logs / usage.jsonl (#330).
  * Opaque ids only — never persist raw emails or Claude Desktop system-hash fallbacks.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import type { OcxConfig } from "../types";
+import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 
 /** Reject absurdly long client strings before hashing (DoS / JSONL bloat). */
 export const LOG_CONVERSATION_ID_INPUT_MAX = 4096;
@@ -128,6 +130,42 @@ export function sessionLaneIdFromRequest(headers: Headers): string | undefined {
   const specific = thread ?? session;
   if (parent && specific) return `${parent}\u0000${specific}`;
   return specific ?? parent;
+}
+
+/**
+ * The affinity lane a request binds under, derived once so every entry path agrees.
+ *
+ * `sessionLaneIdFromRequest` first (explicit thread/session/parent identity), then the
+ * explicit `x-opencode-session` header the Claude-Go handoff and
+ * `getOrAllocateRequestSessionLane` already treat as lane identity, then the log
+ * conversation id — except the Hermes digest, which is log correlation only and must
+ * never affect lanes or routing (#330). This expression used to be inlined at four
+ * entry paths and drifted: three of the four missed the `x-opencode-session` fallback
+ * until PR #7738 aligned them.
+ *
+ * Scope authenticated lanes to the admitted principal with a process-local HMAC. A translated
+ * request carries the principal captured before its caller credential was stripped. Loopback
+ * without a recognized credential retains the existing local lane; an authenticated admission
+ * without a principal cannot bind. The distinct prefix prevents local lanes from colliding.
+ */
+const AFFINITY_SCOPE_KEY = randomBytes(32);
+
+export function affinityLaneFromRequest(
+  req: Request,
+  slot: LogConversationSlot,
+  config: OcxConfig,
+  admission?: DataPlaneAdmission,
+  capturedPrincipal?: Readonly<{ clientPrincipalId: string | undefined }>,
+): string | undefined {
+  const lane = sessionLaneIdFromRequest(req.headers)
+    ?? normalizeLogConversationId(req.headers.get("x-opencode-session"))
+    ?? (slot.conversationIdIsHermesFallback ? undefined : normalizeLogConversationId(slot.conversationId));
+  if (!lane) return undefined;
+  const principal = capturedPrincipal ? capturedPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, admission);
+  if (principal) return `principal:${createHmac("sha256", AFFINITY_SCOPE_KEY).update(JSON.stringify([principal, lane])).digest("hex")}`;
+  // An authenticated admission with no identity must not join any other caller's lane.
+  if (admission && admission.kind !== "loopback") return undefined;
+  return lane;
 }
 
 function firstSanitizedConversationId(

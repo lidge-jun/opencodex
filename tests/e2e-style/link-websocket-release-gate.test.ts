@@ -1,8 +1,7 @@
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 import type { OcxConfig } from "../../src/types";
 import { setLinkWebsocketLimitsForTests, setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -12,23 +11,45 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { STANDIN_MAX_MESSAGE_BYTES, startRelayStandin, type RelayStandin } from "../fixtures/link-child-relay-standin";
 import { fixturePath } from "../helpers/repo-root";
+import { preparePinnedCodex } from "../helpers/link-gate-binary";
+import { startChild } from "../helpers/link-ws-child";
+import { probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
+import { forgetLinkWebsocketAdvertisementsForTests } from "../../src/client/link-ws-advertisement";
+import type { LinkTunnelGate } from "../../src/client/link-relay";
+import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
+import type { Server } from "bun";
 
 // Lane T5f: the link WebSocket release gate of design T4 11.1 item 13, with the pinned Codex binary as the client (U13).
-// The pinned binary is codex-rs built at openai/codex 88c5856 (design section 0). These tests run only when
-// OCX_LINK_GATE_CODEX names an executable; otherwise each is skipped with that reason. A run is release evidence only
+// The pinned binary is codex-rs built at openai/codex 88c5856 (design section 0). The Codex scenarios run only when
+// OCX_LINK_GATE_CODEX names an executable file; otherwise every Codex scenario is skipped with that reason, and the pin
+// test always runs. A run is release evidence only
 // when the binary's sha256 equals the digest recorded for that revision in tests/fixtures/link-gate-codex.json, a file
-// that changes only through review; any other executable runs as a smoke check, and every test title says which. Codex reaches the Home through a test-only
-// stand-in for the Child's relay (tests/fixtures/link-child-relay-standin.ts), because the Child's relay is lane T6.
+// that changes only through review; any other executable runs as a smoke check, and each Codex scenario's title says which. Codex reaches the Home through a test-only
+// stand-in for the Child's relay (tests/fixtures/link-child-relay-standin.ts), except in the 503 sequence, which needs the
+// Child's own relay and tunnel gate (lane T6, src/client/link-websocket.ts) and runs the real Child listener.
 // Codex is an external process with no clock to inject, so each test carries a per-test bound instead of sleeps.
 
-const BIN = process.env.OCX_LINK_GATE_CODEX ?? "";
-const usable = (() => { if (!BIN) return false; try { accessSync(BIN, constants.X_OK); return true; } catch { return false; } })();
+// OCX_LINK_GATE_CODEX is resolved once to an executable file and copied read-only into a scratch directory; that copy is
+// what is hashed and what every scenario spawns, by absolute path (tests/helpers/link-gate-binary.ts).
+// The scratch copy is removed after the file, and at once if preparing it throws or the value is refused.
+const BIN_SCRATCH = process.env.OCX_LINK_GATE_CODEX ? mkdtempSync(join(tmpdir(), "ocx-link-gate-bin-")) : "";
+afterAll(() => { if (BIN_SCRATCH) removeTreeWithRetry(BIN_SCRATCH); });
+const PREPARED = (() => {
+  if (!BIN_SCRATCH) return null;
+  try {
+    const prepared = preparePinnedCodex(process.env.OCX_LINK_GATE_CODEX!, { scratch: BIN_SCRATCH });
+    if (!prepared) removeTreeWithRetry(BIN_SCRATCH);
+    return prepared;
+  } catch (error) { removeTreeWithRetry(BIN_SCRATCH); throw error; }
+})();
+const BIN = PREPARED?.path ?? "";
+const usable = PREPARED !== null;
 const PIN = JSON.parse(readFileSync(fixturePath("link-gate-codex.json"), "utf8")) as { revision: string; sha256: string | null };
 const PINNED_SHA256 = typeof PIN.sha256 === "string" ? PIN.sha256.toLowerCase() : "";
-const digest = usable ? createHash("sha256").update(readFileSync(BIN)).digest("hex") : "";
+const digest = PREPARED?.digest ?? "";
 const mode: "absent" | "gate" | "smoke" = !usable ? "absent" : PINNED_SHA256 && digest === PINNED_SHA256 ? "gate" : "smoke";
 const LABEL = {
-  absent: " [skipped: pinned Codex binary absent (U13); set OCX_LINK_GATE_CODEX to codex-rs built at openai/codex 88c5856]",
+  absent: " [skipped: pinned Codex binary absent (U13); set OCX_LINK_GATE_CODEX to an executable file of codex-rs built at openai/codex 88c5856]",
   gate: " [release gate: Codex sha256 " + digest + " matches the reviewed digest for openai/codex " + PIN.revision.slice(0, 7) + " in tests/fixtures/link-gate-codex.json]",
   smoke: " [smoke only, not release evidence: Codex sha256 " + digest + " is not the reviewed digest for openai/codex " + PIN.revision.slice(0, 7) + " (tests/fixtures/link-gate-codex.json" + (PINNED_SHA256 ? "" : " records none yet") + ")]",
 }[mode];
@@ -64,6 +85,7 @@ let codexHome: IsolatedCodexHome | null = null;
 let server: { stop(force?: boolean): Promise<void> } | null = null;
 let upstream: ReturnType<typeof Bun.serve> | null = null;
 let standin: RelayStandin | null = null;
+let childListener: Server<unknown> | null = null;
 const children: Array<ReturnType<typeof Bun.spawn>> = [];
 
 afterEach(async () => {
@@ -71,6 +93,9 @@ afterEach(async () => {
   setLinkWebsocketLimitsForTests(null);
   for (const child of children.splice(0)) if (child.exitCode === null) child.kill();
   await standin?.stop(); standin = null;
+  if (childListener) await childListener.stop(true);
+  childListener = null;
+  forgetLinkWebsocketAdvertisementsForTests();
   if (server) await server.stop(true);
   server = null;
   if (upstream) await upstream.stop(true);
@@ -263,5 +288,52 @@ describe("link WebSocket release gate (design 11.1 item 13)", () => {
     expect(after.some(event => event.startsWith("ws-create:") || event === "http:200")).toBe(true);
   });
 
-  test.skip("a 503 sequence while the Child's tunnel reconnects, recovering on WebSocket and, separately, ending on HTTP [skipped: the Child's tunnel and 503 sequence are lane T6]", () => {});
+  /** The real Child listener in front of the scratch Home, with a tunnel gate the test drives; it learned the Home's advertisement from one probe. */
+  async function realChild(linkPort: number, tunnel: LinkTunnelGate, records: LinkDiagnosticRecord[]): Promise<number> {
+    const target = { tunnelPort: linkPort, admissionKey: SECRET, linkId: LINK, apiKeyId: KEY_ID };
+    expect(await probeLinkRelayPreflight(target)).toBe("ok");
+    childListener = startChild(linkPort, { keyId: KEY_ID, linkId: LINK, secret: SECRET },
+      { tunnel, websocket: { ready: () => true, diagnostic: record => records.push(record) } });
+    return childListener.port!;
+  }
+
+  const words = (records: LinkDiagnosticRecord[]) => records.map(record => record.event + ":" + record.outcome);
+
+  gate("the 503 sequence while the Child's tunnel reconnects recovers on the WebSocket once the tunnel is back", async () => {
+    const bodies: string[] = [];
+    const h = await home((body, index) => { bodies.push(body); return new Response(completed("resp_" + index), { headers: { "content-type": "text/event-stream" } }); });
+    // The first two upgrades find the tunnel reconnecting through their 3 s hold (503 each); the third finds it back.
+    let holds = 0, up = false;
+    const tunnel: LinkTunnelGate = {
+      connected: () => ({ kind: up ? "match" : "unavailable" }), pending: () => !up,
+      waitForConnected: async () => { holds += 1; if (holds === 3) up = true; return up; },
+    };
+    const records: LinkDiagnosticRecord[] = [];
+    const port = await realChild(h.linkPort(), tunnel, records);
+    expectCompleted(await runCodex(port, { argument: "say gate-ok" }));
+    expect(holds).toBe(3);
+    // Two 503s, then the socket opened, and the session never fell back to HTTP (no 426 was ever answered).
+    expect(words(records).slice(0, 3)).toEqual(["link_ws_fallback:tunnel_connecting_timeout", "link_ws_fallback:tunnel_connecting_timeout", "link_ws_open:connected"]);
+    expect(words(records).some(word => word.startsWith("link_ws_fallback:") && !word.endsWith("tunnel_connecting_timeout"))).toBe(false);
+    expect(bodies.length).toBeGreaterThanOrEqual(1);
+  });
+
+  gate("the 503 sequence while the Child's tunnel reconnects ends on HTTP when the tunnel stays down past Codex's retry budget", async () => {
+    const bodies: string[] = [];
+    const h = await home((body, index) => { bodies.push(body); return new Response(completed("resp_" + index), { headers: { "content-type": "text/event-stream" } }); });
+    // Every upgrade's 3 s hold ends with the tunnel still reconnecting; the HTTP relay's 15 s hold sees it come back.
+    let upgradeHolds = 0, up = false;
+    const tunnel: LinkTunnelGate = {
+      connected: () => ({ kind: up ? "match" : "unavailable" }), pending: () => !up,
+      waitForConnected: async ms => { if (ms > 3_000) up = true; else upgradeHolds += 1; return up; },
+    };
+    const records: LinkDiagnosticRecord[] = [];
+    const port = await realChild(h.linkPort(), tunnel, records);
+    expectCompleted(await runCodex(port, { argument: "say gate-ok" }));
+    // Every upgrade Codex tried within its budget (how many is its own policy, C5/C6) was answered 503 and never
+    // reached the Home; then the same request went over HTTP, once.
+    expect(upgradeHolds).toBeGreaterThanOrEqual(2);
+    expect(words(records)).toEqual(Array.from({ length: upgradeHolds }, () => "link_ws_fallback:tunnel_connecting_timeout"));
+    expect(bodies).toHaveLength(1);
+  });
 });

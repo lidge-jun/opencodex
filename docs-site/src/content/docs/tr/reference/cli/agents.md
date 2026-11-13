@@ -29,9 +29,9 @@ komut tetiklediği Codex tarafı yazmayı bildirir (`--json` içinde `codexWebSe
 halde son satırda `Codex config:`) ve yazma yapılamadığında `ocx sync` adresini gösterir.
 Bayrak `vision` için de çalışır.
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
-Codex `multi_agent_v2` özellik bayrağını ve üç durumlu çoklu ajan yüzey modunu
+Codex `multi_agent_v2` özellik bayrağını ve dört durumlu çoklu ajan yüzey modunu
 yönetin.
 
 | Alt komut | Eylem |
@@ -41,7 +41,9 @@ yönetin.
 | `off` | `multi_agent_v2` özelliğini devre dışı bırakın ve kataloğu yeniden senkronize edin. |
 | `mode v1` | Tüm modelleri v1'e zorlayın, yerel v2'yi devre dışı bırakın ve aktif iş parçacığı sınırını koruyun. |
 | `mode default` | Yukarı akış model yüzeyi sabitlemelerine saygı gösterin. |
-| `mode v2` | Tüm modelleri v2'ye zorlayın, yerel v2'yi etkinleştirin ve aktif iş parçacığı sınırını koruyun. |
+| `mode v2` | İş parçacığı sınırını koruyarak modelleri v2 yapın. `keep-native-v1` kapalıysa genel yerel v2 etkinleşir; açıksa genel zorlama kapatılır ve katalog sabitlemeleri kullanılır. |
+| `keep-native-v1 on\|off` | `mode v2` içinde ChatGPT yerel modellerini v1, yönlendirilen modelleri v2 üzerinde tutun. Etkinleştirme katalog eşitlemesinden önce genel V2 zorlamasını kapatır. |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | Yeni oturumlar için V2 seçer ve genel zorlamayı kapalı tutarak uygun görevleri düz metin iletir. Giriş için `--acknowledge-plaintext-agent-messages` gerekir. |
 | `threads <n>` | Aktif v1/v2 iş parçacığı sınırını en az 1 olan bir tamsayıya ayarlayın. |
 | `mode-hint <text>` | Her model ve çaba için Proaktif yetkilendirme ipucunu (Ultra modu) ayarlayın. |
 | `mode-hint --clear` | İpucunu kaldırın, böylece çabadan türetilen politika (ultra = proaktif) devam eder. |
@@ -72,8 +74,9 @@ böylece herhangi bir model ve herhangi bir akıl yürütme çabası Proaktif
 yetkilendirme istemini alır. Akıl yürütme çabasının kendisini **değiştirmez**.
 Eksik bir argüman veya yalnızca boşluk içeren bir değer reddedilir; yalnızca
 `--clear` ipucunu kaldırır. Alt Ajanlar kontrol panelinin Ultra modu **açık**
-anahtarının daha katı bir kapısı vardır: yerel özelliğin açık bir v2 yüzeyiyle
-(`ocx v2 mode v2`) etkinleştirilmesini gerektirir; tek başına `ocx v2 on` bu
+anahtarının daha katı bir kapısı vardır: yerel özelliğin açık v2 yüzeyiyle
+(`ocx v2 mode v2`) etkinleştirilmesini veya genel zorlama kapalıyken
+`v2-plaintext` modunu gerektirir; tek başına `ocx v2 on` bu
 kontrol paneli kapısını karşılamaz.
 
 ## Kombo yönlendirme

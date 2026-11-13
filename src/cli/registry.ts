@@ -51,11 +51,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "stop",
-    usage: "ocx stop [--json]",
+    usage: "ocx stop [--json] [--deadline-ms <ms>]",
     summary: "Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.",
     details: [
       "--json keeps the stop path unchanged and prints one structured summary document on stdout; human output moves to stderr.",
       "Exit codes are identical with and without --json: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).",
+      "--deadline-ms <ms>  Windows: finish the service stop within <ms> of this command's start, or refuse up front with nothing changed (default 60000; OCX_STOP_DEADLINE_MS is read when the flag is absent).",
     ],
   },
   {
@@ -189,12 +190,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "disconnect",
-    usage: "ocx disconnect [--keep-catalog] [--json]",
+    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json]",
     summary: "Restore local client state offline and clear the remote-hub connection.",
   },
   {
     name: "sync",
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--overwrite-conflict [--overwrite-client <id>]] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "A current Home catalog fans out to linked Children; --local-only disables fan-out and --json emits the result. Partial fan-out exits 6.",
@@ -255,6 +256,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "OAuth or API-key login for a provider.",
     details: [
       "--headless (anthropic, anthropic2): no browser and no local port; approve in any browser and paste the displayed code.",
+      "--headless (xai): device authorization instead of the loopback callback; no local port, confirm the printed short code in any browser, nothing to paste.",
       "Codex/ChatGPT: ocx login codex runs the Codex account-pool login (same flow as ocx account login codex).",
       "That one needs a running proxy; the OAuth and API-key providers log in locally.",
       "'chatgpt' and 'openai' are the same route; an OpenAI platform API key is 'ocx login openai-apikey'.",
@@ -263,10 +265,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "logout", usage: "ocx logout <provider>", summary: "Remove a stored provider login." },
   {
     name: "gui",
-    usage: "ocx gui [pair --origin <browser-origin> [--json]]",
+    usage: "ocx gui [pair [--desktop] --origin <browser-origin> [--json]]",
     summary: "Open the opencodex dashboard or create a secret single-use remote pairing grant.",
     details: [
       "Pairing requires an explicit allowed --origin; there is no localhost or config-derived default.",
+        "--desktop authorizes only Desktop compatibility actions in an existing standalone local dashboard session, for at most five minutes; it does not authorize Remote Link or key disclosure.",
       "The printed grant is secret, single-use, short-lived, and must not be persisted.",
     ],
   },
@@ -417,7 +420,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "ocx advisor and ocx advisor status read the resolved settings; use --json for machine-readable output.",
       "ocx advisor on requires current context-sharing consent. Pass --ack-context-sharing to record consent v1 and enable. ocx advisor off disables the sidecar without granting consent.",
-      "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it and stops task-context transfer.",
+      "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it: consultations not yet dispatched are blocked, while a dispatched consultation cannot be cancelled and task content already sent cannot be retracted.",
       "ocx advisor set updates --model, --effort, --policy, --context-mode, --max-consultations and --timeout-ms; the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",
       "In the default context mode, policy manual consults only when the worker calls the synthetic advisor tool; policy preflight also attempts one automatic consultation per task with a stable conversation identity, once the task shows orientation evidence. Without a stable identity, each eligible request may trigger another consultation. Both require current consent before any task context is sent. The question-only mode pauses automatic consultations.",
     ],
@@ -442,8 +445,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "route",
-    usage: "ocx route <combo|policy> <subcommand>",
-    summary: "Manage combo routing and routing profiles.",
+    usage: "ocx route <combo|policy|to> <subcommand>",
+    summary: "Manage combo routing, routing profiles and per-device client intent.",
   },
   {
     name: "effort",

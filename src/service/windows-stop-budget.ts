@@ -79,10 +79,10 @@ export function windowsPartAWorstCaseMs(input: Pick<WindowsStopBudgetInput, "man
   const enumeration = input.enumerationReused ? 0 : C.enumeration;
   let ms = 0;
   if (scheduler) ms += enumeration + C.taskEnd + C.terminateAndWait + C.managerState;
+  else if (!stray) ms += enumeration + C.terminateAndWait;
   if (winsw) {
     const stopTimeout = input.winswStopTimeoutMs ?? DEFAULT_WINSW_STOP_TIMEOUT_MS;
-    // WinSW has no wrapper: no bind, no terminate. Its own stop ends the proxy within
-    // <stoptimeout>, so the SCM poll is capped at that plus a margin.
+    // The service stop itself is capped at <stoptimeout> plus a margin.
     ms += C.winswStopCommand + stopTimeout + C.winswPollMargin + C.managerState;
   }
   // Nothing registered: the stray enumeration already ran in the registration step.

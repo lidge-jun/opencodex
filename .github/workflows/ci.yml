@@ -348,10 +348,12 @@ jobs:
             setup_action:
               - '.github/actions/**'
               - '.github/workflows/ci.yml'
-            # The Rust remote-workspace helper. Nothing else in CI builds it, and its sandbox is
-            # real only on macOS and Windows, so its job lints and tests the crate on all three.
+            # The Rust crates: the remote-workspace helper (nothing else builds it; its sandbox is real only on
+            # macOS and Windows) and the lightweight Child with the conformance fixture its tests read.
             remote_helper:
               - 'native/remote-workspace-helper/**'
+              - 'native/ocx-child/**'
+              - 'tests/fixtures/link/ocx-child-conformance.json'
             # docker-smoke and keyring-smoke on a pull request. Both used to run on every PR the
             # ci filter matched, which is nearly all of them, while each proves something narrow:
             # the image builds, starts and survives recreation with its volume; the OS keyring
@@ -677,6 +679,16 @@ jobs:
           cd gui
           bun run build
 
+      # The Rust-backed tests (the compiled ocx-child end-to-end and conformance runs, the
+      # desktop-recovery rustc fixture) need cargo. ubuntu-latest ships it; the lidge
+      # self-hosted pool does not, so run 43343080374 failed link-ocx-child-e2e there
+      # ("neither cargo nor prebuilt ocx-child binary is available") while the conformance
+      # run skipped. Installing it here makes the prerequisite explicit on both runner kinds.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+
       - name: Test in fresh-process batches
         env:
           TEST_SHARD: ${{ matrix.shard }}/5
@@ -700,6 +712,11 @@ jobs:
           role: test-runner # See the Bun roles contract above test.
       - name: Install dependencies and build the GUI the tests serve
         run: bash scripts/ci/bun-install-frozen.sh . gui && cd gui && bun run build
+      # Same cargo prerequisite as the test shards above (link-ocx-child-e2e and the conformance run).
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
       - name: Test the files this pull request reaches
         run: bash scripts/ci/run-changed-tests.sh
 
@@ -1046,7 +1063,7 @@ jobs:
   # Windows shards run only on a full manual dispatch. Pull requests retain
   # fast Ubuntu checks, including when the Windows-sensitive filter is set.
   platform-windows:
-    name: windows ${{ matrix.shard }}/11
+    name: windows ${{ matrix.shard }}/14
     needs: [changes, select-windows-runner]
     if: >-
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
@@ -1084,11 +1101,21 @@ jobs:
     # maximum setup, eleven projects ~22.4 minutes; 25% test variance makes ~27.3.
     # Pay for two extra setups (~3.3 runner-minutes at the older run's mean), keep
     # the 30-minute job bound and all tests, and leave batch deadlines independent.
+    #
+    # Eleven shards then reached it too: run 43257334898 cancelled 8/11 at batch 44/52
+    # while the other ten finished in 19.4-29.9 minutes. Total Windows test work had
+    # grown from the table's 14,874 s to 16,496 s, and new or grown files carried
+    # default weights, so 8/11 drew far more than 5/11. Refreshing the weights from
+    # that run balances the shards to within a second of each other, but at eleven
+    # each still holds ~25.0 minutes of tests: with 25% variance and the 2.4-minute
+    # setup that projects ~33.6 against the 30-minute bound. Fourteen shards put test
+    # work at ~19.6 minutes and the same projection at ~26.9, the margin chosen for
+    # eleven. Pay for three extra setups, keep the 30-minute job bound and all tests.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     steps:
       - name: Show selected runner
         shell: bash
@@ -1168,7 +1195,7 @@ jobs:
         # and service-manager guard before the lock boundary.
         shell: bash
         env:
-          TEST_SHARD: ${{ matrix.shard }}/11
+          TEST_SHARD: ${{ matrix.shard }}/14
           BUN_TEST_FILE_SCOPE: all
           BUN_TEST_BATCH_SIZE: "6"
           BUN_TEST_BATCH_TIMEOUT_SECONDS: "480"
@@ -1392,9 +1419,8 @@ jobs:
             exit 1
           fi
 
-  # The Rust remote-workspace helper, when a change touches it (see the remote_helper filter).
-  # Formatting once, then clippy and the crate's tests on each platform: the sandbox and the live
-  # confinement tests compile only on macOS and Windows, and Linux covers the protocol and stub.
+  # The Rust crates, when a change touches either (remote_helper filter). The helper: formatting once, then
+  # clippy and tests on each platform (its sandbox compiles only on macOS and Windows). ocx-child: Linux only.
   remote-helper:
     name: remote helper ${{ matrix.os }}
     needs: changes
@@ -1428,6 +1454,13 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --locked --manifest-path native/remote-workspace-helper/Cargo.toml
+
+      - name: Check, lint and test ocx-child
+        if: runner.os == 'Linux'
+        run: |
+          cargo fmt --manifest-path native/ocx-child/Cargo.toml --check
+          cargo clippy --locked --manifest-path native/ocx-child/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path native/ocx-child/Cargo.toml
 
   # `gates` already runs `privacy:scan` on every event it runs for, so this job
   # covers exactly the pull requests `gates` skips -- its condition is the
@@ -1932,10 +1965,10 @@ jobs:
           # started: five successes and one skipped leg roll up to `success`. No matrix here
           # carries a per-leg `if:`, so a leg can only be skipped when its whole job is, which
           # the expectation table above already catches. What that table cannot catch is a
-          # matrix that produced FEWER legs than the eleven a dispatch is run to read, so count
-          # them by name. The eleven Windows legs are the entire output of that dispatch.
+          # matrix that produced FEWER legs than the fourteen a dispatch is run to read, so count
+          # them by name. The fourteen Windows legs are the entire output of that dispatch.
           if [ "$windows" = requested ]; then
-            shards=11
+            shards=14
             # `filter=latest` (the default) is the latest execution of each job in the run,
             # which is what a human reading the run sees. Asking for one ATTEMPT instead would
             # fail every partial re-run: "Re-run failed jobs" puts only the repaired shard in

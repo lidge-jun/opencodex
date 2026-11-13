@@ -25,6 +25,7 @@ import { linkStorePath } from "../../link/paths";
 import { linkRouteAllowed } from "../../link/routes";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import { registerFallbackLinkResolver } from "../../routing/fallback-policy";
+import { captureChildRouteDefaults } from "../../routing/home-route-intent";
 
 export const LINK_INGRESS_HOSTNAME = "opencodex-link.invalid";
 
@@ -60,6 +61,10 @@ export interface LinkListenerDeps {
   writeStore?: (path: string, store: LinkStore) => void;
   serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
   warn?: (message: string) => void;
+  /** Freezes every default Children inherit (native switches and file ownership) before this listener can serve route intent. */
+  captureRouteDefaults?: () => void;
+  /** Delay before retry `attempt` (0-based) of a failed capture; tests shorten it. */
+  captureRetryDelayMs?: (attempt: number) => number;
   /** Test seams for the link WebSocket gate: limits, timers, socket reservation, drain state. */
   websocket?: Pick<LinkWebsocketGateDeps, "limits" | "timers" | "reserveSocket" | "draining">;
 }
@@ -167,6 +172,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     // The same lifecycle-owned book relayed HTTP turns count in, so restart gates see link sockets.
     activity,
     holds,
+    // The same per-link traffic book as the relayed HTTP requests: a link socket is one request in it.
+    traffic,
     enabled: websocketEnabled,
     policy: () => startContext!.responsesWebsocket!.policy(),
     authorized: identity => fingerprintsFor(identity.keyId, identity.linkId).includes(identity.fingerprint),
@@ -174,6 +181,32 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   // OCX-11: the fallback policy resolves a link data key to its link id through this slot.
   const releaseFallbackLinkResolver = registerFallbackLinkResolver(keyId =>
     readStoreForAdmission().links.find(link => link.apiKeyId === keyId)?.id);
+
+  // Children read route intent through this listener, and that read is pure: it never captures.
+  // So a failed capture (a busy config lock, a damaged route-intent.json, unresolved Aside
+  // ownership) is owed and retried with backoff until it succeeds, the listener closes or stops,
+  // and again on every ensureStarted. Meanwhile every Home-only writer still captures first.
+  let routeDefaultsOwed = false;
+  let captureAttempt = 0;
+  let captureRetry: ReturnType<typeof setTimeout> | undefined;
+  const retryDelay = deps.captureRetryDelayMs ?? (attempt => Math.min(1_000 * 2 ** attempt, 300_000));
+  const captureRouteDefaults = (): void => {
+    if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
+    try {
+      (deps.captureRouteDefaults ?? captureChildRouteDefaults)();
+      routeDefaultsOwed = false;
+      captureAttempt = 0;
+    } catch (error) {
+      if (!routeDefaultsOwed) warn(`⚠ Child route defaults were not captured; retrying: ${error instanceof Error ? error.message : String(error)}`);
+      routeDefaultsOwed = true;
+      if (stopped) return;
+      captureRetry = setTimeout(() => {
+        captureRetry = undefined;
+        if (!stopped && routeDefaultsOwed) captureRouteDefaults();
+      }, retryDelay(captureAttempt++));
+      (captureRetry as { unref?: () => void }).unref?.();
+    }
+  };
 
   const bindIfNeeded = (): void => {
     if (stopped || listener || !startContext) return;
@@ -188,8 +221,16 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       setStatus("off", null, null);
       return;
     }
+    // Capture the Children's defaults from the Home's switches and integrations as they stand at
+    // startup, before any Home-only command can move one. A failure leaves the listener up and is
+    // retried (see above).
+    captureRouteDefaults();
     const requestedPort = store.listenerPort ?? 0;
     const linkWebsocket = startContext.responsesWebsocket;
+    // The resolved inbound limit (index.ts resolves maxInboundBodyBytes), fixed at bind like the public listener's. The
+    // handler re-resolves the live config per request, so after a live raise without a restart a coded body between the
+    // two limits is accepted but releases no hold until the next bind: the safe direction (the link stays in flight).
+    const inboundLimit = startContext.maxRequestBodySize;
     const sessions = createLinkRelaySessions({ peers, activity, traffic, homeFeatures: () => startContext?.homeFeatures?.() ?? buildPeerFeatures(), connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: fingerprintsFor,
       ...(linkWebsocket ? { upgrade: websocketGate.upgrade, websocketAdvertised: websocketEnabled } : {}),
@@ -213,7 +254,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
             expanded(body, chain) { threadHash = threadHashOf(body); resent = chain === "unexpanded" ? [] : marksResent(holds, linkId, threadHash, body); },
             expansionFailed() { resent = []; },
             terminal(status, source) { if (resent.length && threadHash && upstreamCompleted(status, source)) holds.releaseMarks(linkId, threadHash, resent); },
-            ...(logging ? { logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, linkId, header?.trim() ?? "", body) }) } : {}),
+            ...(logging ? { pacedReads: true, logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, linkId, header?.trim() ?? "", body) }) } : {}),
           });
           try { req.headers.set(LINK_TURN_HEADER, token); } catch { releaseLinkTurnToken(token); token = null; }
         }
@@ -223,14 +264,17 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
         const beganAt = holds.sequence();
         if (holds.releasable(linkId)) {
           const decision = new Promise<boolean>(resolve => { decide = resolve; });
-          // The copy is read alongside the request, but released only if the handler accepted it.
-          // A Child may send the body coded (#8594); the copy is decoded through the handlers' bounded reader, and a body
-          // that does not decode releases nothing.
+          // The copy is read and decoded only after the handler accepted the request; a refusal, the inbound budget's 503
+          // included, cancels it unread (#8608). A Child may send the body coded (#8594); the copy is decoded through the
+          // handlers' bounded reader under the same resolved inbound limit, and a body that does not decode releases nothing.
           const encoding = req.headers.get("content-encoding");
-          const parsed = req.clone().arrayBuffer()
-            .then(raw => JSON.parse(new TextDecoder().decode(decodeRequestBody(new Uint8Array(raw), encoding))) as unknown).catch(() => null);
-          const observation = Promise.all([parsed, decision]).then(([body, accepted]) => {
-            if (!accepted || !body || typeof body !== "object") return;
+          const copy = req.clone();
+          const observation = decision.then(async accepted => {
+            // Never awaited: a tee's cancel waits for the other half, which a refusal may leave unread.
+            if (!accepted) { void copy.body?.cancel().catch(() => {}); return; }
+            const raw = new Uint8Array(await copy.arrayBuffer());
+            const body = JSON.parse(new TextDecoder().decode(decodeRequestBody(raw, encoding, inboundLimit))) as unknown;
+            if (!body || typeof body !== "object") return;
             holds.observe(linkId, threadHashOf(body), resultKeysOf((body as Record<string, unknown>).input), beganAt);
           }).catch(() => {}).finally(() => { holdObservations.delete(observation); });
           holdObservations.add(observation);
@@ -301,6 +345,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     const flight = (async () => {
       if (closeFlight) await closeFlight;
       if (stopped) return;
+      // An unbound listener captures in bindIfNeeded; a bound one retries an owed capture here.
+      if (routeDefaultsOwed && listener) captureRouteDefaults();
       bindIfNeeded();
     })();
     ensureFlight = flight.finally(() => {
@@ -312,6 +358,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
 
   const close = (): Promise<void> => {
     if (closeFlight) return closeFlight;
+    // No link is left to protect: an owed capture is retried at the next bind, not on a timer.
+    if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
+    captureAttempt = 0;
     const flight = (async () => {
       if (ensureFlight) await ensureFlight;
       const current = listener;
@@ -370,6 +419,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     close,
     async stop() {
       stopped = true;
+      if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
       releaseFallbackLinkResolver();
       // Process shutdown is deliberately forceful, unlike last-link removal. Every
       // authenticated socket is closed, and the client transport cannot reconnect it.
