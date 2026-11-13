@@ -34,23 +34,24 @@ const HOLD_BYTES = 16 * MiB;
 const INPUT_BYTES = LINK_CHILD_WS_LIMITS.localMessageBytes - 64 * 1024;
 setDefaultTimeout(600_000);
 
-const delta = "x".repeat(EVENT_BYTES - 200);
-const eventJson = (index: number) => JSON.stringify({ type: "response.output_text.delta", index, delta });
+const eventJson = (index: number, delta: string) => JSON.stringify({ type: "response.output_text.delta", index, delta });
 const COMPLETED = '{"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}';
 
 /** Server (unmasked) text frames for 14 near-4 MiB events and the terminal: what a Home sends on a link socket. */
 function wsBody(): Buffer {
+  const delta = "x".repeat(EVENT_BYTES - 200);
   const frame = (text: string): Buffer => {
     const payload = Buffer.from(text, "utf8");
     const head = Buffer.alloc(10); head[0] = 0x81; head[1] = 127; head.writeBigUInt64BE(BigInt(payload.length), 2);
     return Buffer.concat([head, payload]);
   };
-  return Buffer.concat([...Array.from({ length: 14 }, (_, index) => frame(eventJson(index))), frame(COMPLETED)]);
+  return Buffer.concat([...Array.from({ length: 14 }, (_, index) => frame(eventJson(index, delta))), frame(COMPLETED)]);
 }
 
 /** The same events as an SSE body: what a Home sends to a relayed HTTP request. */
 function sseBody(): Buffer {
-  return Buffer.from(Array.from({ length: 14 }, (_, index) => "event: response.output_text.delta\ndata: " + eventJson(index) + "\n\n").join("")
+  const delta = "x".repeat(EVENT_BYTES - 200);
+  return Buffer.from(Array.from({ length: 14 }, (_, index) => "event: response.output_text.delta\ndata: " + eventJson(index, delta) + "\n\n").join("")
     + "event: response.completed\ndata: " + COMPLETED + "\n\n", "utf8");
 }
 
