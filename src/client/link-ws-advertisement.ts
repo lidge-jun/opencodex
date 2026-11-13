@@ -80,6 +80,18 @@ export function linkWebsocketAdvertised(linkId: string | undefined): boolean {
   return linkId !== undefined && links.get(linkId)?.on === true;
 }
 
+/**
+ * The cached state for a link: "on" or "off" from the last answer applied for it, or "unknown" when this process has
+ * no applied answer for that link (a Child just started, a new link, or an entry evicted past the 256 kept). An
+ * undefined link id is "off": nothing could be relayed for it.
+ */
+export function linkWebsocketAdvertisement(linkId: string | undefined): "on" | "off" | "unknown" {
+  if (linkId === undefined) return "off";
+  const entry = links.get(linkId);
+  if (!entry) return "unknown";
+  return entry.on ? "on" : "off";
+}
+
 export function forgetLinkWebsocketAdvertisementsForTests(): void {
   links.clear();
   watermarks.clear();

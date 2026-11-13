@@ -250,6 +250,7 @@
   "link-operations-journal.test.ts": "clients",
   "link-revoke-suspend.test.ts": "clients",
   "link-ws-relay-edges.test.ts": "clients",
+  "link-ws-unknown-try.test.ts": "clients",
   "link-ocx-child-ws-gate.test.ts": "clients",
   "link-ocx-child-ws-feature.test.ts": "clients"
 }
