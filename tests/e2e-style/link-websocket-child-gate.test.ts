@@ -156,7 +156,7 @@ describe("link WebSocket release gate through the real Child (design 11.1 item 1
     expect(["link_ws_close:home", "link_ws_close:client"]).toContain(pair.records[1]!);
     expect(pair.records).toHaveLength(2);
     // The next session's upgrade: the Child's preflight for it learns that the Home no longer advertises the link
-    // WebSocket, so the Child answers 426 without asking the Home, and Codex sends the request over HTTP.
+    // WebSocket, so the Child answers 426 without forwarding the upgrade to the Home, and Codex sends the request over HTTP.
     expectCompleted(await pair.run());
     expect(pair.rows.slice(2)).toEqual(["unmarked:200"]);
     expect(pair.records.slice(2)).toEqual(["link_ws_fallback:not_advertised"]);
@@ -177,7 +177,7 @@ describe("link WebSocket release gate through the real Child (design 11.1 item 1
     expect(pair.rows).toEqual(["websocket:200", "unmarked:200"]);
     // One socket, then a close recorded as "home" or "client"; this file does not establish which side ended the tool
     // result's create (the stand-in scenario in the gate file shows the Home's fence). Codex's reconnect then found the
-    // Home no longer advertising: the Child answered 426 without asking it, and the request went over HTTP.
+    // Home no longer advertising: the Child answered 426 without forwarding the upgrade to it, and the request went over HTTP.
     expect(pair.records[0]).toBe("link_ws_open:connected");
     expect(["link_ws_close:home", "link_ws_close:client"]).toContain(pair.records[1]!);
     expect(pair.records.slice(2)).toEqual(["link_ws_fallback:not_advertised"]);
