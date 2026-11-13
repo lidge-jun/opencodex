@@ -1711,5 +1711,8 @@
   "link-websocket-pump.test.ts": "server",
   "link-websocket-rss.test.ts": "e2e-style",
   "link-websocket-holds.test.ts": "server",
-  "link-ws-activity-holds.test.ts": "clients"
+  "link-ws-activity-holds.test.ts": "clients",
+  "link-ws-framer.test.ts": "clients",
+  "link-ws-advertisement.test.ts": "clients",
+  "link-ws-transport.test.ts": "clients"
 }
