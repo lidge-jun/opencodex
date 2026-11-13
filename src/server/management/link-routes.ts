@@ -511,7 +511,10 @@ async function removeReserved(
         catch {
           const latest = readStoreFor(ctx).links.find(link => link.id === id);
           if (!latest || JSON.stringify(latest) !== JSON.stringify(record)) {
-            await restartTunnel();
+            // A journalled revoke whose Child cleanup ran (or a resumed one) leaves the tunnel down: the Child may already be
+            // disconnected or purged, and the revoke settles unknown, which keeps the link suspended. A plain revoke, or one
+            // that ran no cleanup, restarts it as before.
+            if (!((cleanup || journal.keepsTunnelDown) && journal.operationId !== undefined)) await restartTunnel();
             return fail("link_changed", "The link changed during removal.", 409);
           }
           return fail("link_remove_failed", "The link retirement could not be claimed.", 503);

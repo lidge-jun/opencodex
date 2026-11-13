@@ -901,3 +901,15 @@ test("a resolve during a plain --force takeover is refused, and a failed force l
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
   expect(h.suspendedAtHoldRelease).toEqual([true]);
 });
+
+test("a journalled purge whose link record changes during the Child cleanup keeps the tunnel down and settles unknown", async () => {
+  // Another process edits the record while the purge runs on the Child, so the receipt claim fails afterwards.
+  const changed = { ...record(), tunnelPort: 2201 };
+  let edited = false;
+  const h: ReturnType<typeof harness> = harness({ onRun: () => { if (!edited) { edited = true; h.store = { ...h.store, links: [changed] }; } } });
+  const answer = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: answer.status, code: code(answer), outcome: answer.body.outcome }).toEqual({ status: 409, code: "link_changed", outcome: "unknown" });
+  expect(h.restarts).toBe(0);
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+});
