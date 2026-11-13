@@ -184,7 +184,7 @@ State-changing: yes. JSON mode: `envelope`.
 | `--json` | boolean | Emit the {linkId, outcome, purged} receipt, the {tombstones} list or the {linkId, outcome} forget answer as JSON. |
 
 - Runs the managed planted ocx-child's disconnect --purge --expect-link <id> over the link's alias with its pinned host key, never a sibling route. The Child restores only when its state and its CODEX_HOME ownership record both name that link.
-- Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; a residual one needs ocx-child detach on that machine.
+- Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; for a residual one, inspect the machine first, since a plain ocx-child detach there also removes a link an interrupted attach would restore.
 - A forced revoke of a Home-initiated ephemeral link writes the tombstone; a link that still exists answers link_present, and any other Home-initiated link naming the same alias (case-insensitive) answers alias_linked before the machine is contacted. Without a link operation journal, --operation-id answers operation_journal_unavailable.
 
 ### `ocx link reconnect`

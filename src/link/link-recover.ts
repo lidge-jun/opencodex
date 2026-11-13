@@ -82,13 +82,13 @@ export async function recoverRemoteChild(
   try { result = await exec(remoteManagedPurgeDisconnectArgv(platform, target.linkId)); } catch { return failed("The Child could not be reached.", "ssh_failed"); }
   const report = parseExpectLinkReport(result.stdout);
   if (result.code === EXIT_RESIDUAL && report?.outcome === "residual") {
-    return { ok: false, status: 409, code: "child_residual", message: "The Child keeps state this command does not restore (an ownership record without a link id, or state missing beside its record); run ocx-child detach on that machine, then recover again.", ...(recordHint(report) ? { hint: recordHint(report) } : {}) };
+    return { ok: false, status: 409, code: "child_residual", message: "The Child keeps state this command does not restore (an ownership record without a link id, state missing beside its record, or an interrupted attach of another link). Inspect it first: a plain ocx-child detach on that machine also removes a link an interrupted attach would restore, so run it only when that is safe, then recover again.", ...(recordHint(report) ? { hint: recordHint(report) } : {}) };
   }
   if (result.code === EXIT_CONFLICT && report?.outcome === "conflict") {
     return { ok: false, status: 409, code: "child_conflict", message: "The Child belongs to another link or OpenCodex home, or its records cannot be read; nothing was changed.", ...(recordHint(report) ? { hint: recordHint(report) } : {}) };
   }
   if (result.code === EXIT_USAGE) {
-    return { ok: false, status: 409, code: "child_recover_unsupported", message: "The planted ocx-child predates detach --expect-link; run ocx-child detach on that machine instead." };
+    return { ok: false, status: 409, code: "child_recover_unsupported", message: "The planted ocx-child predates detach --expect-link, so it cannot check which link it belongs to. Plant a current ocx-child and recover again, or check on that machine that it still belongs to this link before running ocx-child detach there; for a machine that is gone, a person on this Home can run ocx link recover --forget." };
   }
   if (result.code !== 0) {
     if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) {

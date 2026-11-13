@@ -1565,8 +1565,10 @@ means the Child restored its state but kept the planted binary because another
 OpenCodex home on that machine runs a relay from it, and the tombstone is removed
 too. `child_residual`
 (exit 5) means the Child keeps records this command does not restore, such as an
-ownership record written by an older `ocx-child`; run
-`~/.cache/opencodex/bin/ocx-child detach` on that machine, then recover again.
+ownership record written by an older `ocx-child` or an interrupted attach of
+another link. Inspect the machine first: `~/.cache/opencodex/bin/ocx-child detach`
+there also removes a link that interrupted attach would restore, so run it only
+when that is safe, then recover again.
 `child_conflict` (exit 5) means the Child belongs to another link or OpenCodex
 home, and nothing was changed. `alias_linked` (exit 5) means another Home-initiated link still uses that
 alias, as its alias or one of its routes, so the machine may belong to that link: do not run
