@@ -586,7 +586,7 @@ describe("replay survives the settled-entry bound", () => {
     const applied = await h.enroll();
     expect(applied.status).toBe(202);
     const committedOp = h.journal().operations[0]!;
-    // Many operations settle after it within the same day (a provisioning burst); a later write prunes.
+    // Many operations settle after it inside the replay window (a provisioning burst); a later write prunes, but not it.
     const newer = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 4 }, (_, i) => entry({ operationId: "later-" + i, alias: "pen-later-" + i, state: "committed",
       finishedAt: new Date(NOW + 1000 + i).toISOString(), digest: "e".repeat(64) }));
     writeOperationsJournal(h.journalPath, { version: 1, operations: [committedOp, ...newer] });
