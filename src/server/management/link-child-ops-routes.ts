@@ -73,7 +73,7 @@ export function childOpsEnvFor(ctx: ManagementContext, state: LinkRouteState, id
     // wp2's observe deps, unchanged: the peer and activity listeners are optional on LinkRouteListener.
     observe: record => observeChild(record, { runner, knownHostsFile: hosts, homeVersion,
       peer: linkId => state.listener.peerObservation?.(linkId) ?? { observed: null, refused: null },
-      platformOf: link => requireRemotePlatform(runner, link.alias, hosts),
+      platformOf: link => requireRemotePlatform(runner, link.alias, link.explicitRoute ?? null, hosts),
       inspect: inspectRemoteChildRuntime, now: () => new Date(now()) }),
     readObservation: linkId => readChildObservations().children[linkId] ?? null,
     // Never throws into a runner: a cache write failure is logged by error name (ChildOpsEnv contract).

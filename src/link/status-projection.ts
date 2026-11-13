@@ -28,6 +28,9 @@ export interface LinkStatusDto {
     reason: string | null;
     tunnelPort: number;
     childKind?: "full" | "ephemeral";
+    /** Exclusive links only (structure/remote-link.md, "Explicit route"); absent on every other row. */
+    exclusive?: true;
+    explicitRoute?: import("./explicit-route").ExplicitRoute;
     /** Home only: what the link carried from this Child, and the compatibility verdict. */
     peer?: LinkPeerStatus;
     /** Home-initiated links on request (`?diagnostics=1`): retry progress and the last failure. */
@@ -294,6 +297,8 @@ export function projectLinkStatus(
     ...stateDetails(record, byId.get(record.id), compensation),
     tunnelPort: record.tunnelPort,
     ...(record.childKind ? { childKind: record.childKind } : {}),
+    ...(record.exclusive ? { exclusive: true as const } : {}),
+    ...(record.explicitRoute ? { explicitRoute: { ...record.explicitRoute } } : {}),
     ...parity(record.id),
   }));
   const childRecord = config.runtimeRole === "client"
