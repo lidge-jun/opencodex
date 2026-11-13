@@ -20,7 +20,8 @@ import { writeWindowsSchedulerAssets, stageWindowsSchedulerRegistrationXml, remo
 import type { WindowsCheckedStopResult } from "./windows-checked-stop";
 import { WINDOWS_STOP_CAPS } from "./windows-stop-budget";
 import type { WindowsStopConfirmResult } from "./windows-stop-confirm";
-import { confirmWindowsServiceStop, describeWindowsPartA, describeWindowsPartB, runWindowsServiceStopPartA, serviceStopOutcomeFromWindows, windowsServiceStopPort, windowsStopAdmission, windowsStopRemainingMs, type WindowsPartARequest } from "./windows-service-stop";
+import { claimPendingTeardown, clearPendingTeardown, type PendingTeardownReceipt } from "../config/pending-teardown";
+import { confirmWindowsServiceStop, describeWindowsPartA, describeWindowsPartB, runWindowsServiceStopPartA, serviceStopOutcomeFromWindows, windowsPartARecord, windowsReceiptEndpoint, windowsServiceStopPort, windowsStopAdmission, windowsStopRemainingMs, type WindowsPartARequest } from "./windows-service-stop";
 import { schtasks, probeWindowsSchedulerTask, rollbackWindowsSchedulerTaskOwnedByAttempt, settleDelay } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy } from "./windows-taskxml";
@@ -281,8 +282,49 @@ export interface ServiceInstallPreparationDeps extends RuntimePreflightDeps {
    * so Part B confirmed the wrapper's port while the proxy's own port was never checked.
    */
   windowsStopPort?: () => number;
-  stopTrackedProxy?: () => Promise<unknown>;
+  /** Receives the deferral nonce so the wrapper's POST does not run the teardown. */
+  stopTrackedProxy?: (io?: TrackedProxyStopIo) => Promise<unknown>;
+  /** The endpoint a Windows install's teardown receipt names (runtime record, else config). */
+  teardownEndpoint?: typeof windowsReceiptEndpoint;
+  claimTeardown?: typeof claimPendingTeardown;
+  clearTeardown?: (nonce: string) => boolean;
   platform?: NodeJS.Platform;
+}
+
+/**
+ * What an install preparation left behind.
+ *
+ * `deferredTeardownNonce` exists only on Windows after Part A stopped: the install stopped
+ * the old proxy with the shared teardown deferred, so it owes the receipt. The install that
+ * replaces the proxy keeps shared config pointed at OpenCodex and completes the receipt
+ * after the new service is installed and started; a failed install leaves it for the next
+ * `ocx stop` to finish.
+ */
+export interface ServiceInstallPreparationResult {
+  deferredTeardownNonce?: string;
+}
+
+/**
+ * Claim the deferred-teardown receipt the install's tracked stop will name.
+ *
+ * Part A leaves the scheduler task registered, so a receipt-less POST answers 409
+ * `respawnable_service` and the stop throws while the old proxy keeps serving. The
+ * receipt is claimed with Part A's record before the POST, exactly as `ocx service stop`
+ * does; without it no undeferred stop is sent.
+ */
+function claimInstallTeardownReceipt(
+  deps: ServiceInstallPreparationDeps,
+  partA: WindowsCheckedStopResult,
+): PendingTeardownReceipt {
+  const { endpoint, source } = (deps.teardownEndpoint ?? windowsReceiptEndpoint)();
+  try {
+    return (deps.claimTeardown ?? claimPendingTeardown)(endpoint, source, process.pid, undefined, windowsPartARecord(partA));
+  } catch (error) {
+    throw new Error(
+      "The deferred-teardown receipt could not be recorded, so the proxy was left running and nothing was replaced: "
+      + (error instanceof Error ? error.message : String(error)),
+    );
+  }
 }
 
 /**
@@ -293,7 +335,7 @@ export interface ServiceInstallPreparationDeps extends RuntimePreflightDeps {
 export async function prepareServiceInstall(
   requestedBackend: ServiceBackend,
   deps: ServiceInstallPreparationDeps = {},
-): Promise<void> {
+): Promise<ServiceInstallPreparationResult> {
   const latch = deps.supervisionLatch ?? createSupervisionLatch();
   assertNoDesktopSupervision(deps.inspectSupervision, latch);
   const platform = deps.platform ?? process.platform;
@@ -312,11 +354,21 @@ export async function prepareServiceInstall(
     if (partA.outcome !== "stopped" && partA.outcome !== "absent") {
       throw new Error(`The installed Windows service could not be proven stopped (${partA.outcome}); nothing was replaced. ${describeWindowsPartA(partA)}`);
     }
+    let nonce: string | undefined;
+    if (partA.outcome === "stopped") {
+      // Before the tracked stop: a receipt-less POST would answer 409 and abort the install
+      // while the old proxy kept serving.
+      nonce = claimInstallTeardownReceipt(deps, partA).nonce;
+    }
     // Part B owns the port wait after a stopped manager (030 "Time budget").
-    await (deps.stopTrackedProxy ?? (() => stopTrackedProxyIfRunning({
+    await (deps.stopTrackedProxy ?? ((io?: TrackedProxyStopIo) => stopTrackedProxyIfRunning(io ?? {
       skipPortWait: partA.outcome === "stopped",
       orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery,
-    })))();
+    })))({
+      ...(nonce ? { deferSharedTeardownNonce: nonce } : {}),
+      skipPortWait: partA.outcome === "stopped",
+      orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery,
+    });
     if (partA.outcome === "stopped") {
       const partB = await (deps.windowsPartB ?? confirmWindowsServiceStop)({
         port: stopPort,
@@ -325,8 +377,9 @@ export async function prepareServiceInstall(
       if (partB.outcome !== "freed") {
         throw new Error(`The service port is not free after the stop; nothing was published or started. ${describeWindowsPartB(partB)}`);
       }
+      return { deferredTeardownNonce: nonce };
     }
-    return;
+    return {};
   }
   const resolveOps = deps.managerOps ?? platformServiceInstallCleanupOps;
   const backends: ServiceBackend[] = [];
@@ -341,6 +394,8 @@ export async function prepareServiceInstall(
     if (manager.status() !== null) manager.stop();
   }
   await (deps.stopTrackedProxy ?? stopTrackedProxyIfRunning)();
+  // No manager deferral off Windows: the launchd/systemd stop is down when it reports so.
+  return {};
 }
 
 export async function installServiceSafely(
@@ -353,9 +408,16 @@ export async function installServiceSafely(
   const runtime = Object.freeze({ ...(deps.selectRuntime ?? durableBunRuntime)() });
   const configDir = (deps.configDir ?? getConfigDir)();
   (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform: deps.platform, rootWasAbsent: !existsSync(configDir) });
-  await prepareServiceInstall(requestedBackend, { ...deps, supervisionLatch: latch });
+  const prepared = await prepareServiceInstall(requestedBackend, { ...deps, supervisionLatch: latch });
   assertNoDesktopSupervision(deps.inspectSupervision, latch);
   await install(runtime);
+  // The new service is installed and started, so shared config stays pointed at OpenCodex
+  // and the deferral is discharged. An install failure above throws before this line and
+  // keeps the receipt for the next stop.
+  const nonce = prepared.deferredTeardownNonce;
+  if (nonce && !(deps.clearTeardown ?? clearPendingTeardown)(nonce)) {
+    console.warn("⚠️  The deferred-teardown receipt could not be removed; the next 'ocx stop' will finish it.");
+  }
 }
 
 export interface FreshWindowsSchedulerInstallDeps extends RuntimePreflightDeps {
@@ -364,7 +426,7 @@ export interface FreshWindowsSchedulerInstallDeps extends RuntimePreflightDeps {
   stageRegistrationXml?: (attemptNonce: string) => string;
   register?: (xmlPath: string, attemptNonce: string) => Promise<void>;
   recordOwnership?: () => boolean;
-  prepare?: () => Promise<void>;
+  prepare?: () => Promise<ServiceInstallPreparationResult | void>;
   removeNativeService?: () => void;
   publishAssets?: (runtime: DurableBunRuntime) => void;
   verifyBeforeRun?: (attemptNonce: string) => void | Promise<void>;
@@ -446,7 +508,7 @@ export async function installFreshWindowsSchedulerSafely(
       );
     }
     (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform: deps.platform, rootWasAbsent: false });
-    await prepare();
+    const prepared = await prepare();
     assertNoDesktopSupervision(deps.inspectSupervision, latch);
     removeNativeService();
     publishAssets(runtime);
@@ -455,6 +517,13 @@ export async function installFreshWindowsSchedulerSafely(
     runTask();
     started = true;
     writeState(runtime);
+    // A prepare that stopped an old manager claimed the deferral receipt; the replacement
+    // is running now, so shared config stays pointed at OpenCodex and the obligation is
+    // discharged. A failure above keeps it for the next stop.
+    const nonce = prepared && "deferredTeardownNonce" in prepared ? prepared.deferredTeardownNonce : undefined;
+    if (nonce && !clearPendingTeardown(nonce)) {
+      console.warn("⚠️  The deferred-teardown receipt could not be removed; the next 'ocx stop' will finish it.");
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (registered && !started) {

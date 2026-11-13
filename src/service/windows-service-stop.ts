@@ -231,6 +231,21 @@ export function windowsPartARecord(result: WindowsCheckedStopResult): PendingTea
   };
 }
 
+/**
+ * The endpoint a teardown receipt should name: the runtime record when it has one, the
+ * configured address otherwise. `exact` is the only source a stop may defer against.
+ */
+export function windowsReceiptEndpoint(): { endpoint: { hostname: string; port: number }; source: "exact" | "guessed" } {
+  const runtime = readRuntimePort();
+  if (runtime?.port) return { endpoint: { hostname: runtime.hostname ?? "127.0.0.1", port: runtime.port }, source: "exact" };
+  try {
+    const config = loadConfig();
+    return { endpoint: { hostname: config.hostname ?? "127.0.0.1", port: typeof config.port === "number" && config.port > 0 ? config.port : 10100 }, source: "guessed" };
+  } catch {
+    return { endpoint: { hostname: "127.0.0.1", port: 10100 }, source: "guessed" };
+  }
+}
+
 /** The port Part B watches: runtime record, then the wrapper's baked port, then the config. */
 export function windowsServiceStopPort(): number {
   return resolveWindowsStopPort({

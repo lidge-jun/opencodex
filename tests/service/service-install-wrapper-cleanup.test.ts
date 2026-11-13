@@ -102,6 +102,70 @@ describe("service install preparation wrapper cleanup", () => {
     expect(calls).toEqual(["partA", "stop:standalone"]);
   });
 
+  test("a stopped Part A claims a receipt before the tracked stop and forwards its nonce", async () => {
+    // #7771 round 9: Part A leaves the scheduler task registered, so the tracked stop's
+    // /api/stop answers 409 respawnable_service without a receipt. stopProxy then throws and
+    // the install aborts while the old proxy keeps serving. The install claims the receipt
+    // with Part A's record before the stop, exactly as `ocx service stop` does.
+    const calls: string[] = [];
+    const claimed: Array<{ endpoint: { hostname: string; port: number }; partA: unknown }> = [];
+    const stopIo: Array<{ deferSharedTeardownNonce?: string }> = [];
+    const cleared: string[] = [];
+    let installed = false;
+    await installServiceSafely("scheduler", () => { calls.push("install"); installed = true; }, {
+      platform: "win32",
+      windowsPartA: async () => { calls.push("partA"); return partAResult("stopped"); },
+      windowsPartB: async () => { calls.push("partB"); return partBResult("freed"); },
+      windowsStopPort: () => 12000,
+      teardownEndpoint: () => ({ endpoint: { hostname: "127.0.0.1", port: 12000 }, source: "exact" }),
+      claimTeardown: (endpoint, _source, _pid, _handover, partA) => {
+        calls.push("claim");
+        claimed.push({ endpoint, partA });
+        return { nonce: "nonce-1" };
+      },
+      clearTeardown: nonce => { calls.push("clear"); cleared.push(nonce); return true; },
+      stopTrackedProxy: async io => { calls.push("stop:standalone"); stopIo.push(io ?? {}); },
+    });
+    expect(installed).toBe(true);
+    expect(calls).toEqual(["partA", "claim", "stop:standalone", "partB", "install", "clear"]);
+    expect(claimed).toEqual([{
+      endpoint: { hostname: "127.0.0.1", port: 12000 },
+      partA: { partA: "stopped", manager: { scheduler: true, winsw: false }, wrappers: [{ pid: 30, startTime: 5_100 }] },
+    }]);
+    expect(stopIo).toEqual([{ deferSharedTeardownNonce: "nonce-1", skipPortWait: true, orphanDiscoveryCapMs: expect.any(Number) }]);
+    // The install replaces the proxy, so shared config stays pointed at OpenCodex and the
+    // obligation is discharged only once the new service is installed and started.
+    expect(cleared).toEqual(["nonce-1"]);
+  });
+
+  test("an install that fails after the stop keeps the receipt for the next stop", async () => {
+    const cleared: string[] = [];
+    await expect(installServiceSafely("scheduler", () => { throw new Error("install failed"); }, {
+      platform: "win32",
+      windowsPartA: async () => partAResult("stopped"),
+      windowsPartB: async () => partBResult("freed"),
+      windowsStopPort: () => 12000,
+      teardownEndpoint: () => ({ endpoint: { hostname: "127.0.0.1", port: 12000 }, source: "exact" }),
+      claimTeardown: () => ({ nonce: "nonce-2" }),
+      clearTeardown: nonce => { cleared.push(nonce); return true; },
+      stopTrackedProxy: async () => {},
+    })).rejects.toThrow("install failed");
+    expect(cleared).toEqual([]);
+  });
+
+  test("a receipt that cannot be claimed refuses before the tracked stop", async () => {
+    const calls: string[] = [];
+    await expect(prepareServiceInstall("scheduler", {
+      platform: "win32",
+      windowsPartA: async () => { calls.push("partA"); return partAResult("stopped"); },
+      windowsStopPort: () => 12000,
+      teardownEndpoint: () => ({ endpoint: { hostname: "127.0.0.1", port: 12000 }, source: "exact" }),
+      claimTeardown: () => { throw new Error("disk full"); },
+      stopTrackedProxy: async () => { calls.push("stop:standalone"); },
+    })).rejects.toThrow(/deferred-teardown receipt could not be recorded[\s\S]*disk full/);
+    expect(calls).toEqual(["partA"]);
+  });
+
   test("non-Windows install preparation never reaches the checked Windows stop", async () => {
     let partA = 0;
     await prepareServiceInstall("scheduler", {
