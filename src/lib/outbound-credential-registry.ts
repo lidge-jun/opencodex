@@ -32,6 +32,52 @@ export function isCredentialName(name: string): boolean {
   return SENSITIVE_KEY_PATTERN.test(name) || CREDENTIAL_HEADER_NAME.test(name);
 }
 
+/** True for a request-correlation header, whose value is never recorded as a credential. */
+export function isCorrelationHeaderName(name: string): boolean {
+  return CORRELATION_HEADER_NAME.test(name);
+}
+
+/**
+ * Replace every span of text a secret covers: the whole text when it equals a whole-only value, and
+ * every occurrence of each substring value. Spans are found on the original text and merged before
+ * anything is replaced, so overlapping values are replaced as one union and no part of either
+ * survives between them.
+ */
+export function maskSecretSpans(text: string, replacement: string, substrings: Iterable<string>, wholeOnly: Iterable<string> = []): string {
+  for (const value of wholeOnly) if (value && text === value) return replacement;
+  const spans: Array<[number, number]> = [];
+  for (const secret of substrings) {
+    if (!secret) continue;
+    for (let at = text.indexOf(secret); at >= 0; at = text.indexOf(secret, at + 1)) spans.push([at, at + secret.length]);
+  }
+  if (spans.length === 0) return text;
+  spans.sort((a, b) => a[0] - b[0]);
+  let out = "";
+  let cursor = 0;
+  let [start, end] = spans[0]!;
+  for (const [spanStart, spanEnd] of spans.slice(1)) {
+    if (spanStart <= end) {
+      end = Math.max(end, spanEnd);
+      continue;
+    }
+    out += text.slice(cursor, start) + replacement;
+    cursor = end;
+    start = spanStart;
+    end = spanEnd;
+  }
+  return out + text.slice(cursor, start) + replacement + text.slice(end);
+}
+
+/** Slices recorded for a value too large to keep whole: any window of 320+ characters holds one. */
+const OVERSIZED_SLICE_CHARS = 64;
+const OVERSIZED_SLICE_STRIDE = 256;
+function oversizedSlices(value: string): string[] {
+  const slices: string[] = [];
+  for (let at = 0; at + OVERSIZED_SLICE_CHARS <= value.length; at += OVERSIZED_SLICE_STRIDE) slices.push(value.slice(at, at + OVERSIZED_SLICE_CHARS));
+  slices.push(value.slice(-OVERSIZED_SLICE_CHARS));
+  return slices;
+}
+
 /**
  * Values of RFC 9110 auth-params (token BWS "=" BWS ( token / quoted-string )), cookie pairs and
  * other name=value pairs, in one linear pass: every character is visited a bounded number of times,
@@ -164,23 +210,32 @@ class BoundedValueSet {
 export class OutboundCredentialRegistry {
   private readonly strict: BoundedValueSet;
   private readonly observed: BoundedValueSet;
+  private readonly maxValueBytes: number;
 
   constructor(options: OutboundCredentialRegistryOptions = {}) {
     const entries = options.maxEntries ?? 4096;
     const bytes = options.maxBytes ?? 1 << 20;
     const valueBytes = options.maxValueBytes ?? 16_384;
+    this.maxValueBytes = valueBytes;
     this.strict = new BoundedValueSet(entries, bytes, valueBytes);
     this.observed = new BoundedValueSet(entries, bytes, valueBytes);
   }
 
-  /** Record the components of every value in headers that are about to be sent. */
+  /**
+   * Record the components of every value in headers that are about to be sent. A component too
+   * large to keep whole is also recorded as overlapping slices, so a bounded diagnostic that repeats
+   * any part of it is still recognized; a credential-named one still marks the registry incomplete.
+   */
   remember(headers: HeadersInit | Headers | undefined): void {
     if (!headers) return;
     new Headers(headers).forEach((value, name) => {
       const strict = isCredentialName(name);
       if (!strict && CORRELATION_HEADER_NAME.test(name)) return;
       const tier = strict ? this.strict : this.observed;
-      for (const part of credentialComponents(value)) tier.add(part);
+      for (const part of credentialComponents(value)) {
+        tier.add(part);
+        if (Buffer.byteLength(part, "utf8") > this.maxValueBytes) for (const slice of oversizedSlices(part)) this.observed.add(slice);
+      }
     });
   }
 
@@ -198,14 +253,15 @@ export class OutboundCredentialRegistry {
    * Replace, inside text, every recorded value {@link matches} would recognize: the whole text when
    * it equals a credential-named value at any length (or another value at 8+), and each contained
    * value of 8+ characters. Unlike a whole-text refusal, the surrounding copy survives, so a reader
-   * that classifies it (refusal wording, codes) still sees the provider's words.
+   * that classifies it (refusal wording, codes) still sees the provider's words. Extra values from
+   * the caller are masked in the same pass, so overlaps across both sets are replaced as one span.
    */
-  mask(text: string, replacement: string): string {
-    if (this.strict.values.has(text) || (text.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH && this.observed.values.has(text))) return replacement;
-    const secrets = [...this.strict.values.keys(), ...this.observed.values.keys()]
-      .filter(secret => secret.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH && text.includes(secret))
-      .sort((a, b) => b.length - a.length);
-    return secrets.reduce((safe, secret) => safe.replaceAll(secret, replacement), text);
+  mask(text: string, replacement: string, extra: { substrings?: readonly string[]; wholeOnly?: readonly string[] } = {}): string {
+    const observed = [...this.observed.values.keys()].filter(value => value.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH);
+    const strictLong = [...this.strict.values.keys()].filter(value => value.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH);
+    return maskSecretSpans(text, replacement,
+      [...strictLong, ...observed, ...(extra.substrings ?? [])],
+      [...this.strict.values.keys(), ...observed, ...(extra.wholeOnly ?? [])]);
   }
 }
 

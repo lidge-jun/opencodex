@@ -1,5 +1,12 @@
 import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib/redact";
-import { CREDENTIAL_SUBSTRING_MIN_LENGTH, credentialComponents, outboundCredentials } from "../../lib/outbound-credential-registry";
+import {
+  CREDENTIAL_SUBSTRING_MIN_LENGTH,
+  credentialComponents,
+  isCorrelationHeaderName,
+  isCredentialName,
+  maskSecretSpans,
+  outboundCredentials,
+} from "../../lib/outbound-credential-registry";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 import { isUntypedBareUpstreamError } from "../bare-upstream-error";
 
@@ -19,8 +26,8 @@ const PROTOCOL_WORD = /^[A-Za-z._]+$/;
  * to occur in copy by chance and is not a protocol word, so masking never rewrites an event name,
  * a `type` or a field name of the frame it protects. The full credential is masked at any length.
  */
-export function createOutboundCredentialMask(outboundHeaders: Record<string, string>): (text: string) => string {
-  const knownSecrets = Object.entries(outboundHeaders)
+function exactSecrets(outboundHeaders: Record<string, string>): string[] {
+  return Object.entries(outboundHeaders)
     .filter(([name]) => SENSITIVE_KEY_PATTERN.test(name) || CREDENTIAL_HEADER_SEGMENT.test(name))
     .flatMap(([name, value]) => {
       const credential = /^(?:authorization|proxy-authorization)$/i.test(name)
@@ -29,13 +36,37 @@ export function createOutboundCredentialMask(outboundHeaders: Record<string, str
       if (!credential) return [];
       const parts = new Set([credential, ...credentialComponents(value)
         .filter(part => part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH && !PROTOCOL_WORD.test(part))]);
-      return [...parts].flatMap(part => {
-        const escaped = JSON.stringify(part).slice(1, -1);
-        return escaped === part ? [part] : [part, escaped];
-      });
-    })
-    .sort((a, b) => b.length - a.length);
-  return (text) => knownSecrets.reduce((safe, secret) => safe.replaceAll(secret, REDACTED_SECRET), text);
+      return [...parts].flatMap(withEscapedSpelling);
+    });
+}
+
+function withEscapedSpelling(part: string): string[] {
+  const escaped = JSON.stringify(part).slice(1, -1);
+  return escaped === part ? [part] : [part, escaped];
+}
+
+export function createOutboundCredentialMask(outboundHeaders: Record<string, string>): (text: string) => string {
+  const secrets = exactSecrets(outboundHeaders);
+  return (text) => maskSecretSpans(text, REDACTED_SECRET, secrets);
+}
+
+/**
+ * Every value this request sends, tiered like the outbound registry and without its size cap:
+ * credential-named headers are masked when the whole text equals a component at any length, and
+ * every header except request correlation is masked where a component of 8+ characters occurs.
+ */
+function sentValueSets(outboundHeaders: Record<string, string>): { substrings: string[]; wholeOnly: string[] } {
+  const substrings: string[] = [];
+  const wholeOnly: string[] = [];
+  for (const [name, value] of Object.entries(outboundHeaders)) {
+    const credentialNamed = isCredentialName(name);
+    if (!credentialNamed && isCorrelationHeaderName(name)) continue;
+    for (const part of credentialComponents(value)) {
+      if (credentialNamed) wholeOnly.push(part);
+      if (part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) substrings.push(...withEscapedSpelling(part));
+    }
+  }
+  return { substrings, wholeOnly };
 }
 
 /** Mask upstream diagnostics before either SSE delivery or buffered JSON reconstruction. */
@@ -43,7 +74,9 @@ export function createTerminalErrorRedactionBlockRewrite(
   outboundHeaders: Record<string, string>,
   maskCredential = createOutboundCredentialMask(outboundHeaders),
 ): SseBlockRewrite {
+  const untypedMask = { exact: exactSecrets(outboundHeaders), sent: sentValueSets(outboundHeaders) };
   const redactDiagnostic = (value: unknown): unknown => {
+    if (isUntypedBareUpstreamError(value)) return redactSecrets(guardUntypedEnvelope(value, untypedMask));
     const maskKnown = (entry: unknown): unknown => {
       if (typeof entry === "string") return maskCredential(entry);
       if (Array.isArray(entry)) return entry.map(maskKnown);
@@ -59,8 +92,7 @@ export function createTerminalErrorRedactionBlockRewrite(
     };
     // The exact selected credential first: a pattern rule that matches a token inside it (sk-...,
     // Bearer ...) would otherwise split it and leave a prefix the exact mask can no longer find.
-    const masked = maskKnown(value);
-    return redactSecrets(isUntypedBareUpstreamError(value) ? guardUntypedDiagnostics(masked as Record<string, unknown>) : masked);
+    return redactSecrets(maskKnown(value));
   };
   return (block) => {
     const terminalFrame = /^event:[ \t]*response\.(?:failed|incomplete)[ \t]*\r?$/m.test(block);
@@ -83,24 +115,30 @@ export function createTerminalErrorRedactionBlockRewrite(
 }
 
 /**
- * An untyped envelope's diagnostic records hold the same guard as the bare-verdict copy built from
- * them: every value this process sent upstream, by the outbound registry's coverage (credential-named
- * headers, other headers at 8+ characters, Basic halves and parameter values), is masked inside each
- * string. The rest of the copy survives, so the relay's tail still reads the provider's refusal
- * wording and codes from the rewritten frame. Only error records are guarded, so the frame's own
- * fields and names stay intact.
+ * An untyped envelope is upstream text throughout, with no protocol `type` of its own, so every key
+ * and string in it is masked in one pass: the exact selected credentials at any length, every value
+ * this request sent (its own headers, uncapped), and every value the outbound registry recorded.
+ * Spans are merged before replacement, so overlapping values leave nothing between them. Only the
+ * matching values are replaced, so the relay's tail still reads the provider's refusal wording and
+ * codes from the rewritten frame. A value under a sensitive key name is withheld whole.
  */
-function guardUntypedDiagnostics(event: Record<string, unknown>): Record<string, unknown> {
+function guardUntypedEnvelope(
+  event: unknown,
+  masks: { exact: readonly string[]; sent: { substrings: readonly string[]; wholeOnly: readonly string[] } },
+): unknown {
   const registry = outboundCredentials();
+  const extra = { substrings: [...masks.exact, ...masks.sent.substrings], wholeOnly: masks.sent.wholeOnly };
+  const mask = (text: string): string => registry.mask(text, REDACTED_SECRET, extra);
   const guard = (entry: unknown): unknown => {
-    if (typeof entry === "string") return registry.mask(entry, REDACTED_SECRET);
+    if (typeof entry === "string") return mask(entry);
     if (Array.isArray(entry)) return entry.map(guard);
-    if (entry && typeof entry === "object") return Object.fromEntries(Object.entries(entry).map(([key, item]) => [key, guard(item)]));
+    if (entry && typeof entry === "object") {
+      return Object.fromEntries(Object.entries(entry).map(([key, item]) => [
+        mask(key),
+        SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_SECRET : guard(item),
+      ]));
+    }
     return entry;
   };
-  return {
-    ...event,
-    ...(event.error !== undefined ? { error: guard(event.error) } : {}),
-    ...(event.last_error !== undefined ? { last_error: guard(event.last_error) } : {}),
-  };
+  return guard(event);
 }

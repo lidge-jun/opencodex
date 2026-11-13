@@ -1753,6 +1753,7 @@
     "sse-null-data-frame.test.ts": "responses",
     "sse-payload-rewrite.test.ts": "responses",
     "sse-rewrite-line-endings.test.ts": "responses",
+    "sse-untyped-credential-mask.test.ts": "responses",
     "chat-sse-framing-guard.test.ts": "responses",
     "sse-unspaced-data-fields.test.ts": "responses",
     "stale-state-purge.test.ts": "service",
