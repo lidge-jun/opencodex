@@ -644,7 +644,9 @@ const RETIREMENT_GUIDANCE: Record<string, string> = {
   // A journalled owner refuses any revoke without --force that is not its own id; a plain revoke without --force finishes only
   // a removal no journalled operation owns (link-routes.ts foreignRetirement).
   link_retirement_owned: "An unfinished removal holds this link. Repeat the open or unknown revoke of this link (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --link-id <link id> --force --yes without --operation-id. If no journalled operation owns it, ocx link revoke without --operation-id and without --force also finishes it when its Child cleanup can run again.",
-  link_retirement_mode_mismatch: "This link's removal was interrupted after its cleanup ran. Repeat it with the same options as that attempt, or with --force, to finish it.",
+  // Unreachable with --operation-id at this head (foreignRetirement admits only this operation's own receipt, resumed in its own
+  // mode); kept as a closed text with no state claim. "--force" with the same id would answer operation_mismatch, so it is not offered.
+  link_retirement_mode_mismatch: "This link's removal was interrupted in another mode than this revoke asks for. Repeat the revoke that started it with its options (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --link-id <link id> --force --yes without --operation-id.",
 };
 
 /**
