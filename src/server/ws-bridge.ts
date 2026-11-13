@@ -1,4 +1,5 @@
 import { isolateCodexPoolAccountHeaders } from "../codex/forward-transport-headers";
+import { isUntypedBareUpstreamError } from "./bare-upstream-error";
 import type { NativeResponseControl } from "./responses/native-response-control";
 import type { HandleResponsesOptions } from "./responses/core-options";
 import type { ServerWebSocket } from "bun";
@@ -296,6 +297,8 @@ export async function pumpResponsesSseToWebSocket(
     untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
+    /** The body is the upstream itself (native control), so no relay tail follows a bare envelope. */
+    rawUpstream?: boolean;
   } = {},
 ): Promise<void> {
   const reader = sseStream.getReader();
@@ -366,12 +369,22 @@ export async function pumpResponsesSseToWebSocket(
   const handlePayload = (payload: string): boolean => {
     if (!isCurrent()) return true;
     if (payload === "[DONE]") return false;
-    try {
-      options.onSsePayload?.(payload);
-    } catch {
-      /* payload observation must not affect WebSocket delivery */
-    }
     const type = payloadType(payload);
+    let untypedBare = false;
+    if (!type) {
+      try { untypedBare = isUntypedBareUpstreamError(JSON.parse(payload)); } catch { /* protocol error below */ }
+    }
+    // A relayed stream follows an untyped envelope with its own response.failed, so the envelope
+    // waits for it. A raw upstream body has no such tail: the envelope stays the protocol error
+    // it always was and is not recorded as a verdict the client never received.
+    if (!(untypedBare && options.rawUpstream)) {
+      try {
+        options.onSsePayload?.(payload);
+      } catch {
+        /* payload observation must not affect WebSocket delivery */
+      }
+    }
+    if (untypedBare && !options.rawUpstream) return false;
     if (!type) {
       reportTerminal("incomplete");
       sendProtocolError(ws, 502, "Invalid JSON payload in upstream SSE frame");
@@ -572,6 +585,7 @@ export async function sendResponseToWebSocket(
     untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
+    rawUpstream?: boolean;
   } = {},
 ): Promise<void> {
   if (!isCurrent()) {
@@ -606,6 +620,7 @@ export async function sendResponseToWebSocket(
       untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
+      rawUpstream: options.rawUpstream,
     });
     return;
   }
@@ -630,6 +645,7 @@ export async function sendResponseToWebSocket(
       untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
+      rawUpstream: options.rawUpstream,
     });
     return;
   }
