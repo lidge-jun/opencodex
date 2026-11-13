@@ -18,6 +18,17 @@ function packageEnd(row: Record<string, unknown>): number | undefined {
   return undefined;
 }
 
+/** CN summaries can report only an aggregate `TotalCredits` record with no Packages rows. */
+export function workBuddyAggregateCredits(summary: Record<string, unknown>): WorkBuddyCreditBalance | undefined {
+  if (!Array.isArray(summary.Packages) || summary.Packages.length) return undefined;
+  const raw = summary.TotalCredits;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const row = raw as Record<string, unknown>;
+  const total = workBuddyCapacity(row.Total), used = workBuddyCapacity(row.Used), remaining = workBuddyCapacity(row.Remain);
+  if (total === undefined || used === undefined || remaining === undefined) return undefined;
+  return { total, used, remaining, frozen: 0, groups: [] };
+}
+
 export function workBuddyExpiringCredits(packages: unknown[], codes: ReadonlySet<string>, now: number): WorkBuddyCreditBalance["expiring"] {
   let at = Infinity, amount = 0;
   for (const raw of packages) {
@@ -63,7 +74,7 @@ export async function fetchWorkBuddyQuota(provider: string, credential: OAuthCre
   try {
     const headers = workBuddyHeaders(credential.access, credential.workbuddy, profile);
     const summary = await workBuddyApi("/billing/meter/get-user-resource-summary", headers, signal, true, {}, profile);
-    let credits = parseWorkBuddyCredits(summary);
+    let credits = workBuddyAggregateCredits(workBuddyRecord(summary)) ?? parseWorkBuddyCredits(summary);
     if (credential.workbuddy.enterpriseId && (!credits || credits.total === 0)) {
       const team = await workBuddyApi("/billing/meter/get-enterprise-user-usage", headers, signal, true, {}, profile);
       const total = workBuddyCapacity(team.limitNum), used = workBuddyCapacity(team.credit);

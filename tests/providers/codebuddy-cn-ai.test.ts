@@ -97,5 +97,6 @@ test("CN catalog and credits read from the CN API host with account headers", as
   const report = await fetchWorkBuddyQuota("codebuddy-cn-ai", cred);
   expect(calls[0]!.url).toBe(`${CN}/billing/meter/get-user-resource-summary`);
   expect(calls[0]!.headers.get("authorization")).toBe("Bearer fixture-access");
-  expect(report).toMatchObject({ provider: "codebuddy-cn-ai", label: "CodeBuddy CN" });
+  expect(report).toMatchObject({ provider: "codebuddy-cn-ai", label: "CodeBuddy CN",
+    quota: { workbuddyCredits: { total: 100, used: 40, remaining: 60 } } });
 });
