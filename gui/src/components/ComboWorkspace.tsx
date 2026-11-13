@@ -37,6 +37,7 @@ export default function ComboWorkspace({
   addDecisionProvider,
   onCloseAdd,
   onCreated,
+  selectRequest,
 }: ComboWorkspaceProps) {
   const t = useT();
   const providerMap = useMemo(
@@ -108,6 +109,12 @@ export default function ComboWorkspace({
     }
     setPendingSelect(id);
   }, [activeId, detailDirty]);
+
+  const [seenSelectSeq, setSeenSelectSeq] = useState(selectRequest?.seq);
+  if (selectRequest && selectRequest.seq !== seenSelectSeq) {
+    setSeenSelectSeq(selectRequest.seq);
+    trySelect(selectRequest.id);
+  }
 
   const confirmDiscard = () => {
     if (pendingSelect === undefined) return;

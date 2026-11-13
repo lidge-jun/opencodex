@@ -49,4 +49,6 @@ export interface ComboWorkspaceProps {
   addDecisionProvider?: string | null;
   onCloseAdd: () => void;
   onCreated: (id: string) => void;
+  /** Select this combo when `seq` changes (the overview's "open in Advanced"); dirty drafts still prompt. */
+  selectRequest?: { id: string; seq: number };
 }
