@@ -306,7 +306,8 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
     } finally { h.restore(); }
   });
 
-  test("an unknown outcome says to repeat the same id before resolving, since the repeat finishes a removal this id still owns", async () => {
+  // An unknown can arise before the receipt claim (a disconnect timeout, a journal write failure), so the resume is conditional.
+  test("an unknown outcome says to repeat the same id before resolving, which resumes a removal only if this id still owns one", async () => {
     const h = harness([{ status: 502, body: { error: { code: "remote_disconnect_failed", message: "x" }, operationId: "detach-13", outcome: "unknown" } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-13"], h.deps)).toBe(1);
       const printed = [...h.out, ...h.err].join("\n");
@@ -314,6 +315,9 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
       const resolve = printed.indexOf("ocx link operations resolve --operation-id detach-13 --yes");
       expect(repeat).toBeGreaterThan(-1);
       expect(resolve).toBeGreaterThan(repeat);
+      expect(printed).toContain("if this id still owns an unfinished removal, the repeat resumes it");
+      expect(printed).toContain("if it fails again or stays unknown (ocx link operations --operation-id detach-13 shows its state)");
+      expect(printed).not.toContain("it resumes a removal this id still owns");
     } finally { h.restore(); }
   });
 
