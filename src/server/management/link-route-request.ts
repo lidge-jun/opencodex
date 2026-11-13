@@ -4,7 +4,7 @@
  * probe binds them to the pending host; confirm-host and apply must name the same values (absent is
  * none), so a probe made by another caller with another route can never be confirmed or applied here.
  */
-import { checkExplicitRoute, sameExplicitRoute, type ExplicitRoute } from "../../link/explicit-route";
+import { checkExplicitRoute, identityFileProblem, sameExplicitRoute, type ExplicitRoute } from "../../link/explicit-route";
 import { fail, isRecord } from "./link-route-state";
 
 export interface RouteRequest {
@@ -22,9 +22,12 @@ export function splitRouteRequest(value: unknown): { body: unknown; route: Route
   let route: ExplicitRoute | null = null;
   if (explicitRoute !== undefined) {
     const checked = checkExplicitRoute(explicitRoute);
-    if (!checked.ok) return { error: fail("invalid_explicit_route", "explicitRoute must be {proxyCommand, user, port} in the accepted form.", 400, checked.reason) };
+    if (!checked.ok) return { error: fail("invalid_explicit_route", "explicitRoute must be {proxyCommand, user, port} with an optional identityFile, in the accepted form.", 400, checked.reason) };
     route = checked.route;
     if (exclusive !== true) return { error: fail("explicit_route_requires_exclusive", "A link with an explicit route must be exclusive.", 400) };
+    // Checked on every request that names it (probe, confirm-host, apply), from its metadata only; the hint is a fixed code.
+    const problem = route.identityFile === undefined ? null : identityFileProblem(route.identityFile);
+    if (problem) return { error: fail("invalid_identity_file", "explicitRoute.identityFile must be a regular file (not a symlink) that this user owns and can read, with no group or other permissions.", 400, problem) };
   }
   return { body, route: { explicitRoute: route, exclusive: exclusive === true } };
 }
