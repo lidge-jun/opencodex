@@ -35,6 +35,10 @@ opencodex 的 CLI 是 `ocx`。它会根据第一个命令名进行分发；文�
 
 声明需要确认的破坏性删除、导入、额度消耗和更新操作，在非交互用法中都要求 `--yes`。该标志是显式选择加入；省略它时，绝不能在静默情况下确认该操作。
 
+## 恢复明文子代理模式配置
+
+进入实验性明文子代理模式请使用 `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`。通用的 `config set` 和 `config import` 会拒绝新进入该模式，因为专用命令还会协调原生模式转换。恢复包含 `multiAgentMode: "v2-plaintext"` 的导出配置前，先完成上述确认转换，再导入文件。恢复已经启用的模式、修改其他设置和退出明文模式仍然允许；独立的 `plaintextV2AgentMessages` 首选项不受影响。
+
 ## 版本与内部分发目标
 
 `ocx --version`、`ocx -v` 和 `ocx version` 会打印一行适合脚本读取的版本信息并退出。

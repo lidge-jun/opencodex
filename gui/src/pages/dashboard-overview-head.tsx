@@ -1,5 +1,6 @@
 import { IconAlert, IconChevron } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
+import { subagentSurfaceModes } from "../subagent-surface";
 import { formatTokens } from "../format-tokens";
 import { formatUptime } from "../formatUptime";
 import { navigateHash } from "../hash-routing";
@@ -121,7 +122,7 @@ function HeadTile({ label, children, sub, busy, title }: {
  * The subagent engine switch (v1 / base / v2) as a settings-row control. Radio semantics come
  * from the shared segmented control; a disabled fieldset holds it still while a switch is saving.
  */
-export function DashboardMultiAgentControl({ maMode, maBusy, switchMaMode }: Pick<Dash, "maMode" | "maBusy" | "switchMaMode">) {
+export function DashboardMultiAgentControl({ maMode, maSupportsPlaintextV2, maBusy, switchMaMode }: Pick<Dash, "maMode" | "maSupportsPlaintextV2" | "maBusy" | "switchMaMode">) {
   const t = useT();
   return (
     <fieldset disabled={maBusy} className="dash-ma-switch m-0 min-w-0 border-0 p-0 disabled:opacity-60">
@@ -129,7 +130,7 @@ export function DashboardMultiAgentControl({ maMode, maBusy, switchMaMode }: Pic
         aria-label={t("dash.multiAgent")}
         value={maMode}
         onChange={mode => { if (mode !== maMode) void switchMaMode(mode); }}
-        items={(["v1", "default", "v2"] as const).map(mode => ({ value: mode, label: t(`models.v2Mode_${mode}` as TKey) }))}
+        items={subagentSurfaceModes(maSupportsPlaintextV2 || maMode === "v2-plaintext").map(mode => ({ value: mode, label: t(`models.v2Mode_${mode}` as TKey) }))}
       />
     </fieldset>
   );

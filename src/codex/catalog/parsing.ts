@@ -1,4 +1,6 @@
 import type { VendorContextInference } from "./vendor-context";
+import type { MultiAgentMode } from "../../types/multi-agent";
+export type { MultiAgentMode } from "../../types/multi-agent";
 import { retainedNativeInheritanceTemplate } from "./native-template";
 export { findSupportedNativeTemplate } from "./native-template";
 import { isCodexControlPlaneModel } from "../control-plane-models";
@@ -594,8 +596,6 @@ export function ensureStrictCatalogFields(
   return ensureAutoCompactTokenLimit(entry);
 }
 
-export type MultiAgentMode = "v1" | "default" | "v2";
-
 export interface MultiAgentModeOptions {
   /** Caller-owned source metadata already defines the default for these projected rows. */
   preserveDefaultMultiAgentVersion?: (entry: RawEntry) => boolean;
@@ -665,6 +665,9 @@ export function applyRoutedCodexToolMode(
  * `keepNativeChatGptOnV1` only applies when `mode === "v2"`. It leaves Sol/Terra
  * (and other ChatGPT-native rows) on v1 so a native parent can still spawn a
  * routed child. See issue #92.
+ *
+ * `"v2-plaintext"` stamps every row v2, ChatGPT-native rows included -- the mode is
+ * the plaintext-delivery opt-in, so no native/routed split applies.
  */
 export function applyMultiAgentMode(
   entries: RawEntry[],
@@ -743,9 +746,10 @@ export function applyMultiAgentMode(
     }
     return entries;
   }
+  const forcedVersion = mode === "v2-plaintext" ? "v2" : mode;
   for (const entry of entries) {
     recordMultiAgentOrigin(entry);
-    entry.multi_agent_version = mode;
+    entry.multi_agent_version = forcedVersion;
   }
   return entries;
 }

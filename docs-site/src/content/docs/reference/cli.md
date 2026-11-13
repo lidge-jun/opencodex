@@ -338,6 +338,8 @@ Integer options such as `--limit` require decimal whole numbers within JavaScrip
 
 `ocx config validate <file>` and `ocx config import <file> --yes` accept UTF-8 JSON with or without a leading BOM, including stdin (`-`). This supports UTF-8 exports from Windows PowerShell and editors. UTF-16 input is not accepted.
 
+To enter the experimental plaintext subagent mode, use `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`. Generic `config set` and `config import` refuse a new entry into this mode because the dedicated command also coordinates the native mode transition. Before restoring an exported config that contains `multiAgentMode: "v2-plaintext"`, complete that acknowledged transition first, then import the file. Restoring an already-active mode, changing other settings, and leaving plaintext mode remain allowed. The independent `plaintextV2AgentMessages` preference is unchanged.
+
 ## Default alias listing
 
 `ocx alias --json` is equivalent to `ocx alias list --json`. The output flag can precede or follow an explicit alias action.
