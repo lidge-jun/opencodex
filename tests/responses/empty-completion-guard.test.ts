@@ -141,6 +141,16 @@ describe("empty-completion guard retry", () => {
     expect(reasoning).toEqual(["discarded", "retry"]);
   });
 
+  test.each([[2, undefined], [undefined, 2]])("missing retry credit reading stays incomplete: %s %s", async (first, second) => {
+    const usage = (credits: number | undefined) => ({ inputTokens: 1, outputTokens: 1, ...(credits === undefined ? {} : { providerCredits: credits }) });
+    const events = await collect(guardEmptyCompletionEventStream({
+      firstEvents: eventsOf({ type: "done", usage: usage(first) }),
+      continuation: () => eventsOf({ type: "text_delta", text: "answer" }, { type: "done", usage: usage(second) }),
+    }));
+    const done = events.at(-1) as Extract<AdapterEvent, { type: "done" }>;
+    expect(done.usage?.providerCredits).toBe(-1);
+  });
+
   test("usage is merged across attempts", async () => {
     const events = await collect(guardEmptyCompletionEventStream({
       firstEvents: eventsOf(
