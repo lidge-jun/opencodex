@@ -222,8 +222,10 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
   }
 }
 
-describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance on the Child"
-  + (ENABLED ? "" : " [skipped: opt-in with OCX_LINK_WS_RSS_CHILD_ACCEPTANCE=1; it runs two Child processes under a held load and is not part of the ordinary suite]"), () => {
+const LINUX = process.platform === "linux";
+describe.skipIf(!ENABLED || !LINUX)("link WebSocket transport-only RSS acceptance on the Child"
+  + (!ENABLED ? " [skipped: opt-in with OCX_LINK_WS_RSS_CHILD_ACCEPTANCE=1; it runs two Child processes under a held load and is not part of the ordinary suite]"
+    : !LINUX ? " [skipped: Linux only; the peak is the kernel's VmHWM, and elsewhere the acceptance cannot pass]" : ""), () => {
   test.skipIf(!CANONICAL)("acceptance: the WebSocket's peak RSS over the HTTP relay's, under the same held load, stays within the Child's link socket reservations"
     + (CANONICAL ? "" : " [skipped: diagnostic settings present (" + DIAGNOSTIC_SETTINGS.join(", ") + ")]"), async () => {
     const websocket = await runLoad("websocket");
