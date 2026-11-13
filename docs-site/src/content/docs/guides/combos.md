@@ -1002,6 +1002,14 @@ on that relay and saves conclusive results; for a pay-per-use provider it first 
 small requests it will send. A failed plain request changes nothing. Context is inferred from the
 model name, never probed. Click the context tag on a row to open it directly.
 
+**Suggested combos** sits above the rows when two or more of your providers serve a model under the
+same name (`claude-opus-5.5` and `claude-opus-5-5`, or `gpt-6.1-sol-high` and `gpt-6.1-sol`, count as
+one; snapshot dates do not). **Generate** opens a failover draft with subscriptions from the model's
+maker first, then other subscriptions, Vertex credit, and pay-per-use keys and relays last; rename,
+reorder, or drop members, then **Save combo**. When an existing combo for that model is missing a
+provider that serves it, the card offers **Add to combo** instead. **Dismiss** hides a suggestion in this
+browser only; nothing is written to the config.
+
 **Advanced** opens the full workspace (`#models/combos/advanced`), which creates, edits, renames, and
 removes combos. Its model selectors include hidden models: catalog visibility only controls external model
 lists, not internal Combo selection, and selecting a hidden model does not make it visible externally.

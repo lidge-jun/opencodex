@@ -190,3 +190,54 @@
 .rb-channel :is(button, input, [role=combobox]) { cursor: pointer; }
 /* A press on the provider icon must start the row drag, not the browser's own image drag. */
 .rb-channel img, .rb-channel svg { pointer-events: none; -webkit-user-drag: none; user-select: none; }
+
+/* Suggested combos: same-name models across providers (T2c). Grey, above the combo list. */
+.rb-suggest {
+  margin-bottom: 16px;
+  padding: 12px 0 4px;
+  border-radius: 12px;
+  background: light-dark(var(--ocx-raised), var(--ocx-surface-2));
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.rb-suggest-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 0 16px 6px; }
+.rb-suggest-head strong { color: var(--ocx-fg); font-size: 14px; font-weight: 600; }
+.rb-suggest-head span { color: var(--ocx-fg-subtle); font-size: 12.5px; }
+.rb-suggest-list { list-style: none; margin: 0; padding: 0; }
+.rb-suggest-card + .rb-suggest-card { border-top: 1px dashed var(--ocx-line); }
+.rb-suggest-actions { display: inline-flex; flex: none; gap: 6px; }
+.rb-suggest-note { color: var(--ocx-fg-subtle); font-size: 12.5px; }
+.rb-suggest-tier {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--ocx-accent-soft);
+  color: var(--ocx-fg-subtle);
+  font-size: 11px;
+}
+.rb-suggest-tier--own-subscription { background: var(--ocx-success-soft); color: var(--ocx-success); }
+.rb-suggest-tier--subscription { background: var(--ocx-highlight-soft); color: var(--ocx-highlight); }
+.rb-suggest-more { margin: 2px 12px 6px; }
+.rb-suggest-draft { display: flex; flex-direction: column; gap: 8px; padding: 0 16px 14px 100px; }
+.rb-suggest-field { display: inline-flex; align-items: center; gap: 8px; color: var(--ocx-fg-muted); font-size: 13px; }
+.rb-suggest-id { width: 260px; font-family: var(--font-code); }
+.rb-suggest-hint { margin: 0; color: var(--ocx-fg-subtle); font-size: 12.5px; }
+.rb-suggest-members { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; counter-reset: rb-member; }
+.rb-suggest-members li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+  font-size: 13px;
+  counter-increment: rb-member;
+}
+.rb-suggest-members li::before { content: counter(rb-member); width: 14px; color: var(--ocx-fg-subtle); font-size: 12px; text-align: right; }
+.rb-suggest-member-name { color: var(--ocx-fg); }
+.rb-suggest-members code { color: var(--ocx-fg-muted); font-family: var(--font-code); font-size: 12px; }
+.rb-suggest-move { display: inline-flex; gap: 2px; margin-left: auto; }
+.rb-suggest-icon-btn { min-width: 28px; padding-inline: 6px; }
+.rb-suggest-draft-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.rb-suggest-draft-actions .rb-suggest-note { margin-right: auto; }
+@media (max-width: 760px) { .rb-suggest-draft { padding-left: 16px; } }
+.rb-suggest-card .rb-row-body { flex: 1 1 auto; }
