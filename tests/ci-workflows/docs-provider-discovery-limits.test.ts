@@ -21,6 +21,7 @@ import { repoPath } from "../helpers/repo-root";
 
 /** English plus every translated guide that ships, matching docs-site/astro.config.mjs. */
 const GUIDES = [
+  { locale: "es", path: "docs-site/src/content/docs/es/guides/providers.md" },
   { locale: "en", path: "docs-site/src/content/docs/guides/providers.md" },
   { locale: "fr", path: "docs-site/src/content/docs/fr/guides/providers.md" },
   { locale: "ja", path: "docs-site/src/content/docs/ja/guides/providers.md" },
