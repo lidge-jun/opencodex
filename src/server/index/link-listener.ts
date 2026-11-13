@@ -79,8 +79,9 @@ export interface LinkListenerLifecycle<T> {
   start(ctx: LinkListenerStartContext<T>): void;
   ensureStarted(): Promise<void>;
   linkAdmissionKeyIds(): ReadonlySet<string>;
-  onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
-  notifyAuthenticatedCatalog(apiKeyId: string): void;
+  /** A key-admitted catalog request; routeProofId is a multi-route readiness proof it carried (src/link/route-proof.ts). */
+  onAuthenticatedCatalog(listener: (apiKeyId: string, routeProofId?: string) => void): () => void;
+  notifyAuthenticatedCatalog(apiKeyId: string, routeProofId?: string): void;
   /** What this Home last learned of a Child over the link; empty until it relays a request. */
   peerObservation(linkId: string): LinkPeerEntry;
   /** Relayed model traffic for one link (D5); legacy key admissions count against every link. */
@@ -122,7 +123,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   let ensureFlight: Promise<void> | undefined;
   let closeFlight: Promise<void> | undefined;
   let stopped = false;
-  const authenticatedCatalogListeners = new Set<(apiKeyId: string) => void>();
+  const authenticatedCatalogListeners = new Set<(apiKeyId: string, routeProofId?: string) => void>();
   const catalogServedListeners = new Set<(served: LinkCatalogServed) => void>();
   let lifecycleStatus: LinkListenerStatus = { state: "off", port: null, reason: null };
   const peers = createLinkPeerObservations();
@@ -189,6 +190,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     }
     const requestedPort = store.listenerPort ?? 0;
     const linkWebsocket = startContext.responsesWebsocket;
+    // The resolved inbound limit (index.ts resolves maxInboundBodyBytes), fixed at bind like the public listener's.
+    const inboundLimit = startContext.maxRequestBodySize;
     const sessions = createLinkRelaySessions({ peers, activity, traffic, homeFeatures: () => startContext?.homeFeatures?.() ?? buildPeerFeatures(), connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: fingerprintsFor,
       ...(linkWebsocket ? { upgrade: websocketGate.upgrade, websocketAdvertised: websocketEnabled } : {}),
@@ -222,14 +225,17 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
         const beganAt = holds.sequence();
         if (holds.releasable(linkId)) {
           const decision = new Promise<boolean>(resolve => { decide = resolve; });
-          // The copy is read alongside the request, but released only if the handler accepted it.
-          // A Child may send the body coded (#8594); the copy is decoded through the handlers' bounded reader, and a body
-          // that does not decode releases nothing.
+          // The copy is read and decoded only after the handler accepted the request; a refusal, the inbound budget's 503
+          // included, cancels it unread (#8608). A Child may send the body coded (#8594); the copy is decoded through the
+          // handlers' bounded reader under the same resolved inbound limit, and a body that does not decode releases nothing.
           const encoding = req.headers.get("content-encoding");
-          const parsed = req.clone().arrayBuffer()
-            .then(raw => JSON.parse(new TextDecoder().decode(decodeRequestBody(new Uint8Array(raw), encoding))) as unknown).catch(() => null);
-          const observation = Promise.all([parsed, decision]).then(([body, accepted]) => {
-            if (!accepted || !body || typeof body !== "object") return;
+          const copy = req.clone();
+          const observation = decision.then(async accepted => {
+            // Never awaited: a tee's cancel waits for the other half, which a refusal may leave unread.
+            if (!accepted) { void copy.body?.cancel().catch(() => {}); return; }
+            const raw = new Uint8Array(await copy.arrayBuffer());
+            const body = JSON.parse(new TextDecoder().decode(decodeRequestBody(raw, encoding, inboundLimit))) as unknown;
+            if (!body || typeof body !== "object") return;
             holds.observe(linkId, threadHashOf(body), resultKeysOf((body as Record<string, unknown>).input), beganAt);
           }).catch(() => {}).finally(() => { holdObservations.delete(observation); });
           holdObservations.add(observation);
@@ -347,8 +353,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       authenticatedCatalogListeners.add(listener);
       return () => { authenticatedCatalogListeners.delete(listener); };
     },
-    notifyAuthenticatedCatalog(apiKeyId) {
-      for (const listener of authenticatedCatalogListeners) listener(apiKeyId);
+    notifyAuthenticatedCatalog(apiKeyId, routeProofId) {
+      for (const listener of authenticatedCatalogListeners) listener(apiKeyId, routeProofId);
     },
     peerObservation: linkId => peers.get(linkId),
     linkActivity: (linkId, now) => activity.snapshot(linkId, now),
