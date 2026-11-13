@@ -377,7 +377,8 @@ Client departure releases pacing to the existing 15-second/32-MiB bounded drain.
 A stream marked paced (`src/lib/paced-stream.ts`) changes that for its own request: the
 inspection branch leads its client by one chunk instead of the allowance, the eager relay
 queues one chunk instead of 8 MiB, and each stage that reads a paced source (the block
-rewrite, the failed-tail relay, the translator-budget and account-lease wrappers) queues
+rewrite, the failed-tail relay, the translator-budget and account-lease wrappers, a combo
+preflight's replay) queues
 nothing ahead and marks its own output, so the chain reads as the client asks. Only a Remote
 Link turn while the link WebSocket feature is on is paced (#8601, `remote-link.md`); its
 upstream chunks are also cut into 256 KiB views (`sliceChunks`), so each stage holds a slice
@@ -386,7 +387,9 @@ A passthrough turn also keeps its outbound body only as the serialized text it s
 (`src/server/responses/passthrough-dispatch.ts`): the parsed copy the undeclared-tool guard
 reads when the request is built is not kept, and the later readers (snapshot repair and Grok
 compatibility rewrites) parse that text again when they need it, so a large request is not held
-twice while its turn streams (#8601).
+twice while its turn streams (#8601). A combo preflight's replay lets go of each buffered chunk as it hands it to the
+client, and of all of them on cancel, so a committed child's prefix is not held for the rest of
+its turn.
 One tee branch's cancellation is never awaited by the wrapper, because that
 promise may depend on its sibling. A hard owner abort discards pending candidates
 rather than flushing them as successful terminals; genuine EOF/read-error tail
