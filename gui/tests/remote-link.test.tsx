@@ -1334,6 +1334,25 @@ test("every locale translates the forced-removal notice and keeps its command an
   }
 });
 
+test("every locale keeps the force-remove and ownership texts' paths, commands and placeholders byte for byte", async () => {
+  // An operator copies these literals: a translation may move them but never change or drop one.
+  const { DICTS } = await import("../src/i18n/catalogs");
+  const keys = ["remoteLink.forceRemove.body", "remoteLink.forceRemove.ephemeralBody", "remoteLink.forceRemove.unknownBody", "remoteLink.forceRemove.noteId",
+    "remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.fullDisconnect", "remoteLink.forceRemoved.unknownCheck",
+    "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownDisconnect", "remoteLink.residual.ownership"];
+  const literals = ["{cmd}", "{alias}", "{linkId}", "Link: {linkId}", "~/.cache/opencodex/bin/ocx-child", "~/.local/bin", "PATH", "LOCALAPPDATA",
+    "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where.exe ocx-child", "ocx-child connect status --json"];
+  const en = DICTS.en as Record<string, string>;
+  for (const [locale, dict] of Object.entries(DICTS)) {
+    for (const key of keys) {
+      const text = (dict as Record<string, string>)[key];
+      expect(typeof text, locale + " " + key).toBe("string");
+      for (const literal of literals) expect(text.includes(literal), locale + " " + key + " " + literal).toBe(en[key]!.includes(literal));
+    }
+  }
+});
+
+
 test("a forced removal of a Child of unknown type names no command up front and checks either install's link afterwards", async () => {
   // A link saved before the Home recorded the Child type has no childKind: it may run a full install or ocx-child, and its
   // forced removal leaves no tombstone, so neither ocx disconnect alone nor ocx link recover can be the answer.
