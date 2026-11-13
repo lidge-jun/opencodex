@@ -186,6 +186,7 @@ import { LOCAL_ASIDE_SYNC_CAPABILITY_VERSION } from "../../lib/local-aside-sync-
 import {
   GUI_PAIR_CAPABILITY_VERSION,
   GUI_PAIR_PATH,
+  DESKTOP_GUI_PAIR_PATH,
 } from "../../lib/gui-pair-capability";
 import {
   GuiPairingGrantRateLimitError,
@@ -667,7 +668,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
         const principal = managementPrincipal(req, managementAuth, config, localManagementAuth) ?? undefined;
-        if (url.pathname === GUI_PAIR_PATH) {
+        if (url.pathname === GUI_PAIR_PATH || url.pathname === DESKTOP_GUI_PAIR_PATH) {
+          if (url.pathname === DESKTOP_GUI_PAIR_PATH && (!trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1")
+            || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(requestServer.requestIP(req)?.address ?? "")
+            || localManagementAuth.port !== config.port)) return Response.json({ error: "desktop_authorization_required" }, { status: 403 });
           if (req.method !== "POST" || principal !== "gui-pair-capability" || !managementAuth.available) {
             return withManagementCors(Response.json({ error: "GUI pairing capability required" }, { status: 403 }), req, config);
           }
@@ -688,7 +692,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           }
         }
         const mgmtResponse = await handleManagementAPI(req, url, config, requestManagementApiDeps, principal, managementSessionControl, {
-          trustedLoopback: trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1"),
+          trustedLoopback: trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1")
+            && (!url.pathname.startsWith("/api/codex/desktop-compatibility/")
+              || ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(requestServer.requestIP(req)?.address ?? "")),
           guiSessionIssuance: managementSessionIssuance(req, managementAuth),
         });
         // A local read capability authenticates the request; sign its single-use nonce so the

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
+import { isPassiveKeyTransparent, markPassiveKeyTransparent } from "../lib/passive-key-fetch-proof";
 import { configuredOutboundFetch } from "../lib/proxy-env";
 import { resolveGithubCopilotTransport } from "./github-copilot-transport";
 import { resolveMistralTransport } from "./mistral-transport";
@@ -165,12 +166,14 @@ export function resolveProviderTransport(
   // the configuration named a proxy.
   const baseFetch = provider.fetch
     ?? markEgressTransparentExecutor(((input, init) => configuredOutboundFetch(input, init)) as typeof globalThis.fetch);
+  if (!provider.fetch) markPassiveKeyTransparent(baseFetch);
   const attemptFetch = ((input, init) =>
     baseFetch(input, withGeneratedRequestId(init, requestId, stableHeaders))) as typeof globalThis.fetch;
   // This wrapper only adds a header and forwards the init, so it carries a request-scoped proxy
   // option through to whatever it wraps — but only if what it wraps carries it too. A
   // configured executor owns its own routing and is not assumed to.
   if (isEgressTransparentExecutor(baseFetch)) markEgressTransparentExecutor(attemptFetch);
+  if (isPassiveKeyTransparent(baseFetch) && !Object.keys(stableHeaders).some(name => ["authorization", "x-api-key", "api-key"].includes(name.toLowerCase()))) markPassiveKeyTransparent(attemptFetch);
 
   return {
     ...provider,
