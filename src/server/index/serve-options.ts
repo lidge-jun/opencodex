@@ -208,6 +208,9 @@ import { classifyUsageClient } from "../../usage/client";
 import { isOllamaNativePath } from "../ollama-native-paths";
 import { ollamaError } from "../ollama-inbound";
 import { dispatchOllamaRoute } from "./ollama-routes";
+import { isGeminiNativePath } from "../gemini-native-paths";
+import { geminiError } from "../gemini-inbound";
+import { dispatchGeminiRoute } from "./gemini-routes";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { homeInstanceId, stampServedBy } from "../../remote/served-by";
@@ -364,6 +367,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         || readyzPath !== undefined
         || url.pathname.startsWith("/v1/")
         || isOllamaNativePath(url.pathname)
+        || isGeminiNativePath(url.pathname)
       )) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
@@ -389,7 +393,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             }, 503, req, policy)
           : isOllamaNativePath(url.pathname)
             ? withCors(ollamaError(503, message), req, policy)
-            : packageTreeChangedResponse(req, policy, message);
+            : isGeminiNativePath(url.pathname)
+              ? withCors(geminiError(503, message), req, policy)
+              : packageTreeChangedResponse(req, policy, message);
         const headers = new Headers(response.headers);
         headers.set("Retry-After", "5");
         const challenge = fencedHealth ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
@@ -407,6 +413,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         // The exact Ollama-compatible paths are data-plane routes and take data-plane CORS.
         const managementPreflight = url.pathname.startsWith("/api/") && !isOllamaNativePath(url.pathname);
+        // Gemini routes are data-plane paths too (never under /api/), so they take the data-plane branch.
         const allowed = managementPreflight
           ? isAllowedManagementOrigin(req, config)
           : isAllowedRequestOrigin(req, policy);
@@ -654,6 +661,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // Checked synchronously: an await here would delay every later route's admission capture.
       if (isOllamaNativePath(url.pathname)) {
         const native = await dispatchOllamaRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
+        if (native) return native;
+      }
+      if (isGeminiNativePath(url.pathname)) {
+        const native = await dispatchGeminiRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
         if (native) return native;
       }
 

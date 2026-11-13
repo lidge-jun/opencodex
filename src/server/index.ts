@@ -5,6 +5,7 @@ import { normalizeBindHostname } from "./bind-host";
 import { configureInboundBodyBudget } from "./inbound-body-admission";
 import { createAdmittedHttpTurn } from "./admitted-http-turn";
 import { isOllamaNativePath } from "./ollama-native-paths";
+import { isGeminiNativePath } from "./gemini-native-paths";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -451,6 +452,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (rawPath === "/opencodex-session") return req.method === "GET" || req.method === "POST";
     // Ollama-compatible inference paths are data plane, not management: never via Tailscale Serve.
     if (isOllamaNativePath(rawPath)) return false;
+    // Gemini-compatible inference paths are data plane too, and /v1beta/ is never a management route.
+    if (isGeminiNativePath(rawPath) || rawPath.startsWith("/v1beta/")) return false;
     if (rawPath.startsWith("/api/")) return true;
     if (req.method !== "GET" && req.method !== "HEAD") return false;
     let decodedPath: string;

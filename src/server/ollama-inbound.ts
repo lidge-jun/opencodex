@@ -11,8 +11,6 @@ import { OllamaCodecError, consumeOllamaChatChunk, createOllamaStreamState, olla
 import { createTranslatorBudget, isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import type { OcxConfig } from "../types";
 import type { DataPlaneAdmission } from "./auth-cors";
-import type { CapturedAdmissionPolicy } from "../types/admission-policy";
-import type { AdmissionLease } from "../lib/admission";
 import { resolveAdmissionModelScope, routeAllowedByScope } from "./admission-model-scope";
 import { handleChatCompletions } from "./chat-completions";
 import { VERSION } from "./management-api";
@@ -26,6 +24,7 @@ import {
   nativeRefusalParts,
   nativeRetryAfter,
   streamNativeFromChat,
+  type NativeLogIds,
 } from "./native-chat-bridge";
 import { createNativeFinalLog, type NativeFinalLog } from "./native-final-log";
 import { findOllamaRoute, listOllamaRoutes, preflightOllamaRoute } from "./ollama-route-policy";
@@ -90,13 +89,7 @@ export async function handleOllamaShow(config: OcxConfig, req: Request, admissio
   return Response.json({ details: {}, model_info: {}, capabilities: ["completion"] });
 }
 
-export interface OllamaLogIds {
-  requestId: string;
-  start: number;
-  turnAdmissionLease?: AdmissionLease;
-  admission?: DataPlaneAdmission;
-  advisorAdmissionPolicy?: CapturedAdmissionPolicy;
-}
+export type OllamaLogIds = NativeLogIds;
 
 function failBeforeInner(ids: OllamaLogIds, logCtx: RequestLogContext, status: number, message: string): Response {
   addFinalRequestLog(ids.requestId, ids.start, logCtx, status, { closeReason: "non_stream" });

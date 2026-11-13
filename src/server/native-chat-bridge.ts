@@ -6,7 +6,10 @@
  * protocol-specific parts (frame shapes, error bodies) stay in each ingress.
  */
 import { parseRetryAfterMs } from "../combos";
+import type { AdmissionLease } from "../lib/admission";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
+import type { CapturedAdmissionPolicy } from "../types/admission-policy";
+import type { DataPlaneAdmission } from "./auth-cors";
 import type { NativeFinalLog } from "./native-final-log";
 import { linkRequestSessionLane } from "./request-log-conversation";
 
@@ -24,6 +27,15 @@ export function internalChatRequest(req: Request, chatJson: string): Request {
   const internal = new Request(new URL("/v1/chat/completions", req.url), { method: "POST", headers, body: chatJson, signal: req.signal });
   linkRequestSessionLane(req, internal);
   return internal;
+}
+
+/** The request-log and admission identity a native handler passes to the inner Chat path. */
+export interface NativeLogIds {
+  requestId: string;
+  start: number;
+  turnAdmissionLease?: AdmissionLease;
+  admission?: DataPlaneAdmission;
+  advisorAdmissionPolicy?: CapturedAdmissionPolicy;
 }
 
 /** Upper bound for the retry advice a native surface passes on. */
