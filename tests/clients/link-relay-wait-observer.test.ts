@@ -113,16 +113,26 @@ function manualClock() {
   return { clock, fire };
 }
 
-/** Records every event; `nextFalse()` settles on the first false after it is called, the milestone each case waits for. */
+/**
+ * Records every event. `nextFalse()` settles on the first false after it is called, and `reached(n)` once `n` events
+ * have been recorded: the milestones each case waits for.
+ */
 function recordWaits() {
   const events: boolean[] = [];
   let waiters: Array<() => void> = [];
+  let counted: Array<{ count: number; resolve: () => void }> = [];
   setLinkChildRelayWaitObserverForTests(waiting => {
     events.push(waiting);
     if (!waiting) { const settled = waiters; waiters = []; for (const settle of settled) settle(); }
+    const due = counted.filter(waiter => events.length >= waiter.count);
+    counted = counted.filter(waiter => events.length < waiter.count);
+    for (const waiter of due) waiter.resolve();
   });
   const nextFalse = (): Promise<void> => new Promise(resolve => { waiters.push(resolve); });
-  return { events, nextFalse };
+  const reached = (count: number): Promise<void> => new Promise(resolve => {
+    if (events.length >= count) resolve(); else counted.push({ count, resolve });
+  });
+  return { events, nextFalse, reached };
 }
 
 describe("the Child relay's test-only wait observer", () => {
@@ -197,7 +207,7 @@ describe("the Child relay's test-only wait observer", () => {
   }
 
   test("a Home failure the relay has not read yet keeps it waiting while it holds a read-ahead chunk", async () => {
-    const { events } = recordWaits();
+    const { events, reached } = recordWaits();
     const home = drivenHome("text/event-stream");
     const { clock, armed } = armingClock();
     const reader = (await relayedFrom(home, { clock })).body!.getReader();
@@ -212,12 +222,13 @@ describe("the Child relay's test-only wait observer", () => {
     await armed(3);
     expect(home.pulls()).toBe(2);
     home.fail(new Error("home failed"));
-    expect(events).toEqual([true]);
-    // It still holds "two" and hands it over; reading past it reads the failure, and the relay ends.
+    // It still holds "two" and hands it over (false, then true). Handing it over frees its queue, so its read-ahead
+    // reads the Home, meets the failure and ends the relay (false) without the reader asking again.
     expect(text(await reader.read())).toBe("two");
+    await reached(4);
+    expect(events).toEqual([true, false, true, false]);
     expect(await reader.read().then(() => "read", () => "failed")).toBe("failed");
-    expect(events.slice(0, 2)).toEqual([true, false]);
-    expect(events.at(-1)).toBe(false);
+    expect(events).toEqual([true, false, true, false]);
   });
 
   test("a caller abort while the relay holds a queued chunk ends the wait for good", async () => {
