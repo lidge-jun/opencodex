@@ -394,7 +394,11 @@ A passthrough turn also keeps no parsed copy of its outbound body while it strea
 the request is built, and only its tool scope (`outboundToolScope` in
 `src/server/responses/outbound-request-body.ts`: the tool catalog, the selection, the parallel
 flag and the input items that declare tools) stays for the later readers, snapshot repair and
-the Grok tool scope, so a large request's input is not held twice (#8601). A combo preflight's replay lets go of each buffered chunk as it hands it to the
+the Grok tool scope, so a large request's input is not held twice (#8601). A streaming combo
+child's required-tool check (`src/server/responses/combo-required-tool-fulfillments.ts`) also
+parses the outbound body once when it is built and keeps whether it denies every tool and its
+tool declarations (shallow copies, which can share nested schema objects with the parse), never the
+parsed body. A combo preflight's replay lets go of each buffered chunk as it hands it to the
 client, and of all of them on cancel, so a committed child's prefix is not held for the rest of
 its turn.
 One tee branch's cancellation is never awaited by the wrapper, because that
@@ -505,3 +509,18 @@ events and opaque usage are charged until emitted or replaced; cancellation, rea
 identity/argument refusal release every relay-owned buffer. Failed terminals close outstanding calls
 incomplete and replay queued semantics before the error; diagnostic usage keeps only numeric counters,
 releasing any previously retained opaque usage. Ciphertext alone transfers with its done lease.
+
+## Link traffic counters
+
+`src/link/traffic.ts` counts what a Remote Link carried, per link, in one book per process
+(the Child's and the Home's); the counters are plain additions with no lock, timer or disk, and
+`structure/remote-link.md` owns their definition. Relayed HTTP counts body bytes. A link
+WebSocket is one request in the same book on both sides, in the same units: message payload bytes
+each way, without WebSocket framing, handshake or control frames. The Home counts it complete when
+any close frame ended it; the Child also counts its own overload, binary and protocol closes as
+incomplete. On the Home the
+gate in `src/server/index/link-websocket.ts` opens the flow when it opens an admitted socket,
+counts each message that reached it, and ends the flow on close; `sendTextFrame` in
+`src/server/ws-bridge.ts` counts each message Bun took for a link socket (a dropped send is not
+counted). A local socket has no flow, and link sockets exist only while the link WebSocket's
+switch and release gate are on.

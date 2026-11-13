@@ -233,7 +233,9 @@ describe("Grok fence lifecycle wiring", () => {
     // second redundant teardown (#3008).
     expect(stopFn).toContain("deferSharedTeardownNonce: teardownNonce");
     expect(controlSource).toContain("deferSharedTeardown");
-    expect(apiSource).toContain("performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt })");
+    // The receipt must name this proxy's own port (#8416).
+    expect(apiSource).toContain("const ownsThisReceipt = (nonce: string | null) => deferralMatchesReceipt(nonce, servedPort);");
+    expect(apiSource).toContain("performStopTeardown(url, { ownsReceipt: ownsThisReceipt })");
     // The deferral is an obligation, so it is claimed on disk BEFORE it is requested and
     // released only after THIS process has restored the shared config itself. A bare
     // query flag could not survive the parent dying mid-stop.
@@ -257,7 +259,7 @@ describe("Grok fence lifecycle wiring", () => {
     const guessedBranch = stopFn.slice(stopFn.indexOf('if (read.receipt.endpointSource === "guessed")'), stopFn.indexOf("if (await abandonedTeardownIsSafeToFinish("));
     expect(guessedBranch).toContain("inheritedBlocks = true;");
     expect(guessedBranch).toContain("stopFailed = true;");
-    expect(controlSource).toContain("io.runtimeEndpoint ?? readRuntime(pid)");
+    expect(controlSource).toContain("io.runtimeEndpoint ?? (io.runtimeEndpointOnly ? null : readRuntime(pid))");
     // Inherited obligations are snapshotted BEFORE this run claims anything, so its own
     // receipt is never mistaken for one it inherited.
     expect(stopFn).toContain("isPendingTeardownAbandoned(read, teardownOwnerStillRunning)");
@@ -453,7 +455,7 @@ describe("POST /api/stop teardown", () => {
     // unreachable. tests/service/stop-deferred-teardown.test.ts proves the behaviour; this proves
     // the route still delegates to it rather than growing a second copy.
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
-    expect(handler).toContain("performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt })");
+    expect(handler).toContain("performStopTeardown(url, { ownsReceipt: ownsThisReceipt })");
     const teardownSource = readFileSync(repoPath("src", "server", "stop-teardown.ts"), "utf8");
     expect(teardownSource).toContain('await import("../grok/inject")');
     expect(teardownSource).toContain("grok = guard.run(() => strip())");
@@ -590,7 +592,7 @@ describe("POST /api/stop teardown", () => {
 
     const stopProxyFn = sliceFn(PROCESS_CONTROL_SOURCE, "export async function stopProxy(", "export function killProxy(");
     const refusedAt = stopProxyFn.indexOf('graceful === "refused"');
-    const killAt = stopProxyFn.indexOf("killProxy(pid)");
+    const killAt = stopProxyFn.indexOf("killProxy(pid");
     expect(refusedAt).toBeGreaterThan(-1);
     expect(refusedAt).toBeLessThan(killAt);
     expect(stopProxyFn).toContain("throw new ProxyOwnershipRefusedError(");

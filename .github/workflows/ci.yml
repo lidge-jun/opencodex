@@ -348,10 +348,12 @@ jobs:
             setup_action:
               - '.github/actions/**'
               - '.github/workflows/ci.yml'
-            # The Rust remote-workspace helper. Nothing else in CI builds it, and its sandbox is
-            # real only on macOS and Windows, so its job lints and tests the crate on all three.
+            # The Rust crates: the remote-workspace helper (nothing else builds it; its sandbox is real only on
+            # macOS and Windows) and the lightweight Child with the conformance fixture its tests read.
             remote_helper:
               - 'native/remote-workspace-helper/**'
+              - 'native/ocx-child/**'
+              - 'tests/fixtures/link/ocx-child-conformance.json'
             # docker-smoke and keyring-smoke on a pull request. Both used to run on every PR the
             # ci filter matched, which is nearly all of them, while each proves something narrow:
             # the image builds, starts and survives recreation with its volume; the OS keyring
@@ -1417,9 +1419,8 @@ jobs:
             exit 1
           fi
 
-  # The Rust remote-workspace helper, when a change touches it (see the remote_helper filter).
-  # Formatting once, then clippy and the crate's tests on each platform: the sandbox and the live
-  # confinement tests compile only on macOS and Windows, and Linux covers the protocol and stub.
+  # The Rust crates, when a change touches either (remote_helper filter). The helper: formatting once, then
+  # clippy and tests on each platform (its sandbox compiles only on macOS and Windows). ocx-child: Linux only.
   remote-helper:
     name: remote helper ${{ matrix.os }}
     needs: changes
@@ -1453,6 +1454,13 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --locked --manifest-path native/remote-workspace-helper/Cargo.toml
+
+      - name: Check, lint and test ocx-child
+        if: runner.os == 'Linux'
+        run: |
+          cargo fmt --manifest-path native/ocx-child/Cargo.toml --check
+          cargo clippy --locked --manifest-path native/ocx-child/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path native/ocx-child/Cargo.toml
 
   # `gates` already runs `privacy:scan` on every event it runs for, so this job
   # covers exactly the pull requests `gates` skips -- its condition is the

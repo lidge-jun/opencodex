@@ -20,6 +20,7 @@ import {
 } from "./tunnel-state";
 import { effectiveLinkRoutes, emptyLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
 import { CANDIDATE_KILL_GRACE_MS, createRouteRounds, type LinkRouteStatus } from "./route-rounds";
+import { linkSuspendedByRevoke, operationsJournalPath, revokeSuspensions } from "./operations-journal";
 import type { RouteProofRegistry } from "./route-proof";
 
 export type LinkTunnelStatus =
@@ -33,6 +34,8 @@ export type LinkTunnelStatus =
     history?: TunnelHistory;
     /** Links with several routes only (src/link/route-rounds.ts). */
     routes?: LinkRouteStatus;
+    /** An unsettled revoke keeps this link down (revokeSuspendsLink); absent otherwise. */
+    suspended?: { operationId: string; since: string };
   }
   | {
     linkId: string;
@@ -51,8 +54,9 @@ export interface LinkSupervisor {
   /**
    * Restart one Home-initiated tunnel now: stop its child, forget the backoff or failed state,
    * and spawn a fresh attempt. False when the link is not a Home-initiated link of this store.
+   * "suspended" when an unsettled revoke keeps the link down: nothing was stopped or spawned.
    */
-  reconnect(linkId: string): Promise<boolean>;
+  reconnect(linkId: string): Promise<boolean | "suspended">;
   status(): readonly LinkTunnelStatus[];
   /** `<runtime instance>:<generation>` of a Home-initiated link's current tunnel; every spawn changes it. */
   connectionGeneration?(linkId: string): string | undefined;
@@ -122,6 +126,8 @@ export interface LinkSupervisorDeps {
   sshCapture?: SshCaptureOpener;
   /** Readiness proofs of multi-route candidates; without it no multi-route link can be proven. */
   routeProof?: RouteProofRegistry;
+  /** The operation journal; a link with an unsettled revoke there is not reconnected (src/link/operations-journal.ts). */
+  operationsJournalPath?: string;
 }
 
 const TIMER_MS = 1_000;
@@ -201,6 +207,7 @@ function defaultKillProcess(pid: number, signal: NodeJS.Signals = "SIGTERM"): vo
 
 export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervisor {
   const storePath = linkStorePath();
+  const journalPath = deps.operationsJournalPath ?? operationsJournalPath();
   const storeDir = deps.pidfileDir ?? linkDir();
   const readStore = deps.readStore ?? (() => readLinkStore(storePath));
   const runner = deps.runner ?? createSshRunner();
@@ -253,14 +260,14 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
    * Tunnel children (one-route tunnels, multi-route candidates and proven tunnels) a stop sent SIGTERM
    * and is awaiting; the tick sends SIGKILL after the grace.
    */
-  const draining = new Set<{ child: SshChild; stopAt: number; killed: boolean }>();
+  const draining = new Set<{ linkId: string; child: SshChild; stopAt: number; killed: boolean; warned: boolean }>();
   /** Per-link generation, advanced by spawns and explicit stop/removal reservations. */
   const generations = new Map<string, number>();
   /** The process-unique connection name of each link's current ssh child, minted at spawn. */
   const connectionNames = new Map<string, string>();
   const linkRevisions = new Map<string, number>();
   /** Reconnects in flight, so overlapping requests for one link restart it once. */
-  const reconnects = new Map<string, Promise<boolean>>();
+  const reconnects = new Map<string, Promise<boolean | "suspended">>();
   const holds = new Map<string, number>();
   const orphanUnverified = new Set<string>();
   /** The generation of the child whose exit is still being classified, per link. */
@@ -303,9 +310,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     record.apiKeyId,
     record.createdAt,
     listenerPort,
-    // How ssh reaches the alias: an edit of either restarts the tunnel on the new route instead of keeping the old one.
+    // How ssh reaches the alias: an edit restarts the tunnel on the new route instead of keeping the old one. exclusive
+    // alone changes no argv (it only locks the route list), so it is not part of the instance.
     record.explicitRoute ?? null,
-    record.exclusive ?? false,
   ]);
 
   const conditionalRemovePidfile = (linkId: string, pid: number): void => {
@@ -591,6 +598,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
 
   const spawnFor = (record: LinkRecord): void => {
     if (stopping || holds.has(record.id) || record.direction !== "hub-initiated" || children.has(record.id)) return;
+    // A revoke that reached the Child's cleanup and stopped unknown may have purged it: no reconnect until resolved.
+    if (linkSuspendedByRevoke(journalPath, record.id)) return;
     // Only a fresh link or a due attempt spawns. A reload must neither skip the backoff nor start
     // a second child while an exited one is still reporting its stderr.
     const prior = states.get(record.id);
@@ -636,12 +645,18 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const tick = (): void => {
     // The SIGKILL for any tunnel child a stop is draining runs even while lifecycle work is pending or the
     // supervisor shuts down: no reload, removal, reconnect or shutdown waits on an ssh that ignores SIGTERM.
-    // (A candidate route-rounds already halted with SIGKILL gets a fresh stop time here, so a second SIGKILL
-    // on the same unreaped process: harmless.)
+    // (A candidate route-rounds already stopped gets a fresh stop time from stopChild; one it already halted
+    // with SIGKILL gets a second, harmless one on the same unreaped process.)
     for (const drain of draining) {
-      if (drain.killed || now() - drain.stopAt < CANDIDATE_KILL_GRACE_MS) continue;
-      drain.killed = true;
-      try { drain.child.kill("SIGKILL"); } catch { /* already gone */ }
+      const age = now() - drain.stopAt;
+      if (!drain.killed && age >= CANDIDATE_KILL_GRACE_MS) {
+        drain.killed = true;
+        try { drain.child.kill("SIGKILL"); } catch { /* already gone */ }
+      } else if (drain.killed && !drain.warned && age >= 2 * CANDIDATE_KILL_GRACE_MS) {
+        // Its exit is still unseen, so the stop holds the lifecycle queue: say so once.
+        drain.warned = true;
+        warn(`[link] tunnel exit unconfirmed link=${drain.linkId}`);
+      }
     }
     if (stopping) return;
     // Route deadlines run even while lifecycle work is pending, so a stuck reload cannot stretch a probe.
@@ -744,7 +759,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     children.delete(linkId);
     current.child.kill("SIGTERM");
     // A child the tick already stopped keeps its stop time and its SIGKILL.
-    const drain = { child: current.child, stopAt: current.stopAt ?? now(), killed: current.killed === true };
+    const drain = { linkId, child: current.child, stopAt: current.stopAt ?? now(), killed: current.killed === true, warned: current.warned === true };
     draining.add(drain);
     try { await current.child.exited; } finally { draining.delete(drain); }
     conditionalRemovePidfile(linkId, current.child.pid);
@@ -760,14 +775,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
 
   const holdLink = (linkId: string): (() => void) => {
     holds.set(linkId, (holds.get(linkId) ?? 0) + 1);
-    invalidateLink(linkId);
     let released = false;
-    return () => {
+    const release = (): void => {
       if (released) return;
       released = true;
       const remaining = (holds.get(linkId) ?? 1) - 1;
       if (remaining) holds.set(linkId, remaining); else holds.delete(linkId);
     };
+    // A cancellation that throws must not leave a hold nobody can release.
+    try { invalidateLink(linkId); } catch (error) { release(); throw error; }
+    return release;
   };
 
   return {
@@ -918,11 +935,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       const inFlight = reconnects.get(linkId);
       if (inFlight) return inFlight;
       const linkRevision = linkRevisions.get(linkId);
-      let restarted = false;
+      let restarted: boolean | "suspended" = false;
       const flight = runLifecycle(async () => {
         if (stopping || !started || holds.has(linkId) || linkRevisions.get(linkId) !== linkRevision) return;
         const record = store.links.find(link => link.id === linkId && link.direction === "hub-initiated");
         if (!record) return;
+        // spawnFor would decline it after the stop; answer that instead of stopping a child and claiming a restart.
+        if (linkSuspendedByRevoke(journalPath, linkId)) {
+          restarted = "suspended";
+          return;
+        }
         // An earlier tunnel of a multi-route link that may still live is never bypassed by a reconnect.
         if (rounds.isMultiRoute(record) && orphanUnverified.has(linkId)) return;
         // A preceding reload may have spawned a new generation; it is the current one we drain.
@@ -934,6 +956,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const fresh = latest.links.find(link => link.id === linkId && link.direction === "hub-initiated");
         if (stopping || holds.has(linkId) || generations.get(linkId) !== generation
           || lifecycleRevision !== revision || !fresh || recordInstance(fresh, latest.listenerPort) !== instance) return;
+        if (linkSuspendedByRevoke(journalPath, linkId)) {
+          restarted = "suspended";
+          return;
+        }
         spawnFor(fresh);
         restarted = true;
       }).then(() => restarted).finally(() => { reconnects.delete(linkId); });
@@ -953,6 +979,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       }
     },
     status() {
+      const suspensionOf = revokeSuspensions(journalPath);
       return store.links.map(record => {
         if (record.direction === "client-initiated") {
           return { linkId: record.id, direction: record.direction, state: "client-owned", pid: null };
@@ -960,6 +987,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const child = children.get(record.id);
         const recorded = history.get(record.id);
         const routes = rounds.isMultiRoute(record) ? rounds.status(record.id) : undefined;
+        const suspension = suspensionOf(record.id);
         return {
           linkId: record.id,
           direction: record.direction,
@@ -968,6 +996,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           ...(orphanUnverified.has(record.id) ? { orphan: "orphan-unverified" as const } : {}),
           ...(recorded ? { history: recorded } : {}),
           ...(routes ? { routes } : {}),
+          ...(suspension ? { suspended: { operationId: suspension.operationId, since: suspension.since } } : {}),
         };
       });
     },

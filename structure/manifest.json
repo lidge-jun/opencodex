@@ -1413,6 +1413,8 @@
         "src/lib/local-control-socket.ts",
         "src/cli/link-local-control.ts",
         "src/server/management/link-enrollment.ts",
+        "src/server/management/link-recover-route.ts",
+        "src/cli/link-recover.ts",
         "native/ocx-child/",
         "src/lib/gui-pair-intent.ts",
         "src/lib/windows-owner-acl.ts",

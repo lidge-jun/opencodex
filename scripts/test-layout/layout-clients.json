@@ -76,6 +76,7 @@
   "link-ssh-argv-discovery.test.ts": "clients",
   "link-ssh-config.test.ts": "clients",
   "link-store.test.ts": "clients",
+  "link-retirement.test.ts": "clients",
   "link-tunnel-state.test.ts": "clients",
   "link-routes-store.test.ts": "clients",
   "link-routes-argv.test.ts": "clients",
@@ -195,8 +196,10 @@
   "link-ocx-child-conformance.test.ts": "clients",
   "link-ephemeral-child-discovery.test.ts": "clients",
   "link-enrollment-ephemeral-child.test.ts": "server",
+  "link-recover.test.ts": "server",
   "link-ocx-child-e2e.test.ts": "clients",
   "link-child-plant-foundations.test.ts": "clients",
+  "link-child-binary-cache-fill.test.ts": "clients",
   "link-gated-ocx-argv.test.ts": "clients",
   "link-child-update-contract.test.ts": "clients",
   "link-child-observations.test.ts": "clients",
@@ -234,6 +237,7 @@
   "link-ws-child-status.test.ts": "clients",
   "link-explicit-route.test.ts": "clients",
   "link-explicit-route-paths.test.ts": "clients",
+  "link-explicit-route-no-ssh-config.test.ts": "clients",
   "link-route-edit-exclusive.test.ts": "server",
   "link-enrollment-explicit-route.test.ts": "server",
   "cli-link-explicit-route.test.ts": "cli",
@@ -243,5 +247,7 @@
   "link-revoke-operation.test.ts": "server",
   "link-operations-routes.test.ts": "server",
   "cli-link-operation.test.ts": "cli",
-  "link-operations-journal.test.ts": "clients"
+  "link-operations-journal.test.ts": "clients",
+  "link-revoke-suspend.test.ts": "clients",
+  "link-ws-relay-edges.test.ts": "clients"
 }

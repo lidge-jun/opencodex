@@ -60,6 +60,13 @@ export interface LinkTunnelGate {
    * when the tunnel stops being re-established (failed or stopped), or when too many requests wait.
    */
   waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Optional: `listener` runs once, synchronously, when the gate's owner starts stopping, before the
+   * tunnel goes away: the supervisor's stop(), or the link ending (its sidecar gone, naming another link,
+   * or the connected link id unreadable for several checks in a row) before the runtime recycles. The link
+   * WebSocket drains its sockets here.
+   */
+  onStopping?(listener: () => void): void;
 }
 
 /**
