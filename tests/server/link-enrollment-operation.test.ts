@@ -147,6 +147,8 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
     get store() { return store; }, set store(value: LinkStore) { store = value; },
     journal: () => readOperationsJournal(journalPath),
     advance: (ms: number) => { clock += ms; }, breakRevoke: () => { revokeWorks = false; }, failIssue: () => { issueWorks = false; },
+    /** What a revoke does to the Child: it serves standalone again. */
+    disconnectChild: () => { restarted = false; },
   };
 }
 
@@ -594,5 +596,24 @@ describe("replay survives the settled-entry bound", () => {
     const replayed = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
     expect({ status: replayed.status, body: replayed.body }).toEqual({ status: 202, body: applied.body });
     expect(h.ssh.length).toBe(calls);
+  });
+});
+
+describe("a repeat after the replay window (the documented limit of the guarantee)", () => {
+  test("an enrollment whose entry was pruned and whose link was removed meanwhile enrolls the machine again under the same id", async () => {
+    const h = harness();
+    const first = await h.enroll();
+    expect(first.status).toBe(202);
+    const firstLink = first.body.linkId;
+    // The link is revoked, and its entry is later pruned (past the floor, with more than 256 settled entries).
+    h.store = { ...h.store, links: [] };
+    h.config.apiKeys = [];
+    h.disconnectChild();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [] });
+    const again = await h.enroll();
+    // Not a refusal: callers must not repeat an operation id after the window and expect its old answer.
+    expect({ status: again.status, body: again.body }).toMatchObject({ status: 202 });
+    expect(again.body.linkId).not.toBe(firstLink);
+    expect(h.store.links.map(link => link.id)).toEqual([again.body.linkId]);
   });
 });
