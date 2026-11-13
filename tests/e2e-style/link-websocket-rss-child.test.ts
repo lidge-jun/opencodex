@@ -20,8 +20,9 @@ import { repoPath } from "../helpers/repo-root";
 // the kernel's high-water mark, and the WebSocket run's peak over idle minus the HTTP run's stays within the sockets'
 // reservations (8 x 32 MiB = 256 MiB).
 // The Child's HTTP relay accepts request bodies up to 256 MiB (LINK_RELAY_BODY_MAX_BYTES), so both loads carry the same
-// near-8 MiB request; nothing is scaled down. Any other OCX_LINK_WS_RSS_CHILD_* setting makes the run a diagnostic that
-// prints its numbers and asserts no budget. A child process runs the Child: the bound is this file's default.
+// near-8 MiB request; nothing is scaled down. OCX_LINK_WS_RSS_CHILD_SOCKETS (the only other setting) makes the run a
+// diagnostic that prints its numbers and asserts no budget. A child process runs the Child: the bound is this file's
+// default.
 
 const ENABLED = process.env.OCX_LINK_WS_RSS_CHILD_ACCEPTANCE === "1";
 const SOCKETS = Number(process.env.OCX_LINK_WS_RSS_CHILD_SOCKETS ?? LINK_CHILD_WS_LIMITS.openSockets);
