@@ -299,9 +299,39 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     try { journal.intent(effect); return true; } catch { return false; }
   };
   const cleanup = !force && record.direction === "hub-initiated";
+  // A forced revoke leaves an ephemeral Child uncleaned. Its tombstone is durable before the first intent (key_revoked
+  // for a force revoke) and before the tunnel stops, so ocx link recover can still reach and clean that machine;
+  // without it, refuse with nothing touched.
+  const tombstoned = force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
+  // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: a later
+  // ordinary revoke would otherwise leave one no recover can settle. Only that exact tombstone, and
+  // only while the link still exists: another process may have committed its own forced revoke.
+  let written: LinkTombstone | null = null;
+  const dropOwnTombstone = (): void => {
+    if (!written) return;
+    const own = written;
+    try { withConfigMutationLockSync(() => { removeOwnTombstone(own, readStoreFor(ctx).links.some(link => link.id === id), tombstonesPath()); }); } catch { /* the link remains; recover refuses link_present */ }
+  };
+  if (tombstoned && record.hostKeyFingerprint) {
+    const tombstone: LinkTombstone = {
+      linkId: id, alias: record.alias, hostKeyFingerprint: record.hostKeyFingerprint,
+      ...(record.remotePlatform ? { remotePlatform: record.remotePlatform } : {}),
+      ...(record.routes ? { routes: [...record.routes] } : {}),
+      ...(record.explicitRoute ? { explicitRoute: { ...record.explicitRoute } } : {}),
+      ...(record.exclusive ? { exclusive: true as const } : {}),
+      revokedAt: new Date((ctx.deps.now ?? Date.now)()).toISOString(),
+      attempt: randomBytes(8).toString("hex"),
+    };
+    try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); written = tombstone; } catch (error) {
+      if (error instanceof LinkTombstoneLimitError) {
+        return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
+      }
+      return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
+    }
+  }
   // The first intent (cleanup, or the key for a force revoke) is written before stopLink: a failed write leaves the
   // tunnel as it was and nothing has been touched.
-  if (!intend(cleanup ? "remote_cleanup" : "key_revoked")) return journalFailed();
+  if (!intend(cleanup ? "remote_cleanup" : "key_revoked")) { dropOwnTombstone(); return journalFailed(); }
   const release = state.supervisor.holdLink?.(id);
   // Set when this revoke restarts the tunnel itself after a cleanup that never ran; every other way out leaves it down.
   let restarted = false;
@@ -353,44 +383,14 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         journal.done("remote_cleanup");
       }
     }
-    // A forced revoke leaves an ephemeral Child uncleaned. Its tombstone is durable before the key and
-    // record go, so ocx link recover can still reach and clean that machine; without it, refuse.
-    const tombstoned = force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
-    // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: a later
-    // ordinary revoke would otherwise leave one no recover can settle. Only that exact tombstone, and
-    // only while the link still exists: another process may have committed its own forced revoke.
-    let written: LinkTombstone | null = null;
-    const dropOwnTombstone = (): void => {
-      if (!written) return;
-      const own = written;
-      try { withConfigMutationLockSync(() => { removeOwnTombstone(own, readStoreFor(ctx).links.some(link => link.id === id), tombstonesPath()); }); } catch { /* the link remains; recover refuses link_present */ }
-    };
-    if (tombstoned && record.hostKeyFingerprint) {
-      const tombstone: LinkTombstone = {
-        linkId: id, alias: record.alias, hostKeyFingerprint: record.hostKeyFingerprint,
-        ...(record.remotePlatform ? { remotePlatform: record.remotePlatform } : {}),
-        ...(record.routes ? { routes: [...record.routes] } : {}),
-        ...(record.explicitRoute ? { explicitRoute: { ...record.explicitRoute } } : {}),
-        ...(record.exclusive ? { exclusive: true as const } : {}),
-        revokedAt: new Date((ctx.deps.now ?? Date.now)()).toISOString(),
-        attempt: randomBytes(8).toString("hex"),
-      };
-      try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); written = tombstone; } catch (error) {
-        await restartTunnel();
-        if (error instanceof LinkTombstoneLimitError) {
-          return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
-        }
-        return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
-      }
-    }
-    // A journal write that fails here leaves the link and key in place, so the tombstone written above goes too.
-    if (cleanup && !intend("key_revoked")) { dropOwnTombstone(); return journalFailed(); }
+    if (cleanup && !intend("key_revoked")) return journalFailed();
     if (!revokeKeyIdempotent(ctx, record.apiKeyId)) {
       dropOwnTombstone();
       return fail("key_revoke_failed", "The link key could not be revoked.", 502);
     }
     journal.done("key_revoked");
-    if (!intend("record_removed")) return journalFailed();
+    // The link stays when its record cannot be marked for removal, so the tombstone this revoke wrote goes too.
+    if (!intend("record_removed")) { dropOwnTombstone(); return journalFailed(); }
     let next: LinkStore;
     try {
       next = withConfigMutationLockSync(() => {

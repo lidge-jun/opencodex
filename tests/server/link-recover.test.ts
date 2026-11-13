@@ -162,13 +162,15 @@ describe("force revoke tombstones", () => {
     expect(tombstones()).toEqual([]);
   });
 
-  test("a damaged tombstone file refuses the forced revoke and keeps the link", async () => {
-    const h = harness([link()]);
+  test("a damaged tombstone file refuses the forced revoke and keeps the link, before the tunnel is touched", async () => {
+    let stopped = false;
+    const h = harness([link()], { duringStop: () => { stopped = true; } });
     await Bun.write(tombstonesPath(), "{damaged");
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
     expect(res.status).toBe(503);
     expect((await errorOf(res)).code).toBe("tombstone_write_failed");
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(stopped).toBe(false);
   });
 });
 
@@ -600,10 +602,11 @@ describe("final review follow-ups", () => {
     expect(tombstones()).toEqual([]);
   });
 
-  test("a journal write that fails before the key revoke drops the tombstone the forced revoke wrote", async () => {
+  test("a journal write that fails before the link goes drops the tombstone the forced revoke wrote", async () => {
     const operationsPath = join(root, "operations.json");
     const h = harness([link()], { operationsPath, duringStop: () => { writeFileSync(operationsPath, "{ not json"); } });
-    await expect(h.request("DELETE", "/api/link/" + ID, { force: true, operationId: "revoke-1" })).rejects.toThrow();
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true, operationId: "revoke-1" });
+    expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([500, "operation_journal_failed"]);
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
     expect(tombstones()).toEqual([]);
   });
