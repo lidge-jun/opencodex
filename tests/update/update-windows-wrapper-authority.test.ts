@@ -16,6 +16,20 @@ function execute(body: string, deps: object): any {
 const authority = (kind: "same" | "absent" | "unknown" | "foreign"): UpdateServiceHomeAuthority =>
   kind === "foreign" ? { kind, subject: "a".repeat(64) } : { kind };
 
+for (const scenario of ["refused stop", "unreadable WinSW state", "conflicting scheduler task"]) {
+  test(`native backend aborts for ${scenario}`, async () => {
+    const homePolicy = createUpdateServiceHomePolicy(() => authority("same"), () => {});
+    let checked = 0;
+    const result = await execute(helperBody + ";return stopWindowsServiceForRestart(homePolicy.authorizeMutation);", {
+      homePolicy, process: { platform: "win32" }, readServiceBackend: () => "native",
+      stopWinswService: () => { throw new Error("refused"); },
+      checkedStop: async () => { checked++; return scenario === "refused stop" ? "denied" : "unknown"; },
+    });
+    expect(result).toBe(false);
+    expect(checked).toBe(1);
+  });
+}
+
 /**
  * Part A of the checked stop (#7771) as the updater sees it: the authorizer at entry, the
  * manager stop, then the authorizer again before the wrapper terminate.
@@ -31,7 +45,7 @@ function checkedStop(events: string[], home: () => UpdateServiceHomeAuthority, c
   };
 }
 
-for (const phase of ["checked", "backend-native", "backend-throw"] as const) {
+for (const phase of ["checked"] as const) {
   for (const changed of ["same", "absent", "unknown", "foreign"] as const) {
     test(`Windows service stop checks ${changed} service authority after ${phase}`, async () => {
       let home = authority("same");
@@ -39,17 +53,11 @@ for (const phase of ["checked", "backend-native", "backend-throw"] as const) {
       const homePolicy = createUpdateServiceHomePolicy(() => home, () => {});
       const result = await execute(helperBody + ";return stopWindowsServiceForRestart(homePolicy.authorizeMutation);", {
         homePolicy, process: { platform: "win32" },
-        readServiceBackend: () => {
-          if (phase.startsWith("backend")) home = authority(changed);
-          if (phase === "backend-throw") throw new Error("fixture backend read");
-          return phase === "backend-native" ? "native" : "scheduler";
-        },
+        readServiceBackend: () => "scheduler",
         stopWinswService: () => events.push(`native:${home.kind}`),
         checkedStop: checkedStop(events, () => home, () => { if (phase === "checked") home = authority(changed); }),
       });
-      // An unreadable backend falls through to the checked stop, which probes both backends.
-      const stable = phase === "backend-native" ? ["native:same"] : ["stop:same", "terminate:same"];
-      expect(events).toEqual(changed === "same" ? stable : phase === "checked" ? ["stop:same"] : []);
+      expect(events).toEqual(changed === "same" ? ["stop:same", "terminate:same"] : ["stop:same"]);
       // Anything but a proven stop aborts the restart.
       expect(result).toBe(changed === "same");
       // The same policy must retain unknown/foreign refusal even if registration re-matches.

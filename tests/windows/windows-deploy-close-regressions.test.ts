@@ -57,8 +57,8 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
     const restart = read("src/update/job-windows-restart.ts");
     expect(restart).toContain("export async function stopWindowsServiceForRestart(authorizeMutation: UpdateMutationAuthorizer): Promise<boolean>");
     expect(restart).toContain('if (process.platform !== "win32") return true;');
-    // Native WinSW installs keep today's stop and return before the checked Task Scheduler stop.
-    expect(restart).toMatch(/if \(backend === "native"\) \{\s*if \(!authorizeMutation\("service"\)\) return false;\s*try \{ guardedStopWinsw\(authorizeMutation\); \} catch \{[^}]*\}\s*return true;\s*\}\s*if \(!authorizeMutation\("service"\)\) return false;/);
+    // Both manager registrations are probed by the checked stop.
+    expect(restart).not.toContain("guardedStopWinsw");
     // Task Scheduler: Part A ends the manager and the bound wrappers (the binding rule in
     // windows-stop-binding.ts excludes the stopper itself); only stopped or absent continues.
     expect(restart).toContain("const outcome = await guardedStopWindowsChecked(authorizeMutation);");

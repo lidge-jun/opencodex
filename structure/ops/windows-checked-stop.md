@@ -228,8 +228,8 @@ stop instead of sliding forward.
   `"none"` after its orphan-discovery cap while an unresponsive proxy still holds the port. The
   candidate set is resolved before cleanup and every endpoint must be definitively dead before
   the install callback runs; live or unknown throws like a Part B failure.
-- The updater (`src/update/job-windows-restart.ts`) uses `guardedStopWindowsChecked` for Task
-  Scheduler, with the service mutation gate as the authorizer; WinSW keeps its stop. Each of the
+- The updater (`src/update/job-windows-restart.ts`) uses `guardedStopWindowsChecked` for both
+  backends, with the service mutation gate as the authorizer. Each of the
   three call sites in `src/update/job.ts` aborts the restart unless the outcome is stopped or absent.
 
 ## Who may run Part A
