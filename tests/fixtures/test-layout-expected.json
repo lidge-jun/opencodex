@@ -1517,7 +1517,7 @@
   "user-cost-overlay-coderabbit-regressions.test.ts": "usage", "user-cost-overlay-live-reconcile.test.ts": "usage",
   "user-cost-overlay-provider-delete.test.ts": "usage", "v1-hub-state.test.ts": "server",
   "v2-agent-message-failfast.test.ts": "server", "vercel-gateway-provider-routing.test.ts": "providers",
-  "version-line.test.ts": "ci-workflows", "vertex-catalog.test.ts": "adapters/google",
+  "version-line.test.ts": "ci-workflows", "vertex-catalog.test.ts": "adapters/google", "vertex-model-discovery.test.ts": "adapters/google",
   "vision-anthropic.test.ts": "vision", "vision-backend-union.test.ts": "vision",
   "vision-cache.test.ts": "vision", "vision-classification-seed-repair.test.ts": "providers",
   "vision-custom-row-precedence.test.ts": "vision", "vision-eligibility.test.ts": "vision",
