@@ -448,8 +448,8 @@ function readRemovalTarget(ctx: ManagementContext, id: string):
 
 // What each link-bound refusal means and what to do; fixed text, never the Child's own output.
 const BOUND_REFUSAL_MESSAGES: Record<string, string> = Object.assign(Object.create(null) as Record<string, string>, {
-  child_link_mismatch: "The Child is not connected to this link, so nothing was disconnected and the link was kept. If it now belongs to another link, a hub or another Home, do not disconnect it there: revoke this link with --force. If it has a connect or key rotation in progress, or its state cannot be read, repair that on the Child first.",
-  child_residual: "The lightweight Child keeps records it cannot restore, so nothing was disconnected and the link was kept; run ~/.cache/opencodex/bin/ocx-child detach on it, then revoke again.",
+  child_link_mismatch: "The Child refused because of who it belongs to or what state it is in, so nothing was disconnected and the link was kept. If it now belongs to another link, a hub or another Home, do not disconnect it there: revoke this link with --force. If it is not connected at all, revoke with --force too. If it joined this Home by itself, run ocx disconnect on it. If a connect, key rotation or unreadable state is in the way, repair that on the Child first.",
+  child_residual: "The lightweight Child keeps records it cannot restore, so nothing was disconnected and the link was kept. Inspect them first: an interrupted attach of another link can be what is left, and ~/.cache/opencodex/bin/ocx-child detach would then remove that link too. Run it only when that is safe, then revoke again; otherwise revoke with --force.",
   child_disconnect_pending: "The Child has an unfinished disconnect it could not tie to this link and may be partly cleaned; check it, finish it there with ocx disconnect, then revoke again or with --force.",
   expect_link_unsupported: "The Child runs an OpenCodex older than --expect-link and another Home-initiated link of this Home may reach the same machine, so it was not disconnected unbound. Update OpenCodex on the Child, revoke the other link first, or revoke this one with --force.",
 });

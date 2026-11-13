@@ -350,8 +350,8 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
   // #8662's link-bound refusals reach the CLI only as a hint: each validated hint in the closed set gets the CLI's own text, with
   // its outcome; child_disconnect_pending ends unknown, so its repeat guidance stays conditional.
   test.each([
-    ["child_link_mismatch", "failed_clean", ["not connected to this link", "do not disconnect it there", "--force"]],
-    ["child_residual", "failed_clean", ["keeps records it cannot restore", "~/.cache/opencodex/bin/ocx-child detach"]],
+    ["child_link_mismatch", "failed_clean", ["who it belongs to or what state it is in", "do not disconnect it there", "--force", "If it joined this Home by itself, run ocx disconnect"]],
+    ["child_residual", "failed_clean", ["keeps records it cannot restore", "Inspect them first", "interrupted attach of another link", "~/.cache/opencodex/bin/ocx-child detach"]],
     ["child_disconnect_pending", "unknown", ["unfinished disconnect", "may be partly cleaned", "ocx disconnect", "if this id still owns an unfinished removal, the repeat resumes it"]],
     ["expect_link_unsupported", "failed_clean", ["older than --expect-link", "another Home-initiated link", "Update OpenCodex on the Child"]],
   ] as const)("a journalled revoke refused with hint %s prints the CLI's own text for it", async (hint, outcome, parts) => {
