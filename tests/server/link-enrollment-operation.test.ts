@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { enrollOperationDigest, openEnrollJournal } from "../../src/server/management/link-operation";
 import { acquireAliasLock, type AliasLockDeps } from "../../src/link/alias-lock";
-import { readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { OPERATION_JOURNAL_MAX_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, OPERATION_PRUNE_FLOOR_MS, readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -147,6 +147,8 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
     get store() { return store; }, set store(value: LinkStore) { store = value; },
     journal: () => readOperationsJournal(journalPath),
     advance: (ms: number) => { clock += ms; }, breakRevoke: () => { revokeWorks = false; }, failIssue: () => { issueWorks = false; },
+    /** What a revoke does to the Child: it serves standalone again. */
+    disconnectChild: () => { restarted = false; },
   };
 }
 
@@ -295,16 +297,29 @@ describe("a repeat after the process died at a boundary", () => {
     }
   });
 
-  test("another link for the alias makes the outcome unknown and nothing is touched", async () => {
+  test("another link for the alias makes the outcome unknown; the foreign link stays, the reserved key is still revoked", async () => {
     const h = harness();
     writeOperationsJournal(h.journalPath, { version: 1, operations: [entry({ effects: marks("key_issued:intent", "key_issued:done") })] });
-    h.config.apiKeys = [reservedKey];
+    const foreignKey = { ...reservedKey, id: "someone-else" };
+    h.config.apiKeys = [reservedKey, foreignKey];
     const foreign = { ...reservedRecord(), id: "lnk_00000000000000bb", apiKeyId: "someone-else" };
     h.store = { version: 1, listenerPort: 18181, links: [foreign] };
     const repeat = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
     expect(repeat.body.outcome).toBe("unknown");
     expect(h.store.links).toEqual([foreign]);
-    expect(h.config.apiKeys).toEqual([reservedKey]);
+    // reserved.apiKeyId names only this operation's key, and no record carries the reserved link id.
+    expect(h.config.apiKeys).toEqual([foreignKey]);
+  });
+
+  test("with another link for the alias and a record carrying the reserved link id, that record is not touched either", async () => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [entry({ effects: marks("key_issued:intent", "key_issued:done", "link_recorded:intent") })] });
+    h.config.apiKeys = [reservedKey];
+    const foreign = { ...reservedRecord(), id: "lnk_00000000000000bb", apiKeyId: "someone-else", alias: ALIAS.toUpperCase() };
+    h.store = { version: 1, listenerPort: 18181, links: [reservedRecord(), foreign] };
+    const repeat = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
+    expect(repeat.body.outcome).toBe("unknown");
+    expect(h.store.links.map(link => link.id)).toEqual(["lnk_00000000000000aa", "lnk_00000000000000bb"]);
   });
 
   test("a reserved key that will not revoke leaves the outcome unknown", async () => {
@@ -387,7 +402,14 @@ describe("review round 1", () => {
     const journal = openEnrollJournal(ctx, { id: OP, digest: digest() }, ALIAS, {});
     journal.intent("plant");
     const finished = await journal.finish(Response.json(body, { status: 502 }));
-    expect((await finished.json() as { outcome: string }).outcome).toBe(outcome);
+    const answer = await finished.json() as { outcome: string; linkId?: string; recovery?: string; residualKind?: string };
+    expect(answer.outcome).toBe(outcome);
+    if (outcome === "residual") {
+      // The first answer already binds the Child's step to the reserved link id, as a replay does (#8694 review).
+      expect(answer.linkId).toBe(journal.reservedLinkId);
+      expect(answer.residualKind).toBe("plant");
+      expect(answer.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + journal.reservedLinkId);
+    }
   });
 
   test("without an operation id and before this Home ever journalled, apply takes no lock and reads no journal", async () => {
@@ -453,9 +475,12 @@ describe("review round 3", () => {
     expect({ code: code(replay), outcome: replay.body.outcome, residual: replay.body.residual }).toEqual({ code: "key_issue_uncertain", outcome: "unknown", residual: true });
     // A plant is removed only by the managed binary's purge; a disconnect would leave it.
     expect(replay.body.residualKind).toBe("plant");
-    expect(replay.body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
-    expect(replay.body.recovery).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge');
-    expect(replay.body.recovery).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge');
+    // Bound to the reserved link id the journal recorded before anything changed (#8691 final review).
+    const linkId = replay.body.linkId as string;
+    expect(linkId).toMatch(/^lnk_[0-9a-f]{16}$/);
+    expect(replay.body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + linkId);
+    expect(replay.body.recovery).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + linkId);
+    expect(replay.body.recovery).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + linkId);
     expect(replay.body.recovery).not.toContain("ocx disconnect");
   });
 
@@ -477,6 +502,72 @@ describe("review round 3", () => {
 
 });
 
+describe("journal size limit", () => {
+  // Distinct, increasing finish times past the prune floor (early pruning never takes a younger entry), so "oldest first" is well defined.
+  const filled = (count: number, shape: Partial<LinkOperation> = {}): LinkOperation[] => Array.from({ length: count }, (_, i) => entry({
+    operationId: "old-" + i, alias: "pen-old-" + i, state: "committed", finishedAt: new Date(NOW - OPERATION_PRUNE_FLOOR_MS - (count - i) * 1000).toISOString(), digest: "d".repeat(64), ...shape }));
+
+  test("settled entries never block a new operation: past the bound the oldest are pruned instead", async () => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_SETTLED) });
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+    expect((await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP })).status).toBe(202);
+    const kept = h.journal().operations;
+    expect(kept).toHaveLength(OPERATION_JOURNAL_MAX_SETTLED);
+    expect(kept.map(op => op.operationId)).not.toContain("old-0");
+    expect(kept.find(op => op.operationId === OP)!.state).toBe("committed");
+  });
+
+  test("past the bound of open and unresolved residual or unknown entries a new journalled apply is refused before any effect, naming resolve; a plain apply is not affected", async () => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_UNSETTLED, { state: "unknown" }) });
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+    const before = h.ssh.length;
+    const refused = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
+    expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_journal_full" });
+    expect((refused.body.error as { message: string }).message).toContain("ocx link operations resolve");
+    // A closed field naming the bound; an older CLI drops it and still refuses.
+    expect(refused.body.bound).toBe("unsettled");
+    expect(h.ssh.length).toBe(before);
+    expect(h.config.apiKeys).toEqual([]);
+    expect((await h.call("apply", { alias: ALIAS, fingerprint })).status).toBe(202);
+  });
+
+  test("marks on an operation already in the journal are never refused at the bound", () => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_UNSETTLED - 1, { state: "unknown" }) });
+    const ctx = { deps: { now: () => NOW, linkOperationsPath: () => h.journalPath } } as unknown as ManagementContext;
+    const journal = openEnrollJournal(ctx, { id: OP, digest: digest() }, ALIAS, {});
+    expect(h.journal().operations).toHaveLength(OPERATION_JOURNAL_MAX_UNSETTLED);
+    journal.intent("key_issued");
+    expect(h.journal().operations.find(op => op.operationId === OP)!.effects.map(mark => mark.effect)).toEqual(["key_issued"]);
+  });
+});
+
+describe("small follow-ups", () => {
+  test("an operation id without a fingerprint is refused, as the CLI already refuses it", async () => {
+    const h = harness();
+    const refused = await h.call("apply", { alias: ALIAS, operationId: OP });
+    expect({ status: refused.status, code: code(refused) }).toEqual({ status: 400, code: "invalid_body" });
+    expect(existsSync(h.journalPath)).toBe(false);
+  });
+
+  test("a committed enrollment that planted the Child says planted: true, live and on replay", async () => {
+    const h = harness();
+    h.overrides.inspect = () => ok("ocx-inspect:uname:Linux:x86_64\nocx-inspect:kind:missing\n");
+    h.overrides.config = () => ok('{"port":10100,"runtimeRole":"standalone","ephemeralChild":true}\n');
+    h.overrides.before = () => ({ code: 7, stdout: "", stderr: "" });
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true, allowMissing: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint, allowMissing: true })).status).toBe(200);
+    const applied = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
+    expect({ status: applied.status, planted: applied.body.planted, outcome: applied.body.outcome }).toEqual({ status: 202, planted: true, outcome: "committed" });
+    const replay = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
+    expect(replay).toEqual({ status: 202, body: applied.body });
+  });
+});
+
 describe("retention", () => {
   test("a residual entry older than 30 days is still there and recoverable; a committed one is pruned", async () => {
     const h = harness();
@@ -496,5 +587,50 @@ describe("retention", () => {
     expect(h.journal().operations.map(op => op.operationId)).toEqual([OP]);
     updateOperationsJournal(h.journalPath, NOW + 2 * DAY, () => {});
     expect(h.journal().operations).toEqual([]);
+  });
+});
+
+describe("replay survives the settled-entry bound", () => {
+  test("a committed enrollment whose answer was lost still replays after 256 newer settled entries, without SSH", async () => {
+    const h = harness();
+    const applied = await h.enroll();
+    expect(applied.status).toBe(202);
+    const committedOp = h.journal().operations[0]!;
+    // Many operations settle after it inside the replay window (a provisioning burst); a later write prunes, but not it.
+    const newer = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 4 }, (_, i) => entry({ operationId: "later-" + i, alias: "pen-later-" + i, state: "committed",
+      finishedAt: new Date(NOW + 1000 + i).toISOString(), digest: "e".repeat(64) }));
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [committedOp, ...newer] });
+    updateOperationsJournal(h.journalPath, NOW + 3_600_000, () => {});
+    expect(h.journal().operations.map(op => op.operationId)).toContain(OP);
+    const calls = h.ssh.length;
+    const replayed = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
+    expect({ status: replayed.status, body: replayed.body }).toEqual({ status: 202, body: applied.body });
+    expect(h.ssh.length).toBe(calls);
+  });
+});
+
+describe("a repeat after the replay window (the documented limit of the guarantee)", () => {
+  test("an enrollment whose entry was pruned and whose link was removed meanwhile enrolls the machine again under the same id", async () => {
+    const h = harness();
+    const first = await h.enroll();
+    expect(first.status).toBe(202);
+    const firstLink = first.body.linkId as string;
+    // The link is revoked through the route (forced: no remote step), and the Child serves standalone again.
+    expect((await h.del(firstLink, { force: true })).status).toBe(200);
+    h.disconnectChild();
+    expect(h.store.links).toEqual([]);
+    // 256 operations settle after it; once it is past the prune floor, the next journal write prunes it.
+    const settled = h.journal().operations;
+    const later = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED }, (_, i) => entry({ operationId: "later-" + i, alias: "pen-later-" + i, state: "committed",
+      finishedAt: new Date(NOW + 1000 + i).toISOString(), digest: "e".repeat(64) }));
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [...settled, ...later] });
+    h.advance(OPERATION_PRUNE_FLOOR_MS + 1000);
+    updateOperationsJournal(h.journalPath, NOW + OPERATION_PRUNE_FLOOR_MS + 1000, () => {});
+    expect(h.journal().operations.map(op => op.operationId)).not.toContain(OP);
+    const again = await h.enroll();
+    // Not a refusal: callers must not repeat an operation id after the window and expect its old answer.
+    expect({ status: again.status, body: again.body }).toMatchObject({ status: 202 });
+    expect(again.body.linkId).not.toBe(firstLink);
+    expect(h.store.links.map(link => link.id)).toEqual([again.body.linkId]);
   });
 });

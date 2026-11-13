@@ -159,6 +159,12 @@ export type RuntimePortState = {
   /** A Link runtime is draining; new and in-flight sync commits must stand down. */
   clientStopping?: true;
   /**
+   * Fresh for every publication of a client runtime, including the rollback of a failed restart.
+   * A sync compares the whole record before each commit, so one captured before a restart cannot
+   * commit into the runtime that serves again afterwards (src/client/sync-runtime.ts).
+   */
+  servingGeneration?: string;
+  /**
    * The owner a client runtime classified from positive evidence (src/client/runtime-restart.ts
    * restartOwnerEvidence: desktop, service-manager or none). Absent for a bare OCX_SERVICE=1 and for
    * runtimes older than this field; `ocx disconnect` restarts only a runtime whose record states a
@@ -195,6 +201,7 @@ export function isValidRuntimePortState(value: unknown): value is RuntimePortSta
     && hostnameOk
     && attestationOk
     && (state.clientStopping === undefined || state.clientStopping === true)
+    && (state.servingGeneration === undefined || (typeof state.servingGeneration === "string" && state.servingGeneration.length <= 64))
     && (state.restartOwner === undefined || (typeof state.restartOwner === "string" && state.restartOwner.length <= 64))
     && siblingOk;
 }

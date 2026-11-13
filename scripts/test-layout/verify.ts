@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { withoutGitRepositoryEnv } from "../git-repository-env";
 import { LAYOUT_PATH, loadLayout, scanEscapes } from "./schema";
 import { listTestFiles, parseDomainArgs, repoRootFromHere } from "./plan";
 import { getTestRunnerBun } from "../lib/test-runner-bun";
@@ -65,7 +66,7 @@ export function filesNamingAny(root: string, literals: string[]): Map<string, st
   const patterns = literals.flatMap(literal => ["-e", literal]);
   // -n -o prints "path:line:match" so one pass attributes each hit to its literal.
   const proc = Bun.spawnSync(["git", "grep", "-n", "-o", "--fixed-strings", ...patterns, "--", ...roots], {
-    cwd: root, stdout: "pipe", stderr: "pipe",
+    cwd: root, env: withoutGitRepositoryEnv(process.env), stdout: "pipe", stderr: "pipe",
   });
   // git grep exits 1 for "no matches"; anything above that is an execution error.
   if (proc.exitCode !== 0 && proc.exitCode !== 1) {

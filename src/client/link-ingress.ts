@@ -52,7 +52,8 @@ export interface LinkIngress {
   relay?: LinkRelayDeps;
   /**
    * The Responses WebSocket over the link (link-websocket.ts). It is tried only when it wants the
-   * upgrade (the Child's release gate is open and the Home advertised the feature); otherwise the
+   * upgrade (the Child's release gate is open, no opt-out, and the Home's last applied answer for the link
+   * did not say off; with no answer yet since start the upgrade tries); otherwise the
    * upgrade keeps the 426 below, with no network I/O.
    */
   websocket?: Pick<LinkWebsocketRelay, "wanted" | "upgrade">;

@@ -10,6 +10,7 @@ import { hermesProfileStore } from "../../src/integrations/hermes-profiles";
 import { defaultIntegrationIO, parseConfig } from "../../src/integrations/config-io";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { previewRouteModel } from "../../src/router";
+import { withLinkApply } from "../../src/client/link-home";
 import { RUNTIME_PROVIDER_FETCH, runtimeProviderFetch, type RuntimeProviderFetch } from "../../src/lib/provider-runtime-fetch";
 import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
@@ -205,6 +206,99 @@ test("different explicit modes never join the same mutation flight", async () =>
   expect((await response.json()).code).toBe("integration_mutation_busy");
 });
 
+test.each(["apply", "disable", "restore"] as const)("%s flight refuses a joiner after its preview roster is retired", async operation => {
+  install("hermes");
+  if (operation !== "apply") expect((await api("/api/client-integrations/hermes", { enabled: true }, "PUT")).status).toBe(200);
+  await warm();
+  const opId = store.listOperations("hermes")[0]?.opId;
+  const preview = operation === "restore"
+    ? await api("/api/client-integrations/restore/preview", { opId })
+    : await api("/api/client-integrations/preview", { clientId: "hermes", operation });
+  expect(preview.status).toBe(200);
+  const plan = await preview.json(); expect(plan.canApply).toBe(true);
+  const path = operation === "restore" ? "/api/client-integrations/restore" : "/api/client-integrations/hermes";
+  const method = operation === "restore" ? "POST" : "PUT";
+  const body = operation === "restore" ? { opId, operation, planFingerprint: plan.fingerprint }
+    : { enabled: operation === "apply", operation, planFingerprint: plan.fingerprint };
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const joinedFlight = Promise.withResolvers<void>();
+  const retiredFlight = Promise.withResolvers<void>();
+  let flightReads = 0;
+  setIntegrationMutationFlightTestHooks({ store, io: { ...defaultIntegrationIO(store), now: () => {
+    if (new Error().stack?.includes("runIntegrationMutationFlight")) {
+      if (++flightReads === 2) joinedFlight.resolve();
+      if (flightReads === 3) retiredFlight.resolve();
+    }
+    return Date.now();
+  } }, run: async execute => {
+    const result = await execute(); entered.resolve(); await release.promise; return result;
+  } });
+  const first = api(path, body, method);
+  try {
+    await entered.promise;
+    const validJoin = api(path, body, method);
+    await joinedFlight.promise;
+    resetExportSnapshotForTests();
+    const second = api(path, body, method);
+    // Either refusal completes, or the clock seam proves it reached the occupied flight.
+    await Promise.race([second.then(() => undefined), retiredFlight.promise]);
+    release.resolve();
+    expect((await validJoin).status).toBe(200);
+    const verdict = await second;
+    expect(verdict.status).toBe(409);
+    expect((await verdict.json()).code).toBe("integration_preview_unavailable");
+    expect(network).not.toHaveBeenCalled();
+  } finally { release.resolve(); }
+  expect((await first).status).toBe(200);
+});
+
+test.each(["apply", "disable", "restore"] as const)("%s rejects a roster retired between capture and flight admission", async operation => {
+  install("hermes");
+  if (operation !== "apply") expect((await api("/api/client-integrations/hermes", { enabled: true }, "PUT")).status).toBe(200);
+  await warm();
+  const opId = store.listOperations("hermes")[0]?.opId;
+  const preview = operation === "restore"
+    ? await api("/api/client-integrations/restore/preview", { opId })
+    : await api("/api/client-integrations/preview", { clientId: "hermes", operation });
+  const plan = await preview.json(); expect(plan.canApply).toBe(true);
+  const path = operation === "restore" ? "/api/client-integrations/restore" : "/api/client-integrations/hermes";
+  const method = operation === "restore" ? "POST" : "PUT";
+  const body = operation === "restore" ? { opId, operation, planFingerprint: plan.fingerprint }
+    : { enabled: operation === "apply", operation, planFingerprint: plan.fingerprint };
+  const ownerDone = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const captured = Promise.withResolvers<void>();
+  const admitted = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  let captures = 0, admissions = 0;
+  setIntegrationMutationFlightTestHooks({ store,
+    afterBoundSnapshot: async () => { if (++captures === 2) { captured.resolve(); await resume.promise; } },
+    io: { ...defaultIntegrationIO(store), now: () => {
+      if (new Error().stack?.includes("runIntegrationMutationFlight") && ++admissions === 2) admitted.resolve();
+      return Date.now();
+    } },
+    run: async execute => { const response = await execute(); ownerDone.resolve(); await release.promise; return response; },
+  });
+  const owner = api(path, body, method);
+  try {
+    await ownerDone.promise;
+    const before = witness();
+    const joiner = api(path, body, method);
+    await captured.promise;
+    await loadExportModels(config, [{ provider: "acme", id: "different-model" }]);
+    resume.resolve();
+    await Promise.race([joiner.then(() => undefined), admitted.promise]);
+    release.resolve();
+    const response = await joiner;
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe("integration_preview_stale");
+    expect(witness()).toEqual(before);
+    expect(network).not.toHaveBeenCalled();
+  } finally { resume.resolve(); release.resolve(); }
+  expect((await owner).status).toBe(200);
+});
+
 test.each(["hermes", "commandcode"] as const)("%s unbound apply revalidates an alias reassigned during discovery", async client => {
   const path = install(client);
   const provider = config.providers.acme!;
@@ -266,12 +360,12 @@ for (const client of ["hermes", "commandcode"] as const) {
           expect(store.readRecords()[client]?.modelNames).toBe("alias");
         }
         provider.models = ["vendor/model-x", "model-b"];
+        // The Home lock is persistent infrastructure, so include it in the before witness.
+        await withLinkApply(async () => {});
         const before = witness();
-        setIntegrationMutationFlightTestHooks({ store, run: operation => {
-          // The coordinator captures config synchronously before its first await.
-          const pending = operation();
+        setIntegrationMutationFlightTestHooks({ store, afterWriterStart: () => {
+          // The coordinator has captured config before this seam runs.
           provider.modelAliases = { "model-b": "pick" };
-          return pending;
         } });
         const response = await api(`/api/client-integrations/${client}`, {
           enabled: true, ...(inherited ? {} : { modelNames: "alias" }),
@@ -289,10 +383,8 @@ for (const client of ["hermes", "commandcode"] as const) {
     config.providers.acme!.models = ["vendor/model-x", "model-b"];
     config.providers.acme!.modelAliases = { "vendor/model-x": "pick" };
     config.fastRows = false;
-    setIntegrationMutationFlightTestHooks({ store, run: operation => {
-      const pending = operation();
+    setIntegrationMutationFlightTestHooks({ store, afterWriterStart: () => {
       config.providers.acme!.modelAliases = { "model-b": "pick" };
-      return pending;
     } });
     expect((await api(`/api/client-integrations/${client}`, { enabled: true }, "PUT")).status).toBe(200);
     expect(store.readRecords()[client]?.modelNames).toBe("routed");

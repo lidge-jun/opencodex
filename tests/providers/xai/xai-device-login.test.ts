@@ -636,9 +636,14 @@ describe("xAI device login", () => {
     const cancel = new AbortController();
     const calls = mockXai(boundedDevice({ expires_in: 10, interval: 1 }), [throttled("9".repeat(310)), granted()]);
     const waits: number[] = [];
-    await expect(loginXaiDevice({ signal: cancel.signal }, { sleep: async ms => {
-      waits.push(ms); if (waits.length === 2) { cancel.abort(); throw cancel.signal.reason; }
-    } })).rejects.toBeDefined();
+    // The second wait is capped by what the grant has left, so a real millisecond passing between
+    // the deadline and that wait would read 9_999 (run 43369456647). Hold the clock still.
+    const clock = spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      await expect(loginXaiDevice({ signal: cancel.signal }, { sleep: async ms => {
+        waits.push(ms); if (waits.length === 2) { cancel.abort(); throw cancel.signal.reason; }
+      } })).rejects.toBeDefined();
+    } finally { clock.mockRestore(); }
     expect(waits).toEqual([1_000, 10_000]);
     expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
   });

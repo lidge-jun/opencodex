@@ -207,6 +207,8 @@ Las opciones enteras como `--limit` requieren números enteros decimales dentro 
 
 <a id="default-alias-listing"></a>
 
+Para entrar en el modo experimental usa `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`. Los comandos genéricos `config set` y `config import` rechazan una entrada nueva a este modo, pues el comando dedicado también coordina la transición nativa. Antes de restaurar una configuración exportada con `multiAgentMode: "v2-plaintext"`, realiza primero esa transición con reconocimiento y después importa el archivo. Se permite restaurar un modo ya activo, cambiar otros ajustes y salir del modo. La preferencia independiente `plaintextV2AgentMessages` no cambia.
+
 ## Listado de alias predeterminado
 
 `ocx alias --json` es equivalente a `ocx alias list --json`. La bandera de salida puede preceder o seguir una acción de alias explícita.

@@ -16,6 +16,8 @@
 export const LINK_MANAGEMENT_PREFIX = "/v1/link-management";
 /** The Home's OpenCodex-owned Codex settings a Child applies when it syncs. */
 export const LINK_CODEX_SETTINGS_PATH = `${LINK_MANAGEMENT_PREFIX}/codex-settings`;
+export const LINK_ROUTE_INTENT_PATH = `${LINK_MANAGEMENT_PREFIX}/route-intent`;
+export const LINK_ROUTE_CATALOG_PATH = `${LINK_MANAGEMENT_PREFIX}/route-catalog`;
 
 export const LINK_MANAGEMENT_READ_PATHS: readonly string[] = [
   "/api/system/health",
@@ -71,7 +73,7 @@ export function linkManagementTarget(url: URL): URL | null {
 /** Home side: may the hub-link listener dispatch this request to the link management handler? */
 export function linkManagementRouteAllowed(url: URL, req: Request): boolean {
   if (req.headers.has("upgrade")) return false;
-  if (url.pathname === LINK_CODEX_SETTINGS_PATH) return req.method === "GET" && url.search === "";
+  if (url.pathname === LINK_CODEX_SETTINGS_PATH || url.pathname === LINK_ROUTE_INTENT_PATH || url.pathname === LINK_ROUTE_CATALOG_PATH) return req.method === "GET" && url.search === "";
   const target = linkManagementTarget(url);
   return target !== null && linkManagementReadAllowed(req.method, target.pathname, target.searchParams);
 }

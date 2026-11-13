@@ -192,7 +192,7 @@ State-changing: yes. JSON mode: `payload`.
 |---|---|---|
 | `--json` | boolean | Emit the client rows or toggle result as JSON. |
 
-- Each toggle writes the selected client configuration through its runtime owner. Refused disables remain failures. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor.
+- Each on/off writes the Home's native switch, recording no route intent for the Home, and applies it through the client's runtime owner, including Claude Desktop's first-party transition; Children keep inheriting their saved default. Refused disables remain failures. On a Child it is refused with the exact Home command. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor.
 
 ### `ocx integration client`
 
@@ -228,7 +228,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--confirm-drift` | boolean | Explicitly allow replacing edits made after the snapshot. |
 
 - status/show/list reads all clients, one client or Aside profiles. history/journal reads rollback records; expired snapshots stay visible.
-- enable/disable requires --client; an omitted Aside --profile toggles all profiles. --overwrite-conflict applies only to enable.
+- enable/disable requires --client; an omitted Aside --profile toggles all profiles. Each toggle is this Home's own decision, like the dashboard: once the Home uses route intent it is recorded so ocx sync keeps it, and linked Children keep their defaults (ocx route to <client> on|off changes those). --overwrite-conflict applies only to enable.
 - restore requires --op (alias --op-id); --client requires --profile and only Aside supports that profile selector. --confirm-drift is an explicit user waiver, never auto-retried. Use client preview or restore --preview to inspect a change, history remove --op ID --yes to retire a journal row, and sync --client aside to refresh managed profiles.
 
 ### `ocx grok status`
@@ -417,7 +417,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--reasoning-default` | string | Repeat MODEL=EFFORT to replace the full Droid defaults map; exact model IDs, duplicate keys refused. |
 | `--clear-reasoning-defaults` | boolean | Droid apply/overwrite only: send an empty map, distinct from omitted inherited defaults. |
 
-- An omitted Aside profile toggles all Aside profiles. Ownership, snapshots, journal and conflict refusals remain server-owned.
+- A Home-only decision, like the dashboard toggle: once the Home uses route intent the server records it as this Home's override so ocx sync keeps it, and linked Children keep their defaults (ocx route to <client> on|off changes those). On a Child a plain toggle is refused with the Home command. An omitted Aside profile toggles all Aside profiles. Ownership, snapshots, journal and conflict refusals remain server-owned.
 - Partial Aside failures remain failures after emitting the per-profile result. Never infer permission to overwrite from a refusal.
 - Bound Aside mutations require one explicit profile. Repeat the exact preview action/profile/options. The token is concurrency evidence, not authorization; stale state requires a new explicit preview.
 - Droid map omission preserves inheritance; supplied entries replace the full map, clear sends {}. Only Droid apply/overwrite accepts these options.
@@ -443,7 +443,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the result as JSON. |
 | `--plan-fingerprint` | string | Optional versioned token from a matching preview; stale intent is refused without retry. |
 
-- An omitted Aside profile toggles all Aside profiles. Ownership, snapshots, journal and conflict refusals remain server-owned.
+- A Home-only decision, like the dashboard toggle: once the Home uses route intent the server records it as this Home's override so ocx sync keeps it, and linked Children keep their defaults (ocx route to <client> on|off changes those). On a Child a plain toggle is refused with the Home command. An omitted Aside profile toggles all Aside profiles. Ownership, snapshots, journal and conflict refusals remain server-owned.
 - Partial Aside failures remain failures after emitting the per-profile result. Never infer permission to overwrite from a refusal.
 - Bound Aside mutations require one explicit profile. Repeat the exact preview action/profile/options. The token is concurrency evidence, not authorization; stale state requires a new explicit preview.
 

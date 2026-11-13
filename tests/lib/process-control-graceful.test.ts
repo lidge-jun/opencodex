@@ -45,6 +45,37 @@ describe("gracefulStopHost", () => {
 });
 
 describe("stopProxyGracefully", () => {
+  test("a refused mayTerminate keeps the forced-stop fallback from signalling the process", async () => {
+    // A throwaway child as the target: a regression could only ever signal it. The runtime's own
+    // binary is the idle process, so the case runs where /bin/sleep does not exist; on Windows the
+    // forced fallback it guards is taskkill, behind the same mayTerminate check.
+    const child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30_000)"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      await expect(stopProxy(child.pid, {
+        runtimeEndpoint: { hostname: "127.0.0.1", port: 1 }, runtimeEndpointOnly: true,
+        fetchFn: (async () => { throw new Error("unanswered"); }) as unknown as typeof fetch,
+        mayTerminate: () => false,
+      })).rejects.toThrow("Process termination refused");
+      expect(child.exitCode).toBeNull();
+    } finally {
+      child.kill("SIGKILL");
+      await child.exited;
+    }
+  });
+
+  test("runtimeEndpointOnly sends nothing without the resolved endpoint and never re-reads the record", async () => {
+    let reads = 0, requests = 0;
+    const result = await stopProxyGracefully(4242, {
+      // A record published after the caller resolved no endpoint, naming another port.
+      readRuntime: () => { reads++; return { port: 10200 }; },
+      runtimeEndpointOnly: true,
+      deferSharedTeardownNonce: "a".repeat(32),
+      fetchFn: (async () => { requests++; return new Response(null, { status: 500 }); }) as unknown as typeof fetch,
+      waitExit: () => true,
+    });
+    expect({ result, reads, requests }).toEqual({ result: false, reads: 0, requests: 0 });
+  });
+
   for (const [name, body] of [
     ["reported restore failure", JSON.stringify({ success: false, sharedTeardown: "performed" })],
     ["missing teardown result", JSON.stringify({ success: true })],

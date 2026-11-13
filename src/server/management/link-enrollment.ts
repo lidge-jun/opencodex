@@ -1,3 +1,4 @@
+import { seedRouteDeviceClients } from "../../routing/home-route-intent";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,13 +11,15 @@ import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRu
 import { requireRemotePlatform } from "../../link/remote-platform";
 import { LINK_CATALOG_MAX_BYTES, LINK_RELAY_VERIFY_MS, isChildHealth, linkCommandBudget, linkRestartBudget, parseChildHttp, remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../link/remote-probe";
 import { newLinkId, type LinkStore } from "../../link/store";
+import { residualRecovery } from "../../link/residual-recovery";
 import { SshRunnerError, boundHint, sshFailureHint, sshRunnerErrorHint, type SshRunResult } from "../../link/ssh-runner";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
-import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
-import { enrollOperationDigest, journalInUse, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { identityFileRefusal, routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
+import { enrollOperationDigest, journalInUse, journalOpenFailure, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { tombstoneNamesAlias } from "../../link/tombstones";
 import { isOperationId } from "../../link/operations-journal";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
@@ -25,20 +28,19 @@ const MIN_REMOTE_OCX = [2, 66, 0] as const;
 const REMOTE_OCX_VERSION = /^opencodex (\d{1,9})\.(\d{1,9})\.(\d{1,9})(-[0-9A-Za-z.-]{1,64})?(\+[0-9A-Za-z.-]{1,64})?(?=\s|$)/;
 
 /**
- * The fixed recovery line a refused apply that may have left the Child connected answers, with the
- * closed words a client maps to its own guidance: residualKind (plant: only the managed binary's
- * purge removes it; enrollment) as journalled replies use, and the Child's platform when known. The
- * purge line names the managed binary where that platform keeps it (on Windows both locations the plant uses).
+ * What a refused apply that may have left the Child connected answers: the closed words a client maps to its own guidance
+ * (residualKind: plant, only the managed binary's purge removes it, or enrollment; residualInstall for the latter, when the
+ * apply knew it), the attempt's link id and the Child's platform when known, and a recovery line bound to that id
+ * (src/link/residual-recovery.ts), which journalled replies share.
  */
-export function liveResidual(kind: "plant" | "ephemeral" | "full", platform: "posix" | "windows" | undefined): { residualKind: "plant" | "enrollment"; recovery: string; remotePlatform?: "posix" | "windows" } {
-  const recovery = kind === "plant"
-    ? platform === "windows"
-      ? 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child, or "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge where LOCALAPPDATA is not set, before retrying.'
-      : "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying."
-    : kind === "ephemeral"
-      ? "Run ocx-child detach (or ocx disconnect) on the Child before retrying."
-      : "Run ocx disconnect and ocx restart on the Child before retrying.";
-  return { residualKind: kind === "plant" ? "plant" : "enrollment", recovery, ...(platform ? { remotePlatform: platform } : {}) };
+export function liveResidual(kind: "plant" | "ephemeral" | "full", platform: "posix" | "windows" | undefined, linkId: string): { residualKind: "plant" | "enrollment"; residualInstall?: "ephemeral" | "full"; linkId: string; recovery: string; remotePlatform?: "posix" | "windows" } {
+  return {
+    residualKind: kind === "plant" ? "plant" : "enrollment",
+    ...(kind === "plant" ? {} : { residualInstall: kind }),
+    ...(platform ? { remotePlatform: platform } : {}),
+    linkId,
+    recovery: residualRecovery(kind, linkId, platform),
+  };
 }
 
 /**
@@ -71,6 +73,8 @@ function isOutdatedVersion(parts: readonly number[]): boolean {
 export async function probe(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
   const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
   if ("error" in split) return split.error;
+  const keyRefusal = identityFileRefusal(split.route.explicitRoute);
+  if (keyRefusal) return keyRefusal;
   const value = split.body, wanted = split.route, route = wanted.explicitRoute, bound = routeFields(wanted);
   const body = exactBody(value, ["alias"]) ?? exactBody(value, ["alias", "includeVersion"]) ?? exactBody(value, ["alias", "includeVersion", "allowMissing"]);
   if (!body || typeof body.alias !== "string"
@@ -149,6 +153,8 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
 export async function confirmHost(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
   const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
   if ("error" in split) return split.error;
+  const keyRefusal = identityFileRefusal(split.route.explicitRoute);
+  if (keyRefusal) return keyRefusal;
   const value = split.body, wanted = split.route;
   const body = exactBody(value, ["alias", "fingerprint"]) ?? exactBody(value, ["alias", "fingerprint", "allowMissing"]);
   if (!body || typeof body.alias !== "string" || typeof body.fingerprint !== "string" || (body.allowMissing !== undefined && typeof body.allowMissing !== "boolean")) {
@@ -258,11 +264,14 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     return fail("invalid_body", "alias and optional fingerprint/plant are required.", 400);
   }
   const alias = body.alias;
+  // A repeat replays without probing, so the fingerprint is what names the operation (the CLI requires it too).
+  if (body.operationId !== undefined && typeof body.fingerprint !== "string") return fail("invalid_body", "operationId requires fingerprint.", 400);
   const resolveBinary = ctx.deps.resolveChildBinarySource ?? resolveChildBinarySource;
   // ocx link add --operation-id (structure/remote-link.md, "Operation journal"): replay, recovery and the reserved ids.
   const operation = typeof body.operationId === "string" ? { id: body.operationId, digest: enrollOperationDigest({ alias,
     ...(typeof body.fingerprint === "string" ? { fingerprint: body.fingerprint } : {}), route: wanted, requireEphemeral: body.requireEphemeral === true }) } : null;
-  return underAliasLock(ctx, alias, operation !== null || journalInUse(ctx), async () => {
+  // A tombstone for this alias means recover can run against the machine; it holds the alias lock, so this does too.
+  return underAliasLock(ctx, alias, operation !== null || journalInUse(ctx) || tombstoneNamesAlias(alias), async () => {
   if (operation) {
     const replay = await replayOperation(ctx, state, operation, "enroll");
     if (replay) return replay;
@@ -276,16 +285,22 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     if (body.fingerprint !== undefined && body.fingerprint !== confirmed.fingerprint) return fail("host_fingerprint_mismatch", "The apply fingerprint does not match the confirmed host.", 409);
     if (!sameRouteRequest(routeOf(confirmed), wanted)) return routeMismatch();
     const route = confirmed.explicitRoute ?? null;
+    // After the replay above, before the journal entry and any SSH: a new operation needs a key ssh can use.
+    const keyRefusal = identityFileRefusal(route);
+    if (keyRefusal) return keyRefusal;
     if (readStoreFor(ctx).links.some(link => link.alias === alias && link.direction === "hub-initiated")) return fail("link_exists", "A link for this alias already exists.", 409);
     if (confirmed.runtimeKind === "missing" && body.plant !== true) {
       return fail("remote_ocx_missing", "ocx was not found on the remote host; confirm planting ocx-child before applying.", 409);
     }
     let journal: EnrollJournal = NO_ENROLL_JOURNAL;
     if (operation) {
-      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch {
-        return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch (error) {
+        return journalOpenFailure(error);
       }
     }
+    // The attempt's link id, fixed before anything changes on the Child: a residual answer binds the Child's step to it, even
+    // for a plant whose rollback failed before the link was stored.
+    const attemptLinkId = journal.reservedLinkId ?? newLinkId();
     return journal.finish(await (async (): Promise<Response> => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-link-apply-")), knownHosts = join(dir, "known_hosts");
     writeFileSync(knownHosts, confirmed.knownHostLine + "\n", { mode: 0o600 });
@@ -332,7 +347,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       const outcome = compensation ?? response;
       if (!remoteMayBeConnected) return outcome;
       const payload = await outcome.json() as Record<string, unknown>;
-      const residual = liveResidual(purgeRollbackFailed ? "plant" : ephemeralChild ? "ephemeral" : "full", knownPlatform());
+      const residual = liveResidual(purgeRollbackFailed ? "plant" : ephemeralChild ? "ephemeral" : "full", knownPlatform(), attemptLinkId);
       return Response.json({ ...payload, residual: true, ...residual }, { status: outcome.status });
     };
     try {
@@ -402,7 +417,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       }
       state.confirmedHosts?.delete(alias);
       phase = "home_setup";
-      const id = journal.reservedLinkId ?? newLinkId();
+      const id = attemptLinkId;
       journal.intent("key_issued");
       let issued: ReturnType<typeof issueKey>;
       if (journal.reservedKeyId === undefined) issued = issueKey(ctx, "link:" + alias);
@@ -442,6 +457,9 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
             ? fail("trust_file_unexpected", "The link known_hosts file has a pattern, host-list, marker or malformed line; remove that line, then probe and confirm the host again.", 409)
             : fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409));
       }
+      // An ephemeral ocx-child never reads route intent, so its enrollment saves none: seeding would
+      // also start ocx sync applying route intent to every Home client.
+      if (!ephemeralChild) withConfigMutationLockSync(() => seedRouteDeviceClients(ctx.config, ctx.version, id, undefined, readStoreFor(ctx).links.map(link => link.id)));
       journal.done("link_recorded");
       await state.listener.ensureStarted();
       if (state.listener.status().state !== "listening") return await failed(fail("listener_unavailable", "The link listener is unavailable.", 503));

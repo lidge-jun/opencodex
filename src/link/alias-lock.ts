@@ -9,7 +9,8 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { linkDir } from "./paths";
 
@@ -18,18 +19,26 @@ export interface AliasLockDeps {
   lockDir?: string;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
-  /** How long a second holder waits; defaults to the enrollment deadline. */
+  /** How long a second holder waits; defaults to ALIAS_LOCK_WAIT_MS. */
   waitMs?: number;
   pollMs?: number;
+  /** The caller's request: once it aborts (the client went away), the wait ends at the next poll. */
+  signal?: AbortSignal;
 }
 
 export interface AliasLock { release(): void }
 
-export const ALIAS_LOCK_WAIT_MS = 360_000;
+/**
+ * Two minutes: a third of the CLI's 360 s enrollment deadline (ENROLLMENT_DEADLINE_MS in src/cli/link-enrollment.ts),
+ * which bounds the wait itself. It does not promise the waiter time to finish: an apply's own worst case can outrun the
+ * deadline, and then the CLI reports the outcome uncertain and a repeat with the same operation id replays it. A waiting
+ * revoke holds its link's Child-operation reservation no longer than this.
+ */
+export const ALIAS_LOCK_WAIT_MS = 120_000;
 const ALIAS_LOCK_POLL_MS = 250;
 
 export class AliasLockError extends Error {
-  constructor(readonly code: "link_alias_lock_busy" | "link_alias_lock_failed", options?: ErrorOptions) {
+  constructor(readonly code: "link_alias_lock_busy" | "link_alias_lock_failed" | "link_alias_lock_aborted", options?: ErrorOptions) {
     super(code, options);
     this.name = "AliasLockError";
   }
@@ -50,6 +59,8 @@ function assertPrivate(path: string, directory: boolean): void {
 }
 
 function prepare(path: string, directory: string): void {
+  // <configDir>/link/locks: refuse before any mkdir when a test points it at the real OpenCodex home.
+  assertNotRealHomeUnderTest(dirname(dirname(directory)));
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   assertPrivate(directory, true);
   if (process.platform !== "win32") chmodSync(directory, 0o700);
@@ -85,6 +96,7 @@ export async function acquireAliasLock(alias: string, deps: AliasLockDeps = {}):
   const now = deps.now ?? Date.now, sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms));
   const deadline = now() + (deps.waitMs ?? ALIAS_LOCK_WAIT_MS);
   for (;;) {
+    if (deps.signal?.aborted) throw new AliasLockError("link_alias_lock_aborted");
     const database = tryAcquire(path);
     if (database) {
       let held = true;
@@ -97,6 +109,7 @@ export async function acquireAliasLock(alias: string, deps: AliasLockDeps = {}):
     }
     if (now() >= deadline) throw new AliasLockError("link_alias_lock_busy");
     await sleep(deps.pollMs ?? ALIAS_LOCK_POLL_MS);
+    if (deps.signal?.aborted) throw new AliasLockError("link_alias_lock_aborted");
   }
 }
 

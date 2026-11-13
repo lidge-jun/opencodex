@@ -7,7 +7,11 @@ import type { OcxConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 const ID = "lnk_0123456789abcdef";
-const RECOVERY = "Run ocx disconnect on the remote client.";
+// A link without a recorded Child type (or a record the CLI cannot read) gets the steps for either install (#8662 follow-up P3-d).
+const RECOVERY = `The Child type is not known here (the link was saved before the Home recorded it, or its record could not be read). If ocx link recover --list shows ${ID}, run ocx link recover --link-id ${ID} once the machine answers. Otherwise, once it answers, run ocx disconnect --expect-link ${ID} on a full install, or the planted ocx-child's detach --expect-link ${ID} on a lightweight Child (~/.cache/opencodex/bin/ocx-child; in Command Prompt on Windows %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe, or %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe where LOCALAPPDATA is not set): either refuses a machine that another link, a hub or another Home owns. A build older than that flag refuses it as a usage error before it acts on the link. Then, on a full install, check ocx connect status --json and run ocx disconnect only if it shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed); if it shows another link, a hub or another Home, or its state cannot be read, leave it as it is. On a lightweight Child, leave it as it is: its status cannot show an interrupted attach of another link, which a plain ocx-child detach would restore and then remove.`;
+// A link this Home no longer lists has no record to read its type from: the reason says so (#8691 final review).
+const RECOVERY_ABSENT = RECOVERY.replace("(the link was saved before the Home recorded it, or its record could not be read)", "(the link is no longer on this Home, so no record of it says)");
+const FULL_RECOVERY = `Run ocx disconnect --expect-link ${ID} on the remote client once it answers: it disconnects only while the machine is connected to this link, so a newer link is never removed. An OpenCodex older than that flag refuses it as a usage error before it acts on the link; then check ocx connect status --json there and run ocx disconnect only if it shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed). If it shows another link, a hub or another Home, or its state cannot be read, leave it as it is.`;
 const nativeFetch = globalThis.fetch;
 let home: TempHome;
 let output: ReturnType<typeof spyOn>, errors: ReturnType<typeof spyOn>, network: ReturnType<typeof spyOn>;
@@ -69,9 +73,9 @@ describe("explicit forced link revoke", () => {
   test.each([true, false])("missing link reports unverified cleanup, json=%s", async wantsJson => {
     const f = fixture({ error: { code: "link_not_found", message: "private-canary" } }, 404);
     expect(await invoke(["--force", "--yes", ...(wantsJson ? ["--json"] : [])], f.deps)).toBe(0);
-    if (wantsJson) expect(json()).toEqual({ linkId: ID, remoteCleanup: "unverified", recovery: RECOVERY });
+    if (wantsJson) expect(json()).toEqual({ linkId: ID, remoteCleanup: "unverified", recovery: RECOVERY_ABSENT });
     else {
-      expect(output.mock.calls.flat().join("\n")).toBe(`Link ${ID} is already absent; remote cleanup is unverified.\n${RECOVERY}`);
+      expect(output.mock.calls.flat().join("\n")).toBe(`Link ${ID} is already absent; remote cleanup is unverified.\n${RECOVERY_ABSENT}`);
     }
     expect(errors).not.toHaveBeenCalled();
   });
@@ -98,13 +102,15 @@ describe("explicit forced link revoke", () => {
     expect(output).not.toHaveBeenCalled(); expect(errors.mock.calls.flat().join(" ")).not.toContain("private-canary");
   });
   test("real owner force removes only local link/key without an SSH attempt; retry is unverified", async () => {
-    const cfg: OcxConfig = { port: 15100, defaultProvider: "fixture", providers: {}, runtimeRole: "hub", apiKeys: [] };
+    // The link's issued key is listed, as in a real Home; revoking removes it.
+    const cfg = { port: 15100, defaultProvider: "fixture", providers: {}, runtimeRole: "hub", apiKeys: [{ id: "fixture-key" }] } as unknown as OcxConfig;
+    // A stored Home-initiated record always carries its confirmed host key; the retirement journal validates it.
     let store: LinkStore = { version: 1, listenerPort: 18181, links: [{ id: ID, alias: "fixture-peer", direction: "hub-initiated",
-      tunnelPort: 19200, apiKeyId: "fixture-key", createdAt: "2026-10-01T00:00:00.000Z" }] };
+      hostKeyFingerprint: "SHA256:" + "A".repeat(43), tunnelPort: 19200, apiKeyId: "fixture-key", createdAt: "2026-10-01T00:00:00.000Z" }] };
     const events: string[] = [];
     const owner: ManagementApiDeps = {
       readLinkStore: () => store, writeLinkStore: next => { store = next; events.push("store"); },
-      revokeApiKey: (_cfg, id) => { expect(id).toBe("fixture-key"); events.push("revoke"); return true; },
+      revokeApiKey: (_cfg, id) => { expect(id).toBe("fixture-key"); events.push("revoke"); cfg.apiKeys = (cfg.apiKeys ?? []).filter(key => key.id !== id); return true; },
       linkKnownHostsPath: () => home.path("known_hosts"),
       linkSupervisor: () => ({ start() {}, ensureStarted: async () => {}, reload: async () => {}, stop: async () => {},
         stopLink: async id => { expect(id).toBe(ID); events.push("stop"); }, status: () => [] }),
@@ -152,6 +158,12 @@ describe("explicit forced link revoke", () => {
     const fEph = fixture();
     fEph.deps.readStore = () => ({ version: 1, listenerPort: 18181, links: [{ id: ID, alias: "barebox", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 24500, apiKeyId: "k1", createdAt: "2026-11-07T00:00:00Z", childKind: "ephemeral" }] });
     expect(await invoke(["--force", "--yes", "--json"], fEph.deps)).toBe(0);
-    expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: "Run ~/.cache/opencodex/bin/ocx-child detach on the remote client." });
+    expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: `Run ocx link recover --link-id ${ID} once the machine answers: it acts only when the machine's records name this link or nothing at all, and refuses a machine another link owns.` });
+
+    output.mockClear();
+    const fFull = fixture();
+    fFull.deps.readStore = () => ({ version: 1, listenerPort: 18181, links: [{ id: ID, alias: "fullbox", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 24501, apiKeyId: "k2", createdAt: "2026-11-07T00:00:00Z", childKind: "full" }] });
+    expect(await invoke(["--force", "--yes", "--json"], fFull.deps)).toBe(0);
+    expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: FULL_RECOVERY });
   });
 });

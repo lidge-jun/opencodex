@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { findPlatformDialogCalls } from "../helpers/platform-dialog-scan";
+import { repositoryGitEnv } from "../helpers/git-fixture";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 
 /**
@@ -19,7 +20,7 @@ import { repoPath, repoRoot } from "../helpers/repo-root";
  * this file does for the source and what gui/tests/action-dialogs.test.ts does at runtime.
  */
 function dashboardSources(): string[] {
-  return execFileSync("git", ["ls-files", "gui/src"], { cwd: repoRoot(), encoding: "utf8" })
+  return execFileSync("git", ["ls-files", "gui/src"], { cwd: repoRoot(), env: repositoryGitEnv(), encoding: "utf8" })
     .split("\n")
     .filter(file => file.endsWith(".ts") || file.endsWith(".tsx"));
 }

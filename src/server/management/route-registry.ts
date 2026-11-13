@@ -386,6 +386,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/provider-quotas", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/quota-pool", module: "server/management/quota-pool-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The ocx.quota-pool/1 read is a machine contract GOAT consumes over management and the link relay; the CLI shows the same caches through ocx provider quota and ocx account.", owner: "ocx-1 quota pool", ownerDoc: "structure/quota-pool.md" } },
   { method: "GET", path: "/api/fallback", module: "server/management/fallback-routes", mutates: false },
+  { method: "GET", path: "/api/route-to", module: "server/management/route-to-routes", mutates: false },
+  { method: "PUT", path: "/api/route-to", module: "server/management/route-to-routes", mutates: true },
+  { method: "POST", path: "/api/route-to/sync", module: "server/management/route-to-routes", mutates: true },
   { method: "PUT", path: "/api/fallback", module: "server/management/fallback-routes", mutates: true },
   { method: "GET", path: "/api/provider-request-pacing", module: "server/management/provider-key-pacing-routes", mutates: false },
   { method: "GET", path: "/api/providers", module: "server/management/provider-routes", mutates: false },
@@ -447,6 +450,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/link/operations/{id}", module: "server/management/link-operation", mutates: false, mechanism: "regex" },
   { method: "POST", path: "/api/link/operations/{id}/resolve", module: "server/management/link-operation", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/link/issue", module: "server/management/link-routes", mutates: true },
+  { method: "POST", path: "/api/link/recover", module: "server/management/link-routes", mutates: true },
+  { method: "GET", path: "/api/link/recover", module: "server/management/link-routes", mutates: false },
   // server/management/link-child-ops-routes (reached through link-routes)
   { method: "POST", path: "/api/link/children/operations", module: "server/management/link-child-ops-routes", mutates: true },
   { method: "GET", path: "/api/link/children/jobs/{jobId}", module: "server/management/link-child-ops-routes", mutates: false, mechanism: "regex" },

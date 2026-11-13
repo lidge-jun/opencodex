@@ -1,3 +1,4 @@
+import { isRouteClientId, type RouteClientId } from "./route-intent";
 /**
  * Argument vectors for the system OpenSSH client used by machine links.
  *
@@ -20,7 +21,7 @@
 
 import { isAbsolute } from "node:path";
 import { ExplicitRouteError, explicitRouteSshOptions, type ExplicitRoute } from "./explicit-route";
-import { POWERSHELL_ENCODED_MAX, PowerShellCommandTooLongError, windowsGatedOcxArgv, windowsOcxArgv } from "./remote-windows";
+import { POWERSHELL_ENCODED_MAX, PowerShellCommandTooLongError, ROUTE_OVERWRITE_MIN_CHILD_VERSION, windowsGatedOcxArgv, windowsOcxArgv, windowsOverwriteSyncArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
 
@@ -76,17 +77,32 @@ export type SshLogLevel = "ERROR" | "DEBUG1";
  * anything in ssh_config. It names how to reach the link's own alias, so it is refused with any other
  * destination; null adds nothing, which is the argv of a link without one.
  */
-function routeOptions(route: ExplicitRoute | null | undefined, alias: string, destination: string): string[] {
-  if (!route) return [];
+function routeOptions(route: ExplicitRoute | null | undefined, alias: string, destination: string): RouteArgs {
+  if (!route) return NO_ROUTE;
   if (destination !== alias) throw new LinkSshArgumentError("an explicit route reaches the link alias only");
-  try { return explicitRouteSshOptions(route); } catch (error) {
+  try {
+    // Decided by the route itself, never by what its options happen to be: a link with a route reads no ssh_config.
+    return { configFile: ["-F", "none"], options: explicitRouteSshOptions(route) };
+  } catch (error) {
     if (error instanceof ExplicitRouteError) throw new LinkSshArgumentError(error.message);
     throw error;
   }
 }
 
-function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel, route: readonly string[]): string[] {
+/**
+ * What a route adds to the argv. configFile is ["-F", "none"] for every explicit route and comes first: an explicit route
+ * names the transport, user and port and the host key is pinned, so such a link reads no ssh_config at all (list-valued
+ * settings such as forwards, SendEnv and IdentityFile would add to ours, a RemoteCommand would break every exec, and no
+ * option can remove a configured forward from the tunnel). A route's identity file (link.route/2) narrows what remains:
+ * with -F none the defaults still offer the agent's keys and ~/.ssh/id_*, so IdentitiesOnly=yes and IdentityAgent=none
+ * leave that one IdentityFile. Links without a route keep reading the owner's ssh_config, which is how they reach their host.
+ */
+interface RouteArgs { configFile: readonly string[]; options: readonly string[] }
+const NO_ROUTE: RouteArgs = { configFile: [], options: [] };
+
+function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel, route: RouteArgs): string[] {
   return [
+    ...route.configFile,
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     "-o", "ServerAliveInterval=15",
@@ -106,7 +122,7 @@ function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "a
     "-o", "ForwardX11=no",
     "-o", "PermitLocalCommand=no",
     "-o", `LogLevel=${logLevel}`,
-    ...route,
+    ...route.options,
   ];
 }
 
@@ -402,8 +418,9 @@ export function quoteRemote(argv: readonly string[]): string {
 }
 
 /** Minimum served ocx for a gated command. Closed set: the literals are spliced into awk and PowerShell. */
-export type GatedMinVersion = "2.93.0" | "2.97.0";
-export type GatedLacksMarker = "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update";
+export { ROUTE_OVERWRITE_MIN_CHILD_VERSION };
+export type GatedMinVersion = "2.93.0" | "2.97.0" | "2.100.0";
+export type GatedLacksMarker = "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update" | "child-ocx-lacks-overwrite";
 export interface GatedOcxCommand {
   minVersion: GatedMinVersion;
   lacksMarker: GatedLacksMarker;
@@ -426,9 +443,9 @@ export interface GatedOcxCommand {
   args: readonly string[];
 }
 export const GATED_VERSION_PARTS: Readonly<Record<GatedMinVersion, readonly [string, string, string]>> = {
-  "2.93.0": ["2", "93", "0"], "2.97.0": ["2", "97", "0"],
+  "2.93.0": ["2", "93", "0"], "2.97.0": ["2", "97", "0"], "2.100.0": ["2", "100", "0"],
 };
-const LACKS_MARKERS: ReadonlySet<string> = new Set(["child-ocx-lacks-expect-link", "child-ocx-lacks-orchestrated-update"]);
+const LACKS_MARKERS: ReadonlySet<string> = new Set(["child-ocx-lacks-expect-link", "child-ocx-lacks-orchestrated-update", "child-ocx-lacks-overwrite"]);
 export const LINK_ID_PATTERN = /^lnk_[0-9a-f]{16}$/;
 
 function assertGated(cmd: GatedOcxCommand): readonly [string, string, string] {
@@ -448,7 +465,9 @@ function assertGated(cmd: GatedOcxCommand): readonly [string, string, string] {
  */
 function remoteGatedScript(cmd: GatedOcxCommand): string {
   const [major, minor, patch] = assertGated(cmd);
-  const ephemeral = cmd.acceptEphemeral ? "" : `
+  const overwriteEphemeral = cmd.lacksMarker === "child-ocx-lacks-overwrite" ? `
+  case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:child-ephemeral-no-overwrite' >&2; exit 121;; esac` : "";
+  const ephemeral = cmd.acceptEphemeral || overwriteEphemeral ? "" : `
   case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:child-ocx-ephemeral' >&2; exit 121;; esac`;
   // Only a pinned sync that carries a restart asks for this, so the plain sync's stderr stays exact.
   const kind = cmd.acceptEphemeral && cmd.reportSelectedKind ? `
@@ -484,7 +503,7 @@ find_launcher_node() {
 }
 try_ocx() {
   c=$1; shift
-  [ -x "$c" ] || return
+  [ -x "$c" ] || return${overwriteEphemeral}
   ( ulimit -c 0; ulimit -f 1; exec "$c" \${ocx_entry:+"$ocx_entry"} --version ) >"$tmp" 2>/dev/null & vp=$!
   ( sleep 10 & timer=$!; trap 'kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit' TERM HUP INT; : > "$ready"; wait "$timer" 2>/dev/null; kill -9 "$vp" 2>/dev/null ) >/dev/null 2>&1 & watchdog=$!
   while [ ! -f "$ready" ]; do kill -0 "$watchdog" 2>/dev/null || break; sleep 0.01 >/dev/null 2>&1; done
@@ -555,17 +574,25 @@ export function remoteGatedOcxArgv(cmd: GatedOcxCommand, platform: "posix" | "wi
 }
 
 export type ChildRestartRequest = "app-server" | "codex";
-export interface PinnedSyncOptions { restart?: ChildRestartRequest }
+export interface PinnedSyncOptions { restart?: ChildRestartRequest; overwrite?: boolean; overwriteClient?: RouteClientId }
 const RESTART_FLAG: Readonly<Record<ChildRestartRequest, string>> = { "app-server": "--restart-app-server-only", codex: "--restart-codex" };
 
-export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix", opts: PinnedSyncOptions = {}): string[] {
+export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix", opts: PinnedSyncOptions | boolean = {}, overwriteClient?: RouteClientId): string[] {
+  if (typeof opts === "boolean") opts = { overwrite: opts, ...(overwriteClient !== undefined ? { overwriteClient } : {}) };
+  else if (overwriteClient !== undefined) throw new LinkSshArgumentError("invalid overwrite client");
+  const overwrite = opts.overwrite === true;
+  overwriteClient = opts.overwriteClient;
+  if (overwriteClient !== undefined && (!overwrite || !isRouteClientId(overwriteClient))) throw new LinkSshArgumentError("invalid overwrite client");
   if (!LINK_ID_PATTERN.test(linkId)) throw new LinkSshArgumentError("invalid link id");
   if (opts.restart !== undefined && !Object.hasOwn(RESTART_FLAG, opts.restart)) throw new LinkSshArgumentError("invalid restart request");
   // D20: the Home never sends a restart to a Windows Child.
   if (opts.restart !== undefined && platform === "windows") throw new LinkSshArgumentError("unsupported:windows-restart");
   const restart = opts.restart === undefined ? [] : [RESTART_FLAG[opts.restart]];
-  return remoteGatedOcxArgv({ minVersion: "2.93.0", lacksMarker: "child-ocx-lacks-expect-link", acceptEphemeral: true,
+  if (overwrite && platform === "windows") {
+    try { return windowsOverwriteSyncArgv(linkId, true, overwriteClient); }
+    catch (error) { if (error instanceof PowerShellCommandTooLongError) throw new LinkSshArgumentError("windows-command-too-long"); throw error; }
+  }
+  return remoteGatedOcxArgv({ minVersion: overwrite ? "2.100.0" : "2.93.0", lacksMarker: overwrite ? "child-ocx-lacks-overwrite" : "child-ocx-lacks-expect-link", acceptEphemeral: !overwrite,
     reportEntry: false, reportClock: false, reportSelectedKind: restart.length > 0, launcher: "none",
-    args: ["sync", "--expect-link", linkId, "--json", ...restart] }, platform);
+    args: ["sync", "--expect-link", linkId, "--json", ...restart, ...(overwrite ? ["--overwrite-conflict"] : []), ...(overwriteClient ? ["--overwrite-client", overwriteClient] : [])] }, platform);
 }
-

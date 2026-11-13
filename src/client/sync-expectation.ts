@@ -9,7 +9,7 @@
  */
 import type { DesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { readDesktopDisconnectReceipt } from "../claude/desktop-remote-store";
-import { isLinkConnection, pendingClientConnectMayOwnToken, readClientConnectionState, type ClientConnectionState } from "./state";
+import { isLinkConnection, pendingClientConnectMayOwnToken, readClientConnectionState, sameClientConnectionOwner, type ClientConnectionState } from "./state";
 
 export type ClientSyncExpectation =
   | { kind: "link"; linkId: string }
@@ -25,7 +25,9 @@ export type ClientSyncMismatchReason =
   | "hub_client"
   | "link_client"
   | "other_link"
-  | "other_key";
+  | "other_key"
+  /** ocx disconnect --expect-link only: this machine joined that link itself (sidecar or marker). */
+  | "client_initiated_link";
 
 type DisconnectReceiptRead =
   | { kind: "absent" }
@@ -115,4 +117,36 @@ export function assertClientSyncExpectation(expectation: ClientSyncExpectation):
     state.kind === "disconnected" ? readPendingConnect() : "absent",
   );
   if (reason) throw new ClientSyncExpectationError(expectation, reason);
+}
+
+/**
+ * `ocx disconnect --expect-link` (a Home's revoke): the link expectation, except that an unfinished disconnect
+ * may resume when the machine is still connected to that very link and the receipt belongs to that connection, or
+ * once the connection is cleared (no link can be attached then), so a Home whose earlier bound disconnect was
+ * interrupted or lost its answer can finish it. Pure verdict: null when it may proceed.
+ */
+export function classifyDisconnectLinkExpectation(
+  state: ClientConnectionState,
+  receipt: { kind: "absent" } | { kind: "unsafe" } | { kind: "valid"; value: Pick<DesktopDisconnectReceipt, "phase" | "owner"> },
+  linkId: string,
+  pendingConnect: PendingConnectRead = "absent",
+): ClientSyncMismatchReason | null {
+  const reason = classifyClientSyncExpectation(state, receipt, { kind: "link", linkId }, pendingConnect);
+  if (reason !== "disconnect_pending") return reason;
+  const resumesOwnDisconnect = receipt.kind === "valid" && receipt.value.phase !== "complete"
+    && state.kind === "connected" && !state.value.pendingOperation && isLinkConnection(state.value)
+    && state.value.link?.linkId === linkId && sameClientConnectionOwner(receipt.value.owner, state.value);
+  // Once the connection is cleared no link is attached: connect refuses while a disconnect is unfinished, so finishing
+  // the leftover cleanup cannot detach a newer link, whichever link the receipt was for. A plain disconnect resumes it
+  // the same way. Not while a connect is pending or its marker is unreadable.
+  const resumesClearedDisconnect = receipt.kind === "valid" && receipt.value.phase !== "complete"
+    && state.kind === "disconnected" && pendingConnect === "absent";
+  return resumesOwnDisconnect || resumesClearedDisconnect ? null : reason;
+}
+
+/** Read-only; the caller holds the client lifecycle and config mutation locks. */
+export function assertDisconnectLinkExpectation(linkId: string): void {
+  const state = readClientConnectionState();
+  const reason = classifyDisconnectLinkExpectation(state, readDesktopDisconnectReceipt(), linkId, state.kind === "disconnected" ? readPendingConnect() : "absent");
+  if (reason) throw new ClientSyncExpectationError({ kind: "link", linkId }, reason);
 }

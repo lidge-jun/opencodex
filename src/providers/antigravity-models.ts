@@ -295,8 +295,9 @@ function completeDiscoveredEffortWireModelIds(
 /**
  * Default rung for a model known only from live discovery. Gemini 4 Hydrogen defaults to high:
  * its low/medium/high/xhigh ladder and high default were verified on Vertex AI by #8583's author
- * (2026-11-13). Hydrogen on CCA has not been live-verified, so this applies only once CCA
- * discovery lists its family. Other discovered families keep medium when they have it.
+ * (2026-11-13). On CCA it is entitlement-gated: an account whose discovery listed the four
+ * `gemini-4-hydrogen-*` tiers answered an xhigh request with 200 (2026-11-12), so this applies only
+ * once that account's CCA discovery lists the family. Other discovered families keep medium when they have it.
  */
 const ANTIGRAVITY_DISCOVERED_DEFAULT_EFFORT: Record<string, string> = {
   "gemini-4-hydrogen": "high",
@@ -345,8 +346,11 @@ function pickerToWireId(pickerId: string): string {
   return ANTIGRAVITY_PICKER_TO_WIRE[pickerId] ?? pickerId;
 }
 
+/** Requested efforts above `high`: they select a discovered xhigh tier when one exists, else `high`. */
+const ANTIGRAVITY_ABOVE_HIGH_EFFORTS = new Set(["xhigh", "max", "ultra"]);
+
 function resolveAntigravityThinkingLevel(effort: string): string | undefined {
-  if (effort === "xhigh" || effort === "max" || effort === "ultra") return "high";
+  if (ANTIGRAVITY_ABOVE_HIGH_EFFORTS.has(effort)) return "high";
   return ANTIGRAVITY_THINKING_LEVELS.has(effort) ? effort : undefined;
 }
 
@@ -593,7 +597,7 @@ function discoveredAntigravityEffortWireModelId(
   const effortMap = discoveredAntigravityMapping(baseUrl)?.effortModels.get(modelId);
   if (!effortMap) return undefined;
 
-  const requestedEffort = effort === "xhigh" && effortMap.xhigh ? "xhigh" : effort ? resolveAntigravityThinkingLevel(effort) : undefined;
+  const requestedEffort = effort && ANTIGRAVITY_ABOVE_HIGH_EFFORTS.has(effort) && effortMap.xhigh ? "xhigh" : effort ? resolveAntigravityThinkingLevel(effort) : undefined;
   if (requestedEffort && isAntigravityDiscoveryEffort(requestedEffort) && effortMap[requestedEffort]) {
     return effortMap[requestedEffort];
   }
@@ -855,7 +859,8 @@ export function resolveAntigravityEffortWireModel(
   if (effortMap) {
     const suffixTiered = ANTIGRAVITY_SUFFIX_TIER_MODELS.has(modelId);
     // Normalize FIRST for suffix-tiered models. The discovery path clamps max/xhigh/ultra to
-    // `high` before its own lookup, so a static path that skipped the clamp answered `medium`
+    // `high` for a family without a discovered xhigh tier (a family that has one selects it, see
+    // ANTIGRAVITY_ABOVE_HIGH_EFFORTS), so a static path that skipped the clamp answered `medium`
     // for the same request: one input, two tiers, decided by whether discovery happened to run.
     const requested = suffixTiered && effort
       ? resolveAntigravityThinkingLevel(effort) ?? effort

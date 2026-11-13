@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, statSync, utimesSync, watch, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHmac } from "node:crypto";
@@ -14,6 +14,7 @@ import { LinkWireClient, frameType, type WireMessage } from "../helpers/link-ws-
 import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 import * as nativeControl from "../../src/server/responses/native-response-control";
 import * as workflow from "../../src/server/workflow-refusal";
+import * as requestDecompress from "../../src/server/request-decompress";
 
 const originalMode = nativeControl.nativeResponseControlMode;
 
@@ -27,6 +28,27 @@ const KEY_B = "link-ws-secret-b-0123456789";
 const LINK_A = "lnk_aaaaaaaaaaaaaaaa";
 const LINK_B = "lnk_bbbbbbbbbbbbbbbb";
 const ADMIN = "link-ws-admin-token-0123456789";
+
+async function waitForHolds(path: string, linkId: string, expected: number): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  for (;;) {
+    let contents: string | undefined;
+    try { contents = readFileSync(path, "utf8"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (contents !== undefined) {
+      const state: unknown = JSON.parse(contents);
+      if (!state || typeof state !== "object" || !("version" in state) || state.version !== 1 || !("keyId" in state) || (state.keyId !== null && typeof state.keyId !== "string") || !("links" in state) || !state.links || typeof state.links !== "object" || Array.isArray(state.links)) throw new Error("Malformed activity holds state");
+      const entry = (state.links as Record<string, unknown>)[linkId];
+      if (entry !== undefined && (!entry || typeof entry !== "object" || !("holds" in entry) || !Array.isArray(entry.holds) || !("unknown" in entry))) throw new Error("Malformed activity holds entry");
+      if (entry !== undefined && (entry as { unknown: unknown }).unknown !== null) throw new Error("Activity holds state is unknown");
+      if ((entry === undefined ? 0 : (entry as { holds: unknown[] }).holds.length) === expected) return;
+    }
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${expected} activity holds`);
+    await Bun.sleep(25);
+  }
+}
 
 const identityA = { keyId: KEY_A_ID, linkId: LINK_A, fingerprint: serviceApiTokenFingerprint(KEY_A) };
 const identityB = { keyId: KEY_B_ID, linkId: LINK_B, fingerprint: serviceApiTokenFingerprint(KEY_B) };
@@ -152,6 +174,21 @@ afterEach(async () => {
   if (previous.admin === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previous.admin;
   if (testHome) removeTreeWithRetry(testHome);
   testHome = "";
+});
+
+test("hold state wait checks persisted state without notifications and propagates bad reads", async () => {
+  const path = join(testHome, "holds-probe.json");
+  const waiting = waitForHolds(path, LINK_A, 1);
+  writeFileSync(path, JSON.stringify({ version: 1, keyId: null, links: { [LINK_A]: { holds: [{}], unknown: null } } }));
+  await waiting;
+  await waitForHolds(path, LINK_A, 1);
+  writeFileSync(path, "{broken");
+  await expect(waitForHolds(path, LINK_A, 1)).rejects.toThrow();
+  writeFileSync(path, JSON.stringify({ version: 1, keyId: null, links: { [LINK_A]: {} } }));
+  await expect(waitForHolds(path, LINK_A, 1)).rejects.toThrow("Malformed activity holds entry");
+  writeFileSync(path, JSON.stringify({ version: 1, keyId: null, links: { [LINK_A]: { holds: [], unknown: "write-failed" } } }));
+  await expect(waitForHolds(path, LINK_A, 0)).rejects.toThrow("Activity holds state is unknown");
+  await expect(waitForHolds(testHome, LINK_A, 1)).rejects.toThrow();
 });
 
 describe("link Responses WebSocket switched off (characterization)", () => {
@@ -334,16 +371,12 @@ describe("link Responses WebSocket switched on", () => {
     const port = await startHome();
     const holdsPath = join(testHome, "link", "activity-holds.json");
     const holdsOf = () => (JSON.parse(readFileSync(holdsPath, "utf8")) as { links: Record<string, { holds: unknown[] }> }).links[LINK_A]?.holds.length ?? 0;
-    const holdsChanged = () => new Promise<void>(resolve => {
-      const watcher = watch(join(testHome, "link"), (_event, name) => { if (name === "activity-holds.json") { watcher.close(); resolve(); } });
-    });
     const first = await client(port);
     const session = await first.challenge(identityA);
     expect((await first.upgrade({ nonce: session.nonce, bearer: KEY_A, headers: { "thread-id": "thread-hold" } })).status).toBe(101);
     await runTurn(first);
-    const written = holdsChanged();
     first.destroy();
-    await written;
+    await waitForHolds(holdsPath, LINK_A, 1);
     expect(holdsOf()).toBe(1);
 
     const second = await client(port);
@@ -364,9 +397,8 @@ describe("link Responses WebSocket switched on", () => {
     expect(failed.map(frameType).some(type => type === "error" || type === "response.failed")).toBe(true);
     upstreamStatus = () => 200;
     expect(holdsOf()).toBe(1);
-    const released = holdsChanged();
     await runTurn(second, returned);
-    await released;
+    await waitForHolds(holdsPath, LINK_A, 0);
     expect(holdsOf()).toBe(0);
   });
 
@@ -379,9 +411,6 @@ describe("link Responses WebSocket switched on", () => {
     const port = await startHome();
     const holdsPath = join(testHome, "link", "activity-holds.json");
     const holdsOf = () => (JSON.parse(readFileSync(holdsPath, "utf8")) as { links: Record<string, { holds: unknown[] }> }).links[LINK_A]?.holds.length ?? 0;
-    const holdsChanged = () => new Promise<void>(resolve => {
-      const watcher = watch(join(testHome, "link"), (_event, name) => { if (name === "activity-holds.json") { watcher.close(); resolve(); } });
-    });
     const wire = await client(port);
     const session = await wire.challenge(identityA);
     expect((await wire.upgrade({ nonce: session.nonce, bearer: KEY_A, headers: { "thread-id": "thread-same" } })).status).toBe(101);
@@ -397,9 +426,8 @@ describe("link Responses WebSocket switched on", () => {
     const failed = await wire.until(message => frameType(message) === "error" || frameType(message) === "response.failed");
     expect(failed.map(frameType).some(type => type === "error" || type === "response.failed")).toBe(true);
     upstreamStatus = () => 200;
-    const written = holdsChanged();
     wire.destroy();
-    await written;
+    await waitForHolds(holdsPath, LINK_A, 1);
     expect(holdsOf()).toBe(1);
   });
 
@@ -424,5 +452,45 @@ describe("link Responses WebSocket switched on", () => {
     server = null;
     const after = await second.nextMessage();
     expect(["close", "eof"]).toContain(after.type);
+  });
+});
+
+describe("a link create reaches the pipeline once (#8600)", () => {
+  test("the pipeline takes the frame the socket parsed instead of reading it back from a request body; a local socket still reads one", async () => {
+    const port = await startHome();
+    const read = spyOn(requestDecompress, "readJsonRequestBody");
+    try {
+      const wire = await openSocket(port);
+      expect((await runTurn(wire, create("from the link"))).map(frameType)).toContain("response.completed");
+      expect(read).not.toHaveBeenCalled();
+      const local = new WebSocket(new URL("/v1/responses", server!.url).href.replace("http:", "ws:"));
+      await new Promise<void>((resolve, reject) => { local.onopen = () => resolve(); local.onerror = () => reject(new Error("local websocket failed")); });
+      const done = new Promise<void>(resolve => { local.onmessage = event => { if (String(event.data).includes("response.completed")) resolve(); }; });
+      local.send(JSON.stringify(create("from the local socket")));
+      await done;
+      expect(read).toHaveBeenCalledTimes(1);
+      local.close();
+    } finally { read.mockRestore(); }
+    // Both turns reached the upstream with their own input.
+    expect(JSON.stringify(upstreamRequests)).toContain("from the link");
+    expect(JSON.stringify(upstreamRequests)).toContain("from the local socket");
+  });
+
+  test("a link create through a combo reaches the upstream as the child the combo built, not as the parent's body", async () => {
+    const port = await startHome({ combos: { free: { strategy: "failover", targets: [{ provider: "fixture", model: "fixture" }] } } } as Partial<OcxConfig>);
+    const wire = await openSocket(port);
+    expect((await runTurn(wire, { ...create("through the combo"), model: "combo/free" })).map(frameType)).toContain("response.completed");
+    expect(upstreamRequests).toHaveLength(1);
+    expect((JSON.parse(upstreamRequests[0]!.body) as Record<string, unknown>).model).toBe("fixture");
+  });
+
+  test("a link create past the configured inbound limit is refused as it was when it was read back", async () => {
+    const port = await startHome({ maxInboundBodyBytes: 1024 * 1024 });
+    const wire = await openSocket(port);
+    wire.sendJson(create("x".repeat(2 * 1024 * 1024)));
+    const error = await wire.until(message => frameType(message) === "error");
+    const frame = JSON.parse(String(error[error.length - 1]!.data)) as Record<string, unknown>;
+    expect({ status: frame.status, code: (frame.error as Record<string, unknown> | undefined)?.code }).toEqual({ status: 413, code: "inbound_body_too_large" });
+    expect(upstreamRequests).toHaveLength(0);
   });
 });

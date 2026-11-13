@@ -23,6 +23,7 @@ import { buildServiceShellCommand } from "../../src/service/definition";
 import { inspectOrphanServiceAdmission } from "../../src/client/orphan-token-recovery";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 const linkId = "lnk_0123456789abcdef";
 const key = `ocx_data_${"a".repeat(40)}`;
@@ -93,7 +94,10 @@ describe("client link connection contracts", () => {
     expect(chunk.every(byte => byte === 0)).toBe(true);
   });
 
-  async function withLinkHome(run: (home: string, codexHome: string) => Promise<void>): Promise<void> {
+  async function withLinkHome(
+    run: (home: string, codexHome: string) => Promise<void>,
+    removeTree: typeof removeTreeAfterBackgroundWork = removeTreeAfterBackgroundWork,
+  ): Promise<void> {
     const home = mkdtempSync(join(tmpdir(), "ocx-client-link-contract-"));
     const codexHome = mkdtempSync(join(tmpdir(), "ocx-client-link-contract-codex-"));
     const previousHome = process.env.OPENCODEX_HOME;
@@ -107,12 +111,14 @@ describe("client link connection contracts", () => {
     setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
     setIcaclsRunnerForTests(aclSuccess);
     setAsyncIcaclsRunnerForTests(async () => aclSuccess());
+    let runSucceeded = false;
     try {
       const config = getDefaultConfig();
       config.port = 10100;
       saveConfig(config);
       await run(home, codexHome);
       if (process.platform === "win32") expect(aclCalls).toBeGreaterThan(0);
+      runSucceeded = true;
     } finally {
       setIcaclsRunnerForTests(null);
       setAsyncIcaclsRunnerForTests(null);
@@ -121,9 +127,40 @@ describe("client link connection contracts", () => {
       else process.env.OPENCODEX_HOME = previousHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
-      rmSync(home, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
+      const cleanupErrors: unknown[] = [];
+      for (const path of [home, codexHome]) {
+        try { await removeTree(path); } catch (error) { cleanupErrors.push(error); }
+      }
+      // Keep the original body/assertion error when cleanup also fails.
+      if (runSucceeded && cleanupErrors.length > 0) throw cleanupErrors[0];
     }
+  }
+
+  for (const runFails of [false, true]) {
+    test(`link fixture cleanup attempts both removals after body ${runFails ? "failure" : "success"}`, async () => {
+      const previousHome = process.env.OPENCODEX_HOME, previousCodexHome = process.env.CODEX_HOME;
+      const bodyFailure = new Error("synthetic fixture body failure");
+      const cleanupFailure = new Error("synthetic first removal failure");
+      let homes: string[] = [];
+      const attempted: string[] = [];
+      try {
+        await expect(withLinkHome(async (home, codexHome) => {
+          homes = [home, codexHome];
+          if (runFails) throw bodyFailure;
+        }, async path => {
+          attempted.push(path);
+          if (path === homes[0]) throw cleanupFailure;
+          await removeTreeAfterBackgroundWork(path);
+        })).rejects.toBe(runFails ? bodyFailure : cleanupFailure);
+        expect(attempted).toEqual(homes);
+        expect(process.env.OPENCODEX_HOME).toBe(previousHome);
+        expect(process.env.CODEX_HOME).toBe(previousCodexHome);
+        expect(existsSync(homes[0]!)).toBe(true);
+        expect(existsSync(homes[1]!)).toBe(false);
+      } finally {
+        for (const path of homes) if (existsSync(path)) await removeTreeAfterBackgroundWork(path);
+      }
+    });
   }
 
   function linkOptions() {
@@ -148,6 +185,7 @@ describe("client link connection contracts", () => {
           managementUrl: "http://127.0.0.1:34567",
         }, { status: 503 }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       })).rejects.toThrow("hub is not ready");
       expect(readServiceApiTokenState()).toEqual({ kind: "absent" });
       expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
@@ -174,6 +212,7 @@ describe("client link connection contracts", () => {
           return Response.json({ models: [] });
         },
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       })).rejects.toThrow("fixture enrollment cancelled");
       expect(cancelledFetch).toBe(true);
       expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(prior);
@@ -240,6 +279,7 @@ describe("client link connection contracts", () => {
           })
           : new Response("catalog failed", { status: 503 }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       })).rejects.toThrow("Hub catalog request failed");
       expect(readServiceApiTokenState()).toEqual({ kind: "absent" });
       expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
@@ -258,6 +298,7 @@ describe("client link connection contracts", () => {
           })
           : Response.json({ models: [] }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       });
       expect(connection.transport).toBe("link");
       const logs = spyOn(console, "log").mockImplementation(() => {});
@@ -271,6 +312,76 @@ describe("client link connection contracts", () => {
       expect(readServiceApiTokenState()).toEqual({ kind: "absent" });
       expect(existsSync(join(home, "service-api-token"))).toBe(false);
       expect(logs.mock.calls.flat().join(" ")).not.toContain(key);
+    });
+  });
+
+  test("disconnect --expect-link for another link changes nothing and exits 5 with the child_link_mismatch line", async () => {
+    await withLinkHome(async home => {
+      await connectClient(linkOptions(), {
+        fetchImpl: async input => String(input).endsWith("/readyz")
+          ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+          : Response.json({ models: [] }),
+        lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        // No real Codex probe for its supported efforts (it can take seconds): the catalog here has no models.
+        catalogCompatibility: { supportedEfforts: () => new Set() },
+      });
+      const lines: string[] = [];
+      const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+      let exit: number;
+      try {
+        exit = await handleDisconnectCommand(["--expect-link", "lnk_ffffffffffffffff"], { lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") } });
+      } finally { errors.mockRestore(); }
+      expect(exit).toBe(5);
+      expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "other_link" });
+      expect(readClientConnectionState()).toMatchObject({ kind: "connected", value: { link: { linkId } } });
+      expect(readServiceApiTokenState()).toMatchObject({ kind: "present" });
+    });
+  });
+
+  test("disconnect --expect-link for its own link disconnects as a plain disconnect does", async () => {
+    await withLinkHome(async home => {
+      await connectClient(linkOptions(), {
+        fetchImpl: async input => String(input).endsWith("/readyz")
+          ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+          : Response.json({ models: [] }),
+        lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        // No real Codex probe for its supported efforts (it can take seconds): the catalog here has no models.
+        catalogCompatibility: { supportedEfforts: () => new Set() },
+      });
+      const logs = spyOn(console, "log").mockImplementation(() => {});
+      let exit: number;
+      try {
+        exit = await handleDisconnectCommand(["--expect-link", linkId, "--json"], { lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") } });
+      } finally { logs.mockRestore(); }
+      expect(exit).toBe(0);
+      expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+    });
+  });
+
+  test("disconnect --expect-link on a disconnected machine exits 5 (reason disconnected) before any teardown", async () => {
+    await withLinkHome(async home => {
+      const lines: string[] = [];
+      const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+      let exit: number;
+      try {
+        exit = await handleDisconnectCommand(["--expect-link", linkId], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+        });
+      } finally { errors.mockRestore(); }
+      expect(exit).toBe(5);
+      expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "disconnected" });
+      expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+    });
+  });
+
+  test("disconnect --expect-link without a valid link id is a usage error and changes nothing", async () => {
+    await withLinkHome(async () => {
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(await handleDisconnectCommand(["--expect-link", "not-a-link"])).toBe(2);
+        expect(await handleDisconnectCommand(["--expect-link", linkId, "--orphaned-token", "--yes"])).toBe(2);
+      } finally { errors.mockRestore(); }
     });
   });
 
@@ -561,6 +672,12 @@ describe("client link connection contracts", () => {
     expect(skipsCodexShimAutoRestore("disconnect", ["disconnect", "--orphaned-token"])).toBe(true);
   });
 
+  test("a Home's link-bound disconnect bypasses automatic shim repair, so a refusal changes nothing", () => {
+    expect(skipsCodexShimAutoRestore("disconnect", ["disconnect", "--expect-link", linkId])).toBe(true);
+    expect(skipsCodexShimAutoRestore("disconnect", ["disconnect", "--expect-link=" + linkId])).toBe(true);
+    expect(skipsCodexShimAutoRestore("disconnect", ["disconnect"])).toBe(false);
+  });
+
   test("orphan token refusal and link enrollment name the explicit recovery command", async () => {
     await withLinkHome(async home => {
       writeFileSync(join(home, "service-api-token"), `${key}\n`, { mode: 0o600 });
@@ -595,6 +712,7 @@ describe("client link connection contracts", () => {
         const newKey = `ocx_data_${"b".repeat(40)}`;
         const connection = await connectClient({ ...linkOptions(), credential: { kind: "link", apiKeyId: "new-key", key: newKey } }, {
           lifecycleLockDeps: { lockPath },
+          catalogCompatibility: { supportedEfforts: () => new Set() },
           fetchImpl: async input => String(input).endsWith("/readyz")
             ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
             : Response.json({ models: [] }),
@@ -778,16 +896,7 @@ describe("client link connection contracts", () => {
   });
 
   test("connects through the link credential strategy without issuing a hub key", async () => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-client-link-connect-"));
-    const codexHome = mkdtempSync(join(tmpdir(), "ocx-client-link-codex-"));
-    const previousHome = process.env.OPENCODEX_HOME;
-    const previousCodexHome = process.env.CODEX_HOME;
-    process.env.OPENCODEX_HOME = home;
-    process.env.CODEX_HOME = codexHome;
-    try {
-      const config = getDefaultConfig();
-      config.port = 10100;
-      saveConfig(config);
+    await withLinkHome(async (home, codexHome) => {
       writeFileSync(join(codexHome, "config.toml"), 'model_provider = "openai"\n');
       const calls: Array<{ url: string; key?: string }> = [];
       const fetchImpl: typeof fetch = async (input, init = {}) => {
@@ -829,13 +938,6 @@ describe("client link connection contracts", () => {
       expect(calls[0]?.key).toBe(key);
       expect(calls[1]?.key).toBe(key);
       expect(calls.some(call => call.url.includes("/api/keys"))).toBe(false);
-    } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = previousCodexHome;
-      rmSync(home, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
-    }
+    });
   });
 });

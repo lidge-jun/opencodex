@@ -1,5 +1,7 @@
 import { isolateCodexPoolAccountHeaders } from "../codex/forward-transport-headers";
+import { isUntypedBareUpstreamError } from "./bare-upstream-error";
 import type { NativeResponseControl } from "./responses/native-response-control";
+import type { HandleResponsesOptions } from "./responses/core-options";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -9,6 +11,7 @@ import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
 import { BoundedSseFrameBuffer, MAX_CLIENT_SSE_FRAME_BYTES } from "./sse-frame-buffer";
+import type { LinkTrafficFlow } from "../link/traffic";
 import { sseDataPayload as parseSseBlock } from "./sse-payload-rewrite";
 import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
@@ -41,6 +44,8 @@ export interface WsData {
    * attribution.
    */
   admission?: DataPlaneAdmission;
+  /** Local-only loopback replay identity; revalidated each turn without retaining its secret. */
+  replayPrincipal?: HandleResponsesOptions["replayPrincipal"];
   authContext?: CodexAuthContext; // last resolved account decision for observability/registry cleanup
   cancel?: () => void; // cancels the in-flight stream reader/fetch
   turnId?: number; // monotonically increasing per socket; prevents stale frames after replacement turns
@@ -99,6 +104,8 @@ export interface LinkSocketBinding {
   readonly leases: { closed(): void };
   /** Set by the link pump while it waits for Bun's drain; the link handler calls it on drain and close. */
   drained?: () => void;
+  /** This socket's flow in the Home's per-link traffic book: message payload bytes each way (link-websocket.ts). */
+  traffic?: LinkTrafficFlow;
 }
 
 export interface LiveSidebandUpstreamFailure {
@@ -134,12 +141,14 @@ export function buildResponsesWsData(
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>,
   sessionLaneId?: string,
   client?: UsageClient,
+  replayPrincipal?: HandleResponsesOptions["replayPrincipal"],
 ): WsData {
   // Auth is handshake-time only on this path: the per-frame contexts have no
   // request headers left to re-resolve from, so the decision rides along here.
   return {
     headers,
     admission,
+    ...(replayPrincipal ? { replayPrincipal } : {}),
     ...(client ? { client } : {}),
     ...(admissionLease ? { admissionLease } : {}),
     ...(sessionLaneId ? { sessionLaneId } : {}),
@@ -214,6 +223,9 @@ export function sendTextFrame(ws: ServerWebSocket<WsData>, payload: string): voi
   const result = ws.send(payload);
   if (result === 0) throw new WsSendDroppedError();
   // Bun returns -1 when queued with backpressure. That is accepted; a later 0 is the hard failure.
+  // A link socket counts what Bun took, queued or written; a local socket has no flow and pays one property read.
+  const flow = ws.data.link?.traffic;
+  if (flow) flow.fromHome(Buffer.byteLength(payload));
 }
 
 export function sendJsonFrame(ws: ServerWebSocket<WsData>, payload: Record<string, unknown>): void {
@@ -291,6 +303,8 @@ export async function pumpResponsesSseToWebSocket(
     untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
+    /** The body is the upstream itself (native control), so no relay tail follows a bare envelope. */
+    rawUpstream?: boolean;
   } = {},
 ): Promise<void> {
   const reader = sseStream.getReader();
@@ -361,12 +375,22 @@ export async function pumpResponsesSseToWebSocket(
   const handlePayload = (payload: string): boolean => {
     if (!isCurrent()) return true;
     if (payload === "[DONE]") return false;
-    try {
-      options.onSsePayload?.(payload);
-    } catch {
-      /* payload observation must not affect WebSocket delivery */
-    }
     const type = payloadType(payload);
+    let untypedBare = false;
+    if (!type) {
+      try { untypedBare = isUntypedBareUpstreamError(JSON.parse(payload)); } catch { /* protocol error below */ }
+    }
+    // A relayed stream follows an untyped envelope with its own response.failed, so the envelope
+    // waits for it. A raw upstream body has no such tail: the envelope stays the protocol error
+    // it always was and is not recorded as a verdict the client never received.
+    if (!(untypedBare && options.rawUpstream)) {
+      try {
+        options.onSsePayload?.(payload);
+      } catch {
+        /* payload observation must not affect WebSocket delivery */
+      }
+    }
+    if (untypedBare && !options.rawUpstream) return false;
     if (!type) {
       reportTerminal("incomplete");
       sendProtocolError(ws, 502, "Invalid JSON payload in upstream SSE frame");
@@ -567,6 +591,7 @@ export async function sendResponseToWebSocket(
     untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
+    rawUpstream?: boolean;
   } = {},
 ): Promise<void> {
   if (!isCurrent()) {
@@ -601,6 +626,7 @@ export async function sendResponseToWebSocket(
       untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
+      rawUpstream: options.rawUpstream,
     });
     return;
   }
@@ -625,6 +651,7 @@ export async function sendResponseToWebSocket(
       untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
+      rawUpstream: options.rawUpstream,
     });
     return;
   }

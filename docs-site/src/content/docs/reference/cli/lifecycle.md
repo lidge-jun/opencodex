@@ -1540,8 +1540,59 @@ ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
 A forced success returns `{linkId,remoteCleanup:"skipped",recovery}`. Idempotent
 link-not-found instead reports `remoteCleanup:"unverified"`. Both can exit 0;
 these facts derive from CLI intent, not a server cleanup report. Neither means
-remote disconnect was attempted or confirmed. Follow the recovery instruction,
-`ocx disconnect` on the remote client, when that action is authorized.
+remote disconnect was attempted or confirmed. Follow the recovery instruction when
+that action is authorized: on a full Child, run `ocx disconnect --expect-link <id>`
+there, which acts only while the machine is connected to this link. An OpenCodex
+older than that flag refuses it as a usage error before it acts on the link; then
+run `ocx disconnect` only if `ocx connect status --json` shows this link's id or no
+connection, right after that check (an enrollment that lands between the two
+commands would be removed), and leave it if it shows another link, a hub or
+another Home, or its state cannot be read. A lightweight Child uses
+`ocx link recover` (below). A link saved before the Home recorded the Child type
+keeps no tombstone, so the instruction names both installs' link-bound commands.
+
+A forced revoke of a lightweight (`ocx-child`) Child that the Home reached over
+SSH leaves a tombstone on the Home naming the link, its alias and its pinned host
+key; the recovery instruction then names `ocx link recover`. Once that machine
+answers again, run:
+
+```bash
+ocx link recover --link-id lnk_0123456789abcdef --json
+```
+
+The Home connects over the link's alias with the host key it recorded (a changed
+key refuses with `host_key_changed` before connecting) and runs the planted
+binary's `disconnect --purge --expect-link <id>`. The Child restores its
+`~/.codex` files and removes the planted binary only when its records name that
+link and no other: its state and its ownership record both name it, or an
+interrupted detach or attach of that link left the ownership record naming it
+without the state (any attach rollback left, including one a detach stopped
+while restoring, may name no link or that link, never another). Success prints
+`{linkId,outcome:"clean",purged:true}` and removes the tombstone; `purged:false`
+means the Child restored its state but kept the planted binary because another
+OpenCodex home on that machine runs a relay from it, and the tombstone is removed
+too. `child_residual`
+(exit 5) means the Child keeps records this command does not restore, such as an
+ownership record written by an older `ocx-child` or an interrupted attach of
+another link, and nothing was changed. Do not run a plain `ocx-child detach`
+there: it would also restore and remove a link that interrupted attach left. For
+a machine that is gone or whose cleanup cannot be proven, a person on the Home
+can run `ocx link recover --forget --link-id <id> --yes`.
+`child_conflict` (exit 5) means the Child belongs to another link or OpenCodex
+home, and nothing was changed. `alias_linked` (exit 5) means another Home-initiated link still uses that
+alias, as its alias or one of its routes, so the machine may belong to that link: do not run
+`ocx-child detach` there. Leave that link: no status check on the machine can show it is stale,
+since an attach of it still in progress can show no link or an earlier one, and state that cannot be read
+shows none. The tombstone waits until that link is removed; then run recover again. Revoking that link (after
+settling any open operation on it) ends it and disconnects the machine if the machine runs it, so do that
+only if you mean to end that link. A person on the Home can instead forget the tombstone once the machine
+is confirmed clean or gone.
+`link_present` (exit 5) means the link itself still exists; revoke it instead (with `--purge` for a lightweight Child).
+`--operation-id` recovers a Child that an
+interrupted enrollment left behind; it needs the link operation journal and
+otherwise answers `operation_journal_unavailable`.
+Automation can discover support with `ocx capabilities --contracts --json`: the
+`contracts` array contains `link.recover/1`.
 
 ## Observe Remote Workspace from the Hub
 
