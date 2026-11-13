@@ -375,9 +375,9 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     if (loginObject(raw).error) throw new Error("Provider login failed");
     if (xaiDevice && (raw.flowId !== start.flowId || raw.status === "idle")) throw new Error("Device login flow is unavailable");
     const state = publicLoginStatus(raw);
-    if (state.done === true && state.loggedIn !== true) throw new Error("Provider login ended without authentication");
+    if (state.done === true && state.loggedIn !== true && !(xaiDevice && raw.status === "complete")) throw new Error("Provider login ended without authentication");
     // A device login adds an account, so an already signed-in provider is not done until its flow is.
-    if (state.loggedIn === true && (!device || (state.done === true && (!xaiDevice || raw.status === "complete")))) {
+    if ((xaiDevice && raw.status === "complete") || (state.loggedIn === true && (!device || (state.done === true && !xaiDevice)))) {
       printData({ ...state, modelSelection: modelSelectionNextSteps(provider) }, wantsJson, [`Logged in to ${provider}.`, ...modelSelectionGuidance(provider)]);
       return;
     }

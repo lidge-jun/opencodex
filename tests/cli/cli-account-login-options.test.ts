@@ -159,6 +159,13 @@ describe("login flow-specific options", () => {
     expect(await handleAccountAuthCommand("login", ["anthropic", "--device", "--no-wait"], refused.deps)).toBe(2);
     expect(refused.calls).toHaveLength(0);
   });
+  test("xAI device reauth succeeds for an inactive account while the active account needs reauth", async () => {
+    const f = fixture([{ flowId: "flow-1", deviceCode: "ABCD" },
+      { flowId: "flow-1", loggedIn: false, done: true, status: "complete" }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--reauth", "--id", "inactive"], f.deps)).toBe(0);
+    expect(f.calls[0]?.body).toEqual({ provider: "xai", addAccount: false, device: true, accountId: "inactive", reauth: true });
+    expect(f.calls[1]?.url).toContain("flowId=flow-1");
+  });
   test("xAI device requires and polls its own flow id, refusing a replacement success", async () => {
     const missing = fixture([{ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" }]);
     expect(await handleAccountAuthCommand("login", ["xai", "--device"], missing.deps)).not.toBe(0);
