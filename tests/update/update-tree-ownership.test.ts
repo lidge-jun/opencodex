@@ -31,7 +31,7 @@ function exposingGroup(path: string): string {
 }
 
 /** A real pnpm home: the global-store proof refuses an anchor that is missing or reached through a link. */
-const STORE_PROOF_HOME = realpathSync(mkdtempSync(join(tmpdir(), "ocx-tree-pnpm-home-")));
+const STORE_PROOF_HOME = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-tree-pnpm-home-")));
 
 /**
  * Owner discovery with the store-proof inputs a global-store owner needs: pnpm 12 and a real pnpm
@@ -70,7 +70,7 @@ describe("#4202 install-tree dependency ownership", () => {
 
   beforeEach(() => {
     // Canonical spelling: link targets below are compared with the canonical store and group.
-    root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-tree-ownership-")));
+    root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-tree-ownership-")));
   });
 
   afterEach(() => {
