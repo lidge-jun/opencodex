@@ -153,3 +153,29 @@ test("an upstream error header cannot claim a local WebSocket workflow refusal",
   expect(frames[0]?.status).toBe(429);
   expect(frames[0]?.headers["x-opencodex-local-refusal"]).toBeUndefined();
 });
+
+test("a real WebSocket turn masks the selected credential in an untyped upstream refusal", async () => {
+  const credential = "fixture_selected_credential_8299";
+  upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    return new Response(`data: ${JSON.stringify({ error: { code: "cyber_policy", message: `blocked ${credential}` } })}\n\ndata: [DONE]\n\n`,
+      { headers: { "content-type": "text/event-stream" } });
+  } });
+  saveConfig({
+    port: 0, hostname: "127.0.0.1", codexAutoStart: false, websockets: true,
+    clientIntegrations: { codex: false }, defaultProvider: "fixture",
+    providers: { fixture: { adapter: "openai-responses", baseUrl: new URL("/v1", upstream.url).href,
+      apiKey: credential, allowPrivateNetwork: true, liveModels: false, models: ["m"] } },
+  } as OcxConfig);
+  proxy = startServer(0);
+  const url = new URL("/v1/responses", proxy.url); url.protocol = "ws:";
+  const frames: Array<{ type: string; response?: { error?: { code?: string; message?: string } } }> = [];
+  socket = new WebSocket(url);
+  socket.addEventListener("message", event => frames.push(JSON.parse(String(event.data))));
+  await until(() => socket!.readyState === WebSocket.OPEN);
+  socket.send(JSON.stringify({ type: "response.create", model: "fixture/m", input: "synthetic task" }));
+  await until(() => frames.some(frame => frame.type === "response.failed"));
+  const terminal = frames.find(frame => frame.type === "response.failed")!;
+  expect(terminal.response?.error?.code).toBe("cyber_policy");
+  expect(terminal.response?.error?.message).toContain("[REDACTED]");
+  expect(JSON.stringify(frames)).not.toContain(credential);
+}, 10_000);

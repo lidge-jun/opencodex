@@ -22,6 +22,11 @@ import {
 import { removeTreeWithRetry } from "./remove-tree";
 
 type Scenario = "exhaustion" | "guard";
+const phaseStarted = performance.now();
+const phase = (name: string): void => {
+  process.stderr.write(`shutdown-budget-phase: ${name} +${Math.round(performance.now() - phaseStarted)}ms\n`);
+};
+phase("module-ready");
 
 function fixedResponse(id: string, output: unknown[]): { id: string; output: unknown[]; status: string } {
   return { id, output, status: "completed" };
@@ -49,6 +54,7 @@ async function runScenario(scenario: Scenario): Promise<Record<string, unknown>>
   const priorHome = process.env.OPENCODEX_HOME;
   process.env.OPENCODEX_HOME = home;
   clearResponseStateMemoryForTests();
+  phase("fixture-ready");
   try {
     setPlatformForTests("win32");
     setResponseSpillShutdownBudgetForTests({ totalMs: 60, fallbackReserveMs: 40 });
@@ -61,6 +67,7 @@ async function runScenario(scenario: Scenario): Promise<Record<string, unknown>>
     setAsyncIcaclsRunnerForTests(async () => {
       if (!announced) {
         announced = true;
+        phase("first-acl");
         entered();
         await gate;
       }
@@ -72,6 +79,7 @@ async function runScenario(scenario: Scenario): Promise<Record<string, unknown>>
     });
     setResponseStateByteCapForTests(1_024);
     rememberLarge("resp_budget_exhausted_first", "a".repeat(2 * 1024 * 1024 + 4_096));
+    phase("initial-state-stored");
     await started;
     rememberLarge("resp_budget_exhausted_final", "b".repeat(2 * 1024 * 1024 + 4_096));
     setResponseStateByteCapForTests(1_000_000_000);
@@ -84,12 +92,14 @@ async function runScenario(scenario: Scenario): Promise<Record<string, unknown>>
 
     let reported: unknown;
     try {
+      phase("flush-start");
       const flushing = flushResponseState();
       setResponseStateByteCapForTests(scenario === "guard" ? 1 : 1_024);
       await flushing;
     } catch (error) {
       reported = error;
     } finally {
+      phase("flush-settled");
       release();
     }
     const pending = pendingResponseSpillMetricsForTests();
@@ -111,6 +121,7 @@ async function runScenario(scenario: Scenario): Promise<Record<string, unknown>>
       guardReported: messages.some(message => message.includes("terminalization pass limit")),
     };
   } finally {
+    phase("cleanup-start");
     setAsyncIcaclsRunnerForTests(null);
     setIcaclsRunnerForTests(null);
     setPlatformForTests(null);
@@ -122,6 +133,7 @@ async function runScenario(scenario: Scenario): Promise<Record<string, unknown>>
     removeTreeWithRetry(home);
     if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = priorHome;
+    phase("cleanup-finished");
   }
 }
 

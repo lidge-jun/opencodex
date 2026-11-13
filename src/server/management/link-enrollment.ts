@@ -16,13 +16,30 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
-import { enrollOperationDigest, journalInUse, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { enrollOperationDigest, journalInUse, journalOpenFailure, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
 import { isOperationId } from "../../link/operations-journal";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
 const PROBE_TTL_MS = 5 * 60_000;
 const MIN_REMOTE_OCX = [2, 66, 0] as const;
 const REMOTE_OCX_VERSION = /^opencodex (\d{1,9})\.(\d{1,9})\.(\d{1,9})(-[0-9A-Za-z.-]{1,64})?(\+[0-9A-Za-z.-]{1,64})?(?=\s|$)/;
+
+/**
+ * The fixed recovery line a refused apply that may have left the Child connected answers, with the
+ * closed words a client maps to its own guidance: residualKind (plant: only the managed binary's
+ * purge removes it; enrollment) as journalled replies use, and the Child's platform when known. The
+ * purge line names the managed binary where that platform keeps it (on Windows both locations the plant uses).
+ */
+export function liveResidual(kind: "plant" | "ephemeral" | "full", platform: "posix" | "windows" | undefined): { residualKind: "plant" | "enrollment"; recovery: string; remotePlatform?: "posix" | "windows" } {
+  const recovery = kind === "plant"
+    ? platform === "windows"
+      ? 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child, or "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge where LOCALAPPDATA is not set, before retrying.'
+      : "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying."
+    : kind === "ephemeral"
+      ? "Run ocx-child detach (or ocx disconnect) on the Child before retrying."
+      : "Run ocx disconnect and ocx restart on the Child before retrying.";
+  return { residualKind: kind === "plant" ? "plant" : "enrollment", recovery, ...(platform ? { remotePlatform: platform } : {}) };
+}
 
 /**
  * Same-alias operations refuse overlap rather than overwrite a confirmed generation. Keyed without case, as OpenSSH
@@ -241,6 +258,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     return fail("invalid_body", "alias and optional fingerprint/plant are required.", 400);
   }
   const alias = body.alias;
+  // A repeat replays without probing, so the fingerprint is what names the operation (the CLI requires it too).
+  if (body.operationId !== undefined && typeof body.fingerprint !== "string") return fail("invalid_body", "operationId requires fingerprint.", 400);
   const resolveBinary = ctx.deps.resolveChildBinarySource ?? resolveChildBinarySource;
   // ocx link add --operation-id (structure/remote-link.md, "Operation journal"): replay, recovery and the reserved ids.
   const operation = typeof body.operationId === "string" ? { id: body.operationId, digest: enrollOperationDigest({ alias,
@@ -265,8 +284,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     }
     let journal: EnrollJournal = NO_ENROLL_JOURNAL;
     if (operation) {
-      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch {
-        return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch (error) {
+        return journalOpenFailure(error);
       }
     }
     return journal.finish(await (async (): Promise<Response> => {
@@ -274,7 +293,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     writeFileSync(knownHosts, confirmed.knownHostLine + "\n", { mode: 0o600 });
     const runner = runnerFor(ctx), budget = linkCommandBudget(confirmed.sshLatencyMs);
     const run = (argv: readonly string[], timeoutMs = budget, maxOutputBytes?: number) => runner.run(buildExecArgv({ alias, argv, knownHostsFile: knownHosts, route }), { timeoutMs, ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }) });
-    let remotePlatform: "posix" | "windows";
+    let remotePlatform: "posix" | "windows" | undefined;
+    const knownPlatform = (): "posix" | "windows" | undefined => remotePlatform;
     const ocx = (args: readonly string[]) => remoteOcxArgv(args, remotePlatform);
     let record: LinkStore["links"][number] | undefined, input: Uint8Array | undefined;
     // A key issued for a record that has not passed the locked alias and trust checks. Until then a
@@ -314,12 +334,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       const outcome = compensation ?? response;
       if (!remoteMayBeConnected) return outcome;
       const payload = await outcome.json() as Record<string, unknown>;
-      const recovery = purgeRollbackFailed
-        ? "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying."
-        : ephemeralChild
-          ? "Run ocx-child detach (or ocx disconnect) on the Child before retrying."
-          : "Run ocx disconnect and ocx restart on the Child before retrying.";
-      return Response.json({ ...payload, residual: true, recovery }, { status: outcome.status });
+      const residual = liveResidual(purgeRollbackFailed ? "plant" : ephemeralChild ? "ephemeral" : "full", knownPlatform());
+      return Response.json({ ...payload, residual: true, ...residual }, { status: outcome.status });
     };
     try {
       remotePlatform = confirmed.remotePlatform ?? await requireRemotePlatform(runner, alias, route, knownHosts);
