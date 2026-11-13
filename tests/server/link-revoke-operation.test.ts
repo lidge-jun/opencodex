@@ -522,3 +522,24 @@ test("a plain --force finishes an owned receipt whose purge cannot run again, an
   const replay = await h.revoke({ purge: true, operationId: OP });
   expect(replay.body.outcome).toBe("unknown");
 });
+
+test.each([true, false])("a plain --force finishes a receipt whose owner a dead process left open (record listed: %p)", async listed => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  if (!listed) h.store = { ...h.store, links: [] };
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: at, updatedAt: at, state: "open",
+    effects: listed ? [{ effect: "remote_cleanup", phase: "intent", at }] : [{ effect: "remote_cleanup", phase: "intent", at }, { effect: "record_removed", phase: "intent", at }],
+  } as LinkOperation] });
+  const ssh = h.ssh.length;
+  const forced = await h.revoke({ force: true });
+  expect(forced.status).toBe(200);
+  expect(h.ssh.length).toBe(ssh);
+  expect(h.store.links).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+  // The owner was settled as its own replay would settle it while its receipt was outstanding, and keeps that.
+  expect(h.journal().operations[0]!.state).toBe("unknown");
+  expect((await h.revoke({ purge: true, operationId: OP })).body.outcome).toBe("unknown");
+});

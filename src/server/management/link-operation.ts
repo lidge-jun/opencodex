@@ -210,9 +210,21 @@ function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation
   const removalStarted = hasEffect(op, "record_removed", "intent");
   // A retirement receipt still outstanding for the link means its post-commit work has not finished (#8416): this
   // revoke's own receipt was resumed before replay, so one left here belongs to another identity or is unreadable.
-  if (removed && removalStarted && !retirementOutstanding(op)) return settle(ctx, op.operationId, "committed");
-  const touched = removalStarted || hasEffect(op, "remote_cleanup", "intent") || hasEffect(op, "key_revoked", "intent");
+  const outstanding = retirementOutstanding(op);
+  if (removed && removalStarted && !outstanding) return settle(ctx, op.operationId, "committed");
+  // An outstanding receipt counts as touched: a removal was claimed and its outcome is not known to be nothing.
+  const touched = removalStarted || outstanding || hasEffect(op, "remote_cleanup", "intent") || hasEffect(op, "key_revoked", "intent");
   return settle(ctx, op.operationId, removed || touched ? "unknown" : "failed_clean", { code: "operation_interrupted", status: 409 });
+}
+
+/**
+ * Before a plain --force finishes a receipt, settle its owner if the owner is still open (#8416). The force holds the
+ * alias lock and this runtime's per-alias set, so an open owner here belongs to a process that died: it is settled as
+ * its own replay would settle it (unknown while its receipt is outstanding), and keeps that outcome afterwards.
+ */
+export function settleOpenRetirementOwner(ctx: ManagementContext, receipt: LinkRetirement): void {
+  const owner = retirementOwner(readOperationsJournal(journalPathFor(ctx)), receipt);
+  if (owner?.state === "open") recoverRevoke(ctx, owner);
 }
 
 /**

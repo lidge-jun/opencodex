@@ -27,7 +27,7 @@ import { readManagementJsonBodyOr, readOptionalManagementJsonBody, rethrowManage
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, cleanupRecorded, replayOperation, resumedRevokeJournal, retirementOwner, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, cleanupRecorded, replayOperation, resumedRevokeJournal, retirementOwner, revokeOperationDigest, settleOpenRetirementOwner, underAliasLock, type RevokeJournal } from "./link-operation";
 import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -264,6 +264,13 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         if (resumed) return resumed;
         const replay = await replayOperation(ctx, state, operation, "revoke");
         if (replay) return replay;
+      }
+      if (!operation && force) {
+        // A plain --force may finish any receipt (foreignRetirement); an owner a dead process left open is settled first.
+        try {
+          const receipt = readLinkRetirement(id);
+          if (receipt) settleOpenRetirementOwner(ctx, receipt);
+        } catch { return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500); }
       }
       const open = openRevokeConflict(ctx, id, operation?.id);
       if (open) return open;
