@@ -1039,6 +1039,50 @@ test("a pidfile unreadable at a reload that replaced the record is never acted o
   });
 });
 
+
+test("a watch whose pidfile turns unreadable does not lift the block when its process ends", async () => {
+  await withPidfileDir(async (dir, path) => {
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 5151, argv: ["ssh"] }) + "\n");
+    let alive = true;
+    const h = await started({ pidfileDir: dir, processArgv: () => alive ? ["ssh"] : null, processAlive: () => alive });
+    expect(h.state().orphan).toBe("orphan-unverified");
+    // The file is replaced by something unreadable: it may name another tunnel now.
+    rmSync(path);
+    mkdirSync(path);
+    alive = false;
+    await h.advance(1_000);
+    await h.advance(60_000);
+    expect(h.state().orphan).toBe("orphan-unverified");
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+    expect(h.warns.filter(line => line.includes("pidfile unreadable"))).toHaveLength(1);
+    rmSync(path, { recursive: true });
+    await h.advance(1_000);
+    expect(h.state().orphan).toBeUndefined();
+    await h.tick();
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+  });
+});
+
+test("a blocked link that is removed and added again with the same id is settled from its pidfile, not left blocked", async () => {
+  await withPidfileDir(async (dir, path) => {
+    mkdirSync(path);
+    const other = record(["beta-lan", "pen-alpha"], "lnk_fedcba9876543210", 19004);
+    const blocked = record(["alpha-lan", "pen-alpha"]);
+    let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [blocked, other] };
+    const h = await started({ store: () => current, pidfileDir: dir });
+    expect(h.state().orphan).toBe("orphan-unverified");
+    current = { ...current, links: [other] };
+    await h.supervisor.reload();
+    await h.advance(1_000);
+    rmSync(path, { recursive: true });
+    current = { ...current, links: [blocked, other] };
+    await h.supervisor.reload();
+    await h.tick();
+    expect(h.state().orphan).toBeUndefined();
+    expect(h.runs.filter(run => run.kind === "probe" && run.destination === "alpha-lan")).toHaveLength(1);
+  });
+});
+
 test("a reload that changes the record of a link blocked by an unreadable pidfile keeps it blocked", async () => {
   await withPidfileDir(async (dir, path) => {
     mkdirSync(path);
