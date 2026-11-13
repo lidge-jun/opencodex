@@ -1,26 +1,34 @@
 // Plain ESM shared by the Node launcher (bin/ocx.mjs) and the Bun updater (src/update/index.ts):
 // the launcher runs under Node and cannot import TypeScript. Types: child-binary-cache-fill.d.mts.
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { detectInstallFromPath } from "../update/install-detection.mjs";
 
 /**
- * Fills $OPENCODEX_HOME/cache/ocx-child/<version>/ when a Home of that version starts (lane O2 of
- * the disposable-machines design), so a packaged Home can plant ocx-child on a bare machine after
- * an update by any installer.
+ * Fills $OPENCODEX_HOME/cache/ocx-child/<version>/ when an updated Home of that version starts (lane
+ * O2 of the disposable-machines design), so a packaged Home can plant ocx-child on a bare machine
+ * after an update by any installer.
  *
  * Trust is the update's own: the expected digests come from CHILD_RELEASE_DIGESTS_PATH inside the
  * running package tree, which its installer verified, and each binary, fetched from the GitHub
  * release of exactly that version, is cached only when its SHA-256 equals that digest. Nothing is
- * fetched without that file, or when a newer version's cache exists (a downgrade). A listed build that cannot be
- * verified is removed from the cache and its manifest, so it can never stay trusted under an older
- * manifest; child-binary-source.ts keeps answering artifact_not_found for it.
+ * fetched without that file, from a source checkout, or without evidence of an upgrade:
+ * cache/ocx-child/.home-version records the last version whose fill completed, and only a running
+ * version newer than it fills. A first start (no record: a fresh install) records its version and
+ * fetches nothing, a restart of the same version fetches nothing, and a record or cache directory for
+ * a newer version means a downgrade. A listed build that cannot be verified loses its manifest line,
+ * so it can never stay trusted under an older manifest, but its file is left in place (it may be an
+ * operator's); the record stays behind until every listed build is verified, so the next start retries.
  *
- * The cache directories are never followed through a symlink: each of cache, cache/ocx-child and the
- * version directory must be a real directory (created 0700 when missing), and every write re-checks
- * the version directory's identity, so a directory swapped in during a download receives nothing.
+ * Nobody else can substitute a build: on POSIX each of cache, cache/ocx-child and the version
+ * directory must be a real directory (never a symlink; created 0700 when missing) owned by this user
+ * and writable by nobody else, and every directory above them must be owned by this user or root and
+ * writable by nobody else unless sticky. Every write re-checks the target directory's identity, so a
+ * directory swapped in during a download receives nothing. (On Windows the profile's ACLs stand in for
+ * the mode checks; only the symlink and identity checks apply.)
  */
 
 /** Digests of the release's ocx-child builds, relative to the package root ("<sha256>  ocx-child-<triple>[.exe]"). */
@@ -33,6 +41,8 @@ export const CHILD_CACHE_ARTIFACT_FILES = Object.freeze([
 const MAX_CHILD_BINARY_BYTES = 32 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
+const VERSION_RECORD = ".home-version";
+const POSIX = process.platform !== "win32";
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 export function childReleaseAssetUrl(version, file) {
@@ -97,7 +107,26 @@ function readDigests(packageRoot) {
   return digests.size > 0 ? digests : null;
 }
 
-/** A real directory (never a symlink), created private when missing; returns its identity. */
+function currentUid() {
+  return typeof process.getuid === "function" ? process.getuid() : null;
+}
+
+/** Every directory above the cache: owned by this user or root, writable by nobody else unless sticky (/tmp). */
+function assertTrustedAncestors(home) {
+  if (!POSIX) return;
+  let dir = realpathSync(home);
+  for (;;) {
+    const st = lstatSync(dir);
+    const owner = st.uid === currentUid() || st.uid === 0;
+    const writers = (st.mode & 0o022) === 0 || (st.mode & 0o1000) !== 0;
+    if (!st.isDirectory() || !owner || !writers) throw new Error("unsafe cache directory: " + dir);
+    const parent = dirname(dir);
+    if (parent === dir) return;
+    dir = parent;
+  }
+}
+
+/** A real directory (never a symlink) private to this user, created 0700 when missing; returns its identity. */
 function realDirectory(path) {
   let st;
   try { st = lstatSync(path); } catch (error) {
@@ -106,6 +135,7 @@ function realDirectory(path) {
     st = lstatSync(path);
   }
   if (!st.isDirectory() || st.isSymbolicLink()) throw new Error("unsafe cache directory: " + path);
+  if (POSIX && (st.uid !== currentUid() || (st.mode & 0o022) !== 0)) throw new Error("unsafe cache directory: " + path);
   return { dev: st.dev, ino: st.ino };
 }
 
@@ -133,6 +163,14 @@ function publish(dir, identity, name, bytes) {
 function unpublish(dir, identity, name) {
   if (!sameDirectory(dir, identity)) throw new Error("cache directory changed");
   try { unlinkSync(join(dir, name)); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+}
+
+/** The last version whose fill completed, or null (absent or unreadable: no evidence of an upgrade). */
+function readVersionRecord(dir) {
+  let bytes;
+  try { bytes = readRegular(join(dir, VERSION_RECORD), 256); } catch { return null; }
+  const value = bytes?.toString("utf8").trim() ?? "";
+  return parseVersion(value) ? value : null;
 }
 
 async function download(url, fetchImpl, timeoutMs) {
@@ -172,9 +210,17 @@ export async function fillChildBinaryCacheForVersion(options) {
   const digests = readDigests(options.packageRoot);
   if (!digests) return { kind: "skipped", reason: "no_digests" };
   const home = options.opencodexHome || process.env.OPENCODEX_HOME?.trim() || join(process.env.HOME || homedir(), ".opencodex");
+  assertTrustedAncestors(home);
   if (newerVersionCached(home, options.version)) return { kind: "skipped", reason: "downgrade" };
   realDirectory(join(home, "cache"));
-  realDirectory(join(home, "cache", "ocx-child"));
+  const root = join(home, "cache", "ocx-child");
+  const rootIdentity = realDirectory(root);
+  const recorded = readVersionRecord(root);
+  const record = () => publish(root, rootIdentity, VERSION_RECORD, Buffer.from(options.version + "\n"));
+  if (recorded === null) { record(); return { kind: "skipped", reason: "first_start" }; }
+  const order = compareReleaseVersions(options.version, recorded);
+  if (order === -1) return { kind: "skipped", reason: "downgrade" };
+  if (order === 0) return { kind: "skipped", reason: "not_an_upgrade" };
   const dir = childBinaryCacheDir(home, options.version);
   const identity = realDirectory(dir);
   // Entries the release does not list (a build an operator placed by hand) keep their lines.
@@ -196,20 +242,18 @@ export async function fillChildBinaryCacheForVersion(options) {
       cached.push(file);
       fetched.push(file);
     } else {
-      // Never leave a build the current release does not vouch for under an older manifest line.
-      unpublish(dir, identity, file);
+      // Never leave a build the current release does not vouch for under an older manifest line;
+      // the file itself stays (it may be an operator's), unlisted, so the reader refuses it.
       failed.push(file);
     }
   }
   if (manifest.size > 0) publish(dir, identity, "SHA256SUMS", Buffer.from([...manifest].map(([file, sha]) => sha + "  " + file + "\n").join("")));
   else unpublish(dir, identity, "SHA256SUMS");
+  // An incomplete fill leaves the older record, so the next start of this version retries.
+  if (failed.length === 0) record();
   return { kind: "filled", cached, fetched, failed };
 }
 
-/**
- * Startup step (src/server/index.ts): fill the cache for the running version in the background and
- * say what happened in one line. Never throws and never delays the server.
- */
 /** The running package's version, from its own package.json; null when unreadable. */
 export function runningPackageVersion(packageRoot = runningPackageRoot()) {
   try {
@@ -218,11 +262,19 @@ export function runningPackageVersion(packageRoot = runningPackageRoot()) {
   } catch { return null; }
 }
 
+/**
+ * Startup step (src/server/index.ts): fill the cache for the running version in the background and
+ * say what happened in one line. Never throws and never delays the server.
+ */
 export async function fillChildBinaryCacheOnStart(options = {}, out = { log: console.log, warn: console.warn }) {
   let outcome;
   const packageRoot = options.packageRoot ?? runningPackageRoot();
   const version = options.version ?? runningPackageVersion(packageRoot) ?? "";
-  try { outcome = await fillChildBinaryCacheForVersion({ timeoutMs: 20_000, ...options, packageRoot, version }); } catch {
+  try {
+    // A source checkout (a developer's server, the test suite) never fetches a release.
+    if (detectInstallFromPath(packageRoot) === "source") return { kind: "skipped", reason: "source_checkout" };
+    outcome = await fillChildBinaryCacheForVersion({ timeoutMs: 20_000, ...options, packageRoot, version });
+  } catch {
     out.warn("[link] the ocx-child builds of this release could not be cached; planting on a bare machine needs a build supplied by hand.");
     return null;
   }

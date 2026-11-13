@@ -837,8 +837,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       .catch(() => {}));
   }
 
-  // Remote Link (lane O2): cache this release's ocx-child builds from the digests its package carries.
-  // Inert until a release ships them; a background read that never delays listen.
+  // Remote Link (lane O2): after an upgrade of a packaged install, cache the ocx-child builds its package's digests
+  // vouch for. Inert until a release ships them; a background read that never delays listen.
   if ((config.runtimeRole ?? "standalone") !== "client") void trackBackgroundWork("ocx-child-cache-fill", import("../link/child-binary-cache-fill.mjs").then(fill => fill.fillChildBinaryCacheOnStart()).catch(() => {}));
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.

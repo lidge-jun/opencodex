@@ -6,8 +6,9 @@ export declare function childBinaryCacheDir(opencodexHome: string, version: stri
 export declare function compareReleaseVersions(left: string, right: string): -1 | 0 | 1 | null;
 
 export type ChildCacheFillOutcome =
-  | { readonly kind: "skipped"; readonly reason: "invalid_version" | "no_digests" | "downgrade" }
-  /** cached: every verified build now in the cache; fetched: those downloaded now; failed: removed. */
+  /** first_start: no record of an earlier version (a fresh install), so the version is recorded and nothing fetched. */
+  | { readonly kind: "skipped"; readonly reason: "invalid_version" | "no_digests" | "downgrade" | "first_start" | "not_an_upgrade" | "source_checkout" }
+  /** cached: every verified build now in the cache; fetched: those downloaded now; failed: listed builds withdrawn from the manifest. */
   | { readonly kind: "filled"; readonly cached: readonly string[]; readonly fetched: readonly string[]; readonly failed: readonly string[] };
 
 export interface ChildCacheFillOptions {
