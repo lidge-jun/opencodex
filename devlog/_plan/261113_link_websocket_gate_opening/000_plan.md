@@ -14,6 +14,7 @@ Both Children can carry Codex's Responses WebSocket over a Remote Link, and both
 8. **Platforms.** macOS and Windows runs of the crate and the real-binary tests.
 9. **User docs.** The guide pages that describe the link WebSocket on a lightweight Child, with the Spanish mirror rule.
 10. **CI path filter.** `tests/fixtures/link/link-ws-state-proof.json` is outside the Rust CI path filter in `.github/workflows/ci.yml`, so a change to the vectors alone does not run the Rust tests. Add it the next time `ci.yml` is edited (an edit needs the release-evidence re-pin).
+11. **No answer yet means try.** `ocx-child` tries an upgrade only when the Home's "on" has been applied for the current link (`link_ws_advert::advertised`, checked on the relay's WebSocket route in `relay.rs`), so a freshly started or newly linked `ocx-child` answers 426 until a preflight teaches it, and Codex then stays on HTTP for that session. The TypeScript Child's rule (#8682) is to try when no answer has been applied since start, letting the upgrade's own preflight decide, while a cached off, a closed gate and the opt-out keep the 426 with no network traffic. `ocx-child` needs the same rule, with the same tests.
 
 ## TypeScript Child
 
