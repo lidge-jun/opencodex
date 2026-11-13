@@ -109,8 +109,9 @@ export const OPERATION_PRUNE_FLOOR_MS = OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAI
  * disposable machines that each live ten minutes make about 120 add and revoke operations per hour, about 246 inside the
  * window, a quarter of the bound. A runaway loop that retries with a fresh id after each failure is held for at most that
  * window instead of locking the Home out for 30 days. With the three bounds the file holds about 256 unsettled plus
- * 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at most about 1.5 MiB at the limit, so every
- * whole-file rewrite under the config mutation lock stays small.
+ * 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at most about 1.5 MiB at the limit, plus the
+ * entries an outstanding retirement receipt pins (at most two per receipt; receipts have no cap of their own), so every
+ * whole-file rewrite under the config mutation lock stays small while receipts are settled.
  */
 export const OPERATION_JOURNAL_MAX_RECENT_SETTLED = 1024;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
