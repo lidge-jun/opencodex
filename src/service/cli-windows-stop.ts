@@ -171,7 +171,7 @@ export function completeWindowsServiceStopReceipt(nonce: string | undefined, cle
  * `ocx service stop` does, and kept until the caller's restore succeeds.
  */
 export async function windowsServiceRemovalStop(
-  io: Pick<WindowsServiceStopCommandIo, "stopTracked" | "ownsSharedTeardown" | "claim" | "endpointLiveness"> = {},
+  io: Pick<WindowsServiceStopCommandIo, "stopTracked" | "ownsSharedTeardown" | "claim" | "endpointLiveness" | "endpoints"> = {},
 ): Promise<{ ok: boolean; nonce?: string }> {
   const port = windowsServiceStopPort();
   // Resolved once: the receipt and the absent-Part-A probe must name the same address, or
