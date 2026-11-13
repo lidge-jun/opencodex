@@ -50,7 +50,11 @@ const iso = (ctx: ManagementContext) => new Date(nowOf(ctx)).toISOString();
  */
 export function ownsRetirement(op: LinkOperation): boolean {
   if (op.kind !== "revoke" || op.linkId === undefined) return false;
-  try { return readLinkRetirement(op.linkId)?.operationId === op.operationId; } catch { return true; }
+  // Its former owner too: every later plain force fences that entry, so it must outlive its retention while the receipt does.
+  try {
+    const receipt = readLinkRetirement(op.linkId);
+    return receipt?.operationId === op.operationId || receipt?.formerOwner === op.operationId;
+  } catch { return true; }
 }
 
 function retirementOutstanding(op: LinkOperation): boolean {

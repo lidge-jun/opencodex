@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
-import { resumedRevokeJournal, revokeOperationDigest } from "../../src/server/management/link-operation";
+import { ownsRetirement, resumedRevokeJournal, revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
 import { claimLinkRetirement, disownLinkRetirement, readLinkRetirement } from "../../src/link/retirement";
 import { linkSuspendedByRevoke, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, resolveLinkOperation, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
@@ -1036,6 +1036,28 @@ test("a later plain --force fences the former owner of a receipt an earlier forc
   open();
   expect((await forced).status).toBe(502);
   const owner = h.journal().operations[0]!;
+  expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: undefined });
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  expect(h.suspendedAtHoldRelease).toEqual([true]);
+});
+
+test("a disowned receipt pins its former owner past retention, so a later failed force still finds it to fence", async () => {
+  const h = harness({ revokeFails: true });
+  disownLinkRetirement(claimLinkRetirement(record(), root, () => h.store, "purge", OP), root);
+  const old = new Date(NOW - 40 * 24 * 60 * 60 * 1000).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: old, updatedAt: old, state: "unknown", finishedAt: old, resolvedAt: old, error: { code: "operation_interrupted", status: 409 },
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: old }],
+  } as LinkOperation, {
+    operationId: "other-op", kind: "revoke", alias: "other-alias", linkId: "lnk_fedcba9876543210", digest: revokeOperationDigest({ linkId: "lnk_fedcba9876543210", purge: false, force: true }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 }, effects: [],
+  } as LinkOperation] });
+  // An unrelated journal write prunes what has outlived retention; the former owner is pinned by the receipt.
+  expect(resolveLinkOperation(h.journalPath, "other-op", NOW, ownsRetirement)).not.toBeNull();
+  expect(h.journal().operations.map(op => op.operationId)).toContain(OP);
+  expect((await h.revoke({ force: true })).status).toBe(502);
+  const owner = h.journal().operations.find(op => op.operationId === OP)!;
   expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: undefined });
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
   expect(h.suspendedAtHoldRelease).toEqual([true]);
