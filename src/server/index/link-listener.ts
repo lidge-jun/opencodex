@@ -190,7 +190,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     }
     const requestedPort = store.listenerPort ?? 0;
     const linkWebsocket = startContext.responsesWebsocket;
-    // The resolved inbound limit (index.ts resolves maxInboundBodyBytes), fixed at bind like the public listener's.
+    // The resolved inbound limit (index.ts resolves maxInboundBodyBytes), fixed at bind like the public listener's. The
+    // handler re-resolves the live config per request, so after a live raise without a restart a coded body between the
+    // two limits is accepted but releases no hold until the next bind: the safe direction (the link stays in flight).
     const inboundLimit = startContext.maxRequestBodySize;
     const sessions = createLinkRelaySessions({ peers, activity, traffic, homeFeatures: () => startContext?.homeFeatures?.() ?? buildPeerFeatures(), connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: fingerprintsFor,
