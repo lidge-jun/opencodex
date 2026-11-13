@@ -341,6 +341,18 @@ describe("standalone one-use pairing boundaries", () => {
     const session = consumeGuiPairingGrant(pairingRequest(origin), { grant: created.grant }, config, state, now);
     expect(session).toMatchObject({ issuance: "pairing", expiresAt: now + 12 * 60 * 60000 });
   });
+  test("a desktop-purpose grant is refused at issuance without a local Desktop origin", () => {
+    const state = pairingState(), now = Date.now(), origin = "https://hub.example.test";
+    const config: OcxConfig = { ...localConfig, runtimeRole: "hub", hostname: "0.0.0.0", hub: { managementPublicOrigin: origin } };
+    // The hub remote-pairing path above stays open, but a desktopPurpose record would be stored
+    // unredeemable; issuance now refuses it instead of relying on the distant redemption check.
+    expect(() => createGuiPairingGrant(origin, config, state, now, true)).toThrow();
+    expect(state.pairingGrants.size).toBe(0);
+    const local = pairingState();
+    const created = createGuiPairingGrant(localOrigin, localConfig, local, now, true);
+    expect([...local.pairingGrants.values()].some(record => record.desktopPurpose)).toBe(true);
+    expect(created.grant).toMatch(/^ocx_pair_/);
+  });
   test("ordinary local bootstrap remains unpaired", () => {
     const state = pairingState();
     const session = issueGuiSession(new Request(`${localOrigin}/opencodex-session`, {

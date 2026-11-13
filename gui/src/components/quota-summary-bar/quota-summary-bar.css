@@ -169,6 +169,10 @@
   color: var(--red);
 }
 
+.quota-summary-item .quota-summary-pct--normal { color: var(--text); }
+.quota-summary-item .quota-summary-pct--warn { color: var(--amber); }
+.quota-summary-item .quota-summary-pct--critical { color: var(--red); }
+
 .quota-summary-item--critical .quota-summary-flag {
   background: var(--red);
 }
@@ -251,7 +255,7 @@
 
 .quota-summary-row-reset {
   color: var(--muted);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 /*
@@ -323,6 +327,12 @@
 
 /* The mobile top bar is already sticky at top: 0; scroll the summary with the page there. */
 @media (max-width: 760px) {
+  .quota-summary-table--passive tr,
+  .quota-summary-table--passive th,
+  .quota-summary-table--passive td { display: block; }
+
+  .quota-summary-table--passive td.quota-summary-row-pct { padding: 3px 0; text-align: left; }
+
   .quota-summary-bar {
     position: static;
     padding: 4px 10px;

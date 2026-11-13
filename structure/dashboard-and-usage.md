@@ -100,7 +100,7 @@ Accounts tab through `revealProviderAccounts` instead; following the same link a
 the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
 so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
 `gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
-`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS. `gui/src/quota-summary.ts` selects fixed windows by semantic label and promotes critical credits over a noncritical preferred window; a critical preferred window retains priority. For a positive WorkBuddy credit total it derives the unavailable share from remaining credits, including frozen amounts, with neutral severity, nearest-whole-percent display and no partial expiry presented as a balance reset. `gui/tests/quota-summary.test.ts` covers this projection, precedence and provider-label collisions. Dashboard health probes (`gui/src/lib/proxy-health.ts`, #8506): Home and the self-update reload check read the authenticated `/api/system/health` on the shared base, and the sidebar reads `machineHealthPath` on the machine base: `/healthz` only for a connected Child (`targets.connected || isConnectedRuntime()`), whose machine listener admits nothing else, and `/api/system/health` everywhere else, because a Remote Hub's management ingress denies `/healthz`. `readManagementHealth` counts a 401/403 as reachable with unknown version, so a public standalone before its token prompt or a hub before pairing does not read as Offline. `gui/tests/management-health-probe.test.ts`, `gui/tests/home-management-health.test.tsx` and `gui/tests/dashboard-contracts.test.ts` cover the rule.
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS. `gui/src/quota-summary.ts` selects fixed windows by semantic label and promotes critical credits over a noncritical preferred window; a critical preferred window retains priority. For a positive WorkBuddy credit total it derives the unavailable share from remaining credits, including frozen amounts, with neutral severity, nearest-whole-percent display and no partial expiry presented as a balance reset. `gui/tests/quota-summary.test.ts` covers this projection, precedence and provider-label collisions. Dashboard health probes (`gui/src/lib/proxy-health.ts`, #8506): Home and the self-update reload check read the authenticated `/api/system/health` on the shared base, and the sidebar reads `machineHealthPath` on the machine base: `/healthz` only for a connected Child (`targets.connected || isConnectedRuntime()`), whose machine listener admits nothing else, and `/api/system/health` everywhere else, because a Remote Hub's management ingress denies `/healthz`. `readManagementHealth` counts a 401/403 as reachable with unknown version, so a public standalone before its token prompt or a hub before pairing does not read as Offline. `gui/tests/management-health-probe.test.ts`, `gui/tests/home-management-health.test.tsx` and `gui/tests/dashboard-contracts.test.ts` cover the rule. The strip also validates `passiveKeyLimits` with `gui/src/passive-quota-summary.ts` and displays a separate chip per provider, numbered observed key and model. Each window shows remaining / limit, its observation age and reset when known; missing counts stay unknown and a passed reset marks the reading stale without another poll. These observations do not change provider budget headlines or routing. `gui/tests/muse-limit-expiry.test.tsx` covers separate Mistral budgets, invalid fields and reset expiry.
 
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
@@ -228,7 +228,7 @@ Account quota discovery is capability-based. Cheap OAuth and provider-key lists 
 `quotaMode` (`probe`, `passive`, or `unsupported`) without contacting upstream quota APIs.
 `GET /api/oauth/accounts?provider=...&quota=1` and
 `GET /api/providers/keys?name=...&quota=1` enrich each supported credential separately;
-`refresh=1` bypasses settled quota cache while joining a current same-identity read.
+`refresh=1` bypasses settled quota cache while joining a current same-identity read. Mistral quota reports include separately labelled API and Vibe windows; the header chip shows both and uses the most severe measured window for its status. A window with no usable budget or currency is shown as unknown, without a percentage or exhaustion bar. The same windows and reset times are available in provider and API-key CLI reports.
 OAuth readers use the named stored account; key readers use isolated per-key configuration,
 never active-key mutation or the provider-wide cache. Response projection rechecks key identity
 and exposes only quota/availability fields, not its internal identity guard. Passive observations
@@ -304,8 +304,7 @@ an unexplained send is the quantity the record exists to expose. `reserved` and 
 report the request execution budget's final state, and `moveReasons` names every pool-binding move
 that discarded a warmed prompt-cache prefix. `/api/usage` totals these as `sends`,
 `settledSends`, `unresolvedSends` and `spendRequests`; per-attempt `sendCount` remains the
-accounting source, and `attemptCount` is the smaller number because retry layers re-send inside
-one attempt.
+accounting source, and `attemptCount` is the smaller number because retry layers re-send inside one attempt.
 
 Cache detail is qualified by provenance rather than read as a measurement. `cacheProvenance` is
 `observed`, `synthesized` or `unknown`: strict-client normalization emits zero-default
@@ -325,9 +324,8 @@ and `errorCode: "codex_no_account"`; no synthetic row is emitted, since `/api/us
 row as one request. Affinity now reaches disk with the rest of the row — the field-by-field
 projection in `addRequestLog` did not name it, so a move survived only until the next restart.
 
-Usage aggregation does not infer confirmed model identity merely from a requested selector.
-Model rows with saved unchanged
-default-provider route evidence carry `hasUnresolvedRequestedModel`: their tokens stay under
+Usage aggregation does not infer confirmed model identity merely from a requested selector. Model
+rows with saved unchanged default-provider route evidence carry `hasUnresolvedRequestedModel`: their tokens stay under
 the recorded serving provider, with an unresolved-request annotation. For those slash-containing
 selectors, a vendor-only inferred price is unavailable; exact provider and user prices remain
 eligible. Missing trace evidence is not reconstructed from today's configuration. Provider-detail
@@ -392,8 +390,7 @@ For diagnosing upstream-shape / usage-extraction issues run `ocx debug usage on`
 `OPENCODEX_USAGE_DEBUG=1` before start). The proxy then writes a rolling debug record per finalized
 request to `~/.opencodex/usage-debug.jsonl` (mode `0o600`, auto-trimmed to the most-recent 100 lines
 once it exceeds 200) with the upstream content-type, body kind (`sse / json / other / none`), a 2KB
-body sample, and the extracted usage. Off by default; the hot path is guarded so production stays
-untouched.
+body sample, and the extracted usage. Off by default; the hot path is guarded so production stays untouched.
 
 For content-free cache-read diagnostics, `OPENCODEX_CACHE_DEBUG=1` enables `src/usage/cache-diagnostic.ts`; otherwise hooks return before body/header inspection, hashing or file access. Its live `enabled()` hook remains registered. Every observed on/off transition (the gate is evaluated on each diagnostic call, so an idle process keeps its history until the next call) starts a new retention epoch: continuation history and pending drafts are cleared, and a draft from an earlier epoch is neither compared nor written (`tests/usage/cache-diagnostic.test.ts`).
 It writes one finalized request to `~/.opencodex/cache-debug.jsonl` (mode `0o600`, 200-to-100 rolling lines), preserving raw cache-counter evidence.
@@ -463,7 +460,7 @@ Chat helper admission in `src/server/responses/core.ts` follows the [deferred st
 
 `gui/src/pages/Combos.tsx` supplies all non-Combo management catalog rows to internal model selectors, including hidden models. Catalog visibility does not restrict Combo member or JEV decision-model selection and selecting a hidden model does not change its external visibility. Disabled-provider, decision-service and recursion exclusions remain unchanged; the v2 workspace cache avoids reusing v1 visibility-filtered candidates.
 
-`src/server/management/provider-routes.ts` projects `routingQuota` after each quota read using the current provider
+`src/server/management/provider-routing-quota.ts` projects `routingQuota` for the read served by `src/server/management/provider-routes.ts`, using the current provider
 configuration and [scoped inference evidence](runtime.md#scoped-provider-quota-for-combo-selection). The DTO carries only state,
 observation time and an exclusive `validUntil`; cached display reports and private credential bindings are unchanged. Known states
 expire within 30 minutes; exhaustion may expire earlier when the runtime predicate clears at a reset boundary, accounting for other windows and persistent USD blockers.
@@ -537,14 +534,18 @@ write when an existing baseline is forgotten: `src/quota/reset-observer.ts` runs
 enabling it takes effect without a restart.
 
 - `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list, and
-  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies it. The selection of those Mistral windows lives in `src/providers/quota-mistral-budget.ts`, not under `src/quota/`, because `src/providers/quota.ts` imports it statically on the core path.
+  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's
+  `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies
+  it. The selection of those Mistral windows lives in `src/providers/quota-mistral-budget.ts`, not
+  under `src/quota/`, because `src/providers/quota.ts` imports it statically on the core path.
+  Mistral budget labels are stable; amounts and plan are presentation text.
 - `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification, and it
   never throws into the quota write that triggered it. `src/codex/quota.ts` and `src/providers/quota.ts`
   reach it only through a lazy import, because both are statically reachable from `src/server/responses/core.ts`.
   A probe-bound report may carry a private credential digest (`keyReportCredentialIds` in
   `src/providers/quota/report-cache.ts`); only opted-in producers (today Mistral) bind it, reset identity
   uses it instead of `apiKeyPoolEntryId`, and cached rows re-validate against the current credential and
-  destination; passive reads use literal or environment keys without publishing evidence and withhold keychain-backed rows. Others keep identity byte for byte.
+  destination; passive reads use literal or environment keys without publishing evidence and withhold keychain-backed rows. Queued reset observations recheck the report owner, credential, account and global and provider invalidation epochs in a passive read immediately before observation. Others keep identity byte for byte.
 - `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger; the observer claims a reset there
   before dispatch, so each reset is attempted at most once across restarts and racing observers, and a failed
   delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or local command, each best-effort and isolated.
@@ -591,8 +592,7 @@ to Combos preserves a pending read and its existing stale-state banner.
 Anthropic Fast pricing applies a 2x list-price multiplier only when the response confirms
 `usage.speed: "fast"`; an absent echo or standard-speed downgrade retains standard pricing.
 `tests/usage/usage-anthropic-fast-pricing.test.ts` pins that distinction. The request-metrics recovery
-label `anthropic-fast-downgrade` projects to `fast_downgrade`, separate from reasoning-effort
-`effort_downgrade`.
+label `anthropic-fast-downgrade` projects to `fast_downgrade`, separate from reasoning-effort `effort_downgrade`.
 
 Cursor Claude Fast pricing applies the published Fast tuples to Opus 4.8, Opus 5 and Opus 5.5.
 Explicit `-fast` model IDs use the Fast tuple directly; a Cursor variant tier outcome applies
