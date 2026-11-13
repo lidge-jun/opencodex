@@ -737,6 +737,46 @@ describe("ocx disconnect --expect-link (a Home's revoke)", () => {
     expect(run.last).toEqual({ phase: "child_link_mismatch", reason: "pending_operation" });
   });
 
+  test("a bound disconnect resumes this link's own unfinished disconnect while still connected", async () => {
+    writeClient({ transport: "link" });
+    const value = clientBlock({ transport: "link" }) as unknown as OcxClientConnectionConfig;
+    const { writeDesktopDisconnectReceipt, readDesktopDisconnectReceipt } = await import("../../src/claude/desktop-remote-store");
+    const { withClientLifecycleSync } = await import("../../src/client/lifecycle-lock");
+    withClientLifecycleSync(held => writeDesktopDisconnectReceipt(held, null, {
+      version: 1, owner: { serverUrl: value.serverUrl, apiKeyId: value.apiKeyId, connectedAt: value.connectedAt },
+      tokenFingerprint: value.tokenFingerprint, keepCatalog: true, phase: "prepared",
+    }));
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const logs = spyOn(console, "log").mockImplementation(() => {});
+    const errs = spyOn(console, "error").mockImplementation(() => {});
+    let exit: number;
+    try { exit = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog"], {}); } finally { logs.mockRestore(); errs.mockRestore(); }
+    expect(exit).toBe(0);
+    expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+    expect(readDesktopDisconnectReceipt()).toMatchObject({ kind: "valid", value: { phase: "complete" } });
+  });
+
+  test("a bound disconnect finishes a disconnect whose connection was already cleared", async () => {
+    writeClient({ transport: "link" });
+    const store = await import("../../src/claude/desktop-remote-store");
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const logs = spyOn(console, "log").mockImplementation(() => {});
+    const errs = spyOn(console, "error").mockImplementation(() => {});
+    // The first disconnect clears the connection, then its last step fails: the receipt is left unfinished.
+    const fail = spyOn(store, "finishRemoteDesktopCleanup").mockImplementation(() => ({ ok: false, changed: false, reason: "unsafe" }));
+    let first: number, second: number;
+    try {
+      first = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog"], {});
+      fail.mockRestore();
+      expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+      expect(store.readDesktopDisconnectReceipt()).toMatchObject({ kind: "valid", value: { phase: "connection_cleared" } });
+      second = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog"], {});
+    } finally { fail.mockRestore(); logs.mockRestore(); errs.mockRestore(); }
+    expect(first).not.toBe(0);
+    expect(second).toBe(0);
+    expect(store.readDesktopDisconnectReceipt()).toMatchObject({ kind: "valid", value: { phase: "complete" } });
+  });
+
   test("--expect-link with --recover-config is a usage error that changes nothing", async () => {
     writeClient({ transport: "link" });
     const before = readClientConnectionState();

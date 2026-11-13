@@ -318,6 +318,8 @@ describe("client link connection contracts", () => {
           ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
           : Response.json({ models: [] }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        // No real Codex probe for its supported efforts (it can take seconds): the catalog here has no models.
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       });
       const lines: string[] = [];
       const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
@@ -339,6 +341,8 @@ describe("client link connection contracts", () => {
           ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
           : Response.json({ models: [] }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        // No real Codex probe for its supported efforts (it can take seconds): the catalog here has no models.
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       });
       const logs = spyOn(console, "log").mockImplementation(() => {});
       let exit: number;
