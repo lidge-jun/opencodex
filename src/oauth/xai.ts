@@ -409,8 +409,8 @@ const XAI_DEVICE_DEFAULT_INTERVAL_S = 5;
  * `interval` and `expires_in`, but sets no ceiling on either, so the values below are this client's
  * policy rather than an RFC rule: a grant that outlives a plausible human approval at another
  * machine is not worth holding a login open for. A grant the issuer would still honour past the
- * ceiling ends here and reports `expired_token`, which is the same outcome as a real expiry from
- * the caller's side.
+ * ceiling ends here: pending approval reports `expired_token`, while a final transport or server
+ * failure retains its cause.
  */
 const XAI_DEVICE_MIN_INTERVAL_MS = 1_000;
 const XAI_DEVICE_MAX_TTL_S = 30 * 60;
