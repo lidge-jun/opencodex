@@ -129,12 +129,21 @@ describe("ocx link recover", () => {
     }
   });
 
-  test("a refusal for an --operation-id recover names where the link id comes from instead of a bare <id>", async () => {
+  // An --operation-id recover's target comes from the journal, not a tombstone (--list shows only tombstones), so its steps
+  // name the operation id the CLI validated (#8694 final review).
+  test.each([
+    ["child_recover_unsupported", "a person on this Home can run ocx link operations resolve --operation-id enroll-7 --yes"],
+    ["alias_linked", "then run ocx link recover --operation-id enroll-7 again"],
+    ["alias_linked", "resolve the operation (ocx link operations resolve --operation-id enroll-7 --yes)"],
+  ])("a %s refusal for an --operation-id recover names the operation id", async (code, expected) => {
     errors.mockClear();
-    const f = fixture({ error: { code: "child_recover_unsupported", message: "server text" } }, 409);
+    const f = fixture({ error: { code, message: "server text" } }, 409);
     expect(await runLinkCommand(["recover", "--operation-id", "enroll-7"], f.deps)).toBe(5);
-    expect(stderr()).toContain("ocx link recover --forget --link-id <the link's id from ocx link recover --list> --yes");
-    expect(stderr()).not.toContain("--link-id <id>");
+    expect(stderr()).toContain(expected);
+    expect(stderr()).not.toContain("--link-id <the link's id");
+    expect(stderr()).not.toContain("ocx link recover --list>");
+    expect(stderr()).not.toContain("This tombstone");
+    expect(stderr()).not.toContain("server text");
   });
 
   // A full install refuses --purge (purge_unsupported), so link_present names --purge only for a lightweight Child.
