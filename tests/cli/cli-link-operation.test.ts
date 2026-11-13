@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Readable } from "node:stream";
 import { runLinkCommand, type LinkCliDeps } from "../../src/cli/link";
+import { RuntimeApiError } from "../../src/cli/runtime-api";
 
 /** O1: ocx link add|revoke --operation-id, ocx link add --require-ephemeral and ocx link operations. */
 const fingerprint = "SHA256:abcdefghijklmnop";
@@ -242,4 +243,12 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
       expect(printed).not.toContain("Nothing was changed");
     } finally { h.restore(); }
   });
+});
+
+test("the revoke helper re-checks the outcome itself: a value outside the closed set is never printed", async () => {
+  const { journalledRevokeError } = await import("../../src/cli/link");
+  const error = new RuntimeApiError("x", 409, { error: { code: "operation_interrupted" }, operationId: "detach-7", outcome: "not-an-outcome; rm -rf" });
+  const explained = journalledRevokeError(error, "detach-7") as Error;
+  expect(explained.message).not.toContain("not-an-outcome");
+  expect(explained.message).toContain("(code operation_interrupted)");
 });

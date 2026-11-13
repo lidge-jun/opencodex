@@ -581,12 +581,14 @@ function validateParity(candidate: Record<string, unknown>, index: number): Link
  * A journalled revoke that did not complete: the CLI's own text from the filtered body only, the caller's validated
  * operation id, the closed outcome and the filtered code, never the server's message. The status (and exit) stay.
  */
-function journalledRevokeError(error: unknown, operationId: string): unknown {
+export function journalledRevokeError(error: unknown, operationId: string): unknown {
   if (!(error instanceof RuntimeApiError) || !isRecord(error.body) || !isRecord(error.body.error) || typeof error.body.error.code !== "string") return error;
   const code = error.body.error.code;
+  // The filtered body is re-checked here, as journalFullGuidance re-checks bound, so this helper is safe on its own.
+  if (!/^[a-z_]{1,64}$/.test(code)) return error;
   if (code === "operation_journal_full") return new RuntimeApiError(journalFullGuidance(error.body), error.status, error.body);
   if (Object.hasOwn(REVOKE_REFUSALS, code)) return new RuntimeApiError(REVOKE_REFUSALS[code] + " (code " + code + ")", error.status, error.body);
-  const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" ? error.body.outcome : undefined;
+  const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
   const resolve = outcome === "unknown" ? "; check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
   return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve, error.status, error.body);
 }
