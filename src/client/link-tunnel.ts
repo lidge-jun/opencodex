@@ -396,6 +396,7 @@ export function spawnClientLinkTunnel(spec: ClientLinkTunnelSpec, deps: ClientLi
     targetPort: spec.peerListenerPort,
     knownHostsFile,
     ...(capture ? { logLevel: capture.logLevel } : {}),
+    route: null,
   });
   const child = capture ? runner.spawnTunnel(argv, { stderrLine: capture.stderrLine }) : runner.spawnTunnel(argv);
   const pidfile = clientTunnelPidfilePath(deps.configDir);

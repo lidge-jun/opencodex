@@ -203,13 +203,14 @@ describe("GitHub Actions hardening", () => {
       expect(`${jobName}:${String(checkout?.with?.["fetch-tags"])}`).toBe(`${jobName}:true`);
     }
 
-    // Windows shards more finely than Linux. Nine reached 30 minutes in run 40756291846;
-    // refreshed weights and eleven restore margin while keeping the bound unchanged. The
-    // matrix, runner shard spec, job name and aggregate leg count must move together.
+    // Windows shards more finely than Linux. Nine reached 30 minutes in run 40756291846 and
+    // eleven in run 43257334898; refreshed weights and fourteen restore margin while keeping
+    // the bound unchanged. The matrix, runner shard spec, job name and aggregate leg count
+    // must move together.
     const windowsShards = (ci.jobs?.["platform-windows"] as {
       strategy?: { matrix?: { shard?: number[] } };
     })?.strategy?.matrix?.shard ?? [];
-    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
     expect(windowsShards).toEqual(windowsShards.map((_, i) => i + 1));
     const windowsSteps = (ci.jobs?.["platform-windows"] as {
       steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }>;

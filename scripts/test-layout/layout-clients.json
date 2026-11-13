@@ -231,5 +231,10 @@
   "link-ws-relay.test.ts": "clients",
   "link-ws-fallback.test.ts": "clients",
   "link-ws-child-home.test.ts": "e2e-style",
-  "link-ws-child-status.test.ts": "clients"
+  "link-ws-child-status.test.ts": "clients",
+  "link-explicit-route.test.ts": "clients",
+  "link-explicit-route-paths.test.ts": "clients",
+  "link-route-edit-exclusive.test.ts": "server",
+  "link-enrollment-explicit-route.test.ts": "server",
+  "cli-link-explicit-route.test.ts": "cli"
 }
