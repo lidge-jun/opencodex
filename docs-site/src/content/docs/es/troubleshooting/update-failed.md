@@ -139,6 +139,42 @@ El actualizador comprueba la carpeta de caché de npm antes de detener el proxy,
 
 Luego ejecuta `ocx update` de nuevo. Si `ENOTDIR` persiste después de que pase la comprobación, abra un problema con la salida completa del terminal de `ocx update` y la salida de `npm config get prefix` y `npm config get cache`.
 
+## Si una actualización con pnpm indica que la ruta parece una tienda global de pnpm
+
+pnpm 11 y 12 instalan paquetes globales como enlaces a la tienda de pnpm (por ejemplo,
+`~/Library/pnpm/store/v11/links/...` en macOS o `~/.local/share/pnpm/store/v11/links/...`
+en Linux). El actualizador solo acepta esa instalación si pnpm identifica la tienda que usa: ejecuta
+`pnpm store path` para el directorio de pnpm y comprueba que el paquete instalado esté dentro de esa
+tienda. Una ruta que parezca una tienda, los archivos marcadores o `.modules.yaml` no bastan por sí
+solos.
+
+Si no se puede hacer esa comprobación al identificar la instalación, la actualización se detiene
+antes de instalar o quitar nada (la consulta de la tienda de pnpm puede crear una carpeta vacía).
+El mensaje incluye `this install's path looks like a pnpm global store` y el comando que debes
+ejecutar. El actualizador vuelve a comprobar la tienda después de `pnpm add`; si la respuesta de
+pnpm ya no pasa la comprobación, la actualización se detiene sin revertir, porque el actualizador
+ya no puede confirmar en qué tienda escribiría una reversión. Comprueba `ocx --version` y usa el
+comando pnpm siguiente.
+
+Causas frecuentes:
+
+- pnpm es anterior o posterior a las versiones comprobadas (11 y 12). Ejecuta `pnpm --version`.
+- `PNPM_HOME`, o alguna carpeta superior, es un enlace simbólico; o pnpm muestra una ruta de tienda
+  que no es una sola carpeta absoluta `v<N>`.
+- En Windows, el directorio de pnpm, las carpetas globales o la ruta de la tienda contienen uno de
+  estos caracteres: `"%!^&|<>`; `cmd.exe` no puede pasarlos a pnpm de forma segura.
+- El grupo global está dentro de una carpeta que solo parece una tienda (una carpeta `v<N>/links`,
+  o los marcadores `files` e `index` de pnpm), pero no es la tienda que pnpm informa.
+
+En cualquiera de estos casos, actualiza con pnpm y luego reinicia el proxy:
+
+```bash
+pnpm add -g @bitkyc08/opencodex@latest
+```
+
+Una instalación predeterminada de pnpm 11 o 12 supera esta comprobación y se actualiza normalmente
+con `ocx update`.
+
 <a id="desktop-app-update-stalls-or-fails-on-installing-update"></a>
 
 ## La actualización de Desktop se detiene o falla en «Instalar actualización…»
