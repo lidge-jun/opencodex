@@ -161,14 +161,15 @@ function createRedactionTools(outboundHeaders: Record<string, string>, maskCrede
   // SSE comments and extension fields can also carry upstream text. A protocol event name and the
   // data payload (already masked structurally) are left as they are; any other event name is
   // provider text and is masked like the rest.
+  // Lines end in CRLF, CR or LF as the SSE parser accepts them; each separator is kept as it was.
   const maskExtensionLines = (block: string): string => block
-    .split("\n")
-    .map(line => {
-      if (/^data:/.test(line) || PROTOCOL_EVENT_LINE.test(line)) return line;
+    .split(/(\r\n|\r|\n)/)
+    .map((line, index) => {
+      if (index % 2 === 1 || /^data:/.test(line) || PROTOCOL_EVENT_LINE.test(line)) return line;
       const event = /^event:[ \t]*/.exec(line);
       return event ? `${event[0]}${guardedText(line.slice(event[0].length))}` : guardedText(line);
     })
-    .join("\n");
+    .join("");
   // A frame that cannot be restructured (unparsable or non-object JSON) has its data masked as text.
   const maskUnstructuredBlock = (block: string, payload: string | null): string => {
     if (payload === null) return maskExtensionLines(block);

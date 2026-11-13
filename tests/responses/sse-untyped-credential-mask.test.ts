@@ -493,6 +493,16 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     });
   });
 
+  test.each([["tee", "\r"], ["eager", "\r"], ["tee", "\r\n"], ["eager", "\r\n"]] as const)("%s masks extension lines whatever the line ending (%j)", async (mode, eol) => {
+    const credential = "secretABC123456";
+    const headers = { authorization: `Bearer ${credential}` };
+    await withRegistry(headers, async () => {
+      const block = `data: ${JSON.stringify({ type: "error", error: { message: "oops" } })}${eol}event: ${credential}${eol}: ${credential}`;
+      const out = await deliver(mode, headers, [block]);
+      expect(out).not.toContain(credential);
+    });
+  });
+
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: "Bearer auth" });
     const failed = { type: "response.failed", response: { status: "failed", error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } } };
