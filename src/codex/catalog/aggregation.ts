@@ -155,7 +155,11 @@ export function deriveComboCatalogModel(
     : comboAdvertisesEffortUnion(combo.capabilityPolicy, combo.reasoningEffortMode)
       ? unionEfforts(advertisedLadders)
       : intersectStrings(advertisedLadders);
-  const contextWindow = Math.min(...members.map(member => member.contextWindow!));
+  // `union` advertises the largest window: dispatch skips a member that cannot hold the input
+  // (`comboCapabilityGate`). Max output stays the minimum under both policies, because it bounds
+  // every response and a caller rarely declares the output it needs, so it cannot be filtered on.
+  const pickWindow = combo.capabilityPolicy === "union" ? Math.max : Math.min;
+  const contextWindow = pickWindow(...members.map(member => member.contextWindow!));
   const limitingMembers = members.filter(member => member.contextWindow === contextWindow);
   const hasLimitingContextCapMetadata = limitingMembers.some(
     member => typeof member.contextCapped === "boolean",
@@ -166,7 +170,7 @@ export function deriveComboCatalogModel(
   const contextCapped = limitingMembers.every(member => member.contextCapped === true);
   const maxInputTokens = Math.min(
     contextWindow,
-    ...members.map(member => member.maxInputTokens ?? member.contextWindow!),
+    pickWindow(...members.map(member => member.maxInputTokens ?? member.contextWindow!)),
   );
   const knownMaxOutputTokens = members
     .map(member => member.maxOutputTokens)
@@ -174,7 +178,7 @@ export function deriveComboCatalogModel(
   const maxOutputTokens = knownMaxOutputTokens.length === members.length
     ? Math.min(...knownMaxOutputTokens)
     : undefined;
-  const autoCompactTokenLimit = Math.min(
+  const autoCompactTokenLimit = pickWindow(
     ...members.map(member => clampAutoCompactTokenLimit(
       member.contextWindow!,
       member.maxInputTokens,

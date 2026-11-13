@@ -67,7 +67,7 @@ describe("combo capabilityPolicy: request filtering", () => {
   test("every enabled member unable opens the gate and reports unservable", () => {
     const cfg = config({ visionSidecar: { enabled: false }, providers: { sub: textOnly, key: { ...vision, disabled: true } } });
     const gate = comboCapabilityGate(cfg, union, imageBody, router(cfg));
-    expect(gate.unservable).toBe(true);
+    expect(gate.unservable).toBe("image");
     expect(gate.eligible(first)).toBe(true);
   });
 
@@ -140,5 +140,63 @@ describe("combo capabilityPolicy: effort clamp", () => {
     expect(ask({ reasoning: { effort: "medium" } }, ["low", "medium", "high"]).reasoning).toEqual({ effort: "medium" });
     expect(ask({ reasoning: { effort: "xhigh" } }, undefined).reasoning).toEqual({ effort: "xhigh" });
     expect(ask({ reasoning: { effort: "xhigh" } }, []).reasoning).toEqual({ effort: "xhigh" });
+  });
+});
+
+describe("combo capabilityPolicy: context window", () => {
+  afterEach(() => clearComboSelectionState());
+
+  const small: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", apiKey: "k", models: ["s"], liveModels: false, contextWindow: 1_000 };
+  const large: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", apiKey: "k", models: ["l"], liveModels: false, contextWindow: 100_000 };
+  const longBody = { model: "combo/u", input: "word ".repeat(2_000) };
+  const hugeBody = { model: "combo/u", input: "word ".repeat(200_000) };
+  const contextConfig = (strategy: "failover" | "round-robin", policy?: "union") => config({
+    providers: { small, large },
+    combos: { u: { strategy, ...(policy ? { capabilityPolicy: policy } : {}), targets: [{ provider: "small", model: "s" }, { provider: "large", model: "l" }] } },
+  });
+
+  for (const strategy of ["failover", "round-robin"] as const) {
+    test(`${strategy} skips a member whose window cannot hold the input, and still uses it for a short turn`, () => {
+      const cfg = contextConfig(strategy, "union");
+      const combo = getCombo(cfg, "u")!;
+      const picks = (body: unknown) => {
+        const gate = comboCapabilityGate(cfg, combo, body, router(cfg));
+        expect(gate.unservable).toBe(false);
+        return Array.from({ length: 4 }, () => {
+          const pick = pickComboTarget(cfg, "u", { eligible: gate.eligible })!;
+          noteComboSuccess("u", combo, pick.target);
+          return targetKey(pick.target);
+        });
+      };
+      expect(new Set(picks(longBody))).toEqual(new Set(["large/l"]));
+      clearComboSelectionState();
+      expect(picks(textBody)).toContain("small/s");
+    });
+  }
+
+  test("no member can hold the input: only the largest window stays eligible and the gate reports context", () => {
+    const cfg = contextConfig("failover", "union");
+    const gate = comboCapabilityGate(cfg, getCombo(cfg, "u")!, hugeBody, router(cfg));
+    expect(gate.unservable).toBe("context");
+    expect(gate.eligible({ provider: "small", model: "s" })).toBe(false);
+    expect(gate.eligible({ provider: "large", model: "l" })).toBe(true);
+  });
+
+  test("intersection never filters on context, and a compaction turn is never filtered", () => {
+    const cfg = contextConfig("failover");
+    expect(comboCapabilityGate(cfg, getCombo(cfg, "u")!, longBody, router(cfg)).eligible({ provider: "small", model: "s" })).toBe(true);
+    const unionCfg = contextConfig("failover", "union");
+    const compaction = { ...hugeBody, input: [{ role: "user", content: "word ".repeat(200_000) }, { type: "compaction_trigger" }] };
+    const gate = comboCapabilityGate(unionCfg, getCombo(unionCfg, "u")!, compaction, router(unionCfg));
+    expect(gate.unservable).toBe(false);
+    expect(gate.eligible({ provider: "small", model: "s" })).toBe(true);
+  });
+
+  test("an unknown window fits, like the child's fail-open", () => {
+    const cfg = config({
+      providers: { small: { ...small, contextWindow: undefined }, large },
+      combos: { u: { capabilityPolicy: "union", targets: [{ provider: "small", model: "s" }, { provider: "large", model: "l" }] } },
+    });
+    expect(comboCapabilityGate(cfg, getCombo(cfg, "u")!, hugeBody, router(cfg)).eligible({ provider: "small", model: "s" })).toBe(true);
   });
 });
