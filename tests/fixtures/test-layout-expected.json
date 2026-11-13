@@ -1670,6 +1670,7 @@
   "link-enrollment-ephemeral-child.test.ts": "server",
   "link-ocx-child-e2e.test.ts": "clients",
   "link-child-plant-foundations.test.ts": "clients",
+  "link-child-binary-cache-fill.test.ts": "clients",
   "model-discovery-skip-invalid-rows.test.ts": "providers",
   "management-provider-model-discovery.test.ts": "server",
   "link-gated-ocx-argv.test.ts": "clients",

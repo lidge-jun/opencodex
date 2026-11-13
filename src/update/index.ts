@@ -1331,4 +1331,11 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     if (child) process.exitCode = updateExitCode;
     else process.exit(updateExitCode);
   } else if (child && !mutationStarted) process.exitCode = 1;
+  // Fill the ocx-child cache for the version just installed, from the digests inside that verified
+  // package tree (inert until a release ships them). Not in orchestrated mode, whose stdout is a
+  // protocol and whose caller waits for this process.
+  else if (completed && !child && latest && latest !== current) {
+    const { cacheChildBuildsAfterUpdate } = await import("../link/child-binary-cache-fill");
+    await cacheChildBuildsAfterUpdate({ packageRoot: packageRoot(), fromVersion: current, toVersion: latest });
+  }
 }
