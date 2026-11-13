@@ -236,7 +236,8 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         // Test-only stall signal (link-websocket-limits.ts): set from each chunk handed over until the reader asks again.
         const waitObserver = sessionLink !== null ? linkRelayWaitObserver() : null;
         let waiting = false;
-        const stopWaiting = (): void => { if (waiting) { waiting = false; waitObserver?.(false); } };
+        const tellWaiting = (value: boolean): void => { try { waitObserver?.(value); } catch { /* a test observer never breaks the relay */ } };
+        const stopWaiting = (): void => { if (waiting) { waiting = false; tellWaiting(false); } };
         const finish = () => {
           if (ended) return;
           ended = true;
@@ -260,7 +261,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
               if (next.done) { endFlow(!cancelled); finish(); controller.close(); if (!cancelled) reportCatalog(); }
               else {
                 catalogHash?.update(next.value); flow?.fromHome(next.value.byteLength); controller.enqueue(next.value);
-                if (waitObserver && !ended) { waiting = true; waitObserver(true); }
+                if (waitObserver && !ended) { waiting = true; tellWaiting(true); }
               }
             } catch (error) { endFlow(false); finish(); controller.error(error); }
           },
