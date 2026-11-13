@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { httpStatusForRequestLogTerminal, inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
+import { addFinalRequestLog, httpStatusForRequestLogTerminal, inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { collectBufferedResponsesSse } from "../../src/server/responses/buffered-sse-json";
@@ -1476,6 +1476,19 @@ describe("one bare-error precedence rule across client, account and row", () => 
     inspectResponseLogSsePayload(afterBare, JSON.stringify(failed));
     expect(httpStatusForRequestLogTerminal("failed", afterBare)).toBe(httpStatusForRequestLogTerminal("failed", alone));
     expect(alone.terminalHttpStatus).toBe(401);
+  });
+
+  test.each([
+    ["a recognized quota code beside policy copy", { code: "rate_limit_exceeded", message: "flagged for possible cybersecurity risk" }, "rate_limit_exceeded", 429],
+    ["copy-only policy refusal", { code: "gateway_broken", message: "flagged for possible cybersecurity risk" }, "cyber_policy", 400],
+  ] as const)("the final row's error code follows the bare verdict: %s", async (_name, error, code, status) => {
+    for (const mode of ["tee", "eager"] as const) {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const { text, outcomes } = await relayMixed(mode, [frame(error, "untyped")], log);
+      const rows: Array<{ status: number; errorCode?: string }> = [];
+      addFinalRequestLog("bare-row", 0, log, httpStatusForRequestLogTerminal("failed", log), { terminalStatus: "failed" }, entry => rows.push(entry));
+      expect([mode, failedCode(text), outcomes, rows.map(row => [row.status, row.errorCode])]).toEqual([mode, code, [status], [[status, code]]]);
+    }
   });
 
   test.each([

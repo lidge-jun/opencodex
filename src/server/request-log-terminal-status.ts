@@ -220,6 +220,18 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
   }
 }
 
+/**
+ * The final row's error code while a winning bare verdict owns the row and names a provider class
+ * whose copy also reads like a policy refusal. The verdict already ruled that the structured class
+ * outranks that copy, so the row must not reclassify the same copy as cyber_policy. Undefined
+ * otherwise: every other row keeps the ordinary status-and-copy classification.
+ */
+export function bareVerdictRowErrorCode(logCtx: TerminalStatusContext): string | undefined {
+  const verdict = bareEvidence.get(logCtx)?.verdict;
+  if (verdict === undefined || verdict.refusalCode !== undefined || verdict.httpStatus === undefined) return undefined;
+  return isCyberPolicyMessage(verdict.message) ? verdict.terminalCode : undefined;
+}
+
 export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): UpstreamErrorDiagnostics {
   // One verification per projection: the three fields are checked at the same instant, so they
   // share one snapshot of each source, taken only once a field is actually populated (a row with

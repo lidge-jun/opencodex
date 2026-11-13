@@ -6,7 +6,7 @@ import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
 export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
-import { captureUpstreamTerminalDiagnostics, linkLogField, notifyLinkTurnFinal, upstreamDiagnosticLogFields, type LinkRequestLogCarrier, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
+import { bareVerdictRowErrorCode, captureUpstreamTerminalDiagnostics, linkLogField, notifyLinkTurnFinal, upstreamDiagnosticLogFields, type LinkRequestLogCarrier, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
@@ -1455,7 +1455,7 @@ function writeFinalRequestLog(
     ? 499
     : status;
   // Locally assigned codes name proxy refusals that status and upstream text cannot reconstruct.
-  const errorCode = logCtx.errorCode ?? requestLogErrorCode(
+  const errorCode = logCtx.errorCode ?? bareVerdictRowErrorCode(logCtx) ?? requestLogErrorCode(
     effectiveStatus,
     logCtx.upstreamError,
     logCtx.terminalErrorCode,
@@ -1478,7 +1478,7 @@ function writeFinalRequestLog(
     // The final row and its active physical attempt describe the same terminal. Preserve the
     // semantic code on both so detailed attempt telemetry cannot regress to a generic status code.
     const attemptErrorCode = attemptStatus === undefined ? errorCode : attemptStatus < 400 ? undefined
-      : logCtx.errorCode ?? requestLogErrorCode(attemptStatus, logCtx.upstreamError, logCtx.terminalErrorCode, false);
+      : logCtx.errorCode ?? bareVerdictRowErrorCode(logCtx) ?? requestLogErrorCode(attemptStatus, logCtx.upstreamError, logCtx.terminalErrorCode, false);
     if (attemptErrorCode) logCtx.activeAttempt.errorCode = attemptErrorCode;
     else delete logCtx.activeAttempt.errorCode;
   }
