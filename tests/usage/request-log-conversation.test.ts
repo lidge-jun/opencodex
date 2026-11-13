@@ -207,11 +207,18 @@ describe("reasoningReplayConversationIdFromResponsesRequest", () => {
     })).not.toBe(digest32("session"));
   });
 
-  test("prefers parent thread, then thread-id, then cursor, then session_id", () => {
+  test("prefers the request's own thread-id, then the parent thread, then cursor, then session_id", () => {
+    // A child agent carries both headers. Its own thread-id must own its replay record, or the
+    // child's route overwrites the parent's serving provenance and the parent loses its
+    // replayed thinking signatures on the next turn (#8632).
     expect(reasoningReplayConversationIdFromResponsesRequest({
       clientThreadId: "parent-thread",
       threadIdHeader: "thread",
       cursorConversationId: "cursor",
+      sessionIdHeader: "session",
+    })).toBe("thread");
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      clientThreadId: "parent-thread",
       sessionIdHeader: "session",
     })).toBe("parent-thread");
     expect(reasoningReplayConversationIdFromResponsesRequest({
