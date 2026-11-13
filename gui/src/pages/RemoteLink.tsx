@@ -469,7 +469,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
         : { method: "DELETE" };
     try {
       await requestLinkJson<{ linkId: string }>(apiBase, `/api/link/${encodeURIComponent(pending.row.id)}`, deleteInit);
-      if (pending.force) setForceRemoved(current => [...current.filter(item => item.id !== pending.row.id), { id: pending.row.id, alias: pending.row.alias, ephemeral: pending.row.childKind === "ephemeral" }]);
+      if (pending.force) setForceRemoved(current => [...current.filter(item => item.id !== pending.row.id), { id: pending.row.id, alias: pending.row.alias, kind: pending.row.childKind ?? "unknown" }]);
       closeConfirmation(); await refreshStatus();
     }
     catch (error) {

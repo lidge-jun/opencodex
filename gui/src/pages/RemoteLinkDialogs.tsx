@@ -17,7 +17,9 @@ export interface RemoteLinkDisconnectDialogProps {
 }
 
 /** A link removed with Remove here only: its row is gone, so the notice keeps what the operator still needs on the Child. */
-export interface ForceRemovedLink { id: string; alias: string; ephemeral: boolean }
+export interface ForceRemovedLink { id: string; alias: string; kind: "full" | "ephemeral" | "unknown" }
+
+const PLANTED_CHILD = "~/.cache/opencodex/bin/ocx-child";
 
 export function RemoteLinkForceRemovedNotice({ removed, onDismiss }: { removed: ForceRemovedLink; onDismiss: () => void }): ReactElement {
   const t = useT();
@@ -25,9 +27,18 @@ export function RemoteLinkForceRemovedNotice({ removed, onDismiss }: { removed: 
   // The id passed the status parser's link-id check, so it is safe inside a copied command.
   return (
     <Banner tone="warn" className="remote-link-force-removed" action={<Button variant="ghost" size="sm" onClick={onDismiss}>{t("api.dismiss")}</Button>}>
-      {removed.ephemeral
+      {removed.kind === "ephemeral"
         ? <span className="block"><Trans k="remoteLink.forceRemoved.ephemeral" cmd={`ocx link recover --link-id ${removed.id}`} vars={vars} /></span>
-        : <>
+        : removed.kind === "unknown"
+          // Every ocx-child prints its link from connect status --json; an early one ignored unknown detach flags, so a
+          // link-bound --expect-link is not offered for a Child this old.
+          ? <>
+            <span className="block"><Trans k="remoteLink.forceRemoved.unknownCheck" cmd="ocx connect status --json" vars={vars} /></span>
+            <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLightweight" cmd={`${PLANTED_CHILD} connect status --json`} vars={vars} /></span>
+            <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownDisconnect" cmd="ocx disconnect" vars={vars} /></span>
+            <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLightweight" cmd={`${PLANTED_CHILD} detach`} vars={vars} /></span>
+          </>
+          : <>
           <span className="block"><Trans k="remoteLink.forceRemoved.fullCheck" cmd="ocx connect status" vars={vars} /></span>
           <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.fullDisconnect" cmd="ocx disconnect" vars={vars} /></span>
         </>}
@@ -47,6 +58,9 @@ export function RemoteLinkDisconnectDialog({
 }: RemoteLinkDisconnectDialogProps): ReactElement {
   const t = useT();
   const isEphemeral = confirming?.row.childKind === "ephemeral";
+  // A link saved before the Home recorded the Child type: it may run a full install or ocx-child, and a forced removal
+  // leaves no tombstone for it, so the dialog names no command; the notice afterwards checks either install's link.
+  const unknownKind = confirming !== null && (confirming.row.childKind ?? null) === null;
   // Never a bare disconnect: a forced removal is also the way out when the Child now belongs to another link, a hub or another
   // Home. A lightweight Child is cleaned by the link-bound recover (run here), which checks that it still belongs to this link.
   const forceCmd = isEphemeral ? `ocx link recover --link-id ${confirming?.row.id ?? ""}` : "ocx disconnect";
@@ -59,7 +73,9 @@ export function RemoteLinkDisconnectDialog({
           <h3 id="remote-link-confirm-title" className="m-0 text-[16px] leading-6 font-semibold tracking-[-0.015em]">{confirming.force ? t("remoteLink.forceRemove.title", { alias: confirming.row.alias }) : t("link.disconnect")}</h3>
           <p className="m-0 text-[14px] leading-[21px] text-fg-muted">
             {confirming.force
-              ? <Trans k={isEphemeral ? "remoteLink.forceRemove.ephemeralBody" : "remoteLink.forceRemove.body"} cmd={forceCmd} vars={{ alias: confirming.row.alias }} />
+              ? unknownKind
+                ? t("remoteLink.forceRemove.unknownBody", { alias: confirming.row.alias })
+                : <Trans k={isEphemeral ? "remoteLink.forceRemove.ephemeralBody" : "remoteLink.forceRemove.body"} cmd={forceCmd} vars={{ alias: confirming.row.alias }} />
               : isEphemeral
                 ? t("remoteLink.disconnect.ephemeralBody", { alias: confirming.row.alias })
                 : t("link.disconnectConfirm", { alias: confirming.row.alias })}

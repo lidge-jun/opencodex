@@ -558,7 +558,7 @@ test("disconnect failure opens force confirmation and sends force body", async (
   globalThis.fetch = (async (input, init) => {
     const path = new URL(String(input)).pathname;
     calls.push({ method: init?.method ?? "GET", body: typeof init?.body === "string" ? init.body : undefined });
-    if (path === "/api/link/status") return response({ ...baseStatus, links: [{ id: "lnk_0000000000000001", alias: "child", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 43110 }] });
+    if (path === "/api/link/status") return response({ ...baseStatus, links: [{ id: "lnk_0000000000000001", alias: "child", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 43110, childKind: "full" }] });
     if (path === "/api/link/lnk_0000000000000001" && init?.method === "DELETE" && init.body === undefined) return response({ error: { code: "remote_disconnect_failed" } }, 502);
     return response({ linkId: "lnk_0000000000000001" });
   }) as typeof fetch;
@@ -1312,13 +1312,53 @@ test("a forced removal of a full Child leaves a notice that checks the Child's l
 test("every locale translates the forced-removal notice and keeps its command and link id slots", async () => {
   const { DICTS } = await import("../src/i18n/catalogs");
   for (const [locale, dict] of Object.entries(DICTS)) {
-    for (const key of ["remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.fullDisconnect"]) {
+    for (const key of ["remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.fullDisconnect", "remoteLink.forceRemoved.unknownCheck", "remoteLink.forceRemoved.unknownDisconnect"]) {
       const text = (dict as Record<string, string>)[key];
       expect(typeof text, locale + " " + key).toBe("string");
       if (locale !== "en") expect(text, locale + " " + key).not.toBe((DICTS.en as Record<string, string>)[key]);
       expect(text.includes("{cmd}") && text.includes("{linkId}"), locale + " " + key).toBe(true);
     }
+    for (const key of ["remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemove.unknownBody"]) {
+      const text = (dict as Record<string, string>)[key];
+      expect(typeof text, locale + " " + key).toBe("string");
+      if (locale !== "en") expect(text, locale + " " + key).not.toBe((DICTS.en as Record<string, string>)[key]);
+      expect(text.includes("{cmd}"), locale + " " + key).toBe(key.endsWith("unknownLightweight"));
+    }
   }
+});
+
+test("a forced removal of a Child of unknown type names no command up front and checks either install's link afterwards", async () => {
+  // A link saved before the Home recorded the Child type has no childKind: it may run a full install or ocx-child, and its
+  // forced removal leaves no tombstone, so neither ocx disconnect alone nor ocx link recover can be the answer.
+  const id = "lnk_00000000000000d3";
+  let listed = true;
+  globalThis.fetch = (async (_input, init) => {
+    if (init?.method === "DELETE") {
+      const body = init.body ? JSON.parse(String(init.body)) as { force?: boolean } : undefined;
+      if (body?.force !== true) return response({ error: { code: "remote_disconnect_failed" } }, 502);
+      listed = false;
+      return response({ linkId: id });
+    }
+    return response({ ...baseStatus, links: listed ? [{ id, alias: "devbox-old", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 24504 }] : [] });
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { ([...host.querySelectorAll(".remote-link-row button")].find(item => item.textContent === "Disconnect") as HTMLButtonElement).click(); });
+  await flush();
+  const dialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
+  await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+  await flush();
+  expect(dialog.textContent).toContain("did not record whether devbox-old runs a full install or the lightweight agent");
+  expect(dialog.querySelector("code.chip")).toBeNull();
+  await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+  await flush();
+  const notice = host.querySelector(".remote-link-force-removed");
+  expect(notice?.textContent).toContain("keeps nothing to recover it from");
+  expect(notice?.textContent).toContain("names link " + id);
+  expect(notice?.textContent).toContain("leave it as it is");
+  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([
+    "ocx connect status --json", "~/.cache/opencodex/bin/ocx-child connect status --json", "ocx disconnect", "~/.cache/opencodex/bin/ocx-child detach",
+  ]);
+  expect(notice?.textContent).not.toContain("ocx link recover");
 });
 
 test("a refused --purge on a full install explains why instead of a generic failure", async () => {
