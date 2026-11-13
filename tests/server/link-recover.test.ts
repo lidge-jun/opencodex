@@ -797,7 +797,12 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
   test.each(sameMachine)("an older Child is not disconnected unbound while %s", async (_name, other) => {
     const h = harness([link(), link(other)], { ordinary: () => ok("", 2, "Error: Unexpected argument(s)") });
     const res = await h.request("DELETE", "/api/link/" + ID, {});
-    expect([res.status, (await errorOf(res)).hint]).toEqual([502, "expect_link_unsupported"]);
+    const error = await errorOf(res);
+    expect([res.status, error.hint]).toEqual([502, "expect_link_unsupported"]);
+    // No status check can show the other link is stale, so the way out is --force on this link, never that link's revoke.
+    expect(error.message).toContain("Otherwise revoke this link with --force");
+    expect(error.message).toContain("no status check can show it is stale");
+    expect(error.message).not.toContain("only if it is stale too");
     expect(h.commands.filter(c => c.includes("disconnect"))).toHaveLength(1);
     expect(h.store.links.map(l => l.id)).toEqual([ID, OTHER]);
   });
