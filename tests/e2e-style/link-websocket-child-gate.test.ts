@@ -147,8 +147,8 @@ describe("link WebSocket release gate through the real Child (design 11.1 item 1
     });
     expectCompleted(await pair.run());
     // Both requests of the turn ran on the one socket the Child opened, the tool result included, and the socket then
-    // closed. Which side closed first is a race between the Home's fence of the idle socket and Codex exiting after its
-    // turn, so the record is "home" or "client"; the stand-in scenario in the gate file shows the fence itself.
+    // closed. The close is recorded as "home" or "client" (Codex closed first where it was printed); this file does not
+    // establish that the Home fenced the socket. The stand-in scenario in the gate file shows the fence itself.
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toContain("call_gate_goal");
     expect(pair.rows).toEqual(["websocket:200", "websocket:200"]);
@@ -171,12 +171,12 @@ describe("link WebSocket release gate through the real Child (design 11.1 item 1
       return sseResponse(completed("resp_" + index));
     });
     expectCompleted(await pair.run());
-    // The fenced create never reached the upstream: the first request on the socket, then the HTTP retry only.
+    // The tool result never reached the upstream over the socket: the first request on the socket, then one over HTTP only.
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toContain("call_gate_goal");
     expect(pair.rows).toEqual(["websocket:200", "unmarked:200"]);
-    // One socket. The Home fenced the tool result's create; whether Codex or the Home closed the socket first is a race
-    // (Codex closes on the fenced create's failure), so the close is "home" or "client". Codex's reconnect then found the
+    // One socket, then a close recorded as "home" or "client"; this file does not establish which side ended the tool
+    // result's create (the stand-in scenario in the gate file shows the Home's fence). Codex's reconnect then found the
     // Home no longer advertising: the Child answered 426 without asking it, and the request went over HTTP.
     expect(pair.records[0]).toBe("link_ws_open:connected");
     expect(["link_ws_close:home", "link_ws_close:client"]).toContain(pair.records[1]!);
