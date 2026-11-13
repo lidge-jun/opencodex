@@ -5,6 +5,7 @@ import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
 import type { OcxTelemetryConfig } from "./telemetry";
 import type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
+import type { OcxLinkHomeConfig, OcxLinkTransportConfig } from "./link";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 export type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
@@ -483,11 +484,6 @@ export interface OcxPrivacyConfig {
   maskEmails?: boolean;
 }
 
-export interface OcxLinkTransportConfig {
-  tunnelPort: number;
-  linkId: string;
-}
-
 export interface OcxClientConnectionConfig {
   serverUrl: string;
   managementUrl: string;
@@ -527,7 +523,7 @@ export interface OcxClientConnectionConfig {
   };
 }
 
-export interface OcxConfig {
+export interface OcxConfig extends OcxLinkHomeConfig {
   /** Experimental macOS app-server stdout shim; absent or false disables it. */
   chatgptDesktop?: { appServerShim?: boolean };
   port: number;
@@ -1077,8 +1073,8 @@ export interface OcxConfig {
   connectTimeoutMs?: number;
   /** Graceful shutdown drain timeout (ms). Active turns are aborted after this deadline. Default 5000. */
   shutdownTimeoutMs?: number;
-  /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */
-  websockets?: boolean;
+  /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */ websockets?: boolean;
+  /** Accept the Responses WebSocket from linked Children over the Remote Link. Default false; needs websockets too. */ linkResponsesWebsocket?: boolean;
   /** Experimental single-lane native OpenAI WebSocket steering; default off. */
   codexNativeSteering?: boolean;
   /** Experimental, default-off saved function-result injection on native multi-agent WebSockets. */
@@ -1420,6 +1416,19 @@ export interface OcxConfig {
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
   /**
+   * #8338, opt-in, standalone only: the one reverse proxy a dashboard may sit behind and still
+   * remember devices. `origin` is the exact https origin the browser uses; `proxyAddresses` are
+   * the proxy hop's own IP addresses as this process observes them (never a range); and
+   * `trustHeaders` names the forwarded headers that carry the browser's host and scheme (default:
+   * Host only, scheme from `origin`). Absent, Remember stays direct HTTPS or loopback only. Parsed by
+   * src/config/dashboard-trusted-proxy.ts; enforced in managementRequestOrigin (src/server/auth-cors.ts).
+   */
+  dashboardTrustedProxy?: {
+    origin: string;
+    proxyAddresses: string[];
+    trustHeaders?: Array<"x-forwarded-host" | "x-forwarded-proto">;
+  };
+  /**
    * OCX-11 fallback off: refuse model or provider fallback per scope, and record per-device local
    * fallback permission. Absent keeps every chain as it was. See src/routing/fallback-policy.ts.
    */
@@ -1754,6 +1763,8 @@ export interface OcxAdvisorConfig {
    * or a tool result after the latest user message).
    */
   policy?: "manual" | "preflight" | "adaptive";
+  /** question-only sends only the worker's explicit question and disables automatic consultations. */
+  contextMode?: "context" | "question-only";
   /** Adaptive task consultation attempts (manual + automatic). Integer 1–3, default 3. */
   maxConsultationsPerTask?: number;
   /** Advisor fetch timeout (ms). Default 120000. */
@@ -1834,6 +1845,13 @@ export interface OcxCodexPoolConfig {
   startIdleWindows?: boolean;
   /** Enable process-local affinity for caller-owned credentials; defaults off. */
   requestOwnedAffinity?: boolean;
+  /**
+   * Pool-only policy (#7410); defaults off. When true, automatic Pool resolution serves only
+   * registered, eligible non-main accounts: no ordered or preserved native main, no caller-main
+   * fallback, and a manual main pin is not honoured. An exhausted allowed pool refuses. Explicit
+   * account selectors (including `__main__` and Reserve) and Direct mode stay outside the policy.
+   */
+  poolOnly?: boolean;
   /**
    * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
    * account. Absent or empty means no policy.

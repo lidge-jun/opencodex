@@ -699,6 +699,7 @@ provider, see [Fallback off](/guides/fallback-off/).
 | HTTP 410 with an explicit model end-of-life, retired, deprecated, sunset, decommissioned, or no-longer-available signal | Cool that target and hop. Unrelated 410 responses remain terminal. |
 | Classified authentication, subscription, quota, rate-limit, overload, or upstream-server error | Cool the target and hop, even when the status alone is not sufficient. |
 | Confirmed context-window overflow before output, including HTTP 400 | Try the next untried eligible target without cooling this target; another model may have a larger window. Exhaustion returns the first confirmed HTTP 400 context-length error; a context refusal sent with another status still advances but is not retained. |
+| HTTP 400 or 422 moderation verdict from the provider or a gateway (a structured `moderation_refusal` or `content_filter` code; moderation wording without such a code still stops) | Try the next target without cooling this one; another provider's filter may accept the prompt. A body that also carries a terminal refusal (cyber or bio policy, `invalid_prompt`, `content_policy_violation`, safety-system wording) still stops. |
 | Client cancellation (499), `origin_rejected`, cyber-policy refusal, or other invalid request | Stop and return the error; another target would not make the request valid. |
 | Exact HTTP 400 saying a model is not supported when using Codex with a ChatGPT account | Try the next declared target before output commitment. The message must be the whole refusal in `detail`, `error.message`, or bare text; competing `detail` and `error` envelopes stay terminal. This does not quarantine the account or cool every model on the provider. |
 | Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, model-scoped image input, or input media the route cannot read (`unsupported_input_modality`) | For an effort refusal, try the next lower published rung on the same target while the send budget allows; if no rung works, hop before output commitment without cooling if the refusal matches a recognized compatibility shape, otherwise stay terminal. Other listed mismatches hop without cooling; see request-local target compatibility below. |
@@ -1083,6 +1084,9 @@ it has already been attempted for this request, or an encrypted v2 task excludes
 provider state and recent upstream errors. When no target was attempted, the error message lists
 why each target was skipped, for example
 `No available targets for combo (2 targets; target 1 (openai): quota exhausted; target 2 (anthropic): cooldown)`. The client error names targets by position and provider only; the service log records the target's position and provider when it fails or when the proxy waits out its cooldown.
+When a cooling target sets the earliest recovery, the response carries it in `Retry-After` and the
+message names the same wait, for example `(retry in ~2m)`, so a client that hides the header still
+shows it. The Claude Messages listener adds the same wait to its fixed combo sentence.
 For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies

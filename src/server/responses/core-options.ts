@@ -37,6 +37,8 @@ export interface ConsumedComboFailure {
   malformedResponseFormat?: boolean;
   /** Complete bounded-envelope OpenRouter opaque-400 verdict captured before display truncation. */
   openRouterOpaque400?: boolean;
+  /** Complete bounded-envelope provider moderation verdict captured before display truncation. */
+  providerModerationRefusal?: boolean;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
   /**
@@ -166,6 +168,8 @@ export interface HandleResponsesOptions {
   forceEmptyResponseId?: boolean;
   /** Internal, connection-owned control channel; never reconstructed from headers. */
   nativeControl?: NativeResponseControl;
+  /** A Remote Link WebSocket turn: told the expanded input and the terminal (src/server/link-turn.ts). */
+  linkTurn?: import("../link-turn").LinkTurnObserver;
   abortSignal?: AbortSignal;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;

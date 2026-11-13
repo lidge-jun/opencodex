@@ -100,7 +100,7 @@ to standard error, leaves standard output empty, and exits 1.
 
 ### `ocx alias`
 
-`ocx alias list [--json]` shows effective user and built-in aliases. Use `ocx alias set <provider>[/<native-model-id>] <alias>` and `ocx alias rm <provider>[/<native-model-id>]` to edit them. Native model ids may contain additional slashes because the selector splits only at the first slash. Enable shipped defaults with `ocx alias defaults on|off [--provider <name>]`.
+`ocx alias list [--json]` shows effective user and built-in aliases. Use `ocx alias set <provider>[/<native-model-id>] <alias>` and `ocx alias rm <provider>[/<native-model-id>]` to edit them. Native model ids may contain additional slashes because the selector splits only at the first slash. Enable shipped defaults with `ocx alias defaults on|off [--provider <name>]`. `ocx alias template set <provider> <template>`, `ocx alias template rm <provider>` and `ocx alias template show [<provider>]` manage a provider's opt-in alias template; see [Model alias templates](/guides/model-routing/#model-alias-templates).
 
 ### `ocx remote-workspace`
 
@@ -179,7 +179,8 @@ See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 For a reviewed applicable npm-global plan, `ocx system codex-cli-update apply --plan-id <id> --yes`
 performs the exact update and returns a durable job. `ocx system codex-cli-update status <job-id> --json`
 reads its result; use a stable `--request-id` for a lost-response retry. See
-[confirmation and job states](/reference/cli/agents/#confirmed-codex-cli-apply-and-job-status).
+[confirmation and job states](/reference/cli/agents/#confirmed-codex-cli-apply-and-job-status). The dashboard's **Codex → Codex CLI** tab uses the
+same plan, apply and job routes; see [the dashboard guide](/guides/web-dashboard/#applying-a-codex-cli-update-from-the-dashboard).
 
 For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 

@@ -4,7 +4,8 @@ export type Acquisition = { kind: "acquired"; addDelegate(pid: number): void; re
 export declare function tryAcquireUpdateSyncMutex(home: string, kind: "sync" | "update", deps?: { now?: () => number; processAlive?: (pid: number) => boolean }): Acquisition;
 export declare function inspectUpdateSyncMutex(home: string): Holder;
 export declare function parentHoldsSyncMutex(home: string, claimedPid?: string): boolean;
-export declare function refuseSync(reason: "update-in-flight" | "sync-in-progress", args: readonly string[]): number;
+export declare function refuseSync(reason: "update-in-flight" | "sync-in-progress", args: readonly string[], hint?: readonly string[]): number;
+export declare function staleUpdateMarkerHint(home: string, platform?: NodeJS.Platform): string[];
 export declare function acquireSyncGuard(home: string, args: readonly string[]): { kind: "acquired"; addDelegate(pid: number): void; release(): void } | { kind: "refused"; exit: number };
-export declare function inspectUpdateMarker(home: string, deps?: { now?: () => number }): Observation;
+export declare function inspectUpdateMarker(home: string, deps?: { now?: () => number; platform?: NodeJS.Platform; signal?: (id: number) => unknown; detail?: { witnessless?: boolean } }): Observation;
 export declare function isUpdateInFlight(home: string, deps?: { mutex(home: string): Holder; ownershipLease(home: string): Observation; marker(home: string): Observation }): boolean;

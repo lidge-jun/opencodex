@@ -7,7 +7,8 @@ import MainAccountHardLockSetting from "../components/MainAccountHardLockSetting
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import CodexAccountPickerSetting from "../components/CodexAccountPickerSetting";
 import { codexAccountModeState, type CodexAccountModeState } from "../codex-multi-state";
-import { navigateHash } from "../hash-routing";
+import { openProviderAccountMode, openProviderSettings } from "../protocol-deep-links";
+import { IconChevron } from "../icons";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { startVisibilityPoll } from "../visibility-poll";
@@ -33,17 +34,27 @@ export function OpenAiAccountModeBanner({
   // /api/config arrives. Render nothing and let the pool section own the space.
   if (state === null) return null;
   const settled = state === "pool" || state === "direct";
+  const modeLabel = state === "pool" ? t("codexAuth.accountModePool") : t("codexAuth.accountModeDirect");
   return (
     // One quiet line when the mode is settled: the mode is the state, its explanation sits
     // behind the "?". A missing or disabled provider is a problem, so it stays spelled out.
     <div className={`openai-account-mode-banner acc-mode flex flex-col gap-2 rounded-[12px] px-4 py-3 ring-1 ring-line ${settled ? "bg-transparent" : "bg-surface"}`}>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
         <span className="text-[13px] font-medium text-fg-muted">{t("codexAuth.accountModeTitle")}</span>
-        {state === "pool" ? (
-          <span className="badge openai-account-mode-banner__badge-slot">{t("codexAuth.accountModePool")}</span>
-        ) : state === "direct" ? (
-          <span className="badge openai-account-mode-banner__badge-slot">{t("codexAuth.accountModeDirect")}</span>
-        ) : null}
+        {settled && (
+          // The mode is the state; following it opens the one control that changes it, in
+          // Providers -> OpenAI. Changing the mode stays an explicit choice there (#8501).
+          <button
+            type="button"
+            className="badge badge-muted badge-clickable openai-account-mode-banner__badge-slot"
+            aria-label={`${modeLabel} — ${t("codexAuth.changeAccountMode")}`}
+            title={t("codexAuth.changeAccountMode")}
+            onClick={() => openProviderAccountMode("openai")}
+          >
+            {modeLabel}
+            <IconChevron width={12} height={12} aria-hidden="true" />
+          </button>
+        )}
         {settled && (
           <HelpButton open={help.open} controls={help.id} name={t("codexAuth.accountModeTitle")} onToggle={help.toggle} />
         )}
@@ -59,8 +70,8 @@ export function OpenAiAccountModeBanner({
           {state === "direct" && (
             <>
               {t("codexAuth.accountModeDirectDesc")}{" "}
-              <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
-                {t("codexAuth.openProviders")}
+              <button type="button" className="link-btn" onClick={() => openProviderAccountMode("openai")}>
+                {t("codexAuth.changeAccountMode")}
               </button>
             </>
           )}
@@ -72,7 +83,7 @@ export function OpenAiAccountModeBanner({
       {state === "invalid" && (
         <p className="card-sub openai-account-mode-banner__desc m-0 text-[13px] text-fg-muted">
           {t("codexAuth.openaiMissing")}{" "}
-          <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
+          <button type="button" className="link-btn" onClick={() => openProviderSettings("openai")}>
             {t("codexAuth.openProviders")}
           </button>
         </p>

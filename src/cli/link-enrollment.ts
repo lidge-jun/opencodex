@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { plantUnavailableGuidance } from "../link/child-binary-source";
 import { assertSshAlias } from "../link/ssh-argv";
+import { checkExplicitRoute, type ExplicitRoute } from "../link/explicit-route";
 import { CliUsageError, RuntimeApiError, runtimeBaseUrl, rejectArgs, takeFlag, takeJsonFlag, takeOption, printData } from "./runtime-api";
 import type { LinkCliDeps } from "./link";
 
@@ -24,6 +25,11 @@ const PHASES: Record<string, string> = {
 };
 const RECOVERY_FULL = "Run ocx disconnect and ocx restart on the Child before retrying.";
 const RECOVERY_EPHEMERAL = "Run ~/.cache/opencodex/bin/ocx-child detach on the Child before retrying.";
+const HOME_CLEANUP: Record<string, string> = {
+  key_cleanup_failed: "Enrollment did not complete, and the Home could not revoke the link key it issued; revoke the leftover link key under API keys before retrying.",
+  link_cleanup_uncertain: "Enrollment did not complete, and the Home could not undo the attempt: whether the link is stored is unknown and its issued key could not be revoked. Run ocx link status, remove the link if it is listed (ocx link revoke), and revoke the leftover link key under API keys if it remains.",
+};
+const CHILD_MAY_BE_CONNECTED = "The Child may still be connected.";
 type LinkRequest = <T>(path: string, init: RequestInit, deps: LinkCliDeps) => Promise<T>;
 
 interface ParsedProbeOffer {
@@ -108,6 +114,34 @@ function validateConfirmed(value: unknown, alias: string, fingerprint: string, a
   }
 }
 
+/**
+ * --proxy-command, --ssh-user and --ssh-port name one explicit route and go together; they need
+ * --exclusive (structure/remote-link.md, "Explicit route"). The values are checked here and again on
+ * the Home, which refuses any form explicit-route.ts does not accept.
+ */
+const ROUTE_FORM = {
+  proxy_command_form: "--proxy-command must be an absolute path followed by words of letters, digits and . _ / : @ + , = - separated by single spaces (no %, quotes or other shell characters)",
+  user_form: "--ssh-user must be a letter or _ followed by up to 31 letters, digits, ., _ or -",
+  port_form: "--ssh-port must be an integer from 1 to 65535",
+} as const;
+
+function takeRouteFlags(args: string[], usage: string): { explicitRoute?: ExplicitRoute; exclusive?: true } {
+  const proxyCommand = takeOption(args, "--proxy-command");
+  const user = takeOption(args, "--ssh-user");
+  const portText = takeOption(args, "--ssh-port");
+  const exclusive = takeFlag(args, "--exclusive");
+  const given = [proxyCommand, user, portText].filter(value => value !== undefined).length;
+  if (given === 0) return exclusive ? { exclusive: true } : {};
+  if (given !== 3) throw new CliUsageError("--proxy-command, --ssh-user and --ssh-port go together", usage);
+  if (!exclusive) throw new CliUsageError("An explicit route requires --exclusive", usage);
+  const port = /^[0-9]{1,5}$/.test(portText!) ? Number(portText) : Number.NaN;
+  const checked = checkExplicitRoute({ proxyCommand, user, port });
+  if (!checked.ok) {
+    throw new CliUsageError(ROUTE_FORM[checked.reason === "user_form" || checked.reason === "port_form" ? checked.reason : "proxy_command_form"], usage);
+  }
+  return { explicitRoute: checked.route, exclusive: true };
+}
+
 function formatSizeMb(bytes?: number): string {
   if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return "~0.9 MB";
   return `~${Math.max(0.1, bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -117,6 +151,7 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
   const wantsJson = takeJsonFlag(args);
   const plantFlag = takeFlag(args, "--plant");
   const expected = takeOption(args, "--expect-fingerprint");
+  const routeBody = takeRouteFlags(args, usage);
   const alias = args.shift();
   if (!alias) throw new CliUsageError(command + " requires an SSH alias", usage);
   try { assertSshAlias(alias); } catch { throw new CliUsageError("Invalid SSH alias", usage); }
@@ -151,7 +186,7 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
   const work = async () => {
     boundDeps = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
     controller.signal.throwIfAborted();
-    const probeReq = command === "add" ? { alias, includeVersion: true, allowMissing: true } : { alias, includeVersion: true };
+    const probeReq = command === "add" ? { alias, includeVersion: true, allowMissing: true, ...routeBody } : { alias, includeVersion: true, ...routeBody };
     const probe = parseOffered(await post<unknown>("/api/link/probe", probeReq), command === "add");
     if (probe.alias !== alias) throw new Error("Host probe alias did not match");
     if (command === "probe") {
@@ -192,11 +227,11 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       if (!approved) throw new CliUsageError("Host fingerprint was not confirmed");
     }
     const sendAllowMissing = shouldPlant || probe.runtimeKind === "missing";
-    const confirm = await post<unknown>("/api/link/confirm-host", { alias, fingerprint: probe.fingerprint, ...(sendAllowMissing ? { allowMissing: true } : {}) });
+    const confirm = await post<unknown>("/api/link/confirm-host", { alias, fingerprint: probe.fingerprint, ...(sendAllowMissing ? { allowMissing: true } : {}), ...routeBody });
     validateConfirmed(confirm, alias, probe.fingerprint, sendAllowMissing);
-    const result = await post<unknown>("/api/link/apply", { alias, fingerprint: probe.fingerprint, ...(shouldPlant ? { plant: true } : {}) });
+    const result = await post<unknown>("/api/link/apply", { alias, fingerprint: probe.fingerprint, ...(shouldPlant ? { plant: true } : {}), ...routeBody });
     if (!record(result) || Object.keys(result).join(",") !== "linkId" || typeof result.linkId !== "string" || !/^lnk_[0-9a-f]{16}$/.test(result.linkId)) throw new Error("Invalid link apply response");
-    printData({ linkId: result.linkId, alias, state: "connected", childRole: "client", ...(shouldPlant ? { planted: true } : {}) }, wantsJson, ["Connected " + alias + " as a Child (" + result.linkId + ")."]);
+    printData({ linkId: result.linkId, alias, state: "connected", childRole: "client", ...(shouldPlant ? { planted: true } : {}), ...(routeBody.exclusive ? { exclusive: true } : {}) }, wantsJson, ["Connected " + alias + " as a Child (" + result.linkId + ")."]);
   };
   try { await Promise.race([work(), expiry]); }
   catch (error) {
@@ -206,13 +241,22 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       if (code === "child_port_busy") throw new Error("The target port on the Child is already in use by another process; no Child files were modified.");
       if (code === "child_preflight_output_limit") throw new Error("The Child's ocx config show --json output exceeded the Remote Link preflight limit; trim the Child's saved configuration and retry.");
       if (code === "child_external_provider_conflict") throw new Error("The Child's ~/.codex/config.toml is already managed by another model provider or custom base URL; no Child files were modified.");
+      // Home-side cleanup that left a link key behind: fixed, locally written guidance (the server's
+      // prose is never echoed), plus the Child's own recovery step when it may still be connected.
+      const homeCleanup = typeof code === "string" && Object.hasOwn(HOME_CLEANUP, code) ? HOME_CLEANUP[code] : undefined;
+      if (homeCleanup) {
+        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL) : "";
+        throw new Error(homeCleanup + childStep + " (code " + code + ")");
+      }
       const phase = typeof code === "string" && Object.hasOwn(PHASES, code) ? PHASES[code] : undefined;
       // The server's hint is the Child's own bounded, redacted reason (#8357); a phase name
       // alone left every failure to SSH reproduction and source reading.
       const hint = record(error.body.error) && typeof error.body.error.hint === "string" ? error.body.error.hint : "";
       const message = phase ? "Remote Link failed during " + phase + (hint ? ": " + hint : "") : error.message;
       const recovery = ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL;
-      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : ""));
+      // The machine-readable code rides along so a script can branch without parsing prose.
+      const codeSuffix = phase && typeof code === "string" ? " (code " + code + ")" : "";
+      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : "") + codeSuffix);
     }
     throw error;
   } finally {

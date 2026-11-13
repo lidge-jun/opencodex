@@ -23,6 +23,21 @@ providers or is shadowed by another route, the row keeps its qualified ID so sel
 it still reaches the intended model. The qualified ID also stays when a built-in short
 alias would produce an unparseable synthetic Fast selector. Codex's own model catalog is unchanged.
 
+### Codex Pool-only policy
+
+`codexPool.poolOnly` (boolean, default `false`) limits automatic Pool selection to registered
+added accounts. With it on, the native main login is never selected by ordering, never kept as the
+active Pool account, and never used as the caller-main fallback; a manual pin on main is ignored.
+If no allowed account can serve, the request is refused. Account-qualified models (including
+`__main__`), Reserve models and Direct mode are explicit choices outside the policy. Paused,
+duplicate, entitlement and cooldown checks apply unchanged.
+Web-search and vision helpers that borrow a Codex login automatically follow the same rule: with
+only the native main login signed in, they treat Codex as unavailable while the policy is on.
+
+```json
+{"codexPool":{"poolOnly":true}}
+```
+
 ### Codex Pool low-quota protection
 
 `codexPool.lowQuotaProtection` applies only to stored Codex Pool accounts. The Desktop/main

@@ -322,9 +322,12 @@ relinked in between, the sync changes nothing and exits 5 with a JSON `phase` li
 ([04_failure_semantics.md](04_failure_semantics.md#a-pinned-sync-that-refuses-exit-5)).
 
 On the Home, `ocx sync` fans out only after it commits a current catalog. Use `--local-only`
-to suppress propagation and `--json` to inspect Home and Child results. Fan-out never asks a Child
-to restart a Codex app or app-server; use GOAT or `ocx sync --restart-codex` on that Child. Its
-pinned sync can still restart its own OpenCodex client runtime after applying changed Home settings.
+to suppress propagation, `--json` to inspect Home and Child results, and `--child <linkId>`
+(repeatable) to fan out only to those links (the others read `not-selected`). Fan-out asks a Child to
+restart Codex only with `--restart-children` (app-servers) or `--restart-children=codex --yes`: each
+Child is synced first, and its restart, never its sync, is skipped while it relays a model request
+(`restart-skipped:link-active`), on Windows and on `ocx-child`, with exit 6. A Child held by a Child
+operation is skipped as `child-busy`. Its pinned sync can still restart its own OpenCodex client runtime after applying changed Home settings.
 A Child sync already running can continue after the Home times out its local SSH process.
 
 ### Checking Children from the Home (`ocx link check`)
@@ -343,6 +346,55 @@ holds answers 409, and in a multi-link job that link's item ends `busy` (`link-o
 `ocx link status` asks the Home for each row's `child` block: installed and running versions, the
 update route from the last check, whether the Child last pulled the Home's current catalog, and whether
 a relayed model request is running. An older Home omits the block.
+
+### Operating Children from the Home (`ocx link sync|restart-codex|update`)
+
+Three more verbs run on Home-initiated Children over the same pinned SSH trust and print the same
+`ocx.link.child-job/1` document as `check`. Pick the smallest one that fixes what the operator sees:
+
+- `ocx link sync --link-id <id>` (repeatable, or `--all`) runs the pinned `sync --expect-link` the
+  `ocx sync` fan-out runs, from 2.93.0. Use it when a Child's catalog or settings are behind.
+- `ocx link restart-codex --link-id <id> --yes` restarts the Child's Codex app-servers so a running
+  Codex reloads the catalog (the about-258k context symptom); `--scope codex` also quits and relaunches the
+  desktop app. `ocx link sync --link-id <id> --restart-app-server-only` does the sync and the restart together;
+  `--restart-codex` there needs `--yes`. A restart names exactly one link; `--all` is refused.
+- `ocx link update --link-id <id> --yes` (or `--all --yes`) updates the Child's OpenCodex to the Home's
+  version through the Child's own updater, one Child at a time, then resyncs. It needs a Child at
+  2.97.0 or later; older Children report `owner-action` `legacy-ocx` and receive no update command.
+
+`--yes` confirms that running work on the Child ends: a restart ends the Codex turns there, and an update
+restarts the Child's OpenCodex and ends the turns relayed for it. Never pass `--yes` or run
+`ocx link update --all` on your own initiative; ask the operator first, because an update cannot be
+taken back from the Home. A restart is withheld while the Home is relaying a model request for that
+Child (`restart-skipped:link-active`, exit 6); try again when the Child is idle. A Child older than 2.69
+is seen as busy only once its response starts for a non-streaming request, so a restart sent while such
+a request is still running can end it.
+
+A link Responses WebSocket that closed while Codex was busy, or a Home that stopped uncleanly, can leave the Child
+held: `ocx link status` shows `child.holds` with each hold's reasons, and restarts are withheld the same way.
+`--ignore-activity` on a one-link `ocx link sync ... --restart-*` or `ocx link restart-codex` restarts past
+that check and ends the running work; `ocx link activity clear --link-id <id>` forgets one link's holds. Both are
+the operator's decision: never pass them on your own initiative, and nothing applies them automatically.
+
+Windows Children take `sync` only: restarts are `unsupported` (`windows-restart`) and orchestrated updates
+`unsupported` (`windows-apply`). `ocx-child` Children report restart and update `unsupported`. The CLI
+verbs need a Home bound to loopback; on any other Home they exit 1, these operations are not available
+there, and the dashboard has no controls for them. While a job holds a link, `ocx link revoke` on it is refused with 409 `link_operation_in_progress` (it does not wait); while a revoke runs, a job for that link is refused the same way, or its item ends `busy`.
+
+### Automatic catalog fan-out and the Child policy (`ocx link policy`)
+
+On a Home with links, a Home catalog change reaches each eligible Child without anyone running
+`ocx sync`: about 60 s after the change settles, the Home runs the same pinned sync as `ocx link sync`
+(no Codex restart unless `childCodexRestart` enables one) on every connected, Home-initiated Child whose last Home-run sync predates the change. A
+busy Child is synced only when its Codex settings already match the Home and its runtime restarted after that apply; failures back off from 5
+minutes to 6 hours. Automatic jobs show `trigger: "auto"` in the job document.
+
+`ocx link policy` (no flags) reads the knobs: `catalogFanout` (`auto` default, or `manual`),
+`childCodexRestart` (`never` default, or `app-server-when-idle`), `updates` (`auto-when-idle`
+default, `notify`, `off`) and `idleAfterMs` (`--idle-after-minutes <1-60>`, default 10). Changing the
+Child policy needs the operator's request; reading it does not. A `warning: "policy-file-invalid"`
+means fan-out and updates are off; a save keeps unnamed settings off, so re-enabling needs `--catalog-fanout auto` and an `--updates` mode. The fan-out fixes the Child's
+catalog file; a Codex app-server already running there keeps its old list until restarted. This release stores `updates` but starts no automatic update yet.
 
 ## Key rotation is a two-step commit
 

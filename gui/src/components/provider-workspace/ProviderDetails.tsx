@@ -21,6 +21,7 @@ import ProviderUsage from "./ProviderUsage";
 import ProviderAuthPanel from "./ProviderAuthPanel";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import ProviderSettings from "./ProviderSettings";
+import type { ProviderDeepLinkFocus } from "../../protocol-deep-links";
 import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch, ProviderUpdateResult, ProviderUpdateCallback } from "./types";
@@ -57,6 +58,7 @@ export default function ProviderDetails({
   accountsFocusProvider = null,
   settingsFocusToken = 0,
   settingsFocusProvider = null,
+  settingsFocusField = null,
   switchingAccountId,
   pausingAccountId,
   keys,
@@ -107,6 +109,8 @@ export default function ProviderDetails({
   /** When this token increases for settingsFocusProvider, switch to the Settings tab (deep link). */
   settingsFocusToken?: number;
   settingsFocusProvider?: string | null;
+  /** The Settings field the same deep link asks to focus (the Codex account mode, #8501). */
+  settingsFocusField?: ProviderDeepLinkFocus | null;
   switchingAccountId?: string | null;
   pausingAccountId?: string | null;
   keys?: ApiKeyRow[];
@@ -155,6 +159,9 @@ export default function ProviderDetails({
   // authSurface exists; seeding with the prop would treat it as already seen.
   const [seenAccountsFocusToken, setSeenAccountsFocusToken] = useState(0);
   const [seenSettingsFocusToken, setSeenSettingsFocusToken] = useState(0);
+  // Pending until ProviderSettings has focused the control, so reopening Settings later does not
+  // pull focus back to it.
+  const [accountModeFocusToken, setAccountModeFocusToken] = useState(0);
   const [mutationRevision, setMutationRevision] = useState(0);
   const registerSettingsSave = useCallback((save: (() => Promise<boolean>) | null) => {
     settingsSaveRef.current = save;
@@ -280,8 +287,12 @@ export default function ProviderDetails({
   const scopedSettingsFocusToken = settingsFocusProvider === item.name ? settingsFocusToken : 0;
   if (scopedSettingsFocusToken !== seenSettingsFocusToken) {
     setSeenSettingsFocusToken(scopedSettingsFocusToken);
-    if (scopedSettingsFocusToken) setTab("settings");
+    if (scopedSettingsFocusToken) {
+      setTab("settings");
+      setAccountModeFocusToken(settingsFocusField === "account-mode" ? scopedSettingsFocusToken : 0);
+    }
   }
+  const clearAccountModeFocus = useCallback(() => setAccountModeFocusToken(0), []);
 
   const requestDeselect = useCallback(() => {
     if (settingsDirty && tab === "settings") {
@@ -497,6 +508,8 @@ export default function ProviderDetails({
             onDirtyChange={setSettingsDirty}
             onRegisterSave={registerSettingsSave}
             onRegisterDiscard={registerSettingsDiscard}
+            accountModeFocusToken={accountModeFocusToken}
+            onAccountModeFocused={clearAccountModeFocus}
           />
         )}
       </div>

@@ -9,6 +9,7 @@ import {
 import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { atomicWriteFile, loadConfig, withConfigMutationLockSync } from "../config";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { claudeDesktopIntegrationEnabledNow } from "../codex/desired-state";
 import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import {
@@ -31,6 +32,8 @@ import {
 } from "../codex/inject";
 import {
   JOURNAL_PATH,
+  adoptJournalForClient,
+  journalHandoverIncomplete,
   journalOwner,
   restoreJournalState,
 } from "../codex/journal";
@@ -468,7 +471,10 @@ async function rotateConnectedClientKeyHeld(
       const desktop = inspectRemoteDesktopStore(desktopOwner(connection));
       if (["conflict", "unsafe", "pending"].includes(desktop.kind)) throw new Error("desktop_lifecycle_recovery_required");
       // Establish legacy fallback ownership and reject edited projections BEFORE hub issuance.
-      alignDesktopCredential(held, connection, current.fingerprint, current);
+      // The remote Desktop store writes under the config root with required ACLs, so it admits
+      // after overlapping config-root ACL work (#7815); a timeout here refuses before the hub.
+      const unchanged = connection;
+      await withConfigDirHardeningSettled(getConfigDir(), () => alignDesktopCredential(held, unchanged, current.fingerprint, current));
       withConfigMutationLockSync(() => {
         assertClientConnectionUnchanged(connection!);
         const orphan = readTokenBackupState();
@@ -500,7 +506,10 @@ async function rotateConnectedClientKeyHeld(
       assertRotationCandidates(connection!, current.fingerprint, current.fingerprint);
       return replaceServiceApiTokenFile(rotation.key);
     });
-    alignDesktopCredential(held, connection, current.fingerprint, { token: rotation.key, fingerprint: replacement.fingerprint });
+    // Still before the hub commit: an admission timeout takes the ordinary rollback below.
+    const marking = connection;
+    await withConfigDirHardeningSettled(getConfigDir(), () =>
+      alignDesktopCredential(held, marking, current.fingerprint, { token: rotation.key, fingerprint: replacement.fingerprint }));
     if (!await probeClientKeyId(connection.serverUrl, rotation.key, connection.apiKeyId, { fetchImpl: deps.fetchImpl })) {
       throw new Error("new client key admission probe was refused");
     }
@@ -831,6 +840,24 @@ async function connectClientUnlocked(
       commitClientConnection(connection);
       committed = true;
     }), deps.lifecycleLockDeps);
+    // Only now does the routing belong to this connection: take over a journal another owner wrote
+    // (src/codex/journal.ts adoptJournalForClient). A failure keeps the connection; sync retries.
+    if (injectionCommitted) {
+      try {
+        const adoption = adoptJournalForClient(apiKeyId, () => {
+          // Under the Codex lock: still this committed connection (same owner and link) and its
+          // token, or write nothing. The stored record is normalized, so identity is compared.
+          assertNoClientDisconnectPending();
+          const current = readClientConnectionState();
+          if (current.kind !== "connected" || !sameClientConnectionOwner(current.value, connection)
+            || current.value.link?.linkId !== connection.link?.linkId) throw new Error("client_connection_changed");
+          const token = readServiceApiTokenState();
+          if (token.kind !== "present" || token.fingerprint !== connection.tokenFingerprint) throw new Error("client_token_changed");
+        });
+        if (journalHandoverIncomplete(adoption)) console.warn(FOREIGN_JOURNAL_WARNING);
+      }
+      catch { console.warn("Warning: the Codex journal could not be handed to this connection; run 'ocx sync' so a supervised restart keeps Codex routing."); }
+    }
     // Recorded only when the injection that applied it ran (not with --no-sync). The connection is
     // already committed, so a failed record write must not reach the rollback below: it is a
     // warning, and `ocx status` reports no recorded apply until `ocx sync` writes one.
@@ -933,6 +960,8 @@ export interface ConnectedSyncResult {
   appliedRecord?: HomeCodexSettingsRecord;
   /** The Home's settings were injected but their record could not be written (OCX-6). */
   applyRecordFailed?: true;
+  /** Routing was injected but the Codex journal stayed with its previous owner; sync again. */
+  journalHandoverFailed?: true;
   /**
    * The connection this sync ran under, read inside its lock and compare-and-swapped on every
    * write. Callers decide link-vs-hub wording and restart ownership from this, never from a read
@@ -1049,6 +1078,7 @@ async function syncConnectedClientUnlocked(
   let homeSettings: HomeCodexSettingsSource | undefined;
   let appliedRecord: HomeCodexSettingsRecord | undefined;
   let applyRecordFailed = false;
+  let journalHandoverFailed = false;
   if (next.selectedClients.includes("codex") && (!routeIntent || existsSync(getCodexHome()))) {
     const beforeCodexWrite = () => {
       beforeClientWrite();
@@ -1084,6 +1114,15 @@ async function syncConnectedClientUnlocked(
     // An external provider can preserve config.toml without applying even the same Home digest.
     // Withdraw any previous receipt under the current connection fence before reporting parity.
     if (!injected && next.link) withClientWrite(clearHomeCodexSettingsRecord);
+    if (injected) {
+      // A committed connection re-injected: own the journal too (retries a takeover connect missed),
+      // under the same connection guard as the injection, so a stale sync claims nothing.
+      try {
+        const adoption = adoptJournalForClient(next.apiKeyId, beforeCodexWrite);
+        // No journal or another client's means the routing is not this connection's to keep.
+        if (journalHandoverIncomplete(adoption)) journalHandoverFailed = true;
+      } catch { journalHandoverFailed = true; }
+    }
     if (injected && homeSettings && next.link) {
       const linkId = next.link.linkId;
       const settings = homeSettings;
@@ -1116,6 +1155,7 @@ async function syncConnectedClientUnlocked(
     ...(appliedRecord ? { appliedRecord } : {}),
     ...(applyRecordFailed ? { applyRecordFailed } : {}),
     ...(routeReceipt ? { routeIntent: routeReceipt } : {}),
+    ...(journalHandoverFailed ? { journalHandoverFailed: true as const } : {}),
     connection: next,
   };
 }
@@ -1156,6 +1196,8 @@ const DISCONNECT_PHASES: readonly DesktopDisconnectReceipt["phase"][] = [
 function disconnectAtLeast(receipt: DesktopDisconnectReceipt, phase: DesktopDisconnectReceipt["phase"]): boolean {
   return DISCONNECT_PHASES.indexOf(receipt.phase) >= DISCONNECT_PHASES.indexOf(phase);
 }
+
+const FOREIGN_JOURNAL_WARNING = "Warning: the Codex journal belongs to an earlier connection, so the next OpenCodex restart restores native Codex routing. After that restart, run 'ocx sync --restart-codex' to point Codex at this connection again.";
 
 function catalogIsRecordedPrior(connection: OcxClientConnectionConfig, snapshot: CatalogSnapshot): boolean {
   return snapshot.kind === "file" && !!connection.priorCatalog
@@ -1276,7 +1318,10 @@ export async function disconnectClient(
     if (drained) return drained;
   }
   const keepCatalog = options.keepCatalog === true;
-  const prepared = withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+  // Both phases write the disconnect receipt and the remote Desktop store under the config root
+  // with required ACLs, so each admits after overlapping config-root ACL work (#7815). A timeout
+  // before phase 1 writes nothing; one before phase 2 leaves the prepared receipt it resumes from.
+  const prepared = await withConfigDirHardeningSettled(getConfigDir(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();
     if (read.kind === "unsafe") throw new Error("client_disconnect_receipt_unsafe");
     const state = readClientConnectionState();
@@ -1302,7 +1347,10 @@ export async function disconnectClient(
       }
       if (!receipt) {
         const desktop = inspectRemoteDesktopStore(desktopOwner(connection));
-        if (desktop.kind === "unsafe" || desktop.kind === "conflict") throw new Error("desktop_lifecycle_unsafe");
+        if (desktop.reason === "root_without_state") {
+          throw new Error(`desktop_lifecycle_unsafe: ${desktop.path} exists but holds no Claude Desktop remote state or disconnect receipt (a leftover or renamed file), so disconnect cannot tell what it would restore. Move that folder aside, then run ocx disconnect again.`);
+        }
+        if (desktop.kind === "unsafe" || desktop.kind === "conflict") throw new Error(`desktop_lifecycle_unsafe: the Claude Desktop remote profile store could not be verified (${desktop.kind}); nothing was changed.`);
         preflightDisconnectCatalog(connection, keepCatalog);
         receipt = { version: 1, owner: desktopOwner(connection), tokenFingerprint: connection.tokenFingerprint, keepCatalog, phase: "prepared" };
         writeDesktopDisconnectReceipt(held, previous, receipt);
@@ -1312,7 +1360,7 @@ export async function disconnectClient(
     }
     if (!receipt || receipt.keepCatalog !== keepCatalog) throw new Error("client_disconnect_options_changed");
     return { receipt, connection };
-  }), deps.lifecycleLockDeps);
+  }), deps.lifecycleLockDeps));
 
   // This sibling step owns only file integrations; failures retain the prepared receipt/token.
   if (prepared.connection?.transport === "link" && !disconnectAtLeast(prepared.receipt, "desktop_restored")) {
@@ -1323,7 +1371,7 @@ export async function disconnectClient(
   const recoveryBackupDir = prepared.connection && !disconnectAtLeast(prepared.receipt, "desktop_restored")
     ? restoreConnectedCodex(prepared.connection, prepared.receipt, options.recoverConfig === true) : undefined;
 
-  return withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+  return withConfigDirHardeningSettled(getConfigDir(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();
     if (read.kind !== "valid" || JSON.stringify(read.value) !== JSON.stringify(prepared.receipt)) {
       throw new Error("client_disconnect_receipt_changed");
@@ -1413,7 +1461,7 @@ export async function disconnectClient(
       apiKeyId: receipt.owner.apiKeyId, restartRequired: desktop.restartRequired,
       ...(desktop.restoration ? { desktopRestoration: desktop.restoration } : {}),
     };
-  }), deps.lifecycleLockDeps);
+  }), deps.lifecycleLockDeps));
 }
 
 /**

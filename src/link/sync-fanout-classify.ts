@@ -1,4 +1,5 @@
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
+import { ROUTE_OVERWRITE_MIN_CHILD_VERSION } from "./remote-windows";
 
 /**
  * Home-side classification of a pinned Child sync (moved from src/cli/sync-fanout.ts so the Link engine can use it
@@ -16,6 +17,20 @@ const failure = (reason: string): ChildVerdict => ({ state: "failed", reason });
 const skipped = (reason: string): ChildVerdict => ({ state: "skipped", reason });
 const minimum = parseStrictSemver("2.93.0")!;
 const SELECTED_KIND = "ocx-fanout:selected-kind:";
+
+/** Operator guidance for a skipped pinned sync (moved from src/cli/sync-fanout.ts so the Link job runners can use it). */
+export function childSkipHint(reason: string | null, alias: string): string {
+  if (reason === "child-ocx-lacks-expect-link") return `Update OpenCodex on ${alias} to >= 2.93.0 using the installer that owns its selected ocx. For Desktop on headless Windows, use Check for Updates in the signed-in Desktop tray.`;
+  if (reason === "child-ocx-lacks-overwrite") return `Update OpenCodex on ${alias} to >= ${ROUTE_OVERWRITE_MIN_CHILD_VERSION} to sync with --overwrite-conflict, or sync without it.`;
+  if (reason === "child-ephemeral-no-overwrite") return `${alias} runs the ephemeral ocx-child, which has no route intent to overwrite; sync without --overwrite-conflict.`;
+  if (reason === "child-updating") return "Wait for the Child update to finish, then retry sync.";
+  if (reason === "child-link-mismatch:pending_operation" || reason === "child-link-mismatch:disconnect_pending") return "Wait for the Child's link operation to finish, then check its link and retry sync.";
+  if (reason === "child-link-mismatch:disconnected" || reason === "child-link-mismatch:other_link") return "Please re-link this Child to this Home, then retry sync.";
+  if (reason?.startsWith("child-link-mismatch")) return "Check the Child's Remote Link connection and re-link it to this Home if needed, then retry sync.";
+  if (reason === "child-ocx-version-unknown") return "Check the Child's selected OpenCodex installation and version, then retry sync.";
+  if (reason === "child-platform-unsupported") return "Check the Child's platform and Remote Link setup before retrying sync.";
+  return "Check the Child's sync status and retry sync.";
+}
 
 export function parseOcxVersion(output: string): string | null {
   const version = output.trim().replace(/^opencodex /, "");

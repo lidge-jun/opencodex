@@ -58,12 +58,15 @@ async function mount(props: Partial<React.ComponentProps<typeof RemoteLink>> = {
 }
 
 test("current translated link errors remain implemented across route and enrollment owners", async () => {
-  const source = (await Promise.all(["link-routes", "link-enrollment", "link-route-state"].map(name =>
+  // Child operations answer their own refusals through a `switch (code) { case "x": return fail(code, ...) }`
+  // block instead of `fail("x", ...)` calls, so the second pattern counts that switch.
+  const source = (await Promise.all(["link-routes", "link-enrollment", "link-route-state", "link-child-ops-routes"].map(name =>
     Bun.file(`../src/server/management/${name}.ts`).text()))).join("\n");
   // DELETE --purge forwards the code purgeDisconnectRemote chose, so its literals count as route codes.
   const purgeSource = await Bun.file("../src/link/remote-plant.ts").text();
   const fromRoutes = [
     ...[...source.matchAll(/(?:fail\(|remoteFailure\([^,\n]+,\s*)"([a-z_]+)"/g)].map(match => match[1]),
+    ...[...source.matchAll(/case "([a-z_]+)": return fail\(code/g)].map(match => match[1]),
     ...[...purgeSource.matchAll(/\bcode: "([a-z_]+)"/g)].map(match => match[1]),
   ].filter((value, index, all) => all.indexOf(value) === index).sort();
   // New phase errors use generic text. These two old-server translations remain compatible
@@ -151,6 +154,20 @@ test("refreshing a now-paired status removes pairing guidance without automatica
   expect(host.querySelector(".connect-pairing")).toBeNull();
   expect(host.querySelectorAll('[role="radio"]')[1]?.getAttribute("aria-disabled")).toBe("false");
   expect(calls.every(call => call.path === "/api/link/status" && call.method === "GET")).toBe(true);
+});
+
+test("diagnostics read the page's diagnostics base, not the shared Home relay", async () => {
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes("/api/link/diagnostics")) return response({ schema: "ocx.link.diagnostics/1", files: [], matched: 0, skipped: 0, records: [] });
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount({ apiBase: "http://child/api/machine/hub-relay", diagnosticsApiBase: "http://child" });
+  await act(async () => { host.querySelector<HTMLButtonElement>("[data-action='link-diagnostics-toggle']")!.click(); });
+  await settleUntil(() => urls.some(url => url.includes("/api/link/diagnostics")));
+  expect(urls.filter(url => url.includes("/api/link/diagnostics"))).toEqual(["http://child/api/link/diagnostics?limit=100"]);
 });
 
 test("session gate makes no link request", async () => {

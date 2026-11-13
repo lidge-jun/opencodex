@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -163,6 +163,8 @@ function buildHarness() {
     remotePlatform: "posix",
     ocxVersion: "2.98.0",
   });
+  // A real confirm-host also trusts the probed line; apply checks it is still the trusted one.
+  writeFileSync(knownHosts, "devbox ssh-ed25519 AAAA\nbarebox ssh-ed25519 AAAA\n");
 
   async function request(method: string, path: string, body?: unknown, principal: "admin-token" | "gui-session" = "admin-token") {
     const url = new URL(`http://127.0.0.1:10100${path}`);
@@ -263,7 +265,7 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
       alias: "barebox",
       fingerprint,
       keyType: "ED25519",
-      knownHostLine: "barebox ssh-ed25519 SECRET_LINE",
+      knownHostLine: "barebox ssh-ed25519 U0VDUkVUX0xJTkU",
       probedAt: 1_800_000_000_000,
       remotePlatform: "posix",
     });

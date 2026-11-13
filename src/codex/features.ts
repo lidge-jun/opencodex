@@ -1468,9 +1468,9 @@ function activeThreadComment(content: string, v2Enabled: boolean): string | unde
   let legacy = (entries.find(entry => entry.key === AGENTS_THREAD_LIMIT_KEY) ?? entries[0])?.comment;
   for (const entry of entries) legacy = mergeTrailingComments(legacy, entry.comment) || undefined;
   const dedicated = tomlTableBody(content, "features.multi_agent_v2")
-    ?.match(/^\s*max_concurrent_threads_per_session\s*=\s*\d+(\s*#.*)$/m)?.[1];
+    ?.match(/^\s*max_concurrent_threads_per_session\s*=\s*\d+([ \t]*#.*)$/m)?.[1];
   const features = tomlTableBody(content, "features");
-  const inlineLine = features?.match(/^\s*multi_agent_v2\s*=\s*\{([^}]*)\}(\s*#.*)$/m);
+  const inlineLine = features?.match(/^\s*multi_agent_v2\s*=\s*\{([^}]*)\}([ \t]*#.*)$/m);
   const inline = inlineLine && /(?:^|,)\s*max_concurrent_threads_per_session\s*=\s*\d+\s*(?:,|$)/.test(inlineLine[1])
     ? inlineLine[2]
     : undefined;

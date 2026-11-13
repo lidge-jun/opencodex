@@ -8,11 +8,11 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 35.
+Declared capabilities: 48.
 
 ### `ocx link probe`
 
-Usage: `ocx link probe <alias> [--json]`
+Usage: `ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
 
 Probe an SSH host fingerprint and OpenCodex version without trusting it.
 
@@ -24,13 +24,17 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit alias, fingerprint, key type and version as JSON. |
 
 - Requires loopback admin authority on the Home. Stores only a temporary pending offer; does not persist host trust or issue a link key.
 
 ### `ocx link add`
 
-Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]`
+Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
 
 Connect an SSH Child to this Home after confirming its fingerprint.
 
@@ -45,6 +49,10 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit the verified link result as JSON. |
 
 - Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.
@@ -105,6 +113,26 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the K16 status payload as JSON. |
 
 - Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON.
+
+### `ocx link diagnostics`
+
+Usage: `ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]`
+
+Read this computer's bounded Remote Link diagnostics file.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--limit` | number | Newest records to show, 1-1000; default 200. |
+| `--since` | string | Only records at or after this ISO time or epoch-millisecond timestamp. |
+| `--json` | boolean | Emit the ocx.link.diagnostics/1 document as JSON. |
+
+- Reads <configDir>/link/diagnostics.jsonl and its backup diagnostics.jsonl.1 directly, oldest first, without the proxy or a management route. Never creates, hardens or writes a file, and skips the Codex-shim repair preflight.
+- Reads only regular files (never through a symlink, FIFO or symlinked link directory), at most the newest 256 KiB of each. Every line is re-checked against the writer's allowlist: tunnel and relay event/outcome/state words, generated UUIDs, numbers and timestamps. Lines that fail are counted in skipped, never printed.
+- Exit 0 including when nothing is recorded yet, which prints the file path. The dashboard reads the same records through GET /api/link/diagnostics.
 
 ### `ocx link revoke`
 
@@ -699,6 +727,260 @@ State-changing: yes. JSON mode: `payload`.
 | `--no-wait` | boolean | Print the queued job and return without polling it. |
 | `--json` | boolean | Emit the ocx.link.child-job/1 document as JSON (always JSON). |
 
-- Requires loopback admin authority on the Home. Starts one observe job; the CLI polls it every 2 s and prints the final ocx.link.child-job/1 document. Exit 0 when every item succeeded, 6 when an item is busy, offline, refused, owner-action or unsupported, 1 on a failure, 4 when the link is unknown or the Home predates Child operations, 5 on a conflict: the link already has an operation running, --all found no Home-initiated link, or the command ran on a Child.
-- Changes no install on the Child: it runs the gated update --plan, which only computes. An npm Child without a census pair runs it through its ocx shim, so the launcher's ordinary bootstrap (sync-guard bookkeeping, Bun resolution) runs first, as for any pinned sync; the gated script disables the Desktop handoff. Writes the Home's Child observation cache.
+- Requires loopback admin authority on the Home. Starts one observe job; the CLI polls it every 2 s and prints the final ocx.link.child-job/1 document. Exit 0 when every item succeeded, 6 when an item is busy, offline, refused, owner-action or unsupported, 1 on a failure, 4 when the link is unknown or the Home predates Child operations, 5 on a conflict: the link already has an operation running, the Home has no links, or the command ran on a Child.
+- Changes no install on the Child: it runs the gated update --plan, which only computes. An npm Child without a census pair runs it through its ocx shim, so the launcher's ordinary bootstrap (sync-guard bookkeeping, Bun resolution) runs first, as for any pinned sync; the gated script disables the Desktop handoff. On an npm or pnpm Child served through its census pair it also runs node --version (bounded to 10 s, read-only) to report whether the package launcher can apply an update. Writes the Home's Child observation cache.
 - One SSH call per Child, up to 60 s, three at a time; a POSIX Child older than 2.97.0 costs one more read-only call for its version. Home-initiated links only: client-initiated and ocx-child links are reported without SSH. One operation per link per running Home.
+
+### `ocx link update`
+
+Usage: `ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]`
+
+Update a Home-initiated Child's OpenCodex to this Home's version.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/children/operations` |
+| GET | `/api/link/children/jobs/{jobId}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link to update; repeatable, up to 64. |
+| `--all` | boolean | Every link in the Home's store, one Child at a time; Child-initiated links report unsupported. |
+| `--yes` | boolean | Confirms that each updated Child's OpenCodex restarts and its relayed turns end. |
+| `--no-wait` | boolean | Print the queued job and return. |
+| `--json` | boolean | Emit the ocx.link.child-job/1 document (always JSON). |
+
+- Runs a pinned sync --expect-link first to confirm the Child still belongs to this link, then the Child's own ocx update --plan through the served entry, then --yes with --expect-plan and a --not-after 120 s after the plan on the Child's own clock, through the link's pinned SSH trust. npm and pnpm installs apply through their Node launcher; Bun installs plan and apply on their served Bun entry. The target is always this Home's version; the Child refuses a downgrade.
+- Children below 2.97.0 receive no update command: from 2.93.0 they still get the identity sync, then report owner-action legacy-ocx; ocx-child and GOAT-managed Children report unsupported or owner-action; Windows Children are refused orchestrated apply (unsupported windows-apply). An update restarts the Child's OpenCodex and ends any turn currently relayed for it, so --yes is required. A pinned sync follows a successful, failed or rolled-back apply; an apply whose result is unknown is recorded and neither retried nor resynced, so re-check it with ocx link check.
+- Exit 0 all succeeded or up-to-date (with --no-wait: the job was accepted and may still be running), 6 partial (including a kept update whose follow-up sync failed), 1 failed, uncertain or an unknown state, 5 another operation holds the link, the only link named was started from the Child, the Home has no links or the command ran on a Child, 4 the link is unknown or the Home lacks Child operations. On a Home not bound to loopback it exits 1: these operations are not available there, and the dashboard has no controls for them.
+
+### `ocx link sync`
+
+Usage: `ocx link sync (--link-id <id> | --all) [--no-wait] [--json] | ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--ignore-activity] [--no-wait] [--json]`
+
+Run the pinned catalog and settings sync on Home-initiated Children.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/children/operations` |
+| GET | `/api/link/children/jobs/{jobId}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link to sync; repeatable, up to 64, exactly one with a restart. |
+| `--all` | boolean | Every link in the Home's store, three at a time; refused with a restart. |
+| `--restart-app-server-only` | boolean | Also restart the Child's Codex app-servers after the sync writes. |
+| `--restart-codex` | boolean | Also quit and relaunch the Child's Codex desktop app; ends live turns. |
+| `--yes` | boolean | Confirms --restart-codex. |
+| `--ignore-activity` | boolean | Restart even while the Child is busy or held; ends its running work (operator override, never automatic). |
+| `--no-wait` | boolean | Print the queued job and return. |
+| `--json` | boolean | Emit the ocx.link.child-job/1 document (always JSON). |
+
+- The same sync --expect-link the ocx sync fan-out runs, gated at 2.93.0. Restart flags are refused on Windows and ignored by ocx-child; the item reports restart unsupported.
+- A restart needs one --link-id (--all is refused) and --restart-codex needs --yes. The sync runs first; the restart then goes out as a second pinned sync and is withheld (restart skipped, reason restart-skipped:link-active) while a relayed model request for that Child is in flight. A restarting call whose result is unknown ends uncertain (restart-result-unknown).
+- --ignore-activity restarts past that check and past held link WebSocket activity (ocx link status, child.holds); the job records ignoreActivity: true and the Home logs the link id and its in-flight count. Platform and Child-kind refusals still apply, and no automatic path sets it.
+- Exit codes as for ocx link update; a withheld or unconfirmed restart exits 6 or 1.
+
+### `ocx link restart-codex`
+
+Usage: `ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--ignore-activity] [--no-wait] [--json]`
+
+Restart Codex on one Home-initiated Child so it reloads the catalog.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/children/operations` |
+| GET | `/api/link/children/jobs/{jobId}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link. |
+| `--scope` | string | app-server (default) or codex (also relaunches the desktop app). |
+| `--yes` | boolean | Confirms that running Codex turns on the Child end. |
+| `--ignore-activity` | boolean | Restart even while the Child is busy or held; ends its running work (operator override, never automatic). |
+| `--no-wait` | boolean | Print the queued job and return. |
+| `--json` | boolean | Emit the ocx.link.child-job/1 document (always JSON). |
+
+- A pinned sync, then a second pinned sync with the restart flag; works on full Children from 2.93.0. app-server scope leaves the Codex desktop app's own app-server running. While a relayed model request for that Child is in flight nothing is sent and the item is busy (restart-skipped:link-active), unless --ignore-activity overrides that check.
+- Refused on Windows Children (unsupported windows-restart) and reported unsupported for ocx-child. The codex scope needs a logged-in GUI session on the Child; its outcome is requested, not confirmed. Exit codes as for ocx link update.
+
+### `ocx link capture start`
+
+Usage: `ocx link capture start [--minutes <1-60>] [--json]`
+
+Open a short window in which this machine's link tunnels log sanitized SSH diagnostics.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--minutes` | number | Window length, 15 by default and 60 at most; starting again while open moves the expiry. |
+| `--json` | boolean | Emit the capture status as JSON. |
+
+- A local file operation under <OPENCODEX_HOME>/link/ssh-capture/ on a Home or a Child; it needs no running proxy and no admin token, and no sync, management route or remote input can start it. While the window is open, the next ssh attempt of each Home (-R) or Child (-L) tunnel runs with LogLevel=DEBUG1; an already connected tunnel keeps its level until it reconnects.
+- Every stderr line passes an allowlist of OpenSSH line shapes before it is stored: host names, addresses, users, ports, paths, keys, fingerprints, commands and server messages become fixed placeholders and an unknown line is stored only as the category unrecognized. One file per window, at most 1 MiB, deleted 72 h after its last write; at most four files are kept, the oldest deleted first. Admission is unchanged and lines ssh prints only above LogLevel=ERROR are kept out of the failure classification; an unrecognized line such as a server banner still counts and can change the reported cause.
+
+### `ocx link capture stop`
+
+Usage: `ocx link capture stop [--json]`
+
+Close the SSH capture window; capture files stay until their retention passes.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the capture status as JSON. |
+
+- Removes only the control file, so nothing more is stored and the next tunnel attempt runs ssh with LogLevel=ERROR again. Capture files are kept for sharing and deleted 72 h after their last write; status and later starts apply that retention.
+
+### `ocx link capture status`
+
+Usage: `ocx link capture status [--json]`
+
+Show whether SSH capture is on, its expiry and the retained capture files.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the capture status as JSON. |
+
+- Reads the local capture directory. It also applies retention: capture files 72 h past their last write and an expired control file are deleted, and the count is reported as removed.
+
+### `ocx link policy`
+
+Usage: `ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]`
+
+Read or change how this Home keeps its Children current.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/link/children/policy` |
+| PUT | `/api/link/children/policy` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--updates` | string | off, notify, or auto-when-idle (default). |
+| `--catalog-fanout` | string | auto (default) or manual. |
+| `--child-codex-restart` | string | never (default) or app-server-when-idle. |
+| `--idle-after-minutes` | number | Minutes without a relayed model request before a Child counts as idle; default 10. |
+| `--json` | boolean | Emit {policy, warning} as JSON. |
+
+- Without flags it reads the policy; with flags it changes only those knobs. Stored in <configDir>/link/child-policy.json on the Home, never in config.json. An invalid file turns automatic catalog fan-out and updates off; saving merges onto that, so pass --catalog-fanout auto and an --updates mode to turn them back on.
+- --updates stores the update mode only; this release starts no automatic update (notify and auto-when-idle take effect when the automatic update sweep ships). Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it.
+
+### `ocx link routes`
+
+Usage: `ocx link routes --link-id <id> [--json]`
+
+List the SSH routes a Home-initiated link may use, in the order the Home tries them.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/link/{id}/routes` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link id. |
+| `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
+
+- Requires loopback admin authority on the Home, like ocx link reconnect; the local control socket does not serve it. The pin is the link's own alias: its host key is the one every route must present, and it is always in the list. A link with one route lists its alias only. Read ocx link status for the route in use and since when.
+
+### `ocx link routes add`
+
+Usage: `ocx link routes add --link-id <id> --route <alias> [--position <n>] [--json]`
+
+Add an SSH route to a Home-initiated link after proving the link's pinned host key over it.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/{id}/routes` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link id. |
+| `--route` | string | SSH host alias or destination of the new route. |
+| `--position` | number | Index in the list; by default just before the alias, so direct routes come first and the alias stays last. |
+| `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
+
+- The Home first checks that its link known_hosts file trusts only the link's recorded key for the alias (every entry for it, in any case or hashed by an older release, carries that key), then connects over the new route with strict checking against that one key and stores the route only if the same machine answers. Refusals: route_unproven with a cause (hostkey, auth, forward, transient), pin_mismatch, trust_file_unexpected, link_changed, pin_changed, route_exists, route_limit (8 routes), link_operation_in_progress (removal or a Child job holds the link). Exit 5 on a refusal, 4 for an unknown link, 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed; ocx link routes --link-id <id> reads what was stored).
+- Adding a route does not move a running tunnel; the Home tries the list in order from the next connection on (ocx link reconnect starts one now). Requires loopback admin authority on the Home.
+
+### `ocx link routes remove`
+
+Usage: `ocx link routes remove --link-id <id> --route <alias> [--json]`
+
+Remove an SSH route from a Home-initiated link.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/{id}/routes` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link id. |
+| `--route` | string | Route to remove. |
+| `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
+
+- The alias is the link's pin and cannot be removed (route_is_pin). Removing the route the tunnel uses restarts the tunnel on the remaining list; removing the last extra route returns the link to one route. Exit 4 for an unknown link or route (link_not_found, route_not_found), 5 on a refusal (route_is_pin, link_operation_in_progress), 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed). Requires loopback admin authority on the Home.
+
+### `ocx link routes order`
+
+Usage: `ocx link routes order --link-id <id> --routes <alias,alias,...> [--json]`
+
+Reorder a Home-initiated link's SSH routes.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/{id}/routes` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link id. |
+| `--routes` | string | The current routes, comma separated, in the new order. |
+| `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
+
+- The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. A reorder does not move a running tunnel. Requires loopback admin authority on the Home.
+
+### `ocx link activity clear`
+
+Usage: `ocx link activity clear --link-id <id> [--json]`
+
+Clear one link's held activity so automatic and activity-gated Child restarts may run again.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/children/activity/clear` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | The link whose holds to clear. |
+| `--json` | boolean | Emit {linkId, cleared} as JSON. |
+
+- A link Responses WebSocket that closes while Codex was busy leaves a hold, and so does a Home that stopped without a clean shutdown; a hold keeps the Child in flight so automatic and activity-gated restarts wait. ocx link status lists each held link's holds and their reasons under child.holds. Holds that only the operator can release (an unknown running turn, untracked results, no thread id, or an unknown state after a crash) end here.
+- Clears every hold of that one link and nothing else; nothing clears holds automatically. The holds file is saved before anything is forgotten, so a failed save clears nothing (503). It does not touch live sockets or relayed requests.

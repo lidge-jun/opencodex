@@ -583,6 +583,8 @@ type UninstallServiceHooksForTests = {
   nativeStatus: () => WinswStatus;
   uninstallNative: () => void;
   removeInstallState: () => void;
+  launchdPlistPath?: () => string;
+  uninstallLaunchd?: () => void;
 };
 
 let uninstallServiceHooksForTests: UninstallServiceHooksForTests | null = null;
@@ -607,13 +609,22 @@ export function setUninstallServiceHooksForTests(hooks: UninstallServiceHooksFor
  */
 export type ServiceUninstallOutcome = "absent" | "removed" | "failed";
 
+/**
+ * Remove installed manager assets, including orphaned launchd recovery files.
+ * Keep install state on removal failure; Windows refusal and unknown probes may throw.
+ */
 export function uninstallServiceDetailed(): ServiceUninstallOutcome {
   const hooks = uninstallServiceHooksForTests;
   (hooks?.assertEnvironment ?? assertServiceEnvironmentMatchesInstall)();
   const platform = hooks?.platform ?? process.platform;
   if (platform === "darwin") {
-    if (existsSync(plistPath())) {
-      try { uninstallLaunchd(); removeServiceInstallState(); return "removed"; } catch { return "failed"; }
+    const p = (hooks?.launchdPlistPath ?? plistPath)();
+    if ([p, `${p}.prev`, `${p}.pending`].some(path => existsSync(path))) {
+      try {
+        (hooks?.uninstallLaunchd ?? uninstallLaunchd)();
+        (hooks?.removeInstallState ?? removeServiceInstallState)();
+        return "removed";
+      } catch { return "failed"; }
     }
   } else if (platform === "win32") {
     let removed = false;

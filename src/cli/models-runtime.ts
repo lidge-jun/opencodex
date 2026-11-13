@@ -355,7 +355,7 @@ async function setModelSettings(argv: string[], deps: RuntimeApiDeps): Promise<v
     if (Object.keys(patch).length > 0) {
       throw new CliUsageError("--reset clears every override and cannot be combined with other options", USAGE);
     }
-    for (const key of ["contextWindow", "inputModalities", "reasoningEfforts", "defaultReasoningEffort"]) patch[key] = null;
+    for (const key of ["contextWindow", "inputModalities", "responsesCustomTools", "reasoningEfforts", "defaultReasoningEffort"]) patch[key] = null;
   }
   if (Object.keys(patch).length === 0) throw new CliUsageError("at least one setting or --reset is required", USAGE);
   const result = await runtimeRequest<{ changed?: boolean; hasOverrides?: boolean; saved?: boolean; catalogRefresh?: { status?: string; retryable?: boolean } }>("/api/model-settings", {

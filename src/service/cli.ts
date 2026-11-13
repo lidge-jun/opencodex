@@ -15,7 +15,7 @@ import { collectServiceStatusJson } from "./status-json";
 import { assertServiceAuthEnvironment } from "./auth-preflight";
 import { assertServiceEnvironmentMatchesInstall } from "./guards";
 import { resolveServiceListenPort } from "./definition";
-import { reportServiceServing } from "./health";
+import { reportServiceServing, servingRuntimePid } from "./health";
 import { platformOps, proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand, installServiceSafely, installFreshWindowsSchedulerSafely, removeServiceInstallState, isServiceInstalled } from "./orchestration";
 import { repairService } from "./repair";
 import type { ServiceRepairVerb } from "./repair";
@@ -276,6 +276,11 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     // repaired and serving on port 10100" — and the checkmark was the false half: the
     // existing registration had been restarted, not repaired (#4914).
     let repairError: unknown;
+    // A restart must end with a different runtime answering. The pid that answers now is what
+    // the serving check compares against; a surviving wrapper's old child still answers healthz
+    // and used to be reported as "restarted and serving" (#7771). Repair may keep a healthy
+    // runtime by design, so only restart asks for a replacement.
+    const replacing = verb === "restart" ? await servingRuntimePid() : null;
     try {
       await repairService({ verb, supervisionLatch });
     } catch (error) {
@@ -286,7 +291,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     // defect class this unit exists to close. Windows bakes its port into the
     // scheduler wrapper or the WinSW XML, both of which installedServiceListenPort()
     // now reads.
-    await reportServiceServing(verb === "restart" ? "restarted" : "repaired", {}, repairError);
+    await reportServiceServing(verb === "restart" ? "restarted" : "repaired", { replacing }, repairError);
     if (repairError !== undefined) process.exitCode = 1;
     return;
   }

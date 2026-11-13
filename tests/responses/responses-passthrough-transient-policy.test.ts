@@ -60,7 +60,7 @@ describe("the Responses passthrough lane reads the provider transient policy", (
     // Combo receipt mode settles directly; other sends keep the shared reporter. Copilot's
     // reporter defers its charge until physical dispatch, after negotiation can refuse locally.
     expect(packed).toContain("constinitialAccounting=copilotSendAccounting()");
-    expect(packed).toContain("onPhysicalDispatch:receiptMode?sendBudgetState.noteInitialDispatch:initialAccounting.onPhysicalDispatch");
+    expect(packed).toContain("onPhysicalDispatch:recordPhysicalSend(receiptMode?sendBudgetState.noteInitialDispatch:initialAccounting.onPhysicalDispatch)");
     expect(packed).toContain("...(receiptMode?{}:{onSendsConsumed:initialAccounting.report})");
     expect(packed).toContain("=>physicalSendAccounting(transientSendReporter(permit),");
     expect(budgeted + allowanceBacked + prepaidInitial).toBe(sites);

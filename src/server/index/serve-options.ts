@@ -3,6 +3,7 @@ import type { Server, ServerWebSocket } from "bun";
 import { modelAliasIdPromoter } from "./model-alias-id";
 import type { StartServerDeps } from "./startup-warnings";
 import { isLinkManagementPath } from "../../link/management-routes";
+import { takeRouteProof } from "../../link/route-proof";
 import {
   GUI_PAIRING_EXCHANGE_BODY_LIMIT,
   REMOTE_WORKSPACE_PAIRING_BODY_LIMIT,
@@ -99,6 +100,7 @@ import {
   isAllowedManagementOrigin,
   isApiAuthRequired,
   isLoopbackHostname,
+  markDashboardProxyPeer,
   markTrustedHubManagementRequest,
   jsonResponse,
   admissionFields,
@@ -246,7 +248,7 @@ export interface ServeOptionsContext {
   loopbackRouteAllowed: (url: URL, req: Request) => boolean;
   managementIngressRouteAllowed: (url: URL, req: Request) => boolean;
   linkRouteAllowed: (url: URL, req: Request) => boolean;
-  onAuthenticatedCatalog: (apiKeyId: string) => void;
+  onAuthenticatedCatalog: (apiKeyId: string, routeProofId?: string) => void;
   linkPolicy: () => RequestPolicyView;
   packageTreeChangedResponse: (
     req: Request,
@@ -330,9 +332,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       const ingress = ingressForServer(requestServer);
       // Bind management-origin trust to the actual Bun listener object resolved above.
       // Neither Host nor any X-Forwarded-* header can manufacture this process-local mark.
-      if (ingress === "hub-management" && config.runtimeRole === "hub") {
-        markTrustedHubManagementRequest(req);
-      }
+      if (ingress === "hub-management" && config.runtimeRole === "hub") markTrustedHubManagementRequest(req);
+      // #8338: the kernel-observed peer, so the configured standalone dashboard proxy can be verified.
+      else if (ingress === "public" && config.dashboardTrustedProxy !== undefined) markDashboardProxyPeer(req, requestServer.requestIP(req)?.address);
       const requestUrl = codexCompatibleUrl(req.url);
       const linkPolicyView = ingress === "hub-link" ? linkPolicy() : undefined;
       // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing
@@ -388,9 +390,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (ingress === "hub-link") {
         const admission = resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
-        if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === ""
-          && (req.method === "GET" || req.method === "HEAD")
-          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId);
+        if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === "" && (req.method === "GET" || req.method === "HEAD")
+          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId, takeRouteProof(req));
         // #6957: the Child's read-only view of this Home. Admitted by the link key above and by
         // the shared table in src/link/management-routes.ts; never reachable on another ingress.
         if (isLinkManagementPath(requestUrl.pathname)) {
@@ -879,13 +880,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         // Role gate AFTER admission, deliberately: answering an unauthenticated caller would
         // turn this into a free "is that machine a hub?" probe. A standalone or client install
-        // gains no surface at all — the route simply does not exist there.
+        // gains no public surface — only a hub or an active `hub-link` listener serves it.
         //
         // Built, not formatErrorResponse'd, for the same reason /v1/catalog builds its 404: the
         // code has to distinguish "this route exists and this host is not a hub" from "this
         // build has no such route", which is the difference between admission proof and a
         // vacuous pass in tests/server/api-key-attribution.test.ts.
-        if (config.runtimeRole !== "hub") {
+        if (config.runtimeRole !== "hub" && ingress !== "hub-link") {
           return withCors(
             new Response(JSON.stringify({
               error: {
@@ -1271,6 +1272,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 config,
                 provider,
                 knownModelIdsForProvider(m.provider, provider, config),
+                m.provider,
               ).get(m.id)
             : undefined;
           const effectiveId = !isCombo && !fastModelId && effective

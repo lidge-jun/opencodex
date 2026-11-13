@@ -22,8 +22,8 @@ export async function syncRouteToChild(link: LinkRecord, ctx: ManagementContext,
   try {
     const runner = runnerFor(ctx);
     const knownHosts = knownHostsFile(ctx);
-    const platform = link.remotePlatform ?? await requireRemotePlatformFramed(runner, link.alias, knownHosts);
-    const result = await runner.run(buildExecArgv({ alias: link.alias, knownHostsFile: knownHosts, argv: remotePinnedSyncArgv(link.id, platform, overwriteConflict, overwriteClient) }), { timeoutMs: 60_000, maxOutputBytes: 64 * 1024 });
+    const platform = link.remotePlatform ?? await requireRemotePlatformFramed(runner, link.alias, link.explicitRoute ?? null, knownHosts);
+    const result = await runner.run(buildExecArgv({ alias: link.alias, knownHostsFile: knownHosts, route: link.explicitRoute ?? null, argv: remotePinnedSyncArgv(link.id, platform, overwriteConflict, overwriteClient) }), { timeoutMs: 60_000, maxOutputBytes: 64 * 1024 });
     const verdict = classifySyncResult(result);
     return verdict.state === "synced" ? { state: "synced" } : { state: "failed", reason: verdict.reason ?? "child-sync-failed" };
   } catch {
