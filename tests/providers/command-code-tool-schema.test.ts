@@ -105,6 +105,29 @@ describe("Command Code wireTools input_schema", () => {
     expect(schema!.required).toEqual(["path", "mode"]);
   });
 
+  test("flattens composition inside a resolved $ref branch on the wire", async () => {
+    const [schema] = Object.values(await wiredSchemas([{
+      name: "nested_ref",
+      description: "nested_ref",
+      parameters: {
+        $defs: {
+          Args: {
+            allOf: [{
+              type: "object",
+              properties: { path: { type: "string" } },
+              required: ["path"],
+            }],
+          },
+        },
+        allOf: [{ $ref: "#/$defs/Args" }],
+      },
+    } as OcxTool]));
+
+    expect(schema!.properties).toEqual({ path: { type: "string" } });
+    expect(schema!.required).toEqual(["path"]);
+    expect(schema!.allOf).toBeUndefined();
+  });
+
   test("preserves nested composition inside an outbound property", async () => {
     const nested = { anyOf: [{ type: "string" }, { type: "number" }] };
     const [schema] = Object.values(await wiredSchemas([{
@@ -201,6 +224,40 @@ describe("normalizeAnthropicInputSchema", () => {
     const properties = normalized.properties as Record<string, unknown>;
     expect(Object.prototype.hasOwnProperty.call(properties, "__proto__")).toBe(true);
     expect(JSON.stringify(properties)).toContain('"__proto__"');
+  });
+
+  test("flattens composition inside a resolved $ref definition", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: {
+        Args: {
+          allOf: [{
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          }],
+        },
+      },
+      allOf: [{ $ref: "#/$defs/Args" }],
+    });
+    expect(normalized.allOf).toBeUndefined();
+    expect(Object.keys(normalized.properties as Record<string, unknown>)).toEqual(["path"]);
+    expect(normalized.required).toEqual(["path"]);
+  });
+
+  test("stops at a recursive local $ref chain without losing sibling branches", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: {
+        A: {
+          allOf: [
+            { $ref: "#/$defs/A" },
+            { type: "object", properties: { leaf: { type: "string" } }, required: ["leaf"] },
+          ],
+        },
+      },
+      allOf: [{ $ref: "#/$defs/A" }],
+    });
+    expect(Object.keys(normalized.properties as Record<string, unknown>)).toEqual(["leaf"]);
+    expect(normalized.required).toEqual(["leaf"]);
   });
 
   test("later branches win for same-named properties, as documented", () => {

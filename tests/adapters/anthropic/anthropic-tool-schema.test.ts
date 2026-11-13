@@ -122,6 +122,23 @@ describe("anthropic tool input_schema normalization", () => {
     expect(schema.required).toEqual(["path"]);
   });
 
+  test("flattens composition inside a resolved $ref definition", async () => {
+    const schema = await toolSchema({
+      $defs: {
+        Args: {
+          allOf: [{
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          }],
+        },
+      },
+      allOf: [{ $ref: "#/$defs/Args" }],
+    });
+    expect(schema.properties).toEqual({ path: { type: "string" } });
+    expect(schema.required).toEqual(["path"]);
+  });
+
   test("merges $ref siblings conjunctively and unions required members", async () => {
     const schema = await toolSchema({
       $defs: {

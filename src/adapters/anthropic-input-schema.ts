@@ -17,6 +17,7 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
  */
 
 const LOCAL_REF_PREFIX = "#/";
+const COMPOSITION_KEYS = ["oneOf", "anyOf", "allOf"] as const;
 
 function decodePointerSegment(segment: string): string {
   return segment.replace(/~1/g, "/").replace(/~0/g, "~");
@@ -80,7 +81,7 @@ function mergeRefSiblings(
 function dereferenceLocal(
   node: unknown,
   root: Record<string, unknown>,
-  seen: Set<string>,
+  seen: ReadonlySet<string>,
 ): Record<string, unknown> | undefined {
   if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
   const record = node as Record<string, unknown>;
@@ -95,14 +96,49 @@ function dereferenceLocal(
   return mergeRefSiblings(resolved, siblings);
 }
 
+/**
+ * Flatten root-equivalent composition, including composition that a resolved `$ref` branch
+ * carries. Only a node standing where the root composition stands contributes; `properties`
+ * and nested property schemas are never traversed. `chain` holds the refs already inlined on
+ * this path, so a self- or mutually-recursive definition stops instead of recursing forever.
+ */
+function collectRootComposition(
+  node: Record<string, unknown>,
+  root: Record<string, unknown>,
+  chain: ReadonlySet<string>,
+  mergeRequired: boolean,
+  properties: Record<string, unknown>,
+  required: Set<string>,
+): void {
+  for (const key of COMPOSITION_KEYS) {
+    const variants = node[key];
+    if (!Array.isArray(variants)) continue;
+    const branchMergesRequired = mergeRequired && key === "allOf";
+    for (const variant of variants) {
+      const record = asSchemaMap(variant);
+      if (!record) continue;
+      const ref = typeof record.$ref === "string" ? record.$ref : undefined;
+      if (ref && chain.has(ref)) continue;
+      const resolved = dereferenceLocal(variant, root, chain);
+      if (!resolved) continue;
+      const nextChain = ref ? new Set(chain).add(ref) : chain;
+      const branchProperties = asSchemaMap(resolved.properties);
+      if (branchProperties) Object.assign(properties, branchProperties);
+      if (branchMergesRequired && Array.isArray(resolved.required)) {
+        for (const item of resolved.required) if (typeof item === "string") required.add(item);
+      }
+      collectRootComposition(resolved, root, nextChain, branchMergesRequired, properties, required);
+    }
+  }
+}
+
 export function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
   const stripped = stripResponsesOnlyEncryptedMarker(schema);
   const obj = stripped && typeof stripped === "object" && !Array.isArray(stripped)
     ? stripped as Record<string, unknown>
     : {};
   const root = dereferenceLocal(obj, obj, new Set()) ?? obj;
-  const compositionKeys = ["oneOf", "anyOf", "allOf"] as const;
-  const hasRootComposition = compositionKeys.some(key => Array.isArray(root[key]));
+  const hasRootComposition = COMPOSITION_KEYS.some(key => Array.isArray(root[key]));
   const type = root.type;
   const rootObjectType = type === "object" || (Array.isArray(type) && type.includes("object"));
 
@@ -127,21 +163,7 @@ export function normalizeAnthropicInputSchema(schema: unknown): Record<string, u
     for (const item of root.required) if (typeof item === "string") required.add(item);
   }
 
-  for (const key of compositionKeys) {
-    const variants = root[key];
-    if (!Array.isArray(variants)) continue;
-    const mergeRequired = key === "allOf";
-    for (const variant of variants) {
-      const v = dereferenceLocal(variant, root, new Set());
-      if (!v) continue;
-      if (v.properties && typeof v.properties === "object" && !Array.isArray(v.properties)) {
-        Object.assign(properties, v.properties as Record<string, unknown>);
-      }
-      if (mergeRequired && Array.isArray(v.required)) {
-        for (const item of v.required) if (typeof item === "string") required.add(item);
-      }
-    }
-  }
+  collectRootComposition(root, root, new Set(), true, properties, required);
 
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(root)) {
