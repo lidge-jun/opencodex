@@ -492,7 +492,10 @@ fn purge_removes_the_planted_binary_while_the_lifecycle_lock_is_held() {
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("\"purged\":true"));
     assert!(!planted.exists());
-    assert_eq!(receipt(&homes, LINK_A).expect("no receipt")["purged"], true);
+    assert_eq!(
+        receipt(&homes, LINK_A).expect("no receipt")["restored"],
+        true
+    );
 }
 
 fn receipt(homes: &Homes, link: &str) -> Option<serde_json::Value> {
@@ -511,8 +514,8 @@ fn a_restore_for_the_expected_link_leaves_a_durable_receipt_naming_it() {
     assert_eq!(found["schema"], "ocx.child.detach-receipt/1");
     assert_eq!(found["linkId"], LINK_A);
     assert_eq!(found["restored"], true);
-    // The test binary is outside the managed directory, so nothing was purged.
-    assert_eq!(found["purged"], false);
+    // It records the restore only; whether the binary is gone is read from the binary.
+    assert!(found.get("purged").is_none());
     assert!(receipt(&homes, LINK_B).is_none());
     // A plain detach writes none.
     let other = Homes::new("owner-link-receipt-plain");
@@ -544,4 +547,103 @@ fn a_rollback_snapshot_recovery_would_refuse_is_refused_before_anything_changes(
     .unwrap();
     let report = assert_refused_untouched(&homes, LINK_A, 5, "conflict");
     assert_eq!(report["record"], "attach-rollback");
+}
+
+#[test]
+fn a_new_attach_of_the_same_link_removes_its_old_receipt() {
+    let homes = Homes::new("owner-link-receipt-reattach");
+    let _home = homes.attach(LINK_A);
+    let (code, _, err) = homes.detach_expect(LINK_A);
+    assert_eq!(code, 0, "{err}");
+    assert!(receipt(&homes, LINK_A).is_some());
+    let _home = homes.attach(LINK_A);
+    assert!(
+        receipt(&homes, LINK_A).is_none(),
+        "an old receipt would vouch for the new attachment"
+    );
+}
+
+#[cfg(unix)]
+fn planted_command(
+    planted: &Path,
+    fake_home: &Path,
+    ocx: &Path,
+    codex: &Path,
+    port: u16,
+    args: &[&str],
+) -> std::process::Command {
+    let mut cmd = std::process::Command::new(planted);
+    cmd.args(args)
+        .env("HOME", fake_home)
+        .env("OPENCODEX_HOME", ocx)
+        .env("CODEX_HOME", codex)
+        .env("OCX_CHILD_LISTEN_PORT", port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd
+}
+
+#[cfg(unix)]
+#[test]
+fn a_relay_of_another_home_keeps_the_planted_binary_from_being_purged() {
+    // Home X runs a relay from the shared planted binary; Home Y (another OPENCODEX_HOME and
+    // CODEX_HOME of the same OS user) recovers a link and must not remove that binary.
+    let x = Homes::new("owner-link-cross-x");
+    let y = Homes::new("owner-link-cross-y");
+    let fake_home = x.scratch.0.join("home");
+    let bin_dir = fake_home.join(".cache").join("opencodex").join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let planted = bin_dir.join("ocx-child");
+    fs::copy(env!("CARGO_BIN_EXE_ocx-child"), &planted).unwrap();
+
+    let home = MockHomeServer::start(&raw_token(), KEY_ID, LINK_A);
+    let tunnel = home.port.to_string();
+    let listen = x.port.to_string();
+    let args = attach_args(&tunnel, LINK_A, &listen);
+    let mut attach = planted_command(&planted, &fake_home, &x.ocx, &x.codex, x.port, &args);
+    attach.stdin(Stdio::piped());
+    let out = spawn_with_creds(attach).wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "relay attach failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let purge = |label: &str| {
+        let out = planted_command(
+            &planted,
+            &fake_home,
+            &y.ocx,
+            &y.codex,
+            y.port,
+            &["detach", "--purge", "--json", "--expect-link", LINK_B],
+        )
+        .output()
+        .unwrap();
+        assert!(
+            out.status.success(),
+            "{label}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let kept = purge("purge while X serves");
+    assert!(kept.contains("\"purged\":false"), "{kept}");
+    assert!(
+        planted.exists(),
+        "the purge removed a binary another home's relay runs from"
+    );
+
+    let out = planted_command(&planted, &fake_home, &x.ocx, &x.codex, x.port, &["detach"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "X detach failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let removed = purge("purge after X stopped");
+    assert!(removed.contains("\"purged\":true"), "{removed}");
+    assert!(!planted.exists());
 }

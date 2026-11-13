@@ -87,14 +87,15 @@ export async function recoverRemoteChild(
   }
   if (result.code !== 0) {
     if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) {
-      // A purge whose answer was lost already removed the binary: settle only on its durable receipt.
+      // A purge whose answer was lost already removed the binary: settle only on the durable receipt
+      // of the restore, written before that purge. The missing binary is the purge's own evidence.
       let stored;
       try { stored = await exec(remoteRecoverReceiptArgv(platform, target.linkId)); } catch { return failed("The Child could not be reached.", "ssh_failed"); }
       const receipt = stored.code === 0 ? parseExpectLinkReport(stored.stdout) as (ExpectLinkReport & { schema?: unknown }) | null : null;
       if (!receipt || receipt.schema !== "ocx.child.detach-receipt/1" || receipt.linkId !== target.linkId || receipt.restored !== true) {
         return failed("No planted ocx-child was found in the managed directory and no cleanup receipt for this link exists, so cleanup could not be proven.", "managed_child_missing");
       }
-      return receipt.purged === true ? { ok: true } : failed("The Child was cleaned but did not record removing the planted ocx-child binary.", "purge_incomplete");
+      return { ok: true };
     }
     return failed(result.code === SSH_TRANSPORT_FAILURE ? "The Child could not be reached." : "The Child could not be recovered.", result.code === SSH_TRANSPORT_FAILURE ? "ssh_failed" : "child_failed");
   }

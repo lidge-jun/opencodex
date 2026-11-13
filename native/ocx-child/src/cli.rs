@@ -23,10 +23,10 @@ use crate::journal::{
 use crate::parity::LinkChildParityReport;
 use crate::platform::{
     DirectoryIdentity, FileLock, LockAcquireError, PurgeExecutableOutcome, SecretBytes,
-    constant_time_eq, directory_identity, ensure_private_dir, format_iso8601_utc, now_epoch_ms,
-    purge_managed_executable, random_hex, reject_symlink, resolve_codex_home,
-    resolve_opencodex_home, resolve_user_home, volatile_zero_bytes, write_private_atomic,
-    write_regular_atomic,
+    constant_time_eq, directory_identity, ensure_private_dir, format_iso8601_utc,
+    hold_managed_plant_in_use, now_epoch_ms, purge_managed_executable, random_hex, reject_symlink,
+    resolve_codex_home, resolve_opencodex_home, resolve_user_home, volatile_zero_bytes,
+    write_private_atomic, write_regular_atomic,
 };
 use crate::relay::{
     RelayCredentials, UpstreamError, fetch_home_authenticated, post_child_parity_report,
@@ -675,6 +675,13 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
             return 1;
         }
     };
+    // A receipt from an earlier detach of this link must not vouch for this new attachment.
+    if let Err(e) =
+        remove_optional_file(&detach_receipt_path(&local_paths.opencodex_home, &link_id))
+    {
+        eprintln!("attach failed clearing an earlier detach receipt: {e}");
+        return 1;
+    }
 
     if !matches!(rollback_pending(&local_paths), Ok(false)) {
         eprintln!("attach refused: incomplete attach requires detach recovery");
@@ -1093,6 +1100,21 @@ fn cmd_serve(args: &[String]) -> u8 {
             eprintln!("serve refused: {e}");
             return 1;
         }
+        // Held for the life of this relay, so no purge removes the binary it runs from.
+        let local_appdata = std::env::var_os("LOCALAPPDATA")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+        let _in_use = match std::env::current_exe()
+            .map_err(|e| format!("cannot resolve the current executable: {e}"))
+            .and_then(|exe| {
+                hold_managed_plant_in_use(&exe, &resolve_user_home(), local_appdata.as_deref())
+            }) {
+            Ok(lock) => lock,
+            Err(e) => {
+                eprintln!("serve refused: {e}");
+                return 1;
+            }
+        };
         let port = listen_port.unwrap_or(state.listen_port);
         if port != state.listen_port {
             eprintln!("serve refused: listen port does not match child state");
@@ -1848,32 +1870,37 @@ fn rollback_prior_link(paths: &ChildPaths) -> Result<Option<Option<String>>, Str
     ))
 }
 
+fn detach_receipt_path(opencodex_home: &Path, link_id: &str) -> PathBuf {
+    opencodex_home
+        .join("link-receipts")
+        .join(format!("{link_id}.json"))
+}
+
 /// Durable, link-bound proof that `detach --expect-link` restored this Child, kept in
 /// `$OPENCODEX_HOME/link-receipts/<link id>.json` after the child directory is gone, so a Home
-/// whose answer was lost after the purge can still read it. Holds no credential.
+/// whose answer was lost after the purge can still read it. It records the restore only: whether
+/// the planted binary is gone is read from the binary itself. An attach of the same link removes
+/// it under the lifecycle lock before it changes anything. Holds no credential.
 fn write_detach_receipt(
     opencodex_home: &Path,
     link_id: &str,
     outcome: crate::journal::DetachOutcome,
-    purged: bool,
 ) -> Result<(), String> {
-    let dir = opencodex_home.join("link-receipts");
-    ensure_private_dir(&dir)?;
+    let path = detach_receipt_path(opencodex_home, link_id);
+    if let Some(dir) = path.parent() {
+        ensure_private_dir(dir)?;
+    }
     let body = serde_json::json!({
         "schema": "ocx.child.detach-receipt/1",
         "linkId": link_id,
         "restored": true,
         "outcome": format!("{outcome:?}"),
-        "purged": purged,
     });
-    write_private_atomic(
-        &dir.join(format!("{link_id}.json")),
-        format!("{body}\n").as_bytes(),
-    )
+    write_private_atomic(&path, format!("{body}\n").as_bytes())
 }
 
-/// Purge under the lifecycle lock; with `--expect-link`, record the receipt before the purge
-/// (purged false) and again after it, so a lost answer never leaves the purge unprovable.
+/// Purge under the lifecycle lock; with `--expect-link`, the restore receipt is durable before
+/// the purge starts, so a crash or a lost answer at any later point stays provable.
 fn purge_with_receipt(
     purge: bool,
     current_exe_override: Option<&Path>,
@@ -1882,19 +1909,12 @@ fn purge_with_receipt(
     outcome: crate::journal::DetachOutcome,
 ) -> Result<bool, u8> {
     if let Some(link_id) = expect
-        && let Err(e) = write_detach_receipt(opencodex_home, link_id, outcome, false)
+        && let Err(e) = write_detach_receipt(opencodex_home, link_id, outcome)
     {
         eprintln!("detach could not record its receipt: {e}");
         return Err(1);
     }
-    let purged = purge_after_detach(purge, current_exe_override)?;
-    if let Some(link_id) = expect
-        && purged
-        && let Err(e) = write_detach_receipt(opencodex_home, link_id, outcome, true)
-    {
-        eprintln!("detach could not update its receipt: {e}");
-    }
-    Ok(purged)
+    purge_after_detach(purge, current_exe_override)
 }
 
 /// Restore only when both `state.json` and the ownership record name `link_id`, and an
@@ -2021,6 +2041,12 @@ fn purge_after_detach(purge: bool, current_exe_override: Option<&Path>) -> Resul
     match purge_managed_executable(&exe, &user_home, local_appdata.as_deref()) {
         Ok(PurgeExecutableOutcome::Removed) => Ok(true),
         Ok(PurgeExecutableOutcome::SkippedUnmanagedPath) => Ok(false),
+        Ok(PurgeExecutableOutcome::InUse) => {
+            eprintln!(
+                "detach --purge kept the planted ocx-child: another ocx-child relay is running from it"
+            );
+            Ok(false)
+        }
         Err(e) => {
             eprintln!("detach --purge failed: {e}");
             Err(1)

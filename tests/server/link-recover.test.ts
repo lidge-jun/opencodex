@@ -51,7 +51,7 @@ function harness(links: LinkRecord[]) {
   let store: LinkStore = { version: 1, listenerPort: 18181, links };
   const commands: string[] = [];
   let answer: () => SshRunResult = () => report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true, linkId: ID });
-  const storedReceipt = (body: Record<string, unknown>) => ok(JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: ID, restored: true, outcome: "ExactRestore", purged: true, ...body }) + "\n");
+  const storedReceipt = (body: Record<string, unknown>) => ok(JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: ID, restored: true, outcome: "ExactRestore", ...body }) + "\n");
   let absent: () => SshRunResult = () => storedReceipt({});
   const state: LinkRouteState = {
     pendingHosts: new Map(),
@@ -299,9 +299,9 @@ describe("recover after a lost receipt and with remote failures", () => {
 
   test.each([
     ["no receipt", () => ok("", 4), "managed_child_missing"],
-    ["a receipt for another link", () => ok(JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: OTHER, restored: true, outcome: "ExactRestore", purged: true }) + "\n"), "managed_child_missing"],
-    ["a receipt of another schema", () => ok(JSON.stringify({ linkId: ID, restored: true, purged: true }) + "\n"), "managed_child_missing"],
-    ["a receipt from before the purge", () => ok(JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: ID, restored: true, outcome: "ExactRestore", purged: false }) + "\n"), "purge_incomplete"],
+    ["a receipt for another link", () => ok(JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: OTHER, restored: true, outcome: "ExactRestore" }) + "\n"), "managed_child_missing"],
+    ["a receipt of another schema", () => ok(JSON.stringify({ linkId: ID, restored: true }) + "\n"), "managed_child_missing"],
+    ["a receipt that does not say restored", () => ok(JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: ID, outcome: "ExactRestore" }) + "\n"), "managed_child_missing"],
   ])("a missing binary with %s keeps the tombstone", async (_name, stored, hint) => {
     const h = harness([link()]);
     await forceRevoke(h);
@@ -341,7 +341,7 @@ test.skipIf(process.platform === "win32")("the POSIX receipt read prints only a 
   const home = join(root, "child-home");
   const receipts = join(home, "link-receipts");
   mkdirSync(receipts, { recursive: true });
-  const body = JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: ID, restored: true, outcome: "ExactRestore", purged: true });
+  const body = JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: ID, restored: true, outcome: "ExactRestore" });
   writeFileSync(join(receipts, ID + ".json"), body + "\n");
   const run = (linkId: string) => Bun.spawnSync(remoteRecoverReceiptArgv("posix", linkId), { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root, OPENCODEX_HOME: home } });
   const found = run(ID);

@@ -1078,23 +1078,30 @@ impl FileLock {
     /// Lock `path`, creating its parent private only if it is missing. An existing parent keeps
     /// its permissions; the lock file itself is created owner-only.
     pub fn try_acquire_nonblocking(path: &Path) -> Result<Self, LockAcquireError> {
-        Self::acquire_inner(path, false, true)
+        Self::acquire_inner(path, false, true, false)
     }
 
     pub fn acquire_blocking(path: &Path) -> Result<Self, LockAcquireError> {
-        Self::acquire_inner(path, true, true)
+        Self::acquire_inner(path, true, true, false)
     }
 
     /// Lock a file inside a directory the caller does not own (such as `CODEX_HOME`), leaving
     /// the directory's permissions untouched. The lock file itself is created private.
     pub fn acquire_in_existing_dir(path: &Path, blocking: bool) -> Result<Self, LockAcquireError> {
-        Self::acquire_inner(path, blocking, false)
+        Self::acquire_inner(path, blocking, false, false)
+    }
+
+    /// A shared (reader) lock on a file inside an existing directory, never blocking: many
+    /// holders at once, refused only while someone holds it exclusively.
+    pub fn try_acquire_shared_in_existing_dir(path: &Path) -> Result<Self, LockAcquireError> {
+        Self::acquire_inner(path, false, false, true)
     }
 
     fn acquire_inner(
         path: &Path,
         blocking: bool,
         create_missing_parent: bool,
+        shared: bool,
     ) -> Result<Self, LockAcquireError> {
         let parent = path.parent().ok_or(LockAcquireError::Io)?;
         // A symlinked parent is refused rather than followed, as ensure_private_dir did.
@@ -1146,9 +1153,11 @@ impl FileLock {
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
+            const LOCK_SH: i32 = 1;
             const LOCK_EX: i32 = 2;
             const LOCK_NB: i32 = 4;
-            let op = if blocking { LOCK_EX } else { LOCK_EX | LOCK_NB };
+            let mode = if shared { LOCK_SH } else { LOCK_EX };
+            let op = if blocking { mode } else { mode | LOCK_NB };
             // SAFETY: `file` owns a valid open descriptor.
             let rc = unsafe { flock(file.as_raw_fd(), op) };
             if rc != 0 {
@@ -1160,10 +1169,11 @@ impl FileLock {
             use std::os::windows::io::AsRawHandle;
             const LOCKFILE_FAIL_IMMEDIATELY: u32 = 1;
             const LOCKFILE_EXCLUSIVE_LOCK: u32 = 2;
+            let mode = if shared { 0 } else { LOCKFILE_EXCLUSIVE_LOCK };
             let flags = if blocking {
-                LOCKFILE_EXCLUSIVE_LOCK
+                mode
             } else {
-                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY
+                mode | LOCKFILE_FAIL_IMMEDIATELY
             };
             let mut ov = Overlapped {
                 internal: 0,
@@ -1323,6 +1333,35 @@ pub fn resolve_codex_home() -> PathBuf {
 pub enum PurgeExecutableOutcome {
     Removed,
     SkippedUnmanagedPath,
+    /// Another ocx-child relay (of any OpenCodex home) runs from the planted binary.
+    InUse,
+}
+
+/// Lock file beside the managed planted binary. Every relay serving from that binary holds it
+/// shared for its lifetime; a purge takes it exclusively, without waiting, and keeps the binary
+/// when it cannot. The binary is one per OS user, shared by every ocx-child home of that user.
+pub const PLANT_IN_USE_LOCK: &str = ".ocx-child-in-use.lock";
+
+/// Hold the planted binary's in-use lock shared when `exe_path` is the managed planted binary.
+/// Refuses while a purge holds it, so a relay never starts from a binary being removed.
+pub fn hold_managed_plant_in_use(
+    exe_path: &Path,
+    user_home: &Path,
+    local_appdata: Option<&Path>,
+) -> Result<Option<FileLock>, String> {
+    if !is_managed_plant_executable(exe_path, user_home, local_appdata)? {
+        return Ok(None);
+    }
+    let parent = exe_path
+        .parent()
+        .ok_or_else(|| "missing parent".to_owned())?;
+    match FileLock::try_acquire_shared_in_existing_dir(&parent.join(PLANT_IN_USE_LOCK)) {
+        Ok(lock) => Ok(Some(lock)),
+        Err(LockAcquireError::Busy) => Err("the planted ocx-child is being purged".to_owned()),
+        Err(LockAcquireError::Io) => {
+            Err("cannot open the planted ocx-child in-use lock".to_owned())
+        }
+    }
 }
 
 fn reject_managed_subpath_symlinks(root: &Path, components: &[&str]) -> Result<PathBuf, String> {
@@ -1378,6 +1417,21 @@ pub fn purge_managed_executable(
     if !is_managed_plant_executable(exe_path, user_home, local_appdata)? {
         return Ok(PurgeExecutableOutcome::SkippedUnmanagedPath);
     }
+    let in_use_path = exe_path
+        .parent()
+        .ok_or_else(|| "missing parent".to_owned())?
+        .join(PLANT_IN_USE_LOCK);
+    let _exclusive = match FileLock::acquire_in_existing_dir(&in_use_path, false) {
+        Ok(lock) => lock,
+        Err(LockAcquireError::Busy) => return Ok(PurgeExecutableOutcome::InUse),
+        Err(LockAcquireError::Io) => {
+            return Err("cannot open the planted ocx-child in-use lock".to_owned());
+        }
+    };
+    crate::test_hooks::barrier("purge-holding-in-use");
+    // Removed while held, so the emptied directory can go; a relay opening it now gets a new file
+    // in a directory without a binary and has nothing to serve from.
+    let _ = fs::remove_file(&in_use_path);
     #[cfg(unix)]
     {
         fs::remove_file(exe_path).map_err(|e| {
