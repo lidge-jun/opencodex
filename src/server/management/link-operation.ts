@@ -8,7 +8,8 @@ import { existsSync } from "node:fs";
 import { AliasLockError, withAliasLock } from "../../link/alias-lock";
 import type { ExplicitRoute } from "../../link/explicit-route";
 import { findOperation, hasEffect, isOperationId, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
-  type EnrollEffect, type LinkOperation, type OperationState, type RevokeEffect } from "../../link/operations-journal";
+  type EnrollEffect, type LinkOperation, type OperationsJournal, type OperationState, type RevokeEffect } from "../../link/operations-journal";
+import { readLinkRetirement, type LinkRetirement } from "../../link/retirement";
 import { newLinkId } from "../../link/store";
 import type { ManagementContext } from "./context";
 import { compensateNewLink, fail, readStoreFor, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
@@ -36,6 +37,27 @@ export function journalPathFor(ctx: ManagementContext): string {
 
 const nowOf = (ctx: ManagementContext) => (ctx.deps.now ?? Date.now)();
 const iso = (ctx: ManagementContext) => new Date(nowOf(ctx)).toISOString();
+
+/**
+ * A revoke entry that still owns its link's retirement receipt is never pruned (#8416): its replay is the only path
+ * that settles that receipt from its own evidence, recovery must not lose it between two effect marks, and a pruned
+ * id could be reused by an unrelated operation. A receipt that cannot be read keeps the entry.
+ */
+export function ownsRetirement(op: LinkOperation): boolean {
+  if (op.kind !== "revoke" || op.linkId === undefined) return false;
+  try { return readLinkRetirement(op.linkId)?.operationId === op.operationId; } catch { return true; }
+}
+
+/** The journalled owner of a retirement receipt: the revoke of that same link under the receipt's operation id. */
+export function retirementOwner(journal: OperationsJournal, receipt: LinkRetirement): LinkOperation | undefined {
+  if (receipt.operationId === undefined) return undefined;
+  const op = findOperation(journal, receipt.operationId);
+  return op && op.kind === "revoke" && op.linkId === receipt.link.id ? op : undefined;
+}
+
+function updateJournalPinned<T>(path: string, nowMs: number, change: (journal: OperationsJournal) => T): T {
+  return updateOperationsJournal(path, nowMs, change, ownsRetirement);
+}
 
 /**
  * The parameters that name an enrollment. plant is left out: it follows from what the probe found, and a repeat
@@ -125,7 +147,7 @@ export async function replayOperation(ctx: ManagementContext, state: LinkRouteSt
 }
 
 function settle(ctx: ManagementContext, operationId: string, outcome: OperationState, error?: { code: string; status: number }, childResidual = false): LinkOperation {
-  return updateOperationsJournal(journalPathFor(ctx), nowOf(ctx), journal => {
+  return updateJournalPinned(journalPathFor(ctx), nowOf(ctx), journal => {
     const op = findOperation(journal, operationId)!;
     op.state = outcome;
     if (childResidual && op.kind === "enroll") op.childResidual = true;
@@ -181,7 +203,7 @@ function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation
  * still carries resolvedAt (which the journal refuses to parse).
  */
 export function settleRevokeAfterRetirement(ctx: ManagementContext, operationId: string): void {
-  updateOperationsJournal(journalPathFor(ctx), nowOf(ctx), journal => {
+  updateJournalPinned(journalPathFor(ctx), nowOf(ctx), journal => {
     const current = findOperation(journal, operationId);
     if (!current || current.kind !== "revoke" || (current.state !== "open" && current.state !== "unknown")) return;
     if (!hasEffect(current, "record_removed", "intent") || readStoreFor(ctx).links.some(link => link.id === current.linkId)) return;
@@ -201,7 +223,7 @@ export function settleRevokeAfterRetirement(ctx: ManagementContext, operationId:
  * resume, never a finished removal whose entry stays unknown with nothing left to resume.
  */
 export function resumedRevokeJournal(ctx: ManagementContext, operationId: string, markEffects: boolean): RevokeJournal {
-  const mark = (effect: RevokeEffect, phase: "intent" | "done") => updateOperationsJournal(journalPathFor(ctx), nowOf(ctx), journal => {
+  const mark = (effect: RevokeEffect, phase: "intent" | "done") => updateJournalPinned(journalPathFor(ctx), nowOf(ctx), journal => {
     if (!markEffects) return;
     const op = findOperation(journal, operationId);
     if (!op) throw new Error("the revoke operation is no longer journalled");
@@ -233,13 +255,13 @@ export const NO_ENROLL_JOURNAL: EnrollJournal = {
 /** Write the open entry with its reserved identities; any write failure throws before an effect runs. */
 export function openEnrollJournal(ctx: ManagementContext, request: OperationRequest, alias: string, route: { explicitRoute?: ExplicitRoute; exclusive?: true }): EnrollJournal {
   const path = journalPathFor(ctx), reservedLinkId = newLinkId(), reservedKeyId = randomUUID();
-  updateOperationsJournal(path, nowOf(ctx), journal => {
+  updateJournalPinned(path, nowOf(ctx), journal => {
     journal.operations.push({
       operationId: request.id, kind: "enroll", alias, digest: request.digest, createdAt: iso(ctx), updatedAt: iso(ctx), state: "open",
       reserved: { linkId: reservedLinkId, apiKeyId: reservedKeyId, tunnelPort: null, ...route }, effects: [],
     });
   });
-  const change = (edit: (op: LinkOperation) => void) => updateOperationsJournal(path, nowOf(ctx), journal => {
+  const change = (edit: (op: LinkOperation) => void) => updateJournalPinned(path, nowOf(ctx), journal => {
     const op = findOperation(journal, request.id)!;
     edit(op);
     op.updatedAt = iso(ctx);
@@ -294,10 +316,10 @@ export const NO_REVOKE_JOURNAL: RevokeJournal = { intent() {}, done() {}, finish
 /** Write the open revoke entry; a write failure throws before the revoke changes anything. */
 export function openRevokeJournal(ctx: ManagementContext, request: OperationRequest, alias: string, linkId: string): RevokeJournal {
   const path = journalPathFor(ctx);
-  updateOperationsJournal(path, nowOf(ctx), journal => {
+  updateJournalPinned(path, nowOf(ctx), journal => {
     journal.operations.push({ operationId: request.id, kind: "revoke", alias, linkId, digest: request.digest, createdAt: iso(ctx), updatedAt: iso(ctx), state: "open", effects: [] });
   });
-  const change = (edit: (op: LinkOperation) => void) => updateOperationsJournal(path, nowOf(ctx), journal => {
+  const change = (edit: (op: LinkOperation) => void) => updateJournalPinned(path, nowOf(ctx), journal => {
     const op = findOperation(journal, request.id)!;
     edit(op);
     op.updatedAt = iso(ctx);
@@ -345,7 +367,7 @@ export function handleLinkOperationRoutes(ctx: ManagementContext): Response | nu
   }
   if (one[2] && req.method === "POST") {
     let resolved: ReturnType<typeof resolveLinkOperation>;
-    try { resolved = resolveLinkOperation(journalPathFor(ctx), id, nowOf(ctx)); } catch {
+    try { resolved = resolveLinkOperation(journalPathFor(ctx), id, nowOf(ctx), ownsRetirement); } catch {
       return fail("operation_journal_failed", "The link operation journal could not be written.", 500);
     }
     if (resolved === null) return fail("operation_not_found", "No operation has this id.", 404);

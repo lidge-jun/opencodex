@@ -221,21 +221,23 @@ export function writeOperationsJournal(path: string, journal: OperationsJournal)
  * Drop what has outlived retention: a committed or failed_clean entry 30 days after it finished, a residual or
  * unknown one only 30 days after it was resolved. An open entry, and an unresolved residual or unknown one, stays.
  */
-export function pruneOperations(journal: OperationsJournal, nowMs: number): OperationsJournal {
+export function pruneOperations(journal: OperationsJournal, nowMs: number, keep?: (op: LinkOperation) => boolean): OperationsJournal {
   const expired = (at: string | undefined) => at !== undefined && nowMs - Date.parse(at) > OPERATION_RETENTION_MS;
   return { version: 1, operations: journal.operations.filter(op => {
+    // A caller-pinned entry stays past retention: a revoke that still owns a retirement receipt (#8416).
+    if (keep?.(op)) return true;
     if (op.state === "committed" || op.state === "failed_clean") return !expired(op.finishedAt);
     if (op.state === "residual" || op.state === "unknown") return !expired(op.resolvedAt);
     return true;
   }) };
 }
 
-/** Read, change and write the journal in one section of the config mutation lock, pruning on the way. */
-export function updateOperationsJournal<T>(path: string, nowMs: number, change: (journal: OperationsJournal) => T): T {
+/** Read, change and write the journal in one section of the config mutation lock, pruning on the way (keep pins). */
+export function updateOperationsJournal<T>(path: string, nowMs: number, change: (journal: OperationsJournal) => T, keep?: (op: LinkOperation) => boolean): T {
   return withConfigMutationLockSync(() => {
     const journal = readOperationsJournal(path);
     const result = change(journal);
-    writeOperationsJournal(path, pruneOperations(journal, nowMs));
+    writeOperationsJournal(path, pruneOperations(journal, nowMs, keep));
     return result;
   });
 }
@@ -254,7 +256,7 @@ export function openEnrollmentFor(journal: OperationsJournal, alias: string, exc
  * Mark a residual or unknown entry resolved: O5 proved the Child clean, or a person accepted the loss. Its 30 days
  * of retention start now. An entry in any other state is not resolvable; a missing one is null.
  */
-export function resolveLinkOperation(path: string, operationId: string, nowMs: number): LinkOperation | "not_resolvable" | null {
+export function resolveLinkOperation(path: string, operationId: string, nowMs: number, keep?: (op: LinkOperation) => boolean): LinkOperation | "not_resolvable" | null {
   return updateOperationsJournal(path, nowMs, journal => {
     const op = findOperation(journal, operationId);
     if (!op) return null;
@@ -264,5 +266,5 @@ export function resolveLinkOperation(path: string, operationId: string, nowMs: n
       op.updatedAt = op.resolvedAt;
     }
     return structuredClone(op);
-  });
+  }, keep);
 }

@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claimLinkRetirement, clearLinkRetirement, LinkRetirementError, readLinkRetirement } from "../../src/link/retirement";
+import { claimLinkRetirement, clearLinkRetirement, LinkRetirementError, readLinkRetirement, retirementRootProtected } from "../../src/link/retirement";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore, type LinkRecord, type LinkStore } from "../../src/link/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -116,4 +116,14 @@ test("a receipt keeps the operation that claimed it, refuses a malformed one, an
   const { mode: _mode, operationId: _operationId, ...legacy } = stored;
   writeFileSync(receiptPath(dir), JSON.stringify(legacy));
   expect(readLinkRetirement(link.id, dir)).toEqual({ version: 1, link, nonce: receipt.nonce });
+});
+
+test.skipIf(process.platform === "win32")("a receipt is trusted only under a config root no one else can write", () => {
+  const dir = setup();
+  chmodSync(dir, 0o700);
+  expect(retirementRootProtected(dir)).toBe(true);
+  chmodSync(dir, 0o777);
+  expect(retirementRootProtected(dir)).toBe(false);
+  chmodSync(dir, 0o700);
+  expect(retirementRootProtected(join(dir, "missing"))).toBe(false);
 });

@@ -9,7 +9,7 @@ import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-arg
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
-import { claimLinkRetirement, clearLinkRetirement, readLinkRetirement, type LinkRetirementMode } from "../../link/retirement";
+import { claimLinkRetirement, clearLinkRetirement, readLinkRetirement, retirementRootProtected, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
@@ -27,7 +27,7 @@ import { readManagementJsonBodyOr, readOptionalManagementJsonBody, rethrowManage
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, resumedRevokeJournal, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, resumedRevokeJournal, retirementOwner, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
 import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -296,7 +296,7 @@ function foreignRetirement(ctx: ManagementContext, receipt: ReturnType<typeof re
   if (!receipt) return null;
   let ownerJournalled = false;
   if (receipt.operationId !== undefined) {
-    try { ownerJournalled = findOperation(readOperationsJournal(journalPathFor(ctx)), receipt.operationId) !== undefined; } catch {
+    try { ownerJournalled = retirementOwner(readOperationsJournal(journalPathFor(ctx)), receipt) !== undefined; } catch {
       return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
     }
   }
@@ -333,6 +333,7 @@ async function resumeRetirementBeforeReplay(
     recordListed = readStoreFor(ctx).links.some(link => link.id === id);
   } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
   if (!receipt || receipt.operationId !== operation.id || receipt.mode !== removalMode(force, purge)) return null;
+  if (!retirementTrusted(ctx)) return untrustedRetirement();
   let releaseLink: (() => void) | null = null;
   if (reserve) {
     const { childOpsEngineFor } = await import("./link-child-ops-routes");
@@ -356,9 +357,15 @@ function readRemovalTarget(ctx: ManagementContext, id: string):
     found = readStoreFor(ctx).links.find(link => link.id === id);
   } catch { return { response: fail("link_remove_failed", "The link retirement could not be read.", 503) }; }
   if (!found && !receipt) return { response: fail("link_not_found", "The link was not found.", 404) };
+  if (receipt && !retirementTrusted(ctx)) return { response: untrustedRetirement() };
   if (receipt && found && JSON.stringify(found) !== JSON.stringify(receipt.link)) return { response: fail("link_changed", "The link changed during removal.", 409) };
   return { record: receipt?.link ?? { ...found! }, receipt };
 }
+
+/** A receipt is honoured only under a protected config root (retirementRootProtected); deps inject the check in tests. */
+const retirementTrusted = (ctx: ManagementContext): boolean => (ctx.deps.linkRetirementTrusted ?? retirementRootProtected)();
+const untrustedRetirement = (): Response => fail("link_retirement_untrusted",
+  "This link's removal was interrupted, but the configuration directory is not protected, so its receipt cannot be trusted. Restrict the OpenCodex configuration directory to your user, then repeat the removal.", 503);
 
 async function removeReserved(
   ctx: ManagementContext,

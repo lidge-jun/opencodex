@@ -1,11 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFileNoFollow, isMissingPathError } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { getConfigDir } from "../config/paths";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
-import { hardenSecretDir } from "../lib/windows-secret-acl";
+import { hardenSecretDir, windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import { linkDir, linkStorePath } from "./paths";
 import { isOperationId } from "./operations-journal";
 import { parseLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
@@ -48,6 +48,21 @@ function parse(text: string, id: string): LinkRetirement {
 }
 function sameLink(a: LinkRecord, b: LinkRecord): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+/**
+ * Whether a retirement receipt under this config root can be trusted (#8416). A receipt lets a removal skip the Child
+ * cleanup it records as done, so a receipt another principal could plant must not be honoured. The config mutation
+ * lock only tries to protect the root and continues without it; here protection must hold: on Windows the root's
+ * owner-only ACL must apply, elsewhere the root must be this user's and writable by no one else.
+ */
+export function retirementRootProtected(configDir: string = getConfigDir()): boolean {
+  if (windowsSecretAclApplies()) {
+    try { hardenSecretDir(configDir, { required: true, timeoutMemoKey: `${configDir}::link-retirement` }); return true; } catch { return false; }
+  }
+  try {
+    const root = statSync(configDir);
+    return (root.mode & 0o022) === 0 && (typeof process.getuid !== "function" || root.uid === process.getuid());
+  } catch { return false; }
 }
 /** Missing is distinct from malformed; malformed records always throw. */
 export function readLinkRetirement(id: string, configDir: string = getConfigDir()): LinkRetirement | null {
