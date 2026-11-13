@@ -339,7 +339,7 @@ export async function purgeDisconnectRemote(
   try { result = await runner.run(purgeArgv(expectLink), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
   // A planted binary older than --expect-link rejects it as a usage error (exit 2) before doing anything: run unbound.
   if (bound && result.code === CHILD_USAGE_EXIT) {
-    if (!unboundStillSafe()) return notAttempted("The planted ocx-child predates --expect-link and another link now names this machine's alias, so it was not purged.", "expect_link_unsupported");
+    if (!unboundStillSafe()) return notAttempted("The planted ocx-child predates --expect-link and another link of this Home may reach the same machine, so it was not purged.", "expect_link_unsupported");
     bound = false;
     try { result = await runner.run(purgeArgv(), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
   }

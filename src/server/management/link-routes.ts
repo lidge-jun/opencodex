@@ -10,7 +10,7 @@ import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-arg
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
-import { newLinkId, type LinkStore } from "../../link/store";
+import { effectiveLinkRoutes, newLinkId, type LinkStore } from "../../link/store";
 import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, reownLinkRetirement, type LinkRetirement, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
@@ -567,8 +567,12 @@ async function removeReserved(
     const unboundStillSafe = (): boolean => {
       const links = readStoreFor(ctx).links;
       const wanted = record.alias.toLowerCase();
+      // Enrollment refuses a second link with this primary alias, so the machine another link may own now is found by
+      // its pinned key (the same machine enrolled under another alias or address) or by a route naming this alias.
       return links.some(link => link.id === id)
-        && !links.some(link => link.id !== id && link.direction === "hub-initiated" && link.alias.toLowerCase() === wanted);
+        && !links.some(link => link.id !== id && link.direction === "hub-initiated" && (
+          (Boolean(record.hostKeyFingerprint) && link.hostKeyFingerprint === record.hostKeyFingerprint)
+          || [link.alias, ...effectiveLinkRoutes(link)].some(route => route.toLowerCase() === wanted)));
     };
     if (cleanup) {
       const runner = runnerFor(ctx);
@@ -594,9 +598,10 @@ async function removeReserved(
         try { result = await runner.run(disconnectArgv(true), { timeoutMs: 30_000 }); } catch (error) {
           return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
         }
-        // An ocx or ocx-child older than --expect-link rejects it as a usage error (exit 2) before doing anything.
-        // The unbound retry is the old behaviour, so it runs only while this link is still the only Home-initiated
-        // link naming its alias (re-read now): a re-enrolled machine is refused instead of disconnected unbound.
+        // An ocx or ocx-child older than --expect-link rejects it as a usage error (exit 2) before acting on the link.
+        // The unbound retry is the old behaviour, so it runs only while no other Home-initiated link of this Home may
+        // reach the same machine (same pinned key, or this alias among its routes; re-read now). The machine enrolled
+        // with another Home, or under a new host key, stays outside what this Home can see.
         if (result.code === CHILD_USAGE_EXIT) {
           if (!unboundStillSafe()) return cleanupFailed(disconnectFailed("expect_link_unsupported"), false);
           linkBound = false;

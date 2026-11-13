@@ -717,11 +717,27 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
   });
 
-  test("an older Child cannot be disconnected unbound once another link names its alias", async () => {
-    const h = harness([link(), link({ id: OTHER, alias: "DevBox" })], { ordinary: () => ok("", 2, "Error: Unexpected argument(s)") });
+  // Enrollment refuses a second link with the same primary alias, so the cases that matter are the same machine under
+  // another alias (same pinned key) or a link that reaches this alias through its routes.
+  const sameMachine = [
+    ["the same machine enrolled under another alias (same pinned key)", { id: OTHER, alias: "devbox-ip" }],
+    ["a link that lists this alias among its routes", { id: OTHER, alias: "other-box", hostKeyFingerprint: "SHA256:" + "B".repeat(43), routes: ["other-box", "DEVBOX"] }],
+  ] as const;
+
+  test.each(sameMachine)("an older Child is not disconnected unbound while %s", async (_name, other) => {
+    const h = harness([link(), link(other)], { ordinary: () => ok("", 2, "Error: Unexpected argument(s)") });
     const res = await h.request("DELETE", "/api/link/" + ID, {});
     expect([res.status, (await errorOf(res)).hint]).toEqual([502, "expect_link_unsupported"]);
     expect(h.commands.filter(c => c.includes("disconnect"))).toHaveLength(1);
+    expect(h.store.links.map(l => l.id)).toEqual([ID, OTHER]);
+  });
+
+  test.each(sameMachine)("a --purge on a planted binary older than --expect-link is not run unbound while %s", async (_name, other) => {
+    const h = harness([link(), link(other)]);
+    h.answer(() => ok("", 2, "Usage: ocx-child detach [--keep-catalog] [--purge] [--json]\n"));
+    const res = await h.request("DELETE", "/api/link/" + ID, { purge: true });
+    expect([res.status, (await errorOf(res)).hint]).toEqual([502, "expect_link_unsupported"]);
+    expect(h.commands.filter(c => c.includes("ocx-managed-purge")).map(c => c.includes("--expect-link"))).toEqual([true]);
     expect(h.store.links.map(l => l.id)).toEqual([ID, OTHER]);
   });
 
