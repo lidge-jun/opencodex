@@ -193,6 +193,20 @@ export class OutboundCredentialRegistry {
   complete(): boolean {
     return this.strict.complete;
   }
+
+  /**
+   * Replace, inside text, every recorded value {@link matches} would recognize: the whole text when
+   * it equals a credential-named value at any length (or another value at 8+), and each contained
+   * value of 8+ characters. Unlike a whole-text refusal, the surrounding copy survives, so a reader
+   * that classifies it (refusal wording, codes) still sees the provider's words.
+   */
+  mask(text: string, replacement: string): string {
+    if (this.strict.values.has(text) || (text.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH && this.observed.values.has(text))) return replacement;
+    const secrets = [...this.strict.values.keys(), ...this.observed.values.keys()]
+      .filter(secret => secret.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH && text.includes(secret))
+      .sort((a, b) => b.length - a.length);
+    return secrets.reduce((safe, secret) => safe.replaceAll(secret, replacement), text);
+  }
 }
 
 let active = new OutboundCredentialRegistry();

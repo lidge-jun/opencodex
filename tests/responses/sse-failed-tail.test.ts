@@ -1943,6 +1943,49 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     expect([echoed.includes("ALPHA12345"), echoed.includes("BRAVO67890")]).toEqual([false, false]);
   });
 
+  test.each([
+    ["a Digest parameter that is a protocol word", { authorization: 'Digest username="response", response="a1b2c3d4e5f6"' }, true],
+    ["a header whose name only contains a credential word", { "x-author": "response" }, false],
+  ] as const)("masking keeps the terminal frame's protocol fields: %s", (_name, headers, digestSent) => {
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers);
+    const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message: "echo a1b2c3d4e5f6" } } };
+    const out = rewrite(`event: response.failed\ndata: ${JSON.stringify(failed)}`).join("\n");
+    expect(out).toContain("event: response.failed");
+    const parsed = JSON.parse(out.slice(out.indexOf("data: ") + "data: ".length));
+    // The Digest response value is still a credential this request sent, so its echo is masked.
+    expect([parsed.type, parsed.response?.status, out.includes("a1b2c3d4e5f6")]).toEqual(["response.failed", "failed", !digestSent]);
+  });
+
+  test.each([
+    ["a custom header value", { "x-tenant": "opaque-secret-12345" }, "opaque-secret-12345"],
+    ["a short Basic password", { authorization: "Basic YWNjb3VudGxvbmc6cGluNDI=" }, "pin42"],
+  ] as const)("an untyped error repeating %s this request sent is masked", (_name, headers, echoed) => {
+    const registry = new OutboundCredentialRegistry();
+    registry.remember(headers);
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      const rewrite = createTerminalErrorRedactionBlockRewrite(headers);
+      const out = rewrite(`data: ${JSON.stringify({ error: { code: "mystery_code", message: echoed } })}`).join("\n");
+      expect(out).not.toContain(echoed);
+      expect(JSON.parse(out.slice("data: ".length)).error.code).toBe("mystery_code");
+    } finally { restore(); }
+  });
+
+  test("masking a sent value inside untyped refusal copy keeps the refusal for the relay tail", async () => {
+    const headers = { "x-tenant": "opaque-secret-12345" };
+    const registry = new OutboundCredentialRegistry();
+    registry.remember(headers);
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      const rewrite = createTerminalErrorRedactionBlockRewrite(headers);
+      const raw = `data: ${JSON.stringify({ error: { message: "This request was blocked by our safety systems. opaque-secret-12345" } })}\n\n`;
+      const rewritten = rewrite(raw.trimEnd()).join("\n") + "\n\n";
+      const out = await drain(relaySseWithFailedTail(sourceStream([rewritten]), new AbortController()));
+      expect(out).not.toContain("opaque-secret-12345");
+      expect([out.includes("event: response.failed"), out.includes('"code":"invalid_prompt"')]).toEqual([true, true]);
+    } finally { restore(); }
+  });
+
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: "Bearer auth" });
     const block = `data: ${JSON.stringify({ error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } })}`;
