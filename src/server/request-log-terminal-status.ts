@@ -204,8 +204,10 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     // provider copy it carries. The relay withholds untyped envelopes from the client, so such a
     // reader may meet the tail first; it records the verdict the tail carries.
     const tail = type === "response.failed" ? consumeRelaySyntheticTail(logCtx, json) : undefined;
-    if (tail !== undefined && prior === undefined && tail.verdict !== undefined) {
-      recordBareEvidence(logCtx, { typed: false, verdict: tail.verdict });
+    // The tail's verdict is the relay's own, reduced from the provider's original frames. A reader of
+    // the client stream may have seen only redacted copies of them, so the tail's verdict owns the row.
+    if (tail !== undefined && tail.verdict !== undefined) {
+      recordBareEvidence(logCtx, { typed: prior?.typed ?? false, verdict: tail.verdict });
       return true;
     }
     if (tail !== undefined && prior !== undefined) return true;

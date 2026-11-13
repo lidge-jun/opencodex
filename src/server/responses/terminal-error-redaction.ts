@@ -18,6 +18,8 @@ import { CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, isCyberPolicyMessage, isTer
 const CREDENTIAL_HEADER_SEGMENT = /(?:^|[-_])(?:api[-_]?key|secret|passwd|password|credentials?|auth|token)(?:$|[-_])/i;
 /** A split-out part made only of letters, dots and underscores reads as protocol vocabulary (response, type). */
 const PROTOCOL_WORD = /^[A-Za-z._]+$/;
+/** An SSE event line naming a protocol event, which masking never rewrites. */
+const PROTOCOL_EVENT_LINE = /^event:[ \t]*(?:response\.[a-z_.]+|error|done|ping)[ \t]*\r?$/;
 /**
  * Field names of the Responses frames this rewrite touches. They are protocol, not upstream copy, so
  * masking never renames them, whatever a credential happens to equal.
@@ -156,11 +158,16 @@ function createRedactionTools(outboundHeaders: Record<string, string>, maskCrede
     // Bearer ...) would otherwise split it and leave a prefix the exact mask can no longer find.
     return redactSecrets(maskKnown(value, true));
   };
-  // SSE comments and extension fields can also carry upstream text. The event name and the data
-  // payload (already masked structurally) are left as they are.
+  // SSE comments and extension fields can also carry upstream text. A protocol event name and the
+  // data payload (already masked structurally) are left as they are; any other event name is
+  // provider text and is masked like the rest.
   const maskExtensionLines = (block: string): string => block
     .split("\n")
-    .map(line => /^(?:event|data):/.test(line) ? line : guardedText(line))
+    .map(line => {
+      if (/^data:/.test(line) || PROTOCOL_EVENT_LINE.test(line)) return line;
+      const event = /^event:[ \t]*/.exec(line);
+      return event ? `${event[0]}${guardedText(line.slice(event[0].length))}` : guardedText(line);
+    })
     .join("\n");
   // A frame that cannot be restructured (unparsable or non-object JSON) has its data masked as text.
   const maskUnstructuredBlock = (block: string, payload: string | null): string => {

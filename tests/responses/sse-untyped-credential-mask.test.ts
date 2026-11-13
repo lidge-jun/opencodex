@@ -4,7 +4,7 @@ import { relaySseWithFailedTail } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { createForwardedEvidenceRedaction, createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
 import { OutboundCredentialRegistry, createSentValueGuard, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
-import { noteRequestSentValueGuard } from "../../src/server/request-log-terminal-status";
+import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../../src/server/request-log-terminal-status";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -460,6 +460,36 @@ describe("untyped error envelopes never carry a value this request sent", () => 
       const incomplete = { type: "response.incomplete", response: { status: "incomplete", error: { message: "high-risk cybersecurity" } } };
       const out = await deliver(mode, headers, [`event: response.incomplete\ndata: ${JSON.stringify(incomplete)}`]);
       expect([terminalTypes(out), out.includes('"code":"cyber_policy"'), out.includes("high-risk cybersecurity")]).toEqual([["response.failed"], true, false]);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s never forwards a sent credential as a provider event name", async mode => {
+    const credential = "fixturecredential123456";
+    const headers = { authorization: `Bearer ${credential}` };
+    await withRegistry(headers, async () => {
+      const typed = await deliver(mode, headers, [`event: ${credential}\ndata: ${JSON.stringify({ type: "error", code: "unknown", message: "upstream failed" })}`]);
+      const policy = await deliver(mode, headers, [`event: error\nevent: ${credential}\ndata: ${JSON.stringify({ type: "error", code: "cyber_policy", message: "blocked" })}`]);
+      expect([typed.includes(credential), policy.includes(credential), policy.includes('"code":"cyber_policy"')]).toEqual([false, false, true]);
+    });
+  });
+
+  test("a client-stream row keeps the relay's refusal verdict when a forwarded copy masked its wording", async () => {
+    const headers = { "x-tenant": "safety systems" };
+    await withRegistry(headers, async () => {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const frame = { type: "error", message: "This request was blocked by our safety systems." };
+      const exact = createOutboundCredentialMask(headers);
+      const relayed = await drain(relaySseWithFailedTail(sourceStream([`data: ${JSON.stringify(frame)}\n\n`]), new AbortController(), undefined, {
+        maskCredential: createSynthesizedCopyMask(headers),
+        redactForwardedEvidence: createForwardedEvidenceRedaction(headers, exact),
+        onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(log, payload, verdict),
+      }));
+      // The WebSocket observer reads every client frame into the row.
+      for (const block of relayed.split("\n\n")) {
+        const data = block.split("\n").find(line => line.startsWith("data: "))?.slice("data: ".length);
+        if (data && data !== "[DONE]") inspectResponseLogSsePayload(log, data);
+      }
+      expect([relayed.includes("safety systems"), log.terminalHttpStatus]).toEqual([false, 400]);
     });
   });
 
