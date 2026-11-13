@@ -68,7 +68,19 @@ export async function stopUninstallProxy(io: UninstallProxyStopIo): Promise<Unin
   // An unconfirmed stop normally still leaves this step's proof to the respawn window that
   // follows. With the forced ladder forbidden it must not: the process may be alive, and the
   // Part A failure the caller already recorded is what keeps shared config up.
-  const confirmed = (stopped: boolean): boolean => stopped || !forbidForcedFallback;
+  //
+  // An unconfirmed stop is also NOT evidence that this home's proxy is down. `stopProxy`
+  // answers false without contacting the endpoint when the tracked pid is already dead, so
+  // "the tracked proxy is gone" and "nothing else is serving on this home's ports" are two
+  // different claims; Part A saying `absent`/`stopped` covers only the manager it saw. A
+  // different proxy on the configured port would otherwise be missed, and shared config
+  // restored under it (#3008). The tri-state probe the discovery path already requires is
+  // what settles it, and only a definitive "nothing answers anywhere" keeps the proof.
+  const confirmed = async (stopped: boolean): Promise<boolean> => {
+    if (stopped) return true;
+    if (forbidForcedFallback) return false;
+    return await io.endpointProvenDown();
+  };
 
   // Resolve the target BEFORE anything is recorded. The receipt is an obligation on a
   // specific address, so claiming it from a runtime record the stop never contacts — or
@@ -126,7 +138,7 @@ export async function stopUninstallProxy(io: UninstallProxyStopIo): Promise<Unin
     // The same endpoint the receipt names, so the POST and the obligation cannot diverge.
     ...(target.endpoint ? { runtimeEndpoint: target.endpoint } : {}),
   };
-  const provenDown = confirmed(await io.stop(target.pid, stopIo));
+  const provenDown = await confirmed(await io.stop(target.pid, stopIo));
   // Only a proven stop cleared the record it names. Removing it after a POST that timed out
   // drops the only pointer to a process that may still be running, and reporting the step as
   // changed would claim a state that was never observed. `provenDown` is how the caller

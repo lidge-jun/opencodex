@@ -992,6 +992,45 @@ describe("uninstall proxy stop defers the shared teardown through a receipt (#77
     expect(elsewhere.provenDown).toBe(true);
   });
 
+  test("an unconfirmed tracked stop asks the endpoint before claiming the proxy is down", async () => {
+    // #7771 round 9: `stopProxy` returns false without contacting anything when the tracked
+    // pid is already dead. `confirmed(false)` then reported provenDown:true on the strength of
+    // Part A alone, so a DIFFERENT proxy on the configured port was never probed and shared
+    // config could be restored under it. The tri-state probe is what the discovery path
+    // already requires; the tracked path has to ask the same question.
+    let probed = 0;
+    const dead = await stopUninstallProxy(io({
+      serviceStop: "absent",
+      stop: async () => false,
+      endpointProvenDown: async () => { probed++; return true; },
+    }));
+    expect(probed).toBe(1);
+    expect(dead.provenDown).toBe(true);
+
+    // A live or unreadable endpoint is not proof, and the record stays for the next run.
+    for (const answer of [false]) {
+      const removed: number[] = [];
+      const result = await stopUninstallProxy(io({
+        serviceStop: "stopped",
+        stop: async () => false,
+        endpointProvenDown: async () => answer,
+        removeTracked: pid => { removed.push(pid); },
+      }));
+      expect(result.provenDown).toBe(false);
+      expect(result.changed).toBe(false);
+      expect(removed).toEqual([]);
+    }
+
+    // A confirmed stop needs no second opinion.
+    let asked = 0;
+    const stopped = await stopUninstallProxy(io({
+      stop: async () => true,
+      endpointProvenDown: async () => { asked++; return false; },
+    }));
+    expect(stopped.provenDown).toBe(true);
+    expect(asked).toBe(0);
+  });
+
   test("a receipt that cannot be recorded refuses the stop instead of sending an undeferred POST", async () => {
     let stopped = 0;
     await expect(stopUninstallProxy(io({
