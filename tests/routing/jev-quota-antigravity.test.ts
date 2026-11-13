@@ -379,7 +379,8 @@ test("a credential rotated while the actual probe awaits cannot publish its late
       return Response.json(summary);
     },
   });
-  await collect(); expect(signal("claude-sonnet-5").tier).toBe("unknown");
+  expect(await fetchAntigravityQuota("google-antigravity", config.providers["google-antigravity"]!)).toBeNull();
+  expect(signal("claude-sonnet-5").tier).toBe("unknown");
 });
 
 test("a models-endpoint fallback naming a family never becomes or restamps family evidence", async () => {
@@ -424,4 +425,39 @@ for (const argonObserved of [false, true]) test(`independent Argon pool stays un
   await collect();
   expect(signal("gemini-3.8-flash")).toMatchObject({ tier: "nearly_exhausted", usedPercent: 100 });
   for (const model of ["gemini-4-argon", "gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"]) expect(signal(model).tier).toBe("unknown");
+});
+
+test("a bearer refresh preserves the same account reset baseline", async () => {
+  const events: QuotaResetEvent[] = []; let percent = 95; let deadline = clock - 1000;
+  setQuotaResetSink(event => events.push(event));
+  setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async () => Response.json({ groups: [{ displayName: "Gemini", buckets: [{ window: "5h", remainingFraction: (100 - percent) / 100, resetTime: deadline }] }] }),
+  });
+  await fetchProviderQuotaReports(config, true); await flushProviderQuotaObservationsForTests();
+  store["google-antigravity"]!.accounts[0]!.credential.access = "refreshed-access";
+  store["google-antigravity"]!.accounts[0]!.credential.expires += 60_000;
+  persistStore();
+  percent = 2; deadline = clock + 3_600_000;
+  await fetchProviderQuotaReports(config, true); await flushProviderQuotaObservationsForTests();
+  expect(events).toHaveLength(1);
+});
+
+test("a switch while resolving the token makes no quota request", async () => {
+  const oauth = await import("../../src/oauth");
+  let sends = 0;
+  const spy = spyOn(oauth, "getValidAccessToken").mockImplementation(async () => {
+    const set = store["google-antigravity"]!;
+    set.accounts.push({ id: "fixture-b", credential: { access: "other-access", refresh: "other-refresh", expires: reset + 86_400_000, projectId: "other-project" } });
+    set.activeAccountId = "fixture-b"; persistStore();
+    return "other-access";
+  });
+  setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async () => { sends++; return Response.json(summary); },
+  });
+  try {
+    expect(await fetchAntigravityQuota("google-antigravity", config.providers["google-antigravity"]!)).toBeNull();
+    expect(sends).toBe(0);
+  } finally { spy.mockRestore(); }
 });

@@ -363,13 +363,18 @@ export async function fetchAntigravityUsageQuota(accessToken: string, projectId:
 
 /** Every store read uses `provider`, the same key inference resolves, so a row never probes another row's account. */
 export async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+  const initial = getAccountSet(provider);
+  const selected = initial?.accounts.find(row => row.id === initial.activeAccountId);
   const credential = getCredential(provider);
-  if (!credential?.projectId) return null;
+  if (!credential?.projectId || !selected || !initial) return null;
   let accessToken: string;
   try { accessToken = await getValidAccessToken(provider); } catch { return null; }
   const set = getAccountSet(provider);
   const account = set?.accounts.find(row => row.id === set.activeAccountId);
-  const probed = account?.credential.access === accessToken && account.credential.projectId === credential.projectId ? account : undefined;
+  const probed = set?.activeAccountId === selected.id && set.selectionRevision === initial.selectionRevision
+    && account?.loginId === selected.loginId && account?.addedAt === selected.addedAt
+    && account?.credential.access === accessToken && account.credential.projectId === credential.projectId ? account : undefined;
+  if (!probed) return null;
   const loadedRevision = antigravityLoadedRevision();
   const receipt = probed ? captureAntigravityQuotaReceipt(provider, config, probed.id, antigravityQuotaCredentialGeneration(probed.credential)) : undefined;
   const result = await probeAntigravityUsageQuota(accessToken, credential.projectId);
@@ -379,7 +384,7 @@ export async function fetchAntigravityQuota(provider: string, config: OcxProvide
       const generation = antigravityQuotaCredentialGeneration(probed.credential);
       const revision = set?.selectionRevision;
       const loginId = probed.loginId;
-      reportObservationIdentity.set(value, new Bun.CryptoHasher("sha256").update(JSON.stringify([probed.id, loginId, generation])).digest("hex"));
+      reportObservationIdentity.set(value, new Bun.CryptoHasher("sha256").update(JSON.stringify([probed.id, loginId, probed.addedAt])).digest("hex"));
       accountReportCurrent.set(value, () => {
         const current = getAccountSet(provider);
         const selected = current?.accounts.find(row => row.id === current.activeAccountId);
@@ -391,7 +396,7 @@ export async function fetchAntigravityQuota(provider: string, config: OcxProvide
     // counter Gem/Cla, so it stays display-only: no windows, and retained summary clocks survive.
     const windows = result.source === "google-antigravity:retrieveUserQuotaSummary" ? antigravityDecisionWindows(result.quota) : [];
     if (value && receipt) antigravityEvidence.set(value, { receipt, windows: Object.freeze(windows.map(row => Object.freeze(row))) });
-    return value;
+    return value && accountReportCurrent.get(value)?.() ? value : null;
   }
   if (result.legacy.kind === "throw") throw result.legacy.error;
   return null;

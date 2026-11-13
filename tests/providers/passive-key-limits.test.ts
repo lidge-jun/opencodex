@@ -76,10 +76,10 @@ describe("passive key limit parsing", () => {
 
 describe("passive key observation cache", () => {
   const response = (n: number, reset = "10s") => headers({ "x-ratelimit-remaining-requests": String(n), "x-ratelimit-reset-requests": reset });
-  test("a headerless response is not a reading and leaves the retained measurement intact", () => {
+  test("a headerless response shows unknown and leaves a retained measurement intact", () => {
     const cache = new PassiveKeyLimitCache({ retentionMs: 20000 });
-    expect(cache.record(identity, headers({}), at, 1, 200)).toBe(false);
-    expect(cache.get(identity, at)).toEqual([]);
+    expect(cache.record(identity, headers({}), at, 1, 200)).toBe(true);
+    expect(cache.get(identity, at)).toEqual([{ dimension: "requests", observedAt: at, stale: false }, { dimension: "tokens", observedAt: at, stale: false }]);
     expect(cache.record(identity, response(7, "1s"), at + 10, 2, 200)).toBe(true);
     expect(cache.record(identity, headers({}), at + 20, 3, 200)).toBe(false);
     expect(cache.get(identity, at + 1010)).toEqual([
@@ -110,7 +110,7 @@ describe("passive key observation cache", () => {
   test("a headerless newer response does not fence an older real one", () => {
     const cache = new PassiveKeyLimitCache();
     const old = cache.reserve(identity, 1)!;
-    expect(cache.reserve(identity, 2)!.record(headers({}), at, 200)).toBe(false);
+    expect(cache.reserve(identity, 2)!.record(headers({}), at, 200)).toBe(true);
     expect(old.record(response(1), at, 200)).toBe(true);
     expect(cache.get(identity, at)).toEqual([{ dimension: "requests", observedAt: at, remaining: 1, resetAt: at + 10000, stale: false }, { dimension: "tokens", observedAt: at, stale: false }]);
   });
@@ -160,8 +160,8 @@ describe("passive key observation cache", () => {
   });
   test("headerless responses never replace or fence a measured reading", () => {
     const cache = new PassiveKeyLimitCache();
-    expect(cache.record(identity, headers({}), at, 5, 200)).toBe(false);
-    expect(cache.get(identity, at)).toEqual([]);
+    expect(cache.record(identity, headers({}), at, 5, 200)).toBe(true);
+    expect(cache.get(identity, at)).toEqual([{ dimension: "requests", observedAt: at, stale: false }, { dimension: "tokens", observedAt: at, stale: false }]);
     expect(cache.record(identity, response(1), at, 4, 200)).toBe(true);
     expect(cache.record(identity, response(8), at, 6, 200)).toBe(true);
     expect(cache.record(identity, headers({}), at, 9, 200)).toBe(false);
@@ -279,4 +279,21 @@ describe("passive key observation cache", () => {
     expect(cache.record({ ...identity, model: "redirected" }, response(0), at, 2, 307)).toBe(false);
     expect(cache.get({ ...identity, model: "redirected" }, at)).toEqual([]);
   });
+});
+
+test("first headerless response shows unknown without fencing an older numeric response", () => {
+  const cache = new PassiveKeyLimitCache({ retentionMs: 1000 });
+  const older = cache.reserve(identity, 1)!;
+  const newer = cache.reserve(identity, 2)!;
+  expect(newer.record(headers({}), at, 200)).toBe(true);
+  expect(cache.get(identity, at)).toEqual([
+    { dimension: "requests", observedAt: at, stale: false },
+    { dimension: "tokens", observedAt: at, stale: false },
+  ]);
+  expect(older.record(headers({ "x-ratelimit-remaining-requests": "4" }), at + 1, 429)).toBe(true);
+  expect(cache.get(identity, at + 1)[0]?.remaining).toBe(4);
+  expect(cache.get(identity, at + 1001)).toEqual([]);
+  const redirected = { ...identity, model: "redirect-304" };
+  expect(cache.record(redirected, headers({}), at, 3, 304)).toBe(false);
+  expect(cache.get(redirected, at)).toEqual([]);
 });

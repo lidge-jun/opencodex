@@ -165,7 +165,7 @@ export class PassiveKeyLimitCache {
       if (!active) return false;
       active = false;
       reservedEntry.pending--;
-      if (reservedEntry.pending === 0 && reservedEntry.sequence === -1 && this.entries.get(key) === reservedEntry) {
+      if (reservedEntry.pending === 0 && reservedEntry.sequence === -1 && reservedEntry.rows.length === 0 && this.entries.get(key) === reservedEntry) {
         this.entries.delete(key);
       }
       return true;
@@ -192,8 +192,17 @@ export class PassiveKeyLimitCache {
     const parsed = parsePassiveKeyLimits(identity.provider, headers, observedAt);
     // A parsed response with no count, remaining value or reset in any family proves nothing.
     // It must not advance the sequence fence or replace a retained numeric measurement.
-    if (!parsed.some(row => row.limit !== undefined || row.remaining !== undefined || row.resetAt !== undefined)) return false;
     const current = this.entries.get(key);
+    if (!parsed.some(row => row.limit !== undefined || row.remaining !== undefined || row.resetAt !== undefined)) {
+      if (current?.rows.length) return false;
+      const entry: Entry = current ?? { sequence: -1, rows: [], pending: 0, home: identity.home, namespace: identity.namespace, account: identity.account };
+      entry.rows = parsed;
+      entry.timer = setTimeout(() => { entry.rows = []; entry.timer = undefined; }, this.retentionMs);
+      entry.timer.unref();
+      this.entries.set(key, entry);
+      this.evictOverflow();
+      return true;
+    }
     if (current && sequence <= current.sequence) return false;
     const rows = parsed.flatMap(row => {
       if (row.limit !== undefined || row.remaining !== undefined || row.resetAt !== undefined) return [row];
