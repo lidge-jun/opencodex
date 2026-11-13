@@ -139,6 +139,39 @@ El actualizador comprueba la carpeta de caché de npm antes de detener el proxy,
 
 Luego ejecuta `ocx update` de nuevo. Si `ENOTDIR` persiste después de que pase la comprobación, abra un problema con la salida completa del terminal de `ocx update` y la salida de `npm config get prefix` y `npm config get cache`.
 
+<a id="if-a-pnpm-update-says-the-path-looks-like-a-pnpm-global-store"></a>
+
+## Si una actualización de pnpm indica que la ruta parece un almacén global de pnpm
+
+pnpm 11 y 12 instalan los paquetes globales como enlaces al almacén de pnpm (por ejemplo,
+`~/Library/pnpm/store/v11/links/...` en macOS o `~/.local/share/pnpm/store/v11/links/...`
+en Linux). El actualizador solo acepta esta instalación si pnpm identifica el almacén que usa:
+ejecuta `pnpm store path` para el directorio principal de pnpm y comprueba que el paquete instalado
+esté dentro de ese almacén. Una ruta con aspecto de almacén, archivos marcadores o `.modules.yaml`
+no bastan por sí solos.
+
+Si no se puede realizar esta comprobación al identificar la instalación, la actualización se detiene
+antes de instalar o eliminar nada (la propia consulta de pnpm puede crear una carpeta de almacén vacía).
+El mensaje incluye `this install's path looks like a pnpm global store` y el comando alternativo.
+El actualizador repite la comprobación después de `pnpm add`; si la respuesta de pnpm ya no la
+supera, se detiene sin revertir, pues no puede confirmar en qué almacén escribiría la reversión.
+Comprueba `ocx --version` y luego usa el comando de pnpm que aparece abajo.
+
+Causas frecuentes:
+
+- pnpm es anterior o posterior a las versiones cuyo comportamiento se comprobó (11 y 12). Ejecuta `pnpm --version`.
+- `PNPM_HOME`, o una carpeta superior, es un enlace simbólico, o pnpm muestra una ruta de almacén que no es una única carpeta absoluta `v<N>`.
+- En Windows, el directorio principal de pnpm, las carpetas globales o la ruta del almacén contienen alguno de los caracteres `"%!^&|<>`, que cmd.exe no puede pasar a pnpm de forma segura.
+- El grupo global está en una carpeta que solo parece un almacén (una carpeta `v<N>/links` o los marcadores `files` e `index` de pnpm), pero no es el almacén indicado por pnpm.
+
+En cada caso, actualiza con pnpm y reinicia el proxy:
+
+```bash
+pnpm add -g @bitkyc08/opencodex@latest
+```
+
+Una configuración predeterminada de pnpm 11 o 12 supera esta comprobación y se actualiza normalmente con `ocx update`.
+
 <a id="desktop-app-update-stalls-or-fails-on-installing-update"></a>
 
 ## La actualización de Desktop se detiene o falla en «Instalar actualización…»

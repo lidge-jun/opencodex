@@ -75,6 +75,7 @@ import {
   admissionFields,
   resolveApiAuth,
   resolveResponsesApiAuth,
+  isContextPrincipalCurrent,
   type RequestPolicyView,
   withCors,
   withManagementCors,
@@ -92,7 +93,7 @@ import {
 } from "../live";
 import type { ServeOptionsContext } from "./serve-options";
 import type { RequestMetricsRecorder } from "../request-metrics";
-import { resolveInboundBodyLimitBytes } from "../request-decompress";
+import { attachParsedRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
 import { responseToolOwnership } from "../responses/response-tool-ownership";
 import { runTurnStateCallerScope } from "../turn-state-handles";
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse } from "../workflow-refusal";
@@ -345,11 +346,16 @@ export function createWebsocketHandler(
           const baseHeaders = ws.data.headers ?? new Headers();
           const fwd = new Headers({ "content-type": "application/json" });
           baseHeaders.forEach((value, key) => fwd.set(key, value));
+          // A Remote Link socket hands the pipeline the create it parsed (#8600): serializing it into the request and
+          // parsing it back would hold two more request-sized copies for the turn. Local sockets keep the request body.
+          const turnBody = { ...payload, stream: true };
+          const linkSocket = ws.data.link !== undefined;
           const req = new Request("http://localhost/v1/responses", {
             method: "POST",
             headers: fwd,
-            body: JSON.stringify({ ...payload, stream: true }),
+            ...(linkSocket ? {} : { body: JSON.stringify(turnBody) }),
           });
+          if (linkSocket) attachParsedRequestBody(req, turnBody);
           try {
             // A socket can be the first ingress for a root. Admit every inference frame,
             // then keep its workflow lease with the turn until terminal output or cancellation.
@@ -363,9 +369,15 @@ export function createWebsocketHandler(
             if (workflow?.admitted) turnAdmissionLease.attach(workflow.lease);
             ws.data.nativeControl = nativeControl;
             let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
+            const retainedPrincipal = ws.data.replayPrincipal;
+            const replayPrincipal = retainedPrincipal && (isContextPrincipalCurrent(retainedPrincipal.clientPrincipalId, config)
+              ? retainedPrincipal : { clientPrincipalId: undefined });
             const response = await handleResponses(req, config, logCtx, {
               advisorAdmissionPolicy,
               ...(wsAdmission ? { admission: wsAdmission } : {}),
+              // Keep an empty holder after revocation: a different forwarded bearer
+              // must not become this connection's retained replay owner.
+              ...(replayPrincipal ? { replayPrincipal } : {}),
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
               nativeControl,

@@ -16,4 +16,3 @@ export function authorizedBareNamespaceToolAliases(toolNsMap: Iterable<[string, 
     ),
   );
 }
-

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import { pumpResponsesSseToWebSocket, sendResponseToWebSocket, type WsData } from "../../src/server/ws-bridge";
 import { BoundedSseFrameBuffer, MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
-import { LINK_WS_LIMITS, setLinkPumpTimerForTests } from "../../src/server/index/link-websocket-limits";
+import { LINK_WS_LIMITS, setLinkPumpTimerForTests, setLinkRelayWaitObserverForTests } from "../../src/server/index/link-websocket-limits";
+import { chunkedResponse, relayHarness } from "../helpers/link-relay-harness";
 import { createLinkWebsocketGate } from "../../src/server/index/link-websocket";
 
 // Lane T5c: the link-only bounded pump of design 6.2. A link socket waits for Bun's drain after any
@@ -303,6 +304,46 @@ describe("T5g-R1: a synthesized JSON response on a link socket ends with its tur
     expect(types.at(-1)).toBe("error");
     expect(types).not.toContain("response.completed");
     expect(terminal).toBe("incomplete");
+  });
+});
+
+
+describe("the HTTP link relay reports when it waits for its reader (#8600)", () => {
+  afterEach(() => setLinkRelayWaitObserverForTests(null));
+
+  test("waiting from each chunk it hands over until its reader asks again, and never after the body ends", async () => {
+    const events: boolean[] = [];
+    setLinkRelayWaitObserverForTests(waiting => events.push(waiting));
+    const h = relayHarness();
+    const nonce = await h.session("lnk_aaaaaaaaaaaaaaaa");
+    const response = await h.dispatch(h.request("/v1/responses", { method: "POST", nonce, body: "{}" }), async () => chunkedResponse(["a", "b"]));
+    const reader = response.body!.getReader();
+    expect(events).toEqual([]);
+    expect((await reader.read()).done).toBe(false);
+    expect(events).toEqual([true]);
+    expect((await reader.read()).done).toBe(false);
+    expect(events).toEqual([true, false, true]);
+    expect((await reader.read()).done).toBe(true);
+    expect(events).toEqual([true, false, true, false]);
+  });
+
+  test("a cancelled reader ends the wait", async () => {
+    const events: boolean[] = [];
+    setLinkRelayWaitObserverForTests(waiting => events.push(waiting));
+    const h = relayHarness();
+    const nonce = await h.session("lnk_aaaaaaaaaaaaaaaa");
+    const response = await h.dispatch(h.request("/v1/responses", { method: "POST", nonce, body: "{}" }), async () => chunkedResponse(["a", "b"]));
+    const reader = response.body!.getReader();
+    await reader.read();
+    await reader.cancel();
+    expect(events).toEqual([true, false]);
+  });
+
+  test("without an observer the relay delivers its body as before", async () => {
+    const h = relayHarness();
+    const nonce = await h.session("lnk_aaaaaaaaaaaaaaaa");
+    const response = await h.dispatch(h.request("/v1/responses", { method: "POST", nonce, body: "{}" }), async () => chunkedResponse(["a"]));
+    expect(await response.text()).toBe("a");
   });
 });
 

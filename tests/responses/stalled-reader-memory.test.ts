@@ -170,5 +170,3 @@ describe("request copies under a stalled reader (#8601)", () => {
     } finally { parse.mockRestore(); }
   });
 });
-
-
