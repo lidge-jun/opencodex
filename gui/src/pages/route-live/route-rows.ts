@@ -48,6 +48,9 @@ export interface RouteRow extends LogEntryBase {
   resolvedModel?: string;
   servedModel?: string;
   firstOutputMs?: number;
+  /** ms from request start until the final attempt started (src/server/request-log-route-live.ts). */
+  upstreamSendMs?: number;
+  privacyRedactionMs?: number;
   requestedEffort?: string;
   effectiveEffort?: string;
   usage?: {

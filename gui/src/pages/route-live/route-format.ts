@@ -22,6 +22,13 @@ export function formatDuration(ms: number, locale?: string): string {
   }).format(ms / 1000);
 }
 
+/** Like formatDuration, but a part under 10 ms keeps one decimal so a 2.4 ms stage is not shown as 2 ms. */
+export function formatPartDuration(ms: number, locale?: string): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms >= 10) return formatDuration(ms, locale);
+  return numberFormat(locale, { style: "unit", unit: "millisecond", unitDisplay: "narrow", maximumFractionDigits: 1 }).format(ms);
+}
+
 export function formatPercent(percent: number, locale?: string): string {
   return numberFormat(locale, { style: "percent", maximumFractionDigits: 0 }).format(percent / 100);
 }

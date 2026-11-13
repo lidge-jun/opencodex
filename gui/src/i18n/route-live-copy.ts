@@ -99,6 +99,14 @@ const rows = {
   rowTries: ["{count} tries","{count}회 시도","{count} Versuche","{count} essais","试了 {count} 次","試了 {count} 次","попыток: {count}","{count} 回試行","{count} deneme","{count} lần thử","{count} tentativas"],
   poolTruncated: ["Only the first 16 accounts are shown.","앞의 16개 계정만 보여줘요.","Nur die ersten 16 Konten werden angezeigt.","Seuls les 16 premiers comptes sont affichés.","只显示前 16 个账号。","只顯示前 16 個帳號。","Показаны только первые 16 аккаунтов.","最初の 16 アカウントのみ表示しています。","Yalnızca ilk 16 hesap gösteriliyor.","Chỉ hiển thị 16 tài khoản đầu tiên.","Apenas as primeiras 16 contas são exibidas."],
   loading: ["Loading…","불러오는 중…","Wird geladen…","Chargement…","加载中…","載入中…","Загрузка…","読み込み中…","Yükleniyor…","Đang tải…","Carregando…"],
+  timeHead: ["Where the time went","시간이 어디에 쓰였나","Wohin die Zeit ging","Où est passé le temps","时间花在哪里","時間花在哪裡","Куда ушло время","時間の内訳","Zaman nereye gitti","Thời gian đã đi đâu","Onde o tempo foi gasto"],
+  timePrivacy: ["Privacy redaction","개인정보 마스킹","Datenschutz-Schwärzung","Masquage de confidentialité","隐私脱敏","隱私去識別","Скрытие личных данных","プライバシーのマスキング","Gizlilik maskeleme","Che thông tin riêng tư","Ocultação de privacidade"],
+  timeInternal: ["OpenCodex internal","OpenCodex 내부","OpenCodex intern","Interne OpenCodex","OpenCodex 内部","OpenCodex 內部","Внутри OpenCodex","OpenCodex 内部処理","OpenCodex iç işlem","Nội bộ OpenCodex","Interno do OpenCodex"],
+  timeEarlier: ["Earlier attempts","이전 시도","Frühere Versuche","Essais précédents","之前的尝试","之前的嘗試","Предыдущие попытки","それ以前の試行","Önceki denemeler","Các lần thử trước","Tentativas anteriores"],
+  timeUpstreamWait: ["Waiting for the first token","첫 토큰 대기","Warten auf das erste Token","Attente du premier jeton","等上游第一个字","等上游第一個字","Ожидание первого токена","最初のトークン待ち","İlk token bekleniyor","Chờ token đầu tiên","Esperando o primeiro token"],
+  timeStreaming: ["Streaming","스트리밍 출력","Streaming-Ausgabe","Diffusion de la réponse","流式输出","串流輸出","Потоковая передача","ストリーミング出力","Akış çıktısı","Phát trực tuyến","Transmissão da resposta"],
+  timeReading: ["Waiting for the upstream reply","업스트림 응답 대기","Warten auf die Antwort des Anbieters","Attente de la réponse du fournisseur","等待上游回复","等待上游回覆","Ожидание ответа провайдера","上流の応答待ち","Sağlayıcının yanıtı bekleniyor","Chờ phản hồi từ nhà cung cấp","Esperando a resposta do provedor"],
+  timeNone: ["The time split was not recorded for this request.","이 요청은 시간 내역이 기록되지 않았어요.","Für diese Anfrage wurde keine Zeitaufteilung erfasst.","La répartition du temps n’a pas été enregistrée pour cette requête.","这个请求没有记录时间分布。","這個請求沒有記錄時間分布。","Для этого запроса разбивка времени не записана.","このリクエストには時間の内訳が記録されていません。","Bu istek için zaman dökümü kaydedilmedi.","Yêu cầu này không ghi lại phân bổ thời gian.","A divisão de tempo não foi registrada para esta requisição."],
 } satisfies Record<string, Row>;
 
 export type RouteLiveCopyKey = `routeLive.${keyof typeof rows}`;

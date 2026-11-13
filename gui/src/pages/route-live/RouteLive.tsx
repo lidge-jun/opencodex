@@ -11,6 +11,7 @@ import { FailedDetail, ReasonText } from "./ReasonText";
 import { withSlots } from "./slots";
 import { RequestList } from "./RequestList";
 import { RouteSteps } from "./RouteSteps";
+import { TimeSection } from "./TimeBar";
 import { formatClock, formatDuration } from "./route-format";
 import { rowKey, type RouteRow } from "./route-rows";
 import type { GroupMode } from "./request-groups";
@@ -81,6 +82,7 @@ function Selected({ row, flow, pinned, onBack }: { row: RouteRow; flow: RouteFlo
       <FlowDiagram flow={flow} />
       <PoolLine row={row} />
       <RouteSteps row={row} flow={flow} />
+      {flow.outcome.kind !== "local" && <TimeSection row={row} />}
       {row.routeDecision?.routeKind === "combo" && <p className="rl-muted"><a href="#models/combos">{t("routeLive.linkCombos")}</a></p>}
     </section>
   );

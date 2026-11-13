@@ -56,6 +56,27 @@
 .rl-step--bad { color: var(--red); }
 .rl-step--skipped { color: var(--muted); }
 
+/* where the time went: OpenCodex side, earlier tries, upstream side */
+.rl-time { display: flex; flex-direction: column; gap: var(--space-2); }
+.rl-time-head { display: flex; align-items: baseline; gap: var(--space-3); }
+.rl-time-bar {
+  display: flex; height: 10px; border-radius: var(--radius-xs); overflow: hidden; background: var(--raised);
+  border: 1px solid var(--border);
+}
+.rl-time-seg { flex: 1 1 0; min-width: 2px; }
+.rl-time-side--ocx { background: var(--muted); }
+.rl-time-seg--privacy { opacity: 0.55; }
+.rl-time-side--earlier { background: var(--amber); }
+.rl-time-side--upstream { background: var(--blue); }
+.rl-time-seg--streaming { opacity: 0.55; }
+.rl-time-legend {
+  list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4);
+  font-size: var(--text-label);
+}
+.rl-time-legend li { display: flex; align-items: center; gap: var(--space-1-5); }
+.rl-time-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; }
+.rl-time-legend .rl-num { color: var(--muted); }
+
 /* request list */
 .rl-list { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; overflow-x: auto; }
 .rl-rows { list-style: none; margin: 0; padding: 0; min-width: 880px; }

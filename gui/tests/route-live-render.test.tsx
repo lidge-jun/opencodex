@@ -6,6 +6,7 @@ import { I18nContext, DICTS, interpolate, LOCALES, type Locale, type TFn } from 
 import { FlowDiagram } from "../src/pages/route-live/FlowDiagram";
 import { RequestList } from "../src/pages/route-live/RequestList";
 import { RouteSteps } from "../src/pages/route-live/RouteSteps";
+import { TimeSection } from "../src/pages/route-live/TimeBar";
 import { buildRouteFlow } from "../src/pages/route-live/flow-model";
 import { ROUTE_REASONS } from "../src/pages/route-live/route-reasons";
 import type { RouteRow } from "../src/pages/route-live/route-rows";
@@ -68,6 +69,22 @@ test("request list groups by session, shows dashes for unknown metrics, and mark
   const grouped = list("session");
   expect(grouped.querySelectorAll(".rl-group-head").length).toBe(2);
   expect(grouped.querySelector(".rl-group-head")?.getAttribute("aria-expanded")).toBe("true");
+});
+
+test("time bar lists each measured stage in order with its label, or a note when nothing was recorded", () => {
+  const [first, last] = failover.attempts!;
+  const timed = {
+    ...failover, upstreamSendMs: 1010, privacyRedactionMs: 5, firstOutputMs: 1710,
+    attempts: [{ ...first!, durationMs: 1000 }, { ...last!, firstOutputMs: 700 }],
+  } as unknown as RouteRow;
+  const doc = render(<TimeSection row={timed} />);
+  expect(doc.querySelector("h4")?.textContent).toBe("时间花在哪里");
+  expect([...doc.querySelectorAll(".rl-time-legend li > span:nth-child(2)")].map(s => s.textContent)).toEqual(
+    ["隐私脱敏", "OpenCodex 内部", "之前的尝试", "等上游第一个字", "流式输出"]);
+  expect(doc.querySelectorAll(".rl-time-seg").length).toBe(5);
+  const bare = render(<TimeSection row={{ timestamp: 1, model: "m", provider: "p", status: 200, durationMs: 50 } as unknown as RouteRow} />);
+  expect(bare.querySelector(".rl-time-bar")).toBeNull();
+  expect(bare.querySelector("p")?.textContent).toContain("没有记录时间分布");
 });
 
 test.each(LOCALES)("every reason key the registry points at has copy in $code", ({ code }) => {
