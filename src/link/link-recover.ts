@@ -18,7 +18,8 @@ import type { SshRunner } from "./ssh-runner";
  * words: the machine's own text never reaches the caller.
  */
 export type LinkRecoverOutcome =
-  | { readonly ok: true }
+  /** purged false: the Child restored its state for the link but kept the shared planted binary for another home's relay. */
+  | { readonly ok: true; readonly purged: boolean }
   | { readonly ok: false; readonly status: number; readonly code: string; readonly message: string; readonly hint?: string };
 
 /** Child exit codes of detach --expect-link (native/ocx-child/src/cli.rs). */
@@ -98,14 +99,14 @@ export async function recoverRemoteChild(
       if (!receipt || receipt.schema !== "ocx.child.detach-receipt/1" || receipt.linkId !== target.linkId || receipt.restored !== true) {
         return failed("No planted ocx-child was found in the managed directory and no cleanup receipt for this link exists, so cleanup could not be proven.", "managed_child_missing");
       }
-      return { ok: true };
+      return { ok: true, purged: true };
     }
     return failed(result.code === SSH_TRANSPORT_FAILURE ? "The Child could not be reached." : "The Child could not be recovered.", result.code === SSH_TRANSPORT_FAILURE ? "ssh_failed" : "child_failed");
   }
   if (report?.restored !== true || report.linkId !== target.linkId) return failed("The Child did not report a cleanup bound to this link.", "receipt_unbound");
-  if (report.purged !== true && result.stderr.includes(PURGE_KEPT_IN_USE_MARKER)) {
-    return failed("The Child was cleaned, but kept the planted ocx-child because another ocx-child relay runs from it.", "binary_in_use");
-  }
+  // The link's own state is clean; the binary stays only because another home's relay runs from it,
+  // which no repeat would change. That settles the tombstone.
+  if (report.purged !== true && result.stderr.includes(PURGE_KEPT_IN_USE_MARKER)) return { ok: true, purged: false };
   if (report.purged !== true) return failed("The Child was cleaned but did not report removing the planted ocx-child binary.", "purge_incomplete");
-  return { ok: true };
+  return { ok: true, purged: true };
 }

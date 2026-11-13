@@ -74,7 +74,7 @@ describe("ocx link recover", () => {
     expect(output).not.toHaveBeenCalled();
   });
 
-  test.each([{}, { linkId: "lnk_fedcba9876543210", outcome: "clean", purged: true }, { linkId: ID, outcome: "clean", purged: false }, { linkId: ID, outcome: "clean", purged: true, extra: 1 }])(
+  test.each([{}, { linkId: "lnk_fedcba9876543210", outcome: "clean", purged: true }, { linkId: ID, outcome: "clean", purged: "no" }, { linkId: ID, outcome: "clean", purged: true, extra: 1 }])(
     "a receipt %j that does not prove cleanup fails", async body => {
       const f = fixture(body);
       expect(await runLinkCommand(["recover", "--link-id", ID, "--json"], f.deps)).toBe(1);
@@ -125,5 +125,11 @@ describe("ocx link recover contract", () => {
     expect([noYes.calls, agent.calls, present.calls, person.calls]).toEqual([[], [], [], []]);
     expect(await runLinkCommand(["recover", "--forget", "--link-id", ID, "--yes"], { ...fixture().deps, readStore: noLinks, agentDriven: () => false })).not.toBe(0);
     expect(await runLinkCommand(["recover", "--link-id", ID, "--yes"], fixture().deps)).toBe(2);
+  });
+
+  test("a receipt whose binary stayed for another home's relay is a recovery, and says why", async () => {
+    const f = fixture({ linkId: ID, outcome: "clean", purged: false });
+    expect(await runLinkCommand(["recover", "--link-id", ID], f.deps)).toBe(0);
+    expect(output.mock.calls.flat().join("\n")).toContain("another OpenCodex home on that machine runs a relay from it");
   });
 });

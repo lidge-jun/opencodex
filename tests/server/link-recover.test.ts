@@ -47,7 +47,7 @@ function link(over: Partial<LinkRecord> = {}): LinkRecord {
   };
 }
 
-function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void } = {}) {
+function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: (opts.keyRevokeFails ? [{ id: "fixture-key" }] : []) as OcxConfig["apiKeys"] };
   const knownHosts = join(root, "known_hosts");
@@ -69,7 +69,7 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
     },
     supervisor: {
       start() {}, ensureStarted: async () => {}, reload: async () => {}, holdLink: () => () => {},
-      stopLink: async () => {}, reconnect: async () => true, status: () => [], stop: async () => {},
+      stopLink: async () => { opts.duringStop?.(); }, reconnect: async () => true, status: () => [], stop: async () => {},
     },
   };
   const runner: SshRunner = {
@@ -89,6 +89,7 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
   const deps: ManagementContext["deps"] = {
     now: () => 1_800_000_000_000,
     linkAliasLock: { waitMs: 0 },
+    ...(opts.operationsPath ? { linkOperationsPath: () => opts.operationsPath! } : {}),
     sshRunner: runner,
     readLinkStore: () => store,
     writeLinkStore: next => { if (opts.storeWriteFails) throw new Error("disk full"); store = next; },
@@ -216,7 +217,6 @@ describe("POST /api/link/recover", () => {
     ["a receipt for another link", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true, linkId: OTHER }), "receipt_unbound"],
     ["a receipt without a link id", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true }), "receipt_unbound"],
     ["a binary it did not remove", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: false, linkId: ID }), "purge_incomplete"],
-    ["a binary kept because another relay runs from it", ok(JSON.stringify({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: false, linkId: ID }) + "\n", 0, "ocx-purge-kept:binary_in_use\n"), "binary_in_use"],
   ])("%s is not proof of cleanup", async (_name, result, hint) => {
     const h = harness([link()]);
     await forceRevoke(h);
@@ -587,5 +587,24 @@ describe("recover and a legacy enrollment or revoke of the same alias in another
     // With no tombstone left, a legacy apply runs as before (no lock) and stops at its own first check.
     const after = await harness([]).request("POST", "/api/link/apply", { alias: "devbox" });
     expect((await errorOf(after)).code).toBe("host_not_confirmed");
+  });
+});
+
+describe("final review follow-ups", () => {
+  test("a Child that restored the link but kept the binary for another home's relay settles the tombstone", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    h.answer(() => ok(JSON.stringify({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: false, linkId: ID }) + "\n", 0, "ocx-purge-kept:binary_in_use\n"));
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect([res.status, await res.json()]).toEqual([200, { linkId: ID, outcome: "clean", purged: false }]);
+    expect(tombstones()).toEqual([]);
+  });
+
+  test("a journal write that fails before the key revoke drops the tombstone the forced revoke wrote", async () => {
+    const operationsPath = join(root, "operations.json");
+    const h = harness([link()], { operationsPath, duringStop: () => { writeFileSync(operationsPath, "{ not json"); } });
+    await expect(h.request("DELETE", "/api/link/" + ID, { force: true, operationId: "revoke-1" })).rejects.toThrow();
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
   });
 });

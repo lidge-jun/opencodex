@@ -76,6 +76,6 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
     } catch {
       return fail("tombstone_remove_failed", "The Child was cleaned, but its tombstone could not be removed; run recover again.", 503);
     }
-    return Response.json({ linkId: target.linkId, outcome: "clean", purged: true }, noStore);
+    return Response.json({ linkId: target.linkId, outcome: "clean", purged: outcome.purged }, noStore);
   }));
 }

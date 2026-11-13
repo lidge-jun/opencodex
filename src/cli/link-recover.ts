@@ -26,7 +26,8 @@ const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const ALIAS = /^[^\u0000-\u001f\u007f]{1,255}$/;
 
-interface RecoverReceipt { linkId: string; outcome: "clean"; purged: true }
+/** purged false: the Child restored its state, but kept the shared planted binary for another home's relay. */
+interface RecoverReceipt { linkId: string; outcome: "clean"; purged: boolean }
 interface WaitingTombstone { linkId: string; alias: string; revokedAt: string; remotePlatform?: "posix" | "windows" }
 
 const invalid = (what: string): never => { throw new Error("invalid link API response: " + what); };
@@ -35,8 +36,8 @@ const isObject = (value: unknown): value is Record<string, unknown> => Boolean(v
 function validateReceipt(value: unknown, linkId: string | null): RecoverReceipt {
   if (!isObject(value) || Object.keys(value).sort().join(",") !== "linkId,outcome,purged") return invalid("recover");
   if (typeof value.linkId !== "string" || !LINK_ID.test(value.linkId) || (linkId !== null && value.linkId !== linkId)) invalid("recover");
-  if (value.outcome !== "clean" || value.purged !== true) invalid("recover");
-  return { linkId: value.linkId as string, outcome: "clean", purged: true };
+  if (value.outcome !== "clean" || typeof value.purged !== "boolean") invalid("recover");
+  return { linkId: value.linkId as string, outcome: "clean", purged: value.purged as boolean };
 }
 
 function validateList(value: unknown): WaitingTombstone[] {
@@ -93,5 +94,7 @@ export async function runLinkRecover(args: string[], deps: LinkCliDeps, linkRequ
     body: JSON.stringify(linkId !== undefined ? { linkId } : { operationId }),
   }, deps);
   const receipt = validateReceipt(response, linkId ?? null);
-  printData(receipt, wantsJson, [`Recovered ${receipt.linkId}: the Child restored its pre-link state and removed the planted ocx-child.`]);
+  printData(receipt, wantsJson, [receipt.purged
+    ? `Recovered ${receipt.linkId}: the Child restored its pre-link state and removed the planted ocx-child.`
+    : `Recovered ${receipt.linkId}: the Child restored its pre-link state; the planted ocx-child stays because another OpenCodex home on that machine runs a relay from it.`]);
 }

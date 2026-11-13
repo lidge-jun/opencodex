@@ -329,12 +329,13 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
       try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); written = tombstone; } catch (error) {
         await restartTunnel();
         if (error instanceof LinkTombstoneLimitError) {
-          return fail("tombstone_limit", "The link was kept: too many forced revokes are waiting for cleanup. Recover them, or forget ones whose machine is gone with ocx link recover --forget on this Home.", 409);
+          return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
         }
         return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
       }
     }
-    journal.intent("key_revoked");
+    // A journal write that fails here leaves the link and key in place, so the tombstone written above goes too.
+    try { journal.intent("key_revoked"); } catch (error) { dropOwnTombstone(); throw error; }
     if (!revokeKeyIdempotent(ctx, record.apiKeyId)) {
       dropOwnTombstone();
       return fail("key_revoke_failed", "The link key could not be revoked.", 502);

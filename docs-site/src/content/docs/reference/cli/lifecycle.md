@@ -1557,7 +1557,10 @@ key refuses with `host_key_changed` before connecting) and runs the planted
 binary's `disconnect --purge --expect-link <id>`. The Child restores its
 `~/.codex` files and removes the planted binary only when its state and its
 ownership record both name that link. Success prints
-`{linkId,outcome:"clean",purged:true}` and removes the tombstone. `child_residual`
+`{linkId,outcome:"clean",purged:true}` and removes the tombstone; `purged:false`
+means the Child restored its state but kept the planted binary because another
+OpenCodex home on that machine runs a relay from it, and the tombstone is removed
+too. `child_residual`
 (exit 5) means the Child keeps records this command does not restore, such as an
 ownership record written by an older `ocx-child`; run
 `~/.cache/opencodex/bin/ocx-child detach` on that machine, then recover again.
