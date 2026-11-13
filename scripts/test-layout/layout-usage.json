@@ -4,6 +4,7 @@
   "usage-filter-paging.test.ts": "usage",
   "request-log.test.ts": "usage",
   "request-log-account-roster.test.ts": "usage",
+  "request-log-route-live-timing.test.ts": "usage",
   "oauth-accounts-log-label.test.ts": "oauth",
   "request-log-normalization.test.ts": "usage",
   "request-log-error-detail.test.ts": "usage",

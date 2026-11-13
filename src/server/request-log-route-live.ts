@@ -56,3 +56,28 @@ export function accountRosterField(
     return {};
   }
 }
+
+/** Request-scoped timing the live routing view reads; both are measured, never derived. */
+export interface RouteLiveTimingContext {
+  /** Epoch ms the final physical attempt started; set by whoever opens the attempt. */
+  activeAttemptStartedAt?: number;
+  /** ms a privacy redactor spent rewriting the client body, when one ran. */
+  privacyRedactionMs?: number;
+}
+
+export interface RouteLiveTimingEntryField {
+  /** ms from request start until the final attempt started; includes earlier failed attempts. */
+  upstreamSendMs?: number;
+  privacyRedactionMs?: number;
+}
+
+export function routeLiveTimingField(logCtx: RouteLiveTimingContext, start: number): RouteLiveTimingEntryField {
+  const sendAt = logCtx.activeAttemptStartedAt;
+  const upstreamSendMs = sendAt !== undefined && Number.isFinite(sendAt) && Number.isFinite(start) && sendAt >= start
+    ? sendAt - start : undefined;
+  const redaction = logCtx.privacyRedactionMs;
+  return {
+    ...(upstreamSendMs !== undefined ? { upstreamSendMs } : {}),
+    ...(redaction !== undefined && Number.isFinite(redaction) && redaction >= 0 ? { privacyRedactionMs: redaction } : {}),
+  };
+}
