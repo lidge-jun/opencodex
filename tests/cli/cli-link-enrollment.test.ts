@@ -167,6 +167,34 @@ describe("CLI Remote Link enrollment", () => {
     }
   });
 
+  test("a Home cleanup that left the issued key prints fixed recovery steps, the code and any Child step", async () => {
+    const bareProbe = { alias: "child-a", fingerprint, keyType: "ED25519", ocxVersion: null, runtimeKind: "missing", targetTriple: "linux-x64", plantable: true, binarySizeBytes: 943_718 };
+    const bareConfirm = { alias: "child-a", fingerprint, ocxVersion: null, runtimeKind: "missing", targetTriple: "linux-x64", plantable: true, binarySizeBytes: 943_718 };
+    for (const [code, snippets, residual, bare] of [
+      ["key_cleanup_failed", ["Enrollment did not complete", "revoke the leftover link key under API keys"], false, false],
+      ["link_cleanup_uncertain", ["whether the link is stored is unknown", "ocx link status", "ocx link revoke", "revoke the leftover link key under API keys"], false, false],
+      ["link_cleanup_uncertain", ["whether the link is stored is unknown", "The Child may still be connected.", "Run ocx disconnect and ocx restart on the Child before retrying."], true, false],
+      ["link_cleanup_uncertain", ["whether the link is stored is unknown", "The Child may still be connected.", "ocx-child detach on the Child before retrying."], true, true],
+    ] as const) {
+      let step = 0;
+      const h = harness();
+      try {
+        const [first, second] = bare ? [bareProbe, bareConfirm] : [probe, confirm];
+        h.deps.fetchImpl = async () => ++step < 3 ? Response.json(step === 1 ? first : second) : Response.json({ error: { code, message: "ocx_data_secret server prose" }, ...(residual ? { residual: true } : {}) }, { status: 500 });
+        expect(await runLinkCommand(["add", "child-a", ...(bare ? ["--plant"] : []), "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
+        const message = h.err.join("\n");
+        for (const snippet of snippets) expect(message).toContain(snippet);
+        // A Child that may still be connected was not shown as unlinked.
+        expect(message).not.toContain("was not linked");
+        if (!residual) expect(message).not.toContain("may still be connected");
+        expect(message).toContain("(code " + code + ")");
+        expect(message).not.toContain("ocx_data_secret");
+        expect(message).not.toContain("Link management request failed");
+        expect(h.out).toEqual([]);
+      } finally { h.restore(); }
+    }
+  });
+
   test("a phase failure prints the server's bounded cause, not only the phase name (#8357)", async () => {
     let step = 0;
     const h = harness();
