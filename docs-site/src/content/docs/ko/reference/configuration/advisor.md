@@ -46,7 +46,7 @@ ocx advisor set --context-mode question-only
 
 대시보드 **Advisor** 페이지 또는 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`로 관리합니다.
 
-현재 동의가 없으면 `ocx advisor on`은 프로바이더 간 전송을 켜지 않습니다. 고지를 출력하고 멈춥니다. `ocx advisor on --ack-context-sharing`와 `ocx advisor consent`가 `v1`을 기록합니다. `ocx advisor consent --revoke`는 동의를 지우고 전송을 즉시 멈춥니다. `ocx advisor set`은 동의를 부여하지 않습니다. 대시보드의 동의 확인란은 미리 선택되지 않습니다.
+현재 동의가 없으면 `ocx advisor on`은 프로바이더 간 전송을 켜지 않습니다. 고지를 출력하고 멈춥니다. `ocx advisor on --ack-context-sharing`와 `ocx advisor consent`가 `v1`을 기록합니다. `ocx advisor consent --revoke`는 동의를 지웁니다. 아직 디스패치되지 않은 상담은 차단되지만, 이미 디스패치된 상담은 취소할 수 없고 이미 프록시를 떠난 맥락도 되돌릴 수 없습니다. `ocx advisor set`은 동의를 부여하지 않습니다. 대시보드의 동의 확인란은 미리 선택되지 않습니다.
 
 ## 정책
 
@@ -98,6 +98,7 @@ fetch 기반 웹 검색 턴에서는 실제 적용되는 `tool_choice`가 합성
 ## PR1 제한
 
 - 네이티브 OpenAI 패스스루 턴(ChatGPT 풀 워커)에는 합성 도구가 주입되지 않습니다. 어드바이저는 라우팅(번역) 제공자를 대상으로 합니다. preflight 상담은 run-turn 어댑터에 적용되지만 도구는 적용되지 않습니다.
+- 번역된 `/v1/messages` 요청(예: 번역 제공자로 라우팅한 Claude Code)도 `/v1/responses`, `/v1/chat/completions`와 마찬가지로 합성 도구와 preflight 상담을 받습니다. `policy`와 맥락 공유 동의는 같은 규칙을 따르며, 설정은 현재 구성에서 읽습니다. 따라서 동의를 철회하면 진행 중인 요청이 아직 디스패치되지 않은 상담을 시작하는 것은 차단되지만, 이미 디스패치된 상담은 취소되지 않고 이미 프록시를 떠난 맥락도 되돌릴 수 없습니다.
 - 의미 기반 막힘 감지, 완료 검토, 단계별 에스컬레이션, 다중 전문가 또는 투표는 제공하지 않습니다.
 - preflight 중복 제거 원장은 프로세스 내에 있습니다. 프록시 재시작 후 진행 중인 작업은 preflight 상담을 한 번 더 받을 수 있습니다.
 
