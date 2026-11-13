@@ -5,20 +5,23 @@ import {
   getVertexAccessTokenWithAuthority,
 } from "../lib/gcp-adc";
 import type { OcxProviderConfig } from "../types";
-import { resolveProviderApiKey } from "./api-key-resolve";
+import { isKeychainReference, resolveProviderApiKey } from "./api-key-resolve";
 import { extractGoogleAiStudioModelItems } from "./google-ai-studio-model-discovery";
 import {
   extractModelEnvelopeRows,
   isValidModelDiscoveryModelId,
+  readBoundedDiscoveryJson,
   resolveProviderModelDiscoveryUrl,
   type ProviderModelItemsResult,
   type ProviderModelsApiItem,
 } from "./model-discovery";
+import { MODEL_DISCOVERY_MAX_MODELS, MODEL_DISCOVERY_MAX_RESPONSE_BYTES } from "./model-discovery-limits";
 import {
   effectiveGoogleMode,
   getProviderRegistryEntry,
   mergeRegistryStaticHeaders,
   providerMatchesRegistryTransport,
+  registryEntryForProviderDestination,
 } from "./registry";
 import { resolveProviderTransport } from "./xai-transport";
 
@@ -26,6 +29,42 @@ const VERTEX_PUBLISHER_MODEL_PREFIX = "publishers/google/models/";
 const VERTEX_GENERATIVE_MODEL_ID = /^(?:gemini|gemma)-/i;
 const VERTEX_NON_CHAT_SKU = /(?:^|-)embedding(?:-|$)|-tts(?:-|$)|-transcribe(?:-|$)|(?:^|-)live(?:-|$)/i;
 const VERTEX_TRAILING_API_VERSION = /\/v1(?:beta1?)?$/i;
+
+/** Time budget for one Vertex discovery: ADC token resolution, then every follow-up page. */
+export const VERTEX_DISCOVERY_TIMEOUT_MS = 8_000;
+/** Request ceiling for one listing, first page included (pageSize=300, so 1,500 rows). */
+export const VERTEX_DISCOVERY_MAX_PAGES = 5;
+const VERTEX_PAGE_TOKEN_MAX_LENGTH = 4_096;
+
+/**
+ * Vertex SKUs whose model card lists function calling as "Not supported". An agent client sends
+ * function declarations on every turn, so publishing one of these rows offers a model that cannot
+ * finish a tool loop. Checked 2026-11-13 against the Gemini Enterprise Agent Platform model cards:
+ * gemini-3.1-flash-lite-image, gemini-3.1-flash-image, gemini-3-pro-image(-preview) and
+ * gemini-2.5-flash-image (docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/*).
+ */
+const VERTEX_NO_FUNCTION_CALLING_MODELS = new Set([
+  "gemini-3.1-flash-lite-image",
+  "gemini-3.1-flash-image",
+  "gemini-3-pro-image",
+  "gemini-3-pro-image-preview",
+  "gemini-2.5-flash-image",
+  "gemini-2.5-flash-image-preview",
+  "gemini-2.0-flash-preview-image-generation",
+]);
+
+/**
+ * Image-output Gemini SKUs (`-image` / `-image-generation` segments). Every such card checked
+ * above lists function calling as unsupported, so an unlisted one stays out until its card says
+ * otherwise; publishing it would be a guess about tool support rather than evidence.
+ */
+const VERTEX_IMAGE_OUTPUT_SKU = /-image(?:-|$)/i;
+
+/** Whether a discovered Vertex publisher model can run a client's function-calling loop. */
+export function vertexModelSupportsFunctionCalling(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return !VERTEX_NO_FUNCTION_CALLING_MODELS.has(lower) && !VERTEX_IMAGE_OUTPUT_SKU.test(lower);
+}
 
 /**
  * Whether every configured API key (or the actively selected pool key) is paused on a Vertex row.
@@ -43,21 +82,51 @@ function isVertexApiKeyPoolPaused(provider: OcxProviderConfig | undefined): bool
     && !pool.some(entry => !entry.disabled && entry.key === ref);
 }
 
+function usableVertexKey(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed !== "N/A" && !trimmed.startsWith("<") ? trimmed : undefined;
+}
+
+/** A `keychain:` or `$ENV` reference names one credential; it never widens to ambient ones. */
+function isExplicitKeyReference(value: string | undefined): value is string {
+  return typeof value === "string" && (value.startsWith("keychain:") || value.startsWith("$"));
+}
+
 /**
- * Whether a Vertex provider row authenticates discovery with an API key rather than GCP ADC.
+ * The credential a Vertex discovery request uses, chosen the way inference chooses it
+ * (`snapshotVertexEnvironment` in routed-config and `resolveVertexApiKey` in the Google adapter).
  *
- * Mirrors `resolveVertexApiKey` in `src/adapters/google.ts`: an explicit `gcp-sa:<account>`
- * marker opts into OS-store ADC and never falls back to `GOOGLE_CLOUD_API_KEY`.
+ * - `gcp-sa:<account>` selects that stored service account and never `GOOGLE_CLOUD_API_KEY`.
+ * - An explicit `keychain:` / `$ENV` reference selects that key alone. When it cannot be read,
+ *   `key` is undefined and discovery fails closed: falling through to `GOOGLE_CLOUD_API_KEY` or
+ *   host ADC would publish another account's roster under this provider, and inference rejects
+ *   the same unresolved reference.
+ * - Otherwise a literal key, then `GOOGLE_CLOUD_API_KEY`, then host ADC.
  */
+export type VertexDiscoveryCredential =
+  | { kind: "api-key"; key: string | undefined }
+  | { kind: "adc"; marker?: string };
+
+export function selectVertexDiscoveryCredential(provider: OcxProviderConfig): VertexDiscoveryCredential {
+  const configured = provider.apiKey;
+  if (typeof configured === "string" && configured.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) {
+    return { kind: "adc", marker: configured };
+  }
+  const reference = provider._apiKeyAttempt?.reference;
+  if (isExplicitKeyReference(configured) || isExplicitKeyReference(reference)) {
+    if (!isExplicitKeyReference(configured)) return { kind: "api-key", key: usableVertexKey(configured) };
+    const readable = !configured.startsWith("keychain:") || isKeychainReference(configured);
+    return { kind: "api-key", key: readable ? usableVertexKey(resolveProviderApiKey(configured)) : undefined };
+  }
+  const literal = usableVertexKey(configured);
+  if (literal) return { kind: "api-key", key: literal };
+  const ambientKey = usableVertexKey(process.env.GOOGLE_CLOUD_API_KEY);
+  return ambientKey ? { kind: "api-key", key: ambientKey } : { kind: "adc" };
+}
+
+/** Whether a Vertex provider row authenticates discovery with an API key rather than GCP ADC. */
 export function usesVertexApiKeyForDiscovery(provider: OcxProviderConfig): boolean {
-  if (typeof provider.apiKey === "string" && provider.apiKey.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) {
-    return false;
-  }
-  const resolved = resolveProviderApiKey(provider.apiKey)?.trim();
-  if (resolved && resolved !== "N/A" && !resolved.startsWith("<")) {
-    return true;
-  }
-  return Boolean(process.env.GOOGLE_CLOUD_API_KEY?.trim());
+  return selectVertexDiscoveryCredential(provider).kind === "api-key";
 }
 
 /**
@@ -68,27 +137,27 @@ export function usesVertexApiKeyForDiscovery(provider: OcxProviderConfig): boole
  */
 export function resolveObservedVertexDiscoveryToken(provider: OcxProviderConfig): string | undefined {
   if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
-  if (!usesVertexApiKeyForDiscovery(provider)) return undefined;
-  const resolved = resolveProviderApiKey(provider.apiKey)?.trim();
-  if (resolved && resolved !== "N/A" && !resolved.startsWith("<")) return resolved;
-  return process.env.GOOGLE_CLOUD_API_KEY?.trim() || undefined;
+  const credential = selectVertexDiscoveryCredential(provider);
+  return credential.kind === "api-key" ? credential.key : undefined;
 }
 
 /**
  * Resolve the Vertex model-discovery credential (API key or GCP ADC access token).
  *
- * Paused key pools never fall back to `GOOGLE_CLOUD_API_KEY` or ambient host ADC.
+ * `signal` bounds the ADC exchange by the discovery time budget; without it a stalled token
+ * endpoint would hold discovery through every token retry. Paused key pools, unreadable explicit
+ * references and malformed `gcp-sa:` markers return `undefined` and never reach ambient credentials.
  */
-export async function resolveVertexDiscoveryToken(provider: OcxProviderConfig): Promise<string | undefined> {
+export async function resolveVertexDiscoveryToken(
+  provider: OcxProviderConfig,
+  signal: AbortSignal = AbortSignal.timeout(VERTEX_DISCOVERY_TIMEOUT_MS),
+): Promise<string | undefined> {
   if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
-  if (usesVertexApiKeyForDiscovery(provider)) {
-    return resolveObservedVertexDiscoveryToken(provider);
-  }
+  const credential = selectVertexDiscoveryCredential(provider);
+  if (credential.kind === "api-key") return credential.key;
   try {
-    const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
-    const { token } = await getVertexAccessTokenWithAuthority(
-      markerAccount ? { markerAccount } : undefined,
-    );
+    const markerAccount = gcpCredentialMarkerAccount(credential.marker);
+    const { token } = await getVertexAccessTokenWithAuthority({ signal, ...(markerAccount ? { markerAccount } : {}) });
     return token;
   } catch {
     return undefined;
@@ -120,7 +189,7 @@ export function buildVertexModelsDiscoveryRequest(
     }
   }
   // Vertex ModelGardenService.ListPublisherModels enforces a maximum pageSize of 300
-  // (values > 300 return HTTP 400 INVALID_ARGUMENT).
+  // (values > 300 return HTTP 400 INVALID_ARGUMENT); later pages follow nextPageToken.
   return {
     url: resolveUrl(`${base}/v1beta1/publishers/google/models?pageSize=300`),
     headers,
@@ -154,30 +223,111 @@ export function buildVertexProviderModelsRequest(
   return buildVertexModelsDiscoveryRequest(effectiveProvider, apiKey, headers, resolveUrl);
 }
 
+export type VertexPublisherModelListing =
+  | { ok: true; value: unknown }
+  | { ok: false; reason: "incomplete"; diagnostic: string };
+
+function countingResponse(response: Response, onBytes: (bytes: number) => void): Response {
+  if (!response.body) return response;
+  const counted = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      onBytes(chunk.byteLength);
+      controller.enqueue(chunk);
+    },
+  }));
+  return new Response(counted, { status: response.status, headers: response.headers });
+}
+
+function nextVertexPageToken(page: Record<string, unknown>): string | undefined | null {
+  const token = page.nextPageToken;
+  if (token === undefined || token === "") return undefined;
+  return typeof token === "string" && token.length <= VERTEX_PAGE_TOKEN_MAX_LENGTH ? token : null;
+}
+
 /**
- * Supported reasoning effort levels for known Vertex AI Gemini model IDs.
+ * Follow `nextPageToken` across Vertex `publisherModels` pages and merge them into one envelope.
+ *
+ * One listing is bounded three ways: at most `VERTEX_DISCOVERY_MAX_PAGES` requests, at most the
+ * discovery row limit across every page, and at most the discovery byte limit across every page
+ * (the first page is counted by its re-serialized size, which never exceeds what was read). When
+ * a bound, a page request, the shared deadline, or a repeated token stops the walk before the
+ * last page, the listing is reported incomplete: publishing the pages already read as the
+ * authoritative roster would drop every model on the pages that were not.
+ *
+ * A first page without a `publisherModels` array is returned unchanged for the caller's generic
+ * envelope handling (an OpenAI-compatible gateway in front of Vertex).
  */
-function vertexGeminiReasoningEfforts(modelId: string): readonly string[] | undefined {
-  const lower = modelId.toLowerCase();
-  if (lower.includes("image")) return undefined;
-  if (lower === "gemini-4-hydrogen") {
-    return ["low", "medium", "high", "xhigh"];
+export async function collectVertexPublisherModelPages(
+  firstUrl: string,
+  firstValue: unknown,
+  limits: { maxModels: number; maxResponseBytes: number },
+  fetchPage: (url: string, signal: AbortSignal) => Promise<Response>,
+): Promise<VertexPublisherModelListing> {
+  const first = firstValue !== null && typeof firstValue === "object" && !Array.isArray(firstValue)
+    ? firstValue as Record<string, unknown>
+    : undefined;
+  if (!first || !Array.isArray(first.publisherModels)) return { ok: true, value: firstValue };
+  let token = nextVertexPageToken(first);
+  if (token === undefined) return { ok: true, value: firstValue };
+
+  const maxRows = Math.min(limits.maxModels, MODEL_DISCOVERY_MAX_MODELS);
+  const maxBytes = Math.min(limits.maxResponseBytes, MODEL_DISCOVERY_MAX_RESPONSE_BYTES);
+  const rows: unknown[] = [...first.publisherModels];
+  let bytes = new TextEncoder().encode(JSON.stringify(firstValue)).byteLength;
+  const seenTokens = new Set<string>();
+  const signal = AbortSignal.timeout(VERTEX_DISCOVERY_TIMEOUT_MS);
+  const incomplete = (diagnostic: string): VertexPublisherModelListing =>
+    ({ ok: false, reason: "incomplete", diagnostic: `${diagnostic} after ${seenTokens.size + 1} page(s) and ${rows.length} row(s)` });
+
+  while (token !== undefined) {
+    if (token === null) return incomplete("returned a malformed nextPageToken");
+    if (seenTokens.has(token)) return incomplete("repeated a nextPageToken");
+    if (seenTokens.size + 1 >= VERTEX_DISCOVERY_MAX_PAGES) return incomplete(`exceeded the ${VERTEX_DISCOVERY_MAX_PAGES}-request page limit`);
+    if (rows.length > maxRows) return incomplete(`exceeded the ${maxRows}-row model limit`);
+    if (bytes >= maxBytes) return incomplete(`exceeded the ${maxBytes}-byte listing limit`);
+    seenTokens.add(token);
+    const pageUrl = new URL(firstUrl);
+    pageUrl.searchParams.set("pageToken", token);
+    let page: Record<string, unknown> | undefined;
+    try {
+      const response = await fetchPage(pageUrl.toString(), signal);
+      if (!response.ok) {
+        try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }
+        return incomplete(`page request failed with HTTP ${response.status}`);
+      }
+      const read = await readBoundedDiscoveryJson(countingResponse(response, count => { bytes += count; }), maxBytes - bytes);
+      if (!read.ok) {
+        return incomplete(read.reason === "response_too_large" ? `exceeded the ${maxBytes}-byte listing limit` : "returned an invalid page");
+      }
+      const value = read.value;
+      page = value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+    } catch {
+      return incomplete(signal.aborted ? "exceeded the discovery time budget" : "page request failed");
+    }
+    if (!page || (page.publisherModels !== undefined && !Array.isArray(page.publisherModels))) {
+      return incomplete("returned a malformed page");
+    }
+    if (Array.isArray(page.publisherModels)) rows.push(...page.publisherModels);
+    token = nextVertexPageToken(page);
   }
-  if (
-    lower === "gemini-4-carbon"
-    || lower === "gemini-4-argon"
-    || lower === "gemini-3.8-flash"
-    || lower === "gemini-3.7-flash"
-    || lower.startsWith("gemini-3.1-pro")
-    || lower === "gemini-3-pro"
-    || lower === "gemini-3-pro-preview"
-  ) {
-    return ["low", "medium", "high"];
-  }
-  if (lower === "gemini-3.6-flash" || lower === "gemini-3.5-flash") {
-    return ["minimal", "low", "medium", "high"];
-  }
-  return undefined;
+  if (rows.length > maxRows) return incomplete(`exceeded the ${maxRows}-row model limit`);
+  return { ok: true, value: { publisherModels: rows } };
+}
+
+type ReasoningLadders = Readonly<Record<string, readonly string[]>> | undefined;
+
+/**
+ * The reasoning ladders the Google adapter will serialize for this row. `routedProviderConfig`
+ * fills `modelReasoningEfforts` from the provider's own registry entry when the row matches it,
+ * and from the destination entry (`google-vertex` for aiplatform hosts) otherwise; the adapter
+ * then writes `thinkingConfig` only for a laddered model. Reading the same entry keeps discovery
+ * from advertising a rung the request would silently drop (an unladdered `gemini-3-pro`).
+ */
+function vertexReasoningLadders(providerName: string, provider: OcxProviderConfig): ReasoningLadders {
+  const entry = providerMatchesRegistryTransport(providerName, provider)
+    ? getProviderRegistryEntry(providerName)
+    : registryEntryForProviderDestination(provider);
+  return entry?.modelReasoningEfforts;
 }
 
 /**
@@ -185,12 +335,13 @@ function vertexGeminiReasoningEfforts(modelId: string): readonly string[] | unde
  * `/v1beta1/publishers/google/models` response payload (`{ publisherModels: [...] }`).
  *
  * Strips the `publishers/google/models/` prefix, filters out non-`generateContent` SKUs
- * (embeddings, TTS, transcription, Live API, Imagen/Veo), and enriches known Gemini rows
- * with vendored token/modality/reasoning metadata.
+ * (embeddings, TTS, transcription, Live API, Imagen/Veo) and SKUs without function calling, and
+ * enriches rows with vendored token/modality metadata and the registry's reasoning ladder.
  */
 export function extractGoogleVertexModelItems(
   value: unknown,
   maxModels: number,
+  ladders?: ReasoningLadders,
 ): ProviderModelItemsResult {
   const envelope = extractModelEnvelopeRows(value, maxModels, ["publisherModels"]);
   if (!envelope.ok) return envelope;
@@ -208,10 +359,11 @@ export function extractGoogleVertexModelItems(
       : name;
     if (!isValidModelDiscoveryModelId(id) || seen.has(id)) continue;
     if (!VERTEX_GENERATIVE_MODEL_ID.test(id) || VERTEX_NON_CHAT_SKU.test(id)) continue;
+    if (!vertexModelSupportsFunctionCalling(id)) continue;
     seen.add(id);
 
     const meta = getModelMetadata("google", id) ?? getModelMetadataCaseInsensitive("google", id);
-    const efforts = vertexGeminiReasoningEfforts(id);
+    const efforts = ladders && Object.hasOwn(ladders, id) ? ladders[id] : undefined;
     items.push({
       id,
       owned_by: "google",
@@ -220,7 +372,7 @@ export function extractGoogleVertexModelItems(
         : {}),
       ...(meta?.maxTokens !== undefined ? { max_output_tokens: meta.maxTokens } : {}),
       ...(meta?.input?.length ? { input_modalities: [...meta.input] } : {}),
-      ...(efforts ? { reasoning_efforts: [...efforts] } : {}),
+      ...(efforts?.length ? { reasoning_efforts: [...efforts] } : {}),
     });
   }
   return { ok: true, items, rawCount: envelope.rows.length };
@@ -232,14 +384,16 @@ export function extractGoogleVertexModelItems(
  * gateway envelope (`data[]` or top-level array) so callers fall back cleanly.
  */
 export function extractGoogleNativeModelItems(
-  googleMode: "ai-studio" | "vertex" | "cloud-code-assist" | null,
+  providerName: string,
+  provider: OcxProviderConfig,
   value: unknown,
   maxModels: number,
 ): ProviderModelItemsResult | undefined {
+  const googleMode = effectiveGoogleMode(providerName, provider);
   const result = googleMode === "ai-studio"
     ? extractGoogleAiStudioModelItems(value, maxModels)
     : googleMode === "vertex"
-      ? extractGoogleVertexModelItems(value, maxModels)
+      ? extractGoogleVertexModelItems(value, maxModels, vertexReasoningLadders(providerName, provider))
       : undefined;
   if (!result) return undefined;
   return result.ok || result.reason === "too_many_models" ? result : undefined;

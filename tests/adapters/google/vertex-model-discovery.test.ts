@@ -1,0 +1,218 @@
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { Buffer } from "node:buffer";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createGoogleAdapter } from "../../../src/adapters/google";
+import { __resetVertexTokenCache } from "../../../src/lib/gcp-adc";
+import {
+  collectVertexPublisherModelPages,
+  extractGoogleNativeModelItems,
+  resolveObservedVertexDiscoveryToken,
+  resolveVertexDiscoveryToken,
+  VERTEX_DISCOVERY_MAX_PAGES,
+} from "../../../src/providers/google-vertex-model-discovery";
+import { setProviderKeychainEntryFactoryForTests } from "../../../src/providers/key-store";
+import { getProviderRegistryEntry } from "../../../src/providers/registry";
+import { routedProviderConfig } from "../../../src/providers/routed-config";
+import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
+import { removeTreeWithRetry } from "../../helpers/remove-tree";
+
+const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const ENV_KEYS = ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_API_KEY", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "CLOUDSDK_CONFIG"];
+const UNREADABLE_REFERENCES = ["keychain:missing-fixture", "${MISSING_VERTEX_TEST_KEY}", "$MISSING_VERTEX_TEST_KEY", "keychain:"];
+
+let tmp: string;
+let saPath: string;
+const realFetch = globalThis.fetch;
+const savedEnv: Record<string, string | undefined> = {};
+let tokenCalls = 0;
+
+function vertex(extra: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+  return { adapter: "google", googleMode: "vertex", authMode: "key", baseUrl: "https://aiplatform.googleapis.com", ...extra } as OcxProviderConfig;
+}
+
+beforeAll(async () => {
+  tmp = mkdtempSync(join(tmpdir(), "ocx-vertex-discovery-"));
+  const kp = await globalThis.crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const pkcs8 = await globalThis.crypto.subtle.exportKey("pkcs8", kp.privateKey);
+  const pem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8).toString("base64").match(/.{1,64}/g)!.join("\n")}\n-----END PRIVATE KEY-----\n`;
+  saPath = join(tmp, "sa.json");
+  writeFileSync(saPath, JSON.stringify({ type: "service_account", client_email: "svc@example.test", private_key: pem, private_key_id: "k1" }));
+  for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
+});
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  __resetVertexTokenCache();
+  setProviderKeychainEntryFactoryForTests(null);
+  for (const key of ENV_KEYS) {
+    if (savedEnv[key] === undefined) delete process.env[key]; else process.env[key] = savedEnv[key];
+  }
+  tokenCalls = 0;
+});
+
+afterAll(() => removeTreeWithRetry(tmp));
+
+/** Ambient credentials present: a GOOGLE_CLOUD_API_KEY and a host ADC service account that would mint a token. */
+function withAmbientCredentials(): void {
+  process.env.GOOGLE_CLOUD_API_KEY = "ambient-env-key";
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = saPath;
+  process.env.CLOUDSDK_CONFIG = join(tmp, "no-gcloud");
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+    if (url === OAUTH_TOKEN_URL) {
+      tokenCalls++;
+      return Response.json({ access_token: "ambient-adc-token", expires_in: 3600, token_type: "Bearer" });
+    }
+    return new Response("unexpected", { status: 404 });
+  }) as typeof fetch;
+}
+
+describe("Vertex discovery credential selection", () => {
+  test("an unreadable explicit key reference fails closed instead of using ambient credentials", async () => {
+    withAmbientCredentials();
+    setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => null, setPassword: () => {}, deletePassword: () => true }));
+    for (const apiKey of UNREADABLE_REFERENCES) {
+      const provider = vertex({ apiKey });
+      expect(resolveObservedVertexDiscoveryToken(provider)).toBeUndefined();
+      expect(await resolveVertexDiscoveryToken(provider)).toBeUndefined();
+      // Inference rejects the same reference, so discovery and requests agree on the boundary.
+      expect(() => routedProviderConfig("google-vertex", provider)).toThrow();
+    }
+    expect(tokenCalls).toBe(0);
+  });
+
+  test("the same references use their own key once readable, and no reference keeps the ambient chain", async () => {
+    withAmbientCredentials();
+    setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => "keychain-vertex-key", setPassword: () => {}, deletePassword: () => true }));
+    expect(await resolveVertexDiscoveryToken(vertex({ apiKey: "keychain:google-vertex" }))).toBe("keychain-vertex-key");
+    process.env.MISSING_VERTEX_TEST_KEY = "env-ref-key";
+    try {
+      expect(await resolveVertexDiscoveryToken(vertex({ apiKey: "$MISSING_VERTEX_TEST_KEY" }))).toBe("env-ref-key");
+    } finally {
+      delete process.env.MISSING_VERTEX_TEST_KEY;
+    }
+    expect(await resolveVertexDiscoveryToken(vertex())).toBe("ambient-env-key");
+    delete process.env.GOOGLE_CLOUD_API_KEY;
+    expect(await resolveVertexDiscoveryToken(vertex())).toBe("ambient-adc-token");
+    expect(tokenCalls).toBe(1);
+  });
+
+  test("ADC resolution honours the discovery deadline", async () => {
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = saPath;
+    process.env.CLOUDSDK_CONFIG = join(tmp, "no-gcloud");
+    delete process.env.GOOGLE_CLOUD_API_KEY;
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      tokenCalls++;
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    })) as typeof fetch;
+    const started = Date.now();
+    expect(await resolveVertexDiscoveryToken(vertex(), AbortSignal.timeout(50))).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(tokenCalls).toBeGreaterThan(0);
+  });
+});
+
+function publisher(...ids: string[]): Array<{ name: string }> {
+  return ids.map(id => ({ name: `publishers/google/models/${id}` }));
+}
+
+describe("Vertex discovery rows", () => {
+  test("SKUs without function calling are not published, by tool support rather than the gemini- prefix", () => {
+    const result = extractGoogleNativeModelItems("google-vertex", vertex(), { publisherModels: publisher(
+      "gemini-3.1-flash-lite-image",
+      "gemini-3.1-flash-image",
+      "gemini-3-pro-image",
+      "gemini-2.5-flash-image",
+      "gemini-9-flash-image-preview",
+      "gemini-3.1-flash-lite",
+      "gemini-4-hydrogen",
+    ) }, 100);
+    expect(result?.ok).toBe(true);
+    expect(result?.ok && result.items.map(item => item.id)).toEqual(["gemini-3.1-flash-lite", "gemini-4-hydrogen"]);
+  });
+
+  test("advertised efforts are the registry ladder the adapter serializes", async () => {
+    const ladders = getProviderRegistryEntry("google-vertex")?.modelReasoningEfforts ?? {};
+    const result = extractGoogleNativeModelItems("google-vertex", vertex({ apiKey: "literal-key" }),
+      { publisherModels: publisher("gemini-4-hydrogen", "gemini-4-carbon", "gemini-3-pro") }, 100);
+    const items = result?.ok ? result.items : [];
+    const byId = new Map(items.map(item => [item.id, item]));
+    expect(byId.get("gemini-4-hydrogen")?.reasoning_efforts).toEqual([...ladders["gemini-4-hydrogen"]!]);
+    expect(byId.get("gemini-4-carbon")?.reasoning_efforts).toEqual([...ladders["gemini-4-carbon"]!]);
+    expect(ladders["gemini-3-pro"]).toBeUndefined();
+    expect(byId.get("gemini-3-pro")?.reasoning_efforts).toBeUndefined();
+
+    const adapter = createGoogleAdapter(routedProviderConfig("google-vertex", vertex({ apiKey: "literal-key", project: "p", location: "global" })));
+    const request = (modelId: string, effort: string): OcxParsedRequest => ({
+      modelId, stream: false, context: { messages: [{ role: "user", content: "hi" }], systemPrompt: [], tools: [] },
+      options: { reasoning: effort },
+    } as unknown as OcxParsedRequest);
+    const thinking = async (modelId: string, effort: string) =>
+      JSON.parse((await adapter.buildRequest(request(modelId, effort))).body).generationConfig?.thinkingConfig;
+    expect(await thinking("gemini-4-hydrogen", "xhigh")).toEqual({ thinkingLevel: "xhigh" });
+    expect(await thinking("gemini-3-pro", "high")).toBeUndefined();
+  });
+});
+
+describe("Vertex publisherModels pagination", () => {
+  const limits = { maxModels: 2_000, maxResponseBytes: 4 * 1024 * 1024 };
+  const firstUrl = "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=300";
+
+  function pages(map: Record<string, unknown>, seen: string[] = []) {
+    return async (url: string): Promise<Response> => {
+      const token = new URL(url).searchParams.get("pageToken") ?? "";
+      seen.push(token);
+      const page = map[token];
+      return page === undefined ? new Response("gone", { status: 500 }) : Response.json(page);
+    };
+  }
+
+  test("follows nextPageToken and merges every page", async () => {
+    const seen: string[] = [];
+    const listing = await collectVertexPublisherModelPages(firstUrl, { publisherModels: publisher("gemini-a"), nextPageToken: "t1" }, limits, pages({
+      t1: { publisherModels: publisher("gemini-b"), nextPageToken: "t2" },
+      t2: { publisherModels: publisher("gemini-c") },
+    }, seen));
+    expect(seen).toEqual(["t1", "t2"]);
+    expect(listing).toEqual({ ok: true, value: { publisherModels: publisher("gemini-a", "gemini-b", "gemini-c") } });
+  });
+
+  test("a single page passes through unchanged", async () => {
+    const first = { publisherModels: publisher("gemini-a") };
+    const listing = await collectVertexPublisherModelPages(firstUrl, first, limits, () => { throw new Error("no request expected"); });
+    expect(listing).toEqual({ ok: true, value: first });
+  });
+
+  test("an unfinished walk is reported incomplete, never published as the whole roster", async () => {
+    const endless: Record<string, unknown> = {};
+    for (let page = 1; page <= VERTEX_DISCOVERY_MAX_PAGES + 2; page++) {
+      endless[`t${page}`] = { publisherModels: publisher(`gemini-${page}`), nextPageToken: `t${page + 1}` };
+    }
+    const seen: string[] = [];
+    const capped = await collectVertexPublisherModelPages(firstUrl, { publisherModels: [], nextPageToken: "t1" }, limits, pages(endless, seen));
+    expect(capped.ok).toBe(false);
+    expect(seen).toHaveLength(VERTEX_DISCOVERY_MAX_PAGES - 1);
+
+    const failed = await collectVertexPublisherModelPages(firstUrl, { publisherModels: [], nextPageToken: "t1" }, limits, pages({}));
+    expect(failed).toMatchObject({ ok: false, reason: "incomplete" });
+
+    const loop = await collectVertexPublisherModelPages(firstUrl, { publisherModels: [], nextPageToken: "t1" }, limits,
+      pages({ t1: { publisherModels: [], nextPageToken: "t1" } }));
+    expect(loop.ok).toBe(false);
+
+    const rows = await collectVertexPublisherModelPages(firstUrl, { publisherModels: publisher("gemini-a", "gemini-b"), nextPageToken: "t1" },
+      { ...limits, maxModels: 2 }, pages({ t1: { publisherModels: publisher("gemini-c") } }));
+    expect(rows.ok).toBe(false);
+
+    const big = { publisherModels: publisher(...Array.from({ length: 50 }, (_, i) => `gemini-${i}`)) };
+    const bytes = await collectVertexPublisherModelPages(firstUrl, { publisherModels: [], nextPageToken: "t1" },
+      { ...limits, maxResponseBytes: 600 }, pages({ t1: big }));
+    expect(bytes.ok).toBe(false);
+  });
+});

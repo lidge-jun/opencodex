@@ -275,4 +275,39 @@ describe("Vertex catalog configuration", () => {
       expect(rows.some(row => row.id === excluded)).toBe(false);
     }
   });
+  test("a paginated Vertex listing publishes every page, and an unfinished one is not published as authoritative", async () => {
+    const pageTokens: string[] = [];
+    let failSecondPage = false;
+    globalThis.fetch = ((input: string | URL | Request) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+      const token = url.searchParams.get("pageToken");
+      if (token) pageTokens.push(token);
+      if (!token) {
+        return Promise.resolve(Response.json({
+          publisherModels: [{ name: "publishers/google/models/gemini-4-carbon" }],
+          nextPageToken: "page-2",
+        }));
+      }
+      if (failSecondPage) return Promise.resolve(new Response("unavailable", { status: 503 }));
+      return Promise.resolve(Response.json({ publisherModels: [{ name: "publishers/google/models/gemini-4-hydrogen" }] }));
+    }) as typeof fetch;
+    const config: OcxConfig = { providers: { "paged-vertex": {
+      adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com",
+      apiKey: "vertex-api-key", liveModels: true, models: ["configured-only"],
+    } } };
+
+    const complete = await gatherRoutedModels(config);
+    expect(pageTokens).toEqual(["page-2"]);
+    expect(complete.filter(row => row.provider === "paged-vertex").map(row => row.id))
+      .toEqual(expect.arrayContaining(["gemini-4-carbon", "gemini-4-hydrogen"]));
+
+    clearModelCache();
+    failSecondPage = true;
+    warn = spyOn(console, "warn").mockImplementation(() => {});
+    const incomplete = await gatherRoutedModels(config);
+    const ids = incomplete.filter(row => row.provider === "paged-vertex").map(row => row.id);
+    expect(ids).toContain("configured-only");
+    expect(ids).not.toContain("gemini-4-carbon");
+    expect(warn.mock.calls.map(call => String(call[0])).join("\n")).toContain("incomplete paginated listing");
+  });
 });

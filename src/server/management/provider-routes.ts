@@ -73,8 +73,10 @@ import {
 } from "../../providers/model-discovery";
 import {
   buildVertexProviderModelsRequest,
+  collectVertexPublisherModelPages,
   extractGoogleNativeModelItems,
   resolveVertexDiscoveryToken,
+  VERTEX_DISCOVERY_TIMEOUT_MS,
 } from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
@@ -1655,7 +1657,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const apiKey = prov.authMode === "oauth"
       ? snapshot?.accessToken
       : effectiveGoogleMode(name, prov) === "vertex"
-        ? await resolveVertexDiscoveryToken(prov)
+        ? await resolveVertexDiscoveryToken(prov, AbortSignal.any([req.signal, AbortSignal.timeout(VERTEX_DISCOVERY_TIMEOUT_MS)]))
         : await resolveModelsAuthToken(name, prov);
     if ((prov.authMode === "oauth" || effectiveGoogleMode(name, prov) === "vertex") && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
@@ -1766,21 +1768,26 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (antigravity && !ccaModels) {
         return jsonResponse({ ok: false, latencyMs, error: "upstream CCA model discovery returned an unexpected shape" });
       }
+      const listing = !ccaModels && effectiveGoogleMode(name, prov) === "vertex"
+        ? await collectVertexPublisherModelPages(modelsUrl, bounded.value, discovery,
+          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal: AbortSignal.any([req.signal, signal]) }, outboundDependencies))
+        : { ok: true as const, value: bounded.value };
+      if (!listing.ok) return jsonResponse({ ok: false, latencyMs, error: `upstream Vertex model listing is incomplete: ${listing.diagnostic}` });
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
       // as catalog discovery. Google AI Studio parses the native `models[]` envelope and filters to
       // `generateContent`, while other providers fall back to generic envelope rows if they return `models[]`.
-      const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
-        ? bounded.value as Record<string, unknown>
+      const record = listing.value !== null && typeof listing.value === "object" && !Array.isArray(listing.value)
+        ? listing.value as Record<string, unknown>
         : undefined;
       const googleNative = !ccaModels
-        ? extractGoogleNativeModelItems(effectiveGoogleMode(name, prov), bounded.value, discovery.maxModels)
+        ? extractGoogleNativeModelItems(name, prov, listing.value, discovery.maxModels)
         : undefined;
       const extracted = ccaModels
         ? undefined
         : googleNative
-        ?? (Array.isArray(bounded.value) || Array.isArray(record?.data)
-          ? extractProviderModelItems(bounded.value, discovery)
-          : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]));
+        ?? (Array.isArray(listing.value) || Array.isArray(record?.data)
+          ? extractProviderModelItems(listing.value, discovery)
+          : extractModelEnvelopeRows(listing.value, discovery.maxModels, ["models"]));
       if (extracted && !extracted.ok) {
         return jsonResponse({
           ok: false,

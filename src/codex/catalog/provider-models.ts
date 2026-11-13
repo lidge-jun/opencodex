@@ -101,6 +101,7 @@ import {
   type ResolvedProviderModelDiscovery,
 } from "../../providers/model-discovery";
 import {
+  collectVertexPublisherModelPages,
   extractGoogleNativeModelItems,
   resolveObservedVertexDiscoveryToken,
   resolveVertexDiscoveryToken,
@@ -862,10 +863,23 @@ export async function fetchProviderModelsWithAuth(
       markProviderDiscoveryOk(name, live.length);
       return observed(withConfiguredRetention(azureMetadata ? live : forCache, { warnDrops: true }), "authoritative");
     }
-    const googleNative = extractGoogleNativeModelItems(effectiveGoogleMode(name, prov), bounded.value, discovery.maxModels);
+    const listing = effectiveGoogleMode(name, prov) === "vertex"
+      ? await collectVertexPublisherModelPages(url, bounded.value, discovery,
+        (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies))
+      : { ok: true as const, value: bounded.value };
+    if (!listing.ok) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" returned an incomplete paginated listing (${listing.diagnostic}) [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
+      return observed(models, "degraded");
+    }
+    const googleNative = extractGoogleNativeModelItems(name, prov, listing.value, discovery.maxModels);
     // Native Google discovery wins; a google row served by an OpenAI-compatible
     // gateway keeps the generic data[] / top-level-array contract.
-    const extracted = googleNative ?? extractProviderModelItems(bounded.value, discovery);
+    const extracted = googleNative ?? extractProviderModelItems(listing.value, discovery);
     if (!extracted.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       const diagnostic: Record<ModelDiscoveryResponseFailure, string> = {

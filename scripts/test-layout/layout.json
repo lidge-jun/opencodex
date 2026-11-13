@@ -1885,6 +1885,7 @@
     "vercel-gateway-provider-routing.test.ts": "providers",
     "version-line.test.ts": "ci-workflows",
     "vertex-catalog.test.ts": "adapters/google",
+    "vertex-model-discovery.test.ts": "adapters/google",
     "vision-anthropic.test.ts": "vision",
     "vision-backend-union.test.ts": "vision",
     "vision-cache.test.ts": "vision",
