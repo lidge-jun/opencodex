@@ -12,7 +12,7 @@ import {
   PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE,
   PLAINTEXT_V2_COLLABORATION_NAMESPACE,
 } from "../../src/responses/plaintext-v2-agent-messages";
-import { clearResponseStateForTests } from "../../src/responses/state";
+import { clearResponseStateForTests, expandPreviousResponseInput as expandLegacyResponseInput } from "../../src/responses/state";
 import { handleOwnedResponses as handleResponses, expandOwnedResponseInput as expandPreviousResponseInput } from "../helpers/response-replay-owner";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -196,6 +196,10 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
       const response = await handleResponses(request.clone(), cfg, { model: "", provider: "" });
       expect(response.status).toBe(200);
       expect(await response.text()).toContain('"name":"spawn_agent"');
+      if (mode === "v2" && sentBodies.length === 1) {
+        const legacy = expandLegacyResponseInput({ previous_response_id: "resp-existing-v2-1", input: [] }) as { input: unknown[] };
+        expect(legacy.input).toContainEqual(existingMessage);
+      }
     }
     expect(sentBodies).toHaveLength(3);
     expect(sentBodies.map(body => body.tools[0].name)).toEqual([
