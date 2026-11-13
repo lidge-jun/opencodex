@@ -136,9 +136,10 @@ export interface StandinHomeOptions {
   data?: (request: StandinRequest) => { status: number; body?: string };
   /**
    * Plain data requests the test answers itself on the raw socket (a streamed or held response). Returning true takes the
-   * connection over: the request body and anything after it are read and discarded, never parsed as requests.
+   * connection over: `rest` is what had arrived after the request head, and everything after it goes only to the socket's
+   * own listeners, never parsed as requests.
    */
-  stream?: (request: StandinRequest, socket: Socket) => boolean;
+  stream?: (request: StandinRequest, socket: Socket, rest: Buffer) => boolean;
 }
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -218,7 +219,7 @@ export function startStandinHome(options: StandinHomeOptions): Promise<StandinHo
         if (buffer.length) { const rest = buffer; buffer = Buffer.alloc(0); upgraded.feed(rest); }
         return;
       }
-      if (options.stream?.(request, socket)) { streamed = true; buffer = Buffer.alloc(0); return; }
+      if (options.stream?.(request, socket, buffer)) { streamed = true; buffer = Buffer.alloc(0); return; }
       const reply = options.data?.(request) ?? { status: 404, body: '{"error":"not_found"}' };
       answer(reply.status, { "content-type": "application/json" }, reply.body ?? "");
     };

@@ -76,19 +76,37 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
   const identity = standinIdentity();
   let warm = true;
   const loadSockets: Socket[] = [];
+  // The request bytes the Home received per load request: the HTTP body, or the WebSocket create's text.
+  const homeBodies: number[] = [];
   const ws = wsBody(); const sse = sseBody();
   const home: StandinHome = await startStandinHome({
     identity,
-    // A relayed POST /v1/responses: the warm-up gets a whole short answer, a load request the held SSE stream.
-    stream: (request, socket) => {
+    // A relayed POST /v1/responses: the warm-up gets a whole short answer, a load request the held SSE stream. Either is
+    // answered only once the whole declared body has arrived, as the WebSocket side answers only a complete create.
+    stream: (request, socket, rest) => {
       if (request.method !== "POST" || !request.path.startsWith("/v1/responses")) return false;
-      socket.write("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n");
-      const chunk = (bytes: Buffer) => socket.write(Buffer.concat([Buffer.from(bytes.length.toString(16) + "\r\n"), bytes, Buffer.from("\r\n")]));
-      if (warm) { chunk(Buffer.from("event: response.completed\ndata: " + COMPLETED + "\n\n")); socket.write("0\r\n\r\n"); }
-      else { loadSockets.push(socket); writePlanned(sse, chunk, true); }
+      const isWarm = warm;
+      const declared = Number(request.headers.get("content-length"));
+      let received = rest.length;
+      let answered = false;
+      const arrived = (): void => {
+        if (answered || !(Number.isInteger(declared) && received >= declared)) return;
+        answered = true;
+        if (!isWarm) homeBodies.push(received);
+        respond(socket, isWarm);
+      };
+      socket.on("data", chunk => { received += chunk.length; arrived(); });
+      if (!Number.isInteger(declared)) { homeBodies.push(Number.NaN); respond(socket, isWarm); return true; }
+      arrived();
       return true;
     },
   });
+  function respond(socket: Socket, isWarm: boolean): void {
+    socket.write("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n");
+    const chunk = (bytes: Buffer) => socket.write(Buffer.concat([Buffer.from(bytes.length.toString(16) + "\r\n"), bytes, Buffer.from("\r\n")]));
+    if (isWarm) { chunk(Buffer.from("event: response.completed\ndata: " + COMPLETED + "\n\n")); socket.write("0\r\n\r\n"); }
+    else { loadSockets.push(socket); writePlanned(sse, chunk, true); }
+  }
   // Link sockets: the warm-up gets the terminal at once, a load socket the held frames once its create has arrived.
   void (async () => {
     for (;;) {
@@ -97,6 +115,7 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
       void socket.until(frame => frame.type === "text").then(frame => {
         if (!frame) return;
         if (isWarm) { socket.sendText(COMPLETED); return; }
+        if (frame.type === "text") homeBodies.push(Buffer.byteLength(frame.data));
         loadSockets.push(socket.socket);
         writePlanned(ws, slice => socket.raw(slice), true);
       });
@@ -141,7 +160,11 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
     const warmHttp = await fetch("http://127.0.0.1:" + port + "/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "fixture/fixture", input: "warm", stream: true }) });
     expect(await warmHttp.text()).toContain("response.completed");
     warm = false;
-    const idle = await ask("gc-rss");
+    child.stdin.write("gc-rss\n"); child.stdin.flush();
+    const idleAnswer = await nextLine();
+    const idle = Number(idleAnswer.rss);
+    // No wait is open at the idle reading: the warm-up turns have ended theirs.
+    expect(idleAnswer.waitingAtIdle).toBe(0);
     const body = JSON.stringify({ type: "response.create", model: "fixture/fixture", input: "y".repeat(INPUT_BYTES), stream: true });
     for (let index = 0; index < SOCKETS; index += 1) {
       if (transport === "websocket") {
@@ -175,6 +198,11 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
     child.stdin.write("peak\n"); child.stdin.flush();
     const peakAnswer = await nextLine();
     const peak = peakAnswer.rss === null ? Number.NaN : Number(peakAnswer.rss);
+    // From the idle reading through the peak, never more waits than the load has and never a wait ending that was not open.
+    expect({ maxWaiting: peakAnswer.maxWaiting, minWaiting: peakAnswer.minWaiting }).toEqual({ maxWaiting: SOCKETS, minWaiting: 0 });
+    // The Home received each load request whole before it answered: the same request on both transports.
+    const requestBytes = transport === "websocket" ? Buffer.byteLength(body) : Buffer.byteLength(JSON.stringify({ model: "fixture/fixture", input: "y".repeat(INPUT_BYTES), stream: true }));
+    expect(homeBodies).toEqual(Array.from({ length: SOCKETS }, () => requestBytes));
     const method = String(peakAnswer.method);
     const after = await ask("gc-rss");
     const deltaBytes = peak - idle;

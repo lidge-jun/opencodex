@@ -10,8 +10,10 @@
  * waits toward Codex; the relay's onDownlinkPause seam). For HTTP, every relayed response waits for its reader
  * (setLinkChildRelayWaitObserverForTests, #8680): the reader holds a chunk and the relay may hold one more queued, since
  * the relay reads one Home chunk ahead. The observer reports every relayed response, management reads included, so the
- * fixture counts transitions and reports a run invalid ({"invalid":true}) if more readers wait than the load has, or if
- * a wait that began before the idle reading ends after it; the test sends nothing else through this Child during the load.
+ * fixture counts every transition from the start: the idle reading reports how many waits are open (the test requires
+ * none), and from then on the fixture reports a run invalid ({"invalid":true}) if more readers wait than the load has or
+ * the count goes below zero; the "peak" answer carries the extremes through the measurement, which the test checks too.
+ * The test sends nothing else through this Child during the load.
  * A wrong signal can otherwise only make a run settle early or never: an early HTTP settle lowers the HTTP peak, which
  * makes the acceptance harder to pass, and a load that never settles fails at the deadline.
  */
@@ -94,8 +96,7 @@ const tick = (): void => {
   console.log(JSON.stringify({ stalled: true, quietWindowMs: QUIET_WINDOW_MS, settleMs: now - armedAt! }));
 };
 const observeWait = (isWaiting: boolean): void => {
-  // Before the idle reading (the warm-up turns) nothing counts.
-  if (armedAt === null) return;
+  // Counted from the start, so a warm-up wait still open at the idle reading shows there.
   waiting += isWaiting ? 1 : -1;
   maxWaiting = Math.max(maxWaiting, waiting);
   minWaiting = Math.min(minWaiting, waiting);
@@ -116,13 +117,14 @@ for (;;) {
   const next = await lines.next();
   if (next.done) break;
   const command = String(next.value).trim();
-  if (command === "peak") console.log(JSON.stringify(peakAnswer()));
+  if (command === "peak") console.log(JSON.stringify({ ...peakAnswer(), maxWaiting, minWaiting }));
   else if (command === "gc-rss") {
     Bun.gc(true);
     if (kernel && !resetKernelPeak()) resetFailed = true;
     highWater = process.memoryUsage().rss;
-    if (armedAt === null) { armedAt = Date.now(); settle = setInterval(tick, QUIET_TICK_MS); }
-    console.log(JSON.stringify({ rss: highWater }));
+    const first = armedAt === null;
+    if (first) { armedAt = Date.now(); maxWaiting = waiting; minWaiting = waiting; settle = setInterval(tick, QUIET_TICK_MS); }
+    console.log(JSON.stringify({ rss: highWater, ...(first ? { waitingAtIdle: waiting } : {}) }));
   }
   else if (command === "stop") break;
 }
