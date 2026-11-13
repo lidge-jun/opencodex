@@ -621,9 +621,20 @@ export function journalledRevokeError(error: unknown, operationId: string): unkn
     return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover, or have a person on this Home run ocx link recover --forget for machines that are gone. Then repeat this revoke with the same operation id (--operation-id " + operationId + "): an interrupted removal resumes under it. If it answers this refusal again although capacity is free, try a new operation id; if that answers link_retirement_owned, an unfinished removal holds this link: repeat the open or unknown revoke of this link (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --force --yes without --operation-id. (code tombstone_limit)", error.status, error.body);
   }
   const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
-  const resolve = outcome === "unknown" ? "; check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
-  return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve, error.status, error.body);
+  // Repeating first finishes a removal this id still owns (#8416); resolving first would leave its receipt and record behind.
+  const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first, and if it stays unknown, check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
+  const next = Object.hasOwn(NEXT_STEP, code) ? ". " + NEXT_STEP[code] : "";
+  return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve + next, error.status, error.body);
 }
+
+/**
+ * A next step for codes that keep the generic text because what an earlier step changed differs by path; each holds on every
+ * path that answers the code.
+ */
+const NEXT_STEP: Record<string, string> = {
+  operation_journal_failed: "Repeat the revoke with the same operation id; if that answers operation_journal_failed again, the journal cannot record this attempt: check the disk, then use a new operation id",
+  link_changed: "The link changed while this revoke ran: read ocx link status, then repeat the revoke with the same operation id",
+};
 
 /**
  * #8416's refusals for an interrupted removal of the link. The owning operation and the way out are only in the server's message,

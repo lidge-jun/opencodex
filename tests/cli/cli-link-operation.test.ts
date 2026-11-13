@@ -287,6 +287,32 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
     } finally { h.restore(); }
   });
 
+  // Generic codes still get a next step that holds on every path (the table in structure/remote-link.md).
+  test.each([
+    ["operation_journal_failed", 500, 1, ["Repeat the revoke with the same operation id", "if that answers operation_journal_failed again", "new operation id"]],
+    ["link_changed", 409, 5, ["ocx link status", "repeat the revoke with the same operation id"]],
+  ])("%s names a next step and claims nothing about state", async (code, status, exit, parts) => {
+    const h = harness([{ status, body: { error: { code, message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-12"], h.deps)).toBe(exit);
+      const printed = [...h.out, ...h.err].join("\n");
+      for (const part of parts) expect(printed).toContain(part);
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).toContain("(code " + code + ")");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  test("an unknown outcome says to repeat the same id before resolving, since the repeat finishes a removal this id still owns", async () => {
+    const h = harness([{ status: 502, body: { error: { code: "remote_disconnect_failed", message: "x" }, operationId: "detach-13", outcome: "unknown" } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-13"], h.deps)).toBe(1);
+      const printed = [...h.out, ...h.err].join("\n");
+      const repeat = printed.indexOf("repeat the revoke with the same operation id");
+      const resolve = printed.indexOf("ocx link operations resolve --operation-id detach-13 --yes");
+      expect(repeat).toBeGreaterThan(-1);
+      expect(resolve).toBeGreaterThan(repeat);
+    } finally { h.restore(); }
+  });
+
   // #8416's refusals for an interrupted removal: the owner and the way out live only in the server's message, which is dropped.
   test.each([
     ["link_retirement_owned", ["unfinished removal holds this link", "the open or unknown revoke of this link", "ocx link operations --json", "ocx link revoke --link-id <link id> --force --yes without --operation-id", "If no journalled operation owns it"]],
