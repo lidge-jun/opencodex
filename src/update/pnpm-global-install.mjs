@@ -626,6 +626,10 @@ export function resolvePnpmGlobalOwner({
   verify = verifyPnpmInstallTree,
   platform = process.platform,
   env = process.env,
+  // Discovery from scratch tries the released legacy verdict first. A caller re-resolving an owner that
+  // is already pinned to a store passes false: an updated tree that also satisfies the released verifier
+  // must still be re-proven against that store, never demoted to a legacy owner.
+  legacyFirst = true,
 }) {
   if (!isAbsolutePath(packagePath, platform)) return { ok: false, reason: "running pnpm package path is not absolute" };
   let lastReason = "no pnpm global installation owns the running package";
@@ -671,7 +675,7 @@ export function resolvePnpmGlobalOwner({
       verify,
       {
         owner,
-        legacyFirst: true,
+        legacyFirst,
         expectedPackagePath: packagePath,
         expectedGlobalDir: globalDir,
         expectedGlobalRoot: globalRoot,

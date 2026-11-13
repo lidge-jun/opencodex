@@ -89,7 +89,9 @@ test.skipIf(process.platform === "win32")("orchestrated pnpm update of a global 
       "else if(a[0]==='config') console.log(a[2]==='global-bin-dir'?e.OCX_FIXTURE_BIN:'undefined');",
       "else if(a[0]==='store'&&a[1]==='path'&&a.length===3&&a[2]==='--dir='+e.PNPM_HOME) console.log(childStore?e.OCX_FIXTURE_CHILD_STORE:e.OCX_FIXTURE_STORE);",
       "else if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':'2.1.0');",
-      "else if(a[0]==='add'){m.version='2.1.0';fs.writeFileSync(p.join(e.OCX_FIXTURE_REAL,'package.json'),JSON.stringify(m));}",
+      // The updated tree also gains an in-store node_modules link, so it satisfies the released verifier as
+      // well; the parent's readback must still re-prove the pinned store owner instead of demoting it.
+      "else if(a[0]==='add'){m.version='2.1.0';fs.writeFileSync(p.join(e.OCX_FIXTURE_REAL,'package.json'),JSON.stringify(m));fs.symlinkSync(p.dirname(p.dirname(e.OCX_FIXTURE_REAL)),p.join(e.OCX_FIXTURE_REAL,'node_modules'),'dir');}",
       "else process.exit(90);",
     ].join("\n") + "\n");
     chmodSync(join(bin, "pnpm"), 0o755);
