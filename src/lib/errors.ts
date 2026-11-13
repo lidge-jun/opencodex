@@ -28,6 +28,8 @@ export const SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE = "spend_ledger_storage_unava
 export const UNDECLARED_TOOL_CALL_ERROR_CODE = "undeclared_tool_call";
 /** A buffered combo child completed without the call explicitly required by tool_choice. */
 export const REQUIRED_TOOL_CONTRACT_CODE = "required_tool_contract_unsatisfied";
+/** A combo child ended its turn carrying only reasoning/commentary prelude — no tool call or final answer. */
+export const COMBO_DEGENERATE_COMPLETION_CODE = "degenerate_completion";
 
 /**
  * Wire code for a provider's model-scoped plan refusal (#7684): the account's plan does not
