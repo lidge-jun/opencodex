@@ -1,7 +1,4 @@
-import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
-import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
-import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
@@ -9,9 +6,7 @@ import { completeClaudeBridgePoolIdentity } from "../claude-bridge-pool-session"
 import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
-import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
-import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
-import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
+import { markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
 import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
@@ -19,7 +14,7 @@ import {
   restoreCachedEncryptedAgentTasks,
   recoverEncryptedAgentTaskWithResult,
 } from "./agent-task-recovery";
-import { admitParsedJsonRequestBody, readJsonRequestBody, resolveInboundBodyLimitBytes, takeParsedRequestBody } from "../request-decompress";
+import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
 import {
   clientCancelledResponse,
   decodeRequestErrorResponse,
@@ -74,10 +69,10 @@ import {
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
-  previousResponseRestoredPrefixLength,
   previousResponseReplayFailure,
   markBodyNonPersistable,
   previousResponseProviderState,
+  noteThreadServingIdentity,
 } from "../../responses/state";
 import { formatErrorResponse } from "../../bridge";
 import { chatCanPreserveMandatoryToolChoice } from "./combo-required-tool-contract";
@@ -189,7 +184,6 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
-import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -250,9 +244,7 @@ export async function prepareResponsesRequest(
   const agentTaskRecovery = agentTaskRecoveryConfig(config);
   let body: unknown;
   try {
-    const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
-    const attached = takeParsedRequestBody(req);
-    body = attached ? admitParsedJsonRequestBody(attached.body, limit, translatorBudget) : await readJsonRequestBody(req, translatorBudget, limit);
+    body = await readJsonRequestBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
   } catch (err) {
     if (options.abortSignal?.aborted || req.signal.aborted) {
       return clientCancelledResponse();
@@ -440,17 +432,12 @@ export async function prepareResponsesRequest(
   // parent all present the same parent id. `codexConversationIdentity` already reads this header
   // for the same reason, and a surface that must tell siblings apart needs it too (#5033).
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
-  const replayPrincipal = options.replayPrincipal
-    ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
-  const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
-  const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId) : undefined;
-  const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
   if (options.comboReplaySnapshot) {
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
   } else {
-    body = expandPreviousResponseInput(body, replayThreadId, replayOwnerKey);
+    body = expandPreviousResponseInput(body, inboundClientThreadId);
     const replayFailure = previousResponseReplayFailure(body);
     if (replayFailure?.reason === "scope_mismatch") {
       // Bounded and content-free: no task scope and nothing about the retained entry.
@@ -458,7 +445,6 @@ export async function prepareResponsesRequest(
     }
     // Local replay failures require full client replay.
     if (replayFailure) {
-      failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -469,20 +455,8 @@ export async function prepareResponsesRequest(
   const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
     ?? (body !== originalBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
-  // Remote Link holds and request-log fields (design T4 sections 5, 9.1): the expanded input, before any upstream I/O.
-  if (!options.comboReplaySnapshot) observeLinkTurnExpansion(options.linkTurn, req, logCtx, body, previousResponseInputExpanded ? "chained"
-    : body && typeof body === "object" && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string" ? "unexpanded" : "none");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
   options.responsesFileImage ||= responsesHasFileImage(body);
-  // Counted after replay expansion so the catalog this request pays for is the one measured:
-  // input restored from stored continuation state is history, and the prefix removes it.
-  if (inboundWire === "responses" && !concreteSelection) {
-    warnEagerCodexToolCatalog(body, req.headers, {
-      surface: eagerCodexToolCatalogSurface(body, options.compactionRecoveryKind),
-      replayPrefixLength: previousResponseRestoredPrefixLength(body),
-      logicalRequest: logCtx,
-    });
-  }
 
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
@@ -550,7 +524,6 @@ export async function prepareResponsesRequest(
       parsed._anthropicServerTools = options.anthropicServerTools;
       parsed._anthropicServerReplay = options.anthropicServerReplay;
       parsed._anthropicSystemCachePrefix = options.anthropicSystemCachePrefix;
-      parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
@@ -628,13 +601,10 @@ export async function prepareResponsesRequest(
     }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
-  parsed._plaintextV2Decision = strictReplay;
   options.onRequestBodyRead?.();
-  const responseStateOptions = (force = false) => ({
-    replayOwnerKey,
-    compiledPlaintext: parsed._plaintextV2EverPrepared === true,
+  const responseStateOptions = (force = false): { force?: boolean; clientThreadId?: string } => ({
     ...(force ? { force: true } : {}),
-    ...((strictReplay ? inboundOwnThreadId : parsed._clientThreadId) ? { clientThreadId: strictReplay ? inboundOwnThreadId : parsed._clientThreadId } : {}),
+    ...(parsed._clientThreadId ? { clientThreadId: parsed._clientThreadId } : {}),
   });
   const resolvedConversationId = conversationIdFromResponsesRequest({
     clientThreadId: parsed._clientThreadId,
@@ -1185,8 +1155,6 @@ export async function prepareResponsesRequest(
         try {
           const reparsed = parseRequest(body);
           const kept: Array<keyof OcxParsedRequest> = [
-            "_plaintextV2Decision",
-            "_plaintextV2EverPrepared",
             "_previousResponseInputExpanded",
             "_providerContinuation",
             "_providerContinuationCandidate",
@@ -1445,7 +1413,6 @@ export async function prepareResponsesRequest(
     hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
-    markLinkTurnMissing(logCtx);
     return markProxyError(formatErrorResponse(
       400,
       "previous_response_not_found",
@@ -1453,6 +1420,9 @@ export async function prepareResponsesRequest(
     ));
   }
 
+  // Track the serving identity per continuation thread so a replay miss that crosses a
+  // provider/model boundary fails closed: the destination never stored the referenced response.
+  const previousServingIdentity = noteThreadServingIdentity(parsed._clientThreadId, route.providerName, parsed.modelId);
   if (hasUnexpandedPreviousResponse) {
     const continuationProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy);
     // Can the DESTINATION see the history this process failed to restore? Only the native
@@ -1463,16 +1433,21 @@ export async function prepareResponsesRequest(
     // the entire conversation deleted, with one user line left in its place and nothing in the
     // response saying so. Refuse before auth or upstream I/O and let the client resend.
     const continuationWire = resolvedAdapterWire(continuationProvider.adapter);
+    const servingIdentitySwitched = previousServingIdentity !== undefined
+      && (previousServingIdentity.providerName !== route.providerName
+        || previousServingIdentity.modelId !== parsed.modelId);
     const upstreamOwnsOmittedHistory = continuationWire === "openai-responses"
       // Stateless destinations cannot resolve the omitted prefix. Stateful destinations may,
       // but a lowered custom result still needs its call to recover the original wire type.
       // Native function/custom continuations without lowering keep their upstream-owned state.
+      // A serving-boundary switch also revokes ownership: the new provider/model never stored
+      // the referenced response, so forwarding its id would terminate the task upstream.
       ? !(continuationProvider.statelessResponses === true
         || hasUnmappedRoutedCustomToolOutput(parsed._rawBody, continuationProvider.supportsResponsesCustomTools))
+        && !servingIdentitySwitched
       // An unknown adapter is left to the resolution error it already raises below.
       : continuationWire === undefined || PROVIDER_OWNED_CONTINUATION_WIRES.has(continuationWire);
     if (!upstreamOwnsOmittedHistory) {
-      markLinkTurnMissing(logCtx);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -1531,15 +1506,6 @@ export async function prepareResponsesRequest(
   }
   if (!routeAllowedByScope(admissionScope, scopedDestination)) {
     return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
-  }
-  // A typed Advisor runs its own model server-side on this provider (#8448). The native lane refuses
-  // a declaration outside the caller's scope; the Advisor is optional here, so it is not forwarded.
-  const serverTools = parsed._anthropicServerTools;
-  const scopedServerTools = serverTools?.filter(tool =>
-    !nativeMessagesToolScopeDenial(admissionScope, route.providerName, route.modelId, { tools: [tool] }));
-  if (serverTools && scopedServerTools && scopedServerTools.length !== serverTools.length) {
-    parsed._anthropicServerTools = scopedServerTools;
-    if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
