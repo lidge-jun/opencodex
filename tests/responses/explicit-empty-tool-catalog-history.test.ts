@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import * as adapterResolver from "../../src/server/adapter-resolve";
-import { handleOwnedResponses as handleResponses, expandOwnedResponseInput as expandPreviousResponseInput } from "../helpers/response-replay-owner";
+import { handleResponses } from "../../src/server/responses";
 import {
   clearResponseStateForTests,
+  expandPreviousResponseInput,
   flushResponseState,
 } from "../../src/responses/state";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";

@@ -86,8 +86,9 @@ codex-rs's effort-derived multi-agent policy when that native surface is active.
 A `null` value removes the key so the effort-derived policy (ultra = proactive,
 otherwise explicit) resumes; empty or whitespace-only values are rejected because a
 present empty override would suppress even the ultra-derived Proactive message. The
-Subagents dashboard's **Always proactive delegation** toggle requires both the native feature and
-an explicit v2 surface (`multiAgentMode: "v2"`, equivalent to `ocx v2 mode v2`);
+Subagents dashboard's **Always proactive delegation** toggle requires either the native feature
+with an explicit v2 surface (`multiAgentMode: "v2"`, equivalent to `ocx v2 mode v2`),
+or `multiAgentMode: "v2-plaintext"`, which uses catalog pins with the global override off.
 `ocx v2 on` alone does not satisfy that dashboard gate.
 
 `GET` and `PUT /api/v2` also return `multiAgentModeHintRecommendation: { text, revision }`.

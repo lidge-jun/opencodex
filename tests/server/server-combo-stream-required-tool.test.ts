@@ -9,11 +9,11 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
-import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
+import { clearResponseStateForTests, expandPreviousResponseInput, flushResponseState } from "../../src/responses/state";
 import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import type { OcxConfig } from "../../src/types";
 import type { RequestLogContext } from "../../src/server/request-log";
-import { handleOwnedResponses as handleResponses, expandOwnedResponseInput as expandPreviousResponseInput } from "../helpers/response-replay-owner";
+import { handleResponses } from "../../src/server/responses";
 
 const provider = comboProviderFactory(() => undefined);
 const tools = [{ type: "function", name: "marker_func", parameters: { type: "object", properties: {} } }];

@@ -171,9 +171,9 @@ An ignored subagent field does not remove a valid main cap. `ocx effort clear` c
 while retaining the separate injection-effort setting. See [Sub-agent surfaces](/guides/sub-agent-surface/)
 for the request surfaces where caps apply.
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
-Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
+Manage the Codex `multi_agent_v2` feature flag and the multi-agent surface mode.
 These operate locally by default. `--live` uses the selected running proxy with no
 local fallback; both targets support `--json`. Re-read status on the same target
 after a change and distinguish stored settings from new-session behavior.
@@ -186,6 +186,7 @@ after a change and distinguish stored settings from new-session behavior.
 | `mode v1` | Force all models to v1, disable native v2, and preserve the active thread limit. |
 | `mode default` | Respect upstream model surface pins. |
 | `mode v2` | Force models to v2 and preserve the active thread limit. With `keep-native-v1` off, enable global native v2; with it on, disable the global override and use catalog pins. |
+| `mode v2-plaintext` | Force models to v2 through catalog pins with the global override off and enable experimental plaintext task delivery. Requires `--acknowledge-plaintext-agent-messages`. |
 | `keep-native-v1 on\|off` | Under `mode v2`, keep ChatGPT-native models on v1 and routed models on v2. Enabling it disables the global V2 override before catalog sync. |
 | `threads <n>` | Set the active v1/v2 thread limit to an integer of at least 1. |
 | `mode-hint <text>` | Set the Proactive delegation hint (Ultra mode) for every model and effort. |
@@ -218,8 +219,9 @@ codex-rs's effort-derived multi-agent policy, so any model and any reasoning eff
 receives the Proactive delegation prompt. It does **not** change reasoning effort
 itself. A missing argument or a whitespace-only value is rejected; only `--clear`
 removes the hint. The Subagents dashboard's Ultra mode **on** toggle has a stricter
-gate: it requires the native feature to be enabled with an explicit v2 surface
-(`ocx v2 mode v2`); `ocx v2 on` alone does not satisfy that dashboard gate.
+gate: it requires either an enabled native feature with an explicit v2 surface
+(`ocx v2 mode v2`), or `v2-plaintext`, which uses catalog pins with the global
+override off. `ocx v2 on` alone does not satisfy that dashboard gate.
 
 #### Explicit v2 target and outcome
 
