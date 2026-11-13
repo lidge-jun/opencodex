@@ -622,13 +622,10 @@ export async function handleDisconnectCommand(
     }
     if (yes && !recoverConfig) throw new CliUsageError("--yes requires --orphaned-token or --recover-config", DISCONNECT_USAGE);
     // A Home's revoke names the link it means; checked before the client-link teardown touches anything,
-    // and again inside disconnectClient under the locks it writes under.
+    // and again inside disconnectClient under the locks it writes under. A client-initiated link (its sidecar, or the
+    // marker that survives a lost sidecar, names this link) needs the client-link teardown this path skips, so the
+    // same check refuses it before anything changes.
     if (expectLink !== undefined) {
-      // A Home sends --expect-link only for Home-initiated links. A client-initiated one (its sidecar names this link)
-      // needs the client-link teardown this path skips, so it is refused before anything changes.
-      let sidecar: ReturnType<typeof readClientLinkState>;
-      try { sidecar = readClientLinkState(); } catch { mismatch = { phase: "child_link_mismatch", reason: "invalid_state" }; return; }
-      if (sidecar?.linkId === expectLink) { mismatch = { phase: "child_link_mismatch", reason: "client_initiated_link" }; return; }
       try { assertDisconnectExpectation(expectLink, deps); } catch (error) {
         if (error instanceof ClientSyncExpectationError) { mismatch = error; return; }
         throw error;

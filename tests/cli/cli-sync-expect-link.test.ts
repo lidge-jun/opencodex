@@ -676,6 +676,35 @@ describe("ocx disconnect --expect-link (a Home's revoke)", () => {
     return { exit, last };
   }
 
+  test("a lost sidecar whose Child-initiated marker names the link is still refused as client-initiated", async () => {
+    writeClient({ transport: "link" });
+    const { childLinkMarkerPath } = await import("../../src/client/link-state");
+    mkdirSync(dirname(childLinkMarkerPath()), { recursive: true, mode: 0o700 });
+    writeFileSync(childLinkMarkerPath(), JSON.stringify({ linkId: LINK_ID }), { mode: 0o600 });
+    const before = readClientConnectionState();
+    const run = await refusedDisconnect(["--expect-link", LINK_ID, "--keep-catalog"]);
+    expect(run).toEqual({ exit: 5, last: { phase: "child_link_mismatch", reason: "client_initiated_link" } });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
+  test("an unreadable sidecar beside this link's own unfinished disconnect answers disconnect_pending", async () => {
+    writeClient({ transport: "link" });
+    const value = clientBlock({ transport: "link" }) as unknown as OcxClientConnectionConfig;
+    const { writeDesktopDisconnectReceipt } = await import("../../src/claude/desktop-remote-store");
+    const { withClientLifecycleSync } = await import("../../src/client/lifecycle-lock");
+    withClientLifecycleSync(held => writeDesktopDisconnectReceipt(held, null, {
+      version: 1, owner: { serverUrl: value.serverUrl, apiKeyId: value.apiKeyId, connectedAt: value.connectedAt },
+      tokenFingerprint: value.tokenFingerprint, keepCatalog: true, phase: "prepared",
+    }));
+    const { clientLinkStatePath } = await import("../../src/client/link-state");
+    mkdirSync(dirname(clientLinkStatePath()), { recursive: true, mode: 0o700 });
+    writeFileSync(clientLinkStatePath(), "{not json", { mode: 0o600 });
+    const before = readClientConnectionState();
+    const run = await refusedDisconnect(["--expect-link", LINK_ID, "--keep-catalog"]);
+    expect(run).toEqual({ exit: 5, last: { phase: "child_link_mismatch", reason: "disconnect_pending" } });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
   test("--expect-link with --recover-config is a usage error that changes nothing", async () => {
     writeClient({ transport: "link" });
     const before = readClientConnectionState();

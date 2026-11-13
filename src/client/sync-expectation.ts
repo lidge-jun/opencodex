@@ -25,7 +25,9 @@ export type ClientSyncMismatchReason =
   | "hub_client"
   | "link_client"
   | "other_link"
-  | "other_key";
+  | "other_key"
+  /** ocx disconnect --expect-link only: this machine joined that link itself (sidecar or marker). */
+  | "client_initiated_link";
 
 type DisconnectReceiptRead =
   | { kind: "absent" }
