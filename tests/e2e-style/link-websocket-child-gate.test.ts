@@ -191,7 +191,9 @@ describe("link WebSocket release gate through the real Child (design 11.1 item 1
     expect(Math.max(...sizes)).toBeGreaterThan(DESIGN_MESSAGE_LIMIT);
     // The Child answered Codex's upgrade with its own 101 carrying the 8 MiB limit (C7).
     const upgraded = tapped.connections.filter(connection => connection.answer.startsWith("HTTP/1.1 101"));
-    expect(upgraded.length).toBeGreaterThanOrEqual(1);
+    // Exactly one socket: Codex did not open, overrun and retry its way onto HTTP.
+    expect(upgraded.length).toBe(1);
+    expect(pair.records.filter(record => record === "link_ws_open:connected")).toHaveLength(1);
     for (const connection of upgraded) {
       const advertised = connection.answer.split("\r\n").filter(line => line.toLowerCase().startsWith("x-codex-websocket-max-message-bytes:"));
       expect(advertised.map(line => line.slice(line.indexOf(":") + 1).trim())).toEqual(["8388608"]);
