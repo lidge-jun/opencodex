@@ -1120,7 +1120,10 @@ redirect on either device request is refused rather than followed, and fails the
 as an authentication failure instead of being retried as a network or code problem. `kimi`,
 `nous`, and `github-copilot` accept the flag as a no-op because their only login is already a
 device flow; a provider with no device grant rejects it. A device login has nothing to paste, so
-`--device` with `--code` is refused.
+`--device` with `--code` is refused. For xAI device login, `--json` requires `--no-wait`:
+`ocx account login xai --device --no-wait --json` returns one JSON handoff with the
+verification URL, short code and flow ID. Complete authorization in a browser; the proxy
+continues the login in the background.
 
 The dashboard does not expose a provider's device grant this way. On the add-account modal the
 **"Don't open a browser on the proxy machine"** checkbox only stops the proxy from launching a

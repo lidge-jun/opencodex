@@ -246,6 +246,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   // the proxy would have accepted the paste into a flow with nothing to do with it (the device flow
   // is not a code flow, so `submitLoginCode` stashes it and the login still waits for approval).
   if (device && suppliedCode) throw new CliUsageError("--code cannot be combined with --device", USAGE);
+  if (provider === "xai" && device && wantsJson && !noWait) throw new CliUsageError("xAI device login with --json requires --no-wait; use the returned handoff to complete authorization", USAGE);
   if (addAccount !== undefined && (reauth || CODEX_NAMES.has(provider))) throw new CliUsageError("--add-account is only valid for fresh provider OAuth login", USAGE);
   if (openBrowser !== undefined && (device || DEVICE_NATIVE_PROVIDERS.has(provider))) throw new CliUsageError("--open-browser is not supported for device login", USAGE);
   if (!CODEX_NAMES.has(provider) && id && !reauth) throw new CliUsageError("--id is only valid with --reauth for provider OAuth accounts", USAGE);
