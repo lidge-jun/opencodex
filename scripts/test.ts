@@ -435,15 +435,27 @@ export const SERIAL_FULL_SUITE_FILES = [
   // test set; a cold build can take a minute, so each runs alone rather than inside a 12-file batch.
   "clients/link-ocx-child-ws-gate.test.ts",
   "clients/link-ocx-child-ws-feature.test.ts",
+  // The same cold build, for the conformance target; it is the only Cargo run of ocx-child on Windows (dev run
+  // 43483630535 cut it at 90 s while it was still compiling inside a shared batch).
+  "clients/link-ocx-child-conformance.test.ts",
 ] as const;
 
 type SerialLaneBasename = (typeof SERIAL_FULL_SUITE_FILES)[number] extends infer P
   ? P extends `${string}/${infer B}` ? B : P
   : never;
+/**
+ * The ocx-child conformance case's two Cargo bounds (tests/clients/link-ocx-child-conformance.test.ts): a cold build of
+ * the crate, then the conformance run. Its serial lane is derived from them, so a build that uses its whole bound still
+ * leaves the run its own. The CI batch script's process deadline (300 s Linux, 480 s Windows) also covers the sum.
+ */
+export const OCX_CHILD_CONFORMANCE_BUILD_MS = 180_000;
+export const OCX_CHILD_CONFORMANCE_RUN_MS = 90_000;
 const SERIAL_LANE_TIMEOUT_MS: Partial<Record<SerialLaneBasename, number>> = {
   // This file intentionally exercises 33 complete release-script subprocess trees.
   // It is ~90s on an idle machine and measured at ~170s under unrelated host load.
   "release-helper.test.ts": 5 * 60 * 1000,
+  // Both Cargo bounds plus 30 s for Bun startup and the file's other cases.
+  "link-ocx-child-conformance.test.ts": OCX_CHILD_CONFORMANCE_BUILD_MS + OCX_CHILD_CONFORMANCE_RUN_MS + 30_000,
 };
 
 export interface BunTestLane {
