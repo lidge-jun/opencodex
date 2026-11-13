@@ -42,8 +42,9 @@ function control(path: string): Promise<string> {
     const ws = new WebSocket(wsBase() + path);
     let text = "";
     ws.onmessage = event => { text += String(event.data); };
-    // Only a normal close (1000) ends a control exchange; anything else (a dropped server, an error) fails the run.
-    ws.onclose = event => { if (event.code === 1000) resolve(text); else reject(new Error("fuzzingserver control " + path + " closed " + event.code)); };
+    // Only a close frame ends a control exchange: 1000, or 1005 (the fuzzingserver closes these without a code). A
+    // connection that ended without one (1006) or any other code fails the run.
+    ws.onclose = event => { if (event.code === 1000 || event.code === 1005) resolve(text); else reject(new Error("fuzzingserver control " + path + " closed " + event.code)); };
     ws.onerror = () => reject(new Error("fuzzingserver control " + path + " failed"));
   });
 }
