@@ -23,7 +23,10 @@
  * `incomplete` > 0 `toHomeBytes` is a lower bound of what crossed, and otherwise every request that
  * ended had its body counted in full. A write still in progress counts only once it completes, so a
  * read taken mid-write lags (it can show `incomplete` 0 while the Home already holds a prefix) and a
- * delta between two reads measures completed writes. A Home's hub-link listener (`src/server/index/link-relay-sessions.ts`) counts the
+ * delta between two reads measures completed writes. A write completes once the operating system
+ * accepts it: Linux and macOS accept what fits their send buffer, while Windows accepts a whole
+ * nonblocking send at once, so there a body counts in full, and its upload as finished, as soon as it
+ * is written, even when the Home reads only part of it. A Home's hub-link listener (`src/server/index/link-relay-sessions.ts`) counts the
  * response-body bytes it streams back and, for requests, each declared Content-Length (it cannot
  * wrap Bun's native request without losing its identity); a request body without one is counted in
  * `toHomeUncounted` instead. Neither counts HTTP headers, the relay-auth challenge, SSH or TCP
