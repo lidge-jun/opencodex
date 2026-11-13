@@ -110,9 +110,9 @@ export const IDENTITY_FILE_GUIDANCE: Readonly<Record<IdentityFileProblem, string
   identity_file_missing: "The identity file does not exist.",
   identity_file_not_regular: "The identity file must be a regular file, not a symlink or a directory.",
   identity_file_permissions: "The identity file must be owned by this user with no group or other permissions (chmod 600 on it).",
-  identity_file_directory: "The directory that holds the identity file must be owned by this user or root and not writable by group or others (chmod g-w,o-w on it).",
-  identity_file_ancestor: "Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp, and every symlink on its path must be owned by this user or root. A home or state folder created under umask 002 (per-user groups on Ubuntu or Fedora) is group-writable: chmod g-w on that directory.",
-  identity_file_unreadable: "This user cannot read the identity file or a directory on its path.",
+  identity_file_directory: "The directory that holds the identity file must be owned by this user or root and not writable by group or others (chmod go-w on it if it is yours, or move the key into a private directory such as ~/.ssh).",
+  identity_file_ancestor: "Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp, and every symlink on its path must be owned by this user or root (chmod go-w on such a directory if it is yours, or move the key into a private directory such as ~/.ssh). A home or state folder created under umask 002 (per-user groups on Ubuntu or Fedora) is group-writable and is refused for that reason.",
+  identity_file_unreadable: "This user cannot read the identity file or a directory on its path, or its path has too many symlinks.",
   identity_file_unsupported_platform: "A Windows Home does not support an identity file yet.",
 };
 
@@ -179,6 +179,7 @@ function resolvedDirectory(path: string, lstat: (path: string) => Stats): Stats 
     let links = 0;
     while (pending.length > 0) {
       const name = pending.shift()!;
+      // After a symlink target's "..", the pending count can name the wrong level in the hint; the refusal itself still holds.
       if (name === "..") { current = dirname(current); stat = lstat(current); continue; }
       const next = current === "/" ? "/" + name : current + "/" + name;
       const entry = lstat(next);

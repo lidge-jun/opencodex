@@ -401,10 +401,21 @@ posixTest("each refusal says what to fix, the key's own directory apart from a d
   rmSync(join(root, "keys"), { recursive: true, force: true });
   const above = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: keyUnder(0o775) }, exclusive: true });
   const message = (answer: { body: Record<string, unknown> }) => (answer.body.error as { message: string }).message;
-  expect(message(own)).toBe("The directory that holds the identity file must be owned by this user or root and not writable by group or others (chmod g-w,o-w on it).");
-  expect(message(above)).toContain("Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp");
-  expect(message(above)).toContain("umask 002");
+  // A key put straight into /tmp gets the same text: it must not read as "remove write access on /tmp" (with sudo, that breaks
+  // the machine), so the chmod is for a directory that is the user's own, and moving the key is the other way out.
+  expect(message(own)).toBe("The directory that holds the identity file must be owned by this user or root and not writable by group or others (chmod go-w on it if it is yours, or move the key into a private directory such as ~/.ssh).");
+  expect(message(above)).toBe("Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp, and every symlink on its path must be owned by this user or root (chmod go-w on such a directory if it is yours, or move the key into a private directory such as ~/.ssh). A home or state folder created under umask 002 (per-user groups on Ubuntu or Fedora) is group-writable and is refused for that reason.");
   for (const answer of [own, above]) expect(JSON.stringify(answer.body)).not.toContain(root);
+});
+
+posixTest("a path with a symlink loop is refused as unreadable, and the text says the path may have too many symlinks", async () => {
+  const h = harness();
+  symlinkSync(join(root, "b"), join(root, "a"));
+  symlinkSync(join(root, "a"), join(root, "b"));
+  const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: join(root, "a", "goat_hub_ed25519") }, exclusive: true });
+  expect({ hint: (refused.body.error as { hint?: string }).hint, message: (refused.body.error as { message?: string }).message })
+    .toEqual({ hint: "identity_file_unreadable", message: "This user cannot read the identity file or a directory on its path, or its path has too many symlinks." });
+  expect(h.ssh).toEqual([]);
 });
 
 test.if(WINDOWS)("on a Windows Home a probe that names an identity file is refused before any SSH", async () => {
