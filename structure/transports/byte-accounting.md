@@ -374,6 +374,29 @@ The allowance can be exceeded by one source chunk plus native tee prefetch; it i
 not an RSS limit or a producer-side bound for push transports. Existing eager-path
 selection, WebSocket bounds and SSE frame/output-item limits are unchanged.
 Client departure releases pacing to the existing 15-second/32-MiB bounded drain.
+A stream marked paced (`src/lib/paced-stream.ts`) changes that for its own request: the
+inspection branch leads its client by one chunk instead of the allowance, the eager relay
+queues one chunk instead of 8 MiB, and each stage that reads a paced source (the block
+rewrite, the failed-tail relay, the translator-budget and account-lease wrappers, a combo
+preflight's replay) queues
+nothing ahead and marks its own output, so the chain reads as the client asks. Only a Remote
+Link turn while the link WebSocket feature is on is paced (#8601, `remote-link.md`); its
+upstream chunks are also cut into 256 KiB views (`sliceChunks`), so each stage holds a slice
+rather than a whole source chunk. Unmarked streams keep every queue described above.
+The slicer sits where delivery picks its relay (`passthrough-delivery.ts`), so the stages
+before it are not paced: terminal repair and the web-search bridge, which wrap the upstream
+body first, and the encrypted-output preflight in `passthrough-dispatch.ts` (through
+`combo-stream-preflight.ts`, bounded to 4 MiB before it commits) each keep their default
+queue of one upstream chunk on a paced turn. They are opt-in per provider or bounded, and
+marking them would need the paced decision before the exchange is built.
+A passthrough turn also keeps no parsed copy of its outbound body while it streams
+(`src/server/responses/passthrough-dispatch.ts`): the undeclared-tool guard parses it once when
+the request is built, and only its tool scope (`outboundToolScope` in
+`src/server/responses/outbound-request-body.ts`: the tool catalog, the selection, the parallel
+flag and the input items that declare tools) stays for the later readers, snapshot repair and
+the Grok tool scope, so a large request's input is not held twice (#8601). A combo preflight's replay lets go of each buffered chunk as it hands it to the
+client, and of all of them on cancel, so a committed child's prefix is not held for the rest of
+its turn.
 One tee branch's cancellation is never awaited by the wrapper, because that
 promise may depend on its sibling. A hard owner abort discards pending candidates
 rather than flushing them as successful terminals; genuine EOF/read-error tail

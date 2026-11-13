@@ -180,8 +180,8 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
         // A load that completes before every pump waits never reached the condition being measured.
         expect(await Promise.race([announced, finished])).toBe("stalled");
       } else await Promise.all(signals.slice(1).map(signal => options.hold ? signal.reachedHold : signal.reachedStall));
-      // With a held upstream both transports also wait until every stream has supplied all it will.
-      if (options.hold && options.transport === "websocket") await Promise.all(signals.slice(1).map(signal => signal.reachedHold));
+      // A link turn reads its upstream only as its socket drains (#8601), so a stalled WebSocket pump stops pulling before
+      // the upstream's hold point: the pumps' own stall is the synchronization, and the upstream is never waited for here.
       const enqueuedAtStallMiB = delivered.slice(1).map(bytes => Math.round(bytes / MiB));
       if (HEAP) { child.stdin.write("heap\n"); child.stdin.flush(); console.log(JSON.stringify(await nextLine())); }
       // Cut every socket in a seeded random order, at different points of its stalled stream.
@@ -212,7 +212,8 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
 describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance"
   + (ENABLED ? "" : " [skipped: opt-in with OCX_LINK_WS_RSS_ACCEPTANCE=1; it runs two Homes of several GiB each and is not part of the ordinary suite]"), () => {
   // Design T4 6.3, as decided after the T5g measurements: the reservation bounds what the link WebSocket transport
-  // itself adds. Both transports run the same stalled load against a held upstream (identical synchronization), and
+  // itself adds. Both transports run the same stalled load against a held upstream, each synchronized on the stall it
+  // can observe (the WebSocket on its pumps, the HTTP relay on the upstream's hold; #8600 gives the relay its own), and
   // the WebSocket's peak minus the HTTP relay's peak must stay within the sockets' reservations.
   test.skipIf(!CANONICAL)("acceptance: the WebSocket's peak RSS over the HTTP relay's, under the same held load, stays within the link socket reservations"
     + (CANONICAL ? "" : " [skipped: diagnostic settings present (" + DIAGNOSTIC_SETTINGS.join(", ") + "); only the canonical load reports an acceptance]"), async () => {
