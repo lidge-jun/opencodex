@@ -216,6 +216,7 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
     for (const client of clients) client.destroy();
     for (const socket of loadSockets) socket.destroy();
     try { child.stdin.write("stop\n"); child.stdin.flush(); child.stdin.end(); } catch { /* already gone */ }
+    child.kill();
     await child.exited;
     await home.stop();
     removeTreeWithRetry(root);
