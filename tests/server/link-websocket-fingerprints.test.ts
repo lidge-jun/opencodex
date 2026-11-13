@@ -333,8 +333,10 @@ describe("through a real Home: a cut WebSocket turn and its HTTP resend", () => 
     const port = JSON.parse(readFileSync(linkStorePath(), "utf8")).listenerPort as number;
     const holdsPath = join(dir, "link", "activity-holds.json");
     const marks = () => ((JSON.parse(readFileSync(holdsPath, "utf8")) as { links: Record<string, { holds: Array<{ marks?: unknown[] }> }> }).links[LINK]?.holds ?? []).reduce((sum, hold) => sum + (hold.marks?.length ?? 0), 0);
-    // Each wait is for a change of state; the exact count is asserted after it, so a wrong count fails as a
-    // mismatch, not as a timeout at the wait. The Home writes the holds file with an atomic rename.
+    // Each wait is for a change of state and the exact count is asserted after it: a holds file first written
+    // with a wrong count, or a 200 resend that moves the count to anything but 0, fails as a mismatch; a holds
+    // file never written, or a count that stays 1 after the resend, still fails at the runner's timeout. The Home
+    // writes the holds file with an atomic rename.
     const holdsWritten = () => {
       try { readFileSync(holdsPath); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
     };
