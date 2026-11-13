@@ -218,7 +218,7 @@ describe("guidance for journal refusals and unfinished revokes (O1c)", () => {
   });
 });
 
-describe("a journalled revoke refused before anything ran says so (O1c-2)", () => {
+describe("closed guidance for the refusals of a journalled revoke (O1c)", () => {
   test.each([
     ["operation_mismatch", 409, 5, "used with other parameters"],
     ["link_operation_open", 409, 5, "unfinished revoke holds this link"],
@@ -262,6 +262,8 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
       expect(printed).not.toContain("still belongs to this id");
       expect(printed).toContain("an unfinished removal holds this link");
       expect(printed).toContain("the open or unknown revoke of this link");
+      expect(printed).toContain("ocx link revoke --link-id " + LINK + " --operation-id detach-8 --force --yes");
+      expect(printed).toContain("ocx link recover --link-id");
       expect(printed).toContain("ocx link operations --json");
       expect(printed).not.toContain("lists this link's revokes");
       expect(printed).toContain("ocx link operations");

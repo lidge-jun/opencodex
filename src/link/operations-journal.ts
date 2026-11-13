@@ -88,7 +88,7 @@ export const OPERATION_JOURNAL_MAX_UNSETTLED = 256;
  * a repeat with the same operation id and the same parameters (another set answers operation_mismatch) that reaches the
  * journal within 2 hours of the answer gets the recorded outcome
  * (status, code and outcome), whatever else ran meanwhile, except that a revoke whose own removal was interrupted (its
- * retirement receipt is outstanding) finishes it first and answers that attempt; the alias lock busy past its wait changes
+ * retirement receipt is outstanding) resumes it first and answers that attempt; the alias lock busy past its wait changes
  * nothing and is retried, and after an unreadable journal or a 5xx the caller repeats with the same id (neither proves
  * that nothing changed: a replay after a resumed removal can meet them once that removal finished). Later the id may be treated as a new operation: an
  * enrollment whose link is there meets link_exists and a revoke whose link is gone link_not_found, but an enrollment
@@ -111,7 +111,8 @@ export const OPERATION_PRUNE_FLOOR_MS = OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAI
  * window, a quarter of the bound. A runaway loop that retries with a fresh id after each failure is held for at most that
  * window instead of locking the Home out for 30 days. With the three bounds the file holds about 256 unsettled plus
  * 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at most about 1.5 MiB at the limit, plus the
- * entries an outstanding retirement receipt pins (at most two per receipt; receipts have no cap of their own), so every
+ * entries an outstanding retirement receipt pins (at most two per readable receipt, every revoke entry of a link whose
+ * receipt cannot be read; receipts have no cap of their own), so every
  * whole-file rewrite under the config mutation lock stays small while receipts are settled.
  */
 export const OPERATION_JOURNAL_MAX_RECENT_SETTLED = 1024;

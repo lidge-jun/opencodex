@@ -424,7 +424,7 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     const code = error instanceof RuntimeApiError && error.status === 404 ? errorCodeBody(error.body)?.error.code : undefined;
     if (code !== "link_not_found") {
       if (force && !(error instanceof RuntimeApiError)) throw new Error("Forced link revoke failed; inspect link status before retrying.");
-      throw operationId !== undefined ? journalledRevokeError(error, operationId) : error;
+      throw operationId !== undefined ? journalledRevokeError(error, operationId, linkId) : error;
     }
     // A journalled revoke must not read as done when nothing was journalled: the caller settles a vanished link itself.
     if (operationId !== undefined) throw new RuntimeApiError("Link " + linkId + " is not on this Home; no revoke was journalled (code link_not_found).", 404, error instanceof RuntimeApiError ? error.body : null);
@@ -601,7 +601,7 @@ function validateParity(candidate: Record<string, unknown>, index: number): Link
  * A journalled revoke that did not complete: the CLI's own text from the filtered body only, the caller's validated
  * operation id, the closed outcome and the filtered code, never the server's message. The status (and exit) stay.
  */
-export function journalledRevokeError(error: unknown, operationId: string): unknown {
+export function journalledRevokeError(error: unknown, operationId: string, linkId?: string): unknown {
   if (!(error instanceof RuntimeApiError) || !isRecord(error.body) || !isRecord(error.body.error) || typeof error.body.error.code !== "string") return error;
   const code = error.body.error.code;
   // The filtered body is re-checked here, as journalFullGuidance re-checks bound, so this helper is safe on its own.
@@ -618,11 +618,11 @@ export function journalledRevokeError(error: unknown, operationId: string): unkn
   // It never says the link or key stay active either: an earlier attempt of a resumed revoke may have revoked the key and stopped
   // the tunnel before it failed and dropped its own tombstone, and this repeat then meets the limit while re-recording one.
   if (code === "tombstone_limit") {
-    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover, or have a person on this Home run ocx link recover --forget for machines that are gone. Then repeat this revoke with the same operation id (--operation-id " + operationId + "): an interrupted removal resumes under it. If it answers this refusal again although capacity is free, try a new operation id; if that answers link_retirement_owned, an unfinished removal holds this link: repeat the open or unknown revoke of this link (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --force --yes without --operation-id. (code tombstone_limit)", error.status, error.body);
+    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover --link-id <id> (ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget for machines that are gone. Then repeat this revoke with the same operation id (ocx link revoke --link-id " + (linkId !== undefined && LINK_ID.test(linkId) ? linkId : "<link id>") + " --operation-id " + operationId + " --force --yes): an interrupted removal resumes under it. If it answers this refusal again although capacity is free, try a new operation id; if that answers link_retirement_owned, an unfinished removal holds this link: repeat the open or unknown revoke of this link (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --force --yes without --operation-id. (code tombstone_limit)", error.status, error.body);
   }
   const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
-  // Repeating first finishes a removal this id still owns (#8416); resolving first would leave its receipt and record behind.
-  const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first, and if it stays unknown, check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
+  // Repeating first resumes a removal this id still owns (#8416); resolving first would leave its receipt and record behind.
+  const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first (it resumes a removal this id still owns), and if it stays unknown, check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
   const next = Object.hasOwn(NEXT_STEP, code) ? ". " + NEXT_STEP[code] : "";
   return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve + next, error.status, error.body);
 }
