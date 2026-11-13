@@ -177,22 +177,18 @@ describe("orphan discovery is capped by the caller, not hard-coded (#7771)", () 
       // The endpoint probes are injected: both callers would otherwise fall through to
       // the real ones, which on Windows spend their full window before answering, and this
       // test is about the discovery budget, not about that wait.
-      const survivors: unknown[] = [];
       const probed: unknown[] = [];
       for (const run of [windowsServiceStopBeforeRestore, windowsServiceRemovalStop]) {
         const seen: unknown[] = [];
         await run({
           ownsSharedTeardown: () => false,
+          resolveTarget: async () => null,
           stopTracked: async io => { seen.push(io); return "stopped"; },
-          survivor: async io => { survivors.push(io ?? "no-args"); return null; },
           endpointLiveness: async endpoint => { probed.push(endpoint); return "dead"; },
         });
-        expect(seen).toEqual([{ skipPortWait: false, orphanDiscoveryCapMs: 3_000 }]);
+        expect(seen).toEqual([{ target: null, skipPortWait: false, orphanDiscoveryCapMs: 3_000 }]);
       }
-      // The stop path consulted its survivor injection; the removal path asked the
-      // tri-state endpoint probe instead, because a null survivor is not proof of absence.
-      expect(survivors).toEqual(["no-args"]);
-      expect(probed.length).toBe(1);
+      expect(probed.length).toBe(2);
     } finally {
       setWindowsServiceStopHooksForTests(null);
     }

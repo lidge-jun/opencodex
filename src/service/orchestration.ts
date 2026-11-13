@@ -3,7 +3,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
 import { assertSelectedRuntimeWritable, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
 import { getConfigDir } from "../config";
-import { readPid, removePid, removeRuntimePort, verifyPidIdentity } from "../config/process-state";
+import { readPid, readRuntimePort, removePid, removeRuntimePort, verifyPidIdentity } from "../config/process-state";
 import { isWslRuntime } from "../codex/home";
 import { isProcessAlive, stopProxy } from "../lib/process-control";
 import { randomUUID } from "node:crypto";
@@ -23,7 +23,7 @@ import type { WindowsStopConfirmResult } from "./windows-stop-confirm";
 import { claimPendingTeardown, clearPendingTeardown, type PendingTeardownReceipt } from "../config/pending-teardown";
 import { probeEndpointLiveness, type EndpointLiveness } from "../server/proxy-liveness";
 import type { ProbeEndpoint } from "../cli/uninstall-plan";
-import { confirmWindowsServiceStop, describeWindowsPartA, describeWindowsPartB, endpointsAllDead, runWindowsServiceStopPartA, serviceStopOutcomeFromWindows, windowsPartARecord, windowsReceiptEndpoint, windowsRemovalEndpoints, windowsServiceStopPort, windowsStopAdmission, windowsStopRemainingMs, type WindowsPartARequest } from "./windows-service-stop";
+import { confirmWindowsServiceStop, describeWindowsPartA, describeWindowsPartB, endpointsAllDead, runWindowsServiceStopPartA, serviceStopOutcomeFromWindows, windowsPartARecord, windowsRemovalEndpoints, windowsServiceStopPort, windowsStopAdmission, windowsStopRemainingMs, type WindowsPartARequest } from "./windows-service-stop";
 import { schtasks, probeWindowsSchedulerTask, rollbackWindowsSchedulerTaskOwnedByAttempt, settleDelay } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy } from "./windows-taskxml";
@@ -209,6 +209,8 @@ export const DEFAULT_ORPHAN_DISCOVERY_MS = 7_000;
 
 /** How the tracked proxy is stopped: the deferral receipt and the Windows port wait. */
 export interface TrackedProxyStopIo {
+  /** Pre-resolved Windows target; null means there is no child to stop. */
+  target?: TrackedProxyTarget | null;
   /** ocx service stop on Windows: the claimed receipt, so the proxy defers its teardown. */
   deferSharedTeardownNonce?: string;
   /** Part B follows and owns the port wait (030), so stopProxy skips its own. */
@@ -223,7 +225,33 @@ export interface TrackedProxyStopIo {
   orphanDiscoveryCapMs?: number;
 }
 
+export interface TrackedProxyTarget {
+  pid: number;
+  endpoint: { hostname: string; port: number } | null;
+}
+
+/** Resolve once before claiming a receipt, so its endpoint is the stop's endpoint. */
+export async function resolveTrackedProxyTarget(): Promise<TrackedProxyTarget | null> {
+  const pid = verifiedKillTarget(readPid());
+  if (pid !== null && isProcessAlive(pid)) {
+    const runtime = readRuntimePort(pid);
+    return { pid, endpoint: runtime?.port ? { hostname: runtime.hostname ?? "127.0.0.1", port: runtime.port } : null };
+  }
+  const live = await findLiveProxy({ ...SERVICE_STOP_LIVENESS, deadlineAt: Date.now() + WINDOWS_STOP_CAPS.orphanDiscovery, acceptPackageTreeFenced: true });
+  if (!live) return null;
+  const livePid = verifiedKillTarget(live.pid);
+  if (livePid === null) throw new Error("A live proxy was found but its process identity could not be verified.");
+  return { pid: livePid, endpoint: { hostname: live.hostname ?? "127.0.0.1", port: live.port } };
+}
+
 async function stopTrackedProxyIfRunning(io: TrackedProxyStopIo = {}): Promise<TrackedProxyCleanupResult> {
+  if (io.target !== undefined) {
+    if (!io.target) return "none";
+    await stopProxy(io.target.pid, { ...io, ...(io.target.endpoint ? { runtimeEndpoint: io.target.endpoint } : {}) });
+    removePid(io.target.pid);
+    removeRuntimePort(io.target.pid);
+    return "stopped";
+  }
   let stopped = false;
   const pid = readPid();
   const trackedKillPid = verifiedKillTarget(pid);
@@ -286,8 +314,7 @@ export interface ServiceInstallPreparationDeps extends RuntimePreflightDeps {
   windowsStopPort?: () => number;
   /** Receives the deferral nonce so the wrapper's POST does not run the teardown. */
   stopTrackedProxy?: (io?: TrackedProxyStopIo) => Promise<unknown>;
-  /** The endpoint a Windows install's teardown receipt names (runtime record, else config). */
-  teardownEndpoint?: typeof windowsReceiptEndpoint;
+  resolveTarget?: typeof resolveTrackedProxyTarget;
   claimTeardown?: typeof claimPendingTeardown;
   clearTeardown?: (nonce: string) => boolean;
   /** Every endpoint an absent-manager install must prove down, resolved once. */
@@ -299,7 +326,7 @@ export interface ServiceInstallPreparationDeps extends RuntimePreflightDeps {
 /**
  * What an install preparation left behind.
  *
- * `deferredTeardownNonce` exists only on Windows after Part A stopped: the install stopped
+ * `deferredTeardownNonce` exists on Windows when the install stopped a target: it stopped
  * the old proxy with the shared teardown deferred, so it owes the receipt. The install that
  * replaces the proxy keeps shared config pointed at OpenCodex and completes the receipt
  * after the new service is installed and started; a failed install leaves it for the next
@@ -320,10 +347,10 @@ export interface ServiceInstallPreparationResult {
 function claimInstallTeardownReceipt(
   deps: ServiceInstallPreparationDeps,
   partA: WindowsCheckedStopResult,
+  endpoint: { hostname: string; port: number },
 ): PendingTeardownReceipt {
-  const { endpoint, source } = (deps.teardownEndpoint ?? windowsReceiptEndpoint)();
   try {
-    return (deps.claimTeardown ?? claimPendingTeardown)(endpoint, source, process.pid, undefined, windowsPartARecord(partA));
+    return (deps.claimTeardown ?? claimPendingTeardown)(endpoint, "exact", process.pid, undefined, windowsPartARecord(partA));
   } catch (error) {
     throw new Error(
       "The deferred-teardown receipt could not be recorded, so the proxy was left running and nothing was replaced: "
@@ -366,24 +393,28 @@ export async function prepareServiceInstall(
     const absentProofEndpoints = partA.outcome === "absent"
       ? (deps.installEndpoints ?? windowsRemovalEndpoints)()
       : [];
+    const target = await (deps.resolveTarget ?? resolveTrackedProxyTarget)();
+    if (target?.endpoint && partA.outcome === "absent" && !absentProofEndpoints.some(e => e.hostname === target.endpoint!.hostname && e.port === target.endpoint!.port)) absentProofEndpoints.push(target.endpoint);
     let nonce: string | undefined;
-    if (partA.outcome === "stopped") {
+    if (target) {
       // Before the tracked stop: a receipt-less POST would answer 409 and abort the install
       // while the old proxy kept serving.
-      nonce = claimInstallTeardownReceipt(deps, partA).nonce;
+      if (!target.endpoint) throw new Error("The target endpoint is unavailable, so deferred teardown cannot be recorded.");
+      nonce = claimInstallTeardownReceipt(deps, partA, target.endpoint).nonce;
     }
     // Part B owns the port wait after a stopped manager (030 "Time budget").
     await (deps.stopTrackedProxy ?? ((io?: TrackedProxyStopIo) => stopTrackedProxyIfRunning(io ?? {
       skipPortWait: partA.outcome === "stopped",
       orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery,
     })))({
+      target,
       ...(nonce ? { deferSharedTeardownNonce: nonce } : {}),
       skipPortWait: partA.outcome === "stopped",
       orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery,
     });
     if (partA.outcome === "stopped") {
       const partB = await (deps.windowsPartB ?? confirmWindowsServiceStop)({
-        port: stopPort,
+        port: target?.endpoint?.port ?? stopPort,
         remainingMs: windowsStopRemainingMs(),
       });
       if (partB.outcome !== "freed") {
@@ -399,7 +430,7 @@ export async function prepareServiceInstall(
           : `The endpoint on port ${(proof.unknown.join(", ") || stopPort)} could not be confirmed down; nothing was published or started. Check for a manually started proxy, then retry.`);
       }
     }
-    return {};
+    return nonce ? { deferredTeardownNonce: nonce } : {};
   }
   const resolveOps = deps.managerOps ?? platformServiceInstallCleanupOps;
   const backends: ServiceBackend[] = [];

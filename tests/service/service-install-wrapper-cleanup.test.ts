@@ -7,6 +7,23 @@ import { partAResult, partBResult } from "../helpers/windows-stop-caller-fixture
 // the tracked proxy stops next, and Part B must find the port free before anything is
 // published or started.
 describe("service install preparation wrapper cleanup", () => {
+  test("install claims the discovered orphan endpoint and carries it to the stop", async () => {
+    const endpoint = { hostname: "127.0.0.1", port: 12001 };
+    let claimed: unknown;
+    let target: unknown;
+    let port = 0;
+    await prepareServiceInstall("scheduler", {
+      platform: "win32", windowsStopPort: () => 10100,
+      windowsPartA: async () => partAResult("stopped"),
+      resolveTarget: async () => ({ pid: 42, endpoint }),
+      claimTeardown: value => { claimed = value; return { nonce: "n" }; },
+      stopTrackedProxy: async io => { target = io?.target; },
+      windowsPartB: async request => { port = request.port; return partBResult("freed"); },
+    });
+    expect(claimed).toEqual(endpoint);
+    expect(target).toEqual({ pid: 42, endpoint });
+    expect(port).toBe(12001);
+  });
   test("install preparation ends the respawning wrapper (Part A) before the tracked proxy stop", async () => {
     // The defect: schtasks /end ends the task instance but the detached cmd :loop wrapper
     // survives and respawns its child seconds later, landing after the one-shot tracked-proxy
@@ -84,6 +101,8 @@ describe("service install preparation wrapper cleanup", () => {
         return runtimePort ?? 10100;
       },
       windowsPartA: async () => { calls.push("partA"); return partAResult("stopped"); },
+      resolveTarget: async () => ({ pid: 42, endpoint: { hostname: "127.0.0.1", port: 12000 } }),
+      claimTeardown: () => ({ nonce: "fixture" }),
       stopTrackedProxy: async () => { calls.push("stop:standalone"); runtimePort = null; },
       windowsPartB: async request => { calls.push("partB"); ports.push(request.port); return partBResult("freed"); },
     });
@@ -119,7 +138,7 @@ describe("service install preparation wrapper cleanup", () => {
       windowsPartA: async () => { calls.push("partA"); return partAResult("stopped"); },
       windowsPartB: async () => { calls.push("partB"); return partBResult("freed"); },
       windowsStopPort: () => 12000,
-      teardownEndpoint: () => ({ endpoint: { hostname: "127.0.0.1", port: 12000 }, source: "exact" }),
+      resolveTarget: async () => ({ pid: 42, endpoint: { hostname: "127.0.0.1", port: 12000 } }),
       claimTeardown: (endpoint, _source, _pid, _handover, partA) => {
         calls.push("claim");
         claimed.push({ endpoint, partA });
@@ -134,7 +153,7 @@ describe("service install preparation wrapper cleanup", () => {
       endpoint: { hostname: "127.0.0.1", port: 12000 },
       partA: { partA: "stopped", manager: { scheduler: true, winsw: false }, wrappers: [{ pid: 30, startTime: 5_100 }] },
     }]);
-    expect(stopIo).toEqual([{ deferSharedTeardownNonce: "nonce-1", skipPortWait: true, orphanDiscoveryCapMs: expect.any(Number) }]);
+    expect(stopIo).toEqual([{ target: { pid: 42, endpoint: { hostname: "127.0.0.1", port: 12000 } }, deferSharedTeardownNonce: "nonce-1", skipPortWait: true, orphanDiscoveryCapMs: expect.any(Number) }]);
     // The install replaces the proxy, so shared config stays pointed at OpenCodex and the
     // obligation is discharged only once the new service is installed and started.
     expect(cleared).toEqual(["nonce-1"]);
@@ -147,7 +166,7 @@ describe("service install preparation wrapper cleanup", () => {
       windowsPartA: async () => partAResult("stopped"),
       windowsPartB: async () => partBResult("freed"),
       windowsStopPort: () => 12000,
-      teardownEndpoint: () => ({ endpoint: { hostname: "127.0.0.1", port: 12000 }, source: "exact" }),
+      resolveTarget: async () => ({ pid: 42, endpoint: { hostname: "127.0.0.1", port: 12000 } }),
       claimTeardown: () => ({ nonce: "nonce-2" }),
       clearTeardown: nonce => { cleared.push(nonce); return true; },
       stopTrackedProxy: async () => {},
@@ -161,7 +180,7 @@ describe("service install preparation wrapper cleanup", () => {
       platform: "win32",
       windowsPartA: async () => { calls.push("partA"); return partAResult("stopped"); },
       windowsStopPort: () => 12000,
-      teardownEndpoint: () => ({ endpoint: { hostname: "127.0.0.1", port: 12000 }, source: "exact" }),
+      resolveTarget: async () => ({ pid: 42, endpoint: { hostname: "127.0.0.1", port: 12000 } }),
       claimTeardown: () => { throw new Error("disk full"); },
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
     })).rejects.toThrow(/deferred-teardown receipt could not be recorded[\s\S]*disk full/);
@@ -208,6 +227,7 @@ describe("service install preparation wrapper cleanup", () => {
       windowsStopPort: () => 12000,
       installEndpoints: () => [{ hostname: "127.0.0.1", port: 12000 }],
       endpointLiveness: async () => "dead",
+      resolveTarget: async () => null,
       claimTeardown: () => { calls.push("claim"); return { nonce: "unused" }; },
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
     });

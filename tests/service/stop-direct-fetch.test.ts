@@ -134,7 +134,7 @@ describe("local stop transport", () => {
   // the receipt and the no-forced-fallback rule; the transport default is still not overridden.
   for (const [file, functionName, count, call] of [
     ["src/cli/index.ts", "handleStopUnlocked", 1, "stopProxy"],
-    ["src/service/orchestration.ts", "stopTrackedProxyIfRunning", 2, "stopProxy"],
+    ["src/service/orchestration.ts", "stopTrackedProxyIfRunning", 3, "stopProxy"],
     // One site: the target is resolved before the receipt, so both the tracked and the
     // discovered path reach the stop through the same call (#7771 round 8).
     ["src/cli/uninstall-stop.ts", "stopUninstallProxy", 1, "io.stop"],

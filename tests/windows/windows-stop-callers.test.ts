@@ -9,10 +9,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { inspectGuardedTarget, resetOcxWindowsStopForTests, stopGuardedManager } from "../../src/cli/stop-windows-checked";
 import { runGuardedManagerStep, type GuardedStopSnapshot } from "../../src/cli/stop-approval";
 import { ROUTE_PART_A_CAP_MS, ROUTE_STRAY_SWEEP_CAP_MS, routeServiceStop } from "../../src/server/stop-service-route";
-import { completeWindowsServiceStopReceipt, windowsServiceRemovalStop, windowsServiceStopBeforeRestore } from "../../src/service/cli-windows-stop";
+import { completeWindowsServiceStopReceipt, windowsServiceRemovalStop as removalStop, windowsServiceStopBeforeRestore as stopBeforeRestore } from "../../src/service/cli-windows-stop";
 import { inspectGuardedManagerTarget, type GuardedManagerTarget } from "../../src/service/guarded-manager-target";
 import type { WindowsCheckedStopDeps } from "../../src/service/windows-checked-stop";
 import type { WindowsProcessWatch } from "../../src/service/windows-process-native";
+
+const fixtureTarget = { pid: 4321, endpoint: { hostname: "127.0.0.1", port: 10100 } };
+const windowsServiceStopBeforeRestore: typeof stopBeforeRestore = io => stopBeforeRestore({ resolveTarget: async () => fixtureTarget, ...io });
+const windowsServiceRemovalStop: typeof removalStop = io => removalStop({ resolveTarget: async () => fixtureTarget, ...io });
 import type { WindowsStopProcessEntry } from "../../src/service/windows-process-evidence";
 import { runWindowsServiceStopPartA, serviceStopOutcomeFromWindows, setStopDeadlineMs, setWindowsServiceStopHooksForTests } from "../../src/service/windows-service-stop";
 import { CMD, PATHS, SCHEDULE_PID, VBS, entry, launcher, loop, proxy, scheduleHost } from "../helpers/windows-checked-stop-fixtures";
@@ -86,6 +90,33 @@ describe("/api/stop service stop on Windows", () => {
 });
 
 describe("ocx service stop on Windows", () => {
+  test("a discovered orphan's endpoint is used for both receipt and stop", async () => {
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("stopped"), partB: async () => partBResult("freed") });
+    const endpoint = { hostname: "127.0.0.1", port: 12001 };
+    let claimed: unknown;
+    let stopped: unknown;
+    const result = await windowsServiceStopBeforeRestore({
+      ownsSharedTeardown: () => true,
+      resolveTarget: async () => ({ pid: 4321, endpoint }),
+      claim: (address) => { claimed = address; return { nonce: "n" } as never; },
+      stopTracked: async io => { stopped = io?.target; return "stopped"; },
+    });
+    expect(result.ok).toBe(true);
+    expect(claimed).toEqual(endpoint);
+    expect(stopped).toEqual({ pid: 4321, endpoint });
+  });
+
+  test("no resolved target claims no receipt", async () => {
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("stopped"), partB: async () => partBResult("freed") });
+    let claimed = false;
+    let target: unknown = "unset";
+    const result = await windowsServiceStopBeforeRestore({ resolveTarget: async () => null,
+      ownsSharedTeardown: () => true, claim: () => { claimed = true; return { nonce: "n" } as never; },
+      stopTracked: async io => { target = io?.target; return "none"; } });
+    expect(result.ok).toBe(true);
+    expect(claimed).toBe(false);
+    expect(target).toBeNull();
+  });
   test("a Part A other than stopped/absent refuses before the receipt and the child stop", async () => {
     for (const outcome of ALL_PART_A_FAILURES) {
       const steps: string[] = [];
@@ -143,7 +174,7 @@ describe("ocx service stop on Windows", () => {
     expect(result).toEqual({ ok: true });
     // #7771: the stop also names the admitted discovery cap, so the helper cannot spend 7 s
     // of a budget whose 3 s for this step was already proven at admission.
-    expect(children).toEqual([{ skipPortWait: true, orphanDiscoveryCapMs: 3_000 }]);
+    expect(children).toEqual([{ target: fixtureTarget, skipPortWait: true, orphanDiscoveryCapMs: 3_000 }]);
   });
 
   test("Part B failure keeps the receipt (no restore); a foreign listener does not fail the stop", async () => {
@@ -329,7 +360,7 @@ describe("ocx service uninstall / remove on Windows", () => {
     expect(result).toEqual({ ok: true });
     // #7771: the stop also names the admitted discovery cap, so the helper cannot spend 7 s
     // of a budget whose 3 s for this step was already proven at admission.
-    expect(children).toEqual([{ skipPortWait: true, orphanDiscoveryCapMs: 3_000 }]);
+    expect(children).toEqual([{ target: fixtureTarget, skipPortWait: true, orphanDiscoveryCapMs: 3_000 }]);
   });
 });
 

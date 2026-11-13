@@ -193,6 +193,9 @@ stop instead of sliding forward.
   (`TrackedProxyStopIo.orphanDiscoveryCapMs`). The checked Windows callers pass the admitted 3 s
   (`WINDOWS_STOP_CAPS.orphanDiscovery`), which is what admission priced; the omitted default stays
   the legacy 7 s so macOS and Linux timing is unchanged.
+- Windows service stop, removal and install resolve one tracked or discovered proxy target before
+  claiming its receipt. The receipt and POST use that target's exact endpoint; Part B checks its
+  port. No target means no receipt or POST. An owning caller refuses a target without an endpoint.
 - `ocx uninstall` (`src/cli/uninstall-stop.ts`) resolves its stop target before it claims
   anything: the tracked pid with its own runtime endpoint, or the discovered live proxy with the
   endpoint discovery found it on. The receipt and `stopProxy` then name the same endpoint, so a
