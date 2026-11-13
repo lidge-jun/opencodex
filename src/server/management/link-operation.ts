@@ -14,6 +14,11 @@ import type { ManagementContext } from "./context";
 import { compensateNewLink, fail, readStoreFor, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import type { RouteRequest } from "./link-route-request";
 
+/** A damaged operations.json: nothing reads it as empty, so the answer names the way out. */
+export function journalUnreadable(): Response {
+  return fail("operation_journal_unreadable", "The link operation journal (<configDir>/link/operations.json) is damaged; keep a copy, move it aside, and retry. ocx link operations shows the same error; a revoke with --force still runs.", 500);
+}
+
 /** Compensation that could not finish: whether anything this operation created remains is unknown. */
 const UNKNOWN_CODES = new Set(["compensation_failed", "key_cleanup_failed", "link_cleanup_uncertain", "key_issue_uncertain"]);
 const RESIDUAL_RECOVERY = "The Child may still be enrolled; run ocx disconnect and ocx restart on the Child (ocx-child detach for an ocx-child) before retrying.";
@@ -72,11 +77,13 @@ export async function underAliasLock(ctx: ManagementContext, alias: string, requ
 }
 
 /** An open revoke entry of another operation for this link refuses every other revoke of it. */
-export function openRevokeConflict(ctx: ManagementContext, linkId: string, except?: string): Response | null {
+export function openRevokeConflict(ctx: ManagementContext, linkId: string, except?: string, force = false): Response | null {
   if (!journalInUse(ctx)) return null;
   let open: LinkOperation | undefined;
   try { open = readOperationsJournal(journalPathFor(ctx)).operations.find(op => op.kind === "revoke" && op.state === "open" && op.linkId === linkId && op.operationId !== except); } catch {
-    return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+    // --force is the escape hatch: it skips remote cleanup by design, so it must not be locked out by a damaged journal.
+    if (force) { console.warn("[link] operation journal unreadable; force revoke proceeds without the open-entry check linkId=" + linkId); return null; }
+    return journalUnreadable();
   }
   return open ? fail("link_operation_open", "An unfinished revoke holds this link; repeat it with its operation id to settle it.", 409) : null;
 }
@@ -86,7 +93,7 @@ export function openEnrollmentConflict(ctx: ManagementContext, alias: string, ex
   if (!journalInUse(ctx)) return null;
   let open: LinkOperation | undefined;
   try { open = openEnrollmentFor(readOperationsJournal(journalPathFor(ctx)), alias, except); } catch {
-    return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+    return journalUnreadable();
   }
   return open ? fail("link_operation_open", "An unfinished enrollment holds this alias; repeat it with its operation id to settle it.", 409) : null;
 }
@@ -105,7 +112,7 @@ export function journalOpenFailure(error: unknown): Response {
 
 export function replayResponse(op: LinkOperation): Response {
   if (op.state === "committed") {
-    return Response.json(op.kind === "enroll" ? { linkId: op.reserved!.linkId, ...outcomeBody(op) }
+    return Response.json(op.kind === "enroll" ? { linkId: op.reserved!.linkId, ...outcomeBody(op), ...(hasEffect(op, "plant", "done") ? { planted: true } : {}) }
       : { linkId: op.linkId, ...outcomeBody(op), ...(op.receipt ? { purged: true } : {}) }, { status: op.kind === "enroll" ? 202 : 200 });
   }
   const error = op.error ?? { code: "operation_interrupted", status: 409 };
@@ -124,7 +131,7 @@ export function replayResponse(op: LinkOperation): Response {
 export async function replayOperation(ctx: ManagementContext, state: LinkRouteState, request: OperationRequest, kind: LinkOperation["kind"]): Promise<Response | null> {
   let op: LinkOperation | undefined;
   try { op = findOperation(readOperationsJournal(journalPathFor(ctx)), request.id); } catch {
-    return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+    return journalUnreadable();
   }
   if (!op) return null;
   if (op.kind !== kind || op.digest !== request.digest) return fail("operation_mismatch", "This operation id was used with other parameters.", 409);
@@ -241,7 +248,9 @@ export function openEnrollJournal(ctx: ManagementContext, request: OperationRequ
         return response;
       }
       const kind = residualKind(op);
-      return Response.json({ ...body, ...outcomeBody(op), ...(kind ? { residual: true, residualKind: kind } : {}) }, { status: response.status, headers: response.headers });
+      const planted = op.state === "committed" && hasEffect(op, "plant", "done");
+      return Response.json({ ...body, ...outcomeBody(op), ...(kind ? { residual: true, residualKind: kind } : {}), ...(planted ? { planted: true } : {}) },
+        { status: response.status, headers: response.headers });
     },
   };
 }
@@ -317,7 +326,7 @@ export function handleLinkOperationRoutes(ctx: ManagementContext): Response | nu
   const headers = { "cache-control": "no-store" };
   if (url.pathname === "/api/link/operations" && req.method === "GET") {
     try { return Response.json({ operations: read().operations }, { headers }); } catch {
-      return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+      return journalUnreadable();
     }
   }
   const one = /^\/api\/link\/operations\/([^/]+)(\/resolve)?$/.exec(url.pathname);
@@ -327,7 +336,7 @@ export function handleLinkOperationRoutes(ctx: ManagementContext): Response | nu
   if (!isOperationId(id)) return fail("invalid_operation_id", "The operation id is invalid.", 400);
   if (!one[2] && req.method === "GET") {
     let op: LinkOperation | undefined;
-    try { op = findOperation(read(), id); } catch { return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500); }
+    try { op = findOperation(read(), id); } catch { return journalUnreadable(); }
     return op ? Response.json(op, { headers }) : fail("operation_not_found", "No operation has this id.", 404);
   }
   if (one[2] && req.method === "POST") {

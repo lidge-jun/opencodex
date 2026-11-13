@@ -9,7 +9,8 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { linkDir } from "./paths";
 
@@ -57,6 +58,8 @@ function assertPrivate(path: string, directory: boolean): void {
 }
 
 function prepare(path: string, directory: string): void {
+  // <configDir>/link/locks: refuse before any mkdir when a test points it at the real OpenCodex home.
+  assertNotRealHomeUnderTest(dirname(dirname(directory)));
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   assertPrivate(directory, true);
   if (process.platform !== "win32") chmodSync(directory, 0o700);

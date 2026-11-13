@@ -103,6 +103,21 @@ test("a plain add refused by another operation on the alias names a link operati
   } finally { h.restore(); }
 });
 
+test("a journalled revoke of a link the Home no longer has exits 4 instead of reporting success", async () => {
+  const h = harness([{ status: 404, body: { error: { code: "link_not_found", message: "x" } } }]); try {
+    expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-9"], h.deps)).toBe(4);
+    expect(h.out).toEqual([]);
+    expect(h.err.join("\n")).toContain("no revoke was journalled");
+  } finally { h.restore(); }
+});
+
+test("a replayed committed enrollment that planted the Child prints planted: true", async () => {
+  const h = harness([{ body: { operationId: OP, state: "committed" } }, { status: 202, body: { ...committed, planted: true } }]); try {
+    expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP, "--json"], h.deps)).toBe(0);
+    expect(JSON.parse(h.out[0]!)).toMatchObject({ linkId: LINK, planted: true, operationId: OP, outcome: "committed" });
+  } finally { h.restore(); }
+});
+
 test("revoke --operation-id sends it and prints the outcome and the purge receipt", async () => {
   const h = harness([{ body: { linkId: LINK, operationId: "detach-1", outcome: "committed", purged: true } }]); try {
     expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-1", "--json"], h.deps)).toBe(0);

@@ -241,6 +241,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     return fail("invalid_body", "alias and optional fingerprint/plant are required.", 400);
   }
   const alias = body.alias;
+  // A repeat replays without probing, so the fingerprint is what names the operation (the CLI requires it too).
+  if (body.operationId !== undefined && typeof body.fingerprint !== "string") return fail("invalid_body", "operationId requires fingerprint.", 400);
   const resolveBinary = ctx.deps.resolveChildBinarySource ?? resolveChildBinarySource;
   // ocx link add --operation-id (structure/remote-link.md, "Operation journal"): replay, recovery and the reserved ids.
   const operation = typeof body.operationId === "string" ? { id: body.operationId, digest: enrollOperationDigest({ alias,

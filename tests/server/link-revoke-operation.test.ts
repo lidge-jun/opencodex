@@ -250,6 +250,17 @@ test("a new journalled revoke past the journal limit is refused and the link sta
   expect(h.ssh).toEqual([]);
 });
 
+test("a damaged journal names its recovery step; a force revoke still goes through", async () => {
+  const h = harness();
+  writeFileSync(h.journalPath, "{ damaged");
+  const refused = await h.revoke({ purge: true });
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 500, code: "operation_journal_unreadable" });
+  expect((refused.body.error as { message: string }).message).toContain("move it aside");
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  expect((await h.revoke({ force: true })).status).toBe(200);
+  expect(h.store.links).toEqual([]);
+});
+
 describe("journal write failures during a revoke", () => {
   test("a failed remote_cleanup intent leaves the tunnel running and answers with the operation id", async () => {
     const h = harness({ markHook: (effect, phase) => { if (effect === "remote_cleanup" && phase === "intent") throw new Error("disk full"); } });

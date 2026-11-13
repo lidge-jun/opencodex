@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { protectedHomeForTests } from "../../src/lib/test-home-guard";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireAliasLock, aliasLockPath, AliasLockError, ALIAS_LOCK_WAIT_MS } from "../../src/link/alias-lock";
@@ -64,6 +65,15 @@ test("an aborted request stops waiting at the next poll and takes no lock", asyn
 test("the wait is bounded below the CLI's enrollment deadline, so a waiter still has time to finish", () => {
   expect(ALIAS_LOCK_WAIT_MS).toBeLessThan(ENROLLMENT_DEADLINE_MS);
   expect(ALIAS_LOCK_WAIT_MS).toBeLessThanOrEqual(ENROLLMENT_DEADLINE_MS / 3);
+});
+
+test("a lock directory inside the real OpenCodex home is refused under test before anything is created", async () => {
+  // Written after the guard was added: before it, this call would have created directories in the live home.
+  const lockDir = join(protectedHomeForTests(), "link", "locks");
+  const existed = existsSync(lockDir);
+  const error = await acquireAliasLock("pen-guard", { lockDir, waitMs: 0 }).catch(e => e);
+  expect((error as AliasLockError).code).toBe("link_alias_lock_failed");
+  expect(existsSync(lockDir)).toBe(existed);
 });
 
 test("release is idempotent and a symlinked lock file is refused, never followed", async () => {

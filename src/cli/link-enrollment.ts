@@ -222,7 +222,10 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
   const applied = (result: unknown, planted: boolean): void => {
     const keys = record(result) ? Object.keys(result).sort().join(",") : "";
     const shaped = operationId === undefined ? keys === "linkId"
-      : keys === "linkId,operationId,outcome" && record(result) && result.operationId === operationId && result.outcome === "committed";
+      : (keys === "linkId,operationId,outcome" || (keys === "linkId,operationId,outcome,planted" && record(result) && result.planted === true))
+        && record(result) && result.operationId === operationId && result.outcome === "committed";
+    // A replay never probed, so only the journalled answer can say the Child was planted.
+    planted = planted || (record(result) && result.planted === true);
     if (!shaped || !record(result) || typeof result.linkId !== "string" || !/^lnk_[0-9a-f]{16}$/.test(result.linkId)) throw new Error("Invalid link apply response");
     printData({ linkId: result.linkId, alias, state: "connected", childRole: "client", ...(planted ? { planted: true } : {}), ...(routeBody.exclusive ? { exclusive: true } : {}),
       ...(operationId !== undefined ? { operationId, outcome: "committed" } : {}) }, wantsJson, ["Connected " + alias + " as a Child (" + result.linkId + ")."]);

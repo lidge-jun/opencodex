@@ -518,6 +518,28 @@ describe("journal size limit", () => {
   });
 });
 
+describe("small follow-ups", () => {
+  test("an operation id without a fingerprint is refused, as the CLI already refuses it", async () => {
+    const h = harness();
+    const refused = await h.call("apply", { alias: ALIAS, operationId: OP });
+    expect({ status: refused.status, code: code(refused) }).toEqual({ status: 400, code: "invalid_body" });
+    expect(existsSync(h.journalPath)).toBe(false);
+  });
+
+  test("a committed enrollment that planted the Child says planted: true, live and on replay", async () => {
+    const h = harness();
+    h.overrides.inspect = () => ok("ocx-inspect:uname:Linux:x86_64\nocx-inspect:kind:missing\n");
+    h.overrides.config = () => ok('{"port":10100,"runtimeRole":"standalone","ephemeralChild":true}\n');
+    h.overrides.before = () => ({ code: 7, stdout: "", stderr: "" });
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true, allowMissing: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint, allowMissing: true })).status).toBe(200);
+    const applied = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
+    expect({ status: applied.status, planted: applied.body.planted, outcome: applied.body.outcome }).toEqual({ status: 202, planted: true, outcome: "committed" });
+    const replay = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
+    expect(replay).toEqual({ status: 202, body: applied.body });
+  });
+});
+
 describe("retention", () => {
   test("a residual entry older than 30 days is still there and recoverable; a committed one is pruned", async () => {
     const h = harness();

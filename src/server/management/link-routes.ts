@@ -24,7 +24,7 @@ import { readManagementJsonBodyOr } from "./body";
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { journalInUse, journalOpenFailure, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { journalInUse, journalOpenFailure, journalPathFor, journalUnreadable, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
 import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -222,7 +222,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   if (operation) {
     let recordedAlias: string | undefined;
     try { recordedAlias = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id)?.alias; } catch {
-      return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+      return journalUnreadable();
     }
     if (recordedAlias !== undefined) {
       // Another write may prune the entry between that read and the replay: then this is a first revoke after all,
@@ -254,7 +254,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         const replay = await replayOperation(ctx, state, operation, "revoke");
         if (replay) return replay;
       }
-      const open = openRevokeConflict(ctx, id, operation?.id);
+      const open = openRevokeConflict(ctx, id, operation?.id, force && operation === null);
       if (open) return open;
       const fresh = readStoreFor(ctx).links.find(link => link.id === id);
       if (!fresh) return fail("link_not_found", "The link was not found.", 404);

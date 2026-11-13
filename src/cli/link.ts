@@ -412,6 +412,8 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
       if (force && !(error instanceof RuntimeApiError)) throw new Error("Forced link revoke failed; inspect link status before retrying.");
       throw error;
     }
+    // A journalled revoke must not read as done when nothing was journalled: the caller settles a vanished link itself.
+    if (operationId !== undefined) throw new RuntimeApiError("Link " + linkId + " is not on this Home; no revoke was journalled (code link_not_found).", 404, error instanceof RuntimeApiError ? error.body : null);
     remoteCleanup = "unverified";
   }
   if (force) {
