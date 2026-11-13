@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { removeOwnedConfigAfterDesktopCleanup, type UninstallClientStateDeps } from "../../src/cli/uninstall-client-state";
 import { cleanupOwnedIntegrationsBeforeUninstall } from "../../src/cli/uninstall-integrations";
 import { assertClientLifecycleHeld, withClientLifecycle, withClientLifecycleSync, type ClientLifecycleHeld } from "../../src/client/lifecycle-lock";
-import type { UninstallObservation } from "../../src/cli/uninstall-plan";
+import { captureUninstallEndpointProof, type UninstallObservation } from "../../src/cli/uninstall-plan";
 import type { DesktopDisconnectReceipt } from "../../src/claude/desktop-remote-store";
 import type { ExportModel } from "../../src/clients/config-export";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
@@ -470,9 +470,13 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(windowStep).toContain("could not be confirmed down either");
     expect(windowStep.indexOf("if (!await proxyEndpointProvenDown())"))
       .toBeLessThan(windowStep.indexOf("observed.respawnWindowVerified = true;"));
-    // And the proof itself asks every candidate.
-    expect(fn).toContain("endpointsToProve(readRuntimePort(), loadConfig())");
-    expect(fn).toContain("everyEndpointProvenDownAsync(endpoints, probeEndpointLiveness)");
+    // And the proof itself asks every candidate, captured before the proxy stop removes the
+    // runtime record; the helper requires every captured candidate to answer dead.
+    expect(fn).toContain("captureUninstallEndpointProof(() => endpointsToProve(readRuntimePort(), loadConfig()), probeEndpointLiveness)");
+    expect(fn.indexOf("captureUninstallEndpointProof(")).toBeLessThan(fn.indexOf('runStep("proxy stopped"'));
+    const plan = await readText("src/cli/uninstall-plan.ts");
+    const helper = plan.slice(plan.indexOf("export function captureUninstallEndpointProof("));
+    expect(helper).toContain("everyEndpointProvenDownAsync(candidates, probe)");
   });
 
 const safeTeardown: UninstallObservation = {
@@ -1197,5 +1201,40 @@ describe("uninstall proxy stop defers the shared teardown through a receipt (#77
     const cleared: string[] = [];
     completeWindowsServiceStopReceipt(NONCE, nonce => { cleared.push(nonce); return true; });
     expect(cleared).toEqual([NONCE]);
+  });
+
+  test("after an absent Part A a confirmed tracked stop still proves every candidate endpoint dead", async () => {
+    // A confirmed stop proves the tracked proxy down, not that nothing else serves on this
+    // home's ports; with no manager registered no Part B follows, so a second proxy on the
+    // configured endpoint would otherwise go unseen and shared config be restored under it.
+    let probes = 0;
+    const live = await stopUninstallProxy(io({
+      serviceStop: "absent",
+      stop: async () => true,
+      endpointProvenDown: async () => { probes++; return false; },
+    }));
+    expect(probes).toBe(1);
+    expect(live.provenDown).toBe(false);
+    const dead = await stopUninstallProxy(io({ serviceStop: "absent", stop: async () => true, endpointProvenDown: async () => true }));
+    expect(dead.provenDown).toBe(true);
+    // After a stopped Part A, Part B confirms the port, so the stop's own proof stands.
+    probes = 0;
+    const stopped = await stopUninstallProxy(io({ serviceStop: "stopped", stop: async () => true, endpointProvenDown: async () => { probes++; return false; } }));
+    expect(probes).toBe(0);
+    expect(stopped.provenDown).toBe(true);
+  });
+
+  test("the uninstall endpoint proof reads its candidates once, before the stop removes the runtime record", async () => {
+    let reads = 0;
+    const probed: number[] = [];
+    let runtime: { port: number } | null = { port: 12000 };
+    const proof = captureUninstallEndpointProof(() => { reads++; return runtime ? [{ hostname: "127.0.0.1", port: runtime.port }, { hostname: "127.0.0.1", port: 10100 }] : [{ hostname: "127.0.0.1", port: 10100 }]; },
+      endpoint => { probed.push(endpoint.port); return endpoint.port === 12000 ? "dead" : "dead"; });
+    runtime = null; // the tracked stop removed the runtime record
+    expect(await proof()).toBe(true);
+    expect(reads).toBe(1);
+    expect(probed).toEqual([12000, 10100]);
+    const unreadable = captureUninstallEndpointProof(() => { throw new Error("config unreadable"); }, () => "dead");
+    expect(await unreadable()).toBe(false);
   });
 });

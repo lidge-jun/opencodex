@@ -142,3 +142,26 @@ export async function everyEndpointProvenDownAsync(
   const results = await Promise.all(endpoints.map(e => probe(e)));
   return results.every(result => result === "dead");
 }
+
+/**
+ * The uninstall's "nothing answers on any endpoint this home could serve" proof, with the
+ * candidate set captured NOW. The proxy stop removes the runtime record (and a stopped proxy
+ * may remove its own), so a set read after the stop would silently drop the stopped proxy's
+ * port. Every candidate, not just the preferred one: a stale runtime record pointing at a
+ * closed port would otherwise "prove" a live proxy on the configured port is gone. Any
+ * failure to read or probe is not proof.
+ */
+export function captureUninstallEndpointProof(
+  readCandidates: () => ProbeEndpoint[],
+  probe: (e: ProbeEndpoint) => Promise<"live" | "dead" | "unknown"> | "live" | "dead" | "unknown",
+): () => Promise<boolean> {
+  let candidates: ProbeEndpoint[] | null = null;
+  try { candidates = readCandidates(); } catch { candidates = null; }
+  return async () => {
+    try {
+      return candidates !== null && await everyEndpointProvenDownAsync(candidates, probe);
+    } catch {
+      return false;
+    }
+  };
+}

@@ -80,7 +80,7 @@ import {
 } from "../config/pending-teardown";
 import { collectStatus, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, runtimeSupervisorLine, statusDeadProxyLines, statusProxyUp, statusUnusedProxyLines } from "./status";
 import { stopUninstallProxy } from "./uninstall-stop";
-import { endpointsToProve, everyEndpointProvenDownAsync, respawnWindowRequired, sharedTeardownAuthorized, uninstallServiceRemoval, type UninstallObservation } from "./uninstall-plan";
+import { captureUninstallEndpointProof, endpointsToProve, respawnWindowRequired, sharedTeardownAuthorized, uninstallServiceRemoval, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
 
@@ -1527,17 +1527,8 @@ async function handleUninstall() {
   // Before every teardown step: an elevated run must not act on a home another account can change.
   const privilegeRefusal = uninstallPrivilegeRefusal(getConfigDir());
   if (privilegeRefusal) { console.error(`❌ ${privilegeRefusal}`); process.exit(1); }
-  /** Definitive "nothing is answering" on the endpoint this home would serve. */
-  const proxyEndpointProvenDown = async (): Promise<boolean> => {
-    try {
-      // Every candidate, not just the preferred one: a stale runtime record pointing at a
-      // closed port would otherwise "prove" a live proxy on the configured port is gone.
-      const endpoints = endpointsToProve(readRuntimePort(), loadConfig());
-      return await everyEndpointProvenDownAsync(endpoints, probeEndpointLiveness);
-    } catch {
-      return false;
-    }
-  };
+  /** Definitive "nothing is answering" on every endpoint this home could serve, captured before the stop. */
+  const proxyEndpointProvenDown = captureUninstallEndpointProof(() => endpointsToProve(readRuntimePort(), loadConfig()), probeEndpointLiveness);
   const failures: string[] = [];
 
   const runStep = async (label: string, step: () => void | boolean | Promise<void | boolean>) => {

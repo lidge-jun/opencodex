@@ -77,7 +77,11 @@ export async function stopUninstallProxy(io: UninstallProxyStopIo): Promise<Unin
   // restored under it (#3008). The tri-state probe the discovery path already requires is
   // what settles it, and only a definitive "nothing answers anywhere" keeps the proof.
   const confirmed = async (stopped: boolean): Promise<boolean> => {
-    if (stopped) return true;
+    // A confirmed stop proves the tracked proxy down, nothing more. After an "absent" Part A on
+    // Windows no Part B follows, so a second proxy on another candidate endpoint would go
+    // unseen and shared config would be restored under it (#3008): every candidate has to
+    // answer definitively dead. After "stopped", Part B confirms the port instead.
+    if (stopped) return !(windows && io.serviceStop === "absent") || await io.endpointProvenDown();
     if (forbidForcedFallback) return false;
     return await io.endpointProvenDown();
   };
