@@ -128,7 +128,8 @@ export interface LinkWebsocketGateDeps {
   holds?: ActivityHolds;
   /**
    * The Home's per-link traffic book (the HTTP relay's): each link socket is one request in it, counted from open to close
-   * with the Child's definition (message payload bytes each way, complete when a close ended it).
+   * in the Child's units (message payload bytes each way); complete when any close frame ended it, where the Child also
+   * counts its own overload, binary and protocol closes as incomplete.
    */
   traffic?: LinkTrafficBook;
 }
