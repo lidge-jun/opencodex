@@ -201,6 +201,47 @@ describe("ocx service uninstall / remove on Windows", () => {
     }
   });
 
+  test("an absent Part A proves EVERY candidate endpoint dead, not just the receipt's", async () => {
+    // #7771 round 9: with Part A absent only the receipt endpoint was probed. A stale runtime
+    // record naming a closed port then "proved" removal while the configured port had a live
+    // listener, and the task was deleted under it. The candidate set is the one `ocx uninstall`
+    // proves (`endpointsToProve(readRuntimePort(), loadConfig())`), and every candidate has to
+    // answer definitively dead.
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent") });
+    const probed: { hostname: string; port: number }[] = [];
+    const result = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => false,
+      stopTracked: async () => "none",
+      endpoints: () => [{ hostname: "127.0.0.1", port: 10999 }, { hostname: "127.0.0.1", port: 10100 }],
+      endpointLiveness: async endpoint => {
+        probed.push(endpoint);
+        return endpoint.port === 10999 ? "dead" : "live";
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(probed.map(e => e.port)).toEqual([10999, 10100]);
+
+    // One unreadable candidate refuses too, and nothing is deleted.
+    probed.length = 0;
+    const unknown = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => false,
+      stopTracked: async () => "none",
+      endpoints: () => [{ hostname: "127.0.0.1", port: 10999 }, { hostname: "127.0.0.1", port: 10100 }],
+      endpointLiveness: async endpoint => { probed.push(endpoint); return endpoint.port === 10999 ? "dead" : "unknown"; },
+    });
+    expect(unknown.ok).toBe(false);
+    expect(probed).toHaveLength(2);
+
+    // Every candidate dead is the only proof.
+    const dead = await windowsServiceRemovalStop({
+      ownsSharedTeardown: () => false,
+      stopTracked: async () => "none",
+      endpoints: () => [{ hostname: "127.0.0.1", port: 10999 }, { hostname: "127.0.0.1", port: 10100 }],
+      endpointLiveness: async () => "dead",
+    });
+    expect(dead.ok).toBe(true);
+  });
+
   test("an unreadable absent-Part-A probe refuses and keeps the receipt", async () => {
     // The old branch read `proxyStillLiveAfterStop`'s null — its answer for a timed-out or
     // failed probe — as success and deleted the task, and a claimed receipt was reported

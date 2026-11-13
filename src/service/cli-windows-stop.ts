@@ -18,6 +18,7 @@ import { clearPendingTeardown, claimPendingTeardown } from "../config/pending-te
 import { readRuntimePort } from "../config/process-state";
 import { loadConfig } from "../config";
 import { readClientConnectionState } from "../client/state";
+import { endpointsToProve, type ProbeEndpoint } from "../cli/uninstall-plan";
 import { probeEndpointLiveness, type EndpointLiveness } from "../server/proxy-liveness";
 import { proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand } from "./orchestration";
 import {
@@ -38,10 +39,50 @@ export interface WindowsServiceStopCommandIo {
   stopTracked?: typeof stopTrackedProxyForServiceCommand;
   survivor?: typeof proxyStillLiveAfterStop;
   /**
-   * Tri-state probe of the endpoint the removal stop targeted. Only a definitive "dead"
-   * permits deleting the task; "live" and "unknown" refuse and keep the receipt.
+   * Tri-state probe of an endpoint. Only a definitive "dead" on EVERY candidate permits
+   * deleting the task; "live" and "unknown" refuse and keep the receipt.
    */
   endpointLiveness?: (endpoint: { hostname: string; port: number }) => Promise<EndpointLiveness>;
+  /**
+   * Every endpoint this home could be serving on, for the absent-Part-A proof. Defaults to
+   * `endpointsToProve(readRuntimePort(), loadConfig())` — the set `ocx uninstall` proves.
+   */
+  endpoints?: () => ProbeEndpoint[];
+}
+
+/**
+ * Every endpoint removal has to account for, exactly the set `ocx uninstall` proves.
+ *
+ * The receipt endpoint is ONE candidate; a stale runtime record naming a closed port must
+ * not stand in for the configured port where a live listener can sit (#3008, #7771).
+ */
+function removalEndpoints(): ProbeEndpoint[] {
+  let config: { port?: number; hostname?: string } = {};
+  try { config = loadConfig(); } catch { /* defaults below */ }
+  return endpointsToProve(readRuntimePort(), config);
+}
+
+/**
+ * Definitive absence on EVERY candidate. "unknown" is not absence: a listener that
+ * accepts connections but withholds /healthz, or one that times out, is exactly the state
+ * where deleting the registration is most harmful.
+ */
+async function endpointsAllDead(
+  endpoints: readonly ProbeEndpoint[],
+  probe: (endpoint: ProbeEndpoint) => Promise<EndpointLiveness>,
+): Promise<{ dead: boolean; live: number[]; unknown: number[] }> {
+  const results = await Promise.all(endpoints.map(async endpoint => (
+    await probe(endpoint).catch((): EndpointLiveness => "unknown")
+  )));
+  const live: number[] = [];
+  const unknown: number[] = [];
+  endpoints.forEach((endpoint, index) => {
+    const answer = results[index];
+    if (answer === "live") live.push(endpoint.port);
+    else if (answer !== "dead") unknown.push(endpoint.port);
+  });
+  // No candidate is not proof of anything.
+  return { dead: endpoints.length > 0 && live.length === 0 && unknown.length === 0, live, unknown };
 }
 
 function receiptEndpoint(): { endpoint: { hostname: string; port: number }; source: "exact" | "guessed" } {
@@ -161,15 +202,17 @@ export async function windowsServiceRemovalStop(
     // "absent" says no manager is registered, not that nothing is serving. `findLiveProxy`
     // inside the tracked stop can return null when its discovery cap runs out while the
     // endpoint is live, and `proxyStillLiveAfterStop` returns that same null for a probe
-    // that timed out or failed — which the old branch read as success. Ask the endpoint
-    // itself, tri-state, and delete the task only on a definitive "dead". No respawn hold:
-    // with no manager there is nothing to relaunch the proxy.
-    const liveness = await (io.endpointLiveness ?? probeEndpointLiveness)(endpoint)
-      .catch((): EndpointLiveness => "unknown");
-    if (liveness === "dead") return withNonce(nonce);
-    console.error(liveness === "live"
-      ? "❌ Service uninstall refused: a proxy is still listening on port " + endpoint.port + "."
-      : "❌ Service uninstall refused: the endpoint on port " + endpoint.port + " could not be confirmed down.");
+    // that timed out or failed — which the old branch read as success. Ask the endpoints
+    // themselves, tri-state, and delete the task only when EVERY candidate is definitively
+    // "dead": the receipt endpoint is only one of the addresses this home can serve on, and
+    // a stale runtime record pointing at a closed port used to prove removal while the
+    // configured port had a live listener. No respawn hold: with no manager registered
+    // there is nothing to relaunch the proxy.
+    const proof = await endpointsAllDead((io.endpoints ?? removalEndpoints)(), io.endpointLiveness ?? probeEndpointLiveness);
+    if (proof.dead) return withNonce(nonce);
+    console.error(proof.live.length > 0
+      ? "❌ Service uninstall refused: a proxy is still listening on port " + proof.live.join(", ") + "."
+      : "❌ Service uninstall refused: the endpoint on port " + (proof.unknown.join(", ") || endpoint.port) + " could not be confirmed down.");
     console.error("   The task was not deleted. Stop that proxy, then re-run 'ocx service uninstall'.");
     return { ok: false };
   }
