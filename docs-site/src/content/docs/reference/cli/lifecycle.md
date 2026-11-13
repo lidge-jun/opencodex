@@ -1540,8 +1540,11 @@ ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
 A forced success returns `{linkId,remoteCleanup:"skipped",recovery}`. Idempotent
 link-not-found instead reports `remoteCleanup:"unverified"`. Both can exit 0;
 these facts derive from CLI intent, not a server cleanup report. Neither means
-remote disconnect was attempted or confirmed. Follow the recovery instruction,
-`ocx disconnect` on the remote client, when that action is authorized.
+remote disconnect was attempted or confirmed. Follow the recovery instruction when
+that action is authorized: on a full Child, check that it is still connected to
+this link (`ocx connect status --json`) before running `ocx disconnect` there, and
+leave it if another link, a hub or another Home owns it now; a lightweight Child
+uses `ocx link recover` (below).
 
 A forced revoke of a lightweight (`ocx-child`) Child that the Home reached over
 SSH leaves a tombstone on the Home naming the link, its alias and its pinned host

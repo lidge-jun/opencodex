@@ -159,7 +159,7 @@ State-changing: yes. JSON mode: `envelope`.
 - Requires a valid link ID and loopback admin authority. Explicit force additionally requires --yes.
 - Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.
 - Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.
-- If forced cleanup was needed, run ocx disconnect on the remote client. No new enrollment, SSH trust or credential action is implied.
+- After a forced revoke, check on the remote client that it is still connected to this link (ocx connect status --json shows its link id) before running ocx disconnect there; if another link, a hub or another Home owns it now, leave it. For a lightweight (ocx-child) Child, use ocx link recover --link-id <id>, which cleans it only while it still belongs to this link. No new enrollment, SSH trust or credential action is implied.
 
 ### `ocx link recover`
 

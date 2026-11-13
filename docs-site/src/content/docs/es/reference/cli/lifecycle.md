@@ -838,7 +838,7 @@ Solo cuando se pretenda explícitamente omitir la limpieza remota, use el ID de 
 ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
 ```
 
-`--force` requiere `--yes`; `--yes` solo no es válido. La revocación ordinaria no cambia. Un éxito forzado devuelve `{linkId,remoteCleanup:"skipped",recovery}`. En su lugar, un link-not-found idempotente informa de `remoteCleanup:"unverified"`. Ambos pueden salir con 0; estos hechos derivan de la intención de la CLI, no de un informe de limpieza del servidor. Ninguno de los dos significa que se intentara o confirmara una desconexión remota. Siga la instrucción de recuperación, `ocx disconnect` en el cliente remoto, cuando esa acción esté autorizada.
+`--force` requiere `--yes`; `--yes` solo no es válido. La revocación ordinaria no cambia. Un éxito forzado devuelve `{linkId,remoteCleanup:"skipped",recovery}`. En su lugar, un link-not-found idempotente informa de `remoteCleanup:"unverified"`. Ambos pueden salir con 0; estos hechos derivan de la intención de la CLI, no de un informe de limpieza del servidor. Ninguno de los dos significa que se intentara o confirmara una desconexión remota. Siga la instrucción de recuperación cuando esa acción esté autorizada: en un Child completo, compruebe que sigue conectado a este enlace (`ocx connect status --json`) antes de ejecutar allí `ocx disconnect`, y déjelo si ahora lo posee otro enlace, un hub u otro Home; un Child ligero usa `ocx link recover` (abajo).
 
 Una revocación forzada de un Child ligero (`ocx-child`) al que el Home llegó por SSH deja en el Home un registro (tombstone) con el enlace, su alias y su clave de host fijada; la instrucción de recuperación nombra entonces `ocx link recover`. Cuando ese equipo vuelva a responder, ejecute:
 
