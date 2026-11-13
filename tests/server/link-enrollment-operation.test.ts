@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import { enrollOperationDigest } from "../../src/server/management/link-operation";
-import { acquireAliasLock } from "../../src/link/alias-lock";
+import { acquireAliasLock, type AliasLockDeps } from "../../src/link/alias-lock";
 import { readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
@@ -44,7 +44,7 @@ const ok = (stdout = ""): SshRunResult => ({ code: 0, stdout, stderr: "" });
 const http = (body: unknown) => ok(JSON.stringify(body) + "\n200");
 type Step = "census" | "probe" | "windows" | "uname" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog" | "disconnect";
 
-function harness() {
+function harness(lock: Partial<AliasLockDeps> = {}) {
   const remoteOcx = (args: string[]) => quoteRemote(remoteOcxArgv(args, "posix"));
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {}, apiKeys: [] };
   const knownHosts = join(root, "known_hosts");
@@ -105,7 +105,7 @@ function harness() {
     readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
     linkKnownHostsPath: () => knownHosts, liveListenPort: () => 10100,
     linkOperationsPath: () => journalPath,
-    linkAliasLock: { lockDir: join(root, "locks"), waitMs: 0 },
+    linkAliasLock: { lockDir: join(root, "locks"), waitMs: 0, ...lock },
     issueApiKey: (cfg, name, id) => { const key = { id: id ?? "unreserved-key", name, key: "fixture-child-key", createdAt: "2026-11-13T00:00:00Z" }; cfg.apiKeys = [...(cfg.apiKeys ?? []), key]; return key; },
     revokeApiKey: (cfg, id) => { if (!revokeWorks) return false; const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
   };
@@ -219,6 +219,20 @@ describe("a live enrollment with an operation id", () => {
       expect({ status: busy.status, code: code(busy) }).toEqual({ status: 409, code: "link_operation_in_progress" });
     } finally { lock.release(); }
   });
+});
+
+test("a second enrollment of the same alias waits for the holder, then runs", async () => {
+  let release: (() => void) | undefined;
+  const sleeps: number[] = [];
+  let clock = 0;
+  const h = harness({ waitMs: 10_000, pollMs: 250, now: () => clock, sleep: async ms => { sleeps.push(ms); clock += ms; if (sleeps.length === 2) release?.(); } });
+  expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
+  expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+  const held = await acquireAliasLock(ALIAS, { lockDir: join(root, "locks") });
+  release = () => held.release();
+  const applied = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
+  expect(sleeps).toEqual([250, 250]);
+  expect(applied.status).toBe(202);
 });
 
 function entry(overrides: Partial<LinkOperation> = {}): LinkOperation {
