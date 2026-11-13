@@ -97,7 +97,8 @@ describe("probeAntigravityAccounts", () => {
       account("verify1", "tok-verify"),
       account("denied1", "tok-denied"),
       account("limit01", "tok-limit"),
-      { ...account("paused1", "tok-paused-expired", { expires: Date.now() - 1000 }), paused: true },
+      { ...account("paused1", "tok-paused"), paused: true },
+      account("expired1", "tok-expired", { expires: Date.now() - 1000 }),
       account("noproj1", "tok-noproj", { projectId: undefined }),
     ]);
     const before = readFileSync(path, "utf8");
@@ -115,10 +116,11 @@ describe("probeAntigravityAccounts", () => {
     expect(byId.verify1).toMatchObject({ status: "verification_required", httpStatus: 403 });
     expect(byId.denied1).toMatchObject({ status: "permission_denied", httpStatus: 403 });
     expect(byId.limit01).toMatchObject({ status: "rate_limited", httpStatus: 429 });
-    expect(byId.paused1).toMatchObject({ status: "token_expired", httpStatus: null, paused: true });
+    expect(byId.paused1).toMatchObject({ status: "paused", httpStatus: null, paused: true });
+    expect(byId.expired1).toMatchObject({ status: "token_expired", httpStatus: null, paused: false });
     expect(byId.noproj1).toMatchObject({ status: "error", reason: "missing_project" });
 
-    // Expired and project-less accounts send nothing; every request uses the CLI fingerprint.
+    // Paused, expired and project-less accounts send nothing; every request uses the CLI fingerprint.
     expect(seen.map(row => row.auth).sort()).toEqual(["Bearer tok-denied", "Bearer tok-limit", "Bearer tok-ok", "Bearer tok-verify"]);
     for (const row of seen) {
       expect(row.url).toBe(SUMMARY_URL);

@@ -574,7 +574,7 @@ State-changing: no. JSON mode: `payload`.
 |---|---|---|
 | `--json` | boolean | Emit per-account status, HTTP code, reason and quota windows. |
 
-- Statuses: ok, token_expired, suspended, verification_required, rate_limited, permission_denied, error. Sends one retrieveUserQuotaSummary request per account with its stored token; expired tokens are reported, never refreshed, and paused accounts stay paused. Only google-antigravity is supported.
+- Statuses: ok, paused, token_expired, suspended, verification_required, rate_limited, permission_denied, error. Sends one retrieveUserQuotaSummary request per account with its stored token; paused accounts are skipped without a request, and expired tokens are reported, never refreshed. Only google-antigravity is supported.
 
 ### `ocx account import`
 

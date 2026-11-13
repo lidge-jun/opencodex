@@ -3,7 +3,7 @@ import type { AccountProbeController, AccountProbeEntry, AccountProbeStatus } fr
 
 function statusBadgeClass(status: AccountProbeStatus): string {
   if (status === "ok") return "badge badge-green";
-  if (status === "token_expired") return "badge badge-muted";
+  if (status === "token_expired" || status === "paused") return "badge badge-muted";
   return "badge badge-amber";
 }
 

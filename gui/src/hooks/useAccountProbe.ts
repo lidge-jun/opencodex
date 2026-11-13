@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 
 /** Mirrors `AccountProbeStatus` in src/providers/quota/antigravity-account-probe.ts. */
 export const ACCOUNT_PROBE_STATUSES = [
-  "ok", "token_expired", "suspended", "verification_required", "rate_limited", "permission_denied", "error",
+  "ok", "paused", "token_expired", "suspended", "verification_required", "rate_limited", "permission_denied", "error",
 ] as const;
 export type AccountProbeStatus = typeof ACCOUNT_PROBE_STATUSES[number];
 

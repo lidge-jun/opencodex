@@ -6,11 +6,12 @@ import type { ProviderQuota } from "../quota-types";
 import { fetchAntigravityQuotaSummaryOnce, type AntigravitySummaryOnceResult } from "./antigravity";
 
 /**
- * Per-account probe verdicts. `token_expired` is decided locally and sends nothing; every other
- * value is derived from the single upstream answer.
+ * Per-account probe verdicts. `paused` and `token_expired` are decided locally and send nothing;
+ * every other value is derived from the single upstream answer.
  */
 export const ACCOUNT_PROBE_STATUSES = [
   "ok",
+  "paused",
   "token_expired",
   "suspended",
   "verification_required",
@@ -125,6 +126,8 @@ async function probeOneAntigravityAccount(
   const local = (status: AccountProbeStatus, reason: string | null): AccountProbeResult => ({
     ...base, status, httpStatus: null, reason, message: null, latencyMs: 0, quota: null,
   });
+  // A paused account is left alone: no request, so probing never touches an account the operator parked.
+  if (account.paused === true) return local("paused", null);
   if (!credential?.access) return local("error", "missing_token");
   // Read-only contract: an expired token is reported, never refreshed.
   if (expiresAt !== null && expiresAt <= now) return local("token_expired", null);

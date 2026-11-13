@@ -27,6 +27,7 @@ Omitting `accountId` probes every stored account (concurrency 4). Response:
 | status | meaning | rule |
 | --- | --- | --- |
 | `ok` | usable | HTTP 200 |
+| `paused` | account is paused by the operator; not tested | `account.paused === true`; no request is sent |
 | `token_expired` | stored access token expired, not refreshed | `credential.expires <= now`; no request is sent |
 | `suspended` | upstream says the account is suspended/disabled | 403 whose reason/message names suspension, disablement or ToS |
 | `verification_required` | upstream asks the user to verify the account | 403 with `details[].reason == VALIDATION_REQUIRED` or "verify your account" wording |
@@ -38,8 +39,9 @@ Read-only by construction:
 
 - Uses the account's stored access token exactly as read through `getAccountSet()`; never calls
   `getValidAccessToken`, never refreshes, never writes the auth store, never changes pause,
-  active, cooldown or health state. Paused accounts are probed too (that is the point), but stay
-  paused.
+  active, cooldown or health state. Paused accounts are skipped with status `paused` and no
+  request: an operator who parked an account has said not to use it, and a probe is still a use.
+  To test one, resume it first.
 - One request: `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
   with `{ "project": <projectId> }` and `User-Agent: antigravityCliUserAgent()`. Unlike the quota
   poller there is no 403 retry under the IDE UA and no `fetchAvailableModels` fallback: the

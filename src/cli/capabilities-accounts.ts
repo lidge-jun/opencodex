@@ -89,7 +89,7 @@ export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
     usage: "ocx account probe google-antigravity [<account-id|alias>] [--json]",
     routes: [{ method: "GET", path: "/api/oauth/accounts" }, { method: "POST", path: "/api/oauth/accounts/probe" }],
     flags: [{ name: "--json", value: "boolean", summary: "Emit per-account status, HTTP code, reason and quota windows." }], mutates: false, json: "payload",
-    details: ["Statuses: ok, token_expired, suspended, verification_required, rate_limited, permission_denied, error. Sends one retrieveUserQuotaSummary request per account with its stored token; expired tokens are reported, never refreshed, and paused accounts stay paused. Only google-antigravity is supported."],
+    details: ["Statuses: ok, paused, token_expired, suspended, verification_required, rate_limited, permission_denied, error. Sends one retrieveUserQuotaSummary request per account with its stored token; paused accounts are skipped without a request, and expired tokens are reported, never refreshed. Only google-antigravity is supported."],
   },
   {
     command: ["account", "import"], summary: "Import Google Antigravity accounts from a bounded Cockpit Tools document.",
