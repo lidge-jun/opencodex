@@ -636,8 +636,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const tick = (): void => {
     // The SIGKILL for any tunnel child a stop is draining runs even while lifecycle work is pending or the
     // supervisor shuts down: no reload, removal, reconnect or shutdown waits on an ssh that ignores SIGTERM.
-    // (A candidate route-rounds already stopped gets a fresh stop time here; one it already halted with
-    // SIGKILL gets a second, harmless one on the same unreaped process.)
+    // (A candidate route-rounds already stopped gets a fresh stop time from stopChild; one it already halted
+    // with SIGKILL gets a second, harmless one on the same unreaped process.)
     for (const drain of draining) {
       const age = now() - drain.stopAt;
       if (!drain.killed && age >= CANDIDATE_KILL_GRACE_MS) {
