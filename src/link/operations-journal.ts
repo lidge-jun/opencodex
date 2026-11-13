@@ -18,6 +18,7 @@ import { hardenSecretDir } from "../lib/windows-secret-acl";
 import { parseExplicitRoute, type ExplicitRoute } from "./explicit-route";
 import { isLinkPort } from "./ports";
 import { linkDir } from "./paths";
+import { ALIAS_LOCK_WAIT_MS } from "./alias-lock";
 import { isSshAlias } from "./ssh-argv";
 
 export type OperationKind = "enroll" | "revoke";
@@ -89,6 +90,11 @@ export const OPERATION_JOURNAL_MAX_UNSETTLED = 256;
 export const OPERATION_JOURNAL_MAX_SETTLED = 256;
 /** How long a settled entry is kept for replay however many operations follow it: far past any retry or lock wait. */
 export const OPERATION_REPLAY_MIN_MS = 24 * 60 * 60 * 1000;
+/**
+ * The age before which a settled entry is never pruned early: the replay day, plus the longest alias-lock wait and a
+ * minute, so a retry that started within the day and then waited on the lock still finds its entry.
+ */
+export const OPERATION_PRUNE_FLOOR_MS = OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAIT_MS + 60_000;
 /**
  * At this many entries settled within OPERATION_REPLAY_MIN_MS a new operation is refused until the oldest is a day old: a
  * burst no working fleet reaches (ten machines run a handful of operations each), so a runaway loop that retries with a
@@ -255,7 +261,7 @@ export function pruneOperations(journal: OperationsJournal, nowMs: number): Oper
   const settled = retained.filter(isSettled);
   if (settled.length <= OPERATION_JOURNAL_MAX_SETTLED) return { version: 1, operations: retained };
   // A stable sort: entries settled at the same moment go in journal order.
-  const candidates = settled.map((op, index) => ({ op, index })).filter(item => nowMs - settledAt(item.op) >= OPERATION_REPLAY_MIN_MS)
+  const candidates = settled.map((op, index) => ({ op, index })).filter(item => nowMs - settledAt(item.op) > OPERATION_PRUNE_FLOOR_MS)
     .sort((a, b) => settledAt(a.op) - settledAt(b.op) || a.index - b.index);
   const dropped = new Set(candidates.slice(0, settled.length - OPERATION_JOURNAL_MAX_SETTLED).map(item => item.op));
   return { version: 1, operations: retained.filter(op => !dropped.has(op)) };
@@ -301,7 +307,7 @@ export class OperationsJournalFullError extends Error {
 export function assertRoomForNewOperation(journal: OperationsJournal, nowMs: number): void {
   const kept = pruneOperations(journal, nowMs).operations;
   if (kept.filter(op => !isSettled(op)).length >= OPERATION_JOURNAL_MAX_UNSETTLED) throw new OperationsJournalFullError("unsettled");
-  if (kept.filter(op => isSettled(op) && nowMs - settledAt(op) < OPERATION_REPLAY_MIN_MS).length >= OPERATION_JOURNAL_MAX_RECENT_SETTLED) throw new OperationsJournalFullError("recent");
+  if (kept.filter(op => isSettled(op) && nowMs - settledAt(op) <= OPERATION_PRUNE_FLOOR_MS).length >= OPERATION_JOURNAL_MAX_RECENT_SETTLED) throw new OperationsJournalFullError("recent");
 }
 
 export function findOperation(journal: OperationsJournal, operationId: string): LinkOperation | undefined {

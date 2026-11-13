@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { enrollOperationDigest, openEnrollJournal } from "../../src/server/management/link-operation";
 import { acquireAliasLock, type AliasLockDeps } from "../../src/link/alias-lock";
-import { OPERATION_JOURNAL_MAX_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, OPERATION_REPLAY_MIN_MS, readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { OPERATION_JOURNAL_MAX_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, OPERATION_PRUNE_FLOOR_MS, readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -491,9 +491,9 @@ describe("review round 3", () => {
 });
 
 describe("journal size limit", () => {
-  // Distinct, increasing finish times more than a day old (early pruning never takes a younger entry), so "oldest first" is well defined.
+  // Distinct, increasing finish times past the prune floor (early pruning never takes a younger entry), so "oldest first" is well defined.
   const filled = (count: number, shape: Partial<LinkOperation> = {}): LinkOperation[] => Array.from({ length: count }, (_, i) => entry({
-    operationId: "old-" + i, alias: "pen-old-" + i, state: "committed", finishedAt: new Date(NOW - OPERATION_REPLAY_MIN_MS - (count - i) * 1000).toISOString(), digest: "d".repeat(64), ...shape }));
+    operationId: "old-" + i, alias: "pen-old-" + i, state: "committed", finishedAt: new Date(NOW - OPERATION_PRUNE_FLOOR_MS - (count - i) * 1000).toISOString(), digest: "d".repeat(64), ...shape }));
 
   test("settled entries never block a new operation: past the bound the oldest are pruned instead", async () => {
     const h = harness();

@@ -3,8 +3,9 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertRoomForNewOperation, operationDigest, parseOperationsJournal, pruneOperations, readOperationsJournal, writeOperationsJournal, OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_SETTLED,
-  OPERATION_JOURNAL_MAX_UNSETTLED, OPERATION_REPLAY_MIN_MS, OPERATION_RETENTION_MS, OperationsJournalFullError,
+  OPERATION_JOURNAL_MAX_UNSETTLED, OPERATION_PRUNE_FLOOR_MS, OPERATION_REPLAY_MIN_MS, OPERATION_RETENTION_MS, OperationsJournalFullError,
   OperationsJournalError, type LinkOperation } from "../../src/link/operations-journal";
+import { ALIAS_LOCK_WAIT_MS } from "../../src/link/alias-lock";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /** O1: operations.json is a trust boundary like links.json. */
@@ -67,7 +68,7 @@ test("the digest ignores key order and undefined values", () => {
 });
 
 test("past OPERATION_JOURNAL_MAX_SETTLED settled entries the oldest settled ones more than a day old go first; open and unresolved entries always stay", () => {
-  const now = Date.parse(AT) + OPERATION_REPLAY_MIN_MS + 60_000;
+  const now = Date.parse(AT) + OPERATION_PRUNE_FLOOR_MS + 60_000;
   const settled = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 3 }, (_, i) => entry({ operationId: "done-" + i, state: i % 2 ? "committed" : "failed_clean", finishedAt: new Date(Date.parse(AT) + i).toISOString() }));
   const resolvedOld = entry({ operationId: "resolved-old", state: "unknown", finishedAt: AT, resolvedAt: new Date(Date.parse(AT) - 1).toISOString() });
   const kept = pruneOperations({ version: 1, operations: [entry({ operationId: "open" }), entry({ operationId: "unresolved", state: "residual", finishedAt: AT }), resolvedOld, ...settled] }, now);
@@ -94,7 +95,21 @@ test("a new operation is refused only for a burst of settled operations within a
   expect(() => assertRoomForNewOperation(burst(60_000), now)).toThrow(OperationsJournalFullError);
   try { assertRoomForNewOperation(burst(60_000), now); } catch (error) { expect((error as OperationsJournalFullError).bound).toBe("recent"); }
   // The same number settled more than a day ago is pruned down instead.
-  expect(() => assertRoomForNewOperation(burst(OPERATION_REPLAY_MIN_MS + 60_000), now)).not.toThrow();
+  expect(() => assertRoomForNewOperation(burst(OPERATION_PRUNE_FLOOR_MS + 60_000), now)).not.toThrow();
   const unsettled = { version: 1 as const, operations: Array.from({ length: OPERATION_JOURNAL_MAX_UNSETTLED }, (_, i) => entry({ operationId: "open-" + i })) };
   try { assertRoomForNewOperation(unsettled, now); throw new Error("not refused"); } catch (error) { expect((error as OperationsJournalFullError).bound).toBe("unsettled"); }
+});
+
+test("an entry is pruned early only past a day plus the alias-lock wait: a retry that started within the day still finds it", () => {
+  const settledAgo = (ms: number, id: string) => entry({ operationId: id, state: "committed", finishedAt: new Date(Date.parse(AT) - ms).toISOString() });
+  const now = Date.parse(AT);
+  // 256 entries settled within the hour: none of them may go, so the one under test is the only candidate.
+  const filler = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED }, (_, i) => settledAgo(3_600_000 - i, "recent-" + i));
+  // Just past a day: a retry that started a moment before may still be waiting on the alias lock.
+  const waiting = settledAgo(OPERATION_REPLAY_MIN_MS + 30_000, "waiting");
+  const kept = pruneOperations({ version: 1, operations: [waiting, ...filler] }, now).operations.map(op => op.operationId);
+  expect(kept).toContain("waiting");
+  // Past the day and the whole lock wait it is the oldest candidate's turn like any other.
+  const stale = settledAgo(OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAIT_MS + 120_001, "stale");
+  expect(pruneOperations({ version: 1, operations: [stale, ...filler] }, now).operations.map(op => op.operationId)).not.toContain("stale");
 });
