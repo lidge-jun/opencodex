@@ -15,13 +15,22 @@ import { removeTreeWithRetry } from "./remove-tree";
 
 // OCX_LINK_GATE_CODEX is resolved once to an executable file and copied read-only into a scratch directory; that copy is
 // what is hashed and what every scenario spawns, by absolute path (tests/helpers/link-gate-binary.ts).
+// The scratch copy is removed after each file that drives it (removePinnedCodexCopy from afterAll), and at once when the
+// value is refused or preparing it throws. The fixture is read first, so a fixture error never leaves a copy behind.
+export const GATE_PIN = JSON.parse(readFileSync(fixturePath("link-gate-codex.json"), "utf8")) as { revision: string; sha256: string | null };
 const BIN_SCRATCH = process.env.OCX_LINK_GATE_CODEX ? mkdtempSync(join(tmpdir(), "ocx-link-gate-bin-")) : "";
-const PREPARED = BIN_SCRATCH ? preparePinnedCodex(process.env.OCX_LINK_GATE_CODEX!, { scratch: BIN_SCRATCH }) : null;
-export const GATE_BIN = PREPARED?.path ?? "";
-export const gateUsable = PREPARED !== null;
 /** Removes the scratch copy of the pinned Codex; each file that drives it calls this from afterAll. */
 export function removePinnedCodexCopy(): void { if (BIN_SCRATCH) removeTreeWithRetry(BIN_SCRATCH); }
-export const GATE_PIN = JSON.parse(readFileSync(fixturePath("link-gate-codex.json"), "utf8")) as { revision: string; sha256: string | null };
+const PREPARED = (() => {
+  if (!BIN_SCRATCH) return null;
+  try {
+    const prepared = preparePinnedCodex(process.env.OCX_LINK_GATE_CODEX!, { scratch: BIN_SCRATCH });
+    if (!prepared) removePinnedCodexCopy();
+    return prepared;
+  } catch (error) { removePinnedCodexCopy(); throw error; }
+})();
+export const GATE_BIN = PREPARED?.path ?? "";
+export const gateUsable = PREPARED !== null;
 const PINNED_SHA256 = typeof GATE_PIN.sha256 === "string" ? GATE_PIN.sha256.toLowerCase() : "";
 const digest = PREPARED?.digest ?? "";
 const mode: "absent" | "gate" | "smoke" = !gateUsable ? "absent" : PINNED_SHA256 && digest === PINNED_SHA256 ? "gate" : "smoke";

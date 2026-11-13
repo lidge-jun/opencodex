@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants, copyFileSync, openSync, readSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 /**
  * The executable a release-gate run hashes and runs (tests/e2e-style/link-websocket-release-gate.test.ts). `value` is
@@ -16,7 +16,8 @@ export function preparePinnedCodex(value: string, options: { cwd?: string; scrat
     if (!statSync(file).isFile()) return null;
     accessSync(file, constants.X_OK);
   } catch { return null; }
-  const copy = join(options.scratch, "codex");
+  // The copy keeps the file name, so an extension a platform needs to execute it (codex.exe) stays.
+  const copy = join(options.scratch, basename(file));
   copyFileSync(file, copy, constants.COPYFILE_EXCL);
   chmodSync(copy, 0o555);
   return { path: copy, digest: sha256File(copy) };
