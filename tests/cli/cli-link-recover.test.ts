@@ -98,6 +98,15 @@ describe("ocx link recover", () => {
     }
   });
 
+  // A full install refuses --purge (purge_unsupported), so link_present names --purge only for a lightweight Child.
+  test("link_present says to revoke the link, with --purge only for a lightweight Child", async () => {
+    const f = fixture({ error: { code: "link_present", message: "server text" } }, 409);
+    expect(await runLinkCommand(["recover", "--link-id", ID], f.deps)).toBe(5);
+    expect(stderr()).toContain("revoke it (ocx link revoke, with --purge for a lightweight Child)");
+    expect(stderr()).not.toContain("server text");
+  });
+
+
   test("a code that names an Object prototype key prints only the code", async () => {
     const f = fixture({ error: { code: "constructor", message: "server text" } }, 409);
     await runLinkCommand(["recover", "--link-id", ID], f.deps);

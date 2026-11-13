@@ -61,7 +61,7 @@ ${LINK_OPERATIONS_USAGE.join("\n")}
 ${LINK_CHILD_OPS_USAGE.join("\n")}
 ${LINK_CAPTURE_USAGE.join("\n")}
 
-Forced revoke skips remote cleanup. Run ocx disconnect on the remote client only after checking there that it is still connected to this link.
+Forced revoke skips remote cleanup. On a full install run ocx disconnect there only if ocx connect status --json shows this link's id or no connection; for a lightweight Child run ocx link recover --link-id <id> on this Home.
 An explicit route (--proxy-command, --ssh-user and --ssh-port, with --exclusive) reaches ssh on the command line for every command and tunnel of the link, so ssh_config cannot change it; an exclusive link refuses route edits.
 Recover cleans an ephemeral Child a forced revoke or an interrupted enrollment left behind, over the link's pinned SSH trust.
 Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
@@ -424,7 +424,7 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     const code = error instanceof RuntimeApiError && error.status === 404 ? errorCodeBody(error.body)?.error.code : undefined;
     if (code !== "link_not_found") {
       if (force && !(error instanceof RuntimeApiError)) throw new Error("Forced link revoke failed; inspect link status before retrying.");
-      throw operationId !== undefined ? journalledRevokeError(error, operationId, linkId) : error;
+      throw operationId !== undefined ? journalledRevokeError(error, operationId, linkId) : plainRevokeError(error);
     }
     // A journalled revoke must not read as done when nothing was journalled: the caller settles a vanished link itself.
     if (operationId !== undefined) throw new RuntimeApiError("Link " + linkId + " is not on this Home; no revoke was journalled (code link_not_found).", 404, error instanceof RuntimeApiError ? error.body : null);
@@ -434,8 +434,8 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     const recovery = wasEphemeral
       // Never a bare local disconnect: a forced revoke is also the remedy when the Child now belongs to another link, a hub or
       // another Home, and a disconnect run there would remove that link. The link-bound recover checks ownership itself.
-      ? `Run ocx link recover --link-id ${linkId} once the machine answers: it cleans the machine only while it still belongs to this link. Run ~/.cache/opencodex/bin/ocx-child detach on it by hand only after checking that no other link owns it.`
-      : "Before running ocx disconnect on the remote client, check there that it is still connected to this link (ocx connect status --json shows its link id); if another link, a hub or another Home owns it now, leave it as it is.";
+      ? `Run ocx link recover --link-id ${linkId} once the machine answers: it cleans the machine only while it still belongs to this link.`
+      : "Run ocx disconnect on the remote client only if ocx connect status --json there shows this link's id or no connection, right after that check: an enrollment that lands between the two commands would be removed. If it shows another link, a hub or another Home, leave it as it is.";
     printData({ linkId, remoteCleanup, recovery, ...(operationId !== undefined && recordedOutcome !== undefined ? { operationId, outcome: recordedOutcome } : {}) }, wantsJson, [
       remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,
       recovery,
@@ -633,21 +633,46 @@ export function journalledRevokeError(error: unknown, operationId: string, linkI
   const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first (if this id still owns an unfinished removal, the repeat resumes it). If it does not finish, ocx link operations --operation-id " + operationId + " shows its state: if it reads unknown or residual, check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes; if it reads open, fix what stopped the revoke (for example the journal's disk) and repeat it with the same operation id" : "";
   const next = Object.hasOwn(NEXT_STEP, code) ? ". " + NEXT_STEP[code] : "";
   // A link-bound refusal's hint (#8662), only from the closed set and only in its plain-word form; never the server's text.
-  const rawHint = code === "remote_disconnect_failed" ? error.body.error.hint : undefined;
-  const hint = typeof rawHint === "string" && /^[a-z0-9_-]{1,64}$/.test(rawHint) && Object.hasOwn(BOUND_REFUSAL_HINTS, rawHint) ? rawHint : undefined;
-  const hinted = hint !== undefined ? ". " + BOUND_REFUSAL_HINTS[hint] : "";
+  const hint = code === "remote_disconnect_failed" ? boundRefusalHint(error) : undefined;
+  const hinted = hint !== undefined ? ". " + BOUND_REFUSAL_HINTS[hint]!(againFor(outcome)) : "";
   return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + (hint !== undefined ? ", hint " + hint : "") + ")" + resolve + next + hinted, error.status, error.body);
 }
 
+/** The validated link-bound hint of a remote_disconnect_failed answer (#8662), only from the closed set and only in plain-word form. */
+function boundRefusalHint(error: RuntimeApiError): string | undefined {
+  const body = error.body;
+  const raw = isRecord(body) && isRecord(body.error) && body.error.code === "remote_disconnect_failed" ? body.error.hint : undefined;
+  return typeof raw === "string" && /^[a-z0-9_-]{1,64}$/.test(raw) && Object.hasOwn(BOUND_REFUSAL_HINTS, raw) ? raw : undefined;
+}
+
+/** A plain revoke refused by the Child keeps the generic error unless its hint is in the closed set; the server's text is never shown. */
+function plainRevokeError(error: unknown): unknown {
+  if (!(error instanceof RuntimeApiError)) return error;
+  const hint = boundRefusalHint(error);
+  if (hint === undefined) return error;
+  return new RuntimeApiError("Link revoke did not complete (code remote_disconnect_failed, hint " + hint + "). " + BOUND_REFUSAL_HINTS[hint]!(againFor(undefined)), error.status, error.body);
+}
+
 /**
- * What a link-bound refusal of a journalled revoke means (the hints of remote_disconnect_failed). A text claims only what this
- * attempt's Child command did, which holds whether the revoke was fresh or resumed; an earlier attempt may have done more.
+ * The step after a refused revoke, chosen by the outcome the answer recorded: a failed_clean entry only replays its answer, so
+ * the revoke runs again under a new id; an unknown one may own an unfinished removal, which the same id resumes.
  */
-const BOUND_REFUSAL_HINTS: Record<string, string> = {
-  child_link_mismatch: "The Child refused because of who it belongs to or what state it is in, and this attempt left its link state as it was. If it now belongs to another link, a hub or another Home, do not disconnect it there: revoke this link with --force instead. If it is not connected at all, revoke with --force too. If it joined this Home by itself, run ocx disconnect on it. If a connect, key rotation or unreadable state is in the way, repair that on the Child first",
-  child_residual: "The lightweight Child keeps records it cannot restore, and this attempt left them as they were. Inspect them first: an interrupted attach of another link can be what is left, and ~/.cache/opencodex/bin/ocx-child detach would then remove that link too. Run it only when that is safe, then repeat the revoke with the same operation id; otherwise revoke with --force",
-  child_disconnect_pending: "The Child has an unfinished disconnect it could not tie to this link and may be partly cleaned; check it and finish it there with ocx disconnect before repeating",
-  expect_link_unsupported: "The Child runs an OpenCodex older than --expect-link and another Home-initiated link of this Home may reach the same machine, so it was not disconnected without the link check. Update OpenCodex on the Child, revoke the other link first, or revoke this link with --force",
+function againFor(outcome: string | undefined): string {
+  if (outcome === "failed_clean") return "revoke again with a new operation id (repeating this id only replays this answer)";
+  if (outcome === "unknown") return "repeat the revoke with the same operation id";
+  return "revoke again";
+}
+
+/**
+ * What a link-bound refusal means (the hints of remote_disconnect_failed). A text claims only what this attempt's Child command
+ * did; an earlier attempt of a resumed revoke may have done more. A disconnect is named only after the check that allows it
+ * (this link's id or no connection); every other branch says what not to do and which Home-side command to run.
+ */
+const BOUND_REFUSAL_HINTS: Record<string, (again: string) => string> = {
+  child_link_mismatch: again => "The Child refused because of who it belongs to or what state it is in, and this attempt left its link state as it was. Do not disconnect it there. Check it with ocx connect status --json (ocx-child connect status --json on a lightweight Child): if it shows another link, a hub or another Home, or no connection, revoke this link with --force once any enrollment of this link has finished; if it shows a connect or key rotation in progress, or its state cannot be read, repair that on the Child, then " + again,
+  child_residual: () => "The lightweight Child keeps records it cannot restore, and this attempt left them as they were. Do not run a plain ocx-child detach on it: an interrupted attach of another link can be what is left, and a plain detach would remove that link too. Revoke this link with --force",
+  child_disconnect_pending: again => "The Child has an unfinished disconnect it could not tie to this link and may be partly cleaned. Check whose it is with ocx connect status --json on it: only if it shows this link's id or no connection, finish it there with ocx disconnect, then " + again + "; if it shows another link, a hub or another Home, leave it and revoke this link with --force. If ocx disconnect refuses the receipt as unsafe, revoke with --force too",
+  expect_link_unsupported: again => "The Child runs an ocx or ocx-child older than --expect-link and another Home-initiated link of this Home may reach the same machine, so it was not disconnected without the link check. Update OpenCodex on a full install, then " + again + " (an older planted ocx-child cannot be updated from this Home); or revoke the other link first; or revoke this link with --force",
 };
 
 /**

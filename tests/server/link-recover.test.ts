@@ -637,7 +637,7 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
   });
 
   // A fresh journalled revoke refused at the commit-time check has written its key_revoked intent, so it settles unknown.
-  test("a journalled forced revoke refused by the cap at the commit settles unknown, with no key revoked", async () => {
+  test("a journalled forced revoke refused by the cap at the commit settles unknown and keeps the record", async () => {
     const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
     for (let i = 0; i < MAX_TOMBSTONES - 1; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
     recordTombstone(t0);
@@ -812,7 +812,6 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
   const residualLine = "detach --expect-link " + ID + " refused (residual): the ownership record names no link; record /x; nothing was restored.";
   test.each([
     ["full ocx: another link", 5, '{"phase":"child_link_mismatch","reason":"other_link"}', "child_link_mismatch", "failed_clean"],
-    ["full ocx: a client-initiated link", 5, '{"phase":"child_link_mismatch","reason":"client_initiated_link"}', "child_link_mismatch", "failed_clean"],
     ["full ocx: an unfinished disconnect", 5, '{"phase":"child_link_mismatch","reason":"disconnect_pending"}', "child_disconnect_pending", "unknown"],
     ["full ocx: an unknown reason", 5, '{"phase":"child_link_mismatch","reason":"brand_new"}', undefined, "unknown"],
     ["exit 5 with garbled output", 5, "something went wrong", undefined, "unknown"],
@@ -823,11 +822,14 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     const operationsPath = join(root, "operations.json");
     const h = harness([link()], { operationsPath, ordinary: () => ok("", code, stderr) });
     const res = await h.request("DELETE", "/api/link/" + ID, { operationId: "revoke-1" });
-    const body = await res.json() as { error?: { code?: string; hint?: string }; outcome?: string };
+    const body = await res.json() as { error?: { code?: string; hint?: string; message?: string }; outcome?: string };
     expect(res.status).toBe(502);
     expect(body.error?.code).toBe("remote_disconnect_failed");
     if (hint) expect(body.error?.hint).toBe(hint);
     else expect(["child_link_mismatch", "child_residual", "child_disconnect_pending"]).not.toContain(body.error?.hint);
+    // A remedy never sends the operator to disconnect a machine another link owns (#8662 review P2-1).
+    expect(body.error?.message ?? "").not.toContain("joined this Home by itself");
+    if (hint === "child_link_mismatch") expect(body.error?.message).toContain("Do not disconnect it there");
     expect(body.outcome).toBe(outcome);
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
   });

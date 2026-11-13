@@ -1541,9 +1541,10 @@ A forced success returns `{linkId,remoteCleanup:"skipped",recovery}`. Idempotent
 link-not-found instead reports `remoteCleanup:"unverified"`. Both can exit 0;
 these facts derive from CLI intent, not a server cleanup report. Neither means
 remote disconnect was attempted or confirmed. Follow the recovery instruction when
-that action is authorized: on a full Child, check that it is still connected to
-this link (`ocx connect status --json`) before running `ocx disconnect` there, and
-leave it if another link, a hub or another Home owns it now; a lightweight Child
+that action is authorized: on a full Child, run `ocx disconnect` there only if
+`ocx connect status --json` shows this link's id or no connection, right after
+that check (an enrollment that lands between the two commands would be removed),
+and leave it if it shows another link, a hub or another Home; a lightweight Child
 uses `ocx link recover` (below).
 
 A forced revoke of a lightweight (`ocx-child`) Child that the Home reached over
@@ -1566,14 +1567,15 @@ OpenCodex home on that machine runs a relay from it, and the tombstone is remove
 too. `child_residual`
 (exit 5) means the Child keeps records this command does not restore, such as an
 ownership record written by an older `ocx-child` or an interrupted attach of
-another link. Inspect the machine first: `~/.cache/opencodex/bin/ocx-child detach`
-there also removes a link that interrupted attach would restore, so run it only
-when that is safe, then recover again.
+another link, and nothing was changed. Do not run a plain `ocx-child detach`
+there: it would also restore and remove a link that interrupted attach left. For
+a machine that is gone or whose cleanup cannot be proven, a person on the Home
+can run `ocx link recover --forget --link-id <id> --yes`.
 `child_conflict` (exit 5) means the Child belongs to another link or OpenCodex
 home, and nothing was changed. `alias_linked` (exit 5) means another Home-initiated link still uses that
 alias, as its alias or one of its routes, so the machine may belong to that link: do not run
 `ocx-child detach` there; settle any open operation on that link, revoke it, then recover.
-`link_present` (exit 5) means the link itself still exists; revoke it with `--purge` instead.
+`link_present` (exit 5) means the link itself still exists; revoke it instead (with `--purge` for a lightweight Child).
 `--operation-id` recovers a Child that an
 interrupted enrollment left behind; it needs the link operation journal and
 otherwise answers `operation_journal_unavailable`.

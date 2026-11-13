@@ -349,20 +349,52 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
 
   // #8662's link-bound refusals reach the CLI only as a hint: each validated hint in the closed set gets the CLI's own text, with
   // its outcome; child_disconnect_pending ends unknown, so its repeat guidance stays conditional.
+  // A failed_clean entry only replays its answer, so its next step is a new operation id; an unknown one resumes under the same id.
   test.each([
-    ["child_link_mismatch", "failed_clean", ["who it belongs to or what state it is in", "do not disconnect it there", "--force", "If it joined this Home by itself, run ocx disconnect"]],
-    ["child_residual", "failed_clean", ["keeps records it cannot restore", "Inspect them first", "interrupted attach of another link", "~/.cache/opencodex/bin/ocx-child detach"]],
-    ["child_disconnect_pending", "unknown", ["unfinished disconnect", "may be partly cleaned", "ocx disconnect", "if this id still owns an unfinished removal, the repeat resumes it"]],
-    ["expect_link_unsupported", "failed_clean", ["older than --expect-link", "another Home-initiated link", "Update OpenCodex on the Child"]],
-  ] as const)("a journalled revoke refused with hint %s prints the CLI's own text for it", async (hint, outcome, parts) => {
+    ["child_link_mismatch", "failed_clean", ["who it belongs to or what state it is in", "Do not disconnect it there", "ocx connect status --json (ocx-child connect status --json on a lightweight Child)", "revoke this link with --force once any enrollment of this link has finished", "revoke again with a new operation id (repeating this id only replays this answer)"], ["If it joined this Home by itself", "with the same operation id"]],
+    ["child_link_mismatch", "unknown", ["Do not disconnect it there", "repair that on the Child, then repeat the revoke with the same operation id"], ["revoke again with a new operation id (repeating this id only replays this answer)"]],
+    ["child_residual", "failed_clean", ["keeps records it cannot restore", "Do not run a plain ocx-child detach on it", "interrupted attach of another link", "Revoke this link with --force"], ["~/.cache/opencodex/bin/ocx-child detach", "with the same operation id", "Inspect them first"]],
+    ["child_disconnect_pending", "unknown", ["unfinished disconnect", "may be partly cleaned", "Check whose it is with ocx connect status --json", "only if it shows this link's id or no connection, finish it there with ocx disconnect, then repeat the revoke with the same operation id", "leave it and revoke this link with --force", "if this id still owns an unfinished removal, the repeat resumes it"], ["revoke again with a new operation id (repeating this id only replays this answer)"]],
+    ["expect_link_unsupported", "failed_clean", ["older than --expect-link", "another Home-initiated link", "Update OpenCodex on a full install, then revoke again with a new operation id (repeating this id only replays this answer)", "an older planted ocx-child cannot be updated from this Home"], ["with the same operation id"]],
+    ["expect_link_unsupported", "unknown", ["Update OpenCodex on a full install, then repeat the revoke with the same operation id"], ["revoke again with a new operation id (repeating this id only replays this answer)"]],
+  ] as const)("a journalled revoke refused with hint %s and outcome %s prints the CLI's own text for it", async (hint, outcome, parts, absent) => {
     const h = harness([{ status: 502, body: { error: { code: "remote_disconnect_failed", hint, message: "server-chosen text" }, operationId: "detach-20", outcome } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--operation-id", "detach-20"], h.deps)).toBe(1);
       const printed = [...h.out, ...h.err].join("\n");
       for (const part of parts) expect(printed).toContain(part);
+      for (const part of absent) expect(printed).not.toContain(part);
       expect(printed).toContain("(code remote_disconnect_failed, hint " + hint + ")");
       expect(printed).not.toContain("server-chosen text");
     } finally { h.restore(); }
   });
+
+  // A plain revoke (no operation id) gets the same closed-set text; its next step is simply to revoke again.
+  test.each([
+    ["child_link_mismatch", ["Do not disconnect it there", "repair that on the Child, then revoke again"]],
+    ["child_residual", ["Do not run a plain ocx-child detach on it", "Revoke this link with --force"]],
+    ["child_disconnect_pending", ["Check whose it is with ocx connect status --json", "finish it there with ocx disconnect, then revoke again"]],
+    ["expect_link_unsupported", ["Update OpenCodex on a full install, then revoke again"]],
+  ] as const)("a plain revoke refused with hint %s prints the CLI's own text for it", async (hint, parts) => {
+    const h = harness([{ status: 502, body: { error: { code: "remote_disconnect_failed", hint, message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK], h.deps)).toBe(1);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("Link revoke did not complete (code remote_disconnect_failed, hint " + hint + ")");
+      for (const part of parts) expect(printed).toContain(part);
+      expect(printed).not.toContain("operation id");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  test.each(["ssh_failed", "constructor"])("a plain revoke whose hint is outside the closed set (%s) keeps the generic failure", async hint => {
+    const h = harness([{ status: 502, body: { error: { code: "remote_disconnect_failed", hint, message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK], h.deps)).toBe(1);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("Link management request failed (502)");
+      expect(printed).not.toContain("Link revoke did not complete");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
 
   test.each(["ssh_failed", "constructor", "/home/someone/path"])("a hint outside the closed set (%s) adds no text", async hint => {
     const h = harness([{ status: 502, body: { error: { code: "remote_disconnect_failed", hint, message: "server-chosen text" }, operationId: "detach-21", outcome: "unknown" } }]); try {

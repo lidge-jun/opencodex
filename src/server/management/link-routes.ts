@@ -448,10 +448,10 @@ function readRemovalTarget(ctx: ManagementContext, id: string):
 
 // What each link-bound refusal means and what to do; fixed text, never the Child's own output.
 const BOUND_REFUSAL_MESSAGES: Record<string, string> = Object.assign(Object.create(null) as Record<string, string>, {
-  child_link_mismatch: "The Child refused because of who it belongs to or what state it is in, so nothing was disconnected and the link was kept. If it now belongs to another link, a hub or another Home, do not disconnect it there: revoke this link with --force. If it is not connected at all, revoke with --force too. If it joined this Home by itself, run ocx disconnect on it. If a connect, key rotation or unreadable state is in the way, repair that on the Child first.",
-  child_residual: "The lightweight Child keeps records it cannot restore, so nothing was disconnected and the link was kept. Inspect them first: an interrupted attach of another link can be what is left, and ~/.cache/opencodex/bin/ocx-child detach would then remove that link too. Run it only when that is safe, then revoke again; otherwise revoke with --force.",
-  child_disconnect_pending: "The Child has an unfinished disconnect it could not tie to this link and may be partly cleaned; check it, finish it there with ocx disconnect, then revoke again or with --force.",
-  expect_link_unsupported: "The Child runs an OpenCodex older than --expect-link and another Home-initiated link of this Home may reach the same machine, so it was not disconnected unbound. Update OpenCodex on the Child, revoke the other link first, or revoke this one with --force.",
+  child_link_mismatch: "The Child refused because of who it belongs to or what state it is in, so nothing was disconnected and the link was kept. Do not disconnect it there. Check it with ocx connect status --json (ocx-child connect status --json on a lightweight Child): if it shows another link, a hub or another Home, or no connection, revoke this link with --force once any enrollment of this link has finished; if it shows a connect or key rotation in progress, or its state cannot be read, repair that on the Child, then revoke again.",
+  child_residual: "The lightweight Child keeps records it cannot restore, so nothing was disconnected and the link was kept. Do not run a plain ocx-child detach on it: an interrupted attach of another link can be what is left, and a plain detach would remove that link too. Revoke this link with --force.",
+  child_disconnect_pending: "The Child has an unfinished disconnect it could not tie to this link and may be partly cleaned; the link was kept. Check whose it is with ocx connect status --json on it: only if it shows this link's id or no connection, finish it there with ocx disconnect, then revoke again; if it shows another link, a hub or another Home, leave it and revoke this link with --force. If ocx disconnect refuses the receipt as unsafe, revoke with --force too.",
+  expect_link_unsupported: "The Child runs an ocx or ocx-child older than --expect-link and another Home-initiated link of this Home may reach the same machine, so it was not disconnected without the link check; the link was kept. Update OpenCodex on a full install, then revoke again (an older planted ocx-child cannot be updated from this Home); or revoke the other link first; or revoke this link with --force.",
 });
 
 // A forced revoke of an ephemeral Child refused for its tombstone. Either answer comes before this attempt revoked a key or
@@ -657,7 +657,8 @@ async function removeReserved(
         if (active && JSON.stringify(active) !== JSON.stringify(record)) return "changed" as const;
         // A tombstone this attempt kept may have been dropped since by its owner, a forced revoke that failed in another
         // runtime. Under the lock that removes the record, before the key goes, one must be there: else this attempt
-        // writes its own (and owns it), or stops with the link and key intact.
+        // writes its own (and owns it), or stops with the link and key intact; the tunnel is already stopped and this
+        // attempt's retirement receipt stays claimed, so a repeat of this revoke resumes it.
         if (active && needed) {
           const own = needed;
           let present: boolean;
