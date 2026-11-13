@@ -233,6 +233,15 @@ test("a configured localhost bind reports Desktop unsupported and refuses its au
   expect(io.calls).toEqual([]);
 });
 
+test("unsupported status is also returned for forwarded or nonlocal ingress", async () => {
+  const io = desktopBoundary();
+  for (const response of [await io.dispatch(io.request("authorization"), false),
+    await io.dispatch(io.request("authorization", undefined, { Forwarded: "for=127.0.0.1" }))]) {
+    expect(await response.json()).toEqual({ ok: true, supported: false, authorized: false });
+  }
+  expect(io.calls).toEqual([]);
+});
+
 test("Desktop grants are purpose/origin bound, one use, and cannot mint a general pairing session", async () => {
   const io = desktopBoundary(), other = desktopBoundary("http://127.0.0.1:10100");
   const ordinary = createGuiPairingGrant("http://127.0.0.1:10100", io.config, io.state);

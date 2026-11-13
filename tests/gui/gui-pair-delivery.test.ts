@@ -82,6 +82,21 @@ afterEach(() => {
   removeTreeWithRetry(root);
 });
 
+test("Desktop CLI refuses a configured localhost bind before discovering or issuing a grant", async () => {
+  let discoveries = 0, issues = 0;
+  const warn = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const result = await runGuiCommand(["pair", "--desktop", "--origin", "http://localhost:10100"], {
+      loadConfig: () => ({ ...config(), hostname: "localhost" }), openDefaultGui: async () => 99,
+      findLiveProxy: async () => { discoveries++; return null; },
+      requestPairingGrant: async () => { issues++; throw new Error("unexpected issuance"); },
+    });
+    expect(result).toBe(1);
+    expect(discoveries).toBe(0);
+    expect(issues).toBe(0);
+  } finally { warn.mockRestore(); }
+});
+
 test("Desktop CLI intent crosses real capability admission, grant delivery and dispatcher exchange once", async () => {
   const cfg = config(), s: Extract<ManagementAuthState, { available: true }> = {
     available: true, token: "fixture-admin-only", source: "environment", sessions: new Map(), pairingGrants: new Map(),

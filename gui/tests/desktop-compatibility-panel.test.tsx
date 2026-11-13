@@ -98,6 +98,8 @@ test("a host the server does not support offers no Desktop command a user could 
       : { ok: true, runtime: { supported: true, running: false, phase: "off" } });
   }) as typeof fetch;
   const container = await mount();
+  expect(container.textContent).toContain("If the configured hostname is localhost");
+  expect(container.textContent).toContain("restart");
   expect(container.textContent).not.toContain("ocx gui pair --desktop --origin");
   expect(container.querySelector('input[type="password"]')).toBeNull();
   expect(button(container, "Register trust").disabled).toBe(true);

@@ -117,6 +117,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     <h2>{t("desktopCompat.title")}</h2>
     <p className="muted text-body">{t("desktopCompat.description")}</p>
     <p className="muted text-control">{t("desktopCompat.localOnly")}</p>
+    {authorization.data?.supported === false && <p className="notice-warn" role="status">{t("desktopCompat.authorizationUnavailable")}</p>}
     {authorization.data?.supported && <DesktopCompatibilityAuthorization apiBase={apiBase} authorized={authorized} onAuthorized={authorizedFresh} />}
     <DesktopCompatibilityStartupSetting apiBase={apiBase} active={active} authorized={authorized && !needsRefresh} />
     <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void execute()}>{busy ? t("common.loading") : t("desktopCompat.refresh")}</button>

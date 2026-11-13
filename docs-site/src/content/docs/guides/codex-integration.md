@@ -1148,6 +1148,11 @@ it does not create or replace the browser session. This authorizes Desktop actio
 five minutes in that session; it does not change Remote Link or key-disclosure permissions.
 See [Desktop authorization](/reference/management-api/#desktop-authorization) for the API contract.
 Hub and connected-client Desktop writes are unsupported.
+If authorization is unavailable, use the standalone dashboard directly over HTTP on the proxy
+computer at the configured loopback address and port. If the configured `hostname` is
+`localhost`, set it to `127.0.0.1` or `::1` in [config.json](/reference/configuration/), restart the proxy, and reopen the corresponding
+address and port. Other conditions, including forwarding and mismatched ports or sessions, can
+also make authorization unavailable; changing the hostname alone does not resolve those cases.
 After expiry or logout, reload the local dashboard and authorize again. The panel refreshes
 status, fingerprint and settings revision; select the desired action and consent again.
 It never replays an earlier POST. Certificate expiry or unknown trust does not prevent this

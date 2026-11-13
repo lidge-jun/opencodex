@@ -62,7 +62,7 @@ const GRANT = "ocx_pair_" + "A".repeat(43);
  * answers 403 desktop_authorization_required until that scope exists. No fixture performs real OS
  * trust work: the certificate state is a JSON field, not a trusted root.
  */
-function desktopServer(options: { authorize?: boolean; expireAfterAuthorize?: boolean; refuseSettingsWrite?: boolean; refuseCertificateAction?: boolean } = {}) {
+function desktopServer(options: { supported?: boolean; authorize?: boolean; expireAfterAuthorize?: boolean; refuseSettingsWrite?: boolean; refuseCertificateAction?: boolean } = {}) {
   const calls: Call[] = [];
   let scoped = false, trusted = false, spent = false;
   const authorize = options.authorize ?? true;
@@ -71,7 +71,7 @@ function desktopServer(options: { authorize?: boolean; expireAfterAuthorize?: bo
     const path = new URL(String(input), page.location.href).pathname, method = init?.method ?? "GET";
     calls.push({ path, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (path.endsWith("/desktop-compatibility/authorization")) {
-      if (method === "GET") return Response.json({ ok: true, supported: true, authorized: scoped });
+      if (method === "GET") return Response.json({ ok: true, supported: options.supported ?? true, authorized: scoped });
       const grant = (JSON.parse(String(init!.body)) as { grant?: unknown }).grant;
       // The server accepts only an unspent Desktop grant. The client must never report success
       // from its own optimism, so both a wrong code and a replay answer 403.
@@ -274,4 +274,16 @@ test("a certificate mutation refused at confirmation drops the consent and the a
   expect(button(container, "Resume observation when OpenCodex starts").disabled).toBe(true);
   expect(stepUpInput(container).disabled).toBe(false);
   expect(alerts(container).some(text => text.includes("desktop_authorization_required"))).toBe(true);
+});
+
+
+test("unsupported authorization explains a possible local bind recovery without offering a grant", async () => {
+  const server = desktopServer({ supported: false });
+  const container = await mount();
+  expect(container.textContent).toContain("If the configured hostname is localhost");
+  expect(container.textContent).toContain("restart");
+  expect(container.textContent).not.toContain("ocx gui pair --desktop --origin");
+  expect(container.querySelector('input[type="password"]')).toBeNull();
+  expect(button(container, "Register trust").disabled).toBe(true);
+  expect(posts(server.calls)).toHaveLength(0);
 });
