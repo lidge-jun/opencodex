@@ -630,7 +630,7 @@ describe("pnpm global update", () => {
     delete owner.virtualStoreDirs;
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: fakePnpm(state, owner), verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-    expect(result).toMatchObject({ ok: false, phase: "preflight", error: "pnpm global owner was not pinned" });
+    expect(result).toMatchObject({ ok: false, phase: "preflight", error: "pnpm global owner was not pinned" + STORE_HINT });
     expect(state.calls).toEqual([]);
   });
   test("refuses undefined, relative, or changed effective global store before mutation", () => {
@@ -724,8 +724,10 @@ describe("pnpm global update", () => {
       }, verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
     expect(result).toMatchObject({ ok: false, phase: "rollback", rolledBack: false });
     if (!result.ok) {
-      expect(result.error.startsWith("pnpm update completed but the active package failed verification: pnpm global package listing failed;"
-        + " previous version could not be verified after rollback: pnpm store path")).toBe(true);
+      // The readback's own refusal leads, then the install failure, then the remedy.
+      expect(result.error.startsWith("pnpm store path")).toBe(true);
+      expect(result.error).toContain("; pnpm update completed but the active package failed verification: pnpm global package listing failed;"
+        + " previous version could not be verified after rollback");
       expect(result.error.endsWith(STORE_HINT)).toBe(true);
     }
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(2);

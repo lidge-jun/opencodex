@@ -384,7 +384,9 @@ const STORE_PROOF_HINT = "; this install's path looks like a pnpm global store (
 function isStoreProofFailure(reason) {
   return typeof reason === "string" && (reason.startsWith("pnpm configured store")
     || reason.startsWith("pnpm virtual-store") || reason.startsWith("pnpm store path")
-    || reason.startsWith("pnpm home") || reason.startsWith("pnpm global-store behavior"));
+    || reason.startsWith("pnpm home") || reason.startsWith("pnpm global-store behavior")
+    // A global group that lost its canonical spelling is a configuration fact too: no rollback through it.
+    || reason.startsWith("pnpm global group"));
 }
 
 /**
@@ -721,6 +723,8 @@ export function runPnpmGlobalUpdate({
   platform = process.platform,
   log = () => {},
 }) {
+  // A store owner's refusals during the update carry the same cause and remedy as discovery's.
+  const storeOwnerRefusal = reason => owner?.globalStore === true && typeof reason === "string" ? reason + STORE_PROOF_HINT : reason;
   if (
     !owner?.commandPath
     || !owner?.globalDir
@@ -736,7 +740,7 @@ export function runPnpmGlobalUpdate({
       || !Array.isArray(owner.virtualStoreDirs)))
     || (!owner.globalStore && (owner.store !== undefined || owner.storePath !== undefined))
   ) {
-    return { ok: false, phase: "preflight", error: "pnpm global owner was not pinned" };
+    return { ok: false, phase: "preflight", error: storeOwnerRefusal("pnpm global owner was not pinned") };
   }
   const constraints = {
     owner,
@@ -753,8 +757,6 @@ export function runPnpmGlobalUpdate({
     verify,
     { ...constraints, checkShims: false },
   );
-  // A store owner's refusals during the update carry the same cause and remedy as discovery's.
-  const storeOwnerRefusal = reason => owner.globalStore === true && typeof reason === "string" ? reason + STORE_PROOF_HINT : reason;
   if (!before.ok) return { ok: false, phase: "preflight", error: storeOwnerRefusal(before.reason) };
   if (currentVersion && before.version !== currentVersion) {
     return { ok: false, phase: "preflight", error: storeOwnerRefusal("pnpm's active package does not match the running package") };
@@ -821,6 +823,12 @@ export function runPnpmGlobalUpdate({
   if (owner.globalStore) {
     const rollbackStore = readPnpmStore(runPnpm, owner, platform);
     if (!rollbackStore.ok) return { ok: false, phase: "rollback", rolledBack: false, error: storeOwnerRefusal(rollbackStore.reason) };
+    // The global group is the other root every link hop is confined to: a rollback must not write through a
+    // group that has gained a link component or lost its canonical spelling since discovery.
+    let groupRefusal;
+    try { groupRefusal = spellingRefusal(owner.globalRoot, "pnpm global group"); }
+    catch { groupRefusal = "pnpm global group could not be resolved"; }
+    if (groupRefusal) return { ok: false, phase: "rollback", rolledBack: false, error: storeOwnerRefusal(groupRefusal) };
   }
   log(`Restoring ${packageName}@${before.version} with pnpm…`);
   let rollback;
@@ -849,8 +857,8 @@ export function runPnpmGlobalUpdate({
       error: storeOwnerRefusal(`${installReason}; previous version restored`),
     };
   }
-  // Keep the readback's own reason (a store-proof failure included) so the user sees why.
-  const unverified = restored.ok ? "" : `: ${restored.reason}`;
+  // The readback's own reason (a store-proof failure included) leads, so the user sees why first.
+  const unverifiedPrefix = restored.ok || typeof restored.reason !== "string" ? "" : `${restored.reason}; `;
   return {
     ok: false,
     phase: "rollback",
@@ -859,6 +867,6 @@ export function runPnpmGlobalUpdate({
     ...(restored.ok ? { activePath: restored.path } : {}),
     globalDir: owner.globalDir,
     globalBinDir: owner.globalBinDir,
-    error: storeOwnerRefusal(`${installReason}; previous version could not be verified after rollback${unverified}`),
+    error: storeOwnerRefusal(`${unverifiedPrefix}${installReason}; previous version could not be verified after rollback`),
   };
 }

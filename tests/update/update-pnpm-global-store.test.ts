@@ -606,6 +606,32 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm global-store package is outside the selected store"));
   });
 
+  test("a global group that becomes a link during pnpm add is never rolled back through", () => {
+    const layout = globalStoreLayout(root);
+    const resolved = resolveOwner(layout);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    const run = layout.run;
+    layout.run = args => {
+      const result = run(args);
+      if (args[0] === "add") {
+        // The add leaves the group behind a link to the same tree.
+        const { renameSync } = require("node:fs") as typeof import("node:fs");
+        const real = join(root, "moved-global-v11");
+        renameSync(layout.globalRoot, real);
+        link(real, layout.globalRoot);
+      }
+      return result;
+    };
+    layout.calls.length = 0;
+    const result = runPnpmGlobalUpdate({
+      packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest",
+      owner: resolved.owner, runPnpm: args => layout.run(args), verifyShims: okShims,
+    });
+    expect(result).toMatchObject({ ok: false, phase: "install", rolledBack: false,
+      error: "pnpm global group has a symbolic link component" + STORE_HINT });
+    expect(layout.calls.filter(args => args[0] === "add")).toHaveLength(1);
+  });
+
   test("a store spelling that gains a symbolic link after discovery refuses before pnpm add", () => {
     const layout = globalStoreLayout(root);
     const resolved = resolveOwner(layout);
