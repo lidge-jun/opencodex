@@ -48,7 +48,7 @@ function link(over: Partial<LinkRecord> = {}): LinkRecord {
   };
 }
 
-function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string; holdThrows?: boolean; ordinary?: (command: string) => SshRunResult | undefined } = {}) {
+function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string; holdThrows?: boolean; reloadThrows?: boolean; ordinary?: (command: string) => SshRunResult | undefined } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: (opts.keyRevokeFails ? [{ id: "fixture-key" }] : []) as OcxConfig["apiKeys"] };
   const knownHosts = join(root, "known_hosts");
@@ -69,7 +69,7 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
       onAuthenticatedCatalog: () => () => {},
     },
     supervisor: {
-      start() {}, ensureStarted: async () => {}, reload: async () => {}, holdLink: () => { if (opts.holdThrows) throw new Error("hold failed"); return () => {}; },
+      start() {}, ensureStarted: async () => {}, reload: async () => { if (opts.reloadThrows) throw new Error("reload failed"); }, holdLink: () => { if (opts.holdThrows) throw new Error("hold failed"); return () => {}; },
       stopLink: async () => { opts.duringStop?.(); }, reconnect: async () => true, status: () => [], stop: async () => {},
     },
   };
@@ -722,6 +722,16 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
 describe("recover while another link names the alias", () => {
   // The file can be written before recordTombstone throws (its chmod, or the lock's COMMIT): the revoke then answers
   // tombstone_write_failed and keeps the link, so the tombstone it may have written goes too.
+  // After the commit the link is gone: a later step that throws (here the supervisor reload) answers link_remove_failed,
+  // but the tombstone is the only cleanup evidence for that Child and stays.
+  test("a forced revoke that throws after its commit keeps its tombstone", async () => {
+    const h = harness([link()], { reloadThrows: true });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect([res.status, (await errorOf(res)).code]).toEqual([503, "link_remove_failed"]);
+    expect(h.store.links).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
+
   test("a tombstone write that throws after writing the file leaves no tombstone beside the kept link", async () => {
     const h = harness([link()]);
     const real = tombstonesModule.recordTombstone;
