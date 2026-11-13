@@ -316,6 +316,20 @@ test("a Windows Home refuses an identity file with a fixed hint, whatever the fi
     message: "A Windows Home does not support explicitRoute.identityFile yet.", hint: "identity_file_unsupported_platform" } } });
   expect(identityFileRefusal(ROUTE, "win32")).toBeNull();
 });
+test("confirm-host checks the identity file again: a key removed after the probe is refused before any new SSH", async () => {
+  const h = harness();
+  const key = keyFile();
+  const keyed = { explicitRoute: { ...ROUTE, identityFile: key }, exclusive: true };
+  expect((await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, ...keyed })).status).toBe(200);
+  rmSync(key);
+  const before = h.ssh.length;
+  const refused = await h.call("POST", "confirm-host", { alias: ALIAS, fingerprint, ...keyed });
+  expect({ status: refused.status, code: code(refused), hint: (refused.body.error as { hint?: string }).hint })
+    .toEqual({ status: 400, code: "invalid_identity_file", hint: "identity_file_missing" });
+  expect(h.ssh.length).toBe(before);
+  expect(h.state.confirmedHosts?.size ?? 0).toBe(0);
+});
+
 test("a key whose directory is private, or owned by this user and only readable by others, is accepted", async () => {
   const h = harness();
   for (const mode of [0o700, 0o755]) {
