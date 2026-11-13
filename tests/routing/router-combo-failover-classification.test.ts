@@ -18,6 +18,7 @@ import {
   isProviderModerationRefusal,
 } from "../../src/combos/failover";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { addFinalRequestLog, registerCommittedTerminalCooldownHandler } from "../../src/server/request-log";
 import { normalizeUpstreamErrorText } from "../../src/server/responses/core-errors";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
 import type { OcxConfig } from "../../src/types";
@@ -1957,5 +1958,25 @@ describe("committed-terminal combo cooldown", () => {
     expect(isComboTargetInCooldown("free", first, now + 11 * 60_000)).toBe(true);
     expect(isComboTargetInCooldown("free", first, now + 59 * 60_000)).toBe(true);
     expect(isComboTargetInCooldown("free", first, now + 61 * 60_000)).toBe(false);
+  });
+
+  test("addFinalRequestLog cools the target after finalization overwrites the attempt status", () => {
+    registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
+    try {
+      // The live attempt starts at 200; writeFinalRequestLog finishes it with the
+      // client-facing 502 before the cooldown handler reads attempts.at(-1).
+      const attempt = { provider: "a", model: "m1", adapter: "openai-responses", status: 200, recoveryKinds: [] } as never;
+      const logCtx = {
+        comboId: "free",
+        failureDetail: { code: "stall_timeout" },
+        attempts: [attempt],
+        activeAttempt: attempt,
+      } as never;
+      addFinalRequestLog("ocx-test-stall", Date.now(), logCtx, 502, { terminalStatus: "incomplete" }, () => {});
+      expect(attempt.status).toBe(502);
+      expect(isComboTargetInCooldown("free", first, Date.now() + 30_000)).toBe(true);
+    } finally {
+      registerCommittedTerminalCooldownHandler(undefined);
+    }
   });
 });
