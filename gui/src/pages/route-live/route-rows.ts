@@ -135,6 +135,25 @@ export function rowAccountLabel(row: RouteRow): string | undefined {
   return row.accountLogLabel ?? row.accountTag ?? last?.accountLogLabel ?? last?.accountTag;
 }
 
+const KEY_ACCOUNT_LABEL_RE = /^k[0-9a-f]{32}$/;
+
+/** An API-key account label is a 32-hex digest; show it as its provider plus a short fingerprint. */
+export function readableAccountLabel(label: string, provider: string): string {
+  return KEY_ACCOUNT_LABEL_RE.test(label) ? `${provider} #${label.slice(1, 7)}` : label;
+}
+
+/** A combo row's own provider is "combo"; the account belongs to the provider of the final attempt. */
+export function servingProviderOf(row: RouteRow): string {
+  return row.attempts?.at(-1)?.provider ?? row.provider;
+}
+
+/** What the client asked for. A combo row's alias names the target it landed on, not the combo. */
+export function requestedOf(row: RouteRow): string {
+  return row.routeDecision?.routeKind === "combo"
+    ? row.requestedModel ?? row.model
+    : row.requestedAlias ?? row.requestedModel ?? row.model;
+}
+
 export function servedModelOf(row: RouteRow): string {
   return row.servedModel ?? row.resolvedModel ?? row.model;
 }

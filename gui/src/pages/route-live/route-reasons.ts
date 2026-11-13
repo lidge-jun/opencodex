@@ -51,6 +51,12 @@ export const ROUTE_REASONS: Record<ReasonKind, Readonly<Record<string, TKey>>> =
     "jev-session-pin": "routeLive.whyJevSessionPin",
     "explicit-provider": "routeLive.whyExplicitProvider",
     "default-provider": "routeLive.whyDefaultProvider",
+    "explicit-provider-namespace": "routeLive.whyExplicitProvider",
+    "explicit-account": "routeLive.whyExplicitProvider",
+    "model-alias": "routeLive.whyModelAlias",
+    "model-pattern": "routeLive.whyModelPattern",
+    "native": "routeLive.whyNative",
+    "native-family": "routeLive.whyNative",
   },
 };
 

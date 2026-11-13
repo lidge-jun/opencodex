@@ -2,7 +2,7 @@
  * Pure flow view model for one request row: who was asked, who answered, who was skipped and why.
  * No React, no i18n: reasons stay codes and `route-reasons.ts` owns the wording.
  */
-import { rowAccountLabel, type RouteRoster, type RouteRow } from "./route-rows";
+import { readableAccountLabel, requestedOf, rowAccountLabel, type RouteRoster, type RouteRow } from "./route-rows";
 
 export type FlowStatus = "answered" | "failed" | "skipped" | "idle";
 
@@ -39,7 +39,7 @@ const NUL = String.fromCharCode(0);
 const pm = (provider: string, model: string) => `${provider}${NUL}${model}`;
 
 export function candidateWho(c: FlowCandidate): string {
-  return c.displayName ?? c.accountLabel ?? c.provider;
+  return c.displayName ?? (c.accountLabel ? readableAccountLabel(c.accountLabel, c.provider) : c.provider);
 }
 
 export function buildRouteFlow(row: RouteRow, names: AccountNames = {}): RouteFlow {
@@ -104,8 +104,7 @@ export function buildRouteFlow(row: RouteRow, names: AccountNames = {}): RouteFl
   return {
     client: { value: row.client, ...(row.surface ? { surface: row.surface } : {}) },
     requested: {
-      model: row.requestedModel ?? row.model,
-      ...(row.requestedAlias ? { alias: row.requestedAlias } : {}),
+      model: requestedOf(row),
     },
     candidates,
     outcome,

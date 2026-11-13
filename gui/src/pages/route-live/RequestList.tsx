@@ -11,7 +11,7 @@ import type { AccountNames } from "./flow-model";
 import { groupRows, type GroupLabel, type GroupMode, type GroupStats } from "./request-groups";
 import { formatClock, formatCount, formatDuration, formatPercent, formatRate, shortId } from "./route-format";
 import {
-  cacheHitPercent, costUsdOf, rowAccountLabel, rowKey, servedModelOf, tokPerSecondOf, tokenTotal, type RouteRow,
+  cacheHitPercent, costUsdOf, readableAccountLabel, requestedOf, rowAccountLabel, servingProviderOf, rowKey, servedModelOf, tokPerSecondOf, tokenTotal, type RouteRow,
 } from "./route-rows";
 import "./route-live.css";
 
@@ -44,8 +44,9 @@ function effortText(row: RouteRow): string {
 
 function whoText(row: RouteRow, names: AccountNames): string {
   const label = rowAccountLabel(row);
-  const provider = row.accountRoster?.provider ?? row.provider;
-  return (label && (names[provider]?.[label] ?? names[row.provider]?.[label])) ?? label ?? row.provider;
+  const provider = row.accountRoster?.provider ?? servingProviderOf(row);
+  const named = label ? names[provider]?.[label] ?? names[row.provider]?.[label] : undefined;
+  return named ?? (label ? readableAccountLabel(label, servingProviderOf(row)) : servingProviderOf(row));
 }
 
 function GroupHead({ label, stats, open, onToggle, localeTag }: {
@@ -82,7 +83,7 @@ function RequestRow({ row, pinned, names, localeTag, onPin }: {
         <span className="rl-cell rl-cell--time">{formatClock(row.timestamp, localeTag)}</span>
         <span className="rl-cell rl-cell--client">
           <LogsClientChip client={row.client} t={t} />
-          <code className="rl-ellipsis">{row.requestedAlias ?? row.requestedModel ?? row.model}</code>
+          <code className="rl-ellipsis">{requestedOf(row)}</code>
         </span>
         <span className="rl-cell rl-cell--who">
           <strong className="rl-ellipsis">{whoText(row, names)}</strong>

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildRouteFlow, buildRouteSteps, summarizePool } from "../src/pages/route-live/flow-model";
 import { groupRows } from "../src/pages/route-live/request-groups";
-import { cacheHitPercent, parseRouteRows, type RouteRow } from "../src/pages/route-live/route-rows";
+import { cacheHitPercent, parseRouteRows, readableAccountLabel, requestedOf, type RouteRow } from "../src/pages/route-live/route-rows";
 
 const base = { timestamp: 1000, model: "m", provider: "p", status: 200, durationMs: 900 };
 const row = (extra: Partial<RouteRow>): RouteRow => ({ ...base, ...extra } as RouteRow);
@@ -88,5 +88,20 @@ describe("route rows and groups", () => {
     expect(sessions[1]!.stats.cacheHit).toBeUndefined();
     expect(groupRows(rows, "key").map(g => g.label)).toEqual([
       { kind: "key", id: "k1" }, { kind: "admission", admission: "loopback" }]);
+  });
+});
+
+describe("what the page names", () => {
+  test("a combo row shows the combo the client asked for, not the alias of the target it landed on", () => {
+    const combo = row({ model: "combo/steady", requestedModel: "combo/steady", requestedAlias: "mock-b/deepseek-chat",
+      routeDecision: { routeKind: "combo" } } as Partial<RouteRow>);
+    expect(requestedOf(combo)).toBe("combo/steady");
+    expect(buildRouteFlow(combo).requested.model).toBe("combo/steady");
+    expect(requestedOf(row({ requestedModel: "claude-sonnet", requestedAlias: "sonnet" } as Partial<RouteRow>))).toBe("sonnet");
+  });
+
+  test("an API-key account digest reads as its provider plus a short fingerprint", () => {
+    expect(readableAccountLabel(`k${"6a46ff".padEnd(32, "0")}`, "mock-a")).toBe("mock-a #6a46ff");
+    expect(readableAccountLabel("o1a2b3c", "xai")).toBe("o1a2b3c");
   });
 });
