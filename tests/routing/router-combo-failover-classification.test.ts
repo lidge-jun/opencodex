@@ -18,7 +18,7 @@ import {
   isProviderModerationRefusal,
 } from "../../src/combos/failover";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
-import { addFinalRequestLog, registerCommittedTerminalCooldownHandler } from "../../src/server/request-log";
+import { addFinalRequestLog, beginRequestAttempt, registerCommittedTerminalCooldownHandler, type RequestLogContext } from "../../src/server/request-log";
 import { normalizeUpstreamErrorText } from "../../src/server/responses/core-errors";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
 import type { OcxConfig } from "../../src/types";
@@ -1963,15 +1963,17 @@ describe("committed-terminal combo cooldown", () => {
   test("addFinalRequestLog cools the target after finalization overwrites the attempt status", () => {
     registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
     try {
-      // The live attempt starts at 200; writeFinalRequestLog finishes it with the
-      // client-facing 502 before the cooldown handler reads attempts.at(-1).
-      const attempt = { provider: "a", model: "m1", adapter: "openai-responses", status: 200, recoveryKinds: [] } as never;
-      const logCtx = {
+      // The live attempt carries the upstream 200; writeFinalRequestLog finishes it
+      // with the client-facing 502 before the cooldown handler reads attempts.at(-1).
+      const attempt = beginRequestAttempt(1, "a", "m1", "openai-responses");
+      attempt.status = 200;
+      const logCtx: RequestLogContext = {
+        model: "m1", provider: "a", providerAdapter: "openai-responses",
         comboId: "free",
         failureDetail: { code: "stall_timeout" },
         attempts: [attempt],
         activeAttempt: attempt,
-      } as never;
+      };
       addFinalRequestLog("ocx-test-stall", Date.now(), logCtx, 502, { terminalStatus: "incomplete" }, () => {});
       expect(attempt.status).toBe(502);
       expect(isComboTargetInCooldown("free", first, Date.now() + 30_000)).toBe(true);
