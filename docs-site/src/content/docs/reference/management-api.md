@@ -107,10 +107,10 @@ The dashboard at **Providers > xAI Grok > Accounts** lists remaining coupons and
 
 Claude usage resets work the same way from **Providers > Anthropic > Accounts**. Each
 signed-in account row carries a ticket badge with its remaining resets, and the dialog
-spends one after a second confirmation. A reset refills the 5-hour and weekly limits
+spends one after a second confirmation. Grants differ in expiry and in the limits they clear, so the dialog lists them as choices: it preselects the usable grant that expires first, shows grants that cannot be used now as disabled with the reason, and the confirmation names the chosen grant, its expiry, and the limits it clears before that `grantId` is sent. The server checks the chosen grant again and refuses one that is not usable with `409 grant_not_usable`. A reset refills the limits its grant clears (usually the 5-hour and weekly limits)
 without moving the weekly reset day. When a claim does not answer, the dialog keeps its
 `operationId` and offers a retry with that same ID for ten minutes, which is how the
-Claude Code client itself recovers; a new operation for the same grant is refused
+Claude Code client itself recovers; a new operation on that account, for any grant, is refused
 until then. Spending is dashboard-only: the admin token alone gets `403 session_required`.
 
 For the concepts behind the model roster and encrypted worker-task behavior, see

@@ -174,11 +174,13 @@ import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-
 import { responsesJsonToSseStream } from "../responses-json-events";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import {
+  BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS,
   bufferedResponsesReadOptions,
   collectBufferedResponsesSse,
   type BufferedResponsesSseFailure,
   type BufferedResponsesSseResult,
 } from "./buffered-sse-json";
+import { bufferedResetSelectionStartedAt } from "./passthrough-completion";
 
 const PLAINTEXT_V2_SSE_PREFIX_LIMIT = 4096;
 
@@ -977,10 +979,11 @@ export async function deliverPassthroughResponse(
 
       if (canonicalBufferedJson) {
         const signal = options.abortSignal ?? req.signal;
+        // A turn whose head waited on reset selection keeps the deadline that wait already spent.
         const bufferedRead = bufferedResponsesReadOptions(resolveStallTimeoutMs(
           config.stallTimeoutSec,
           { localUpstream: nativeExchange.localUpstream },
-        ));
+        ), BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS, bufferedResetSelectionStartedAt(nativeExchange.upstreamResponse) ?? Date.now());
         const failBufferedTurn = (
           message: string,
           failure?: BufferedResponsesSseFailure,

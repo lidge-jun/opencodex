@@ -10,6 +10,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { linkLogField, type LinkRequestLogCarrier } from "./link-log-fields";
 import { normalizeRecordedClient, type UsageClient } from "./client";
 import {
   normalizePersistedJevDecision,
@@ -25,6 +26,7 @@ import {
 import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
+import { requestBodyField, type RequestBodyFacts } from "./request-body";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
 import type { UpstreamCondition } from "../lib/upstream-condition";
@@ -309,7 +311,7 @@ export function normalizeRequestSpend(value: unknown): PersistedRequestSpend | u
   };
 }
 
-export interface PersistedUsageEntry {
+export interface PersistedUsageEntry extends LinkRequestLogCarrier {
   requestedAlias?: string;
   requestId: string;
   /** Best-effort classified client; absent only for records predating attribution. */
@@ -429,6 +431,8 @@ export interface PersistedUsageEntry {
    * rows and rows that fail validation carry none, and are never back-filled by guessing.
    */
   protocolTrace?: ProtocolTraceV1;
+  /** The request body as received (#3023): wire bytes, Content-Encoding, decoded bytes. Absent on older rows. */
+  requestBody?: RequestBodyFacts;
   /**
    * How far this request got and why it failed (#2366). Projected from the attempt that ended
    * the request so every surface reads the answer off the same row. Absent on a completed
@@ -1064,6 +1068,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
       : {}),
     ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
     ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}),
+    ...linkLogField(entry.link),
     ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
       ? { accountLogLabel: entry.accountLogLabel }
       : {}),
@@ -1146,6 +1151,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(protocolTrace ? { protocolTrace } : {}),
+    ...requestBodyField(entry.requestBody),
     ...normalizeRequestFailureAttribution(entry),
   };
   if (normalized.attemptNormalizationDropped !== true && (entry.attemptNormalizationDropped === true

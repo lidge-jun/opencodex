@@ -812,6 +812,39 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
       expect(sends).toBe(2);
       expect(replacement.cancels()).toBeGreaterThanOrEqual(1);
     }));
+
+    test("the whole-turn ceiling counts the time selection held the head (#8343)", () => withFakeClock(async () => {
+      const original = scripted();
+      let sends = 0;
+      let sentAt = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        sentAt = Date.now();
+        original.push(created);
+        // Real upstream activity inside every stall budget, for longer than the whole-turn ceiling.
+        const beat = () => { original.push(heartbeat); setTimeout(beat, 4_000); };
+        setTimeout(beat, 4_000);
+        return original.response;
+      }) as typeof fetch;
+      // settle() gives up after 30 s of fake time; this turn has to reach its 15-minute ceiling.
+      const turn: { response?: Response } = {};
+      void call(requestBody(false, false), {}, stallConfig).then(response => { turn.response = response; }, () => undefined);
+      for (;;) {
+        await flushMicrotasks();
+        await new Promise<void>(resolve => setImmediate(resolve));
+        await flushMicrotasks();
+        if (turn.response) break;
+        if (sentAt > 0 && Date.now() - sentAt > BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS + 30_000) throw new Error("buffered turn outlived its ceiling");
+        jest.advanceTimersByTime(1_000);
+      }
+      const elapsed = Date.now() - sentAt;
+      expect(turn.response.status).toBe(502);
+      // Selection held the head for one stall budget before the collector started; the ceiling
+      // still ends the turn one total timeout after the head arrived, not after that wait.
+      expect(elapsed).toBeGreaterThan(BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS - 1_000);
+      expect(elapsed).toBeLessThanOrEqual(BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS + 1_000);
+      expect(sends).toBe(1);
+    }));
   });
 
   for (const ending of ["eof", "read-error"] as const) {

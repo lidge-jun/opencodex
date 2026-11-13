@@ -14,6 +14,8 @@ import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../com
 import { RemoteLinkDisconnectDialog } from "./RemoteLinkDialogs";
 import { RemoteLinkDiagnostics } from "./RemoteLinkDiagnostics";
 import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView } from "./RemoteLinkSheet";
+import { getChildJob, jobHoldsLink, type ChildJobView, type ChildOp } from "../remote-link-child-ops-api";
+import { ChildBulkBar, ChildJobProgress, ChildPolicyPanel, ChildRowActions, ChildRowBadges } from "./RemoteLinkChildActions";
 import "../styles-remote-link.css";
 
 type RemoteLinkRole = "home" | "child";
@@ -58,6 +60,7 @@ const ERROR_TKEY: Record<LinkErrorCode, TKey> = {
   host_not_confirmed: "remoteLink.error.host_not_confirmed",
   invalid_alias: "remoteLink.error.invalid_alias",
   invalid_body: "remoteLink.error.invalid_body",
+  invalid_job_id: "remoteLink.error.invalid_job_id",
   invalid_link_id: "remoteLink.error.invalid_link_id",
   join_connect_failed: "remoteLink.error.join_connect_failed",
   join_in_progress: "remoteLink.error.join_in_progress",
@@ -67,16 +70,19 @@ const ERROR_TKEY: Record<LinkErrorCode, TKey> = {
   join_restart_failed: "remoteLink.error.join_restart_failed",
   join_rollback_failed: "remoteLink.error.join_rollback_failed",
   join_tunnel_failed: "remoteLink.error.join_tunnel_failed",
+  job_not_found: "remoteLink.error.job_not_found",
   key_issue_failed: "remoteLink.error.key_issue_failed",
   key_revoke_failed: "remoteLink.error.key_revoke_failed",
   link_apply_failed: "remoteLink.error.link_apply_failed",
   link_exists: "remoteLink.error.link_exists",
   link_not_found: "remoteLink.error.link_not_found",
-  // Only `ocx link reconnect` can reach it: Retry restarts Home-initiated rows only.
-  link_not_home_initiated: "remoteLink.error.generic",
+  link_not_home_initiated: "remoteLink.error.link_not_home_initiated",
+  link_operation_in_progress: "remoteLink.error.link_operation_in_progress",
   link_remove_failed: "remoteLink.error.link_remove_failed",
   link_unavailable: "remoteLink.error.link_unavailable",
   listener_unavailable: "remoteLink.error.listener_unavailable",
+  no_eligible_links: "remoteLink.error.no_eligible_links",
+  policy_write_failed: "remoteLink.error.policy_write_failed",
   probe_failed: "remoteLink.error.probe_failed",
   purge_unsupported: "remoteLink.error.purge_unsupported",
   remote_connect_failed: "remoteLink.error.remote_connect_failed",
@@ -88,6 +94,7 @@ const ERROR_TKEY: Record<LinkErrorCode, TKey> = {
   remote_plant_timeout: "remoteLink.error.remote_plant_timeout",
   remote_plant_unavailable: "remoteLink.error.remote_plant_unavailable",
   remote_port_failed: "remoteLink.error.remote_port_failed",
+  runtime_role_client: "remoteLink.error.runtime_role_client",
   standalone_required: "remoteLink.error.standalone_required",
   tailscale_session_refused: "remoteLink.error.tailscale_session_refused",
   version_probe_failed: "remoteLink.error.version_probe_failed",
@@ -154,6 +161,13 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
   const [confirmation, setConfirmation] = useState<LinkConfirmHostView | null>(null);
   const [checkedFingerprint, setCheckedFingerprint] = useState(false);
   const [busy, setBusy] = useState<"candidates" | "probe" | "confirm" | "apply" | "join" | "remove" | "reconnect" | null>(null);
+  // Revision 6: child operations and the policy save never enter `busy`, which RemoteLinkSheet types as a closed union.
+  const [childOpBusy, setChildOpBusy] = useState<{ linkId: string | "all"; op: ChildOp } | null>(null);
+  const [policyBusy, setPolicyBusy] = useState(false);
+  // Bumped by the page Refresh so the policy panel re-reads alongside the status; a poll never bumps it.
+  const [policyReload, setPolicyReload] = useState(0);
+  const [childJobs, setChildJobs] = useState<ChildJobView[]>([]);
+  const childJobIds = useRef(new Set<string>());
   const [actionError, setActionError] = useState<LinkActionErrorView | null>(null);
   const [failedAction, setFailedAction] = useState<FailedAction | null>(null);
   const [confirming, setConfirming] = useState<{ row: LinkRowWire; force: boolean } | null>(null);
@@ -206,7 +220,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
     const sequence = ++statusSequenceRef.current;
     statusRequestRef.current = { controller, sequence };
     try {
-      const value = parseRemoteLinkStatus(await requestLinkJson<unknown>(apiBase, "/api/link/status", { signal: controller.signal }));
+      const value = parseRemoteLinkStatus(await requestLinkJson<unknown>(apiBase, "/api/link/status?children=1", { signal: controller.signal }));
       if (controller.signal.aborted || statusSequenceRef.current !== sequence) return;
       setStatus(value);
       setStatusError(null);
@@ -436,13 +450,41 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
   };
 
   const statusRows = status?.links ?? [];
+  // A job accepted by this page disables its links' actions and Disconnect at once. The status row's
+  // activeJob only appears on the next poll, so the tracked childJobs are the earlier signal.
+  const heldLinks = new Set(statusRows.filter(row => jobHoldsLink(childJobs, row.id)).map(row => row.id));
+  // A job the page did not start itself: running before a reload, in another tab, or started by the scheduler.
+  const trackJob = useCallback((job: ChildJobView) => {
+    if (childJobIds.current.has(job.jobId)) return;
+    childJobIds.current.add(job.jobId);
+    setChildJobs(current => [...current, job]);
+  }, []);
+  const finishJob = useCallback((jobId: string) => {
+    setChildJobs(current => current.filter(job => job.jobId !== jobId));
+    void refreshStatus();
+  }, [refreshStatus]);
+  // Each polled snapshot replaces the page's copy, so a row is released when its own item ends, not when the
+  // whole bulk job does.
+  const updateJob = useCallback((job: ChildJobView) => {
+    setChildJobs(current => current.map(item => item.jobId === job.jobId ? job : item));
+  }, []);
+  useEffect(() => {
+    for (const row of status?.links ?? []) {
+      const active = row.child?.activeJob;
+      if (!active || childJobIds.current.has(active.jobId)) continue;
+      childJobIds.current.add(active.jobId);
+      getChildJob(apiBase, active.jobId)
+        .then(job => setChildJobs(current => current.some(item => item.jobId === job.jobId) ? current : [...current, job]))
+        .catch(() => { childJobIds.current.delete(active.jobId); });   // gone since the read; the next status poll retries
+    }
+  }, [apiBase, status]);
   // A machine that chose Home but has no link yet still reports standalone; the panel follows the
   // operator's choice so the heading does not contradict the action in front of them.
   const choseHome = role === "home" && (uiState === "adding-child" || uiState === "confirming-host" || uiState === "applying");
   const roleLabel: TKey = status?.role === "home" || choseHome ? "remoteLink.role.home" : status?.role === "child" ? "remoteLink.role.child" : "remoteLink.role.standalone";
   const primaryActionDisabled = role === "child" && !childSelectable;
 
-  const refreshButton = <Button variant="ghost" size="sm" onClick={() => void refreshStatus()} disabled={busy !== null}><IconRefresh />{t("link.refresh")}</Button>;
+  const refreshButton = <Button variant="ghost" size="sm" onClick={() => { setPolicyReload(value => value + 1); void refreshStatus(); }} disabled={busy !== null}><IconRefresh />{t("link.refresh")}</Button>;
   if (!sessionReady) return (
     <div className="remote-link-page flex min-w-0 flex-col gap-5 font-sans text-fg">
       <PageHeader title={t("link.title")} subtitle={t("link.subtitle")} />
@@ -452,6 +494,8 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
 
   const childHome = role === "child" && standaloneRuntime;
   const showLinks = uiState === "connected" || uiState === "reconnecting" || uiState === "failed" || uiState === "restart-waiting" || status?.role === "child" || statusRows.length > 0 || uiState === "adding-child" || uiState === "confirming-host" || uiState === "applying" || uiState === "joining";
+  // Child badges, actions, the bulk bar and the policy panel exist only for a Home that reports a `child` block.
+  const showChildOps = status?.role === "home" && statusRows.some(row => row.child);
   const showStatusMessage = !sheetOpen && (uiState === "reconnecting" || (uiState === "failed" && ((failedAction !== null && actionError?.key !== "remoteLink.error.join_restart_failed") || statusRows.some(row => row.state === "failed"))));
   const onRoleKey = (event: KeyboardEvent<HTMLButtonElement>, index: number, enabled: boolean) => {
     if (enabled && ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(index, event.key); }
@@ -506,6 +550,12 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
             </Button>
           </div>
           <div className="flex min-w-0 flex-col rounded-[8px] bg-bg ring-1 ring-line">
+            {showChildOps && (
+              <>
+                <ChildBulkBar apiBase={apiBase} rows={statusRows} onJob={trackJob} onError={setActionError} onRun={setChildOpBusy} />
+                {childJobs.map(job => <ChildJobProgress key={job.jobId} apiBase={apiBase} job={job} onDone={() => finishJob(job.jobId)} onJobUpdate={updateJob} />)}
+              </>
+            )}
             {uiState === "restart-waiting" ? (
               <div className="remote-link-restart flex flex-col gap-1.5 px-4 py-4" aria-live="polite">
                 <strong className="text-[14px] font-semibold">{t("remoteLink.restart.title")}</strong>
@@ -534,6 +584,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
                           <span className="truncate text-[14px] font-semibold">{row.alias}</span>
                           {row.childKind && <StateBadge tone={row.childKind === "ephemeral" ? "ok" : "neutral"}>{t(row.childKind === "ephemeral" ? "remoteLink.badge.ephemeral" : "remoteLink.badge.full")}</StateBadge>}
                           {synced !== null && <StateBadge tone={synced ? "ok" : "warn"}>{t(synced ? "remoteLink.parity.synced" : "remoteLink.parity.outdated")}</StateBadge>}
+                          {row.child && <ChildRowBadges row={row.child} />}
                         </div>
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] leading-5 text-fg-muted">
                           <LinkStatus state={row.state}>{t(STATUS_LABEL[row.state])}</LinkStatus>
@@ -541,7 +592,12 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
                           {row.reason && <span className="remote-link-error text-danger">{row.reason in REASON_TKEY ? t(REASON_TKEY[row.reason]) : <>{t("remoteLink.reason.generic")} <code className="font-mono">{row.reason}</code></>}</span>}
                         </div>
                       </div>
-                      <Button variant="ghost" size="sm" className="hover:bg-danger-soft hover:text-danger" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setPurgeOnDisconnect(false); setConfirming({ row, force: false }); }} disabled={busy !== null}>
+                      {row.child && row.direction === "hub-initiated" && (
+                        <ChildRowActions apiBase={apiBase} link={row} disabled={childOpBusy !== null || heldLinks.has(row.id)}
+                          onJob={trackJob} onError={setActionError} onDialog={open => setChildOpBusy(open ? { linkId: row.id, op: "observe" } : null)}
+                          onRun={setChildOpBusy} />
+                      )}
+                      <Button variant="ghost" size="sm" className="hover:bg-danger-soft hover:text-danger" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setPurgeOnDisconnect(false); setConfirming({ row, force: false }); }} disabled={busy !== null || row.child?.activeJob != null || heldLinks.has(row.id)} title={row.child?.activeJob || heldLinks.has(row.id) ? t("remoteLink.child.disconnectBlocked") : undefined}>
                         <IconTrash />{t("link.disconnect")}
                       </Button>
                     </li>
@@ -566,6 +622,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
           )}
         </section>
       )}
+      {showChildOps && <ChildPolicyPanel apiBase={apiBase} busy={policyBusy} reloadSignal={policyReload} onBusy={setPolicyBusy} onError={setActionError} />}
       {(status?.role === "child" || statusRows.length > 0) && <FallbackPanel apiBase={apiBase} section="devices" readOnly={status?.role === "child"} />}
       <RemoteLinkDiagnostics apiBase={diagnosticsApiBase} />
 

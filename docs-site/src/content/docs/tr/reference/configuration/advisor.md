@@ -46,7 +46,7 @@ Kontrol panelindeki **Advisor** sayfasında katalogdan model seçin. Yerel, sağ
 
 Panodaki **Advisor** sayfası veya `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` ile yönetin.
 
-Güncel onay yokken `ocx advisor on` sağlayıcılar arası gönderimi açmaz: açıklamayı basar ve durur. `ocx advisor on --ack-context-sharing` ile `ocx advisor consent` `v1` kaydeder. `ocx advisor consent --revoke` onayı kaldırır ve gönderimi hemen durdurur. `ocx advisor set` onay vermez. Panodaki onay kutusu önceden işaretli değildir.
+Güncel onay yokken `ocx advisor on` sağlayıcılar arası gönderimi açmaz: açıklamayı basar ve durur. `ocx advisor on --ack-context-sharing` ile `ocx advisor consent` `v1` kaydeder. `ocx advisor consent --revoke` onayı kaldırır. Henüz gönderilmemiş danışmalar engellenir, ancak gönderilmiş bir danışma iptal edilemez ve proxy'den ayrılmış bağlam geri alınamaz. `ocx advisor set` onay vermez. Panodaki onay kutusu önceden işaretli değildir.
 
 ## Politikalar
 
@@ -98,6 +98,7 @@ Danışman fail-open davranır: gönderilmiş bir danışma başarısız olursa 
 ## PR1 sınırlamaları
 
 - Yerel OpenAI passthrough turları (ChatGPT havuzu worker'ları) sentetik aracı almaz; danışman desteği yönlendirilen (çevrilen) sağlayıcıları kapsar. Preflight danışması run-turn bağdaştırıcılarına uygulanır; araç uygulanmaz.
+- Çevrilen `/v1/messages` istekleri (örneğin çevrilen bir sağlayıcıya yönlendirilen Claude Code), `/v1/responses` ve `/v1/chat/completions` gibi sentetik aracı ve preflight danışmasını alır. Aynı `policy` ve bağlam paylaşımı onayı kuralları geçerlidir ve ayarlar güncel yapılandırmadan okunur; bu yüzden onayın geri alınması, devam eden isteklerin henüz gönderilmemiş bir danışma başlatmasını engeller. Gönderilmiş bir danışmayı iptal etmez ve proxy'den ayrılmış bağlamı geri almaz.
 - Anlamsal takılma algılama, tamamlanma incelemesi, yükseltme katmanları, çoklu danışman veya oylama yoktur.
 - Preflight tekilleştirme defteri süreç içindedir; proxy yeniden başlatıldıktan sonra devam eden bir görev bir preflight danışması daha alabilir.
 
