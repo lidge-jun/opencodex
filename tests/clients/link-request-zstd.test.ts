@@ -3,6 +3,7 @@ import type { Server } from "bun";
 import { zstdDecompressSync } from "node:zlib";
 import { randomBytes } from "node:crypto";
 import { relayLinkDataRequest, HOME_INITIATED_LINK_TUNNEL, type LinkRelayDeps } from "../../src/client/link-relay";
+import { readDeclaredBody } from "../../src/client/link-request-compression";
 import { createLinkRelaySessions } from "../../src/server/index/link-relay-sessions";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { createLinkTrafficBook } from "../../src/link/traffic";
@@ -214,6 +215,32 @@ describe("per-body zstd from Child to Home (#3023)", () => {
     expect((await pending).status).toBe(503);
     expect(budget.snapshot()).toEqual({ reservedBytes: 0, activeLeases: 0, queuedRequests: 0 });
     expect(h.seen).toHaveLength(1);
+  });
+
+  const bigBytes = encoder.encode(big);
+  const shortBody = () => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bigBytes.subarray(0, bigBytes.byteLength - 10)); c.close(); } });
+
+  test("a body that ends cleanly before its declared length is unreadable, never a shorter complete body", async () => {
+    const bytes = bigBytes;
+    await expect(readDeclaredBody(shortBody(), bytes.byteLength, new AbortController().signal)).rejects.toThrow(RangeError);
+    const whole = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } });
+    expect(await readDeclaredBody(whole, bytes.byteLength, new AbortController().signal)).toEqual(bytes);
+  });
+
+  test("a prepared body shorter than its declared Content-Length answers 400 and reaches no Home", async () => {
+    const bytes = bigBytes;
+    const h = home(() => [LINK_REQUEST_ZSTD_FEATURE]);
+    await relay(post("/v1/responses", big), h.port);
+    const budget = createInboundBodyBudget(64 * 1024 * 1024, 0);
+    const req = new Request("http://127.0.0.1/v1/responses", { method: "POST", duplex: "half", body: shortBody(),
+      headers: { "content-type": "application/json", "content-length": String(bytes.byteLength) } } as RequestInit);
+    expect(req.headers.get("content-length")).toBe(String(bytes.byteLength));
+    const res = await relay(req, h.port, { requestCompression: { budget } });
+    // The Home's session layer counts every request it dispatched: only the first one got there.
+    expect(h.book.snapshot(linkId)).toMatchObject({ requests: 1 });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "link relay request body unreadable" });
+    expect(budget.snapshot()).toEqual({ reservedBytes: 0, activeLeases: 0, queuedRequests: 0 });
   });
 });
 
