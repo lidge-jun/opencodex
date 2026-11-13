@@ -23,13 +23,15 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 | `subagentEffortCap?` | `string` | — | 仅针对派生子轮次的额外上限。两个上限同时适用时，较低者生效。 |
 | `plaintextV2AgentMessages?` | `boolean` | —（未设置） | 实验性选项。显式设置为 `true` 或选择 `multiAgentMode: "v2-plaintext"` 均会启用。符合条件的新 `spawn_agent`、`send_message` 和 `followup_task` 调用会使用明文消息参数。详见[明文 v2 代理消息](#明文-v2-代理消息)。 |
 
-通过仪表板或 `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>` 管理该界面。进入 `v2-plaintext` 需要 `--acknowledge-plaintext-agent-messages`。模式变更会应用于新会话。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ocx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
+通过仪表板或 `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>` 管理该界面。通过 CLI 进入 `v2-plaintext` 需要 `--acknowledge-plaintext-agent-messages`；仪表板要求确认，通过 `PUT /api/v2` 新进入时必须提交 `plaintextAgentMessagesAcknowledged: true`。目录模式变更应用于新会话，编译器的当前设置也影响已有 V2 会话后续符合条件的请求。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ocx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
 
 管理 API 公开 `GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models` 和 `/api/subagent-model-fallback`。injection-model 更新是部分更新；自定义 prompt 是该 API 上的 `prompt` 字段。
 
 ## 始终主动委派
 
 Subagents → 高级中的 **始终主动委派**（原名 **Ultra mode**）只改变触发委派的条件，不改变推理 effort。推荐预设仍遵循用户指令、权限边界、任务范围和工具规则。
+
+仪表板的开关要求原生功能已启用且显式选择 `v2`，或者选择 `v2-plaintext`；仅运行 `ocx v2 on` 不满足条件。
 
 `GET` 和 `PUT /api/v2` 还会返回 `multiAgentModeHintRecommendation: { text, revision }`。仪表板在启用或恢复预设时使用服务器提供的文本，不会回退到硬编码文案。如果旧服务器没有提供推荐值，或返回的值格式无效，则无法应用或恢复预设；仍可编辑或清除现有的自定义提示。恢复预设只修改本地草稿，保存操作才会将其写入配置。
 
