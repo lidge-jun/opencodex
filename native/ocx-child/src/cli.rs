@@ -1997,6 +1997,11 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
         };
     }
     let state_names_link = matches!(state, StateReadOutcome::Valid(_));
+    // A detach marks the record detaching, then removes state.json before it releases the record. Interrupted there,
+    // with no attach rollback left, the record still names this link, so the bound detach finishes it as a plain one
+    // would. An attach interrupted before its state write is phase attaching and stays residual.
+    let interrupted_detach =
+        rollback.is_none() && owner.is_some_and(|r| r.phase == OwnershipPhase::Detaching);
     match owner.map(|r| r.link_id.as_deref()) {
         Some(None) => refuse(
             ExpectLinkRefusal::Residual,
@@ -2005,11 +2010,12 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
             "the ownership record names no link (schema /1); run ocx-child detach on this machine",
         ),
         Some(Some(_)) if state_names_link => Ok(()),
+        Some(Some(_)) if interrupted_detach => Ok(()),
         Some(Some(_)) => refuse(
             ExpectLinkRefusal::Residual,
             "codex-home-owner",
             &owner_path,
-            "the Child state is missing while the ownership record names this link (an attach interrupted before it wrote the state, or an interrupted detach); run ocx-child detach on this machine",
+            "the Child state is missing while the ownership record names this link (an attach interrupted before it wrote the state); run ocx-child detach on this machine",
         ),
         None if state_names_link => refuse(
             ExpectLinkRefusal::Residual,

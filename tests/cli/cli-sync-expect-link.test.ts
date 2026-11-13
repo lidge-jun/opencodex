@@ -588,7 +588,7 @@ test("the machine sync route reports a failed journal handover as not complete",
 });
 
 describe("ocx disconnect --expect-link (a Home's revoke)", () => {
-  test("may resume only its own link's unfinished disconnect", async () => {
+  test("may resume its own link's unfinished disconnect, or one whose connection is already cleared", async () => {
     const { classifyDisconnectLinkExpectation } = await import("../../src/client/sync-expectation");
     const value = clientBlock({ transport: "link" }) as unknown as OcxClientConnectionConfig;
     const connected = { kind: "connected", value } as const;
@@ -601,7 +601,12 @@ describe("ocx disconnect --expect-link (a Home's revoke)", () => {
     expect(classifyDisconnectLinkExpectation(connected, { kind: "valid", value: { phase: "prepared", owner } }, OTHER_LINK_ID)).toBe("disconnect_pending");
     expect(classifyDisconnectLinkExpectation(connected, { kind: "valid", value: { phase: "prepared", owner: { ...owner, apiKeyId: "someone-else" } } }, LINK_ID)).toBe("disconnect_pending");
     expect(classifyDisconnectLinkExpectation(connected, { kind: "unsafe" }, LINK_ID)).toBe("disconnect_pending");
-    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "clearing_connection", owner } }, LINK_ID)).toBe("disconnect_pending");
+    // Once the connection is cleared no link is attached (connect refuses while a disconnect is unfinished), so the
+    // leftover cleanup may finish whichever link it was, as a plain disconnect does; not while a connect is pending.
+    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "clearing_connection", owner } }, LINK_ID)).toBeNull();
+    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "connection_cleared", owner } }, OTHER_LINK_ID)).toBeNull();
+    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "connection_cleared", owner } }, LINK_ID, "present")).toBe("disconnect_pending");
+    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "complete", owner } }, LINK_ID)).toBe("disconnected");
   });
 
   test("its own link disconnects without running the client-link teardown", async () => {
