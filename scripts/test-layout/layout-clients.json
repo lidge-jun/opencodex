@@ -179,6 +179,7 @@
   "link-supervisor.test.ts": "clients",
   "link-status-projection.test.ts": "clients",
   "link-traffic.test.ts": "clients",
+  "held-socket-writes.test.ts": "clients",
   "link-traffic-child-status.test.ts": "clients",
   "link-request-zstd.test.ts": "clients",
   "link-admission-wait.test.ts": "clients",
@@ -249,5 +250,10 @@
   "cli-link-operation.test.ts": "cli",
   "link-operations-journal.test.ts": "clients",
   "link-revoke-suspend.test.ts": "clients",
-  "link-ws-relay-edges.test.ts": "clients"
+  "link-ws-relay-edges.test.ts": "clients",
+  "link-ws-unknown-try.test.ts": "clients",
+  "link-ocx-child-ws-gate.test.ts": "clients",
+  "link-ocx-child-ws-feature.test.ts": "clients",
+  "link-relay-wait-observer.test.ts": "clients",
+  "link-ws-autobahn.test.ts": "clients"
 }

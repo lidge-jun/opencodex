@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
@@ -26,6 +26,31 @@ const KEY = { id: "fp-key", key: "fp-secret-0123456789", linkId: "lnk_ffffffffff
 let dir = "";
 beforeEach(() => { setLinkWebsocketTransportReadyForTests(true); dir = mkdtempSync(join(tmpdir(), "ocx-link-fp-")); });
 afterEach(() => { setLinkWebsocketTransportReadyForTests(false); if (dir) removeTreeWithRetry(dir); dir = ""; });
+
+/**
+ * Waits for a state of the files in one directory, never for a single file event: every wait checks its
+ * condition when it starts and again on each event, so a write that landed before the wait began is still
+ * seen. The watcher is armed once, before the Home starts, so it is armed long before the first write it
+ * has to see (on macOS a watcher is armed asynchronously, and one armed just before the write could miss it).
+ */
+function watchState(directory: string): { until(condition: () => boolean): Promise<void>; close(): void } {
+  const waiters = new Set<() => void>();
+  const watcher: FSWatcher = watch(directory, () => { for (const check of [...waiters]) check(); });
+  return {
+    until(condition) {
+      return new Promise<void>((resolve, reject) => {
+        const check = () => {
+          let met: boolean;
+          try { met = condition(); } catch (error) { waiters.delete(check); reject(error); return; }
+          if (met) { waiters.delete(check); resolve(); }
+        };
+        waiters.add(check);
+        check();
+      });
+    },
+    close() { waiters.clear(); watcher.close(); },
+  };
+}
 
 function policy() {
   const config = { port: 0, apiKeys: [{ id: KEY.id, name: KEY.id, key: KEY.key, createdAt: "2026-11-12T00:00:00.000Z" }] } as OcxConfig;
@@ -263,8 +288,11 @@ describe("through a real Home: a cut WebSocket turn and its HTTP resend", () => 
   let codexHome: IsolatedCodexHome | null = null;
   let server: { stop(force?: boolean): Promise<void> } | null = null;
   let upstream: ReturnType<typeof Bun.serve> | null = null;
+  let holdsState: ReturnType<typeof watchState> | null = null;
   const clients: LinkWireClient[] = [];
   afterEach(async () => {
+    // Before the directory goes: no late event may read a removed file.
+    holdsState?.close(); holdsState = null;
     for (const c of clients.splice(0)) c.destroy();
     if (server) await server.stop(true);
     server = null;
@@ -294,6 +322,8 @@ describe("through a real Home: a cut WebSocket turn and its HTTP resend", () => 
       return new Response('event: response.completed\ndata: {"type":"response.completed","response":{"id":"r2","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n', { headers: { "content-type": "text/event-stream" } });
     } });
     writeLinkStore(linkStorePath(), { version: 1, listenerPort: null, links: [{ id: LINK, alias: "fp", direction: "client-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: KEY_A_ID, createdAt: "2026-11-12T00:00:00.000Z" }] as LinkStore["links"] });
+    // links.json made the link directory; the holds file is written there.
+    const holds = holdsState = watchState(join(dir, "link"));
     const { saveConfig } = await import("../../src/config");
     saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "fixture", websockets: true, linkResponsesWebsocket: true, codexAutoStart: false, clientIntegrations: { codex: false },
       providers: { fixture: { adapter: "openai-responses", baseUrl: "http://127.0.0.1:" + upstream.port + "/v1", authMode: "key", apiKey: "fixture-upstream-key", allowPrivateNetwork: true, models: ["fixture"] } },
@@ -303,7 +333,13 @@ describe("through a real Home: a cut WebSocket turn and its HTTP resend", () => 
     const port = JSON.parse(readFileSync(linkStorePath(), "utf8")).listenerPort as number;
     const holdsPath = join(dir, "link", "activity-holds.json");
     const marks = () => ((JSON.parse(readFileSync(holdsPath, "utf8")) as { links: Record<string, { holds: Array<{ marks?: unknown[] }> }> }).links[LINK]?.holds ?? []).reduce((sum, hold) => sum + (hold.marks?.length ?? 0), 0);
-    const changed = () => new Promise<void>(resolve => { const w = watch(join(dir, "link"), (_e, name) => { if (name === "activity-holds.json") { w.close(); resolve(); } }); });
+    // Each wait is for a change of state and the exact count is asserted after it: a holds file first written
+    // with a wrong count, or a 200 resend that moves the count to anything but 0, fails as a mismatch; a holds
+    // file never written, or a count that stays 1 after the resend, still fails at the runner's timeout. The Home
+    // writes the holds file with an atomic rename.
+    const holdsWritten = () => {
+      try { readFileSync(holdsPath); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+    };
     const request = { model: "fixture/fixture", input: ITEMS, client_metadata: { turn_id: "turn-cut" }, stream: true };
 
     const ws = await LinkWireClient.open(port);
@@ -312,20 +348,19 @@ describe("through a real Home: a cut WebSocket turn and its HTTP resend", () => 
     expect((await ws.upgrade({ nonce: session.nonce, bearer: KEY_A, headers: { "thread-id": "thread-cut" } })).status).toBe(101);
     ws.sendJson({ type: "response.create", ...request });
     expect(frameType(await ws.nextMessage())).toBe("response.created");
-    const held = changed();
     ws.destroy();
-    await held;
+    await holds.until(holdsWritten);
     expect(marks()).toBe(1);
 
     const http = await LinkWireClient.open(port);
     clients.push(http);
     const next = await http.challenge(identity);
-    const settled = resendStatus === 200 ? changed() : Promise.resolve();
     // A peer cannot supply the internal turn header: the relay removes it before setting its own.
     http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", authorization: "Bearer " + KEY_A, "x-opencodex-link-session": next.nonce, "thread-id": "thread-cut", "x-opencodex-link-turn": "peer-chosen" }, JSON.stringify(request));
     const head = await http.readHead();
     expect(head.status).toBe(resendStatus);
-    await settled;
+    // A resend answered 200 releases the fingerprinted mark; one refused leaves it, with nothing to wait for.
+    if (resendStatus === 200) await holds.until(() => marks() !== 1);
     expect(marks()).toBe(left);
     // The token header never reaches the upstream, on either transport.
     expect(turnHeaders).toEqual([null, null]);

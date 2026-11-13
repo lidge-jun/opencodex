@@ -115,7 +115,7 @@ function storeCalls(layout: Layout): Call[] {
 
 describe("pnpm global virtual-store owner (#8183)", () => {
   let root: string;
-  beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-pnpm-global-store-"))); });
+  beforeEach(() => { root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-pnpm-global-store-"))); });
   afterEach(() => { removeTreeWithRetry(root); });
 
   test("a default-store install resolves through pnpm's store path and updates with the lexical store pinned", () => {

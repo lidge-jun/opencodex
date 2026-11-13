@@ -70,3 +70,20 @@ export function linkWebsocketChildReady(): boolean {
 export function setLinkWebsocketChildReadyForTests(ready: boolean): void {
   childReady = ready;
 }
+
+/**
+ * Test-only stall signal for the Child's HTTP relay (src/client/link-relay.ts), the counterpart of the Home's
+ * setLinkRelayWaitObserverForTests: told true when a relayed response has handed its reader a chunk and the
+ * reader has not asked for the next one, and false when it asks again or cancels, or the relay ends, after which it
+ * never reports true again. It is for the Child's memory acceptance (design 6.3), to see the relay hold a stalled
+ * reader. Null in production, where the relay builds its response exactly as without it.
+ */
+let childRelayWaitObserver: ((waiting: boolean) => void) | null = null;
+
+export function linkChildRelayWaitObserver(): ((waiting: boolean) => void) | null {
+  return childRelayWaitObserver;
+}
+
+export function setLinkChildRelayWaitObserverForTests(observer: ((waiting: boolean) => void) | null): void {
+  childRelayWaitObserver = observer;
+}

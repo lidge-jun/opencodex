@@ -169,8 +169,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from \"./tray-update-plan.mjs\";"
   ],
   "src/update/job-windows-restart.ts": [
-    "import { guardedStopWinsw, guardedStopWindowsChecked } from \"./guarded-runtime-ops\";",
-    "import { readServiceBackend } from \"../service\";"
+    "import { guardedStopWindowsChecked } from \"./guarded-runtime-ops\";"
   ],
   "src/update/job.ts": [
     "import { guardedRun, guardedSpawnSync, materializeMutationData } from \"./mutation-guard.mjs\";",

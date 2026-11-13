@@ -9,7 +9,7 @@ import { isEpochMs, type LinkChildParity } from "../link/child-parity";
 import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
 import { isRouteClientId, parseRouteClientOutcomes, ROUTE_INTENT_DIGEST_PATTERN, routeClientOutcomesForPeer } from "../link/route-intent";
 import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
-import { runLinkEnrollment } from "./link-enrollment";
+import { journalFullGuidance, runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
 import { LINK_CHILD_OPS_USAGE, runLinkActivity, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
@@ -301,7 +301,7 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
 
 const OPERATION_OUTCOMES = new Set(["committed", "failed_clean", "residual", "unknown"]);
 
-function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string; operationState?: "open" | "unknown" } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string; operationState?: "open" | "unknown"; bound?: "unsettled" | "recent" } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
   if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
@@ -315,10 +315,12 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string; c
   const operationId = typeof body.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.operationId) ? body.operationId : undefined;
   const outcome = typeof body.outcome === "string" && OPERATION_OUTCOMES.has(body.outcome) ? body.outcome : undefined;
   const residualKind = body.residualKind === "plant" || body.residualKind === "enrollment" ? body.residualKind : undefined;
-  // link_suspended names whether the revoke that keeps the link down is open (the Home stopped during it) or unknown.
+  // link_suspended names whether the revoke that keeps the link down is open (it did not record its outcome) or unknown.
   const operationState = body.operationState === "open" || body.operationState === "unknown" ? body.operationState : undefined;
+  // operation_journal_full names which bound it hit.
+  const bound = body.bound === "unsettled" || body.bound === "recent" ? body.bound : undefined;
   return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}),
-    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}), ...(operationState ? { operationState } : {}) };
+    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}), ...(operationState ? { operationState } : {}), ...(bound ? { bound } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -422,7 +424,7 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     const code = error instanceof RuntimeApiError && error.status === 404 ? errorCodeBody(error.body)?.error.code : undefined;
     if (code !== "link_not_found") {
       if (force && !(error instanceof RuntimeApiError)) throw new Error("Forced link revoke failed; inspect link status before retrying.");
-      throw error;
+      throw operationId !== undefined ? journalledRevokeError(error, operationId, linkId) : error;
     }
     // A journalled revoke must not read as done when nothing was journalled: the caller settles a vanished link itself.
     if (operationId !== undefined) throw new RuntimeApiError("Link " + linkId + " is not on this Home; no revoke was journalled (code link_not_found).", 404, error instanceof RuntimeApiError ? error.body : null);
@@ -470,7 +472,7 @@ function suspendedReconnect(error: unknown, linkId: string): RuntimeApiError | n
   const message = !op
     ? "Link " + linkId + " is kept down by an unsettled revoke; find it with ocx link operations, then resolve it."
     : body.operationState === "open"
-      ? "Link " + linkId + " is kept down: revoke operation " + op + " did not finish (the Home stopped during it). Repeat it with the same flags: ocx link revoke --link-id " + linkId + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve
+      ? "Link " + linkId + " is kept down: revoke operation " + op + " did not record its outcome (the Home stopped or the revoke failed before writing it). Repeat it with the flags of the first attempt: ocx link revoke --link-id " + linkId + " --operation-id " + op + ", with --purge only if the first attempt had it (the journal keeps only a digest of the flags, so a different --purge answers operation_mismatch); if it then ends unknown, run: " + resolve
       : "Link " + linkId + " is kept down: revoke operation " + op + " ended unknown and may have disconnected or purged the Child. Check the Child, then run: " + resolve;
   return new RuntimeApiError(message, 409, error.body);
 }
@@ -594,3 +596,83 @@ function validateParity(candidate: Record<string, unknown>, index: number): Link
     ...route,
   };
 }
+
+/**
+ * A journalled revoke that did not complete: the CLI's own text from the filtered body only, the caller's validated
+ * operation id, the closed outcome and the filtered code, never the server's message. The status (and exit) stay.
+ */
+export function journalledRevokeError(error: unknown, operationId: string, linkId?: string): unknown {
+  if (!(error instanceof RuntimeApiError) || !isRecord(error.body) || !isRecord(error.body.error) || typeof error.body.error.code !== "string") return error;
+  const code = error.body.error.code;
+  // The filtered body is re-checked here, as journalFullGuidance re-checks bound, so this helper is safe on its own.
+  if (!/^[a-z_]{1,64}$/.test(code)) return error;
+  // Commands are printed so that they run as printed: only a validated link id, a placeholder otherwise.
+  const shownLink = linkId !== undefined && LINK_ID.test(linkId) ? linkId : "<link id>";
+  if (code === "operation_journal_full") return new RuntimeApiError(journalFullGuidance(error.body, "revoke"), error.status, error.body);
+  if (Object.hasOwn(REVOKE_REFUSALS, code)) return new RuntimeApiError(REVOKE_REFUSALS[code] + " (code " + code + ")", error.status, error.body);
+  if (Object.hasOwn(RETIREMENT_GUIDANCE, code)) return new RuntimeApiError(RETIREMENT_GUIDANCE[code]!(shownLink) + " (code " + code + ")", error.status, error.body);
+  // A fresh forced revoke is refused before its tombstone, first intent and tunnel stop and its refusal is recorded; a resumed one
+  // (even one recorded failed_clean) may re-own its retirement receipt first and can finish under the same id once capacity is
+  // freed, while a new id is refused with link_retirement_owned (#8416). A second refusal proves nothing (the live limit can still be
+  // full), so the text never declares the refusal recorded: the same id first, then a new id, whose link_retirement_owned is safe.
+  // That answer names an unfinished removal of the link, which may belong to another operation or to a plain revoke, so the text
+  // points at the owner (ocx link operations) or a plain --force instead of claiming this id owns it.
+  // It never says the link or key stay active either: an earlier attempt of a resumed revoke may have revoked the key and stopped
+  // the tunnel before it failed and dropped its own tombstone, and this repeat then meets the limit while re-recording one.
+  if (code === "tombstone_limit") {
+    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover --link-id <id> (ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget --link-id <id> --yes for machines that are gone. Then repeat this revoke with the same operation id (ocx link revoke --link-id " + shownLink + " --operation-id " + operationId + " --force --yes): an interrupted removal resumes under it. If it answers this refusal again although capacity is free, try a new operation id; if that answers link_retirement_owned, an unfinished removal holds this link: repeat the revoke of this link that owns it, whatever its recorded state (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --link-id " + shownLink + " --force --yes without --operation-id. (code tombstone_limit)", error.status, error.body);
+  }
+  const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
+  // Repeating first resumes a removal if this id still owns one (#8416); resolving first would leave its receipt and record behind. An
+  // unknown can also arise before any receipt was claimed (a disconnect timeout or failure, a journal write), so the resume is
+  // conditional. A resume reopens the entry, and one that fails and cannot settle leaves it open, which resolve refuses
+  // (operation_not_resolvable), so the next step follows the state the repeat left: resolve only unknown or residual.
+  const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first (if this id still owns an unfinished removal, the repeat resumes it). If it does not finish, ocx link operations --operation-id " + operationId + " shows its state: if it reads unknown or residual, check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes; if it reads open, fix what stopped the revoke (for example the journal's disk) and repeat it with the same operation id" : "";
+  const next = Object.hasOwn(NEXT_STEP, code) ? ". " + NEXT_STEP[code] : "";
+  return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve + next, error.status, error.body);
+}
+
+/**
+ * A next step for codes that keep the generic text because what an earlier step changed differs by path. Where a repeat can
+ * answer the same code again, the text says what that answer means and what a different step can and cannot do, so it never
+ * sends the caller round the same step for ever.
+ */
+const NEXT_STEP: Record<string, string> = {
+  // A resumed owner can meet the same live write failure again and keep its receipt, so a repeat proves nothing: the same id after
+  // the fix, and a new id only through link_retirement_owned's guidance if one is tried.
+  operation_journal_failed: "The journal could not record a step: fix what keeps it from being written (disk space, permissions), then repeat the revoke with the same operation id. If it keeps answering operation_journal_failed, a new operation id can be tried; if that answers link_retirement_owned, this id may still own the removal: follow that answer",
+  // A stale retirement receipt (the record was edited after a removal claimed it, for example by ocx link routes, which does not
+  // check for a receipt: #8678) answers link_changed to every revoke, this id's resume included, until the record matches the
+  // receipt's copy again. A claim that met a changed record (no receipt for this id) is journalled, so this id replays it while a
+  // new id reads the record afresh; a commit that met one leaves this id's receipt, so its repeat resumes the removal and meets
+  // the same comparison. In one runtime a revoke and a route edit hold the same Child-job reservation, so the code never proves
+  // that the link changed while this revoke ran.
+  link_changed: "The link, or the record of its unfinished removal, no longer matches what this removal started from: read ocx link status, then repeat the revoke with the same operation id. If it answers link_changed again, the link may have been edited after its removal began (for example with ocx link routes). A new operation id can remove it only when no unfinished removal of this link remains; while one remains, no revoke finishes it until the link matches that removal's copy again",
+};
+
+/**
+ * #8416's refusals for an interrupted removal of the link. The owning operation and the way out are only in the server's message,
+ * which the CLI never prints, so these name where to look and make no claim about what an earlier attempt changed.
+ */
+const RETIREMENT_GUIDANCE: Record<string, (link: string) => string> = {
+  // A journalled owner refuses any revoke without --force that is not its own id; a plain revoke without --force finishes only
+  // a removal no journalled operation owns (link-routes.ts foreignRetirement). A revoke without --force refuses --yes.
+  link_retirement_owned: link => "An unfinished removal holds this link. Repeat the revoke of this link that owns it, whatever its recorded state (ocx link operations --json shows each entry's linkId; another revoke's id answers its own outcome or this refusal again), or finish it with ocx link revoke --link-id " + link + " --force --yes without --operation-id. If no journalled operation owns it, ocx link revoke --link-id " + link + " without --operation-id and without --force also finishes it when its Child cleanup can run again.",
+  // Unreachable with --operation-id at this head (foreignRetirement admits only this operation's own receipt, resumed in its own
+  // mode); kept as a closed text with no state claim. "--force" with the same id would answer operation_mismatch, so it is not offered.
+  link_retirement_mode_mismatch: link => "This link's removal was interrupted in another mode than this revoke asks for. Repeat the revoke that started it with its options (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --link-id " + link + " --force --yes without --operation-id.",
+};
+
+/**
+ * Closed texts for refusals of a journalled revoke. Each claims only what holds on every path that answers the code, on a
+ * first and on a resumed attempt (the table in structure/remote-link.md, "Operation journal"); any other code, including ones
+ * a newer Home adds, keeps the generic text.
+ */
+const REVOKE_REFUSALS: Record<string, string> = {
+  operation_mismatch: "This operation id was already used with other parameters. Nothing was changed; repeat it with the flags of its first attempt, or use a new operation id.",
+  link_operation_open: "An unfinished revoke holds this link; repeat it with its own operation id to settle it first. Nothing was changed.",
+  // A resumed revoke can re-own its retirement receipt before this 409 (#8416), so it claims only what holds for every path.
+  link_operation_in_progress: "Another link operation for this alias or link is running. This attempt did not touch the link, its key or the Child; retry when it ends.",
+  // A replay that follows a resumed removal can meet an unreadable journal after that removal finished (#8416): no state claim.
+  operation_journal_unreadable: "The link operation journal (<configDir>/link/operations.json) is damaged or could not be read. Keep a copy, move it aside and repeat the revoke with the same operation id; if that answers link_not_found, the link is already gone (a resumed removal can finish before the read fails). ocx link revoke --force without --operation-id also runs.",
+};

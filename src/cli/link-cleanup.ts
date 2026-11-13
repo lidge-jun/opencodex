@@ -25,7 +25,7 @@ export interface LinkCleanupEntry {
 
 export function windowsChildRecovery(linkId: string, alias: string): string[] {
   return [
-    `On ${alias}, run 'ocx disconnect' and then 'ocx restart' so it stops using this link.`,
+    `On ${alias}, check that it is still connected to this link ('ocx connect status --json' shows its link id); only then run 'ocx disconnect' and 'ocx restart' so it stops using this link. If another link, a hub or another Home owns it now, leave it.`,
     `On this Home, run 'ocx link revoke --link-id ${linkId} --yes' to disconnect it through the recorded SSH trust.`,
     `Retry Remote Link enrollment after updating Home if the remote shell or old installation cannot run the disconnect command.`,
   ];
