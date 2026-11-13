@@ -10,18 +10,23 @@ import { LINK_RELAY_WS_STATE_HEADER, LINK_RELAY_WS_STATE_PROOF_HEADER, linkRelay
  * and however late it arrives: an earlier Home's delayed reply, a reply from before a relink, a restart
  * or a downgrade. A verified answer without the state pair, or whose pair does not verify, applies as
  * off. The state lives in memory only, so a Child restart starts from off; a relink changes the link id,
- * which starts a new entry. At most 256 links are kept. Evicting a link keeps the ordering: an answer for
- * a link without an entry applies only when its preflight started after every evicted link's last
- * applied one, so an answer still in flight when its link was evicted can never land as the newest.
+ * which starts a new entry. At most 256 links are kept. Evicting a link keeps its ordering: its last
+ * applied number stays as a watermark (at most 1,024 of them), and an answer for that link applies only
+ * above it, so an answer still in flight when its link was evicted can never land as the newest. Only
+ * when a watermark itself is dropped does it raise a floor that answers for links without an entry or
+ * a watermark must pass: conservative, and reached only after more than 1,280 distinct links.
  *
  * The cached state only decides whether an upgrade may try the Home at all. The upgrade's own preflight
  * answer decides whether it proceeds (linkWebsocketAnswer on that answer).
  */
 const MAX_LINKS = 256;
+const MAX_WATERMARKS = 1_024;
 let sequence = 0;
-/** The highest preflight number any evicted entry had applied. */
-let evictedFloor = 0;
 const links = new Map<string, { applied: number; on: boolean }>();
+/** Evicted links: the number of the last answer each had applied. */
+const watermarks = new Map<string, number>();
+/** The highest watermark ever dropped. */
+let floor = 0;
 
 export type LinkWebsocketAnswer = "on" | "off";
 
@@ -53,13 +58,19 @@ export function linkWebsocketAnswer(
 /** Apply a verified answer under the ordering rule. Returns whether it was applied. */
 export function applyLinkWebsocketAnswer(linkId: string, preflight: number, answer: LinkWebsocketAnswer): boolean {
   const entry = links.get(linkId);
-  if (preflight <= (entry ? entry.applied : evictedFloor)) return false;
+  if (preflight <= (entry ? entry.applied : watermarks.get(linkId) ?? floor)) return false;
   links.delete(linkId);
+  watermarks.delete(linkId);
   links.set(linkId, { applied: preflight, on: answer === "on" });
   if (links.size > MAX_LINKS) {
     const [oldest, evicted] = links.entries().next().value!;
     links.delete(oldest);
-    evictedFloor = Math.max(evictedFloor, evicted.applied);
+    watermarks.set(oldest, evicted.applied);
+    if (watermarks.size > MAX_WATERMARKS) {
+      const [dropped, mark] = watermarks.entries().next().value!;
+      watermarks.delete(dropped);
+      floor = Math.max(floor, mark);
+    }
   }
   return true;
 }
@@ -71,5 +82,6 @@ export function linkWebsocketAdvertised(linkId: string | undefined): boolean {
 
 export function forgetLinkWebsocketAdvertisementsForTests(): void {
   links.clear();
-  evictedFloor = 0;
+  watermarks.clear();
+  floor = 0;
 }

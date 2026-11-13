@@ -79,6 +79,13 @@ describe("ordering by preflight start", () => {
     expect(applyLinkWebsocketAnswer(LINK, nextLinkPreflightSequence(), "on")).toBe(true);
     expect(linkWebsocketAdvertised(LINK)).toBe(true);
   });
+
+  test("other links' traffic and evictions never discard an answer for a link they did not evict", () => {
+    const first = nextLinkPreflightSequence(); // LINK's first preflight, answered after everyone else's
+    for (let i = 0; i < 600; i += 1) applyLinkWebsocketAnswer("lnk_" + i.toString(16).padStart(16, "0"), nextLinkPreflightSequence(), "off");
+    expect(applyLinkWebsocketAnswer(LINK, first, "on")).toBe(true);
+    expect(linkWebsocketAdvertised(LINK)).toBe(true);
+  });
 });
 
 describe("learned from real relay preflights", () => {

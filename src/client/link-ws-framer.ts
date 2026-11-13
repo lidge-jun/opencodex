@@ -13,9 +13,10 @@ import { randomBytes } from "node:crypto";
  * - UTF-8 validation of complete text messages and close reasons;
  * - close codes 1000-1003, 1007-1011 and 3000-4999 only;
  * - client frames masked, server frames refused when masked;
- * - at most the maximum message plus 14 header bytes held: an unfragmented message gets its own buffer,
+ * - at most the maximum message plus 14 header bytes held (plus one control frame of at most 125 bytes
+ *   between fragments): an unfragmented message gets its own buffer,
  *   and the fragments of a fragmented one are written into one reassembly buffer of the maximum size,
- *   allocated once per reader; at most a bounded number of fragments.
+ *   dropped once that message is complete, so the two never coexist; at most a bounded number of fragments.
  *
  * A violation throws LinkWsProtocolError with the close code to send. The reader never interprets a
  * message: text is passed on as it arrived.
@@ -72,6 +73,12 @@ export class LinkWsFrameReader {
 
   /** True once a close frame was read or a protocol error was thrown; later bytes are ignored. */
   get closed(): boolean { return this.done; }
+
+  /** Payload bytes this reader holds references to right now (the bound is the maximum message plus 14). */
+  heldBytes(): number {
+    const own = this.frame && !this.frame.fragment ? this.frame.payload.length : 0;
+    return (this.assembly?.length ?? 0) + own + this.headerLength;
+  }
 
   /** Feed bytes off the socket; returns every event they complete, in order. */
   push(chunk: Uint8Array): LinkWsFrameEvent[] {
@@ -173,6 +180,8 @@ export class LinkWsFrameReader {
     if (!frame.fin) return;
     const message = frame.fragment ? this.assembly!.subarray(0, this.fragmentBytes) : payload;
     const messageOpcode = this.messageOpcode;
+    // The reassembly buffer goes with its message; `message` keeps it only until it is decoded below.
+    if (frame.fragment) this.assembly = null;
     this.fragmentCount = 0;
     this.fragmentBytes = 0;
     this.messageOpcode = 0;

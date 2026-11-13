@@ -129,6 +129,19 @@ describe("link WebSocket client framer: reading server frames", () => {
     expect(reader.push(Buffer.concat([serverFrame(1, "x", { fin: false }), serverFrame(0, "y")]))).toEqual([{ type: "text", data: "xy", bytes: 2 }]);
     expect(reader.push(serverFrame(1, "z".repeat(1024)))).toEqual([{ type: "text", data: "z".repeat(1024), bytes: 1024 }]);
   });
+
+  test("after a fragmented message, a near-limit message in progress holds no more than the maximum plus its header", () => {
+    const reader = new LinkWsFrameReader({ maxMessageBytes: 1024, maxFragments: 8 });
+    reader.push(Buffer.concat([serverFrame(1, "a".repeat(600), { fin: false }), serverFrame(0, "b".repeat(400))]));
+    expect(reader.heldBytes()).toBe(0);
+    const big = serverFrame(1, "c".repeat(1020));
+    reader.push(big.subarray(0, big.length - 10));
+    expect(reader.heldBytes()).toBeLessThanOrEqual(1024 + 14);
+    expect(reader.push(big.subarray(big.length - 10))).toEqual([{ type: "text", data: "c".repeat(1020), bytes: 1020 }]);
+    // Mid-fragmented message: the reassembly buffer is the only payload held.
+    reader.push(serverFrame(1, "d".repeat(500), { fin: false }));
+    expect(reader.heldBytes()).toBe(1024);
+  });
 });
 
 describe("link WebSocket client framer: writing client frames", () => {
