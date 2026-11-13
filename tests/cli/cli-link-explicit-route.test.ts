@@ -18,7 +18,11 @@ function harness(bodies: unknown[] = [probe, confirm, { linkId }]) {
   console.error = (...args) => err.push(args.map(String).join(" "));
   const deps: LinkCliDeps = { baseUrl: "http://127.0.0.1:10100", readAdminToken: () => "ocx_admin_test",
     stdinImpl: Object.assign(Readable.from([]), { isTTY: false }),
-    fetchImpl: async (url, init) => { calls.push({ path: new URL(String(url)).pathname, body: JSON.parse(String(init?.body)) }); return Response.json(bodies.shift()); } };
+    fetchImpl: async (url, init) => {
+      calls.push({ path: new URL(String(url)).pathname, body: JSON.parse(String(init?.body)) });
+      const next = bodies.shift();
+      return next instanceof Response ? next : Response.json(next);
+    } };
   return { calls, out, err, deps, restore: () => { console.log = log; console.error = error; } };
 }
 
@@ -105,5 +109,19 @@ test.each([
   const h = harness(); try {
     expect(await runLinkCommand(["add", "pen-7f3a9c", "--expect-fingerprint", fingerprint, ...flags], h.deps)).toBe(2);
     expect(h.calls).toEqual([]);
+  } finally { h.restore(); }
+});
+test.each([
+  ["probe", ["probe", "pen-7f3a9c"]],
+  ["add", ["add", "pen-7f3a9c", "--expect-fingerprint", fingerprint]],
+])("%s prints what to fix for a refused identity file, with its code and hint, and no server text", async (_label, command) => {
+  const refusal = Response.json({ error: { code: "invalid_identity_file", message: "SERVER-TEXT", hint: "identity_file_ancestor" } }, { status: 400 });
+  const h = harness([refusal]); try {
+    const exit = await runLinkCommand([...command, ...ROUTE_FLAGS, "--ssh-identity-file", KEY], h.deps);
+    expect(exit).not.toBe(0);
+    const printed = h.err.join("\n");
+    expect(printed).toContain("Every directory above the identity file must be owned by this user or root");
+    expect(printed).toContain("(code invalid_identity_file, hint identity_file_ancestor)");
+    expect(printed).not.toContain("SERVER-TEXT");
   } finally { h.restore(); }
 });
