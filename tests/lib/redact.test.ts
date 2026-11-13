@@ -441,6 +441,16 @@ describe("redactSecretString", () => {
     expect(performance.now() - startedAt).toBeLessThan(1_500);
   });
 
+  test("JWT candidates inside one long token run are rejected in linear time", () => {
+    // As one regex, every `eyJ` in a run of token characters with no dot after it rescanned the
+    // rest of the run: tens of thousands of them took seconds. A real three-segment JWT is still masked.
+    const run = "eyJabcdefgh-".repeat(32_000);
+    const startedAt = performance.now();
+    expect(redactSecretString(run)).toBe(run);
+    expect(redactSecretString(`${run} eyJhbGciOiJIUzI1.eyJzdWIiOiIx.sig_-x`)).toBe(`${run} ${REDACTED_SECRET}`);
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
+  });
+
   test("a quoted form value is masked too", () => {
     expect(redactSecretString('authorization="Basic%20dXNlcjpwYXNz"&model=gpt-5.5'))
       .toBe(`authorization=${REDACTED_SECRET}&model=gpt-5.5`);

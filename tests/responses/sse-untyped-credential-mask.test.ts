@@ -649,6 +649,10 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     const evidence = reduceBareUpstreamEvidence(undefined, { error: { code: "rate_limit_exceeded", message: "name=token ".repeat(16_000) } });
     expect(evidence?.verdict.terminalStatus).toBe(429);
     expect(performance.now() - startedAt).toBeLessThan(1_500);
+    const jwtStartedAt = performance.now();
+    const jwtEvidence = reduceBareUpstreamEvidence(undefined, { error: { code: "rate_limit_exceeded", message: "eyJabcdefgh-".repeat(32_000) } });
+    expect(jwtEvidence?.verdict.terminalStatus).toBe(429);
+    expect(performance.now() - jwtStartedAt).toBeLessThan(1_500);
   });
 
   test("checking an untyped envelope against the registry is one pass, not one per recorded value", () => {
