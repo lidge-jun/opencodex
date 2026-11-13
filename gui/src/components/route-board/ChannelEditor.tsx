@@ -135,7 +135,7 @@ export function ChannelEditor({
         <p className="rb-editor-hint rb-editor-warn">{t("routeBoard.edit.lastResortInert")}</p>
       )}
       <div className="rb-editor-footer">
-        <button type="button" className="btn btn-link btn-sm" onClick={onOpenAdvanced}>{t("routeBoard.edit.more")}</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenAdvanced}>{t("routeBoard.edit.more")}</button>
         <span className="rb-editor-spacer" />
         {dirty && <span className="rb-unsaved">{t("routeBoard.edit.unsaved")}</span>}
         <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>{t("common.cancel")}</button>

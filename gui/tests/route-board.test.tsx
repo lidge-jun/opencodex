@@ -171,7 +171,13 @@ function installFetch() {
   calls = [];
   combosPayload = {
     combos: [
-      { ...toPutBody(alpha).combo, id: "alpha", model: "combo/alpha", targets: [{ provider: "openai", model: "gpt-5" }, { provider: "anthropic", model: "claude", lastResort: true }] },
+      {
+        ...toPutBody(alpha).combo,
+        id: "alpha",
+        model: "combo/alpha",
+        displayName: "Alpha",
+        targets: [{ provider: "openai", model: "gpt-5", modelProfile: "subscription first" }, { provider: "anthropic", model: "claude", lastResort: true }],
+      },
       { ...toPutBody(offOnly).combo, id: "offline", model: "combo/offline" },
     ],
   };
@@ -284,7 +290,8 @@ describe("Combos overview page", () => {
     await renderPage();
     await chooseOption(strategyTrigger("alpha"), "round-robin");
     await flush();
-    expect(calls).toEqual([{ url: "/api/combos", method: "PUT", body: toPutBody({ ...alpha, strategy: "round-robin" }) }]);
+    const saved = { ...alpha, displayName: "Alpha", targets: [{ provider: "openai", model: "gpt-5", modelProfile: "subscription first" }, { provider: "anthropic", model: "claude" }] };
+    expect(calls).toEqual([{ url: "/api/combos", method: "PUT", body: toPutBody({ ...saved, strategy: "round-robin" }) }]);
     expect(JSON.stringify(calls[0]!.body)).not.toContain("lastResort");
   });
 
@@ -329,9 +336,10 @@ describe("Combos overview page", () => {
     await act(async () => { button(editor, "Save").click(); });
     await flush();
     const body = calls[0]!.body as ReturnType<typeof toPutBody>;
+    expect(body.combo.displayName).toBe("Alpha");
     expect(body.combo.targets).toEqual([
       { provider: "anthropic", model: "claude", lastResort: false },
-      { provider: "openai", model: "gpt-5", lastResort: false },
+      { provider: "openai", model: "gpt-5", modelProfile: "subscription first", lastResort: false },
     ]);
   });
 

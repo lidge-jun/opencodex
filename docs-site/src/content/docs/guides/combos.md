@@ -982,8 +982,15 @@ task workflow.
 
 ### Dashboard
 
-Open the local dashboard and choose **Models → Combos**. The workspace creates, edits, renames, and removes
-combos. Its model selectors include hidden models: catalog visibility only controls external model
+Open the local dashboard and choose **Models → Combos**. It opens on an overview with one row per
+combo: its channels in routing order (last-resort members marked), how much quota each subscription
+provider has left (API-key providers read as pay per use), the context window, a strategy menu, and an
+on/off switch. Picking a strategy saves it at once, except JEV, which opens the full editor so the
+decision service is chosen explicitly. Switching a combo off keeps its settings and only stops listing it
+to clients. Click a row to reorder, add, remove, or mark last-resort channels.
+
+**Advanced** opens the full workspace (`#models/combos/advanced`), which creates, edits, renames, and
+removes combos. Its model selectors include hidden models: catalog visibility only controls external model
 lists, not internal Combo selection, and selecting a hidden model does not make it visible externally.
 The target picker still excludes disabled providers, nested combos, and the credential-only JEV provider. **Create JEV Auto** opens the same Combo editor with an editable decision target template;
 an existing `jev-auto` id or alias is reported instead of creating a duplicate. A JEV Combo also shows
