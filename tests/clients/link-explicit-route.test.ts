@@ -404,7 +404,11 @@ describe("the explicit route's identity file", () => {
       expect(identityFileProblem(key)).toBe(process.platform === "win32" ? "identity_file_unsupported_platform" : null);
       expect(identityFileProblem(key, "win32")).toBe("identity_file_unsupported_platform");
       expect(identityFileProblem(join(dir, "missing"), "win32")).toBe("identity_file_unsupported_platform");
-      expect(identityFileProblem(key, "linux")).toBe(null);
+      // A Home always passes its own platform; naming another here applies the POSIX checks to this host's metadata. Windows
+      // reports a writable file as 0o666 whatever mode it was created with, so those checks refuse it there, as they must.
+      expect(identityFileProblem(key, "linux")).toBe(process.platform === "win32" ? "identity_file_permissions" : null);
+      const windowsShaped = (path: string): Stats => path === key ? Object.create(lstatSync(path), { mode: { value: 0o100666 } }) as Stats : lstatSync(path);
+      expect(identityFileProblem(key, "linux", windowsShaped)).toBe("identity_file_permissions");
     } finally { removeTreeWithRetry(dir); }
   });
 
