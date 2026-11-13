@@ -1,6 +1,7 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { Readable } from "node:stream";
 import { runLinkCommand, type LinkCliDeps } from "../../src/cli/link";
+import { RuntimeApiError } from "../../src/cli/runtime-api";
 
 /** O1: ocx link add|revoke --operation-id, ocx link add --require-ephemeral and ocx link operations. */
 const fingerprint = "SHA256:abcdefghijklmnop";
@@ -166,4 +167,225 @@ test("a link_suspended answer with a malformed operation id prints no command bu
     expect(printed).not.toContain("-rm -rf");
     expect(printed).toContain("ocx link operations");
   } finally { h.restore(); }
+});
+
+describe("guidance for journal refusals and unfinished revokes (O1c)", () => {
+  const full = (bound?: string) => ({ status: 409, body: { error: { code: "operation_journal_full", message: "server-chosen text" }, ...(bound ? { bound } : {}) } });
+  test.each([
+    ["unsettled", "ocx link operations resolve --operation-id <id> --yes", "(bound unsettled)"],
+    ["recent", "retry once the oldest of them is older", "(bound recent)"],
+    [undefined, "ocx link operations", ""],
+  ])("add --operation-id refused by a full journal (bound %p) prints local guidance with the code, exit 5", async (bound, guidance, boundNote) => {
+    const h = harness([notFound, { body: probe }, { body: confirm }, full(bound)]); try {
+      expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain(guidance);
+      expect(printed).toContain("(code operation_journal_full)");
+      if (boundNote) expect(printed).toContain(boundNote);
+      // confirm-host already wrote the known_hosts pin before this apply, so only the apply changed nothing.
+      expect(printed).toContain("The apply changed nothing");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  test.each([
+    ["full_install_present", 409, "refused it before the apply changed the Child, a key or a link"],
+    ["full_install_census_failed", 502, "the apply changed no key, link or Child file"],
+  ])("add --require-ephemeral refused with %s claims only what the apply left alone (its journal entry is recorded)", async (code, status, text) => {
+    const h = harness([notFound, { body: probe }, { body: confirm }, { status, body: { error: { code, message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP, "--require-ephemeral"], h.deps)).not.toBe(0);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain(text);
+      expect(printed).not.toContain("nothing was changed");
+      expect(printed).not.toContain("before any change");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  test("a repeated revoke that recovery settled unknown names its outcome, its code and the resolve step, exit 5", async () => {
+    const h = harness([{ status: 409, body: { error: { code: "operation_interrupted", message: "server-chosen text" }, operationId: "detach-3", outcome: "unknown" } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-3"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("(operation detach-3: unknown)");
+      expect(printed).toContain("(code operation_interrupted)");
+      expect(printed).toContain("ocx link operations resolve --operation-id detach-3 --yes");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  test("a revoke answer that names another operation gets no operation note", async () => {
+    const h = harness([{ status: 409, body: { error: { code: "operation_interrupted", message: "x" }, operationId: "someone-else", outcome: "unknown" } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-3"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).not.toContain("someone-else");
+      expect(printed).not.toContain("(operation detach-3");
+      expect(printed).toContain("(code operation_interrupted)");
+    } finally { h.restore(); }
+  });
+
+  test("revoke --operation-id refused by a full journal prints the same local guidance", async () => {
+    const h = harness([full("unsettled")]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-4"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("ocx link operations resolve --operation-id <id> --yes");
+      expect(printed).toContain("(code operation_journal_full)");
+      // A revoke has no step before the refused request, so here nothing was changed.
+      expect(printed).toContain("Nothing was changed");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+});
+
+describe("closed guidance for the refusals of a journalled revoke (O1c)", () => {
+  test.each([
+    ["operation_mismatch", 409, 5, "used with other parameters"],
+    ["link_operation_open", 409, 5, "unfinished revoke holds this link"],
+  ])("%s prints local text that nothing was changed, with the code", async (code, status, exit, text) => {
+    const h = harness([{ status, body: { error: { code, message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-5"], h.deps)).toBe(exit);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain(text);
+      expect(printed).toContain("Nothing was changed");
+      expect(printed).toContain("(code " + code + ")");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  // #8416: a resumed revoke can re-own its retirement receipt before this 409, so the CLI claims only what holds for it.
+  test("link_operation_in_progress says the link, its key and the Child were not touched, with the code", async () => {
+    const h = harness([{ status: 409, body: { error: { code: "link_operation_in_progress", message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-9"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("Another link operation");
+      expect(printed).toContain("did not touch the link, its key or the Child");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).toContain("(code link_operation_in_progress)");
+    } finally { h.restore(); }
+  });
+
+  // Only --force can meet the tombstone limit (#8612). A fresh revoke is refused before anything and settles failed_clean, but a
+  // resumed one may re-own its retirement receipt first and stay open or unknown (#8416), so the text claims neither.
+  test("a forced revoke refused at the tombstone limit claims only that this attempt touched nothing, and to repeat the same id before using a new one", async () => {
+    const h = harness([{ status: 409, body: { error: { code: "tombstone_limit", message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--force", "--yes", "--operation-id", "detach-8"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("waiting for cleanup");
+      expect(printed).toContain("did not touch the link, its key or the Child");
+      // An earlier attempt of a resumed revoke may already have revoked the key and stopped the tunnel (#8416).
+      expect(printed).not.toContain("stay active");
+      expect(printed).toContain("repeat this revoke with the same operation id");
+      expect(printed).toContain("although capacity is free");
+      expect(printed).toContain("link_retirement_owned");
+      // That answer means some unfinished removal holds the link, not necessarily this operation (#8416).
+      expect(printed).not.toContain("still belongs to this id");
+      expect(printed).toContain("an unfinished removal holds this link");
+      expect(printed).toContain("the revoke of this link that owns it, whatever its recorded state");
+      expect(printed).toContain("ocx link revoke --link-id " + LINK + " --operation-id detach-8 --force --yes");
+      expect(printed).toContain("ocx link recover --link-id");
+      expect(printed).toContain("ocx link recover --forget --link-id <id> --yes");
+      expect(printed).toContain("ocx link operations --json");
+      expect(printed).not.toContain("lists this link's revokes");
+      expect(printed).toContain("ocx link operations");
+      // Every printed command runs as printed: revoke needs --link-id (and --yes with --force).
+      expect(printed).toContain("ocx link revoke --link-id " + LINK + " --force --yes without --operation-id");
+      expect(printed).not.toContain("ocx link revoke --force");
+      expect(printed).not.toContain("the refusal was recorded");
+      expect(printed).not.toContain("if it reads failed_clean");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).toContain("(code tombstone_limit)");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  // A replay that follows a resumed removal can read a damaged journal after the removal finished (#8416), so no state claim.
+  test("operation_journal_unreadable names the way out, claims nothing about state, and says what link_not_found then means", async () => {
+    const h = harness([{ status: 500, body: { error: { code: "operation_journal_unreadable", message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-11"], h.deps)).toBe(1);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("Keep a copy, move it aside");
+      expect(printed).toContain("link_not_found");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).toContain("(code operation_journal_unreadable)");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  // Generic codes still get a next step; where a path's answer differs, the text says what a repeat's answer means (the
+  // table in structure/remote-link.md). link_changed can come from a stale retirement receipt that no repeat clears (#8678).
+  test.each([
+    ["operation_journal_failed", 500, 1, ["then repeat the revoke with the same operation id", "if that answers link_retirement_owned", "this id may still own the removal"]],
+    ["link_changed", 409, 5, ["no longer matches", "ocx link status", "repeat the revoke with the same operation id", "If it answers link_changed again", "ocx link routes", "A new operation id can remove it only when no unfinished removal"]],
+  ])("%s names a next step, conditional where a repeat can answer the same code, and claims nothing about state", async (code, status, exit, parts) => {
+    const h = harness([{ status, body: { error: { code, message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-12"], h.deps)).toBe(exit);
+      const printed = [...h.out, ...h.err].join("\n");
+      for (const part of parts) expect(printed).toContain(part);
+      expect(printed).not.toContain("changed while this revoke ran");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).toContain("(code " + code + ")");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  // An unknown can arise before the receipt claim (a disconnect timeout, a journal write failure), so the resume is conditional.
+  test("an unknown outcome says to repeat the same id before resolving, which resumes a removal only if this id still owns one", async () => {
+    const h = harness([{ status: 502, body: { error: { code: "remote_disconnect_failed", message: "x" }, operationId: "detach-13", outcome: "unknown" } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-13"], h.deps)).toBe(1);
+      const printed = [...h.out, ...h.err].join("\n");
+      const repeat = printed.indexOf("repeat the revoke with the same operation id");
+      const resolve = printed.indexOf("ocx link operations resolve --operation-id detach-13 --yes");
+      expect(repeat).toBeGreaterThan(-1);
+      expect(resolve).toBeGreaterThan(repeat);
+      expect(printed).toContain("if this id still owns an unfinished removal, the repeat resumes it");
+      expect(printed).toContain("ocx link operations --operation-id detach-13 shows its state");
+      // A resume that failed and could not settle leaves the entry open, which resolve refuses: only unknown or residual resolve.
+      expect(printed).toContain("if it reads unknown or residual, check the Child, then run ocx link operations resolve --operation-id detach-13 --yes");
+      expect(printed).toContain("if it reads open, fix what stopped the revoke (for example the journal's disk) and repeat it with the same operation id");
+      expect(printed).not.toContain("it resumes a removal this id still owns");
+    } finally { h.restore(); }
+  });
+
+  // #8416's refusals for an interrupted removal: the owner and the way out live only in the server's message, which is dropped.
+  test.each([
+    ["link_retirement_owned", ["unfinished removal holds this link", "the revoke of this link that owns it, whatever its recorded state", "ocx link operations --json", "ocx link revoke --link-id " + LINK + " --force --yes without --operation-id", "If no journalled operation owns it", "ocx link revoke --link-id " + LINK + " without --operation-id and without --force"]],
+    ["link_retirement_mode_mismatch", ["interrupted in another mode", "the revoke that started it", "ocx link revoke --link-id " + LINK + " --force --yes without --operation-id"]],
+  ])("%s prints closed guidance that names the way out and makes no claim about state", async (code, parts) => {
+    const h = harness([{ status: 409, body: { error: { code, message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-10"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      for (const part of parts) expect(printed).toContain(part);
+      expect(printed).not.toContain("<link id>");
+      expect(printed).toContain("(code " + code + ")");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).not.toContain("cleanup ran");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  // tombstone_write_failed can come after the tombstone file was written (its permissions step failed), so it stays generic.
+  test("a code that cannot promise nothing changed makes no such claim", async () => {
+    const h = harness([{ status: 503, body: { error: { code: "tombstone_write_failed", message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-6"], h.deps)).toBe(1);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("(code tombstone_write_failed)");
+      expect(printed).not.toContain("Nothing was changed");
+    } finally { h.restore(); }
+  });
+});
+
+test("the revoke helper re-checks the outcome itself: a value outside the closed set is never printed", async () => {
+  const { journalledRevokeError } = await import("../../src/cli/link");
+  const error = new RuntimeApiError("x", 409, { error: { code: "operation_interrupted" }, operationId: "detach-7", outcome: "not-an-outcome; rm -rf" });
+  const explained = journalledRevokeError(error, "detach-7") as Error;
+  expect(explained.message).not.toContain("not-an-outcome");
+  expect(explained.message).toContain("(code operation_interrupted)");
+});
+
+test("the revoke helper prints only a validated link id in its commands, a placeholder otherwise", async () => {
+  const { journalledRevokeError } = await import("../../src/cli/link");
+  const error = new RuntimeApiError("x", 409, { error: { code: "link_retirement_owned" } });
+  const explained = journalledRevokeError(error, "detach-14", "lnk_; rm -rf ~") as Error;
+  expect(explained.message).not.toContain("rm -rf");
+  expect(explained.message).toContain("ocx link revoke --link-id <link id> --force --yes without --operation-id");
 });
