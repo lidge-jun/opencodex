@@ -264,10 +264,13 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
       expect(printed).toContain("the revoke of this link that owns it, whatever its recorded state");
       expect(printed).toContain("ocx link revoke --link-id " + LINK + " --operation-id detach-8 --force --yes");
       expect(printed).toContain("ocx link recover --link-id");
+      expect(printed).toContain("ocx link recover --forget --link-id <id> --yes");
       expect(printed).toContain("ocx link operations --json");
       expect(printed).not.toContain("lists this link's revokes");
       expect(printed).toContain("ocx link operations");
-      expect(printed).toContain("ocx link revoke --force --yes without --operation-id");
+      // Every printed command runs as printed: revoke needs --link-id (and --yes with --force).
+      expect(printed).toContain("ocx link revoke --link-id " + LINK + " --force --yes without --operation-id");
+      expect(printed).not.toContain("ocx link revoke --force");
       expect(printed).not.toContain("the refusal was recorded");
       expect(printed).not.toContain("if it reads failed_clean");
       expect(printed).not.toContain("Nothing was changed");
@@ -323,13 +326,14 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
 
   // #8416's refusals for an interrupted removal: the owner and the way out live only in the server's message, which is dropped.
   test.each([
-    ["link_retirement_owned", ["unfinished removal holds this link", "the revoke of this link that owns it, whatever its recorded state", "ocx link operations --json", "ocx link revoke --link-id <link id> --force --yes without --operation-id", "If no journalled operation owns it"]],
-    ["link_retirement_mode_mismatch", ["interrupted in another mode", "the revoke that started it", "--force --yes without --operation-id"]],
+    ["link_retirement_owned", ["unfinished removal holds this link", "the revoke of this link that owns it, whatever its recorded state", "ocx link operations --json", "ocx link revoke --link-id " + LINK + " --force --yes without --operation-id", "If no journalled operation owns it", "ocx link revoke --link-id " + LINK + " without --operation-id and without --force"]],
+    ["link_retirement_mode_mismatch", ["interrupted in another mode", "the revoke that started it", "ocx link revoke --link-id " + LINK + " --force --yes without --operation-id"]],
   ])("%s prints closed guidance that names the way out and makes no claim about state", async (code, parts) => {
     const h = harness([{ status: 409, body: { error: { code, message: "server-chosen text" } } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-10"], h.deps)).toBe(5);
       const printed = [...h.out, ...h.err].join("\n");
       for (const part of parts) expect(printed).toContain(part);
+      expect(printed).not.toContain("<link id>");
       expect(printed).toContain("(code " + code + ")");
       expect(printed).not.toContain("Nothing was changed");
       expect(printed).not.toContain("cleanup ran");
@@ -354,4 +358,12 @@ test("the revoke helper re-checks the outcome itself: a value outside the closed
   const explained = journalledRevokeError(error, "detach-7") as Error;
   expect(explained.message).not.toContain("not-an-outcome");
   expect(explained.message).toContain("(code operation_interrupted)");
+});
+
+test("the revoke helper prints only a validated link id in its commands, a placeholder otherwise", async () => {
+  const { journalledRevokeError } = await import("../../src/cli/link");
+  const error = new RuntimeApiError("x", 409, { error: { code: "link_retirement_owned" } });
+  const explained = journalledRevokeError(error, "detach-14", "lnk_; rm -rf ~") as Error;
+  expect(explained.message).not.toContain("rm -rf");
+  expect(explained.message).toContain("ocx link revoke --link-id <link id> --force --yes without --operation-id");
 });
