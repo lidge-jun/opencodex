@@ -218,6 +218,7 @@ describe("Vertex catalog configuration", () => {
       seenApiKeyHeader = headers.get("x-goog-api-key") ?? "";
       return Promise.resolve(Response.json({
         publisherModels: [
+          { name: "publishers/google/models/gemini-4-hydrogen", versionId: "default", launchStage: "GA" },
           { name: "publishers/google/models/gemini-4-carbon", versionId: "default", launchStage: "GA" },
           { name: "publishers/google/models/gemini-4-argon", versionId: "default", launchStage: "GA" },
           { name: "publishers/google/models/gemini-embedding-2", versionId: "default", launchStage: "GA" },
@@ -245,6 +246,16 @@ describe("Vertex catalog configuration", () => {
     expect(seenUrl).toBe("https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=300");
     expect(seenApiKeyHeader).toBe("vertex-api-key");
 
+    const hydrogen = rows.find(row => row.provider === "google" && row.id === "gemini-4-hydrogen");
+    expect(hydrogen).toMatchObject({
+      provider: "google",
+      id: "gemini-4-hydrogen",
+      contextWindow: 1_048_576,
+      maxOutputTokens: 65_536,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      defaultReasoningEffort: "high",
+    });
     const carbon = rows.find(row => row.provider === "google" && row.id === "gemini-4-carbon");
     expect(carbon).toMatchObject({
       provider: "google",

@@ -160,6 +160,9 @@ export function buildVertexProviderModelsRequest(
 function vertexGeminiReasoningEfforts(modelId: string): readonly string[] | undefined {
   const lower = modelId.toLowerCase();
   if (lower.includes("image")) return undefined;
+  if (lower === "gemini-4-hydrogen") {
+    return ["low", "medium", "high", "xhigh"];
+  }
   if (
     lower === "gemini-4-carbon"
     || lower === "gemini-4-argon"
