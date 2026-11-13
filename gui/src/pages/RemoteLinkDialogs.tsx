@@ -34,6 +34,7 @@ export function RemoteLinkForceRemovedNotice({ removed, onDismiss }: { removed: 
           // link-bound --expect-link is not offered for a Child this old.
           ? <>
             <span className="block"><Trans k="remoteLink.forceRemoved.unknownCheck" cmd="ocx connect status --json" vars={vars} /></span>
+            <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLocate" cmd="command -v ocx-child" vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLightweight" cmd={`${PLANTED_CHILD} connect status --json`} vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownDisconnect" cmd="ocx disconnect" vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLightweight" cmd={`${PLANTED_CHILD} detach`} vars={vars} /></span>

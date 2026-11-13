@@ -1318,11 +1318,11 @@ test("every locale translates the forced-removal notice and keeps its command an
       if (locale !== "en") expect(text, locale + " " + key).not.toBe((DICTS.en as Record<string, string>)[key]);
       expect(text.includes("{cmd}") && text.includes("{linkId}"), locale + " " + key).toBe(true);
     }
-    for (const key of ["remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemove.unknownBody"]) {
+    for (const key of ["remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemove.unknownBody"]) {
       const text = (dict as Record<string, string>)[key];
       expect(typeof text, locale + " " + key).toBe("string");
       if (locale !== "en") expect(text, locale + " " + key).not.toBe((DICTS.en as Record<string, string>)[key]);
-      expect(text.includes("{cmd}"), locale + " " + key).toBe(key.endsWith("unknownLightweight"));
+      expect(text.includes("{cmd}"), locale + " " + key).toBe(!key.endsWith("unknownBody"));
     }
   }
 });
@@ -1355,8 +1355,12 @@ test("a forced removal of a Child of unknown type names no command up front and 
   expect(notice?.textContent).toContain("keeps nothing to recover it from");
   expect(notice?.textContent).toContain("names link " + id);
   expect(notice?.textContent).toContain("leave it as it is");
+  // Every location the product plants or finds an ocx-child, with the planted copy kept as the example path.
+  for (const where of ["~/.local/bin", "PATH", "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where ocx-child"]) {
+    expect(notice?.textContent, where).toContain(where);
+  }
   expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([
-    "ocx connect status --json", "~/.cache/opencodex/bin/ocx-child connect status --json", "ocx disconnect", "~/.cache/opencodex/bin/ocx-child detach",
+    "ocx connect status --json", "command -v ocx-child", "~/.cache/opencodex/bin/ocx-child connect status --json", "ocx disconnect", "~/.cache/opencodex/bin/ocx-child detach",
   ]);
   expect(notice?.textContent).not.toContain("ocx link recover");
 });
