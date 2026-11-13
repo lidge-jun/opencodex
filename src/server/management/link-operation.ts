@@ -70,10 +70,14 @@ export function cleanupRecorded(ctx: ManagementContext, receipt: LinkRetirement)
   return receipt.mode !== "purge" || (owner.receipt?.purged === true && owner.receipt.linkId === receipt.link.id);
 }
 
-/** The journalled owner of a retirement receipt: the revoke of that same link under the receipt's operation id. */
-export function retirementOwner(journal: OperationsJournal, receipt: LinkRetirement): LinkOperation | undefined {
-  if (receipt.operationId === undefined) return undefined;
-  const op = findOperation(journal, receipt.operationId);
+/**
+ * The journalled owner of a retirement receipt: the revoke of that same link under the receipt's operation id. With
+ * includeFormer, a receipt a plain --force disowned answers its former owner, which every later force fences too.
+ */
+export function retirementOwner(journal: OperationsJournal, receipt: LinkRetirement, includeFormer = false): LinkOperation | undefined {
+  const id = receipt.operationId ?? (includeFormer ? receipt.formerOwner : undefined);
+  if (id === undefined) return undefined;
+  const op = findOperation(journal, id);
   return op && op.kind === "revoke" && op.linkId === receipt.link.id ? op : undefined;
 }
 
@@ -262,7 +266,8 @@ export interface ForceTakeover {
  */
 export function fenceRetirementOwnerForForce(ctx: ManagementContext, receipt: LinkRetirement): ForceTakeover | null {
   const path = journalPathFor(ctx);
-  const owner = retirementOwner(readOperationsJournal(path), receipt);
+  // A receipt an earlier force disowned still fences its former owner: a later force could otherwise leave it resolvable.
+  const owner = retirementOwner(readOperationsJournal(path), receipt, true);
   if (!owner || (owner.state !== "open" && owner.state !== "unknown")) return null;
   const operationId = owner.operationId;
   const prior = { state: owner.state, finishedAt: owner.finishedAt, resolvedAt: owner.resolvedAt, error: owner.error, updatedAt: owner.updatedAt };

@@ -1018,3 +1018,25 @@ test.each([true, false])("an owner whose receipt a plain --force disowned and th
   }
   expect(h.ssh).toEqual([]);
 });
+
+test("a later plain --force fences the former owner of a receipt an earlier force disowned", async () => {
+  let open!: () => void, stopping!: () => void;
+  const stopped = new Promise<void>(resolve => { stopping = resolve; });
+  const h = harness({ revokeFails: true, stopGate: new Promise<void>(resolve => { open = resolve; }), onStop: () => stopping() });
+  // An earlier force disowned the receipt and failed after beginning: the owner was left unknown and unresolved.
+  disownLinkRetirement(claimLinkRetirement(record(), root, () => h.store, "purge", OP), root);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 },
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }],
+  } as LinkOperation] });
+  const forced = h.revoke({ force: true });
+  await stopped;
+  expect(resolveLinkOperation(h.journalPath, OP, NOW)).toBe("not_resolvable");
+  open();
+  expect((await forced).status).toBe(502);
+  const owner = h.journal().operations[0]!;
+  expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: undefined });
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  expect(h.suspendedAtHoldRelease).toEqual([true]);
+});

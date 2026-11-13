@@ -300,7 +300,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       if (plainForce) {
         try { forceReceipt = readLinkRetirement(id); } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
         if (forceReceipt) {
-          try { ownerId = retirementOwner(readOperationsJournal(journalPathFor(ctx)), forceReceipt)?.operationId; } catch { journalReadable = false; }
+          try { ownerId = retirementOwner(readOperationsJournal(journalPathFor(ctx)), forceReceipt, true)?.operationId; } catch { journalReadable = false; }
         }
       }
       const open = openRevokeConflict(ctx, id, operation?.id ?? ownerId, plainForce);
