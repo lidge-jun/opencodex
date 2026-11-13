@@ -12,6 +12,7 @@ import {
   type LogRouteDecision,
 } from "../log-route-decision";
 import { cacheSplit } from "../logs-token-title";
+import { CONTEXT_CATEGORIES, type ContextBreakdown } from "./context-tiles";
 import type { formatEstimatedUsd } from "../logs-cost-format";
 
 export const ROUTE_LIVE_ROW_CAP = 200;
@@ -64,6 +65,10 @@ export interface RouteRow extends LogEntryBase {
   totalTokens?: number;
   attempts?: RouteAttempt[];
   accountRoster?: RouteRoster;
+  /** Estimated size of each part of the request as the client sent it (src/server/context-breakdown.ts). */
+  contextBreakdown?: ContextBreakdown;
+  /** The serving model's context window in tokens, when known. */
+  contextWindow?: number;
   accountLogLabel?: string;
   accountTag?: string;
   conversationId?: string;
@@ -98,11 +103,33 @@ function parseRoster(value: unknown): RouteRoster | undefined {
     : { provider: value.provider, accounts, ...(value.truncated === true ? { truncated: true as const } : {}) };
 }
 
+const tokenCount = (value: unknown): value is number => finite(value) && value >= 0;
+
+/** A breakdown missing any part, or carrying a negative or non-numeric size, is dropped whole. */
+export function parseContextBreakdown(value: unknown): ContextBreakdown | undefined {
+  if (!isRecord(value) || value.v !== 1 || !isRecord(value.parts) || !Array.isArray(value.turns)) return undefined;
+  const parts = {} as ContextBreakdown["parts"];
+  for (const category of CONTEXT_CATEGORIES) {
+    const size = value.parts[category];
+    if (!tokenCount(size)) return undefined;
+    parts[category] = size;
+  }
+  if (!value.turns.every(tokenCount) || !tokenCount(value.toolCount)) return undefined;
+  return {
+    v: 1, parts, turns: value.turns, toolCount: value.toolCount,
+    ...(tokenCount(value.turnsEarlier) && value.turnsEarlier > 0 ? { turnsEarlier: value.turnsEarlier } : {}),
+    ...(value.held === true ? { held: true as const } : {}),
+  };
+}
+
 function parseRow(raw: unknown): RouteRow | null {
   if (!isRecord(raw) || !finite(raw.timestamp) || typeof raw.model !== "string"
     || typeof raw.provider !== "string" || !finite(raw.status) || !finite(raw.durationMs)) return null;
-  const { attempts, accountRoster, ...rest } = raw;
+  const { attempts, accountRoster, contextBreakdown, contextWindow, ...rest } = raw;
   const row = { ...rest } as unknown as RouteRow;
+  const breakdown = parseContextBreakdown(contextBreakdown);
+  if (breakdown) row.contextBreakdown = breakdown;
+  if (finite(contextWindow) && contextWindow > 0) row.contextWindow = contextWindow;
   const parsedAttempts = parseAttempts(attempts);
   if (parsedAttempts) row.attempts = parsedAttempts;
   const roster = parseRoster(accountRoster);
@@ -169,13 +196,25 @@ export function tokenTotal(row: RouteRow): number | undefined {
   return finite(explicit) ? Math.max(explicit, base) : base;
 }
 
+/** Input tokens the provider counted, cached ones included. Undefined when the row has no usable usage. */
+export function countedInputTokens(row: Pick<RouteRow, "usage">): number | undefined {
+  const input = row.usage?.inputTokens;
+  return finite(input) && input > 0 ? input : undefined;
+}
+
+/** Cached vs total input tokens. Unknown cache detail stays undefined, never a zero read. */
+export function cacheMeterOf(row: RouteRow): { read: number; total: number } | undefined {
+  const usage = row.usage;
+  const total = countedInputTokens(row);
+  if (!usage || total === undefined) return undefined;
+  const { read } = cacheSplit({ provider: row.provider, usage: { inputTokens: total, outputTokens: usage.outputTokens ?? 0, ...usage } });
+  return finite(read) ? { read: Math.min(total, Math.max(0, read)), total } : undefined;
+}
+
 /** Cache read share of the input, 0..100. Unknown cache detail stays undefined, never 0. */
 export function cacheHitPercent(row: RouteRow): number | undefined {
-  const usage = row.usage;
-  if (!usage || !finite(usage.inputTokens) || usage.inputTokens <= 0) return undefined;
-  const { read } = cacheSplit({ provider: row.provider, usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens ?? 0, ...usage } });
-  if (!finite(read)) return undefined;
-  return Math.min(100, Math.max(0, (100 * read) / usage.inputTokens));
+  const meter = cacheMeterOf(row);
+  return meter ? (100 * meter.read) / meter.total : undefined;
 }
 
 export function tokPerSecondOf(row: RouteRow): { value: number; estimated: boolean } | undefined {
