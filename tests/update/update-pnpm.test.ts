@@ -26,6 +26,11 @@ import { checkRegistryPackageIntegrity } from "../../src/update/registry-integri
 import { verifyPnpmInstallTree } from "../../src/update/transactional-install.mjs";
 import { updateCommand, updateCommandStr } from "../../src/update/index";
 
+/** A store owner's refusal carries the cause and remedy appended by the updater (owner decision B on #8331). */
+const STORE_HINT = "; this install's path looks like a pnpm global store (a store links directory or pnpm store markers), "
+  + "so the updater accepts it only when pnpm 11 or 12 names that store. Update with pnpm itself: "
+  + "pnpm add -g @bitkyc08/opencodex@latest";
+
 const PKG = "@bitkyc08/opencodex";
 
 describe("pnpm installation detection", () => {
@@ -646,14 +651,14 @@ describe("pnpm global update", () => {
       const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
         runPnpm: (args, capture) => args[0] === "store" ? { status: 0, stdout: value } : run(args, capture),
         verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-      expect(result).toMatchObject({ ok: false, phase: "preflight", error: "pnpm store path is not one absolute versioned path" });
+      expect(result).toMatchObject({ ok: false, phase: "preflight", error: "pnpm store path is not one absolute versioned path" + STORE_HINT });
       expect(state.calls.some(call => call.args[0] === "add")).toBe(false);
     }
     const owner = { ...storeOwnerFor(), store: realpathSync(dirname(tmpdir())) };
     const state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: fakePnpm(state, owner), verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-    expect(result).toMatchObject({ ok: false, phase: "preflight", error: "pnpm configured store changed" });
+    expect(result).toMatchObject({ ok: false, phase: "preflight", error: "pnpm configured store changed" + STORE_HINT });
     expect(state.calls.some(call => call.args[0] === "add")).toBe(false);
   });
   test("does not roll back into a changed store after installation", () => {
@@ -663,7 +668,7 @@ describe("pnpm global update", () => {
       runPnpm: (args, capture) => args[0] === "store" && ++stores > 1
         ? { status: 0, stdout: join(dirname(fixtureStore), "other", "v11") } : run(args, capture),
       verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-    expect(result).toMatchObject({ ok: false, phase: "install", rolledBack: false, error: "pnpm store path could not be resolved" });
+    expect(result).toMatchObject({ ok: false, phase: "install", rolledBack: false, error: "pnpm store path could not be resolved" + STORE_HINT });
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
   });
   test("refuses readback and rollback if virtual-store configuration changes after install", () => {
@@ -672,7 +677,7 @@ describe("pnpm global update", () => {
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: (args, capture) => args[0] === "config" && args[2] === "virtual-store-dir" && state.activeVersion === "2.0.0"
         ? { status: 0, stdout: fixtureStore } : run(args, capture), verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-    expect(result).toMatchObject({ ok: false, phase: "install", rolledBack: false, error: "pnpm virtual-store configuration changed" });
+    expect(result).toMatchObject({ ok: false, phase: "install", rolledBack: false, error: "pnpm virtual-store configuration changed" + STORE_HINT });
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
   });
   test.each([
@@ -685,7 +690,7 @@ describe("pnpm global update", () => {
     const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
       runPnpm: (args, capture) => args[0] === "config" && args[2] === "virtual-store-dir" ? probe : run(args, capture),
       verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-    expect(result).toMatchObject({ ok: false, phase: "preflight", error });
+    expect(result).toMatchObject({ ok: false, phase: "preflight", error: error + STORE_HINT });
     expect(state.calls.some(call => call.args[0] === "add")).toBe(false);
   });
   test("rechecks the store before rollback even when post-install listing fails", () => {
@@ -697,7 +702,7 @@ describe("pnpm global update", () => {
         if (args[0] === "store" && ++stores > 1) return { status: 0, stdout: join(dirname(fixtureStore), "other", "v11") };
         return run(args, capture);
       }, verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
-    expect(result).toMatchObject({ ok: false, rolledBack: false, error: "pnpm store path could not be resolved" });
+    expect(result).toMatchObject({ ok: false, rolledBack: false, error: "pnpm store path could not be resolved" + STORE_HINT });
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
   });
   test("unconfirmed installer exit stops before inspection or rollback", () => {

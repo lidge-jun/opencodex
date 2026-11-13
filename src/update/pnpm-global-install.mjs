@@ -746,7 +746,9 @@ export function runPnpmGlobalUpdate({
     verify,
     { ...constraints, checkShims: false },
   );
-  if (!before.ok) return { ok: false, phase: "preflight", error: before.reason };
+  // A store owner's refusals during the update carry the same cause and remedy as discovery's.
+  const storeOwnerRefusal = reason => owner.globalStore === true && typeof reason === "string" ? reason + STORE_PROOF_HINT : reason;
+  if (!before.ok) return { ok: false, phase: "preflight", error: storeOwnerRefusal(before.reason) };
   if (currentVersion && before.version !== currentVersion) {
     return { ok: false, phase: "preflight", error: "pnpm's active package does not match the running package" };
   }
@@ -772,7 +774,7 @@ export function runPnpmGlobalUpdate({
     { ...constraints, expectedPackagePath: undefined },
   );
   if (!after.ok && isStoreProofFailure(after.reason)) {
-    return { ok: false, phase: "install", rolledBack: false, error: after.reason };
+    return { ok: false, phase: "install", rolledBack: false, error: storeOwnerRefusal(after.reason) };
   }
   const targetMatches = after.ok && (!targetVersion || after.version === targetVersion);
   if (install?.status === 0 && targetMatches) {
@@ -811,7 +813,7 @@ export function runPnpmGlobalUpdate({
   // issuing a rollback mutation, independently of whether readback succeeded.
   if (owner.globalStore) {
     const rollbackStore = readPnpmStore(runPnpm, owner, platform);
-    if (!rollbackStore.ok) return { ok: false, phase: "rollback", rolledBack: false, error: rollbackStore.reason };
+    if (!rollbackStore.ok) return { ok: false, phase: "rollback", rolledBack: false, error: storeOwnerRefusal(rollbackStore.reason) };
   }
   log(`Restoring ${packageName}@${before.version} with pnpm…`);
   let rollback;

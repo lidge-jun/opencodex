@@ -560,7 +560,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     link(dirname(layout.store), alias);
     layout.storeOutput = () => join(alias, "v11");
     layout.calls.length = 0;
-    expect(update()).toMatchObject({ ok: false, phase: "preflight", error: "pnpm store path has a symbolic link component" });
+    expect(update()).toMatchObject({ ok: false, phase: "preflight", error: "pnpm store path has a symbolic link component" + STORE_HINT });
     expect(layout.calls.some(args => args[0] === "add")).toBe(false);
 
     // Same spelling, different canonical store.
@@ -575,7 +575,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(runPnpmGlobalUpdate({
       packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest",
       owner: resolvedAgain.owner, runPnpm: args => layout.run(args), verifyShims: okShims,
-    })).toMatchObject({ ok: false, phase: "preflight", error: "pnpm store path has a symbolic link component" });
+    })).toMatchObject({ ok: false, phase: "preflight", error: "pnpm store path has a symbolic link component" + STORE_HINT });
     expect(layout.calls.some(args => args[0] === "add")).toBe(false);
   });
 
