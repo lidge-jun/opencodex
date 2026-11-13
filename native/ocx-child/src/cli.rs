@@ -23,10 +23,10 @@ use crate::journal::{
 use crate::parity::LinkChildParityReport;
 use crate::platform::{
     DirectoryIdentity, FileLock, LockAcquireError, PurgeExecutableOutcome, SecretBytes,
-    constant_time_eq, directory_identity, ensure_private_dir, format_iso8601_utc, now_epoch_ms,
-    purge_managed_executable, random_hex, reject_symlink, resolve_codex_home,
-    resolve_opencodex_home, resolve_user_home, volatile_zero_bytes, write_private_atomic,
-    write_regular_atomic,
+    constant_time_eq, directory_identity, ensure_private_dir, format_iso8601_utc,
+    hold_managed_plant_in_use, now_epoch_ms, purge_managed_executable, random_hex, reject_symlink,
+    resolve_codex_home, resolve_opencodex_home, resolve_user_home, volatile_zero_bytes,
+    write_private_atomic, write_regular_atomic,
 };
 use crate::relay::{
     RelayCredentials, UpstreamError, fetch_home_authenticated, post_child_parity_report,
@@ -675,12 +675,20 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
             return 1;
         }
     };
+    // A receipt from an earlier detach of this link must not vouch for this new attachment.
+    if let Err(e) =
+        remove_optional_file(&detach_receipt_path(&local_paths.opencodex_home, &link_id))
+    {
+        eprintln!("attach failed clearing an earlier detach receipt: {e}");
+        return 1;
+    }
 
     if !matches!(rollback_pending(&local_paths), Ok(false)) {
         eprintln!("attach refused: incomplete attach requires detach recovery");
         return 1;
     }
-    let mut guard = match CodexHomeGuard::acquire(&local_paths, true, true, ClaimPolicy::Attach) {
+    // The ownership record names this link (schema /2) before any CODEX_HOME write.
+    let mut guard = match CodexHomeGuard::acquire_for_attach(&local_paths, true, true, &link_id) {
         Ok(guard) => guard,
         Err(e) => {
             eprintln!("attach refused: {}", e.message());
@@ -1092,6 +1100,21 @@ fn cmd_serve(args: &[String]) -> u8 {
             eprintln!("serve refused: {e}");
             return 1;
         }
+        // Held for the life of this relay, so no purge removes the binary it runs from.
+        let local_appdata = std::env::var_os("LOCALAPPDATA")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+        let _in_use = match std::env::current_exe()
+            .map_err(|e| format!("cannot resolve the current executable: {e}"))
+            .and_then(|exe| {
+                hold_managed_plant_in_use(&exe, &resolve_user_home(), local_appdata.as_deref())
+            }) {
+            Ok(lock) => lock,
+            Err(e) => {
+                eprintln!("serve refused: {e}");
+                return 1;
+            }
+        };
         let port = listen_port.unwrap_or(state.listen_port);
         if port != state.listen_port {
             eprintln!("serve refused: listen port does not match child state");
@@ -1539,17 +1562,41 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
     let mut keep_catalog = false;
     let mut json_mode = false;
     let mut purge = false;
-    for arg in args {
-        match arg.as_str() {
+    let mut expect_link: Option<String> = None;
+    let usage = || {
+        eprintln!(
+            "Usage: ocx-child detach [--keep-catalog] [--purge] [--json] [--expect-link <link id>]"
+        );
+        2
+    };
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        i += 1;
+        match arg {
             "--keep-catalog" => keep_catalog = true,
             "--json" => json_mode = true,
             "--purge" => purge = true,
-            _ => {
-                eprintln!("Usage: ocx-child detach [--keep-catalog] [--purge] [--json]");
-                return 2;
+            "--expect-link" if expect_link.is_none() => {
+                expect_link = args.get(i).cloned();
+                i += 1;
+                if expect_link.is_none() {
+                    return usage();
+                }
             }
+            _ => match arg.strip_prefix("--expect-link=") {
+                Some(value) if expect_link.is_none() => expect_link = Some(value.to_owned()),
+                _ => return usage(),
+            },
         }
     }
+    if let Some(id) = &expect_link
+        && !is_valid_link_id(id)
+    {
+        eprintln!("--expect-link needs a link id of the form lnk_ followed by 16 hex digits.");
+        return 2;
+    }
+    let expect = expect_link.as_deref();
     let local_paths = current_paths();
     let lock = match FileLock::acquire_blocking(&local_paths.lock_file) {
         Ok(l) => l,
@@ -1562,26 +1609,61 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
         match CodexHomeGuard::acquire(&local_paths, true, false, ClaimPolicy::Detach) {
             Ok(guard) => guard,
             Err(CodexHomeError::Missing) => {
+                if let Some(link) = expect
+                    && let Some((record, path)) = first_child_record(&local_paths)
+                {
+                    return refuse_expected_link(
+                        json_mode,
+                        ExpectLinkRefusal::Residual,
+                        link,
+                        record,
+                        &path,
+                        "Codex home does not exist while child recovery records remain",
+                    );
+                }
                 if let Err(code) = detach_without_codex_home(&local_paths) {
                     return code;
                 }
-                drop(lock);
-                let purged = match purge_after_detach(purge, current_exe_override) {
+                let purged = match purge_with_receipt(
+                    purge,
+                    current_exe_override,
+                    &local_paths.opencodex_home,
+                    expect,
+                    crate::journal::DetachOutcome::NotAttached,
+                ) {
                     Ok(purged) => purged,
                     Err(code) => return code,
                 };
+                drop(lock);
                 print_detached(
                     json_mode,
                     crate::journal::DetachOutcome::NotAttached,
                     purged,
+                    expect,
                 );
                 return 0;
+            }
+            Err(CodexHomeError::Refused(msg)) if expect.is_some() => {
+                return refuse_expected_link(
+                    json_mode,
+                    ExpectLinkRefusal::Conflict,
+                    expect.unwrap_or_default(),
+                    "codex-home-owner",
+                    &local_paths.codex_owner_path(),
+                    &msg,
+                );
             }
             Err(e) => {
                 eprintln!("detach refused: {}", e.message());
                 return 1;
             }
         };
+    if let Some(link) = expect {
+        if let Err(code) = check_expected_link(&codex_guard, link, json_mode) {
+            return code;
+        }
+        crate::test_hooks::barrier("expect-link-checked");
+    }
     let paths = codex_guard.paths().clone();
     if let Err(e) = codex_guard.set_phase(OwnershipPhase::Detaching) {
         eprintln!("detach failed recording Codex home ownership phase: {e}");
@@ -1675,21 +1757,286 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
     drop(_startup_gate);
     let _ = remove_optional_file(&paths.child_dir.join("daemon-start.lock"));
     let _ = fs::remove_dir(&paths.child_dir);
-    drop(lock);
-    let purged = match purge_after_detach(purge, current_exe_override) {
+    let purged = match purge_with_receipt(
+        purge,
+        current_exe_override,
+        &paths.opencodex_home,
+        expect,
+        outcome,
+    ) {
         Ok(purged) => purged,
         Err(code) => return code,
     };
-    print_detached(json_mode, outcome, purged);
+    drop(lock);
+    print_detached(json_mode, outcome, purged, expect);
     0
 }
 
+#[derive(Clone, Copy)]
+enum ExpectLinkRefusal {
+    /// Leftover state this command will not restore; the owning home's plain detach can.
+    Residual,
+    /// The Child belongs to another link or home, or its records cannot be read.
+    Conflict,
+}
+
+/// Refuse `detach --expect-link` without changing anything: exit 6 residual, exit 5 conflict.
+fn refuse_expected_link(
+    json_mode: bool,
+    kind: ExpectLinkRefusal,
+    link_id: &str,
+    record: &str,
+    path: &Path,
+    reason: &str,
+) -> u8 {
+    let (outcome, code) = match kind {
+        ExpectLinkRefusal::Residual => ("residual", 6),
+        ExpectLinkRefusal::Conflict => ("conflict", 5),
+    };
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::json!({
+                "restored": false,
+                "outcome": outcome,
+                "linkId": link_id,
+                "record": record,
+                "path": path.display().to_string(),
+                "reason": reason,
+                "purged": false,
+            })
+        );
+    }
+    eprintln!(
+        "detach --expect-link {link_id} refused ({outcome}): {reason}; record {}; nothing was restored.",
+        path.display()
+    );
+    code
+}
+
+/// The first child recovery record that exists, by the name a refusal reports.
+fn first_child_record(paths: &ChildPaths) -> Option<(&'static str, PathBuf)> {
+    [
+        ("child-state", &paths.state_file),
+        ("attach-rollback", &paths.rollback_file),
+        ("codex-journal", &paths.journal_file),
+        ("link-key", &paths.key_file),
+        ("catalog-backup", &paths.catalog_backup_file),
+    ]
+    .into_iter()
+    .find(|(_, path)| fs::symlink_metadata(path).is_ok())
+    .map(|(name, path)| (name, path.clone()))
+}
+
+/// The link an unresolved attach rollback would put back: `None` without a snapshot,
+/// `Some(None)` for a first attach (no prior state), `Some(Some(id))` for a re-attach. The
+/// snapshot is parsed and checked exactly as `AttachRollbackSnapshot::recover` will, so a
+/// record recovery would refuse is refused here, before anything changes.
+fn rollback_prior_link(paths: &ChildPaths) -> Result<Option<Option<String>>, String> {
+    reject_symlink(&paths.rollback_file)?;
+    let mut bytes = match fs::File::open(&paths.rollback_file) {
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            file.take(MAX_ROLLBACK_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| format!("cannot read rollback snapshot: {e}"))?;
+            bytes
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot open rollback snapshot: {e}")),
+    };
+    let parsed = if bytes.len() as u64 > MAX_ROLLBACK_BYTES {
+        Err("rollback snapshot exceeds size limit".to_owned())
+    } else {
+        serde_json::from_slice::<AttachRollbackRecord>(&bytes)
+            .map_err(|e| format!("malformed rollback snapshot: {e}"))
+    };
+    volatile_zero_bytes(&mut bytes);
+    let record = parsed?;
+    let (ocx, codex) = AttachRollbackSnapshot::canonical_homes(paths)?;
+    if record.schema != "ocx.child.attach-rollback/1"
+        || record.opencodex_home != ocx
+        || record.codex_home != codex
+        || record.opencodex_home_identity != directory_identity(Path::new(&ocx))?
+        || record.codex_home_identity != directory_identity(Path::new(&codex))?
+    {
+        return Err("rollback snapshot belongs to a different home".to_owned());
+    }
+    // Attach reads an unreadable state.json as no prior state but still snapshots its bytes: such a
+    // snapshot would put back an earlier attachment whose link nobody can name, so it is refused.
+    if record.prior_state.is_none()
+        && (record.state_bytes.is_some()
+            || record.journal.is_some()
+            || record.key.is_some()
+            || record.catalog_backup.is_some())
+    {
+        return Err(
+            "rollback snapshot holds an earlier attachment's files but no readable prior state"
+                .to_owned(),
+        );
+    }
+    Ok(Some(
+        record
+            .prior_state
+            .as_ref()
+            .map(|prior| prior.link_id.clone()),
+    ))
+}
+
+fn detach_receipt_path(opencodex_home: &Path, link_id: &str) -> PathBuf {
+    opencodex_home
+        .join("link-receipts")
+        .join(format!("{link_id}.json"))
+}
+
+/// Durable, link-bound proof that `detach --expect-link` restored this Child, kept in
+/// `$OPENCODEX_HOME/link-receipts/<link id>.json` after the child directory is gone, so a Home
+/// whose answer was lost after the purge can still read it. It records the restore only: whether
+/// the planted binary is gone is read from the binary itself. An attach of the same link removes
+/// it under the lifecycle lock before it changes anything. Holds no credential.
+fn write_detach_receipt(
+    opencodex_home: &Path,
+    link_id: &str,
+    outcome: crate::journal::DetachOutcome,
+) -> Result<(), String> {
+    let path = detach_receipt_path(opencodex_home, link_id);
+    if let Some(dir) = path.parent() {
+        ensure_private_dir(dir)?;
+    }
+    let body = serde_json::json!({
+        "schema": "ocx.child.detach-receipt/1",
+        "linkId": link_id,
+        "restored": true,
+        "outcome": format!("{outcome:?}"),
+    });
+    write_private_atomic(&path, format!("{body}\n").as_bytes())
+}
+
+/// Purge under the lifecycle lock; with `--expect-link`, the restore receipt is durable before
+/// the purge starts, so a crash or a lost answer at any later point stays provable.
+fn purge_with_receipt(
+    purge: bool,
+    current_exe_override: Option<&Path>,
+    opencodex_home: &Path,
+    expect: Option<&str>,
+    outcome: crate::journal::DetachOutcome,
+) -> Result<bool, u8> {
+    if let Some(link_id) = expect
+        && let Err(e) = write_detach_receipt(opencodex_home, link_id, outcome)
+    {
+        eprintln!("detach could not record its receipt: {e}");
+        return Err(1);
+    }
+    purge_after_detach(purge, current_exe_override)
+}
+
+/// Restore only when both `state.json` and the ownership record name `link_id`, and an
+/// unresolved attach rollback would not put back another link; or when nothing at all is left.
+/// Runs with the lifecycle and `CODEX_HOME` locks held, which the restore keeps, so no other
+/// enrollment can run between this check and the restore.
+fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -> Result<(), u8> {
+    let paths = guard.paths();
+    let owner_path = paths.codex_owner_path();
+    let state_path = &paths.state_file;
+    let refuse = |kind, record, path: &Path, reason: &str| {
+        Err(refuse_expected_link(
+            json_mode, kind, link_id, record, path, reason,
+        ))
+    };
+    let state = read_child_state(state_path);
+    if let StateReadOutcome::Invalid(e) = &state {
+        return refuse(
+            ExpectLinkRefusal::Conflict,
+            "child-state",
+            state_path,
+            &format!("the Child state cannot be read ({e})"),
+        );
+    }
+    let rollback = match rollback_prior_link(paths) {
+        Ok(rollback) => rollback,
+        Err(e) => {
+            return refuse(
+                ExpectLinkRefusal::Conflict,
+                "attach-rollback",
+                &paths.rollback_file,
+                &format!("the attach rollback snapshot cannot be read ({e})"),
+            );
+        }
+    };
+    let owner = guard.owner_record();
+    // Every link the records name. More than one means an attach replaced another link's
+    // attachment; an interrupted one (phase attaching, or a rollback left) is the owner's to
+    // finish with a plain detach, and any other mix is a conflict.
+    let mut named: Vec<(&'static str, PathBuf, String)> = Vec::new();
+    if let StateReadOutcome::Valid(st) = &state {
+        named.push(("child-state", state_path.clone(), st.link_id.clone()));
+    }
+    if let Some(id) = owner.and_then(|r| r.link_id.clone()) {
+        named.push(("codex-home-owner", owner_path.clone(), id));
+    }
+    if let Some(Some(id)) = &rollback {
+        named.push(("attach-rollback", paths.rollback_file.clone(), id.clone()));
+    }
+    if let Some((record, path, _)) = named.iter().find(|(_, _, id)| id != link_id) {
+        let interrupted =
+            rollback.is_some() || owner.is_some_and(|r| r.phase == OwnershipPhase::Attaching);
+        return if interrupted && named.iter().any(|(_, _, id)| id == link_id) {
+            refuse(
+                ExpectLinkRefusal::Residual,
+                record,
+                path,
+                "an interrupted attach replaced another link's attachment; run ocx-child detach on this machine",
+            )
+        } else {
+            refuse(
+                ExpectLinkRefusal::Conflict,
+                record,
+                path,
+                "the Child is linked to another link",
+            )
+        };
+    }
+    let state_names_link = matches!(state, StateReadOutcome::Valid(_));
+    match owner.map(|r| r.link_id.as_deref()) {
+        Some(None) => refuse(
+            ExpectLinkRefusal::Residual,
+            "codex-home-owner",
+            &owner_path,
+            "the ownership record names no link (schema /1); run ocx-child detach on this machine",
+        ),
+        Some(Some(_)) if state_names_link => Ok(()),
+        Some(Some(_)) => refuse(
+            ExpectLinkRefusal::Residual,
+            "codex-home-owner",
+            &owner_path,
+            "the Child state is missing while the ownership record names this link (an attach interrupted before it wrote the state, or an interrupted detach); run ocx-child detach on this machine",
+        ),
+        None if state_names_link => refuse(
+            ExpectLinkRefusal::Residual,
+            "child-state",
+            state_path,
+            "the Child state names this link but no ownership record does",
+        ),
+        None => match first_child_record(paths) {
+            Some((record, path)) => refuse(
+                ExpectLinkRefusal::Residual,
+                record,
+                &path,
+                "a child recovery record remains without state or ownership record",
+            ),
+            None => Ok(()),
+        },
+    }
+}
+
 /// Removes the running binary when `--purge` was requested and it sits in the managed plant
-/// directory. Runs only after every recovery record is gone and the lifecycle lock is released.
+/// directory. Runs only after every recovery record is gone, while the caller still holds the
+/// lifecycle lock, so an attach waiting on that lock cannot start before the binary is gone.
 fn purge_after_detach(purge: bool, current_exe_override: Option<&Path>) -> Result<bool, u8> {
     if !purge {
         return Ok(false);
     }
+    crate::test_hooks::barrier("purge-before-remove");
     let exe = match current_exe_override {
         Some(p) => p.to_path_buf(),
         None => match std::env::current_exe() {
@@ -1707,6 +2054,14 @@ fn purge_after_detach(purge: bool, current_exe_override: Option<&Path>) -> Resul
     match purge_managed_executable(&exe, &user_home, local_appdata.as_deref()) {
         Ok(PurgeExecutableOutcome::Removed) => Ok(true),
         Ok(PurgeExecutableOutcome::SkippedUnmanagedPath) => Ok(false),
+        Ok(PurgeExecutableOutcome::InUse) => {
+            // A fixed line the Home matches (remote-plant.ts PURGE_KEPT_IN_USE_MARKER).
+            eprintln!("ocx-purge-kept:binary_in_use");
+            eprintln!(
+                "detach --purge kept the planted ocx-child: another ocx-child relay is running from it"
+            );
+            Ok(false)
+        }
         Err(e) => {
             eprintln!("detach --purge failed: {e}");
             Err(1)
@@ -1714,11 +2069,22 @@ fn purge_after_detach(purge: bool, current_exe_override: Option<&Path>) -> Resul
     }
 }
 
-fn print_detached(json_mode: bool, outcome: crate::journal::DetachOutcome, purged: bool) {
+fn print_detached(
+    json_mode: bool,
+    outcome: crate::journal::DetachOutcome,
+    purged: bool,
+    expect_link: Option<&str>,
+) {
     if json_mode {
-        println!(
-            "{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false,\"purged\":{purged}}}"
-        );
+        match expect_link {
+            // A receipt bound to the link the caller expected.
+            Some(link_id) => println!(
+                "{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false,\"purged\":{purged},\"linkId\":\"{link_id}\"}}"
+            ),
+            None => println!(
+                "{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false,\"purged\":{purged}}}"
+            ),
+        }
     } else {
         println!(
             "Disconnected ephemeral Remote Link Child ({outcome:?}, purged={purged}); zero background daemon running."

@@ -447,6 +447,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/link/operations/{id}", module: "server/management/link-operation", mutates: false, mechanism: "regex" },
   { method: "POST", path: "/api/link/operations/{id}/resolve", module: "server/management/link-operation", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/link/issue", module: "server/management/link-routes", mutates: true },
+  { method: "POST", path: "/api/link/recover", module: "server/management/link-routes", mutates: true },
+  { method: "GET", path: "/api/link/recover", module: "server/management/link-routes", mutates: false },
   // server/management/link-child-ops-routes (reached through link-routes)
   { method: "POST", path: "/api/link/children/operations", module: "server/management/link-child-ops-routes", mutates: true },
   { method: "GET", path: "/api/link/children/jobs/{jobId}", module: "server/management/link-child-ops-routes", mutates: false, mechanism: "regex" },
