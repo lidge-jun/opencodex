@@ -15,6 +15,7 @@ import { clearAccountQuotaCache, fetchProviderAccountQuotas, getCachedProviderAc
 import { accountCacheKey, accountQuotaCache, persistAccountQuotaCache,
   reconcileProviderAccountQuotaRows, resetProviderQuotaReconcileStateForTests } from "../../../src/providers/quota/account-cache";
 import { ACCOUNT_QUOTA_TTL_MS } from "../../../src/providers/quota-wire";
+import { markDisplayOnlyQuota } from "../../../src/providers/quota-types";
 import type { OcxConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -66,6 +67,18 @@ function response(status = "DISABLED", used = 100) {
 }
 
 describe("Kiro account evidence on disk", () => {
+  test("display-only rows cannot return from disk as routing evidence", async () => {
+    const account = await login("active");
+    accountQuotaCache.set(key(account), { ts: Date.now(), identity: kiroEvidenceIdentity(account),
+      quota: markDisplayOnlyQuota({ monthlyPercent: 100, updatedAt: Date.now() }) });
+    accountQuotaCache.set("cursor\0other", { ts: Date.now(), quota: { monthlyPercent: 30, updatedAt: Date.now() } });
+    persistAccountQuotaCache();
+    await flush();
+    expect(readPersistedAccountQuotas().has(key(account))).toBe(false);
+    expect(readPersistedAccountQuotas().has("cursor\0other")).toBe(true);
+    restart();
+    expect(kiroAccountEvidence(account).quotaPercent).toBeUndefined();
+  });
   test("first routing request hydrates exhausted evidence without probing", async () => {
     const active = await login("active");
     const alternate = await login("alternate");

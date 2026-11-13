@@ -129,12 +129,11 @@ model = "anthropic/claude-opus-4-8"
 model_provider = "opencodex"
 ```
 
-Для прокси, доступного по сети, укажите в `base_url` адрес, до которого `grok` реально может
-дозвониться, и используйте свой admission token:
+Перед передачей токена настройте TLS-фронтенд и используйте его HTTPS URL либо loopback-адрес локального туннеля. Grok сохраняет значение `api_key` в `~/.grok/config.toml`: ограничьте доступ к файлу и не включайте его в систему контроля версий или общие резервные копии.
 
 ```toml
 [model_providers.opencodex]
-base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
+base_url = "https://proxy.example.com/v1"   # configured TLS frontend
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 

@@ -173,6 +173,58 @@ describe("CLI OAuth login reports the browser launch (#5261)", () => {
     expect(events).toEqual(["warn"]);
   });
 
+  test("provider-supplied URL and instructions reach the terminal escaped, and the launcher raw", async () => {
+    // The device flow hands the CLI a provider-supplied verification URL and an instruction line
+    // quoting the provider's user code. Both land in a tty, so a control sequence in either would
+    // rewrite the operator's screen. The launcher still needs the real URL, and a normal URL and
+    // code must print unchanged — escaping is not a rewrite of the value itself.
+    const lines: string[] = [];
+    const launched: string[] = [];
+    const capture = spyOn(console, "log").mockImplementation(line => { lines.push(String(line)); });
+    const hostileUrl = "https://accounts.x.ai/oauth2/device\u001b[31m?user_code=AB";
+    const hostileInstructions = "Confirm the code\u001b]0;pwnd\u0007AB";
+    try {
+      await handleOAuthLogin(anyOAuthProvider(), {
+        runLogin: async (_provider, ctrl) => {
+          ctrl.onAuth?.({ url: hostileUrl, instructions: hostileInstructions, deviceCode: "AB" });
+          return {} as OAuthCredentials;
+        },
+        openUrl: async (url: string) => { launched.push(url); return { status: "started" }; },
+      });
+    } finally { capture.mockRestore(); }
+
+    const printed = lines.join("\n");
+    expect(printed).not.toContain("\u001b");
+    expect(printed).not.toContain("\u0007");
+    expect(printed).toContain("\\x1b[31m");
+    expect(printed).toContain("\\x07");
+    // The value is only escaped where a human reads it.
+    expect(launched).toEqual([hostileUrl]);
+  });
+
+  test("an ordinary URL, code and instruction print unchanged", async () => {
+    const lines: string[] = [];
+    const capture = spyOn(console, "log").mockImplementation(line => { lines.push(String(line)); });
+    try {
+      await handleOAuthLogin(anyOAuthProvider(), {
+        runLogin: async (_provider, ctrl) => {
+          ctrl.onAuth?.({
+            url: "https://accounts.x.ai/oauth2/device?user_code=ABCD-EFGH",
+            instructions: "Open this URL in any browser and confirm the code ABCD-EFGH.",
+            deviceCode: "ABCD-EFGH",
+          });
+          return {} as OAuthCredentials;
+        },
+        openUrl: async () => ({ status: "started" }),
+      });
+    } finally { capture.mockRestore(); }
+
+    const printed = lines.join("\n");
+    expect(printed).toContain("https://accounts.x.ai/oauth2/device?user_code=ABCD-EFGH");
+    expect(printed).toContain("confirm the code ABCD-EFGH.");
+    expect(printed).not.toContain("\\x");
+  });
+
   test("a launcher that throws is reported, not turned into a failed login", async () => {
     // openUrl documents that it never rejects, but this seam accepts any launcher. A rejection
     // here used to travel out through settled(), which a polling flow does not await until the
@@ -193,6 +245,63 @@ describe("CLI OAuth login reports the browser launch (#5261)", () => {
     });
 
     expect(events).toEqual(["warn"]);
+  });
+});
+
+describe("provider-supplied progress text reaches the terminal escaped (#8436)", () => {
+  /**
+   * The Meta Muse device login ends by printing an action URL it took from the provider payload
+   * (`src/oauth/meta-muse-device.ts`), so `onProgress` carries provider-derived text — not the
+   * fixed sentences most flows send. It used to be interpolated straight into `console.log`, which
+   * left a bidi override or a line separator free to rewrite the operator's screen.
+   */
+  const HOSTILE_PROGRESS =
+    "Meta reports this account needs a subscription or payment method: "
+    + "https://pay.example.test/\u202echeckout\u061c?step=1\u2028&next=\u206a\u206f\u{e0041}";
+  const UNSAFE_CODES = [0x202e, 0x061c, 0x2028, 0x206a, 0x206f, 0xe0041] as const;
+
+  test("the browser flow escapes progress text and keeps the URL it was given intact", async () => {
+    const lines: string[] = [];
+    const seen: string[] = [];
+    const capture = spyOn(console, "log").mockImplementation(line => { lines.push(String(line)); });
+    try {
+      await handleOAuthLogin(anyOAuthProvider(), {
+        runLogin: async (_provider, ctrl) => {
+          ctrl.onAuth?.({ url: "https://accounts.example.test/authorize?state=progress" });
+          ctrl.onProgress?.(HOSTILE_PROGRESS);
+          seen.push(HOSTILE_PROGRESS);
+          return {} as OAuthCredentials;
+        },
+        openUrl: async () => ({ status: "started" }),
+        ask: async () => "",
+      });
+    } finally { capture.mockRestore(); }
+
+    const printed = lines.join("\n");
+    for (const code of UNSAFE_CODES) expect(printed).not.toContain(String.fromCodePoint(code));
+    // Escaped, not dropped: the value survives in a readable form so a pasted report reproduces it.
+    expect(printed).toContain("https://pay.example.test/\\u202echeckout\\u061c?step=1\\u2028&next=\\u206a\\u206f\\u{e0041}");
+    // The callback's own argument is data, not a rendering surface: nothing here rewrites it.
+    expect(seen).toEqual([HOSTILE_PROGRESS]);
+  });
+
+  test("ordinary progress text still prints as one prefixed line", async () => {
+    const lines: string[] = [];
+    const capture = spyOn(console, "log").mockImplementation(line => { lines.push(String(line)); });
+    try {
+      await handleOAuthLogin(anyOAuthProvider(), {
+        runLogin: async (_provider, ctrl) => {
+          ctrl.onAuth?.({ url: "https://accounts.example.test/authorize?state=plain" });
+          ctrl.onProgress?.("Waiting for approval…");
+          return {} as OAuthCredentials;
+        },
+        openUrl: async () => ({ status: "started" }),
+        ask: async () => "",
+      });
+    } finally { capture.mockRestore(); }
+
+    expect(lines).toContain("   Waiting for approval…");
+    expect(lines.join("\n")).not.toContain("\\u");
   });
 });
 
