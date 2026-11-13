@@ -276,27 +276,31 @@ export function settleRevokeAfterRetirement(ctx: ManagementContext, operationId:
 export function resumedRevokeJournal(ctx: ManagementContext, operationId: string, markEffects: boolean): RevokeJournal {
   const path = journalPathFor(ctx);
   let reopened = false;
-  const mark = (effect: RevokeEffect, phase: "intent" | "done", receipt?: { purged: true; linkId: string }) => updateJournalPinned(path, nowOf(ctx), journal => {
+  // The resumed removal runs as an open, live revoke from its first intent (written before stopLink, whether or not the
+  // Child cleanup is rerun): resolve refuses an open entry, so no resolution (earlier or concurrent) can cover a removal
+  // whose outcome is pending; a resume that fails settles it unknown and unresolved (settleResumedRevoke), so the link
+  // stays suspended (revokeSuspendsLink). The live mark is set only once that reopening write is durable.
+  const mark = (effect: RevokeEffect, phase: "intent" | "done", receipt?: { purged: true; linkId: string }) => {
     if (!markEffects) return;
-    const op = findOperation(journal, operationId);
-    if (!op) throw new Error("the revoke operation is no longer journalled");
-    op.effects.push({ effect, phase, at: iso(ctx) });
-    if (receipt) op.receipt = receipt;
-    op.updatedAt = iso(ctx);
-    // A new Child cleanup attempt runs as an open, live revoke, as a fresh one does: resolve refuses an open entry, so no
-    // resolution (earlier or concurrent) can cover an attempt whose outcome is pending; if the resume fails the entry is
-    // settled unknown and unresolved (settleResumedRevoke), so the link stays suspended (revokeSuspendsLink).
-    if (effect === "remote_cleanup" && phase === "intent") {
-      if (op.state !== "open") {
+    const reopen = phase === "intent" && !reopened;
+    updateJournalPinned(path, nowOf(ctx), journal => {
+      const op = findOperation(journal, operationId);
+      if (!op) throw new Error("the revoke operation is no longer journalled");
+      op.effects.push({ effect, phase, at: iso(ctx) });
+      if (receipt) op.receipt = receipt;
+      op.updatedAt = iso(ctx);
+      if (reopen && op.state !== "open") {
         op.state = "open";
         delete op.finishedAt;
         delete op.resolvedAt;
         delete op.error;
       }
+    });
+    if (reopen) {
       reopened = true;
       markRevokeLive(path, operationId, true);
     }
-  });
+  };
   return {
     operationId,
     keepsTunnelDown: true,
@@ -314,6 +318,8 @@ export function resumedRevokeJournal(ctx: ManagementContext, operationId: string
  */
 export async function settleResumedRevoke(ctx: ManagementContext, operationId: string, response: Response): Promise<void> {
   const path = journalPathFor(ctx);
+  // Dropped before anything awaits: an open entry that is not live is suspended until it settles.
+  markRevokeLive(path, operationId, false);
   try {
     let code = "revoke_failed";
     try {

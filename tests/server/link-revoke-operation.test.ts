@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
-import { revokeOperationDigest } from "../../src/server/management/link-operation";
+import { resumedRevokeJournal, revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
 import { claimLinkRetirement, readLinkRetirement } from "../../src/link/retirement";
 import { linkSuspendedByRevoke, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, resolveLinkOperation, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
@@ -41,7 +41,7 @@ function record(): LinkRecord {
     createdAt: "2026-11-13T00:00:00.000Z", remotePlatform: "posix", childKind: "ephemeral", explicitRoute: ROUTE, exclusive: true };
 }
 
-function harness(options: { operationsPath?: () => string | undefined; onReload?: () => void; purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void;
+function harness(options: { revokeFails?: boolean; operationsPath?: () => string | undefined; onReload?: () => void; purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void;
   markHook?: (effect: string, phase: "intent" | "done") => void } = {}) {
   const stops: string[] = [];
   const closedSockets: string[] = [];
@@ -79,7 +79,7 @@ function harness(options: { operationsPath?: () => string | undefined; onReload?
     linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => options.operationsPath?.() ?? journalPathOf(),
     linkAliasLock: { lockDir: join(root, "locks"), waitMs: options.lockWaitMs ?? 0, pollMs: 250, now: () => NOW, ...(options.sleep ? { sleep: options.sleep } : {}) },
     ...(options.markHook ? { linkOperationMarkHook: options.markHook } : {}),
-    revokeApiKey: (cfg, id) => { const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
+    revokeApiKey: (cfg, id) => { if (options.revokeFails) return false; const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
   };
   async function revoke(body: Record<string, unknown>, signal?: AbortSignal) {
     const url = new URL("http://127.0.0.1:10100/api/link/" + LINK);
@@ -830,4 +830,38 @@ test("a resumed cleanup that fails before it runs keeps the tunnel down when an 
   expect(h.journal().operations[0]!.state).toBe("unknown");
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+});
+
+test("a resumed removal that skips a recorded cleanup still runs as an open revoke, so a failed commit leaves the owner unresolved and suspended", async () => {
+  const h = harness({ revokeFails: true });
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  // The owner recorded the Child purge, then was resolved; the resume reruns no cleanup and its key revoke fails.
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, resolvedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 },
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }, { effect: "remote_cleanup", phase: "done", at: AT_ISO }], receipt: { purged: true, linkId: LINK },
+  } as LinkOperation] });
+  const retried = await h.revoke({ purge: true, operationId: OP });
+  expect(retried.status).toBe(502);
+  expect(h.ssh).toEqual([]);
+  expect(h.restarts).toBe(0);
+  const owner = h.journal().operations[0]!;
+  expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: undefined });
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+});
+
+test.skipIf(process.platform !== "darwin")("a resumed intent whose write fails leaves no live mark behind, so the link stays suspended", () => {
+  const h = harness();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "open", effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }],
+  } as LinkOperation] });
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  const ctx = { deps: { now: () => NOW, linkOperationsPath: () => h.journalPath } } as unknown as ManagementContext;
+  const journal = resumedRevokeJournal(ctx, OP, true);
+  // The journal stays readable but cannot be replaced (the user immutable flag), so the intent write fails.
+  Bun.spawnSync(["chflags", "uchg", h.journalPath]);
+  try { expect(() => journal.intent("remote_cleanup")).toThrow(); } finally { Bun.spawnSync(["chflags", "nouchg", h.journalPath]); }
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  journal.release();
 });
