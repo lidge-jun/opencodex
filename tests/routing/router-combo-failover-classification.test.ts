@@ -1941,4 +1941,18 @@ describe("committed-terminal combo cooldown", () => {
     coolComboTargetForCommittedTerminal({ ...base, comboId: undefined, servingAttempt: committed });
     expect(isComboTargetInCooldown("free", first, Date.now() + 1)).toBe(false);
   });
+
+  test("a longer live cooldown is not shortened by a committed terminal", () => {
+    const now = Date.now();
+    coolComboTarget("free", first, { retryAfter: "3600", status: 429, now });
+    coolComboTargetForCommittedTerminal({
+      comboId: "free",
+      terminalStatus: "incomplete",
+      failureDetailCode: "output_limit",
+      servingAttempt: committed,
+      httpStatus: 200,
+    });
+    // output_limit caps at 10 minutes; the 1h server Retry-After must survive intact.
+    expect(isComboTargetInCooldown("free", first, now + 11 * 60_000)).toBe(true);
+  });
 });

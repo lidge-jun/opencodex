@@ -367,6 +367,10 @@ export function coolComboTargetForCommittedTerminal(facts: CommittedTerminalCool
   // the client as a 5xx attempt status, so gating on status < 400 would silence exactly
   // the case this cooldown exists for.
   if (!attempt || attempt.locallyAnswered === true) return;
+  // A shorter committed-terminal cooldown must not shorten a longer live one — a
+  // server Retry-After or reset already recorded for this target stays authoritative.
+  const existing = targetCooldowns.get(cooldownMapKey(facts.comboId, attempt));
+  if (existing && existing.cooldownUntil > Date.now() + cooldownMs) return;
   coolComboTarget(facts.comboId, { provider: attempt.provider, model: attempt.model }, {
     cooldownMs,
     status: facts.httpStatus,
