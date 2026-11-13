@@ -214,7 +214,7 @@ function suspendedRefusal(ctx: ManagementContext, id: string): Response {
   const resolve = "ocx link operations resolve --operation-id " + op + " --yes";
   const message = suspension.state === "unknown"
     ? "Revoke operation " + op + " ended unknown and may have disconnected or purged the Child, so this link's tunnel stays down. Check the Child, then run: " + resolve
-    : "Revoke operation " + op + " did not finish (the Home stopped during it), so this link's tunnel stays down. Repeat it with the same flags: ocx link revoke --link-id " + id + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve;
+    : "Revoke operation " + op + " did not record its outcome (the Home stopped or the revoke failed before writing it), so this link's tunnel stays down. Repeat it with the flags of the first attempt: ocx link revoke --link-id " + id + " --operation-id " + op + ", with --purge only if the first attempt had it (the journal keeps only a digest of the flags, so a different --purge answers operation_mismatch); if it then ends unknown, run: " + resolve;
   return Response.json({ error: { code: "link_suspended", message }, operationId: op, operationState: suspension.state }, { status: 409, headers });
 }
 

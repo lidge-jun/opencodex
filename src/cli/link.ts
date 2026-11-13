@@ -309,7 +309,7 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string; c
   const operationId = typeof body.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.operationId) ? body.operationId : undefined;
   const outcome = typeof body.outcome === "string" && OPERATION_OUTCOMES.has(body.outcome) ? body.outcome : undefined;
   const residualKind = body.residualKind === "plant" || body.residualKind === "enrollment" ? body.residualKind : undefined;
-  // link_suspended names whether the revoke that keeps the link down is open (the Home stopped during it) or unknown.
+  // link_suspended names whether the revoke that keeps the link down is open (it did not record its outcome) or unknown.
   const operationState = body.operationState === "open" || body.operationState === "unknown" ? body.operationState : undefined;
   // operation_journal_full names which bound it hit.
   const bound = body.bound === "unsettled" || body.bound === "recent" ? body.bound : undefined;
@@ -463,7 +463,7 @@ function suspendedReconnect(error: unknown, linkId: string): RuntimeApiError | n
   const message = !op
     ? "Link " + linkId + " is kept down by an unsettled revoke; find it with ocx link operations, then resolve it."
     : body.operationState === "open"
-      ? "Link " + linkId + " is kept down: revoke operation " + op + " did not finish (the Home stopped during it). Repeat it with the same flags: ocx link revoke --link-id " + linkId + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve
+      ? "Link " + linkId + " is kept down: revoke operation " + op + " did not record its outcome (the Home stopped or the revoke failed before writing it). Repeat it with the flags of the first attempt: ocx link revoke --link-id " + linkId + " --operation-id " + op + ", with --purge only if the first attempt had it (the journal keeps only a digest of the flags, so a different --purge answers operation_mismatch); if it then ends unknown, run: " + resolve
       : "Link " + linkId + " is kept down: revoke operation " + op + " ended unknown and may have disconnected or purged the Child. Check the Child, then run: " + resolve;
   return new RuntimeApiError(message, 409, error.body);
 }

@@ -179,7 +179,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 - Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.
 - A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.
-- A link that an unsettled journalled revoke keeps down (ocx link status: failed, reason revoke_unsettled) is refused with link_suspended (exit 5) and nothing is stopped; the message names the revoke's operation id and the next step (ocx link operations resolve, or first repeat a revoke the Home stopped during).
+- A link that an unsettled journalled revoke keeps down (ocx link status: failed, reason revoke_unsettled) is refused with link_suspended (exit 5) and nothing is stopped; the message names the revoke's operation id and the next step (ocx link operations resolve, or first repeat a revoke that did not record its outcome).
 - Emits {linkId} JSON when the tunnel was restarted.
 
 ### `ocx link cleanup`
@@ -1006,7 +1006,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the resolved entry as JSON. |
 
 - Changes nothing on the Child or in links.json: it records the resolution, and the entry's 30 days of retention start then. operation_not_resolvable (exit 5) for any other state, operation_not_found (exit 4). Requires loopback admin authority on the Home.
-- A journalled revoke that reached the Child and ended unknown, or that the Home stopped during (open), keeps that link's tunnel down across restarts (ocx link status: reason revoke_unsettled; ocx link reconnect: link_suspended). Resolving the revoke reloads the tunnels, so the link reconnects. An open revoke cannot be resolved: repeat it with the same --operation-id and the same --purge flag, then resolve it if it ends unknown.
+- A journalled revoke that reached the Child and ended unknown, or that did not record its outcome (open: the Home stopped or the revoke failed before writing it), keeps that link's tunnel down across restarts (ocx link status: reason revoke_unsettled; ocx link reconnect: link_suspended). Resolving the revoke reloads the tunnels, so the link reconnects. An open revoke cannot be resolved: repeat it with the same --operation-id and the flags of its first attempt (the journal keeps only a digest of them, so a different --purge answers operation_mismatch), then resolve it if it ends unknown.
 
 ### `ocx link activity clear`
 
