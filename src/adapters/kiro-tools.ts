@@ -10,6 +10,10 @@ const MAX_KIRO_TOOL_DESCRIPTION_GPT_56_SOL = 9_216;
 // slots for Kiro's private completion tool and headroom for the enclosing request/message fields.
 export const MAX_KIRO_TOOL_COUNT = 48;
 export const MAX_KIRO_TOOL_CATALOG_BYTES = 96_000;
+// Opt-out for operators whose Kiro account accepts the full client catalog; read per request.
+export const KIRO_TOOL_BUDGET_ENV = "OCX_KIRO_TOOL_BUDGET";
+// Same opt-out for the per-tool description cap; read per request.
+export const KIRO_TOOL_DESCRIPTION_LIMIT_ENV = "OCX_KIRO_TOOL_DESCRIPTION_LIMIT";
 const textEncoder = new TextEncoder();
 
 // JSON Schema validation/annotation keywords that Kiro's runtimeservice tool-spec validator
@@ -17,6 +21,8 @@ const textEncoder = new TextEncoder();
 // but the `memories__*` tools (add_ad_hoc_note/read/search/list) emit pattern/length/range
 // constraints via schemars, which trip the validator. Strip them everywhere in the schema tree;
 // the constraints are advisory for the model, so dropping them does not change tool behavior.
+// PR #8451 reports keyword probes on claude-opus-4.5 and a constrained-tool probe on two
+// 5.5 models. Other Claude ids have no reported schema-keyword measurements.
 const KIRO_REJECTED_SCHEMA_KEYS = new Set([
   "additionalProperties",
   "pattern",
@@ -65,28 +71,64 @@ const SCHEMA_MAP_KEYS = new Set(["properties", "$defs", "definitions"]);
 // silently changing the value a tool argument must equal.
 const SCHEMA_LITERAL_KEYS = new Set(["const", "enum", "default", "examples"]);
 
-function sanitizeSchemaMap(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return sanitizeKiroSchema(value);
+const NO_SCHEMA_KEYS: ReadonlySet<string> = new Set();
+
+/**
+ * The rejected-key set minus `accepted`: the keywords one model id was measured to take.
+ *
+ * `KIRO_REJECTED_SCHEMA_KEYS` is the default; a probe can only widen what one id accepts, so an
+ * exception is written as the keys that probe covered, never as "everything".
+ */
+function rejectAllExcept(accepted: readonly string[]): ReadonlySet<string> {
+  const keep = new Set(accepted);
+  return new Set([...KIRO_REJECTED_SCHEMA_KEYS].filter(key => !keep.has(key)));
+}
+
+// PR #8451 reports the rejected keys above accepted on opus-4.5: its list enumerates 27 items
+// because if/then/else stands for three keys, which is all 29 keys of the set. The report states
+// that total as 28, one fewer than the 29 keys its own list names; the accepted keys, not the
+// stated count, are what the exception below encodes. Its two 5.5 probes explicitly name only
+// pattern and maximum.
+// Other keywords and model ids retain the default strip until supported by evidence.
+const KIRO_SCHEMA_KEY_EXCEPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["claude-opus-4.5", NO_SCHEMA_KEYS],
+  ["claude-opus-5.5", rejectAllExcept(["pattern", "maximum"])],
+  ["claude-sonnet-5.5", rejectAllExcept(["pattern", "maximum"])],
+]);
+
+/**
+ * Schema keywords Kiro rejects for `modelId`.
+ *
+ * Keys are dropped unless a probe measured that exact id taking them, and only the keys that probe
+ * covered survive. An id nobody probed behaves like every other Kiro model, which is the shape that
+ * shipped before this exception existed.
+ */
+export function kiroRejectedSchemaKeys(modelId: string): ReadonlySet<string> {
+  return KIRO_SCHEMA_KEY_EXCEPTIONS.get(normalizeKiroModelId(modelId)) ?? KIRO_REJECTED_SCHEMA_KEYS;
+}
+
+function sanitizeSchemaMap(value: unknown, rejected: ReadonlySet<string> = KIRO_REJECTED_SCHEMA_KEYS): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return sanitizeKiroSchema(value, rejected);
   // fromEntries defines own properties: a property named "__proto__" stays a property instead of
   // hitting the prototype setter and vanishing from the advertised schema.
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, child]) => [name, sanitizeKiroSchema(child)]));
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, child]) => [name, sanitizeKiroSchema(child, rejected)]));
 }
 
 /** Strip the keywords Kiro's tool-spec validator rejects, everywhere in a schema tree. */
-export function sanitizeKiroSchema(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sanitizeKiroSchema);
+export function sanitizeKiroSchema(value: unknown, rejected: ReadonlySet<string> = KIRO_REJECTED_SCHEMA_KEYS): unknown {
+  if (Array.isArray(value)) return value.map(child => sanitizeKiroSchema(child, rejected));
   if (!value || typeof value !== "object") return value;
   const out: Array<[string, unknown]> = [];
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (KIRO_REJECTED_SCHEMA_KEYS.has(key)) continue;
+    if (rejected.has(key)) continue;
     if (key === "required" && Array.isArray(child) && child.length === 0) continue;
     if (SCHEMA_LITERAL_KEYS.has(key)) out.push([key, child]);
-    else out.push([key, SCHEMA_MAP_KEYS.has(key) ? sanitizeSchemaMap(child) : sanitizeKiroSchema(child)]);
+    else out.push([key, SCHEMA_MAP_KEYS.has(key) ? sanitizeSchemaMap(child, rejected) : sanitizeKiroSchema(child, rejected)]);
   }
   return Object.fromEntries(out);
 }
 
-function ensureRootObjectType(schema: unknown): Record<string, unknown> {
+function ensureRootObjectType(schema: unknown, rejected: ReadonlySet<string> = KIRO_REJECTED_SCHEMA_KEYS): Record<string, unknown> {
   const obj = schema && typeof schema === "object" && !Array.isArray(schema)
     ? schema as Record<string, unknown>
     : {};
@@ -109,7 +151,7 @@ function ensureRootObjectType(schema: unknown): Record<string, unknown> {
   // Seed with the root's own properties/required so a schema like
   // { type:"object", properties:{path}, required:["path"], oneOf:[...] } keeps them.
   if (obj.properties && typeof obj.properties === "object") {
-    Object.assign(props, sanitizeSchemaMap(obj.properties) as Record<string, unknown>);
+    Object.assign(props, sanitizeSchemaMap(obj.properties, rejected) as Record<string, unknown>);
   }
   if (Array.isArray(obj.required)) {
     for (const r of obj.required) if (typeof r === "string") required.add(r);
@@ -124,7 +166,7 @@ function ensureRootObjectType(schema: unknown): Record<string, unknown> {
       if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
       const v = variant as Record<string, unknown>;
       if (v.properties && typeof v.properties === "object") {
-        Object.assign(props, sanitizeSchemaMap(v.properties) as Record<string, unknown>);
+        Object.assign(props, sanitizeSchemaMap(v.properties, rejected) as Record<string, unknown>);
       }
       if (mergeRequired && Array.isArray(v.required)) {
         for (const r of v.required) if (typeof r === "string") required.add(r);
@@ -147,6 +189,7 @@ function ensureRootObjectType(schema: unknown): Record<string, unknown> {
 }
 
 function toolDescriptionLimit(modelId: string): number {
+  if (process.env[KIRO_TOOL_DESCRIPTION_LIMIT_ENV] === "off") return Number.POSITIVE_INFINITY;
   return normalizeKiroModelId(modelId) === "gpt-5.6-sol"
     ? MAX_KIRO_TOOL_DESCRIPTION_GPT_56_SOL
     : MAX_KIRO_TOOL_DESCRIPTION_UNVERIFIED;
@@ -196,6 +239,7 @@ export function convertKiroToolContext(
 ): { tools: unknown[]; systemAdditions: string[]; nameMap: Map<string, string>; registry: KiroToolNameRegistry } {
   const tools = parsed.context.tools ?? [];
   const descriptionLimit = toolDescriptionLimit(parsed.modelId);
+  const rejectedSchemaKeys = kiroRejectedSchemaKeys(parsed.modelId);
   // Validate every listed name even when tool_choice:none emulates a tool-free turn.
   for (const tool of tools) registry.alias(namespacedToolName(tool.namespace, tool.name));
   const effectiveTools = parsed.options.toolChoice === "none" ? [] : tools;
@@ -211,13 +255,14 @@ export function convertKiroToolContext(
       toolSpecification: {
         name: toolName,
         description: truncateDescription(description, descriptionLimit),
-        inputSchema: { json: ensureRootObjectType(sanitizeKiroSchema(tool.parameters ?? {})) },
+        inputSchema: { json: ensureRootObjectType(sanitizeKiroSchema(tool.parameters ?? {}, rejectedSchemaKeys), rejectedSchemaKeys) },
       },
     };
     return { tool, index, converted };
   });
-  const exceedsBudget = convertedEntries.length > MAX_KIRO_TOOL_COUNT
-    || serializedToolCatalogBytes(convertedEntries.map(entry => entry.converted)) > MAX_KIRO_TOOL_CATALOG_BYTES;
+  const unbounded = process.env[KIRO_TOOL_BUDGET_ENV] === "off";
+  const exceedsBudget = !unbounded && (convertedEntries.length > MAX_KIRO_TOOL_COUNT
+    || serializedToolCatalogBytes(convertedEntries.map(entry => entry.converted)) > MAX_KIRO_TOOL_CATALOG_BYTES);
   const candidates = exceedsBudget
     ? convertedEntries.toSorted((a, b) => boundedCatalogPriority(a.tool) - boundedCatalogPriority(b.tool) || a.index - b.index)
     : convertedEntries;
@@ -241,8 +286,9 @@ export function convertKiroToolContext(
     // subtracting a standalone size would misjudge it by the separators JSON adds between entries.
     const projected = reserved ? [...filled, entry.converted, reserved.converted] : [...filled, entry.converted];
     if (
-      projected.length > MAX_KIRO_TOOL_COUNT
-      || serializedToolCatalogBytes(projected) > MAX_KIRO_TOOL_CATALOG_BYTES
+      !unbounded
+      && (projected.length > MAX_KIRO_TOOL_COUNT
+        || serializedToolCatalogBytes(projected) > MAX_KIRO_TOOL_CATALOG_BYTES)
     ) break;
     filled.push(entry.converted);
     admitted.add(entry.index);

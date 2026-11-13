@@ -1,5 +1,6 @@
 import { isolateCodexPoolAccountHeaders } from "../codex/forward-transport-headers";
 import type { NativeResponseControl } from "./responses/native-response-control";
+import type { HandleResponsesOptions } from "./responses/core-options";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -41,6 +42,8 @@ export interface WsData {
    * attribution.
    */
   admission?: DataPlaneAdmission;
+  /** Local-only loopback replay identity; revalidated each turn without retaining its secret. */
+  replayPrincipal?: HandleResponsesOptions["replayPrincipal"];
   authContext?: CodexAuthContext; // last resolved account decision for observability/registry cleanup
   cancel?: () => void; // cancels the in-flight stream reader/fetch
   turnId?: number; // monotonically increasing per socket; prevents stale frames after replacement turns
@@ -134,12 +137,14 @@ export function buildResponsesWsData(
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>,
   sessionLaneId?: string,
   client?: UsageClient,
+  replayPrincipal?: HandleResponsesOptions["replayPrincipal"],
 ): WsData {
   // Auth is handshake-time only on this path: the per-frame contexts have no
   // request headers left to re-resolve from, so the decision rides along here.
   return {
     headers,
     admission,
+    ...(replayPrincipal ? { replayPrincipal } : {}),
     ...(client ? { client } : {}),
     ...(admissionLease ? { admissionLease } : {}),
     ...(sessionLaneId ? { sessionLaneId } : {}),

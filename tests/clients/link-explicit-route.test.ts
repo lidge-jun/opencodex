@@ -17,7 +17,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  * O6: a Home-initiated link may carry an explicit route {proxyCommand, user, port} and the flag
  * exclusive. The route reaches ssh on the command line, so ssh_config cannot change it.
  */
-const ROUTE: ExplicitRoute = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a9c --noise AbC+/x9= 22", user: "ubuntu", port: 22 };
+const ROUTE: ExplicitRoute = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a9c --noise noise-pub-7f3a9c 22", user: "ubuntu", port: 22 };
 const KNOWN_HOSTS = "/tmp/ocx-explicit-route/known_hosts";
 const SSH = Bun.which("ssh");
 
@@ -44,7 +44,7 @@ describe("accepted route forms", () => {
   test.each([
     ["the pen pipe command", ROUTE],
     ["a bare absolute command", { proxyCommand: "/usr/bin/nc", user: "_svc", port: 1 }],
-    ["host:port and user@host words", { proxyCommand: "/opt/bin/relay --to svc@relayhost:2222 --opt=a,b", user: "dev.user-1", port: 65535 }],
+    ["host:port and user@host words", { proxyCommand: "/opt/bin/relay --to svc@relayhost:2222 --opt=a,b --tag=a+b/c", user: "dev.user-1", port: 65535 }],
   ] as const)("%s is accepted as is", (_label, route) => {
     expect(checkExplicitRoute(route)).toEqual({ ok: true, route: { ...route } });
   });
@@ -158,20 +158,17 @@ describe("ssh argv", () => {
     }
   });
 
-  test("without a route every builder emits the argv it emitted before", () => {
-    const tunnel = buildTunnelArgv({ alias: "pen-7f3a9c", direction: "R", bindPort: 19002, targetPort: 19001, knownHostsFile: KNOWN_HOSTS, route: null });
-    expect(tunnel).toEqual([
-      "ssh", "-N", "-T",
-      "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
-      "-o", "StrictHostKeyChecking=yes", "-o", "HostKeyAlias=pen-7f3a9c", "-o", "UserKnownHostsFile=" + KNOWN_HOSTS,
-      "-o", "HashKnownHosts=no", "-o", "GlobalKnownHostsFile=none", "-o", "KnownHostsCommand=none", "-o", "VerifyHostKeyDNS=no",
-      "-o", "CheckHostIP=no", "-o", "UpdateHostKeys=no", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ForwardAgent=no",
-      "-o", "ForwardX11=no", "-o", "PermitLocalCommand=no", "-o", "LogLevel=ERROR",
-      "-o", "ExitOnForwardFailure=yes", "-R", "127.0.0.1:19002:127.0.0.1:19001", "--", "pen-7f3a9c",
-    ]);
-    for (const argv of Object.values(builders(null))) {
-      expect(options(argv, "ProxyCommand").length + options(argv, "User").length + options(argv, "Port").length).toBe(0);
-    }
+  // The argv each builder produced on origin/dev e85a97556, before explicit routes existed: a drift in any option fails.
+  const BEFORE_EXPLICIT_ROUTES: Record<string, string[]> = {
+    tunnel: ["ssh","-N","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ExitOnForwardFailure=yes","-R","127.0.0.1:19002:127.0.0.1:19001","--","pen-7f3a9c"],
+    exec: ["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ClearAllForwardings=yes","--","pen-7f3a9c","sh '-c' 'true'"],
+    probe: ["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=accept-new","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ClearAllForwardings=yes","--","pen-7f3a9c","echo ocx-link-probe"],
+    routeProbe: ["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ClearAllForwardings=yes","--","pen-7f3a9c","echo ocx-link-probe"],
+    windowsProbe: ["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ClearAllForwardings=yes","--","pen-7f3a9c","cmd /c echo %OS%"],
+  };
+
+  test("without a route every builder emits exactly the argv it emitted before explicit routes", () => {
+    expect(builders(null)).toEqual(BEFORE_EXPLICIT_ROUTES);
   });
 
   test("a builder refuses a route object that is not an accepted form, before any process starts", () => {
@@ -234,6 +231,34 @@ test("the supervisor starts a link without an explicit route exactly as before",
   const argv = startedTunnel([record()]);
   expect(options(argv, "ProxyCommand")).toEqual([]);
   expect(options(argv, "User")).toEqual([]);
+});
+
+test("a links.json edit of the explicit route on a running Home restarts the tunnel on the new route", async () => {
+  const spawned: string[][] = [];
+  let killed = 0;
+  const runner: SshRunner = {
+    async run() { return { code: 0, stdout: "", stderr: "" }; },
+    spawnTunnel(argv) {
+      spawned.push([...argv]);
+      let exit!: (code: number) => void;
+      const exited = new Promise<number>(resolve => { exit = resolve; });
+      return { pid: 4200 + spawned.length, argv: [...argv], exited, stderr: Promise.resolve(""), kill: () => { killed += 1; exit(143); } } as unknown as SshChild;
+    },
+  };
+  let value: LinkStore = { version: 1, listenerPort: 19001, links: [record({ explicitRoute: ROUTE, exclusive: true })] };
+  const supervisor = createLinkSupervisor({
+    readStore: () => structuredClone(value), runner, now: () => 0, random: () => 0.5,
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: () => 1 as unknown as ReturnType<typeof setInterval>, clearTimer: () => {},
+  });
+  supervisor.start();
+  expect(options(spawned[0]!, "Port")).toEqual(["22"]);
+  value = { ...value, links: [record({ explicitRoute: { ...ROUTE, port: 2222 }, exclusive: true })] };
+  await supervisor.reload();
+  expect(killed).toBe(1);
+  expect(spawned.length).toBe(2);
+  expect(options(spawned[1]!, "Port")).toEqual(["2222"]);
+  await supervisor.stop();
 });
 
 function effective(argv: readonly string[], config: string): Map<string, string> {

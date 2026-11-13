@@ -122,6 +122,9 @@ export type {
 
 export type {
   RefreshPolicy,
+  CacheAffinityMode,
+  CacheAffinityOutcome,
+  CacheAffinityLogReason,
   OpenRouterProviderRouting,
   VercelGatewayRouting,
   ResponsesItemIdRepairConfig,

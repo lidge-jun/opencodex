@@ -55,6 +55,7 @@ import {
   GUI_PAIR_EXPIRES_AT_HEADER,
   GUI_PAIR_NONCE_HEADER,
   GUI_PAIR_PATH,
+  DESKTOP_GUI_PAIR_PATH,
   parseExpectedGuiPairPid,
   verifyGuiPairCapability,
 } from "../lib/gui-pair-capability";
@@ -75,6 +76,7 @@ import { hasLocalDesktopSnapshotCapability } from "./local-desktop-snapshot-auth
 import { forgetGuiDevice, rememberGuiDevice, rememberedGuiSessionIsCurrent, resumeGuiDevice } from "./persistent-gui-session";
 import { hasLocalAccountSwitchCapability } from "./local-account-switch-auth";
 import { authorizationCredential } from "../lib/authorization-scheme";
+import { authorizeDesktopSession, desktopSessionAuthorized } from "./gui-desktop-authorization";
 export type { GuiSessionBootstrap, GuiSessionRequestContext } from "./gui-session";
 
 const LOCAL_READ_REPLAY_LIMIT = 256;
@@ -278,6 +280,8 @@ export function managementSessionIssuance(
 export interface ManagementSessionControl {
   rememberDevice?(req: Request, config: OcxConfig): ReturnType<typeof rememberGuiDevice>;
   forgetDevice?(req: Request, config: OcxConfig): string | null;
+  canMutateLocalDesktop?(req: Request, config: OcxConfig): boolean;
+  authorizeLocalDesktop?(req: Request, config: OcxConfig, grant: string): boolean;
   revokeCurrent(req: Request): boolean;
   /** Revalidate a long-lived request against current authority, without cached admission or renewal. */
   isCurrent(req: Request, config: OcxConfig): boolean;
@@ -305,6 +309,14 @@ export function createManagementSessionControl(state: ManagementAuthState): Mana
   return {
     rememberDevice(req, config) { return state.available ? rememberGuiDevice(req, config, state) : null; },
     forgetDevice(req, config) { return state.available ? forgetGuiDevice(req, config, state) : null; },
+    canMutateLocalDesktop(req, config): boolean {
+      const session = state.available ? state.sessions.get(requestManagementCredential(req) ?? "") : undefined;
+      return !!session && desktopSessionAuthorized(req, config, session) && currentSession(req, config) === session;
+    },
+    authorizeLocalDesktop(req, config, grant): boolean {
+      const session = currentSession(req, config);
+      return !!session && state.available && authorizeDesktopSession(req, config, state, session, grant);
+    },
     isCurrent(req: Request, config: OcxConfig): boolean {
       if (!state.available) return false;
       const credential = requestManagementCredential(req);
@@ -514,7 +526,7 @@ function hasGuiPairCapability(
   } catch {
     return false;
   }
-  if (url.pathname !== GUI_PAIR_PATH || url.search !== "") return false;
+  if ((url.pathname !== GUI_PAIR_PATH && url.pathname !== DESKTOP_GUI_PAIR_PATH) || url.search !== "") return false;
   const contentLength = req.headers.get("content-length");
   if (contentLength !== "0" || req.headers.has("transfer-encoding")) return false;
   const expectedPid = parseExpectedGuiPairPid(req.headers.get(GUI_PAIR_EXPECTED_PID_HEADER));

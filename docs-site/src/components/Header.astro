@@ -84,8 +84,47 @@ const fr = {
 	'GitHub, {count} stars': 'GitHub, {count} étoiles',
 } as const;
 
+const es: Record<keyof typeof fr, string> = {
+	"Auto": "Automático",
+	"Light": "Claro",
+	"Dark": "Oscuro",
+	"Theme": "Tema",
+	"Click to use the next theme": "Haz clic para cambiar al siguiente tema",
+	"Getting Started": "Primeros pasos",
+	"Installation": "Instalación",
+	"Quickstart": "Inicio rápido",
+	"How It Works": "Cómo funciona",
+	"Agent Quickstart": "Inicio rápido para agentes",
+	"Guides": "Guías",
+	"Providers": "Proveedores",
+	"Model Routing": "Enrutamiento de modelos",
+	"Combos": "Combos",
+	"Codex Integration": "Integración con Codex",
+	"Codex App Model Picker": "Selector de modelos de Codex App",
+	"Sidecars: Search & Vision": "Sidecars: búsqueda y visión",
+	"Image Bridge": "Puente de imágenes",
+	"Video Bridge": "Puente de video",
+	"Web Dashboard": "Dashboard web",
+	"Sub-agent Surface": "Interfaz de subagentes",
+	"Reference": "Referencia",
+	"Configuration": "Configuración",
+	"Adapters": "Adaptadores",
+	"Architecture": "Arquitectura",
+	"Proxy API Formats": "Formatos de API del proxy",
+	"Management API": "API de administración",
+	"Contributing": "Cómo contribuir",
+	"Dashboard": "Panel de telemetría",
+	"Explore guides": "Explorar las guías",
+	"Main": "Navegación principal",
+	"Select language": "Elegir idioma",
+	"Menu": "Menú",
+	"GitHub": "GitHub",
+	"GitHub, {count} stars": "GitHub, {count} estrellas",
+};
+
+/** Select navigation copy; typed dictionaries require complete French and Spanish keys. */
 const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
-	locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
+	locale === 'es' ? es[en] : locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
 
 const starCount = await getStarCount();
 const starLocale = locale ?? 'en';
@@ -97,9 +136,10 @@ const starLabel = t(
 const githubAccessibleName = starCount === null ? githubLabel
 	: starLabel.replace('{count}', starCount.toLocaleString(starLocale));
 
-type LanguageOption = { code: 'root' | 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr'; label: string };
+type LanguageOption = { code: 'root' | 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr' | 'es'; label: string };
 const languages: LanguageOption[] = [
 	{ code: 'root', label: 'English' },
+	{ code: 'es', label: 'Español' },
 	{ code: 'fr', label: 'Français' },
 	{ code: 'ko', label: '한국어' },
 	{ code: 'zh-cn', label: '简体中文' },
@@ -341,8 +381,21 @@ const contributing: NavLink = {
 				<span class="burger" aria-hidden="true"><span></span><span></span></span>
 			</button>
 			<div class="lp-menu-panel" id="lp-menu-panel">
+				<details class="lp-menu-group lp-menu-languages" style="--i:0">
+					<summary><span>{t('Select language', '언어 선택', '选择语言', 'Выбрать язык', '言語を選択', '選擇語言', 'Dil seçin')}</span></summary>
+					<div class="lp-menu-region"><ul>
+						{languages.map((language) => (
+							<li><a
+								href={languageHref(language.code)}
+								lang={language.code === 'root' ? 'en' : language.code}
+								hreflang={language.code === 'root' ? 'en' : language.code}
+								aria-current={language.code === (locale ?? 'root') ? 'true' : undefined}
+							>{language.label}</a></li>
+						))}
+					</ul></div>
+				</details>
 				{groups.map((group, i) => (
-					<details class="lp-menu-group" style={`--i:${i}`}>
+					<details class="lp-menu-group" style={`--i:${i + 1}`}>
 						<summary>
 							<span>{group.label}</span>
 							<svg viewBox="0 0 16 16" width="18" height="18" fill="none" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
@@ -406,6 +459,21 @@ const contributing: NavLink = {
 		flex-shrink: 0;
 	}
 	:global(.sl-skip-link:focus) { min-height: 44px; }
+
+	/* Longer locale labels need room before the full search pill fits. */
+	@media (min-width: 50rem) and (max-width: 89.99rem) {
+		.header { gap: 0.5rem; }
+		.title-wrapper { flex-shrink: 0; }
+		.search-wrapper :global(button[data-open-modal]) {
+			width: 44px;
+			min-width: 44px;
+			min-height: 44px;
+			padding: 0;
+			justify-content: center;
+		}
+		.search-wrapper :global(button[data-open-modal] > span),
+		.search-wrapper :global(button[data-open-modal] > kbd) { display: none; }
+	}
 
 	.search-wrapper,
 	.github-link,
@@ -950,6 +1018,9 @@ const contributing: NavLink = {
 			translate 0.4s cubic-bezier(0.22, 1, 0.36, 1),
 			visibility 0s;
 	}
+	.lp-menu-languages ul { display: grid; grid-template-columns: repeat(2, 1fr); }
+	.lp-menu-languages a[aria-current='true'] { color: var(--sl-color-text-accent); font-weight: 600; }
+	@media (min-width: 50rem) { .lp-menu-languages { display: none; } }
 	.lp-menu-group,
 	.lp-menu-contrib {
 		border-bottom: 1px solid var(--sl-color-gray-5);

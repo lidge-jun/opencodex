@@ -35,6 +35,7 @@ import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
 import { isJsonOption, takeFlag } from "./runtime-api";
 import { printStopSummary, type StopOutcome } from "./stop-report";
 import { parseStopApproval, type StopApproval } from "./stop-approval";
+import { resolveStopDeadlineMs, setStopDeadlineMs } from "../service/windows-stop-deadline";
 import type { ResolveArgs } from "./resolve";
 import type { ClientConnectionState } from "../client/state";
 import { OCX_NATIVE_REPLAY_RECOVERY_NOTE } from "../responses/compaction";
@@ -111,9 +112,11 @@ const commandRunners: Record<string, CommandRunner> = {
   stop: async deps => {
     const parsed = parseStopApproval(deps.args.slice(1));
     if (!parsed.ok) {
-      console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
+      console.error("Usage: ocx stop [--deadline-ms <ms>] [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
       return 64;
     }
+    // #7771: the Windows checked stop's deadline, from this process's start (flag, then env, then 60 s).
+    setStopDeadlineMs(resolveStopDeadlineMs(parsed.deadlineMs));
     // Downtime warning lives HERE, not in handleStop: `restart`/tray-restart callers
     // re-start the proxy immediately, so warning there would contradict the next line.
     const warning = "⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').";

@@ -76,6 +76,7 @@ export const RESPONSES_CORE_MODULES = [
   "passthrough-completion.ts",
   "opengateway-completion-guard.ts",
   "outbound-request-body.ts",
+  "bare-namespace-aliases.ts",
   "passthrough-observations.ts",
   "passthrough-key-rotation.ts",
   // Reached from passthrough/adapter dispatch, compact and runTurn: local spend-ledger refusal mapping.
