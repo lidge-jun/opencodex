@@ -5,16 +5,17 @@ import { childLinkTraffic, type LinkTrafficBook, type LinkTrafficFlow } from "..
 import { upgradeRequiredResponse } from "./link-ingress";
 import { forwardLinkUpgradeHeaders, type LinkAdmissionResult, type LinkTunnelGate } from "./link-relay";
 import { CODEX_WS_MAX_MESSAGE_HEADER, LINK_CHILD_WS_LIMITS, linkWebsocketChildReady, type LinkChildWebsocketLimits } from "./link-websocket-limits";
-import { linkWebsocketAdvertised } from "./link-ws-advertisement";
+import { linkWebsocketAdvertisement } from "./link-ws-advertisement";
 import { encodeClientClose, encodeClientPong, encodeClientText, isWireCloseCode, LinkWsFrameReader, LinkWsProtocolError, type LinkWsFrameEvent } from "./link-ws-framer";
 import { openLinkWebsocket, type LinkWebsocketSetupFailure } from "./link-ws-transport";
 
 /**
  * The Responses WebSocket over a Remote Link, Child side (design T4 3.2 and 3.3).
  *
- * Codex's upgrade on the Child's listener is tried only when this build's release gate is open and the
- * Home advertised the feature on the last relay answer this Child applied; otherwise the ingress keeps
- * today's 426 and nothing touches the network. A tried upgrade passes, in order: no Origin; the link key;
+ * Codex's upgrade on the Child's listener is tried only when this build's release gate is open, the Child has
+ * not opted out, and the last relay answer this Child applied for the link did not say off (an answer it has
+ * not had yet since it started counts as a try: the upgrade's own preflight decides); otherwise the ingress
+ * keeps today's 426 and nothing touches the network. A tried upgrade passes, in order: no Origin; the link key;
  * the local caps and memory reservation; the tunnel gate (a connecting or reconnecting tunnel is held up
  * to 3 s, then 503, the only transient answer); one preflight and the upgrade on one authenticated
  * connection (link-ws-transport.ts); all inside an 8 s budget. Every other failure is today's 426, which
@@ -30,7 +31,7 @@ import { openLinkWebsocket, type LinkWebsocketSetupFailure } from "./link-ws-tra
  * runtime stop closes every socket with 1001 on both legs. When the tunnel supervisor starts stopping (a Child
  * restart, or a link that ended and is about to be recycled), the relay drains first:
  * open sockets close with 1001 and every upgrade from then on, new or still in setup, gets the transient 503,
- * so Codex keeps its WebSocket session for the replacement instead of falling back to HTTP.
+ * so Codex keeps its WebSocket session for the replacement, within its retry budget, instead of falling back to HTTP.
  */
 
 export type LinkWsFallbackReason =
@@ -62,7 +63,10 @@ export interface LinkWebsocketRelayDeps {
   open?: typeof openLinkWebsocket;
   /** The Child's release gate; linkWebsocketChildReady by default. */
   ready?: () => boolean;
-  /** advertisedSeen; linkWebsocketAdvertised by default. */
+  /**
+   * Whether the Home's advertisement lets an upgrade try the Home at all: by default true for a cached "on" and for
+   * "unknown" (no answer applied for this link since this process started), false for a cached "off".
+   */
   advertised?: (linkId: string | undefined) => boolean;
   /** The Child-local opt-out (D4): true keeps this Child on HTTP whatever its Home advertises. */
   optOut?: () => boolean;
@@ -373,7 +377,7 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
   const limits: LinkChildWebsocketLimits = { ...LINK_CHILD_WS_LIMITS, ...deps.limits };
   const timers = deps.timers ?? defaultTimers;
   const ready = deps.ready ?? linkWebsocketChildReady;
-  const advertised = deps.advertised ?? linkWebsocketAdvertised;
+  const advertised = deps.advertised ?? ((linkId: string | undefined) => linkWebsocketAdvertisement(linkId) !== "off");
   const open = deps.open ?? openLinkWebsocket;
   const traffic = deps.traffic ?? childLinkTraffic;
   const optOut = deps.optOut ?? (() => false);
@@ -425,7 +429,8 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
     /**
      * Design 3.2 step 2: whether an upgrade may try the Home at all. False keeps today's 426 with no network
      * I/O. With the release gate closed nothing is counted or written; with it open, the Child-local opt-out
-     * and an unadvertised Home are counted in memory (never in the diagnostics file). While the relay drains,
+     * and a Home whose last applied answer said off are counted in memory (never in the diagnostics file). A
+     * link with no applied answer since this process started is tried, and its upgrade's own preflight decides. While the relay drains,
      * an upgrade goes on to its 503 whatever the Home last advertised (the opt-out still keeps it on HTTP).
      */
     wanted(linkId: string | undefined): boolean {

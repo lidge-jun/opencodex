@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,7 +67,7 @@ test("the digest ignores key order and undefined values", () => {
   expect(operationDigest({ a: 1 })).not.toBe(operationDigest({ a: 2 }));
 });
 
-test("past OPERATION_JOURNAL_MAX_SETTLED settled entries the oldest settled ones more than a day old go first; open and unresolved entries always stay", () => {
+test("past OPERATION_JOURNAL_MAX_SETTLED settled entries the oldest settled ones past the prune floor go first; open and unresolved entries always stay", () => {
   const now = Date.parse(AT) + OPERATION_PRUNE_FLOOR_MS + 60_000;
   const settled = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 3 }, (_, i) => entry({ operationId: "done-" + i, state: i % 2 ? "committed" : "failed_clean", finishedAt: new Date(Date.parse(AT) + i).toISOString() }));
   const resolvedOld = entry({ operationId: "resolved-old", state: "unknown", finishedAt: AT, resolvedAt: new Date(Date.parse(AT) - 1).toISOString() });
@@ -83,33 +83,59 @@ test("past OPERATION_JOURNAL_MAX_SETTLED settled entries the oldest settled ones
   expect(ids).toContain("done-3");
 });
 
-test("an entry settled less than a day ago is never pruned early, however many settled entries there are", () => {
+test("an entry settled within the prune floor is never pruned early, however many settled entries there are", () => {
   const now = Date.parse(AT) + 60_000;
   const recent = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 10 }, (_, i) => entry({ operationId: "done-" + i, state: "committed", finishedAt: new Date(Date.parse(AT) + i).toISOString() }));
   expect(pruneOperations({ version: 1, operations: recent }, now).operations).toHaveLength(OPERATION_JOURNAL_MAX_SETTLED + 10);
 });
 
-test("a new operation is refused only for a burst of settled operations within a day, and the refusal says which bound", () => {
+test("a new operation is refused only for a burst of settled operations within the prune floor, and the refusal says which bound", () => {
   const burst = (ageMs: number) => ({ version: 1 as const, operations: Array.from({ length: OPERATION_JOURNAL_MAX_RECENT_SETTLED }, (_, i) => entry({ operationId: "done-" + i, state: "failed_clean", finishedAt: new Date(Date.parse(AT) - ageMs + i).toISOString() })) });
   const now = Date.parse(AT);
   expect(() => assertRoomForNewOperation(burst(60_000), now)).toThrow(OperationsJournalFullError);
   try { assertRoomForNewOperation(burst(60_000), now); } catch (error) { expect((error as OperationsJournalFullError).bound).toBe("recent"); }
-  // The same number settled more than a day ago is pruned down instead.
+  // The same number settled past the prune floor is pruned down instead.
   expect(() => assertRoomForNewOperation(burst(OPERATION_PRUNE_FLOOR_MS + 60_000), now)).not.toThrow();
   const unsettled = { version: 1 as const, operations: Array.from({ length: OPERATION_JOURNAL_MAX_UNSETTLED }, (_, i) => entry({ operationId: "open-" + i })) };
   try { assertRoomForNewOperation(unsettled, now); throw new Error("not refused"); } catch (error) { expect((error as OperationsJournalFullError).bound).toBe("unsettled"); }
 });
 
-test("an entry is pruned early only past a day plus the alias-lock wait: a retry that started within the day still finds it", () => {
+test("an entry is pruned early only past the replay window plus the alias-lock wait: a retry that started within the window still finds it", () => {
   const settledAgo = (ms: number, id: string) => entry({ operationId: id, state: "committed", finishedAt: new Date(Date.parse(AT) - ms).toISOString() });
   const now = Date.parse(AT);
   // 256 entries settled within the hour: none of them may go, so the one under test is the only candidate.
   const filler = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED }, (_, i) => settledAgo(3_600_000 - i, "recent-" + i));
-  // Just past a day: a retry that started a moment before may still be waiting on the alias lock.
+  // Just past the replay window: a retry that started a moment before may still be waiting on the alias lock.
   const waiting = settledAgo(OPERATION_REPLAY_MIN_MS + 30_000, "waiting");
   const kept = pruneOperations({ version: 1, operations: [waiting, ...filler] }, now).operations.map(op => op.operationId);
   expect(kept).toContain("waiting");
-  // Past the day and the whole lock wait it is the oldest candidate's turn like any other.
+  // Past the window and the whole lock wait it is the oldest candidate's turn like any other.
   const stale = settledAgo(OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAIT_MS + 120_001, "stale");
   expect(pruneOperations({ version: 1, operations: [stale, ...filler] }, now).operations.map(op => op.operationId)).not.toContain("stale");
+});
+
+describe("the replay horizon is 2 hours (coordinator decision for disposable-machine churn)", () => {
+  const HOUR = 3_600_000;
+  const settledAgo = (ms: number, id: string) => entry({ operationId: id, state: "committed", finishedAt: new Date(Date.parse(AT) - ms).toISOString() });
+  const now = Date.parse(AT);
+
+  test("the guarantee: a repeat within 2 hours of the answer gets it; pruning waits for 2 hours plus the lock wait and a minute", () => {
+    expect(OPERATION_REPLAY_MIN_MS).toBe(2 * HOUR);
+    expect(OPERATION_PRUNE_FLOOR_MS).toBe(2 * HOUR + 120_000 + 60_000);
+  });
+
+  test("under a burst, an entry settled 2 hours minus a second ago stays, and one just past the floor can go", () => {
+    const burst = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED }, (_, i) => settledAgo(60_000 + i, "recent-" + i));
+    const kept = (op: LinkOperation) => pruneOperations({ version: 1, operations: [op, ...burst] }, now).operations.map(item => item.operationId);
+    expect(kept(settledAgo(2 * HOUR - 1000, "retry-window"))).toContain("retry-window");
+    expect(kept(settledAgo(2 * HOUR + 180_001, "past-floor"))).not.toContain("past-floor");
+    // Without more than 256 settled entries nothing is pruned early, however old (retention is still 30 days).
+    expect(pruneOperations({ version: 1, operations: [settledAgo(10 * HOUR, "old")] }, now).operations).toHaveLength(1);
+  });
+
+  test("the burst refusal counts only entries younger than the floor: 1024 settled three hours ago no longer refuse", () => {
+    const settled = (ageMs: number) => ({ version: 1 as const, operations: Array.from({ length: OPERATION_JOURNAL_MAX_RECENT_SETTLED }, (_, i) => settledAgo(ageMs + i, "done-" + i)) });
+    expect(() => assertRoomForNewOperation(settled(3 * HOUR), now)).not.toThrow();
+    expect(() => assertRoomForNewOperation(settled(HOUR), now)).toThrow(OperationsJournalFullError);
+  });
 });

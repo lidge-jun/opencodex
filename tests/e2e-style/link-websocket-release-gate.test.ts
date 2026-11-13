@@ -1,5 +1,5 @@
-import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
@@ -10,8 +10,7 @@ import { writeLinkStore, type LinkStore } from "../../src/link/store";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { STANDIN_MAX_MESSAGE_BYTES, startRelayStandin, type RelayStandin } from "../fixtures/link-child-relay-standin";
-import { fixturePath } from "../helpers/repo-root";
-import { preparePinnedCodex } from "../helpers/link-gate-binary";
+import { completed, expectCompleted, gate, GATE_PIN as PIN, runGateCodex, toolCall, untilOrExit } from "../helpers/link-gate-codex";
 import { startChild } from "../helpers/link-ws-child";
 import { probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
 import { forgetLinkWebsocketAdvertisementsForTests } from "../../src/client/link-ws-advertisement";
@@ -28,56 +27,13 @@ import type { Server } from "bun";
 // stand-in for the Child's relay (tests/fixtures/link-child-relay-standin.ts), except in the 503 sequence, which needs the
 // Child's own relay and tunnel gate (lane T6, src/client/link-websocket.ts) and runs the real Child listener.
 // Codex is an external process with no clock to inject, so each test carries a per-test bound instead of sleeps.
+// The labels, the Codex runner and the fixture turns are shared with the real-Child scenarios (tests/helpers/link-gate-codex.ts).
 
-// OCX_LINK_GATE_CODEX is resolved once to an executable file and copied read-only into a scratch directory; that copy is
-// what is hashed and what every scenario spawns, by absolute path (tests/helpers/link-gate-binary.ts).
-// The scratch copy is removed after the file, and at once if preparing it throws or the value is refused.
-const BIN_SCRATCH = process.env.OCX_LINK_GATE_CODEX ? mkdtempSync(join(tmpdir(), "ocx-link-gate-bin-")) : "";
-afterAll(() => { if (BIN_SCRATCH) removeTreeWithRetry(BIN_SCRATCH); });
-const PREPARED = (() => {
-  if (!BIN_SCRATCH) return null;
-  try {
-    const prepared = preparePinnedCodex(process.env.OCX_LINK_GATE_CODEX!, { scratch: BIN_SCRATCH });
-    if (!prepared) removeTreeWithRetry(BIN_SCRATCH);
-    return prepared;
-  } catch (error) { removeTreeWithRetry(BIN_SCRATCH); throw error; }
-})();
-const BIN = PREPARED?.path ?? "";
-const usable = PREPARED !== null;
-const PIN = JSON.parse(readFileSync(fixturePath("link-gate-codex.json"), "utf8")) as { revision: string; sha256: string | null };
-const PINNED_SHA256 = typeof PIN.sha256 === "string" ? PIN.sha256.toLowerCase() : "";
-const digest = PREPARED?.digest ?? "";
-const mode: "absent" | "gate" | "smoke" = !usable ? "absent" : PINNED_SHA256 && digest === PINNED_SHA256 ? "gate" : "smoke";
-const LABEL = {
-  absent: " [skipped: pinned Codex binary absent (U13); set OCX_LINK_GATE_CODEX to an executable file of codex-rs built at openai/codex 88c5856]",
-  gate: " [release gate: Codex sha256 " + digest + " matches the reviewed digest for openai/codex " + PIN.revision.slice(0, 7) + " in tests/fixtures/link-gate-codex.json]",
-  smoke: " [smoke only, not release evidence: Codex sha256 " + digest + " is not the reviewed digest for openai/codex " + PIN.revision.slice(0, 7) + " (tests/fixtures/link-gate-codex.json" + (PINNED_SHA256 ? "" : " records none yet") + ")]",
-}[mode];
 // Codex is an external process: the bound is this file's default, not a per-test timeout.
 setDefaultTimeout(180_000);
-const gate = (title: string, body: () => Promise<void>) => test.skipIf(!usable)(title + LABEL, body);
 
 const KEY_ID = "gate-key"; const SECRET = "gate-secret-0123456789abcdef"; const LINK = "lnk_9a9a9a9a9a9a9a9a";
 const identity = { keyId: KEY_ID, linkId: LINK, fingerprint: serviceApiTokenFingerprint(SECRET) };
-
-/** A turn that ends by calling get_goal, a read-only tool Codex declares, so Codex sends a second request. */
-function toolCall(id: string): string {
-  const call = { type: "function_call", id: "fc_" + id, call_id: "call_gate_goal", name: "get_goal", status: "completed", arguments: "{}" };
-  return [
-    "event: response.created\ndata: " + JSON.stringify({ type: "response.created", response: { id, status: "in_progress", output: [] } }) + "\n\n",
-    "event: response.output_item.done\ndata: " + JSON.stringify({ type: "response.output_item.done", output_index: 0, item: call }) + "\n\n",
-    "event: response.completed\ndata: " + JSON.stringify({ type: "response.completed", response: { id, status: "completed", output: [call], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }) + "\n\n",
-  ].join("");
-}
-
-function completed(id: string): string {
-  const message = { type: "message", id: "msg_" + id, role: "assistant", status: "completed", content: [{ type: "output_text", text: "gate-ok", annotations: [] }] };
-  return [
-    "event: response.created\ndata: " + JSON.stringify({ type: "response.created", response: { id, status: "in_progress", output: [] } }) + "\n\n",
-    "event: response.output_item.done\ndata: " + JSON.stringify({ type: "response.output_item.done", output_index: 0, item: message }) + "\n\n",
-    "event: response.completed\ndata: " + JSON.stringify({ type: "response.completed", response: { id, status: "completed", output: [message], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }) + "\n\n",
-  ].join("");
-}
 
 const previous = { home: process.env.OPENCODEX_HOME };
 let dir = "";
@@ -126,35 +82,9 @@ async function home(answer: (body: string, index: number) => Response | Promise<
   return { start, linkPort };
 }
 
-/** Runs one `codex exec` turn against the stand-in, with a scratch HOME and CODEX_HOME and nothing else from this machine. */
+/** Runs one `codex exec` turn against the stand-in (tests/helpers/link-gate-codex.ts). */
 function runCodex(port: number, prompt: { argument: string } | { stdin: string }, options: { instructionsBytes?: number } = {}) {
-  const scratch = mkdtempSync(join(dir, "codex-"));
-  const codexDir = join(scratch, "codex-home");
-  mkdirSync(codexDir, { recursive: true });
-  // Codex caps a prompt at 1 MiB of characters; its base instructions have no such cap, so a large request comes from them.
-  const instructions = options.instructionsBytes ? join(scratch, "instructions.md") : null;
-  if (instructions) writeFileSync(instructions, "Answer with gate-ok.\n" + "x".repeat(options.instructionsBytes!));
-  writeFileSync(join(codexDir, "config.toml"), [
-    ...(instructions ? ["model_instructions_file = " + JSON.stringify(instructions)] : []),
-    'model = "fixture/fixture"', 'model_provider = "ocxgate"', "model_context_window = 100000000",
-    'approval_policy = "never"', 'sandbox_mode = "read-only"', "",
-    "[model_providers.ocxgate]", 'name = "ocx gate"', 'base_url = "http://127.0.0.1:' + port + '/v1"', 'env_key = "OCX_GATE_KEY"',
-    'wire_api = "responses"', "supports_websockets = true", "stream_max_retries = 3", "request_max_retries = 1", "",
-  ].join("\n"));
-  const args = [BIN, "exec", "--skip-git-repo-check", "-C", scratch, "argument" in prompt ? prompt.argument : "-"];
-  const child = Bun.spawn(args, {
-    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: scratch, CODEX_HOME: codexDir, OCX_GATE_KEY: "gate-client-key" },
-    stdin: "stdin" in prompt ? new TextEncoder().encode(prompt.stdin) : "ignore", stdout: "pipe", stderr: "pipe",
-  });
-  children.push(child);
-  const done = (async () => ({ code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() }))();
-  return done;
-}
-
-/** Codex's own account of a failure is part of the evidence: a non-zero exit fails with the tail of its stderr. */
-function expectCompleted(result: { code: number; stdout: string; stderr: string }): void {
-  if (result.code !== 0) throw new Error("codex exited " + result.code + ": " + result.stderr.slice(-1500));
-  expect(result.stdout).toContain("gate-ok");
+  return runGateCodex({ dir, port, prompt, children, ...options });
 }
 
 describe("link WebSocket release gate (design 11.1 item 13)", () => {
@@ -196,6 +126,10 @@ describe("link WebSocket release gate (design 11.1 item 13)", () => {
     expect(secondRun.some(event => event.startsWith("upgrade-refused:"))).toBe(true);
     expect(secondRun).not.toContain("upgrade");
     expect(secondRun.at(-1)).toBe("http:200");
+    // U11: Codex's WebSocket client sends no Origin. Every upgrade of both sessions arrived without one, so the
+    // Home's shape check (which refuses an Origin) is not what sent the second session to HTTP.
+    expect(standin.upgradeOrigins.length).toBeGreaterThanOrEqual(2);
+    expect(standin.upgradeOrigins.every(origin => origin === null)).toBe(true);
   });
 
   gate("drain past its deadline: the session's next create is fenced on the socket, costs one retry, and the same request completes over HTTP", async () => {
@@ -273,7 +207,7 @@ describe("link WebSocket release gate (design 11.1 item 13)", () => {
     });
     standin = startRelayStandin({ linkPort: h.linkPort, identity, bearer: SECRET });
     const result = runCodex(standin.port, { argument: "say gate-ok" });
-    await first;
+    await untilOrExit(first, result, "the first request reached the Home");
     await server!.stop(true);
     standin.events.push("restart");
     await h.start();

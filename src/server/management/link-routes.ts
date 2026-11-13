@@ -5,12 +5,12 @@ import { probe, confirmHost, apply, serialized } from "./link-enrollment";
 import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, reconcileLinkListener, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
 import { requireRemotePlatform } from "../../link/remote-platform";
-import { purgeDisconnectRemote } from "../../link/remote-plant";
+import { CHILD_USAGE_EXIT, classifyBoundRefusal, purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
-import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, removeTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
+import { LinkTombstoneLimitError, readTombstones, recordTombstone, removeOwnTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
-import { newLinkId, type LinkStore } from "../../link/store";
+import { effectiveLinkRoutes, newLinkId, type LinkStore } from "../../link/store";
 import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, reownLinkRetirement, type LinkRetirement, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
@@ -223,7 +223,7 @@ function suspendedRefusal(ctx: ManagementContext, id: string): Response {
   const resolve = "ocx link operations resolve --operation-id " + op + " --yes";
   const message = suspension.state === "unknown"
     ? "Revoke operation " + op + " ended unknown and may have disconnected or purged the Child, so this link's tunnel stays down. Check the Child, then run: " + resolve
-    : "Revoke operation " + op + " did not finish (the Home stopped during it), so this link's tunnel stays down. Repeat it with the same flags: ocx link revoke --link-id " + id + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve;
+    : "Revoke operation " + op + " did not record its outcome (the Home stopped or the revoke failed before writing it), so this link's tunnel stays down. Repeat it with the flags of the first attempt: ocx link revoke --link-id " + id + " --operation-id " + op + ", with --purge only if the first attempt had it (the journal keeps only a digest of the flags, so a different --purge answers operation_mismatch); if it then ends unknown, run: " + resolve;
   return Response.json({ error: { code: "link_suspended", message }, operationId: op, operationState: suspension.state }, { status: 409, headers });
 }
 
@@ -446,6 +446,20 @@ function readRemovalTarget(ctx: ManagementContext, id: string):
 }
 
 
+// What each link-bound refusal means and what to do; fixed text, never the Child's own output.
+const BOUND_REFUSAL_MESSAGES: Record<string, string> = Object.assign(Object.create(null) as Record<string, string>, {
+  child_link_mismatch: "The Child refused because of who it belongs to or what state it is in, so nothing was disconnected and the link was kept. Do not disconnect it there. Check it with ocx connect status --json (on a lightweight Child, connect status --json of its planted ocx-child, ~/.cache/opencodex/bin/ocx-child, or in Command Prompt on Windows %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe, or %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe where LOCALAPPDATA is not set): if it shows another link, a hub or another Home, or no connection, revoke this link with --force once any enrollment of this link has finished. If it shows this link's id, a connect or key rotation of it may be in progress: let it finish on the Child, then revoke again; if the same answer comes back, revoke this link with --force once any enrollment of this link has finished. If its state cannot be read, repair it on the Child, then revoke again; if you cannot, or the machine cannot be reached, revoke this link with --force once any enrollment of this link has finished.",
+  child_residual: "The lightweight Child keeps records it cannot restore, so nothing was disconnected and the link was kept. Do not run a plain ocx-child detach on it: an interrupted attach of another link can be what is left, and a plain detach would remove that link too. Revoke this link with --force.",
+  child_disconnect_pending: "The Child has an unfinished disconnect it could not tie to this link and may be partly cleaned; the link was kept. Check it with ocx connect status --json, which cannot say whose disconnect it is: only if it shows no connection, finish it there with ocx disconnect, then revoke again. If it shows any link, a hub or another Home, if its state cannot be read, or if the machine cannot be reached, leave it and revoke this link with --force. If ocx disconnect refuses the receipt as unsafe, revoke with --force too.",
+  expect_link_unsupported: "The Child runs an ocx or ocx-child older than --expect-link and another Home-initiated link of this Home may reach the same machine, so it was not disconnected without the link check; the link was kept. Update OpenCodex on a full install, then revoke again (an older planted ocx-child cannot be updated from this Home). Otherwise revoke this link with --force. Revoking the other link instead is no way out unless you mean to end it: no status check can show it is stale (an attach of it still in progress can show no link or an earlier one, and state that cannot be read shows none), under the same pinned host key its revoke is refused the same way, and through a shared route it disconnects the machine if the machine runs that link.",
+});
+
+// A forced revoke of an ephemeral Child refused for its tombstone. Either answer comes before this attempt revoked a key or
+// removed a record, and a forced revoke never contacts the Child; an earlier attempt of a resumed revoke may have done more.
+// At the commit-time check this attempt has already stopped the tunnel, so it names only the key, the record and the Child.
+const tombstoneLimit = (): Response => fail("tombstone_limit", "Too many forced revokes are waiting for cleanup; this attempt revoked no key, removed no record and did not contact the Child. Recover them (ocx link recover --link-id <id>; ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget --link-id <id> --yes for a machine that is gone or whose cleanup cannot be proven.", 409);
+const tombstoneWriteFailed = (): Response => fail("tombstone_write_failed", "The tombstone a forced revoke of an ephemeral Child needs could not be written, so this attempt revoked no key and removed no record.", 503);
+
 async function removeReserved(
   ctx: ManagementContext,
   state: LinkRouteState,
@@ -494,6 +508,8 @@ async function removeReserved(
     const own = written;
     try { withConfigMutationLockSync(() => { removeOwnTombstone(own, readStoreFor(ctx).links.some(link => link.id === id), tombstonesPath()); }); } catch { /* the link remains; recover refuses link_present */ }
   };
+  // The tombstone this forced revoke needs when its record goes; the commit step makes sure one is there.
+  let needed: LinkTombstone | null = null;
   if (tombstoned && record.hostKeyFingerprint) {
     const tombstone: LinkTombstone = {
       linkId: id, alias: record.alias, hostKeyFingerprint: record.hostKeyFingerprint,
@@ -504,11 +520,20 @@ async function removeReserved(
       revokedAt: new Date((ctx.deps.now ?? Date.now)()).toISOString(),
       attempt: randomBytes(8).toString("hex"),
     };
-    try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); written = tombstone; } catch (error) {
+    needed = tombstone;
+    // A tombstone already there for this link (a forced revoke in flight in another runtime, or one that died) is kept,
+    // and this attempt owns none: it then has nothing to drop if it does not commit.
+    try { if (withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())) === "recorded") written = tombstone; } catch (error) {
       if (error instanceof LinkTombstoneLimitError) {
-        return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
+        // No state claim: an earlier, interrupted attempt of a resumed revoke may already have revoked the key and stopped the tunnel,
+        // and this one may have taken its receipt back (reownLinkRetirement), so it names only what this attempt left alone.
+        return fail("tombstone_limit", "Too many forced revokes are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them (ocx link recover --link-id <id>; ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget --link-id <id> --yes for machines that are gone.", 409);
       }
-      return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
+      // The file may already be written (a chmod or the lock's COMMIT failed after it); the link stays, so this
+      // attempt's tombstone, if any, goes too. Its random attempt token makes that removal touch nothing else.
+      written = tombstone;
+      dropOwnTombstone();
+      return tombstoneWriteFailed();
     }
   }
   // The first intent (cleanup, or the key for a force revoke) is written before stopLink: a failed write leaves the
@@ -542,7 +567,22 @@ async function removeReserved(
       await restartTunnel();
       return failure;
     };
-    const disconnectFailed = (hint: string | undefined) => fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, hint);
+    const disconnectFailed = (hint: string | undefined) => fail("remote_disconnect_failed", BOUND_REFUSAL_MESSAGES[hint ?? ""] ?? "The remote client could not be disconnected.", 502, hint);
+    // True once the Child confirmed this link before cleaning (--expect-link). A revoke never settles a tombstone, bound or
+    // not: beside a listed link one belongs to a forced revoke still in flight in another process (or one that died), and
+    // removing it here could lose the only recovery evidence for a Child that revoke leaves attached. ocx link recover
+    // settles it once the link is gone, under the alias lock and bound to the link.
+    let linkBound = false;
+    const unboundStillSafe = (): boolean => {
+      const links = readStoreFor(ctx).links;
+      const wanted = record.alias.toLowerCase();
+      // Enrollment refuses a second link with this primary alias, so the machine another link may own now is found by
+      // its pinned key (the same machine enrolled under another alias or address) or by a route naming this alias.
+      return links.some(link => link.id === id)
+        && !links.some(link => link.id !== id && link.direction === "hub-initiated" && (
+          (Boolean(record.hostKeyFingerprint) && link.hostKeyFingerprint === record.hostKeyFingerprint)
+          || [link.alias, ...effectiveLinkRoutes(link)].some(route => route.toLowerCase() === wanted)));
+    };
     if (cleanup) {
       const runner = runnerFor(ctx);
       let platform: Awaited<ReturnType<typeof requireRemotePlatform>>;
@@ -551,19 +591,39 @@ async function removeReserved(
       }
       if (purge) {
         let purged: Awaited<ReturnType<typeof purgeDisconnectRemote>>;
-        try { purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind); } catch (error) {
+        try { purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind, id, unboundStillSafe); } catch (error) {
           return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
         }
-        if (!purged.ok) return cleanupFailed(fail(purged.code, purged.message, purged.status, purged.hint), purged.notAttempted !== true);
+        if (!purged.ok) return cleanupFailed(fail(purged.code, (purged.hint !== undefined ? BOUND_REFUSAL_MESSAGES[purged.hint] : undefined) ?? purged.message, purged.status, purged.hint), purged.notAttempted !== true);
         // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route. The
         // receipt must be durable before the link goes; if it cannot be written, stop here (unknown) and leave the
         // tunnel down, since the Child it would reach is purged.
         try { journal.done("remote_cleanup", { purged: true, linkId: id }); } catch { return journalFailed(); }
       } else {
+        const disconnectArgv = (bound: boolean) => buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(bound ? ["disconnect", "--expect-link", id] : ["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null });
         let result: Awaited<ReturnType<typeof runner.run>>;
-        try { result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 }); } catch (error) {
+        linkBound = true;
+        try { result = await runner.run(disconnectArgv(true), { timeoutMs: 30_000 }); } catch (error) {
           return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
         }
+        // An ocx or ocx-child older than --expect-link rejects it as a usage error (exit 2) before acting on the link.
+        // The unbound retry is the old behaviour, so it runs only while no other Home-initiated link of this Home may
+        // reach the same machine (same pinned key, or this alias among its routes; re-read now). The machine enrolled
+        // with another Home, or under a new host key, stays outside what this Home can see.
+        if (result.code === CHILD_USAGE_EXIT) {
+          if (!unboundStillSafe()) return cleanupFailed(disconnectFailed("expect_link_unsupported"), false);
+          linkBound = false;
+          try { result = await runner.run(disconnectArgv(false), { timeoutMs: 30_000 }); } catch (error) {
+            return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
+          }
+        }
+        // A link-bound refusal recognised as one changed nothing on the Child: another link (or a hub, or no connection)
+        // owns it now (5), or an ocx-child keeps state it cannot restore (6). The tunnel restarts and the link stays. An
+        // unfinished disconnect the Child could not prove is this link's may have been partly cleaned by an earlier
+        // attempt: a cleanup attempted, never failed_clean. Any other exit 5 or 6 falls through as attempted.
+        const refusal = linkBound ? classifyBoundRefusal(result.code, result.stderr, id) : null;
+        if (refusal === "pending") return cleanupFailed(disconnectFailed("child_disconnect_pending"), true);
+        if (refusal === "mismatch" || refusal === "residual") return cleanupFailed(disconnectFailed(refusal === "mismatch" ? "child_link_mismatch" : "child_residual"), false);
         if (result.code !== 0) return cleanupFailed(disconnectFailed(sshFailureHint(result.stderr)), true);
         journal.done("remote_cleanup");
       }
@@ -595,6 +655,24 @@ async function removeReserved(
         const latest = readStoreFor(ctx);
         const active = latest.links.find(link => link.id === id);
         if (active && JSON.stringify(active) !== JSON.stringify(record)) return "changed" as const;
+        // A tombstone this attempt kept may have been dropped since by its owner, a forced revoke that failed in another
+        // runtime. Under the lock that removes the record, before the key goes, one must be there: else this attempt
+        // writes its own (and owns it), or stops with the link and key intact; the tunnel is already stopped and this
+        // attempt's retirement receipt stays claimed, so a repeat of this revoke resumes it.
+        if (active && needed) {
+          const own = needed;
+          let present: boolean;
+          try { present = readTombstones(tombstonesPath()).tombstones.some(t => t.linkId === id); } catch { return "tombstone_failed" as const; }
+          if (!present) {
+            // A write that throws after the file landed (its chmod) still leaves this attempt's tombstone: own it, so the
+            // non-ok path drops it by its token.
+            try { if (recordTombstone(own, tombstonesPath()) === "recorded") written = own; } catch (error) {
+              if (error instanceof LinkTombstoneLimitError) return "tombstone_limit" as const;
+              written = own;
+              return "tombstone_failed" as const;
+            }
+          }
+        }
         if (active && (ctx.config.apiKeys ?? []).some(key => key.id === record.apiKeyId) && !revokeKeyIdempotent(ctx, record.apiKeyId)) return "revoke_failed" as const;
         journal.done("key_revoked");
         if (!intend("record_removed")) return "journal_failed" as const;
@@ -607,10 +685,10 @@ async function removeReserved(
       if (result !== "ok") dropOwnTombstone();
       if (result === "journal_failed") return journalFailed();
       if (result === "changed") return fail("link_changed", "The link changed during removal.", 409);
+      if (result === "tombstone_failed") return tombstoneWriteFailed();
+      if (result === "tombstone_limit") return tombstoneLimit();
       if (result === "revoke_failed") return fail("key_revoke_failed", "The link key could not be revoked.", 502);
       committed = true;
-      // A revoke that cleaned the Child itself settles any tombstone an earlier forced revoke of this link left.
-      if (!force) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
       // Same task as the commit: an open link WebSocket must not outlive its link (design T4 2.4).
       state.listener.closeLinkSockets?.(id);
       clearCompensationFailed(id, compensationPath());
