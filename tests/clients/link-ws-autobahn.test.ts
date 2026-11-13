@@ -34,7 +34,7 @@ const EXPECTATIONS_FILE = fixturePath("link-ws-autobahn-expectations.json");
 
 interface Rule { cases: string[]; expect: "pass" | "unimplemented" | { closeCode: number }; why: string }
 const EXPECTATIONS_TEXT = readFileSync(EXPECTATIONS_FILE, "utf8");
-const EXPECT = JSON.parse(EXPECTATIONS_TEXT) as { caseCount: number; rules: Rule[] };
+const EXPECT = JSON.parse(EXPECTATIONS_TEXT) as { caseCount: number; limits: { homeMessageBytes: number; maxFragments: number }; rules: Rule[] };
 const timers: LinkWebsocketTimers = { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) };
 const wsBase = () => BASE.replace(/^http/, "ws");
 
@@ -118,6 +118,8 @@ describe.skipIf(!ENABLED)("link WebSocket Child leg: Autobahn fuzzingserver clie
     // The server is a local fixture: a fuzzingserver anywhere else is not the recorded run.
     expect(["127.0.0.1", "localhost", "[::1]"]).toContain(new URL(BASE).hostname);
     const count = Number(await control("/getCaseCount"));
+    // The 1009 rules are written for the Child's own limits: the file states them, and they must be the Child's.
+    expect(EXPECT.limits).toEqual({ homeMessageBytes: LINK_CHILD_WS_LIMITS.homeMessageBytes, maxFragments: LINK_CHILD_WS_LIMITS.maxFragments });
     // The case set is pinned: the image's suite has exactly the cases the expectations were reviewed against.
     expect(count).toBe(EXPECT.caseCount);
     const ends: Record<string, number> = {};
@@ -139,7 +141,7 @@ describe.skipIf(!ENABLED)("link WebSocket Child leg: Autobahn fuzzingserver clie
       // The close itself, for every class: completed cleanly, with no handshake or connection-drop timeout.
       const cleanClose = report.wasClean && !report.wasCloseHandshakeTimeout && !report.wasOpenHandshakeTimeout && !report.wasServerConnectionDropTimeout;
       let ok: boolean;
-      if (want === "pass") ok = ["OK", "NON-STRICT", "INFORMATIONAL"].includes(report.behavior) && ["OK", "INFORMATIONAL"].includes(report.behaviorClose);
+      if (want === "pass") ok = ["OK", "NON-STRICT", "INFORMATIONAL"].includes(report.behavior) && ["OK", "INFORMATIONAL"].includes(report.behaviorClose) && cleanClose;
       else if (want === "unimplemented") ok = report.behavior === "UNIMPLEMENTED" && report.behaviorClose === "OK" && cleanClose;
       else {
         // A refusal: the expected close code, nothing but a close frame received from the Child (no echoed or other
