@@ -230,12 +230,19 @@ export function pruneOperations(journal: OperationsJournal, nowMs: number): Oper
   }) };
 }
 
-/** Read, change and write the journal in one section of the config mutation lock, pruning on the way. */
+/**
+ * Read, change and write the journal in one section of the config mutation lock, pruning on the way. Writes only
+ * when the change or the prune altered the journal: a read that finds nothing to do (an unknown id, a state that
+ * cannot be resolved) never rewrites the file, and never creates it, because its mere existence makes every plain
+ * apply and revoke take the alias lock (journalInUse).
+ */
 export function updateOperationsJournal<T>(path: string, nowMs: number, change: (journal: OperationsJournal) => T): T {
   return withConfigMutationLockSync(() => {
     const journal = readOperationsJournal(path);
+    const before = JSON.stringify(journal);
     const result = change(journal);
-    writeOperationsJournal(path, pruneOperations(journal, nowMs));
+    const next = pruneOperations(journal, nowMs);
+    if (JSON.stringify(next) !== before) writeOperationsJournal(path, next);
     return result;
   });
 }

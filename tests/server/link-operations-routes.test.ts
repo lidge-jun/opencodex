@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -57,6 +57,32 @@ test("resolving a residual entry starts its retention once; a committed one is n
   const refused = await h.call("POST", "/api/link/operations/op-done/resolve");
   expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_not_resolvable" });
   expect(h.journal().operations.find(op => op.operationId === "op-done")!.resolvedAt).toBeUndefined();
+});
+
+test("resolving an unknown id on a Home that never journalled answers 404 and creates no journal", async () => {
+  const journalPath = join(root, "never.json");
+  const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", providers: {}, apiKeys: [] } as unknown as OcxConfig;
+  const url = new URL("http://127.0.0.1:10100/api/link/operations/typo-id/resolve");
+  const ctx = { req: new Request(url, { method: "POST" }), url, config, deps: { now: () => NOW, linkOperationsPath: () => journalPath }, version: "2.99.0",
+    principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null, sessionControl: { isCurrent: () => false, isPaired: () => false, revokeCurrent: () => false } } as unknown as ManagementContext;
+  const response = await handleLinkRoutes(ctx, { pendingHosts: new Map() } as unknown as LinkRouteState);
+  expect(response!.status).toBe(404);
+  // Its existence alone would put every plain apply and revoke on the lock path (journalInUse).
+  expect(existsSync(journalPath)).toBe(false);
+});
+
+test("a resolve that changes nothing does not rewrite the journal", async () => {
+  const h = harness();
+  const path = join(root, "operations.json");
+  const before = readFileSync(path, "utf8");
+  // Every write replaces the file atomically (a new inode); an unchanged inode means nothing was written.
+  const inode = statSync(path).ino;
+  // Checked after each call: two replacements in a row can hand the first inode number back.
+  expect((await h.call("POST", "/api/link/operations/op-done/resolve")).status).toBe(409);
+  expect(statSync(path).ino).toBe(inode);
+  expect((await h.call("POST", "/api/link/operations/nope/resolve")).status).toBe(404);
+  expect(statSync(path).ino).toBe(inode);
+  expect(readFileSync(path, "utf8")).toBe(before);
 });
 
 test("a session without link authority is refused", async () => {
