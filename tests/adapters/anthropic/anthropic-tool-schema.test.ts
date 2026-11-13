@@ -23,6 +23,22 @@ async function toolSchema(parameters: unknown): Promise<Record<string, unknown>>
   return tool.input_schema;
 }
 
+/** A diamond of local refs: each level references the previous definition twice. */
+function sharedRefGraph(depth: number): Record<string, unknown> {
+  const defs: Record<string, unknown> = {
+    A0: { type: "object", properties: { p: { type: "string" } }, required: ["p"] },
+  };
+  for (let index = 1; index <= depth; index += 1) {
+    defs[`A${index}`] = {
+      allOf: [
+        { $ref: `#/$defs/A${index - 1}` },
+        { $ref: `#/$defs/A${index - 1}` },
+      ],
+    };
+  }
+  return { $defs: defs, allOf: [{ $ref: `#/$defs/A${depth}` }] };
+}
+
 describe("anthropic tool input_schema normalization", () => {
   test("parameterless and type-less tools become valid object schemas", async () => {
     expect(await toolSchema({})).toEqual({ type: "object", properties: {} });
@@ -105,6 +121,83 @@ describe("anthropic tool input_schema normalization", () => {
         },
       },
     });
+  });
+
+  test("resolves a local $ref allOf branch and keeps its required member", async () => {
+    const schema = await toolSchema({
+      $defs: {
+        Args: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+      allOf: [{ $ref: "#/$defs/Args" }],
+    });
+    expect(schema.properties).toEqual({ path: { type: "string" } });
+    expect(schema.required).toEqual(["path"]);
+  });
+
+  test("flattens composition inside a resolved $ref definition", async () => {
+    const schema = await toolSchema({
+      $defs: {
+        Args: {
+          allOf: [{
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          }],
+        },
+      },
+      allOf: [{ $ref: "#/$defs/Args" }],
+    });
+    expect(schema.properties).toEqual({ path: { type: "string" } });
+    expect(schema.required).toEqual(["path"]);
+  });
+
+  test("fails explicitly when a shared $ref graph exceeds the expansion limit", async () => {
+    await expect(toolSchema(sharedRefGraph(30))).rejects.toThrow(
+      "tool input schema reference expansion exceeded the supported limit",
+    );
+  });
+
+  test("merges $ref siblings conjunctively and unions required members", async () => {
+    const schema = await toolSchema({
+      $defs: {
+        Base: {
+          type: "object",
+          properties: { path: { type: "string", minLength: 1 } },
+          required: ["path"],
+        },
+      },
+      allOf: [{
+        $ref: "#/$defs/Base",
+        properties: {
+          path: { type: "string", maxLength: 64 },
+          mode: { type: "string" },
+        },
+        required: ["mode"],
+      }],
+    });
+    const properties = schema.properties as Record<string, Record<string, unknown>>;
+    expect(Object.keys(properties).sort()).toEqual(["mode", "path"]);
+    expect(properties.path).toEqual({
+      allOf: [
+        { type: "string", minLength: 1 },
+        { type: "string", maxLength: 64 },
+      ],
+    });
+    expect(schema.required).toEqual(["path", "mode"]);
+  });
+
+  test("keeps the documented last-branch-wins loss for root alternatives", async () => {
+    const schema = await toolSchema({
+      oneOf: [
+        { type: "object", properties: { action: { enum: ["read"] } } },
+        { type: "object", properties: { action: { enum: ["write"] } } },
+      ],
+    });
+    expect((schema.properties as Record<string, unknown>).action).toEqual({ enum: ["write"] });
   });
 
   test("strips Codex's Responses-only encrypted marker from collaboration schemas", async () => {
