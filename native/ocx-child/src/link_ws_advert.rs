@@ -1,5 +1,5 @@
-//! Whether this Child's Home advertises the Responses WebSocket over the link (T6-4 addendum, the
-//! TypeScript Child's link-ws-advertisement.ts), and ocx-child's own release gate.
+//! Whether this Child's Home advertises the Responses WebSocket over the link (as the TypeScript Child's
+//! link-ws-advertisement.ts does), and ocx-child's own release gate.
 //!
 //! Every relay-auth preflight of the serving process takes a number from one process counter before it
 //! is written. A verified answer applies only to the entry of the link id its preflight used, and only

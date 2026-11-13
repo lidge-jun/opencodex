@@ -1,4 +1,5 @@
-//! The Responses WebSocket over a Remote Link in ocx-child (design T4 3.2-3.3, T6-4 addendum draft 9).
+//! The Responses WebSocket over a Remote Link in ocx-child (design T4 3.2-3.3; what the gate-opening change
+//! still owes: devlog/_plan/261113_link_websocket_gate_opening).
 //!
 //! Codex's upgrade on /v1/responses is tried only when ocx-child's release gate is open and the Home
 //! advertised the feature on the last answer applied for the current link; otherwise today's 426 stays,
@@ -575,7 +576,7 @@ fn random_mask() -> [u8; 4] {
     m
 }
 
-/// One bounded frame write (design draft 9 U1/V1): the deadline is registered before the lock.
+/// One bounded frame write: the deadline is registered before the lock.
 fn write_frame(
     shared: &Arc<SocketShared>,
     leg: Leg,
@@ -641,7 +642,7 @@ fn close_bytes(action: &CloseAction) -> Option<Vec<u8>> {
     }
 }
 
-/// The local 101 (draft 9 U1, review T6-4 r1): written under Codex's write lock inside a control
+/// The local 101: written under Codex's write lock inside a control
 /// operation deadline, so a close frame can only follow it. Ok(false) when closing began first (a stop
 /// between registration and the 101): nothing is written and the caller answers today's 426.
 fn write_101(shared: &Arc<SocketShared>, reply: &[u8], fail: bool) -> std::io::Result<bool> {
@@ -664,7 +665,8 @@ fn write_101(shared: &Arc<SocketShared>, reply: &[u8], fail: bool) -> std::io::R
     result
 }
 
-/// The terminal transition (draft 9 U4, X1, Y1). Idempotent; only the first caller writes close frames.
+/// The terminal transition. Idempotent; only the first caller writes close frames, and it claims its close
+/// I/O and registers the close deadline in the same state-lock section that starts the transition.
 fn terminate(shared: &Arc<SocketShared>, codex: CloseAction, home: CloseAction) {
     let claimed = {
         let mut st = lock(&shared.state);
@@ -910,7 +912,7 @@ fn open(
         creds.raw_token.as_slice(),
         &after,
     );
-    // Each write call gets only the time left before the setup deadline (design R6).
+    // Each write call gets only the time left before the setup deadline.
     write_all_before(
         &mut upstream.writer,
         head.as_slice(),
@@ -969,7 +971,7 @@ fn open(
     };
     // A panic from here on still unregisters the socket and frees its slot (every normal return calls finish).
     let _unwind = UnwindCleanup(Arc::clone(&shared));
-    // Open-socket timeouts (draft 9 S2/S3): no read timeout, 300 s of no write progress.
+    // Open-socket timeouts: no read timeout, 300 s of no write progress.
     for s in [&shared.codex, &shared.home] {
         let _ = s.set_read_timeout(None);
         let _ = s.set_write_timeout(Some(l.stall));
@@ -1022,7 +1024,7 @@ fn open(
             return Err(Fallback::Unavailable);
         }
     };
-    // The local 101, with the message limit Codex reads (C7).
+    // The local 101, with the message limit Codex reads (x-codex-websocket-max-message-bytes).
     let accept = websocket_accept(&codex_key);
     let reply = format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n{MAX_MESSAGE_HEADER}: {}\r\n\r\n",
@@ -1050,7 +1052,7 @@ fn open(
     test_barrier("link-ws-before-start");
     #[cfg(test)]
     tests::before_start();
-    // The start step (draft 9 V2): registry lock, then the socket's state lock.
+    // The start step: registry lock, then the socket's state lock.
     let started = {
         let (m, _) = registry();
         let r = lock(m);
@@ -1384,7 +1386,7 @@ mod tests {
         assert_eq!(relay_code(Some(1006)), 1011);
     }
 
-    /// A Home that takes one byte per write call while time passes (design R6, review T6-4 r1).
+    /// A Home that takes one byte per write call while time passes.
     struct Trickle {
         clock: std::rc::Rc<std::cell::Cell<u64>>,
         timeouts: Vec<Duration>,
