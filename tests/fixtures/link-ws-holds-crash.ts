@@ -7,6 +7,9 @@ import { createActivityHolds } from "../../src/link/ws-activity-holds";
 import { LINK_WS_LIMITS } from "../../src/server/index/link-websocket-limits";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as { dir: string; point: string; links: string[] };
+// Exit handlers run on any orderly exit, including an error thrown after the kill returned; an abrupt
+// kill never runs them. The parent asserts this sentinel is absent, on every platform.
+process.on("exit", () => { try { writeSync(1, "\n(orderly exit)"); } catch { /* the parent closed its end */ } });
 const kill = (point: string): never => {
   // Name the point first: the parent then knows which crash point the child actually reached.
   writeSync(1, point);

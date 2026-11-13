@@ -174,6 +174,7 @@ describe("crash points (abrupt termination)", () => {
     child.stdin.write(JSON.stringify({ dir, point, links: LINKS }));
     child.stdin.end();
     const [exitCode, reached] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+    // Exactly the point and nothing after it: the fixture's exit handler (an orderly exit) never ran.
     expect(reached).toBe(point);
     // Windows has no signals: the same kill is TerminateProcess, reported as a nonzero exit code.
     if (process.platform === "win32") { expect(child.signalCode).toBeNull(); expect(exitCode).not.toBe(0); }
