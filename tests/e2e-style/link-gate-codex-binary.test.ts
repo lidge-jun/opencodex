@@ -69,6 +69,22 @@ describe("the pinned Codex binary of the release gate: what is hashed is what ru
     if (process.platform !== "win32") expect(statSync(prepared.path).mode & 0o222).toBe(0);
   });
 
+  test("the copy never replaces an existing file: a second copy into the same scratch directory is refused", () => {
+    root = mkdtempSync(join(tmpdir(), "ocx-gate-binary-"));
+    const cwd = join(root, "work"); const scratch = join(root, "scratch");
+    const original = fakeCodex(cwd);
+    mkdirSync(scratch);
+    const prepared = preparePinnedCodex(original, { cwd, scratch })!;
+    // Writable again, so only the exclusive flag (not the copy's 0555 mode) can refuse the second copy.
+    chmodSync(prepared.path, 0o755);
+    writeFileSync(original, "other bytes for the second copy");
+    chmodSync(original, 0o755);
+    let refused: unknown = null;
+    try { preparePinnedCodex(original, { cwd, scratch }); } catch (error) { refused = error; }
+    expect((refused as NodeJS.ErrnoException | null)?.code).toBe("EEXIST");
+    expect(sha256(prepared.path)).toBe(prepared.digest);
+  });
+
   test("a value that names no file is refused", () => {
     root = mkdtempSync(join(tmpdir(), "ocx-gate-binary-"));
     const scratch = join(root, "scratch");

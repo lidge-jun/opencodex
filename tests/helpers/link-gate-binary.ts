@@ -18,7 +18,9 @@ export function preparePinnedCodex(value: string, options: { cwd?: string; scrat
   } catch { return null; }
   // The copy keeps the file name, so an extension a platform needs to execute it (codex.exe) stays.
   const copy = join(options.scratch, basename(file));
-  copyFileSync(file, copy, constants.COPYFILE_EXCL);
+  // Exclusive: never over an existing file. FICLONE makes the copy a reflink where the file system has them (APFS, btrfs,
+  // XFS), so the 1.6 GB binary costs no space there; elsewhere it is an ordinary copy.
+  copyFileSync(file, copy, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
   chmodSync(copy, 0o555);
   return { path: copy, digest: sha256File(copy) };
 }
