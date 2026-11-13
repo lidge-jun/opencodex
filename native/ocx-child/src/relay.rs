@@ -70,7 +70,7 @@ pub struct DeadlineStream {
 }
 
 impl DeadlineStream {
-    fn new(stream: TcpStream, deadline: Option<Instant>, per_read: Duration) -> Self {
+    pub(crate) fn new(stream: TcpStream, deadline: Option<Instant>, per_read: Duration) -> Self {
         Self {
             stream,
             deadline,
@@ -178,6 +178,8 @@ pub struct AuthenticatedUpstream {
     pub writer: TcpStream,
     pub nonce: String,
     pub connection_generation: Option<String>,
+    /// Whether this very answer named the link WebSocket as on (verified; link_ws_advert).
+    pub link_ws_on: bool,
 }
 
 fn url_encode_component(s: &str) -> String {
@@ -210,6 +212,16 @@ pub fn open_authenticated_upstream(
     )
 }
 
+/// The Home leg of a link WebSocket (link_ws.rs): a data preflight on one connection, bounded by one
+/// setup deadline and cancellable by stop.
+pub(crate) fn open_link_ws_upstream(
+    tunnel_port: u16,
+    creds: &RelayCredentials,
+    limits: RequestLimits<'_>,
+) -> Result<AuthenticatedUpstream, UpstreamError> {
+    open_authenticated_upstream_with(tunnel_port, creds, false, limits)
+}
+
 fn open_authenticated_upstream_with(
     tunnel_port: u16,
     creds: &RelayCredentials,
@@ -238,6 +250,8 @@ fn open_authenticated_upstream_with(
     let challenge =
         create_relay_challenge(&creds.token_fingerprint, &creds.api_key_id, &creds.link_id)
             .map_err(UpstreamError::RelayAuthFailed)?;
+    // Taken before the preflight is written: it orders this answer's link WebSocket state.
+    let preflight_seq = crate::link_ws_advert::next_preflight();
 
     let target = format!(
         "{LINK_RELAY_AUTH_PATH}?version={LINK_RELAY_AUTH_VERSION}&key={}&link={}&nonce={}&proof={}",
@@ -310,18 +324,27 @@ fn open_authenticated_upstream_with(
             verified_gen = Some(gen_val.to_owned());
         }
     }
+    let link_ws_on = crate::link_ws_advert::answer_is_on(
+        &resp.headers,
+        &creds.token_fingerprint,
+        &creds.api_key_id,
+        &creds.link_id,
+        &challenge.nonce,
+    );
+    crate::link_ws_advert::apply(&creds.link_id, preflight_seq, link_ws_on);
 
     Ok(AuthenticatedUpstream {
         reader,
         writer,
         nonce: challenge.nonce,
         connection_generation: verified_gen,
+        link_ws_on,
     })
 }
 
 /// Request head carrying the link token, built in one allocation of its final size so no
 /// partial copy is left behind, and wiped on drop.
-fn token_request_head(
+pub(crate) fn token_request_head(
     before: &str,
     auth_kind: RelayAuthKind,
     token: &[u8],
@@ -680,6 +703,8 @@ fn serve_foreground_inner(
     }
 
     shared.signal_shutdown();
+    // Link WebSocket sockets close (1001, best effort) and are shut down within the close bound.
+    crate::link_ws::stop_all();
     let _ = parity_handle.join();
     Ok(())
 }
@@ -909,13 +934,18 @@ fn handle_client_connection(
             &[],
             br#"{"error":{"message":"cross-origin data-plane request blocked","type":"invalid_request_error","code":"origin_rejected"}}"#,
         ),
-        RouteDecision::Reject426Websocket => write_json_response(
-            &mut writer,
-            426,
-            "Upgrade Required",
-            &[],
-            br#"{"error":{"message":"Responses WebSocket transport is disabled; use HTTP","type":"invalid_request_error","code":"upgrade_required"}}"#,
-        ),
+        RouteDecision::Reject426Websocket => {
+            // The link WebSocket is tried only with ocx-child's gate open and the Home's "on" applied for
+            // the current link; otherwise today's 426, with no network I/O.
+            if crate::link_ws_advert::gate_open()
+                && let StateReadOutcome::Valid(st) = read_child_state(&shared.paths.state_file)
+                && let Ok(creds) = shared.load_live_creds()
+                && crate::link_ws_advert::advertised(&creds.link_id)
+            {
+                return crate::link_ws::serve(&mut reader, &mut writer, &req, st.tunnel_port, creds);
+            }
+            crate::link_ws::write_upgrade_required(&mut writer)
+        }
         RouteDecision::Reject404 => {
             write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#)
         }

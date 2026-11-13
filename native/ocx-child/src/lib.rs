@@ -6,6 +6,7 @@ pub mod codex_settings;
 pub mod daemon;
 pub mod http_wire;
 pub mod journal;
+pub mod link_ws;
 pub mod link_ws_advert;
 pub mod link_ws_frame;
 pub mod parity;
