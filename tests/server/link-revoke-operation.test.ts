@@ -40,7 +40,7 @@ function record(): LinkRecord {
     createdAt: "2026-11-13T00:00:00.000Z", remotePlatform: "posix", childKind: "ephemeral", explicitRoute: ROUTE, exclusive: true };
 }
 
-function harness(options: { trusted?: () => boolean; operationsPath?: () => string | undefined; onReload?: () => void; purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void } = {}) {
+function harness(options: { operationsPath?: () => string | undefined; onReload?: () => void; purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: [{ id: "link-key", name: "link:" + ALIAS, key: "k", createdAt: "2026-11-13T00:00:00Z" }] };
   const journalPath = join(root, "operations.json");
@@ -66,7 +66,6 @@ function harness(options: { trusted?: () => boolean; operationsPath?: () => stri
     readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
     linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => options.operationsPath?.() ?? journalPath,
     linkAliasLock: { lockDir: join(root, "locks"), waitMs: options.lockWaitMs ?? 0, pollMs: 250, now: () => NOW, ...(options.sleep ? { sleep: options.sleep } : {}) },
-    ...(options.trusted ? { linkRetirementTrusted: options.trusted } : {}),
     revokeApiKey: (cfg, id) => { const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
   };
   async function revoke(body: Record<string, unknown>) {
@@ -422,24 +421,6 @@ test("a resolved owner past retention is not pruned while it resumes its retirem
   expect(h.journal().operations.map(op => [op.operationId, op.state])).toEqual([[OP, "committed"]]);
 });
 
-test("a receipt under an unprotected config root is not honoured, by a plain revoke or by its owner's replay", async () => {
-  const h = harness({ trusted: () => false });
-  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
-  const at = new Date(NOW).toISOString();
-  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
-    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
-    createdAt: at, updatedAt: at, state: "unknown", finishedAt: at, error: { code: "operation_interrupted", status: 409 }, effects: [],
-  } as LinkOperation] });
-  for (const body of [{ purge: true }, { purge: true, operationId: OP }]) {
-    const refused = await h.revoke(body);
-    expect({ status: refused.status, code: code(refused) }).toEqual({ status: 503, code: "link_retirement_untrusted" });
-  }
-  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
-  expect(h.config.apiKeys?.map(key => key.id)).toEqual(["link-key"]);
-  expect(readLinkRetirement(LINK, root)).not.toBeNull();
-  expect(h.ssh).toEqual([]);
-});
-
 test("a failed_clean owner whose removal resumes from its receipt settles committed", async () => {
   const h = harness();
   // A journal write failed right after the receipt claim, so the owner was recorded clean with nothing marked.
@@ -471,14 +452,41 @@ test("an open revoke whose record is gone does not replay committed while anothe
   expect(readLinkRetirement(LINK, root)).not.toBeNull();
 });
 
-test("an owner's replay checks a mismatched receipt's provenance before replaying", async () => {
-  const h = harness({ trusted: () => false });
-  claimLinkRetirement(record(), root, () => h.store, "force", "other-op");
+test("with the record still listed, a plain purge runs the Child purge again rather than trusting a receipt", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "purge");
+  const plain = await h.revoke({ purge: true });
+  expect(plain.status).toBe(200);
+  expect(h.ssh.length).toBeGreaterThan(0);
+  expect(h.store.links).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+});
+
+test("an owner whose journal recorded the Child purge finishes from its receipt without running it again", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
   const at = new Date(NOW).toISOString();
   writeOperationsJournal(h.journalPath, { version: 1, operations: [{
-    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: at, updatedAt: at, state: "unknown", finishedAt: at, error: { code: "operation_interrupted", status: 409 },
+    effects: [{ effect: "remote_cleanup", phase: "intent", at }, { effect: "remote_cleanup", phase: "done", at }], receipt: { purged: true, linkId: LINK },
+  } as LinkOperation] });
+  const replayed = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: replayed.status, outcome: replayed.body.outcome, purged: replayed.body.purged }).toEqual({ status: 200, outcome: "committed", purged: true });
+  expect(h.ssh).toEqual([]);
+  expect(h.store.links).toEqual([]);
+});
+
+test("an owner whose journal did not record the Child purge runs it before settling committed", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
     createdAt: at, updatedAt: at, state: "unknown", finishedAt: at, error: { code: "operation_interrupted", status: 409 }, effects: [],
   } as LinkOperation] });
-  const refused = await h.revoke({ force: true, operationId: OP });
-  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 503, code: "link_retirement_untrusted" });
+  const replayed = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: replayed.status, outcome: replayed.body.outcome, purged: replayed.body.purged }).toEqual({ status: 200, outcome: "committed", purged: true });
+  expect(h.ssh.length).toBeGreaterThan(0);
+  expect(h.journal().operations[0]!.receipt).toEqual({ purged: true, linkId: LINK });
 });

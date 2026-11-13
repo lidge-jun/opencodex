@@ -1,11 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFileNoFollow, isMissingPathError } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { getConfigDir } from "../config/paths";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
-import { hardenSecretDir, hardenSecretPath, verifySecretPathAcl, windowsSecretAclApplies } from "../lib/windows-secret-acl";
+import { hardenSecretDir } from "../lib/windows-secret-acl";
 import { linkDir, linkStorePath } from "./paths";
 import { isOperationId } from "./operations-journal";
 import { parseLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
@@ -49,47 +49,6 @@ function parse(text: string, id: string): LinkRetirement {
 function sameLink(a: LinkRecord, b: LinkRecord): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
-/** A receipt whose provenance cannot be established: see readTrustedLinkRetirement. */
-export class LinkRetirementUntrustedError extends LinkRetirementError {
-  constructor(message: string) { super(message); this.name = "LinkRetirementUntrustedError"; }
-}
-const ownUid = (): number | undefined => typeof process.getuid === "function" ? process.getuid() : undefined;
-function privateDirectory(path: string): boolean {
-  const entry = lstatSync(path);
-  return entry.isDirectory() && !entry.isSymbolicLink() && (entry.mode & 0o022) === 0 && (ownUid() === undefined || entry.uid === ownUid());
-}
-/**
- * Read a receipt only when this user demonstrably wrote it (#8416). A receipt lets a removal skip the Child cleanup it
- * records, so one another principal could plant, now or before the directories were last tightened, must not be
- * honoured. On POSIX the config root and its link directory must be real directories owned by this user and writable
- * by no one else, and the receipt a single-link regular file owned by this user with no group or other access, read
- * without following a link and checked to be the file that was inspected. On Windows both directories must hold the
- * owner-only ACL and the receipt must carry this user as owner under a protected DACL. Missing is null; anything else
- * throws LinkRetirementUntrustedError, or LinkRetirementError for a malformed record.
- */
-export function readTrustedLinkRetirement(id: string, configDir: string = getConfigDir()): LinkRetirement | null {
-  const path = pathFor(id, configDir);
-  let entry;
-  try { entry = lstatSync(path); } catch (error) { if (isMissingPathError(error)) return null; throw error; }
-  const untrusted = () => new LinkRetirementUntrustedError("the link retirement receipt's provenance cannot be established");
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) throw untrusted();
-  if (windowsSecretAclApplies()) {
-    try {
-      hardenSecretDir(configDir, { required: true, timeoutMemoKey: `${configDir}::link-retirement` });
-      hardenSecretDir(linkDir(configDir), { required: true });
-    } catch { throw untrusted(); }
-    if (!verifySecretPathAcl(path)) throw untrusted();
-    return parse(readFileSync(path, "utf8"), id);
-  }
-  if (!privateDirectory(configDir) || !privateDirectory(linkDir(configDir))) throw untrusted();
-  if ((entry.mode & 0o077) !== 0 || (ownUid() !== undefined && entry.uid !== ownUid())) throw untrusted();
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const opened = fstatSync(fd);
-    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== entry.dev || opened.ino !== entry.ino) throw untrusted();
-    return parse(readFileSync(fd, "utf8"), id);
-  } finally { closeSync(fd); }
-}
 /** Missing is distinct from malformed; malformed records always throw. */
 export function readLinkRetirement(id: string, configDir: string = getConfigDir()): LinkRetirement | null {
   const path = pathFor(id, configDir);
@@ -112,8 +71,6 @@ export function claimLinkRetirement(link: LinkRecord, configDir: string = getCon
     if (process.platform === "win32") hardenSecretDir(dir, { required: true });
     else chmodSync(dir, 0o700);
     atomicWriteFileNoFollow(path, `${JSON.stringify(candidate, null, 2)}\n`, undefined, {}, { exclusive: true });
-    // readTrustedLinkRetirement requires this user as owner under a protected DACL on Windows.
-    if (process.platform === "win32") hardenSecretPath(path, { required: true });
     return candidate;
   }, configDir);
 }

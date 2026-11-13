@@ -9,7 +9,7 @@ import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-arg
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
-import { claimLinkRetirement, clearLinkRetirement, LinkRetirementUntrustedError, readLinkRetirement, readTrustedLinkRetirement, type LinkRetirementMode } from "../../link/retirement";
+import { claimLinkRetirement, clearLinkRetirement, readLinkRetirement, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
@@ -27,7 +27,7 @@ import { readManagementJsonBodyOr, readOptionalManagementJsonBody, rethrowManage
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, resumedRevokeJournal, retirementOwner, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, cleanupRecorded, replayOperation, resumedRevokeJournal, retirementOwner, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
 import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -329,9 +329,9 @@ async function resumeRetirementBeforeReplay(
   try {
     const op = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id);
     if (!op || op.kind !== "revoke" || op.digest !== operation.digest || op.linkId !== id) return null;
-    receipt = readReceipt(ctx, id);
+    receipt = readLinkRetirement(id);
     recordListed = readStoreFor(ctx).links.some(link => link.id === id);
-  } catch (error) { return error instanceof LinkRetirementUntrustedError ? untrustedRetirement() : fail("link_remove_failed", "The link retirement could not be read.", 503); }
+  } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
   // Another identity's receipt is left alone; replay then cannot settle committed while it is outstanding (recoverRevoke).
   if (!receipt || receipt.operationId !== operation.id || receipt.mode !== removalMode(force, purge)) return null;
   let releaseLink: (() => void) | null = null;
@@ -353,26 +353,14 @@ function readRemovalTarget(ctx: ManagementContext, id: string):
   let receipt: ReturnType<typeof readLinkRetirement>;
   let found: LinkStore["links"][number] | undefined;
   try {
-    receipt = readReceipt(ctx, id);
+    receipt = readLinkRetirement(id);
     found = readStoreFor(ctx).links.find(link => link.id === id);
-  } catch (error) {
-    return { response: error instanceof LinkRetirementUntrustedError ? untrustedRetirement() : fail("link_remove_failed", "The link retirement could not be read.", 503) };
-  }
+  } catch { return { response: fail("link_remove_failed", "The link retirement could not be read.", 503) }; }
   if (!found && !receipt) return { response: fail("link_not_found", "The link was not found.", 404) };
   if (receipt && found && JSON.stringify(found) !== JSON.stringify(receipt.link)) return { response: fail("link_changed", "The link changed during removal.", 409) };
   return { record: receipt?.link ?? { ...found! }, receipt };
 }
 
-/**
- * A receipt is honoured only when its provenance holds (readTrustedLinkRetirement); a receipt it cannot vouch for throws
- * LinkRetirementUntrustedError. deps.linkRetirementTrusted returning false makes any present receipt untrusted (tests).
- */
-function readReceipt(ctx: ManagementContext, id: string): ReturnType<typeof readLinkRetirement> {
-  if (ctx.deps.linkRetirementTrusted?.() === false && readLinkRetirement(id)) throw new LinkRetirementUntrustedError("untrusted by configuration");
-  return readTrustedLinkRetirement(id);
-}
-const untrustedRetirement = (): Response => fail("link_retirement_untrusted",
-  "This link's removal was interrupted, but the configuration directory is not protected, so its receipt cannot be trusted. Restrict the OpenCodex configuration directory to your user, then repeat the removal.", 503);
 
 async function removeReserved(
   ctx: ManagementContext,
@@ -392,7 +380,13 @@ async function removeReserved(
   }
   const release = state.supervisor.holdLink?.(id);
   try {
-    if (!receipt) await state.supervisor.stopLink(id);
+    // A receipt is never evidence that the Child was cleaned up (#8416): while the record is listed the cleanup runs
+    // again unless the owning journal entry recorded it (cleanupRecorded), as a removal on dev always runs it. Once the
+    // record is gone the commit already followed a cleanup, and the receipt only drives the local post-commit work.
+    let listed: boolean;
+    try { listed = readStoreFor(ctx).links.some(link => link.id === id); } catch { return fail("link_remove_failed", "The link store could not be read.", 503); }
+    const cleanupDone = receipt !== null && (!listed || cleanupRecorded(ctx, receipt));
+    if (listed) await state.supervisor.stopLink(id);
     const restartTunnel = async (): Promise<void> => {
       release?.();
       try {
@@ -402,7 +396,7 @@ async function removeReserved(
         console.warn(`[link] tunnel restart failed linkId=${id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
-    if (!receipt && !force && record.direction === "hub-initiated") {
+    if (!cleanupDone && !force && record.direction === "hub-initiated") {
       journal.intent("remote_cleanup");
       try {
         const runner = runnerFor(ctx);

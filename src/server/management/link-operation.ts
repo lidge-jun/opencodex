@@ -53,6 +53,18 @@ function retirementOutstanding(op: LinkOperation): boolean {
   try { return readLinkRetirement(op.linkId) !== null; } catch { return true; }
 }
 
+/**
+ * Whether the journal recorded the Child cleanup a receipt stands for (#8416): its owner (the revoke of that link under
+ * the receipt's id) marked remote_cleanup done and, for a purge, holds the Child's purged:true for that link. This is
+ * the evidence a replayed purge already answers from; the receipt alone is not. Unreadable is false.
+ */
+export function cleanupRecorded(ctx: ManagementContext, receipt: LinkRetirement): boolean {
+  let owner: LinkOperation | undefined;
+  try { owner = retirementOwner(readOperationsJournal(journalPathFor(ctx)), receipt); } catch { return false; }
+  if (!owner || !hasEffect(owner, "remote_cleanup", "done")) return false;
+  return receipt.mode !== "purge" || (owner.receipt?.purged === true && owner.receipt.linkId === receipt.link.id);
+}
+
 /** The journalled owner of a retirement receipt: the revoke of that same link under the receipt's operation id. */
 export function retirementOwner(journal: OperationsJournal, receipt: LinkRetirement): LinkOperation | undefined {
   if (receipt.operationId === undefined) return undefined;
@@ -231,16 +243,17 @@ export function settleRevokeAfterRetirement(ctx: ManagementContext, operationId:
  * resume, never a finished removal whose entry stays unknown with nothing left to resume.
  */
 export function resumedRevokeJournal(ctx: ManagementContext, operationId: string, markEffects: boolean): RevokeJournal {
-  const mark = (effect: RevokeEffect, phase: "intent" | "done") => updateJournalPinned(journalPathFor(ctx), nowOf(ctx), journal => {
+  const mark = (effect: RevokeEffect, phase: "intent" | "done", receipt?: { purged: true; linkId: string }) => updateJournalPinned(journalPathFor(ctx), nowOf(ctx), journal => {
     if (!markEffects) return;
     const op = findOperation(journal, operationId);
     if (!op) throw new Error("the revoke operation is no longer journalled");
     op.effects.push({ effect, phase, at: iso(ctx) });
+    if (receipt) op.receipt = receipt;
     op.updatedAt = iso(ctx);
   });
   return {
     operationId,
-    intent: effect => mark(effect, "intent"), done: effect => mark(effect, "done"),
+    intent: effect => mark(effect, "intent"), done: (effect, receipt) => mark(effect, "done", receipt),
     beforeReceiptCleared: () => settleRevokeAfterRetirement(ctx, operationId),
     finish: async response => response,
   };
