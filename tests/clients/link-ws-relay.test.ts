@@ -181,8 +181,8 @@ describe("link WebSocket on the Child: an advertising Home", () => {
     const leg = home.sockets.at(-1)!;
     codex.ws.send("x".repeat(8 * 1024 * 1024 + 1));
     expect((await codex.closed()).code).toBe(1009);
-    // Bun refuses it before the handler; the Home leg then closes like any other socket Codex lost.
-    expect(await leg.until(frame => frame.type === "close")).toMatchObject({ type: "close" });
+    // Bun refuses it before the handler and reports its own close (1006 with a reason): the Home gets 1011, not a drop.
+    expect(await leg.until(frame => frame.type === "close")).toMatchObject({ type: "close", code: 1011 });
     expect(leg.frames.some(frame => frame.type === "text")).toBe(false);
   });
 
@@ -277,7 +277,9 @@ describe("link WebSocket on the Child: an advertising Home", () => {
 describe("link WebSocket on the Child: limits and setup", () => {
   test("a closing socket keeps its slot until the Home connection has actually closed", async () => {
     const clock = manualTimers();
-    const { port, home } = await setup({ websocket: { timers: clock.timers, limits: { openSockets: 1 } } });
+    let released!: () => void;
+    const releasedOnce = new Promise<void>(resolve => { released = resolve; });
+    const { port, home } = await setup({ websocket: { timers: clock.timers, limits: { openSockets: 1 }, onReleased: () => released() } });
     const first = await CodexSocket.open(port);
     const leg = home.sockets.at(-1)!;
     first.ws.close(1000);
@@ -286,13 +288,11 @@ describe("link WebSocket on the Child: limits and setup", () => {
     expect(clock.fire(5_000)).toBe(1);
     await leg.closed();
     // Released only by the close event of the Home connection, which follows the destroy.
-    for (;;) {
-      const { socket, answer } = rawUpgrade(port);
-      const result = await answer;
-      socket.destroy();
-      if (result.status === 101) break;
-      expect(result.status).toBe(426);
-    }
+    await releasedOnce;
+    const { socket, answer } = rawUpgrade(port);
+    const result = await answer;
+    socket.destroy();
+    expect(result.status).toBe(101);
   });
 
   test("a stop aborts upgrades still in setup, in the tunnel hold and at the Home, and keeps none of them", async () => {
@@ -307,7 +307,8 @@ describe("link WebSocket on the Child: limits and setup", () => {
     await inHold;
     await hold.child.stop(false);
     children.splice(children.indexOf(hold.child), 1);
-    expect([426, 503]).toContain((await waiting.answer.catch(() => ({ status: 426 }))).status);
+    // A stop of the listener (not a draining supervisor) ends the held upgrade with today's 426.
+    expect((await waiting.answer).status).toBe(426);
     expect(hold.homeConnections()).toBe(0);
 
     let arrived!: () => void;
@@ -436,7 +437,9 @@ describe("link WebSocket on the Child: accounting and diagnostics", () => {
     const gone = new Promise<void>(resolve => { released = resolve; });
     const ends: string[] = [];
     const leg = new HomeLeg(socket, Buffer.alloc(0), LINK_CHILD_WS_LIMITS, manualTimers().timers,
-      { toHome() {}, fromHome() {}, uncounted() {}, end() {} }, reason => ends.push(reason), () => released());
+      () => ({ toHome() {}, fromHome() {}, uncounted() {}, end() {} }), reason => ends.push(reason), () => released());
+    // server.upgrade returned true; Bun has not run open() yet.
+    leg.upgraded();
     // The connection fails (a reset, an error) after the upgrade and before Bun runs open().
     socket.destroy();
     await gone;
@@ -456,7 +459,7 @@ describe("link WebSocket on the Child: accounting and diagnostics", () => {
     const head = Buffer.concat([Buffer.from([0x81, completed.length]), completed, Buffer.from([0xc1, 1, 0x78])]);
     const ends: string[] = [];
     const leg = new HomeLeg(socket, head, LINK_CHILD_WS_LIMITS, manualTimers().timers,
-      { toHome() {}, fromHome() {}, uncounted() {}, end() {} }, reason => ends.push(reason), () => {});
+      () => ({ toHome() {}, fromHome() {}, uncounted() {}, end() {} }), reason => ends.push(reason), () => {});
     const calls: string[] = [];
     // attach() feeds the whole head to the relay in one call.
     leg.attach({ send: (data: string | Bun.BufferSource) => { calls.push("send:" + String(data)); return 1; }, getBufferedAmount: () => 0,
