@@ -29,6 +29,7 @@ import {
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
+import { comboAdvertisesEffortUnion, unionEfforts, unionStrings } from "../../combos/capability-policy";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
@@ -113,11 +114,15 @@ export function comboCatalogOmissionReason(
     return "incomplete_metadata";
   }
 
-  const inputModalities = intersectStrings(
-    members.map(member => member.inputModalities ?? ["text"]),
-  );
+  const inputModalities = comboInputModalities(combo, members);
   if (inputModalities.length === 0) return "incompatible_modalities";
   return null;
+}
+
+/** `union` advertises what any member serves (natively or through the vision sidecar). */
+function comboInputModalities(combo: NormalizedComboConfig, members: readonly CatalogModel[]): string[] {
+  const lists = members.map(member => member.inputModalities ?? ["text"]);
+  return combo.capabilityPolicy === "union" ? unionStrings(lists) : intersectStrings(lists);
 }
 
 export function deriveComboCatalogModel(
@@ -127,9 +132,7 @@ export function deriveComboCatalogModel(
 ): CatalogModel | null {
   if (comboCatalogOmissionReason(combo, members) !== null) return null;
 
-  const derivedInputModalities = intersectStrings(
-    members.map(member => member.inputModalities ?? ["text"]),
-  );
+  const derivedInputModalities = comboInputModalities(combo, members);
   const inputModalities = combo.imageInput === "disabled"
     ? derivedInputModalities.filter(modality => modality !== "image")
     : derivedInputModalities;
@@ -149,7 +152,9 @@ export function deriveComboCatalogModel(
     : knownLadders;
   const reasoningEfforts = advertisedLadders.length === 0
     ? []
-    : intersectStrings(advertisedLadders);
+    : comboAdvertisesEffortUnion(combo.capabilityPolicy, combo.reasoningEffortMode)
+      ? unionEfforts(advertisedLadders)
+      : intersectStrings(advertisedLadders);
   const contextWindow = Math.min(...members.map(member => member.contextWindow!));
   const limitingMembers = members.filter(member => member.contextWindow === contextWindow);
   const hasLimitingContextCapMetadata = limitingMembers.some(
