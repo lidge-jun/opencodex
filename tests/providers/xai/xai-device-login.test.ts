@@ -515,7 +515,7 @@ describe("xAI device login", () => {
       const calls = mockXai(boundedDevice({ expires_in: 10, interval: 1 }), [
         Response.json({ error: "slow_down" }, { status: 429, headers: { "retry-after": "60" } }),
       ]);
-      await expect(loginXaiDevice({}, { sleep: f.sleep })).rejects.toMatchObject({ oauthError: "expired_token" });
+      await expect(loginXaiDevice({}, { sleep: f.sleep })).rejects.toMatchObject({ oauthError: "slow_down", status: 429 });
       expect(f.waits).toEqual([1_000, 9_000]);
       expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
     } finally { f.clock.mockRestore(); }
@@ -614,7 +614,7 @@ describe("xAI device login", () => {
           Response.json(body, { status, headers: { "retry-after": "9".repeat(310) } }), granted(),
         ]);
         const error = await loginXaiDevice({}, { sleep: f.sleep }).catch(e => e);
-        expect(classifyLoginCodeError(error)).toBe(body.error === "slow_down" ? "invalid_or_expired_code" : "provider_unreachable");
+        expect(classifyLoginCodeError(error)).toBe(status === 400 ? "invalid_or_expired_code" : "provider_unreachable");
         expect(f.waits).toEqual([1_000, 9_000]);
         expect(f.waits.every(ms => Number.isFinite(ms) && ms <= 2 ** 31 - 1)).toBe(true);
         expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);

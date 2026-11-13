@@ -348,6 +348,17 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     method: "POST", redirect: "error",
     body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(device && DEVICE_OPT_IN_PROVIDERS.has(provider) ? { device: true } : {}), ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
   }, pinned));
+  const xaiDevice = provider === "xai" && device;
+  if (xaiDevice && (!start.flowId?.trim() || !start.url?.trim() || !start.deviceCode?.trim())) {
+    let cleanupFailed = false;
+    try {
+      await runtimeRequest("/api/oauth/login/cancel", {
+        method: "POST", redirect: "error",
+        body: JSON.stringify({ provider, ...(start.flowId?.trim() ? { flowId: start.flowId } : {}) }),
+      }, pinned);
+    } catch { cleanupFailed = true; }
+    throw new CliUsageError(`Running proxy does not support xAI device login; restart or upgrade it.${cleanupFailed ? " Could not cancel the unintended login flow." : ""}`);
+  }
   if (!wantsJson) {
     writeLoginInstructions([
       start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
@@ -366,8 +377,6 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     printData({ ...start, modelSelection: modelSelectionNextSteps(provider, true) }, wantsJson, modelSelectionGuidance(provider, true));
     return;
   }
-  const xaiDevice = provider === "xai" && device;
-  if (xaiDevice && !start.flowId) throw new CliUsageError("xAI device login did not return a flow id");
   // A device grant waits on a person at another machine: outlast xAI's 30-minute code.
   for (let attempt = 0; attempt < (device ? 930 : 100); attempt++) {
     await Bun.sleep(2_000);

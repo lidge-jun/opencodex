@@ -340,3 +340,5 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 Routed Grok compaction uses the existing adapter and summary contract after a same-provider
 [compaction routing model override](../transports/responses-failover.md#compaction-routing-overrides); a
 cross-provider override runs the portable summarizer on the selected provider instead.
+
+For device poll expiry, HTTP 400 `slow_down` remains an expired grant; HTTP 429 or server failure retains the provider failure classification even when it carries `slow_down`.

@@ -646,7 +646,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--flow` | string | Required for Codex; selects a native Kiro or xAI flow when supplied. |
 | `--json` | boolean | Emit cancellation receipt. |
 
-- Codex cancellation sends flowId. Other providers send provider; Kiro additionally forwards a supplied flowId.
+- Codex cancellation sends flowId. Other providers send provider; Kiro and xAI additionally forward a supplied flowId.
 
 ### `ocx account reset-credits`
 

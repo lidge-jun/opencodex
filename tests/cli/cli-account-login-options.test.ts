@@ -145,8 +145,20 @@ describe("login flow-specific options", () => {
     expect(f.probes()).toBe(0); expect(f.calls).toEqual([]); expect(f.reads()).toBe(0);
     expect(JSON.stringify(error.mock.calls)).toContain("--no-wait");
   });
+  for (const flags of [["--no-wait"], ["--no-wait", "--json"], []]) test(`xAI rejects an old proxy handoff ${flags.join(" ")}`, async () => {
+    const f = fixture([{ url: "https://example.test/callback", instructions: "callback" }, { ok: true }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", ...flags], f.deps)).not.toBe(0);
+    expect(log).not.toHaveBeenCalled();
+    expect(JSON.stringify(error.mock.calls)).toMatch(/restart|upgrade/i);
+    expect(f.calls[1]?.body).toEqual({ provider: "xai" });
+  });
+  test("xAI cancels an incomplete identified handoff by flow", async () => {
+    const f = fixture([{ flowId: "flow-1", url: "https://example.test/callback" }, { ok: true }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--no-wait", "--json"], f.deps)).not.toBe(0);
+    expect(f.calls[1]?.body).toEqual({ provider: "xai", flowId: "flow-1" });
+  });
   test("xAI --device asks the proxy for its device grant; a provider without one is refused", async () => {
-    const f = fixture([{ url: "https://accounts.x.ai/oauth2/device?user_code=ABCD", deviceCode: "ABCD", browserLaunch: "skipped" }]);
+    const f = fixture([{ url: "https://accounts.x.ai/oauth2/device?user_code=ABCD", deviceCode: "ABCD", flowId: "flow-1", browserLaunch: "skipped" }]);
     expect(await handleAccountAuthCommand("login", ["xai", "--device", "--no-wait", "--json"], f.deps)).toBe(0);
     expect(f.calls[0]?.body).toEqual({ provider: "xai", addAccount: true, device: true });
     expect(output().deviceCode).toBe("ABCD");
@@ -160,17 +172,17 @@ describe("login flow-specific options", () => {
     expect(refused.calls).toHaveLength(0);
   });
   test("xAI device reauth succeeds for an inactive account while the active account needs reauth", async () => {
-    const f = fixture([{ flowId: "flow-1", deviceCode: "ABCD" },
+    const f = fixture([{ flowId: "flow-1", url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" },
       { flowId: "flow-1", loggedIn: false, done: true, status: "complete" }]);
     expect(await handleAccountAuthCommand("login", ["xai", "--device", "--reauth", "--id", "inactive"], f.deps)).toBe(0);
     expect(f.calls[0]?.body).toEqual({ provider: "xai", addAccount: false, device: true, accountId: "inactive", reauth: true });
     expect(f.calls[1]?.url).toContain("flowId=flow-1");
   });
   test("xAI device requires and polls its own flow id, refusing a replacement success", async () => {
-    const missing = fixture([{ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" }]);
+    const missing = fixture([{ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" }, { ok: true }]);
     expect(await handleAccountAuthCommand("login", ["xai", "--device"], missing.deps)).not.toBe(0);
-    expect(missing.calls).toHaveLength(1);
-    const replacement = fixture([{ flowId: "first", deviceCode: "ABCD" },
+    expect(missing.calls).toHaveLength(2);
+    const replacement = fixture([{ flowId: "first", url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" },
       { flowId: "second", loggedIn: true, done: true, status: "complete" }]);
     expect(await handleAccountAuthCommand("login", ["xai", "--device"], replacement.deps)).not.toBe(0);
     expect(replacement.calls[1]?.url).toContain("provider=xai&flowId=first");
@@ -284,7 +296,7 @@ describe("login terminal and code boundaries", () => {
         : Response.json({access_token:'private-token',refresh_token:'private-refresh',expires_in:3600});
       let handoff; await loginXaiDevice({onAuth: x => handoff = x}, {sleep: async () => {}});
       await handleAccountAuthCommand('login', ['xai','--device','--no-wait', ...(process.argv.includes('json-mode') ? ['--json'] : [])], {
-        baseUrl:'http://127.0.0.1:32100', fetchImpl: async () => Response.json(handoff)
+        baseUrl:'http://127.0.0.1:32100', fetchImpl: async () => Response.json({...handoff, flowId: "flow-1"})
       });`;
     for (const json of [false, true]) {
       const child = Bun.spawn([process.execPath, "--eval", script, ...(json ? ["json-mode"] : [])], { cwd: home.root, env: { ...process.env, HOME: home.root, OPENCODEX_HOME: home.codexHome }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
