@@ -319,8 +319,8 @@ proxy does not have:
 
 - `{ "source": "provider-credits", "providerCredits": <number>, "creditPriceUsd": <number> }` — the
   total is `providerCredits x creditPriceUsd` and the four token component fields are placeholders,
-  not a split. Every attempt that shares one credit price reports this; a refused row with no
-  credits reports zero credits rather than a token estimate.
+  not a split. Every attempt that shares one credit price reports this; an explicit zero credit
+  reading reports zero. Missing credits with no output leave the cost unavailable.
 - `{ "source": "mixed" }` — the attempts were not all billed the same way (a credit attempt beside a
   token-priced one, or two credit prices), so only the per-attempt estimates have a split; the
   parent total is still their sum.

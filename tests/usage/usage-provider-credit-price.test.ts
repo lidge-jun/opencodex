@@ -50,9 +50,9 @@ describe("provider credit price", () => {
     expect(estimate?.cost.total).toBeCloseTo(600_000 * 4 / 1e6 + 400 * 20 / 1e6, 6);
   });
 
-  test("a refused or cancelled row (no credits, no output) costs nothing when a price is set", () => {
+  test("a row with an explicit zero credit reading costs nothing when a price is set", () => {
     refreshUserCostOverlays(kiroConfig(0.04));
-    const refused = { inputTokens: 130_000, outputTokens: 0, estimated: true };
+    const refused = { inputTokens: 130_000, outputTokens: 0, providerCredits: 0, estimated: true };
     const estimate = estimateRequestCost({ provider: "kiro", model: "claude-opus-5.5", usage: refused, usageStatus: "estimated" });
 
     expect(estimate?.cost.total).toBe(0);
@@ -157,9 +157,9 @@ describe("credit billing provenance", () => {
     expect(estimate?.billing).toBeUndefined();
   });
 
-  test("a refused row is a zero credit charge, not a token estimate", () => {
+  test("an explicit zero credit reading is a zero credit charge, not a token estimate", () => {
     refreshUserCostOverlays(kiroConfig(0.04));
-    const refused = { inputTokens: 130_000, outputTokens: 0, estimated: true };
+    const refused = { inputTokens: 130_000, outputTokens: 0, providerCredits: 0, estimated: true };
     const estimate = estimateRequestCost({ provider: "kiro", model: "claude-opus-5.5", usage: refused, usageStatus: "estimated" });
 
     expect(estimate?.cost.total).toBe(0);

@@ -11,6 +11,7 @@ import {
   installBillingFixturesPricing,
   legacyTokenRowWithoutBilling,
   mixedComboRow,
+  mixedThreeLegComboRow,
   mixedExactComboRow,
   staleCreditProvenanceRow,
   tokenPriorityRow,
@@ -234,5 +235,15 @@ test("an older row without a billing field is still read as token-priced", async
     expect(text).toContain("Matched price key");
     expect(text).toContain("Price source");
     expect(text).toContain("≥$1.2120");
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
+
+test("mixed credit, lower-bound, and exact token legs retain the floor", async () => {
+  mockLogs([mixedThreeLegComboRow("mixed-three")]);
+  const { root } = await mountAndOpen("mixed-three");
+  try {
+    expect(costSection().textContent).toContain("≥");
+    expect(costSection().textContent).toContain("known lower bound");
   } finally { await act(async () => { root.unmount(); }); }
 });
