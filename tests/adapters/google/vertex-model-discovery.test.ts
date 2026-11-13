@@ -189,6 +189,35 @@ describe("Vertex publisherModels pagination", () => {
     expect(listing).toEqual({ ok: true, value: first });
   });
 
+  test("an empty Vertex page continues, while a non-Vertex follow-up envelope is not read as the last page", async () => {
+    const empty = await collectVertexPublisherModelPages(firstUrl, { publisherModels: publisher("gemini-a"), nextPageToken: "t1" }, limits,
+      pages({ t1: { nextPageToken: "t2" }, t2: {} }));
+    expect(empty).toEqual({ ok: true, value: { publisherModels: publisher("gemini-a") } });
+    for (const page of [{ data: [{ id: "gemini-b" }] }, { error: { code: 500 } }, [{ name: "x" }]]) {
+      const listing = await collectVertexPublisherModelPages(firstUrl, { publisherModels: publisher("gemini-a"), nextPageToken: "t1" }, limits,
+        pages({ t1: page }));
+      expect(listing).toMatchObject({ ok: false, reason: "incomplete" });
+    }
+  });
+
+  test("the byte ceiling counts the bytes read for page one, and the caller's deadline bounds every page", async () => {
+    const small = { publisherModels: publisher("gemini-b") };
+    const pageBytes = new TextEncoder().encode(JSON.stringify(small)).byteLength;
+    const fits = await collectVertexPublisherModelPages(firstUrl, { publisherModels: [], nextPageToken: "t1" },
+      { ...limits, maxResponseBytes: pageBytes + 100, firstPageBytes: 50 }, pages({ t1: small }));
+    expect(fits.ok).toBe(true);
+    const over = await collectVertexPublisherModelPages(firstUrl, { publisherModels: [], nextPageToken: "t1" },
+      { ...limits, maxResponseBytes: pageBytes + 100, firstPageBytes: 150 }, pages({ t1: small }));
+    expect(over.ok).toBe(false);
+
+    const expired = AbortSignal.abort();
+    let pageSignal: AbortSignal | undefined;
+    const late = await collectVertexPublisherModelPages(firstUrl, { publisherModels: [], nextPageToken: "t1" }, { ...limits, signal: expired },
+      async (_url, signal) => { pageSignal = signal; signal.throwIfAborted(); return Response.json(small); });
+    expect(pageSignal).toBe(expired);
+    expect(late).toMatchObject({ ok: false, diagnostic: expect.stringContaining("time budget") });
+  });
+
   test("an unfinished walk is reported incomplete, never published as the whole roster", async () => {
     const endless: Record<string, unknown> = {};
     for (let page = 1; page <= VERTEX_DISCOVERY_MAX_PAGES + 2; page++) {

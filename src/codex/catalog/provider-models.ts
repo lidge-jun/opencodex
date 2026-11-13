@@ -102,9 +102,11 @@ import {
 } from "../../providers/model-discovery";
 import {
   collectVertexPublisherModelPages,
+  countDiscoveryResponseBytes,
   extractGoogleNativeModelItems,
   resolveObservedVertexDiscoveryToken,
   resolveVertexDiscoveryToken,
+  vertexDiscoveryDeadline,
 } from "../../providers/google-vertex-model-discovery";
 import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
@@ -285,6 +287,8 @@ export async function fetchProviderModelsWithAuth(
     }
     return observed(configured, "authoritative");
   }
+  // One Vertex deadline covers ADC, the first request and every follow-up page.
+  const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline() : undefined;
   const auth: ModelsAuthResolution = prov.authMode === "oauth" && !mayResolveModelsOAuth(name, prov)
     ? { apiKey: undefined, observed: resolveAuth.kind === "observed" }
     : captured.observedAuth ?? (resolveAuth.kind === "refreshing"
@@ -303,7 +307,7 @@ export async function fetchProviderModelsWithAuth(
         .catch(() => ({ apiKey: undefined, observed: false }))
       : {
         apiKey: effectiveGoogleMode(name, prov) === "vertex"
-          ? await resolveVertexDiscoveryToken(prov)
+          ? await resolveVertexDiscoveryToken(prov, vertexDeadline)
           : await resolveModelsAuthToken(name, prov),
         observed: false,
       }
@@ -765,7 +769,7 @@ export async function fetchProviderModelsWithAuth(
       }, outboundDependencies)
       : await providerOutboundGet(name, prov, url, {
         headers,
-        signal: AbortSignal.timeout(8000),
+        signal: vertexDeadline ?? AbortSignal.timeout(8000),
       }, outboundDependencies);
     const redirectError = await providerRedirectError(res, url);
     if (redirectError) {
@@ -790,7 +794,8 @@ export async function fetchProviderModelsWithAuth(
     const contentType = (
       res.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "missing"
     ).slice(0, 80);
-    const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+    const vertexFirstPage = vertexDeadline ? countDiscoveryResponseBytes(res) : undefined;
+    const bounded = await readBoundedDiscoveryJson(vertexFirstPage?.response ?? res, discovery.maxResponseBytes);
     if (!bounded.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       const diagnostic = bounded.reason === "response_too_large"
@@ -864,7 +869,8 @@ export async function fetchProviderModelsWithAuth(
       return observed(withConfiguredRetention(azureMetadata ? live : forCache, { warnDrops: true }), "authoritative");
     }
     const listing = effectiveGoogleMode(name, prov) === "vertex"
-      ? await collectVertexPublisherModelPages(url, bounded.value, discovery,
+      ? await collectVertexPublisherModelPages(url, bounded.value,
+        { ...discovery, firstPageBytes: vertexFirstPage?.bytes(), signal: vertexDeadline },
         (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies))
       : { ok: true as const, value: bounded.value };
     if (!listing.ok) {

@@ -150,7 +150,7 @@ export function resolveObservedVertexDiscoveryToken(provider: OcxProviderConfig)
  */
 export async function resolveVertexDiscoveryToken(
   provider: OcxProviderConfig,
-  signal: AbortSignal = AbortSignal.timeout(VERTEX_DISCOVERY_TIMEOUT_MS),
+  signal: AbortSignal = vertexDiscoveryDeadline(),
 ): Promise<string | undefined> {
   if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
   const credential = selectVertexDiscoveryCredential(provider);
@@ -227,15 +227,23 @@ export type VertexPublisherModelListing =
   | { ok: true; value: unknown }
   | { ok: false; reason: "incomplete"; diagnostic: string };
 
-function countingResponse(response: Response, onBytes: (bytes: number) => void): Response {
-  if (!response.body) return response;
+/** Wrap a discovery response so the bytes actually read from its body can be counted. */
+export function countDiscoveryResponseBytes(response: Response): { response: Response; bytes: () => number } {
+  let total = 0;
+  if (!response.body) return { response, bytes: () => total };
   const counted = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
-      onBytes(chunk.byteLength);
+      total += chunk.byteLength;
       controller.enqueue(chunk);
     },
   }));
-  return new Response(counted, { status: response.status, headers: response.headers });
+  return { response: new Response(counted, { status: response.status, headers: response.headers }), bytes: () => total };
+}
+
+/** The single deadline one Vertex discovery shares across ADC, the first request and every page. */
+export function vertexDiscoveryDeadline(cancel?: AbortSignal): AbortSignal {
+  const budget = AbortSignal.timeout(VERTEX_DISCOVERY_TIMEOUT_MS);
+  return cancel ? AbortSignal.any([cancel, budget]) : budget;
 }
 
 function nextVertexPageToken(page: Record<string, unknown>): string | undefined | null {
@@ -249,10 +257,11 @@ function nextVertexPageToken(page: Record<string, unknown>): string | undefined 
  *
  * One listing is bounded three ways: at most `VERTEX_DISCOVERY_MAX_PAGES` requests, at most the
  * discovery row limit across every page, and at most the discovery byte limit across every page
- * (the first page is counted by its re-serialized size, which never exceeds what was read). When
- * a bound, a page request, the shared deadline, or a repeated token stops the walk before the
- * last page, the listing is reported incomplete: publishing the pages already read as the
- * authoritative roster would drop every model on the pages that were not.
+ * (`firstPageBytes` is the byte count the caller read for page one). Every page runs under the
+ * caller's `signal`, the same deadline that bounded ADC and the first request. When a bound, a
+ * page request, the deadline, a repeated token, or a follow-up page that is not a Vertex page
+ * stops the walk before the last page, the listing is reported incomplete: publishing the pages
+ * already read as the authoritative roster would drop every model on the pages that were not.
  *
  * A first page without a `publisherModels` array is returned unchanged for the caller's generic
  * envelope handling (an OpenAI-compatible gateway in front of Vertex).
@@ -260,7 +269,7 @@ function nextVertexPageToken(page: Record<string, unknown>): string | undefined 
 export async function collectVertexPublisherModelPages(
   firstUrl: string,
   firstValue: unknown,
-  limits: { maxModels: number; maxResponseBytes: number },
+  limits: { maxModels: number; maxResponseBytes: number; firstPageBytes?: number; signal?: AbortSignal },
   fetchPage: (url: string, signal: AbortSignal) => Promise<Response>,
 ): Promise<VertexPublisherModelListing> {
   const first = firstValue !== null && typeof firstValue === "object" && !Array.isArray(firstValue)
@@ -273,9 +282,9 @@ export async function collectVertexPublisherModelPages(
   const maxRows = Math.min(limits.maxModels, MODEL_DISCOVERY_MAX_MODELS);
   const maxBytes = Math.min(limits.maxResponseBytes, MODEL_DISCOVERY_MAX_RESPONSE_BYTES);
   const rows: unknown[] = [...first.publisherModels];
-  let bytes = new TextEncoder().encode(JSON.stringify(firstValue)).byteLength;
+  let bytes = limits.firstPageBytes ?? new TextEncoder().encode(JSON.stringify(firstValue)).byteLength;
   const seenTokens = new Set<string>();
-  const signal = AbortSignal.timeout(VERTEX_DISCOVERY_TIMEOUT_MS);
+  const signal = limits.signal ?? vertexDiscoveryDeadline();
   const incomplete = (diagnostic: string): VertexPublisherModelListing =>
     ({ ok: false, reason: "incomplete", diagnostic: `${diagnostic} after ${seenTokens.size + 1} page(s) and ${rows.length} row(s)` });
 
@@ -295,7 +304,9 @@ export async function collectVertexPublisherModelPages(
         try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }
         return incomplete(`page request failed with HTTP ${response.status}`);
       }
-      const read = await readBoundedDiscoveryJson(countingResponse(response, count => { bytes += count; }), maxBytes - bytes);
+      const counted = countDiscoveryResponseBytes(response);
+      const read = await readBoundedDiscoveryJson(counted.response, maxBytes - bytes);
+      bytes += counted.bytes();
       if (!read.ok) {
         return incomplete(read.reason === "response_too_large" ? `exceeded the ${maxBytes}-byte listing limit` : "returned an invalid page");
       }
@@ -304,7 +315,12 @@ export async function collectVertexPublisherModelPages(
     } catch {
       return incomplete(signal.aborted ? "exceeded the discovery time budget" : "page request failed");
     }
-    if (!page || (page.publisherModels !== undefined && !Array.isArray(page.publisherModels))) {
+    // Google omits an empty repeated field, so an empty Vertex page is `{}` or carries only its
+    // token. Anything else without `publisherModels` (a gateway `data[]`, an error body) is not a
+    // Vertex page, and treating it as an empty last page would publish page one as the whole roster.
+    const vertexPage = page !== undefined && (Array.isArray(page.publisherModels)
+      || (page.publisherModels === undefined && Object.keys(page).every(key => key === "nextPageToken")));
+    if (!page || !vertexPage) {
       return incomplete("returned a malformed page");
     }
     if (Array.isArray(page.publisherModels)) rows.push(...page.publisherModels);

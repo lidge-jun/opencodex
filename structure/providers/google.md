@@ -59,18 +59,21 @@ discovery credential the way inference does: a `gcp-sa:` marker uses that servic
 explicit `keychain:` or `$ENV` reference uses that key alone, and when it cannot be read
 discovery sends nothing and the catalog degrades, matching the routed-config rejection of the same
 reference, so `GOOGLE_CLOUD_API_KEY` and host ADC never stand in for it; otherwise a literal key,
-then `GOOGLE_CLOUD_API_KEY`, then host ADC. ADC token resolution is bounded by the discovery
-deadline (`VERTEX_DISCOVERY_TIMEOUT_MS`), and by the request for the management probe.
-`nextPageToken` is followed under one deadline with three ceilings across all pages: five
-requests, the discovery row limit and the discovery byte limit. A walk stopped by a ceiling, a
-failed page, a malformed or repeated token, or the deadline is reported as an incomplete listing;
-the catalog keeps its stale or configured rows and the probe fails, so a partial roster is never
-cached as authoritative. Rows keep Gemini and Gemma chat models and drop embeddings, speech, Live,
+then `GOOGLE_CLOUD_API_KEY`, then host ADC. One deadline (`vertexDiscoveryDeadline`, 8 s, also
+tied to the request for the management probe) covers ADC token resolution, the first request and
+every follow-up page. `nextPageToken` is followed with three ceilings across all pages: five
+requests, the discovery row limit and the discovery byte limit, counted from the bytes actually
+read, page one included. A follow-up page must be a Vertex page: `publisherModels`, or an empty
+`{}` / token-only page, since Google omits empty repeated fields. A walk stopped by a ceiling, a
+failed or foreign page, a malformed or repeated token, or the deadline is reported as an
+incomplete listing; the catalog keeps its stale or configured rows and the probe fails, so a
+partial roster is never cached as authoritative. Rows keep Gemini and Gemma chat models and drop embeddings, speech, Live,
 Imagen/Veo and SKUs without function calling: model cards checked 2026-11-13 list it unsupported
 for every image-output Gemini SKU, so `-image` ids stay out unless a card says otherwise. Each
 row's `reasoning_efforts` comes from the registry entry that `routedProviderConfig` would fill
 for the row (its own entry when the transport matches, else the destination entry), which is the
-ladder the adapter serializes; an unladdered model such as `gemini-3-pro` advertises none.
+ladder the adapter serializes; an unladdered model such as `gemini-3-pro` advertises none, and a
+row's own `modelReasoningEfforts` / `noReasoningModels` still win in the catalog projection.
 `tests/adapters/google/vertex-model-discovery.test.ts` and
 `tests/adapters/google/vertex-catalog.test.ts` cover these boundaries.
 

@@ -74,9 +74,10 @@ import {
 import {
   buildVertexProviderModelsRequest,
   collectVertexPublisherModelPages,
+  countDiscoveryResponseBytes,
   extractGoogleNativeModelItems,
   resolveVertexDiscoveryToken,
-  VERTEX_DISCOVERY_TIMEOUT_MS,
+  vertexDiscoveryDeadline,
 } from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
@@ -1654,10 +1655,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const snapshot = prov.authMode === "oauth" && mayResolveModelsOAuth(name, config.providers[name])
       ? await getModelsOAuthAccessSnapshot(name, prov).catch(() => undefined)
       : undefined;
+    const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline(req.signal) : undefined;
     const apiKey = prov.authMode === "oauth"
       ? snapshot?.accessToken
-      : effectiveGoogleMode(name, prov) === "vertex"
-        ? await resolveVertexDiscoveryToken(prov, AbortSignal.any([req.signal, AbortSignal.timeout(VERTEX_DISCOVERY_TIMEOUT_MS)]))
+      : vertexDeadline
+        ? await resolveVertexDiscoveryToken(prov, vertexDeadline)
         : await resolveModelsAuthToken(name, prov);
     if ((prov.authMode === "oauth" || effectiveGoogleMode(name, prov) === "vertex") && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
@@ -1735,7 +1737,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         }, outboundDependencies)
         : await providerOutboundGet(name, prov, modelsUrl, {
           headers,
-          signal: AbortSignal.timeout(8000),
+          signal: vertexDeadline ?? AbortSignal.timeout(8000),
         }, outboundDependencies);
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);
@@ -1754,7 +1756,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         }
         return jsonResponse({ ok: false, latencyMs, error: `upstream model discovery returned ${res.status}` });
       }
-      const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+      const vertexFirstPage = vertexDeadline ? countDiscoveryResponseBytes(res) : undefined;
+      const bounded = await readBoundedDiscoveryJson(vertexFirstPage?.response ?? res, discovery.maxResponseBytes);
       if (!bounded.ok) {
         return jsonResponse({
           ok: false,
@@ -1768,9 +1771,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (antigravity && !ccaModels) {
         return jsonResponse({ ok: false, latencyMs, error: "upstream CCA model discovery returned an unexpected shape" });
       }
-      const listing = !ccaModels && effectiveGoogleMode(name, prov) === "vertex"
-        ? await collectVertexPublisherModelPages(modelsUrl, bounded.value, discovery,
-          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal: AbortSignal.any([req.signal, signal]) }, outboundDependencies))
+      const listing = !ccaModels && vertexDeadline
+        ? await collectVertexPublisherModelPages(modelsUrl, bounded.value,
+          { ...discovery, firstPageBytes: vertexFirstPage?.bytes(), signal: vertexDeadline },
+          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies))
         : { ok: true as const, value: bounded.value };
       if (!listing.ok) return jsonResponse({ ok: false, latencyMs, error: `upstream Vertex model listing is incomplete: ${listing.diagnostic}` });
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter

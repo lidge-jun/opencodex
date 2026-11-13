@@ -275,6 +275,18 @@ describe("Vertex catalog configuration", () => {
       expect(rows.some(row => row.id === excluded)).toBe(false);
     }
   });
+  test("a configured reasoning ladder wins over the registry ladder discovery advertises", async () => {
+    globalThis.fetch = (() => Promise.resolve(Response.json({
+      publisherModels: [{ name: "publishers/google/models/gemini-4-hydrogen" }, { name: "publishers/google/models/gemini-4-carbon" }],
+    }))) as typeof fetch;
+    const rows = await gatherRoutedModels({ providers: { "override-vertex": {
+      adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com", apiKey: "vertex-api-key", liveModels: true,
+      modelReasoningEfforts: { "gemini-4-hydrogen": ["low", "high"] }, noReasoningModels: ["gemini-4-carbon"],
+    } } });
+    expect(rows.find(row => row.id === "gemini-4-hydrogen")?.reasoningEfforts).toEqual(["low", "high"]);
+    expect(rows.find(row => row.id === "gemini-4-carbon")?.reasoningEfforts ?? []).toEqual([]);
+  });
+
   test("a paginated Vertex listing publishes every page, and an unfinished one is not published as authoritative", async () => {
     const pageTokens: string[] = [];
     let failSecondPage = false;
