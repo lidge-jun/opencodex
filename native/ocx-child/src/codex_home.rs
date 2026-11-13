@@ -11,6 +11,11 @@
 //! Lock order everywhere: local lifecycle lock, then this lock, then the daemon start gate.
 //! The guarantee covers ocx-child against ocx-child; a full OpenCodex install is detected
 //! separately by `journal::assert_no_full_ocx_conflict`.
+//!
+//! Schema /2 adds the id of the link an attach is for. Attach writes it while holding both
+//! locks, in the attaching phase, before any `CODEX_HOME` write, so a later
+//! `detach --expect-link` can tell which link a leftover attachment belongs to. A /1 record
+//! (written by an older ocx-child, or by the adoption path below) names no link.
 
 use std::fs;
 use std::io::{self, Read};
@@ -23,11 +28,15 @@ use crate::platform::{
     DirectoryIdentity, FileLock, LockAcquireError, constant_time_eq, directory_identity,
     random_hex, reject_symlink, write_private_atomic, write_regular_atomic,
 };
+use crate::relay_auth::is_valid_link_id;
 use crate::state::ChildPaths;
 
 pub const CODEX_HOME_LOCK_FILE: &str = ".ocx-child.lock";
 pub const CODEX_HOME_OWNER_FILE: &str = ".ocx-child-owner.json";
+/// Record without a link id: older ocx-child, or an adopted pre-ownership attachment.
 pub const CODEX_HOME_OWNER_SCHEMA: &str = "ocx.child.codex-home-owner/1";
+/// Record naming the link the attach was for.
+pub const CODEX_HOME_OWNER_SCHEMA_V2: &str = "ocx.child.codex-home-owner/2";
 const MAX_OWNER_RECORD_BYTES: u64 = 16 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +59,9 @@ pub struct CodexHomeOwnerRecord {
     pub codex_home: String,
     pub codex_home_identity: DirectoryIdentity,
     pub phase: OwnershipPhase,
+    /// Present exactly in schema /2: the link this attachment is for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,7 +129,10 @@ pub struct CodexHomeGuard {
     codex_identity: DirectoryIdentity,
     owner: Option<CodexHomeOwnerRecord>,
     newly_claimed: bool,
-    phase_before_claim: Option<OwnershipPhase>,
+    /// The record an attach replaced, restored exactly by `revert_claim`.
+    record_before_claim: Option<CodexHomeOwnerRecord>,
+    /// Link an attach claims the home for; recorded as schema /2.
+    attach_link: Option<String>,
 }
 
 fn canonical_utf8(path: &Path, what: &str) -> Result<(PathBuf, String), CodexHomeError> {
@@ -156,6 +171,36 @@ impl CodexHomeGuard {
         create_codex_home_if_missing: bool,
         policy: ClaimPolicy,
     ) -> Result<Self, CodexHomeError> {
+        Self::acquire_inner(paths, blocking, create_codex_home_if_missing, policy, None)
+    }
+
+    /// Lock `CODEX_HOME` for an attach to `link_id`: the ownership record names that link
+    /// (schema /2, phase attaching) before this returns, so before any `CODEX_HOME` write.
+    pub fn acquire_for_attach(
+        paths: &ChildPaths,
+        blocking: bool,
+        create_codex_home_if_missing: bool,
+        link_id: &str,
+    ) -> Result<Self, CodexHomeError> {
+        if !is_valid_link_id(link_id) {
+            return Err(CodexHomeError::Refused("invalid link id".to_owned()));
+        }
+        Self::acquire_inner(
+            paths,
+            blocking,
+            create_codex_home_if_missing,
+            ClaimPolicy::Attach,
+            Some(link_id.to_owned()),
+        )
+    }
+
+    fn acquire_inner(
+        paths: &ChildPaths,
+        blocking: bool,
+        create_codex_home_if_missing: bool,
+        policy: ClaimPolicy,
+        attach_link: Option<String>,
+    ) -> Result<Self, CodexHomeError> {
         if create_codex_home_if_missing {
             create_codex_home(&paths.codex_home)?;
         }
@@ -184,7 +229,8 @@ impl CodexHomeGuard {
             codex_identity,
             owner: None,
             newly_claimed: false,
-            phase_before_claim: None,
+            record_before_claim: None,
+            attach_link,
         };
         // The directory could have been replaced between resolution and locking.
         guard.verify_homes().map_err(CodexHomeError::Refused)?;
@@ -208,6 +254,11 @@ impl CodexHomeGuard {
 
     pub fn phase(&self) -> Option<OwnershipPhase> {
         self.owner.as_ref().map(|r| r.phase)
+    }
+
+    /// The ownership record this guard holds, when the home is ours.
+    pub fn owner_record(&self) -> Option<&CodexHomeOwnerRecord> {
+        self.owner.as_ref()
     }
 
     /// Confirm both homes are still the directories identified when the lock was taken.
@@ -267,8 +318,13 @@ impl CodexHomeGuard {
         }
         let record: CodexHomeOwnerRecord =
             serde_json::from_slice(&bytes).map_err(|e| corrupt(e.to_string()))?;
-        if record.schema != CODEX_HOME_OWNER_SCHEMA {
-            return Err(corrupt(format!("unsupported schema {}", record.schema)));
+        match (record.schema.as_str(), record.link_id.as_deref()) {
+            (CODEX_HOME_OWNER_SCHEMA, None) => {}
+            (CODEX_HOME_OWNER_SCHEMA_V2, Some(id)) if is_valid_link_id(id) => {}
+            (CODEX_HOME_OWNER_SCHEMA | CODEX_HOME_OWNER_SCHEMA_V2, _) => {
+                return Err(corrupt("link id does not match the schema".to_owned()));
+            }
+            _ => return Err(corrupt(format!("unsupported schema {}", record.schema))),
         }
         let ours = record.opencodex_home == path_text(&self.paths.opencodex_home)
             && record.opencodex_home_identity == self.opencodex_identity
@@ -325,9 +381,21 @@ impl CodexHomeGuard {
                         ))
                     }
                     (ClaimPolicy::Attach, _) => {
-                        self.phase_before_claim = Some(phase);
-                        self.set_phase(OwnershipPhase::Attaching)
-                            .map_err(CodexHomeError::Io)
+                        let previous = self.owner.clone();
+                        self.record_before_claim = previous.clone();
+                        match (previous, self.attach_link.clone()) {
+                            (Some(mut record), Some(link_id)) => {
+                                record.schema = CODEX_HOME_OWNER_SCHEMA_V2.to_owned();
+                                record.link_id = Some(link_id);
+                                record.phase = OwnershipPhase::Attaching;
+                                self.write_record(&record).map_err(CodexHomeError::Io)?;
+                                self.owner = Some(record);
+                                Ok(())
+                            }
+                            _ => self
+                                .set_phase(OwnershipPhase::Attaching)
+                                .map_err(CodexHomeError::Io),
+                        }
                     }
                     (ClaimPolicy::Continue, _) => Ok(()),
                 }
@@ -339,10 +407,11 @@ impl CodexHomeGuard {
                     // second ownership record; journal validation reports the conflict.
                     validate_existing_journal_paths(&self.paths)
                         .map_err(CodexHomeError::Refused)?;
-                    self.claim(OwnershipPhase::Attaching)
+                    self.claim(OwnershipPhase::Attaching, self.attach_link.clone())
                 }
                 ClaimPolicy::Continue => match validate_existing_journal_paths(&self.paths) {
-                    Ok(true) => self.claim(OwnershipPhase::Attached),
+                    // Adopting a pre-ownership attachment: the link is not known here.
+                    Ok(true) => self.claim(OwnershipPhase::Attached, None),
                     Ok(false) => Ok(()),
                     Err(e) => Err(CodexHomeError::Refused(e)),
                 },
@@ -350,7 +419,11 @@ impl CodexHomeGuard {
         }
     }
 
-    fn claim(&mut self, phase: OwnershipPhase) -> Result<(), CodexHomeError> {
+    fn claim(
+        &mut self,
+        phase: OwnershipPhase,
+        link_id: Option<String>,
+    ) -> Result<(), CodexHomeError> {
         let owner_id = match self.local_owner_id().map_err(CodexHomeError::Io)? {
             Some(id) => id,
             None => {
@@ -361,13 +434,19 @@ impl CodexHomeGuard {
             }
         };
         let record = CodexHomeOwnerRecord {
-            schema: CODEX_HOME_OWNER_SCHEMA.to_owned(),
+            schema: if link_id.is_some() {
+                CODEX_HOME_OWNER_SCHEMA_V2
+            } else {
+                CODEX_HOME_OWNER_SCHEMA
+            }
+            .to_owned(),
             owner_id,
             opencodex_home: path_text(&self.paths.opencodex_home),
             opencodex_home_identity: self.opencodex_identity.clone(),
             codex_home: path_text(&self.paths.codex_home),
             codex_home_identity: self.codex_identity.clone(),
             phase,
+            link_id,
         };
         self.write_record(&record).map_err(CodexHomeError::Io)?;
         self.owner = Some(record);
@@ -398,13 +477,18 @@ impl CodexHomeGuard {
     }
 
     /// Undo this guard's claim after an attach failed without leaving changes behind: release
-    /// a record this guard created, or put back the phase an existing record had.
+    /// a record this guard created, or put back the record an attach replaced, link id included.
     pub fn revert_claim(&mut self) -> Result<(), String> {
         if self.newly_claimed {
             return self.release();
         }
-        match self.phase_before_claim.take() {
-            Some(phase) => self.set_phase(phase),
+        match self.record_before_claim.take() {
+            Some(record) if self.owner.as_ref() != Some(&record) => {
+                self.write_record(&record)?;
+                self.owner = Some(record);
+                Ok(())
+            }
+            Some(_) => Ok(()),
             None => Ok(()),
         }
     }

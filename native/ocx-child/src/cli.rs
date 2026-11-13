@@ -680,7 +680,8 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         eprintln!("attach refused: incomplete attach requires detach recovery");
         return 1;
     }
-    let mut guard = match CodexHomeGuard::acquire(&local_paths, true, true, ClaimPolicy::Attach) {
+    // The ownership record names this link (schema /2) before any CODEX_HOME write.
+    let mut guard = match CodexHomeGuard::acquire_for_attach(&local_paths, true, true, &link_id) {
         Ok(guard) => guard,
         Err(e) => {
             eprintln!("attach refused: {}", e.message());
@@ -1539,17 +1540,41 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
     let mut keep_catalog = false;
     let mut json_mode = false;
     let mut purge = false;
-    for arg in args {
-        match arg.as_str() {
+    let mut expect_link: Option<String> = None;
+    let usage = || {
+        eprintln!(
+            "Usage: ocx-child detach [--keep-catalog] [--purge] [--json] [--expect-link <link id>]"
+        );
+        2
+    };
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        i += 1;
+        match arg {
             "--keep-catalog" => keep_catalog = true,
             "--json" => json_mode = true,
             "--purge" => purge = true,
-            _ => {
-                eprintln!("Usage: ocx-child detach [--keep-catalog] [--purge] [--json]");
-                return 2;
+            "--expect-link" if expect_link.is_none() => {
+                expect_link = args.get(i).cloned();
+                i += 1;
+                if expect_link.is_none() {
+                    return usage();
+                }
             }
+            _ => match arg.strip_prefix("--expect-link=") {
+                Some(value) if expect_link.is_none() => expect_link = Some(value.to_owned()),
+                _ => return usage(),
+            },
         }
     }
+    if let Some(id) = &expect_link
+        && !is_valid_link_id(id)
+    {
+        eprintln!("--expect-link needs a link id of the form lnk_ followed by 16 hex digits.");
+        return 2;
+    }
+    let expect = expect_link.as_deref();
     let local_paths = current_paths();
     let lock = match FileLock::acquire_blocking(&local_paths.lock_file) {
         Ok(l) => l,
@@ -1562,6 +1587,18 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
         match CodexHomeGuard::acquire(&local_paths, true, false, ClaimPolicy::Detach) {
             Ok(guard) => guard,
             Err(CodexHomeError::Missing) => {
+                if let Some(link) = expect
+                    && let Some((record, path)) = first_child_record(&local_paths)
+                {
+                    return refuse_expected_link(
+                        json_mode,
+                        ExpectLinkRefusal::Residual,
+                        link,
+                        record,
+                        &path,
+                        "Codex home does not exist while child recovery records remain",
+                    );
+                }
                 if let Err(code) = detach_without_codex_home(&local_paths) {
                     return code;
                 }
@@ -1574,14 +1611,31 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
                     json_mode,
                     crate::journal::DetachOutcome::NotAttached,
                     purged,
+                    expect,
                 );
                 return 0;
+            }
+            Err(CodexHomeError::Refused(msg)) if expect.is_some() => {
+                return refuse_expected_link(
+                    json_mode,
+                    ExpectLinkRefusal::Conflict,
+                    expect.unwrap_or_default(),
+                    "codex-home-owner",
+                    &local_paths.codex_owner_path(),
+                    &msg,
+                );
             }
             Err(e) => {
                 eprintln!("detach refused: {}", e.message());
                 return 1;
             }
         };
+    if let Some(link) = expect {
+        if let Err(code) = check_expected_link(&codex_guard, link, json_mode) {
+            return code;
+        }
+        crate::test_hooks::barrier("expect-link-checked");
+    }
     let paths = codex_guard.paths().clone();
     if let Err(e) = codex_guard.set_phase(OwnershipPhase::Detaching) {
         eprintln!("detach failed recording Codex home ownership phase: {e}");
@@ -1680,8 +1734,135 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
         Ok(purged) => purged,
         Err(code) => return code,
     };
-    print_detached(json_mode, outcome, purged);
+    print_detached(json_mode, outcome, purged, expect);
     0
+}
+
+#[derive(Clone, Copy)]
+enum ExpectLinkRefusal {
+    /// Leftover state this command will not restore; the owning home's plain detach can.
+    Residual,
+    /// The Child belongs to another link or home, or its records cannot be read.
+    Conflict,
+}
+
+/// Refuse `detach --expect-link` without changing anything: exit 6 residual, exit 5 conflict.
+fn refuse_expected_link(
+    json_mode: bool,
+    kind: ExpectLinkRefusal,
+    link_id: &str,
+    record: &str,
+    path: &Path,
+    reason: &str,
+) -> u8 {
+    let (outcome, code) = match kind {
+        ExpectLinkRefusal::Residual => ("residual", 6),
+        ExpectLinkRefusal::Conflict => ("conflict", 5),
+    };
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::json!({
+                "restored": false,
+                "outcome": outcome,
+                "linkId": link_id,
+                "record": record,
+                "path": path.display().to_string(),
+                "reason": reason,
+                "purged": false,
+            })
+        );
+    }
+    eprintln!(
+        "detach --expect-link {link_id} refused ({outcome}): {reason}; record {}; nothing was restored.",
+        path.display()
+    );
+    code
+}
+
+/// The first child recovery record that exists, by the name a refusal reports.
+fn first_child_record(paths: &ChildPaths) -> Option<(&'static str, PathBuf)> {
+    [
+        ("child-state", &paths.state_file),
+        ("attach-rollback", &paths.rollback_file),
+        ("codex-journal", &paths.journal_file),
+        ("link-key", &paths.key_file),
+        ("catalog-backup", &paths.catalog_backup_file),
+    ]
+    .into_iter()
+    .find(|(_, path)| fs::symlink_metadata(path).is_ok())
+    .map(|(name, path)| (name, path.clone()))
+}
+
+/// Restore only when both `state.json` and the ownership record name `link_id`, or when
+/// nothing at all is left. Runs with the lifecycle and `CODEX_HOME` locks held, which the
+/// restore keeps, so no other enrollment can run between this check and the restore.
+fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -> Result<(), u8> {
+    let paths = guard.paths();
+    let owner_path = paths.codex_owner_path();
+    let state_path = &paths.state_file;
+    let refuse = |kind, record, path: &Path, reason: &str| {
+        Err(refuse_expected_link(
+            json_mode, kind, link_id, record, path, reason,
+        ))
+    };
+    let state = read_child_state(state_path);
+    match &state {
+        StateReadOutcome::Invalid(e) => {
+            return refuse(
+                ExpectLinkRefusal::Conflict,
+                "child-state",
+                state_path,
+                &format!("the Child state cannot be read ({e})"),
+            );
+        }
+        StateReadOutcome::Valid(st) if st.link_id != link_id => {
+            return refuse(
+                ExpectLinkRefusal::Conflict,
+                "child-state",
+                state_path,
+                "the Child is linked to another link",
+            );
+        }
+        _ => {}
+    }
+    let state_names_link = matches!(state, StateReadOutcome::Valid(_));
+    match guard.owner_record().map(|r| r.link_id.as_deref()) {
+        Some(Some(owner_link)) if owner_link != link_id => refuse(
+            ExpectLinkRefusal::Conflict,
+            "codex-home-owner",
+            &owner_path,
+            "the Codex home is owned for another link",
+        ),
+        Some(None) => refuse(
+            ExpectLinkRefusal::Residual,
+            "codex-home-owner",
+            &owner_path,
+            "the ownership record names no link (schema /1); run ocx-child detach on this machine",
+        ),
+        Some(Some(_)) if state_names_link => Ok(()),
+        Some(Some(_)) => refuse(
+            ExpectLinkRefusal::Residual,
+            "codex-home-owner",
+            &owner_path,
+            "the Child state is missing while the ownership record remains (an interrupted detach); run ocx-child detach on this machine",
+        ),
+        None if state_names_link => refuse(
+            ExpectLinkRefusal::Residual,
+            "child-state",
+            state_path,
+            "the Child state names this link but no ownership record does",
+        ),
+        None => match first_child_record(paths) {
+            Some((record, path)) => refuse(
+                ExpectLinkRefusal::Residual,
+                record,
+                &path,
+                "a child recovery record remains without state or ownership record",
+            ),
+            None => Ok(()),
+        },
+    }
 }
 
 /// Removes the running binary when `--purge` was requested and it sits in the managed plant
@@ -1714,11 +1895,22 @@ fn purge_after_detach(purge: bool, current_exe_override: Option<&Path>) -> Resul
     }
 }
 
-fn print_detached(json_mode: bool, outcome: crate::journal::DetachOutcome, purged: bool) {
+fn print_detached(
+    json_mode: bool,
+    outcome: crate::journal::DetachOutcome,
+    purged: bool,
+    expect_link: Option<&str>,
+) {
     if json_mode {
-        println!(
-            "{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false,\"purged\":{purged}}}"
-        );
+        match expect_link {
+            // A receipt bound to the link the caller expected.
+            Some(link_id) => println!(
+                "{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false,\"purged\":{purged},\"linkId\":\"{link_id}\"}}"
+            ),
+            None => println!(
+                "{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false,\"purged\":{purged}}}"
+            ),
+        }
     } else {
         println!(
             "Disconnected ephemeral Remote Link Child ({outcome:?}, purged={purged}); zero background daemon running."
