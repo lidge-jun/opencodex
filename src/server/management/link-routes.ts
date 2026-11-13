@@ -6,7 +6,7 @@ import { requireRemotePlatform } from "../../link/remote-platform";
 import { purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
-import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, removeTombstone, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
+import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, removeTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
@@ -240,7 +240,8 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   if (!releaseLink) return fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409);
   try {
     // Enrollment and revoke of one alias are serialized: a force revoke cannot run between a purge and its receipt.
-    const admitted = operation !== null || journalInUse(ctx);
+    // Also whenever a tombstone names this alias: recover may run against that machine under the alias lock.
+    const admitted = operation !== null || journalInUse(ctx) || tombstoneNamesAlias(record.alias);
     // A journalled revoke, and every revoke once this Home journals, also takes the per-alias operation set that apply
     // holds for its whole run, so an apply and a revoke of one alias never overlap in this runtime.
     const exclusive = (action: () => Promise<Response>) => admitted ? serialized(state, record.alias, action) : action();

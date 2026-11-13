@@ -88,6 +88,7 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
   };
   const deps: ManagementContext["deps"] = {
     now: () => 1_800_000_000_000,
+    linkAliasLock: { waitMs: 0 },
     sshRunner: runner,
     readLinkStore: () => store,
     writeLinkStore: next => { if (opts.storeWriteFails) throw new Error("disk full"); store = next; },
@@ -564,5 +565,27 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     release();
     expect(await (await held).text()).toBe("first");
     expect(await (await serialized(state, "DEVBOX", async () => new Response("third"))).text()).toBe("third");
+  });
+});
+
+describe("recover and a legacy enrollment or revoke of the same alias in another runtime", () => {
+  test("while a tombstone names the alias, apply and revoke there take the alias lock recover holds", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    let entered!: () => void, release!: () => void;
+    const inSsh = new Promise<void>(resolve => { entered = resolve; });
+    h.answer((() => { entered(); return new Promise<SshRunResult>(resolve => { release = () => resolve(report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true, linkId: ID })); }); }) as unknown as () => SshRunResult);
+    const recovering = h.request("POST", "/api/link/recover", { linkId: ID });
+    await inSsh;
+    // Another runtime: its own per-alias operation set, the same Home and lock directory, no operation journal.
+    const apply = await harness([]).request("POST", "/api/link/apply", { alias: "DevBox" });
+    expect([apply.status, (await errorOf(apply)).message]).toEqual([409, "Another enrollment or revoke of this alias is running; try again when it ends."]);
+    const revoke = await harness([link({ id: OTHER, apiKeyId: "other-key" })]).request("DELETE", "/api/link/" + OTHER, {});
+    expect([revoke.status, (await errorOf(revoke)).message]).toEqual([409, "Another enrollment or revoke of this alias is running; try again when it ends."]);
+    release();
+    expect((await recovering).status).toBe(200);
+    // With no tombstone left, a legacy apply runs as before (no lock) and stops at its own first check.
+    const after = await harness([]).request("POST", "/api/link/apply", { alias: "devbox" });
+    expect((await errorOf(after)).code).toBe("host_not_confirmed");
   });
 });

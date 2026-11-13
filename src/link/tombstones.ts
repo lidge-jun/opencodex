@@ -181,6 +181,16 @@ export function removeOwnTombstone(written: LinkTombstone, linkExists: boolean, 
 export type ForgetTombstoneOutcome = "forgotten" | "not_found" | "link_present";
 
 /**
+ * A tombstone names this alias (compared without case), so ocx link recover may run against that
+ * machine: enrollment and revoke of the alias then take the cross-process alias lock even on a Home
+ * without an operation journal. A damaged file answers true, failing toward the lock.
+ */
+export function tombstoneNamesAlias(alias: string, path: string = tombstonesPath()): boolean {
+  const wanted = alias.toLowerCase();
+  try { return readTombstones(path).tombstones.some(t => t.alias.toLowerCase() === wanted); } catch { return true; }
+}
+
+/**
  * Drop a tombstone without contacting its machine (ocx link recover --forget, run by a person on the
  * Home). Refused while the link exists, so a forced revoke that wrote its tombstone but has not yet
  * removed the link cannot lose it. Callers hold the config mutation lock, which that revoke's link
