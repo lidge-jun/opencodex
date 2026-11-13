@@ -79,7 +79,7 @@ async function mount(apiBase = "") {
 /** Rail add/remove toggles are labelled from sub.workspace.addToFeatured / removeFromFeatured. */
 function addToggle(id: string): HTMLButtonElement {
   const row = Array.from(container.querySelectorAll("button"))
-    .find((b) => (b.getAttribute("aria-label") ?? "").includes(`Add ${id} to featured`));
+    .find((b) => (b.getAttribute("aria-label") ?? "").includes(`Pin ${id} to the top of the model picker`));
   if (!row) throw new Error(`add toggle not found: ${id}`);
   return row as unknown as HTMLButtonElement;
 }
@@ -99,7 +99,7 @@ test("renders one featured list and one picker, never the same list twice", asyn
   expect(container.querySelector(".subagents-workspace-rail")).toBeNull();
   const featuredHeadings = Array.from(container.querySelectorAll(".swi-featured-title"))
     .map(node => node.textContent?.trim());
-  expect(featuredHeadings.filter(text => text === "Featured").length).toBe(1);
+  expect(featuredHeadings.filter(text => text === "Pinned in picker").length).toBe(1);
 });
 
 test("caps featured selections at five", async () => {

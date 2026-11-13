@@ -760,7 +760,7 @@ test("order hint explains visible featured model fill and the custom model picke
   const tooltip = container.querySelector<HTMLElement>('[role="tooltip"]');
   expect(tooltip?.textContent).toContain("spawn_agent");
   expect(tooltip?.textContent).toContain("The order shown here sets positions 1–5 at the top of the Codex model picker and the default model candidates for spawn_agent.");
-  expect(tooltip?.textContent).toContain("fewer than 5 featured models are visible in the picker");
+  expect(tooltip?.textContent).toContain("fewer than 5 pinned models are visible in the picker");
   expect(tooltip?.textContent).toContain("remaining slots are advertised by catalog priority");
-  expect(tooltip?.textContent).toContain("5 visible featured models fill the list unless a custom model picker order changes catalog priority");
+  expect(tooltip?.textContent).toContain("5 visible pinned models fill the list unless a custom model picker order changes catalog priority");
 });
