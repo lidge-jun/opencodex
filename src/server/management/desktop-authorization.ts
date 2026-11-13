@@ -23,7 +23,8 @@ export function requireDesktopAuthorization(ctx: ManagementContext): Response | 
 export async function handleDesktopAuthorization(ctx: ManagementContext): Promise<Response | null> {
   if (ctx.url.pathname !== DESKTOP_AUTHORIZATION_PATH) return null;
   if (ctx.req.method === "GET") return jsonResponse({ ok: true,
-    supported: localDesktopBrowser(ctx), authorized: requireDesktopAuthorization(ctx) === null });
+    supported: localDesktopBrowser(ctx), authorized: requireDesktopAuthorization(ctx) === null,
+    rememberedSession: ctx.guiSessionIssuance === "remembered-admin" });
   if (ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
   // A remembered-admin session is the durable admin token in a cookie: it proves possession,
   // not that the operator is at this machine. Refuse it here, before the body is read, so the

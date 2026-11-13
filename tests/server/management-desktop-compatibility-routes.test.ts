@@ -222,7 +222,7 @@ test("a configured localhost bind reports Desktop unsupported and refuses its au
   const io = desktopBoundary("http://localhost:10100", "localhost");
   const read = await io.dispatch(io.request("authorization"));
   expect(read.status).toBe(200);
-  expect(await read.json()).toEqual({ ok: true, supported: false, authorized: false });
+  expect(await read.json()).toEqual({ ok: true, supported: false, authorized: false, rememberedSession: false });
   // `startServer` canonicalizes this bind to 127.0.0.1, so the configured spelling never names
   // the served origin. The signed grant route is closed too: no usable command can be offered.
   // A grant actually issued for the literal listener must still be unspent after the refusal.
@@ -237,7 +237,7 @@ test("unsupported status is also returned for forwarded or nonlocal ingress", as
   const io = desktopBoundary();
   for (const response of [await io.dispatch(io.request("authorization"), false),
     await io.dispatch(io.request("authorization", undefined, { Forwarded: "for=127.0.0.1" }))]) {
-    expect(await response.json()).toEqual({ ok: true, supported: false, authorized: false });
+    expect(await response.json()).toEqual({ ok: true, supported: false, authorized: false, rememberedSession: false });
   }
   expect(io.calls).toEqual([]);
 });

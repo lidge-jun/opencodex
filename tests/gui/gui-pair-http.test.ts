@@ -452,7 +452,7 @@ describe("Desktop pairing origin policy", () => {
         const served = await authorize(localhostPort, account, literalOriginOnLocalhostBind);
         expect(exact.status, "loopback page read stays available").toBe(200);
         expect(parseObject(exact.body), "a configured localhost bind is not a supported Desktop origin")
-          .toEqual({ ok: true, supported: false, authorized: false });
+          .toEqual({ ok: true, supported: false, authorized: false, rememberedSession: false });
         // The other spelling of the same socket is a different origin: it is never admitted, and the
         // alias's session is not usable there either.
         expect(served.status, "one alias's session is not usable under the other origin").toBe(401);
@@ -471,7 +471,7 @@ describe("Desktop pairing origin policy", () => {
         const aliasSession = await session(aliasOrigin), literalSession = await session(literalOrigin);
         const page = await authorize(litPort, aliasSession, aliasOrigin);
         expect(parseObject(page.body), "localhost is the page alias of a literal loopback listener")
-          .toEqual({ ok: true, supported: true, authorized: false });
+          .toEqual({ ok: true, supported: true, authorized: false, rememberedSession: false });
         expect(parseObject((await authorize(litPort, literalSession, literalOrigin)).body).supported,
           "the exact literal origin is supported on its own session").toBe(true);
 

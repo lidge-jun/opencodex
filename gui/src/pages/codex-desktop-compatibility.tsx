@@ -120,7 +120,8 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     </div>
     <button type="button" className="btn btn-ghost btn-sm acc-desktop__refresh" disabled={busy} onClick={() => void execute()}>{busy ? t("common.loading") : t("desktopCompat.refresh")}</button>
     {authorization.data?.supported === false && <p className="notice-warn" role="status">{t("desktopCompat.authorizationUnavailable")}</p>}
-    {authorization.data?.supported && <div className="acc-desktop__card">
+    {authorization.data?.supported && authorization.data.rememberedSession && <p className="notice-warn" role="status">{t("desktopCompat.rememberedSession")}</p>}
+    {authorization.data?.supported && !authorization.data.rememberedSession && <div className="acc-desktop__card">
       <DesktopCompatibilityAuthorization apiBase={apiBase} authorized={authorized} onAuthorized={authorizedFresh} />
     </div>}
     <DesktopCompatibilityStartupSetting apiBase={apiBase} active={active} authorized={authorized && !needsRefresh} />

@@ -85,6 +85,17 @@ test("an ordinary loopback session offers explicit Desktop authorization and dis
   expect(requests.every(request => request.method === "GET")).toBe(true);
 });
 
+test("a remembered session offers private-window recovery instead of an unusable grant form", async () => {
+  server(false, undefined, undefined, undefined, undefined, false);
+  const fetchServer = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => String(input).endsWith("/authorization")
+    ? Response.json({ ok: true, supported: true, authorized: false, rememberedSession: true })
+    : fetchServer(input, init)) as typeof fetch;
+  const container = await mount();
+  expect(container.textContent).toContain("private browser window");
+  expect(container.textContent).not.toContain("ocx gui pair --desktop --origin");
+});
+
 test("a host the server does not support offers no Desktop command a user could not run", async () => {
   // #8427: a configured `localhost` bind is canonicalized to 127.0.0.1 before listening, so the
   // page's own origin cannot be the served origin and the CLI refuses it. The server says so in
@@ -98,8 +109,10 @@ test("a host the server does not support offers no Desktop command a user could 
       : { ok: true, runtime: { supported: true, running: false, phase: "off" } });
   }) as typeof fetch;
   const container = await mount();
-  expect(container.textContent).toContain("If the configured hostname is localhost");
-  expect(container.textContent).toContain("restart");
+  expect(container.textContent).toContain("hostname as the literal loopback address");
+  expect(container.textContent).toContain("non-loopback address such as 0.0.0.0");
+  expect(container.textContent).toContain("Forwarding, a different role or port, and the current session");
+  expect(container.textContent).toContain("Restart the proxy");
   expect(container.textContent).not.toContain("ocx gui pair --desktop --origin");
   expect(container.querySelector('input[type="password"]')).toBeNull();
   expect(button(container, "Register trust").disabled).toBe(true);

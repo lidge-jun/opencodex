@@ -355,6 +355,30 @@ test("remembered admission reaches and refuses all seven consent routes even wit
   }
 });
 
+test("remembered local dashboard recovers in a separate browser session before redeeming a Desktop grant", async () => {
+  config.hostname = "127.0.0.1"; config.port = 10100;
+  const origin = "http://127.0.0.1:10100";
+  const remembered = await remember(origin);
+  remembered.body.session = resume(remembered)!;
+  expect(remembered.body.session.issuance).toBe("remembered-admin");
+  const path = "/api/codex/desktop-compatibility/authorization";
+  const status = await dispatch(deviceRequest(remembered, path, { method: "GET" }), {}, true);
+  expect(await status.json()).toMatchObject({ supported: true, authorized: false, rememberedSession: true });
+  const grant = createGuiPairingGrant(origin, config, state, Date.now(), true).grant;
+  expect((await dispatch(deviceRequest(remembered, path, { body: { grant } }), {}, true)).status).toBe(403);
+  // A separate private browser has neither the device cookie nor its local-storage proof.
+  const fresh = issueGuiSession(request("/opencodex-session", { origin, method: "GET", token: null }), config, state)!;
+  expect(fresh.issuance).toBe("loopback");
+  expect(fresh.token).not.toBe(remembered.body.session.token);
+  expect(fresh.csrfToken).not.toBe(remembered.body.session.csrfToken);
+  const local = { origin, cookie: "", body: { session: fresh } } as Device;
+  expect(await (await dispatch(deviceRequest(local, path, { method: "GET" }), {}, true)).json()).toMatchObject({ rememberedSession: false });
+  const wrongCsrf = deviceRequest(local, path, { body: { grant }, csrf: false });
+  expect((await dispatch(wrongCsrf, {}, true)).status).toBe(401);
+  expect((await dispatch(deviceRequest(local, path, { body: { grant } }), {}, true)).status).toBe(200);
+  expect((await dispatch(deviceRequest(local, path, { body: { grant } }), {}, true)).status).toBe(403);
+});
+
 test("ordinary loopback sessions reach the sidebar and a Desktop grant reaches desktop services", async () => {
   config.hostname = "127.0.0.1"; config.port = 10100;
   const origin = "http://127.0.0.1:10100";

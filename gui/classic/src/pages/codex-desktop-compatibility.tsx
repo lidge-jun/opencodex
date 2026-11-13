@@ -118,7 +118,8 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     <p className="muted text-body">{t("desktopCompat.description")}</p>
     <p className="muted text-control">{t("desktopCompat.localOnly")}</p>
     {authorization.data?.supported === false && <p className="notice-warn" role="status">{t("desktopCompat.authorizationUnavailable")}</p>}
-    {authorization.data?.supported && <DesktopCompatibilityAuthorization apiBase={apiBase} authorized={authorized} onAuthorized={authorizedFresh} />}
+    {authorization.data?.supported && authorization.data.rememberedSession && <p className="notice-warn" role="status">{t("desktopCompat.rememberedSession")}</p>}
+    {authorization.data?.supported && !authorization.data.rememberedSession && <DesktopCompatibilityAuthorization apiBase={apiBase} authorized={authorized} onAuthorized={authorizedFresh} />}
     <DesktopCompatibilityStartupSetting apiBase={apiBase} active={active} authorized={authorized && !needsRefresh} />
     <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void execute()}>{busy ? t("common.loading") : t("desktopCompat.refresh")}</button>
     {error && <div className="notice-err" role="alert"><p>{t(error in errorLabel ? errorLabel[error as keyof typeof errorLabel] : "desktopCompat.error")}</p><code>{error}</code></div>}

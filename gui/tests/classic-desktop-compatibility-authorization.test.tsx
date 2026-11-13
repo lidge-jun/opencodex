@@ -62,7 +62,7 @@ const GRANT = "ocx_pair_" + "A".repeat(43);
  * answers 403 desktop_authorization_required until that scope exists. No fixture performs real OS
  * trust work: the certificate state is a JSON field, not a trusted root.
  */
-function desktopServer(options: { supported?: boolean; authorize?: boolean; expireAfterAuthorize?: boolean; refuseSettingsWrite?: boolean; refuseCertificateAction?: boolean } = {}) {
+function desktopServer(options: { supported?: boolean; rememberedSession?: boolean; authorize?: boolean; expireAfterAuthorize?: boolean; refuseSettingsWrite?: boolean; refuseCertificateAction?: boolean } = {}) {
   const calls: Call[] = [];
   let scoped = false, trusted = false, spent = false;
   const authorize = options.authorize ?? true;
@@ -71,7 +71,7 @@ function desktopServer(options: { supported?: boolean; authorize?: boolean; expi
     const path = new URL(String(input), page.location.href).pathname, method = init?.method ?? "GET";
     calls.push({ path, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (path.endsWith("/desktop-compatibility/authorization")) {
-      if (method === "GET") return Response.json({ ok: true, supported: options.supported ?? true, authorized: scoped });
+      if (method === "GET") return Response.json({ ok: true, supported: options.supported ?? true, authorized: scoped, rememberedSession: options.rememberedSession ?? false });
       const grant = (JSON.parse(String(init!.body)) as { grant?: unknown }).grant;
       // The server accepts only an unspent Desktop grant. The client must never report success
       // from its own optimism, so both a wrong code and a replay answer 403.
@@ -138,6 +138,14 @@ async function armTrust(container: HTMLElement) {
   await act(async () => (container.querySelector("input[type=checkbox]") as HTMLInputElement).click());
   await act(async () => button(container, "Confirm action").click());
 }
+
+test("the classic overlay gives remembered sessions private-window recovery", async () => {
+  const server = desktopServer({ rememberedSession: true });
+  const container = await mount();
+  expect(container.textContent).toContain("private browser window");
+  expect(container.textContent).not.toContain("ocx gui pair --desktop --origin");
+  expect(posts(server.calls)).toHaveLength(0);
+});
 
 test("the classic overlay offers the Desktop step-up and a consumed grant enables a trust mutation", async () => {
   const server = desktopServer();
@@ -280,8 +288,10 @@ test("a certificate mutation refused at confirmation drops the consent and the a
 test("unsupported authorization explains a possible local bind recovery without offering a grant", async () => {
   const server = desktopServer({ supported: false });
   const container = await mount();
-  expect(container.textContent).toContain("If the configured hostname is localhost");
-  expect(container.textContent).toContain("restart");
+  expect(container.textContent).toContain("hostname as the literal loopback address");
+  expect(container.textContent).toContain("non-loopback address such as 0.0.0.0");
+  expect(container.textContent).toContain("Forwarding, a different role or port, and the current session");
+  expect(container.textContent).toContain("Restart the proxy");
   expect(container.textContent).not.toContain("ocx gui pair --desktop --origin");
   expect(container.querySelector('input[type="password"]')).toBeNull();
   expect(button(container, "Register trust").disabled).toBe(true);

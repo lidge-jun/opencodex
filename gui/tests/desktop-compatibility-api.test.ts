@@ -46,7 +46,7 @@ test("Desktop authorization checks its own status, keeps codes out of errors and
     paths.push(`${init?.method ?? "GET"} ${String(input)}`);
     return Response.json(init?.method === "POST" ? { ok: true, authorized: true } : { ok: true, supported: true, authorized: true });
   }) as typeof fetch;
-  expect(await authorizeDesktop("", "ocx_pair_" + "A".repeat(43), new AbortController().signal)).toEqual({ supported: true, authorized: true });
+  expect(await authorizeDesktop("", "ocx_pair_" + "A".repeat(43), new AbortController().signal)).toEqual({ supported: true, authorized: true, rememberedSession: false });
   expect(paths).toEqual(["POST /api/codex/desktop-compatibility/authorization", "GET /api/codex/desktop-compatibility/authorization"]);
   paths.length = 0;
   globalThis.fetch = (async input => { paths.push(String(input)); return Response.json({ error: "desktop_authorization_required" }, { status: 403 }); }) as typeof fetch;

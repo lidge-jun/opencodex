@@ -138,7 +138,7 @@ test("Desktop CLI intent crosses real capability admission, grant delivery and d
     expect(response?.status).toBe(200);
     const status = request("/api/codex/desktop-compatibility/authorization");
     const view = await handleManagementAPI(status, new URL(status.url), cfg, {}, "gui-session", control, { trustedLoopback: true });
-    expect(await view!.json()).toEqual({ ok: true, supported: true, authorized: true });
+    expect(await view!.json()).toEqual({ ok: true, supported: true, authorized: true, rememberedSession: false });
     expect(control.isPaired(status, cfg)).toBe(false); expect(control.canRevealDataKeys!(status, cfg)).toBe(false);
     const replay = new Request("http://127.0.0.1:10100" + DESKTOP_GUI_PAIR_PATH, { method: "POST", headers: lastHeaders });
     expect(requireManagementAuth(replay, s, cfg, { attestationSecret: secret, pid, port: cfg.port })?.status).toBe(401);

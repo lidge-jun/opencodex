@@ -137,11 +137,11 @@ export async function runCompatibilityAction(apiBase: string, action: Compatibil
   }));
 }
 
-export interface DesktopAuthorization { supported: boolean; authorized: boolean }
+export interface DesktopAuthorization { supported: boolean; authorized: boolean; rememberedSession?: boolean }
 export async function readDesktopAuthorization(apiBase: string, signal: AbortSignal): Promise<DesktopAuthorization> {
   const value = await reply(await fetchDesktopSession(apiBase + ROOT + "authorization", { signal, cache: "no-store" }));
   if (typeof value.authorized !== "boolean" || typeof value.supported !== "boolean") throw new CompatibilityApiError("invalid_response");
-  return { supported: value.supported, authorized: value.authorized };
+  return { supported: value.supported, authorized: value.authorized, rememberedSession: value.rememberedSession === true };
 }
 /** Consumes a fresh code once, then checks Desktop scope; it never repeats the user's old action. */
 export async function authorizeDesktop(apiBase: string, grant: string, signal: AbortSignal): Promise<DesktopAuthorization> {

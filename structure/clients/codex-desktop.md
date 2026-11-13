@@ -121,8 +121,8 @@ Desktop grant boundary for both loopback-issued and locally paired sessions.
 `ocx gui pair --desktop --origin <dashboard-origin>` uses the attested runtime and private-home
 one-use intent through a separately signed pairing path. `/api/codex/desktop-compatibility/authorization`
 consumes that purpose only for the existing current browser session. After common management admission,
-GET returns HTTP 200 with `ok: true`, `supported` and `authorized`, including absent or unsupported
-Desktop scope. POST returns HTTP 200 with `ok: true`, `authorized: true` on success, 400 for malformed
+GET returns HTTP 200 with `ok: true`, `supported`, `authorized` and `rememberedSession`, including absent or unsupported
+Desktop scope. Both editions hide the grant form for a remembered session and direct the operator to a private browser window on the same local origin; its fresh loopback session has separate credentials. POST returns HTTP 200 with `ok: true`, `authorized: true` on success, 400 for malformed
 JSON/body shape, or 403 `desktop_authorization_required` for a refused grant exchange.
 The scope expires after at most five minutes without renewal and disappears with session revocation,
 eviction, restart or an observed role/listener change. It changes neither pairing issuance nor key
