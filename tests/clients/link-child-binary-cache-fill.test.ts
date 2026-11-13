@@ -826,3 +826,17 @@ describe("uninstall after a full fill", () => {
     expect(existsSync(home)).toBe(false);
   });
 });
+
+describe("the fill is always given its Home", () => {
+  test("a call without opencodexHome is refused before anything is read or written, whatever OPENCODEX_HOME says", async () => {
+    const previous = process.env.OPENCODEX_HOME;
+    const elsewhere = join(root, "env-home");
+    process.env.OPENCODEX_HOME = elsewhere;
+    try {
+      await expect(fillChildBinaryCacheForVersion({ packageRoot, version: VERSION } as never)).rejects.toThrow("opencodexHome");
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+    }
+    expect(existsSync(elsewhere)).toBe(false);
+  });
+});

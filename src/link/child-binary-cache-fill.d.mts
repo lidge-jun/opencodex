@@ -25,7 +25,8 @@ export interface ChildCacheFillOptions {
   /** Root of the running package tree, which its installer verified. */
   readonly packageRoot: string;
   readonly version: string;
-  readonly opencodexHome?: string;
+  /** Required: the Home the reader resolves (getConfigDir() in the startup step); there is no environment fallback. */
+  readonly opencodexHome: string;
   readonly fetchImpl?: typeof fetch;
   /** Per download. */
   readonly timeoutMs?: number;
@@ -44,6 +45,6 @@ export declare function fillChildBinaryCacheForVersion(options: ChildCacheFillOp
 export declare function runningPackageVersion(packageRoot?: string): string | null;
 /** Defaults: the running package root and its package.json version. */
 export declare function fillChildBinaryCacheOnStart(
-  options?: Partial<ChildCacheFillOptions>,
+  options: Partial<ChildCacheFillOptions> & { readonly opencodexHome: string },
   out?: { log: (line: string) => void; warn: (line: string) => void },
 ): Promise<ChildCacheFillOutcome | null>;

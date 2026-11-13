@@ -2,7 +2,6 @@
 // src/link/child-binary-cache-start.ts. Types: child-binary-cache-fill.d.mts.
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectInstallFromPath } from "../update/install-detection.mjs";
@@ -371,12 +370,15 @@ function decideFromRecord(recorded, version, digests, dir) {
 }
 
 export async function fillChildBinaryCacheForVersion(options) {
+  // The caller names the Home (the startup step passes getConfigDir(), the Home the reader resolves too); no
+  // environment fallback, so the fill and the reader can never resolve two different Homes.
+  const home = options.opencodexHome;
+  if (typeof home !== "string" || home.length === 0) throw new Error("fillChildBinaryCacheForVersion: opencodexHome is required");
   if (compareReleaseVersions(options.version, options.version) === null) return { kind: "skipped", reason: "invalid_version" };
   if ((options.platform ?? process.platform) === "win32") return { kind: "skipped", reason: "unsupported_platform" };
   const digests = readDigests(options.packageRoot);
   // A digest file that is there but unusable is not "no digests": the record stays, so a repair still fills.
   if (digests === "invalid") return { kind: "skipped", reason: "invalid_digests" };
-  const home = options.opencodexHome || process.env.OPENCODEX_HOME?.trim() || join(process.env.HOME || homedir(), ".opencodex");
   const root = join(home, CHILD_FILL_DIR);
   const dir = childBinaryCacheDir(home, options.version);
   let rootIdentity, lock = null, recorded;
