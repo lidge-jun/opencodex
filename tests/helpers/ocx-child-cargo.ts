@@ -12,12 +12,13 @@ export const OCX_CHILD_CARGO_RUN_MS = 100_000;
 export const ocxChildToolchain = rustToolchainEnv("cargo");
 
 /**
- * ocx-child's Cargo tests are not run on Windows. On the hosted Windows runner (dev run 43413601225) the crate built
- * and the real-binary link WebSocket target did not finish inside OCX_CHILD_CARGO_RUN_MS. Nothing else in CI builds
- * or runs ocx-child on Windows either: the remote-helper job's ocx-child step is Linux only, and
- * link-ocx-child-e2e.test.ts skips Windows. Linux and macOS run both Cargo tests.
+ * The two link WebSocket Cargo runs are skipped on Windows. On the hosted Windows runner (dev run 43413601225) the
+ * crate built and the real-binary `link_websocket` target did not finish inside OCX_CHILD_CARGO_RUN_MS. The run
+ * without the feature is skipped there as a precaution; the gate it proves is a compile-time cfg, closed in every
+ * build without the feature on any platform, and Linux and macOS keep proving it. Other Cargo runs of ocx-child
+ * (the conformance target in link-ocx-child-conformance.test.ts) still build and run the crate on Windows.
  */
-export const ocxChildCargoUnsupported = process.platform === "win32";
+export const ocxChildLinkWsCargoSkipped = process.platform === "win32";
 
 export function ocxChildCargoTest(args: string[]): string {
   const run = Bun.spawnSync([ocxChildToolchain.bin!, "test", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml"), ...args], {
