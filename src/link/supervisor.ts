@@ -100,6 +100,7 @@ export interface LinkSupervisorDeps {
   /** false when the pid does not exist, true when it does, null when that cannot be told. */
   processAlive?: (pid: number) => boolean | null;
   pidfileDir?: string;
+  /** The link's pidfile, null only when there is none; throws when one exists but cannot be read or parsed. */
   readPidfile?: (path: string) => Pidfile | null;
   writePidfile?: (path: string, pidfile: Pidfile) => void;
   removePidfile?: (path: string) => void;
@@ -206,9 +207,20 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const readProcessStartTime = deps.readProcessStartTime ?? (platform === "linux" ? linuxProcessStartTime : () => null);
   const killProcess = deps.killProcess ?? defaultKillProcess;
   const processAlive = deps.processAlive ?? defaultProcessAlive;
-  const readPidfile = deps.readPidfile ?? ((path: string) => {
-    try { return parsePidfile(readFileSync(path, "utf8")); } catch { return null; }
+  const loadPidfile = deps.readPidfile ?? ((path: string): Pidfile | null => {
+    let text: string;
+    try { text = readFileSync(path, "utf8"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    const pidfile = parsePidfile(text);
+    if (pidfile === null) throw new Error("link pidfile unreadable");
+    return pidfile;
   });
+  /** Every reader except the orphan-flag lift treats an unreadable pidfile as none, as before. */
+  const readPidfile = (path: string): Pidfile | null => {
+    try { return loadPidfile(path); } catch { return null; }
+  };
   const writePidfile = deps.writePidfile ?? ((path: string, pidfile: Pidfile) => {
     mkdirSync(storeDir, { recursive: true, mode: 0o700 });
     atomicWriteFile(path, `${JSON.stringify(pidfile)}\n`);
@@ -678,6 +690,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const nextInstances = new Map(nextStore.links.map(record => [record.id, recordInstance(record, nextStore.listenerPort)]));
         const changed = new Set<string>();
         const routesEdited: LinkRecord[] = [];
+        const gainedRoutes: LinkRecord[] = [];
         for (const record of nextStore.links) {
           if (recordInstances.get(record.id) !== undefined && recordInstances.get(record.id) !== nextInstances.get(record.id)) {
             changed.add(record.id);
@@ -699,6 +712,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
             const state = states.get(record.id);
             if (child && state?.kind !== "connected") { changed.add(record.id); continue; }
             if (child && state?.kind === "connected") rounds.adopt(record, child.child, state.since);
+            gainedRoutes.push(record);
           }
           routesEdited.push(record);
         }
@@ -708,6 +722,20 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         for (const linkId of recordInstances.keys()) if (!nextInstances.has(linkId)) { rounds.cancel(linkId); orphanWatches.delete(linkId); }
         for (const record of nextStore.links) if (!rounds.isMultiRoute(record)) orphanWatches.delete(record.id);
         store = nextStore;
+        // A one-route link flagged at start whose spawn never cleared the flag (ssh missing, say) now
+        // blocks its rounds: watch that pidfile as a multi-route orphan, or lift the flag when there is
+        // no earlier process left to watch. A pidfile that exists but cannot be read may still name the
+        // ssh holding the port, so it keeps the flag; only a missing one (ENOENT) lifts it.
+        for (const record of gainedRoutes) {
+          if (!orphanUnverified.has(record.id) || orphanWatches.has(record.id)) continue;
+          let file: Pidfile | null;
+          try { file = loadPidfile(pidfilePath(record.id)); } catch {
+            warn(`[link] pidfile unreadable; link stays blocked link=${record.id}`);
+            continue;
+          }
+          if (file !== null && file.linkId === record.id) reapMultiRouteOrphan(record, file);
+          if (!orphanWatches.has(record.id)) orphanUnverified.delete(record.id);
+        }
         if (routesEdited.some(record => rounds.isMultiRoute(record))) rounds.recheckClient();
         for (const record of routesEdited) if (rounds.isMultiRoute(record)) rounds.routesChanged(record);
         for (const [linkId] of [...children]) {

@@ -24,7 +24,14 @@ import type { StderrClass, TunnelEvent, TunnelState } from "./tunnel-state";
 
 /** One route probe, supervisor clock. */
 export const ROUTE_PROBE_MS = 10_000;
-/** From a candidate's spawn to its proven readiness: grant, discovery, health and every trigger. */
+/**
+ * A candidate's budget, twice: from its spawn to the grant of its remote listener, and then from that
+ * grant to its proven readiness (discovery, health and every trigger). A slow route that spends most
+ * of the first budget on the ssh handshake still has the whole second one for its readiness execs.
+ * Not measured on a real slow route. A candidate's readiness deadline is at most 2 x READY_PROOF_MS
+ * after its spawn; the supervisor tick after that deadline stops it (SIGTERM, then SIGKILL after
+ * CANDIDATE_KILL_GRACE_MS).
+ */
 export const READY_PROOF_MS = 30_000;
 /** One correlated trigger at most. */
 export const PROOF_ATTEMPT_MS = 15_000;
@@ -274,6 +281,14 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     try { phase.child.kill("SIGTERM"); } catch { /* already gone */ }
   };
 
+  /**
+   * Until the grant: READY_PROOF_MS from spawn. After it: READY_PROOF_MS from the grant, and a grant
+   * seen after that first deadline (before the next tick stopped the candidate) counts from it, so the
+   * deadline is never later than spawn + 2 x READY_PROOF_MS.
+   */
+  const readinessDeadline = (phase: Extract<Phase, { kind: "candidate" }>): number =>
+    (phase.grantedAt === undefined ? phase.spawnedAt : Math.min(phase.grantedAt, phase.spawnedAt + READY_PROOF_MS)) + READY_PROOF_MS;
+
   const proven = (linkId: string, link: LinkRoutes, round: Round, phase: Extract<Phase, { kind: "candidate" }>): void => {
     // A child whose exit was already observed is never promoted, however late its proof settles.
     if (!host.ownsChild(linkId, phase.child)) return;
@@ -300,7 +315,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     if (!record) return;
     const live = (): boolean => current(linkId, round) && round.phase === phase && phase.stopAt === undefined
       && host.ownsChild(linkId, phase.child);
-    const candidateDeadline = phase.spawnedAt + READY_PROOF_MS;
+    const candidateDeadline = readinessDeadline(phase);
     const { proof, abort } = phase;
     try {
       if (!proof.platform) {
@@ -430,7 +445,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
         }
         return;
       }
-      if (now >= phase.spawnedAt + READY_PROOF_MS) {
+      if (now >= readinessDeadline(phase)) {
         // Unlike a one-route tunnel, which reads connected after its 5 s grace and is never stopped
         // for lacking proof, a candidate with no proof by now is stopped: a granted forward whose
         // relay cannot authenticate or serve looks the same as a slow one, and keeping it would
