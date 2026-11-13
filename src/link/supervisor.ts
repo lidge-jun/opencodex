@@ -423,10 +423,11 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       if (watch.processes.length === 0) {
         orphanWatches.delete(linkId);
         if (unreadable) {
-          // Every watched process is gone, but the file cannot say what it names: stay blocked and
-          // read it again every tick, keeping the watch's observe-only policy.
+          // Every watched process is gone, but the file cannot say what it names: stay blocked and read
+          // it again every tick. Whatever it names once readable is a replacement to this watch, so it
+          // is only observed: no signal, no removal.
           if (!unreadablePidfiles.has(linkId)) warn(`[link] pidfile unreadable; link stays blocked link=${linkId}`);
-          unreadablePidfiles.set(linkId, !watch.observeOnly);
+          unreadablePidfiles.set(linkId, false);
           continue;
         }
         orphanUnverified.delete(linkId);

@@ -1083,6 +1083,38 @@ test("a blocked link that is removed and added again with the same id is settled
   });
 });
 
+
+test("a pidfile replaced while unreadable, after the watched process ended, is only observed once readable", async () => {
+  await withPidfileDir(async (dir, path) => {
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 5252, argv: ["ssh"] }) + "\n");
+    let oldAlive = true;
+    let newAlive = true;
+    const newArgv = ["ssh", "-N", "new"];
+    const h = await started({
+      pidfileDir: dir,
+      processArgv: pid => pid === 5252 ? (oldAlive ? ["ssh"] : null) : (newAlive ? newArgv : null),
+      processStart: pid => pid === 5353 && newAlive ? 1234 : null,
+      processAlive: pid => pid === 5252 ? oldAlive : newAlive,
+    });
+    expect(h.state().orphan).toBe("orphan-unverified");
+    rmSync(path);
+    mkdirSync(path);
+    oldAlive = false;
+    await h.advance(1_000);
+    // Another owner's tunnel, with a provable identity, now holds the pidfile.
+    rmSync(path, { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 5353, argv: newArgv, startTime: 1234 }) + "\n");
+    await h.advance(1_000);
+    await h.advance(3_000);
+    expect(h.kills).toEqual([]);
+    expect(h.state().orphan).toBe("orphan-unverified");
+    newAlive = false;
+    await h.advance(1_000);
+    expect(h.state().orphan).toBeUndefined();
+    expect(h.removed).toEqual([]);
+  });
+});
+
 test("a reload that changes the record of a link blocked by an unreadable pidfile keeps it blocked", async () => {
   await withPidfileDir(async (dir, path) => {
     mkdirSync(path);
