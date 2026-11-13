@@ -965,16 +965,23 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     async stop() {
       stopping = true;
       rounds.stop();
-      await runLifecycle(async () => {
-        await Promise.all([...children.keys()].map(stopChild));
-        for (const record of store.links) {
-          if (record.direction === "hub-initiated") put(record.id, IDLE);
+      try {
+        await runLifecycle(async () => {
+          // Every stop runs to its end, so one that fails cannot cut short another child's drain.
+          const results = await Promise.allSettled([...children.keys()].map(stopChild));
+          const failed = results.find(result => result.status === "rejected");
+          if (failed) throw failed.reason;
+          for (const record of store.links) {
+            if (record.direction === "hub-initiated") put(record.id, IDLE);
+          }
+        });
+      } finally {
+        // The timer runs until the stops above are done: it alone sends SIGKILL to a child that ignores
+        // SIGTERM. It goes even when a stop failed, so it never keeps the process alive.
+        if (timer !== undefined) {
+          clearTimer(timer);
+          timer = undefined;
         }
-      });
-      // The timer runs until the stops above are done: it alone sends SIGKILL to a child that ignores SIGTERM.
-      if (timer !== undefined) {
-        clearTimer(timer);
-        timer = undefined;
       }
       try { await deps.flushDiagnostics?.(); } catch { /* best effort */ }
     },

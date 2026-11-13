@@ -48,6 +48,8 @@ function harness(options: {
   store?: () => LinkStore;
   /** Tunnels ignore signals (an exit that never arrives). */
   stubborn?: boolean;
+  /** Signalling the tunnel with this index throws. */
+  killFails?: (index: number) => boolean;
   processAlive?: (pid: number) => boolean | null;
   writePidfile?: (path: string, pidfile: Pidfile) => void;
   /** Hold every tunnel's stderr until released (an exit still being classified). */
@@ -63,6 +65,7 @@ function harness(options: {
 } = {}) {
   let now = 0;
   let tick: () => void = () => {};
+  const timer = { cleared: 0 };
   const runs: Run[] = [];
   const tunnels: Tunnel[] = [];
   const kills: Array<{ pid: number; signal: string }> = [];
@@ -117,7 +120,11 @@ function harness(options: {
           const held = options.holdStderr;
           return exited.then(() => new Promise<string>(resolve => { held.release = () => resolve(stderr); }));
         },
-        kill: signal => { signals.push(signal ?? "SIGTERM"); if (!options.stubborn) tunnel.exit(143); },
+        kill: signal => {
+          if (options.killFails?.(tunnels.indexOf(tunnel))) throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+          signals.push(signal ?? "SIGTERM");
+          if (!options.stubborn) tunnel.exit(143);
+        },
       };
       tunnels.push(tunnel);
       return tunnel.child;
@@ -142,13 +149,13 @@ function harness(options: {
     processAlive: options.processAlive ?? (pid => (options.processArgv?.(pid) ?? null) !== null),
     killProcess: (pid, signal) => { kills.push({ pid, signal: signal ?? "SIGTERM" }); },
     setTimer: callback => { tick = callback; return 1 as unknown as ReturnType<typeof setInterval>; },
-    clearTimer: () => {},
+    clearTimer: () => { timer.cleared += 1; },
     sshCapture: () => null,
     routeProof: proofs,
     warn: message => { warns.push(message); },
   });
   return {
-    supervisor, runs, tunnels, kills, proofs, removed, warns,
+    supervisor, runs, tunnels, kills, proofs, removed, warns, timer,
     advance: async (ms: number) => { now += ms; tick(); await flush(); },
     /** Move the clock without a tick (a delayed timer). */
     skip: (ms: number) => { now += ms; },
@@ -1459,4 +1466,30 @@ test.each(["during a reload's drain", "on its own"] as const)("shutdown %s still
   h.tunnels[0]!.exit(137);
   await reload;
   await stopped;
+});
+
+test("a shutdown whose stop of one child fails still escalates the other drains and clears its timer", async () => {
+  const other = "lnk_fedcba9876543210";
+  const opts: Parameters<typeof harness>[0] = {
+    store: () => ({ version: 1, listenerPort: LISTENER_PORT, links: [record(), record(undefined, other, 19004)] }),
+    stubborn: true, killFails: index => index === 0,
+  };
+  const h = start(opts);
+  await flush();
+  expect(h.tunnels).toHaveLength(2);
+  let rejected: unknown;
+  const stopped = h.supervisor.stop().catch(error => { rejected = error; });
+  await flush();
+  await h.advance(2_000);
+  // The first child's stop failed; the second is still drained and escalated before the timer goes.
+  expect(h.tunnels[1]!.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  expect(h.timer.cleared).toBe(0);
+  opts.stubborn = false;
+  h.tunnels[1]!.exit(137);
+  await stopped;
+  expect((rejected as NodeJS.ErrnoException | undefined)?.code).toBe("EPERM");
+  expect(h.timer.cleared).toBe(1);
+  // The afterEach stop must not signal the failing tunnel again.
+  opts.killFails = () => false;
+  h.tunnels[0]!.exit(143);
 });
