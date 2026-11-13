@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { rustToolchainEnv } from "../helpers/rust-toolchain-env";
+import { OCX_CHILD_CONFORMANCE_BUILD_MS, OCX_CHILD_CONFORMANCE_RUN_MS } from "../../scripts/test";
 import { linkRouteAllowed } from "../../src/link/routes";
 import { linkManagementRouteAllowed } from "../../src/link/management-routes";
 import { isDetachedEphemeralChildConfig, isEphemeralChildHealth } from "../../src/link/ephemeral-child";
@@ -640,8 +641,8 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
   // 41 s in earlier dev batches and was cut at 90 s, still compiling, in 43483630535. One shared 90 s bound reported
   // that cold build as a failed conformance run. The file runs alone (SERIAL_FULL_SUITE_FILES), inside the shard's
   // process deadline (300 s Linux, 480 s Windows), and the run itself keeps its 90 s bound.
-  const CONFORMANCE_BUILD_MS = 180_000;
-  const CONFORMANCE_RUN_MS = 90_000;
+  const CONFORMANCE_BUILD_MS = OCX_CHILD_CONFORMANCE_BUILD_MS;
+  const CONFORMANCE_RUN_MS = OCX_CHILD_CONFORMANCE_RUN_MS;
 
   test.skipIf(!cargoAvailable)("Rust conformance runner passes against the identical shared fixture", () => {
     const args = [cargo.bin!, "test", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml"), "--test", "conformance"];

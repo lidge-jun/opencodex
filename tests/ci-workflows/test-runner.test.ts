@@ -23,6 +23,8 @@ import {
   LIVE_INSTALL_CREDENTIAL_ENV,
   ensureGuiDependencies,
   inspectChangedRun,
+  OCX_CHILD_CONFORMANCE_BUILD_MS,
+  OCX_CHILD_CONFORMANCE_RUN_MS,
   resolveBunTestArgs,
   resolveBunTestPlan,
   runTestLane,
@@ -718,6 +720,9 @@ describe("bun test argv", () => {
     }
     expect(plan.find(lane => lane.label === "release-helper.test.ts")?.timeoutMs).toBe(5 * 60 * 1000);
     expect(plan.find(lane => lane.label === "codex-shim.test.ts")?.timeoutMs).toBe(3 * 60 * 1000);
+    // The conformance lane outlasts a build that uses its whole bound followed by the whole run bound.
+    expect(plan.find(lane => lane.label === "link-ocx-child-conformance.test.ts")?.timeoutMs)
+      .toBeGreaterThan(OCX_CHILD_CONFORMANCE_BUILD_MS + OCX_CHILD_CONFORMANCE_RUN_MS);
   });
 
   test("a control budget is bounded and changes only the main lane", () => {
