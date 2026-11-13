@@ -51,6 +51,9 @@ test.each([
   ["/api/claude-code", { claudeCode: { enabled: true } }, { enabled: false }, { injectAgents: false }, "claudeCode", { enabled: false, injectAgents: false }],
   ["/api/injection-model", { injectionModel: "mock/test-model", injectionEffort: "high", syncCodexSubagentDefaults: true }, { model: null }, { prompt: "updated" }, "injectionModel", undefined],
 ] as const)("admitted partial edits merge the latest state: %s", async (path, initial, firstBody, secondBody, key, expected) => {
+  // This test controls ACL completion, not elapsed time; timeout behavior has separate coverage.
+  setNowForTests(() => 0);
+  setAsyncIcaclsBeltSchedulerForTests(() => () => {});
   const config = Object.assign(fixture(), structuredClone(initial));
   writeFileSync(join(root, "config.json"), JSON.stringify(config));
   const parent = holdParent(); await parent.entered;
