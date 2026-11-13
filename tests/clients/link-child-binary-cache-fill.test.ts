@@ -124,20 +124,20 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(resolve("darwin-arm64")).toEqual({ ok: false, reason: "artifact_not_found" });
   });
 
-  test("a build the package no longer vouches for loses its manifest line when its refetch fails, and its file stays", async () => {
+  test("a build the package no longer vouches for loses its manifest line when its refetch fails, and the fill deletes no file", async () => {
     ranBefore();
-    const oldBuild = new TextEncoder().encode("operator build");
+    const oldBuild = new TextEncoder().encode("earlier build");
     mkdirSync(cacheDir(), { recursive: true, mode: 0o700 });
     writeFileSync(join(cacheDir(), "ocx-child-linux-x64"), oldBuild, { mode: 0o600 });
-    // A build placed by hand for a target the release does not list keeps its line.
-    const handBuild = new TextEncoder().encode("hand build");
-    writeFileSync(join(cacheDir(), "ocx-child-windows-x64.exe"), handBuild, { mode: 0o600 });
-    writeFileSync(join(cacheDir(), "SHA256SUMS"), sha(oldBuild) + "  ocx-child-linux-x64\n" + sha(handBuild) + "  ocx-child-windows-x64.exe\n", { mode: 0o600 });
+    // A line for a target the release does not list is left as it is: the fill manages only the builds its digests name.
+    const unlistedBuild = new TextEncoder().encode("unlisted target build");
+    writeFileSync(join(cacheDir(), "ocx-child-windows-x64.exe"), unlistedBuild, { mode: 0o600 });
+    writeFileSync(join(cacheDir(), "SHA256SUMS"), sha(oldBuild) + "  ocx-child-linux-x64\n" + sha(unlistedBuild) + "  ocx-child-windows-x64.exe\n", { mode: 0o600 });
     expect(resolve("linux-x64").ok).toBe(true);
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     expect(await fill(release({ "ocx-child-linux-x64": 503 }).fetchImpl)).toEqual({ kind: "filled", cached: [], fetched: [], failed: ["ocx-child-linux-x64"] });
     expect(readFileSync(join(cacheDir(), "ocx-child-linux-x64"))).toEqual(Buffer.from(oldBuild));
-    expect(readFileSync(join(cacheDir(), "SHA256SUMS"), "utf8")).toBe(sha(handBuild) + "  ocx-child-windows-x64.exe\n");
+    expect(readFileSync(join(cacheDir(), "SHA256SUMS"), "utf8")).toBe(sha(unlistedBuild) + "  ocx-child-windows-x64.exe\n");
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "checksum_mismatch" });
   });
 

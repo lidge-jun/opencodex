@@ -22,8 +22,8 @@ import { detectInstallFromPath } from "../update/install-detection.mjs";
  * so the newest can never go down, and only a running version newer than it fills. A first start (no record: a fresh install) records
  * its version and fetches nothing, a restart of the same version fetches nothing, and a record or
  * cache directory for a newer version means a downgrade. A listed build that cannot be verified loses its manifest line,
- * so it can never stay trusted under an older manifest, but its file is left in place (it may be an
- * operator's); the record stays behind until every listed build is verified, so the next start retries.
+ * so it can never stay trusted under an older manifest; the fill deletes no file (unlisted, the reader
+ * refuses it); the record stays behind until every listed build is verified, so the next start retries.
  * A digest file that is there but unreadable or unusable is not an absent one: nothing is written and
  * the record stays, so a repaired package still fills. Overlapping fills cannot lose a build: the
  * manifest is rebuilt from the builds verified on disk when it is written, and a completed record
@@ -434,9 +434,9 @@ export async function fillChildBinaryCacheForVersion(options) {
     }
     assertFillLockHeld(lock);
     // Rebuilt from the disk as it is now, so an overlapping fill's verified builds stay listed and a
-    // build the release does not vouch for never stays under an older line (its file stays: it may be
-    // an operator's, and unlisted the reader refuses it). Lines for builds the release does not list,
-    // placed by hand, are kept.
+    // build the release does not vouch for never stays under an older line (the fill deletes no file;
+    // unlisted, the reader refuses it). Lines for targets the release does not list are left as they
+    // are: the fill manages only the builds its digests name.
     const verified = verifiedOnDisk(dir, digests);
     const manifest = new Map([...readCacheManifest(dir)].filter(([file]) => !digests.has(file)));
     for (const [file, sha] of verified) manifest.set(file, sha);
