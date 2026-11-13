@@ -402,7 +402,14 @@ describe("review round 1", () => {
     const journal = openEnrollJournal(ctx, { id: OP, digest: digest() }, ALIAS, {});
     journal.intent("plant");
     const finished = await journal.finish(Response.json(body, { status: 502 }));
-    expect((await finished.json() as { outcome: string }).outcome).toBe(outcome);
+    const answer = await finished.json() as { outcome: string; linkId?: string; recovery?: string; residualKind?: string };
+    expect(answer.outcome).toBe(outcome);
+    if (outcome === "residual") {
+      // The first answer already binds the Child's step to the reserved link id, as a replay does (#8694 review).
+      expect(answer.linkId).toBe(journal.reservedLinkId);
+      expect(answer.residualKind).toBe("plant");
+      expect(answer.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + journal.reservedLinkId);
+    }
   });
 
   test("without an operation id and before this Home ever journalled, apply takes no lock and reads no journal", async () => {

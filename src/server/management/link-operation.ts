@@ -475,7 +475,17 @@ export function openEnrollJournal(ctx: ManagementContext, request: OperationRequ
       }
       const kind = residualKind(op);
       const planted = op.state === "committed" && hasEffect(op, "plant", "done");
-      return Response.json({ ...body, ...outcomeBody(op), ...(kind ? { residual: true, residualKind: kind } : {}), ...(planted ? { planted: true } : {}) },
+      // A residual this answer settles on (a plant that did not report, which returns before the live residual is built) gets
+      // the same step a replay gives: bound to the reserved link id. A live line is kept only when it was built for this kind.
+      const residualFields = (): Record<string, unknown> => {
+        const linkId = residualLinkId(op);
+        const platform = body.remotePlatform === "posix" || body.remotePlatform === "windows" ? body.remotePlatform : undefined;
+        const install = body.residualInstall === "ephemeral" || body.residualInstall === "full" ? body.residualInstall : "enrollment";
+        const keep = body.residualKind === kind && typeof body.recovery === "string" && body.linkId === linkId;
+        return { residual: true, residualKind: kind, ...(linkId ? { linkId } : {}),
+          recovery: keep ? body.recovery : residualRecovery(kind === "plant" ? "plant" : install, linkId, platform) };
+      };
+      return Response.json({ ...body, ...outcomeBody(op), ...(kind ? residualFields() : {}), ...(planted ? { planted: true } : {}) },
         { status: response.status, headers: response.headers });
     },
   };
