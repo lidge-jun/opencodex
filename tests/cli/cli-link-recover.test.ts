@@ -98,6 +98,10 @@ describe("ocx link recover", () => {
       // link or an earlier one (ocx-child's status reads only state.json), and unreadable state shows none (#8691 review).
       expect(stderr()).toContain("Leave that link: no status check on the machine can show it is stale");
       expect(stderr()).toContain("do that only if you mean to end that link");
+      // Recover is never run for the operator; the revoke names the other link's id (#8691 final review).
+      expect(stderr()).toContain("then run ocx link recover --link-id " + ID + " again");
+      expect(stderr()).toContain("ocx link revoke --link-id <that link's id>, shown by ocx link status");
+      expect(stderr()).not.toContain("recover runs then");
       expect(stderr()).not.toContain("Only if it shows");
       expect(stderr()).not.toContain("Check which link it runs");
       // The forget way out is its own sentence (not under the branch that keeps the machine running), with this link's id.

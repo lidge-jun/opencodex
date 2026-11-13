@@ -1583,7 +1583,7 @@ home, and nothing was changed. `alias_linked` (exit 5) means another Home-initia
 alias, as its alias or one of its routes, so the machine may belong to that link: do not run
 `ocx-child detach` there. Leave that link: no status check on the machine can show it is stale,
 since an attach of it still in progress can show no link or an earlier one, and state that cannot be read
-shows none. The tombstone waits until that link is removed, then recover. Revoking that link (after
+shows none. The tombstone waits until that link is removed; then run recover again. Revoking that link (after
 settling any open operation on it) ends it and disconnects the machine if the machine runs it, so do that
 only if you mean to end that link. A person on the Home can instead forget the tombstone once the machine
 is confirmed clean or gone.

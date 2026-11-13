@@ -932,6 +932,8 @@ describe("recover while another link names the alias", () => {
     // That link may be the one the machine runs now, and no status check can show it is stale: the remedy leaves it.
     expect(error.message).toContain("Leave that link: no status check on the machine can show it is stale");
     expect(error.message).toContain("do that only if you mean to end that link");
+    expect(error.message).toContain("then run ocx link recover again");
+    expect(error.message).not.toContain("recover runs then");
     expect(error.message).not.toContain("Only if it shows");
     expect(error.message).toContain("A person on this Home can instead forget this tombstone once the machine is confirmed clean or gone.");
     expect(error.message).not.toContain("settle any open operation on that link (ocx link operations), revoke the link, then recover");
