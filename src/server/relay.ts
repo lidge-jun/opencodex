@@ -180,10 +180,11 @@ export function upstreamErrorTailFrame(
   errorType?: string,
   errorCode?: string,
   verdict?: BareUpstreamError,
+  onPayload?: (payload: string) => void,
 ): Uint8Array {
-  return encoder.encode(
-    `event: response.failed\ndata: ${upstreamErrorFailedPayload(message, tailIdentity({ refusalCode, errorType, errorCode }, verdict), maskCredential)}\n\n`,
-  );
+  const payload = upstreamErrorFailedPayload(message, tailIdentity({ refusalCode, errorType, errorCode }, verdict), maskCredential);
+  onPayload?.(payload);
+  return encoder.encode(`event: response.failed\ndata: ${payload}\n\n`);
 }
 
 /**
@@ -248,8 +249,10 @@ export function refusalFailedTailFrame(
   errorType?: string,
   errorCode?: string,
   verdict?: BareUpstreamError,
+  onPayload?: (payload: string) => void,
 ): Uint8Array {
   const payload = upstreamErrorFailedPayload(message, tailIdentity({ refusalCode, errorType, errorCode }, verdict), maskCredential);
+  onPayload?.(payload);
   return encoder.encode(
     `\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`,
   );
@@ -482,7 +485,9 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
-  opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string },
+  opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string;
+    /** Receives the exact payload of every synthesized bare-verdict tail, so a client-stream log can tell it from upstream. */
+    onSyntheticTail?: (payload: string) => void },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
@@ -540,6 +545,7 @@ export function relaySseWithFailedTail(
                   terminalBoundary.upstreamErrorType(),
                   terminalBoundary.upstreamErrorCode(),
                   terminalBoundary.upstreamVerdict(),
+                  opts?.onSyntheticTail,
                 ));
               controller.enqueue(doneFrame(encoder));
             }
@@ -572,7 +578,7 @@ export function relaySseWithFailedTail(
             const refusalCode = terminalBoundary.upstreamRefusalCode();
             const refusalMessage = terminalBoundary.upstreamError();
             controller.enqueue((refusalCode !== undefined || terminalBoundary.recognizedBareError()) && refusalMessage !== undefined
-              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode, opts?.maskCredential, terminalBoundary.upstreamErrorType(), terminalBoundary.upstreamErrorCode(), terminalBoundary.upstreamVerdict())
+              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode, opts?.maskCredential, terminalBoundary.upstreamErrorType(), terminalBoundary.upstreamErrorCode(), terminalBoundary.upstreamVerdict(), opts?.onSyntheticTail)
               : failedTailFrame(encoder, err, opts?.maskCredential));
           }
           controller.close();

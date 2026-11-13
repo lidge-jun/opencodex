@@ -90,6 +90,8 @@ export type EagerRelayOptions = {
   terminalBoundary?: CodexSafetyBufferingFilterOptions;
   /** Mask the selected outbound credential in synthetic failures. */
   maskCredential?: (text: string) => string;
+  /** Receives the exact payload of every synthesized bare-verdict tail (see relaySseWithFailedTail). */
+  onSyntheticTail?: (payload: string) => void;
   /** Injectable clock for tests. */
   now?: () => number;
 };
@@ -146,7 +148,7 @@ export function relaySseEagerBounded(
     }
     try {
       return refusalFailedTailFrame(terminalEncoder, message, verdict.refusalCode,
-        opts?.maskCredential, verdict.errorType, verdict.errorCode, verdict);
+        opts?.maskCredential, verdict.errorType, verdict.errorCode, verdict, opts?.onSyntheticTail);
     } catch {
       return null;
     }
@@ -347,6 +349,7 @@ export function relaySseEagerBounded(
                 terminalBoundary.upstreamErrorType(),
                 terminalBoundary.upstreamErrorCode(),
                 terminalBoundary.upstreamVerdict(),
+                opts?.onSyntheticTail,
               );
             queuedBytes += upstreamErrorFrame.byteLength + terminalSentinel.byteLength;
             try {

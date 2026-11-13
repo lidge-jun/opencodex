@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
+import { noteRelaySyntheticTail } from "../../src/server/request-log-terminal-status";
 import { collectBufferedResponsesSse } from "../../src/server/responses/buffered-sse-json";
 import { bareUpstreamError } from "../../src/server/bare-upstream-error";
 import { consumeForInspection, consumeForResponseLogMetadata, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
@@ -1491,6 +1492,18 @@ describe("one bare-error precedence rule across client, account and row", () => 
     }
   });
 
+  test("a genuine terminal in the relay's exact tail shape stays genuine on the inspection row", async () => {
+    // Byte-for-byte the shape the relay renders, but from upstream: only registered relay output is a tail.
+    const copy = "flagged for possible cybersecurity risk";
+    const error = { type: "rate_limit_error", code: "rate_limit_exceeded", message: copy };
+    const genuine = `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error, last_error: error } })}\n\n`;
+    for (const mode of ["tee", "eager"] as const) {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const { text, outcomes } = await relayMixed(mode, [frame({ code: "rate_limit_exceeded", message: copy }, "untyped"), genuine], log);
+      expect([mode, failedCode(text), outcomes, httpStatusForRequestLogTerminal("failed", log)]).toEqual([mode, "cyber_policy", [400], 400]);
+    }
+  });
+
   test("a genuine terminal that shares the verdict's fields is not mistaken for the relay tail", async () => {
     const copy = "flagged for possible cybersecurity risk";
     const genuine = `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed",
@@ -1754,7 +1767,7 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     for (const copy of ["unauthorized request", "rate limit hit, slow down"]) {
       const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
       const src = sourceStream([`event: error\ndata: ${JSON.stringify({ error: { code: "mystery_code", message: copy } })}\n\n`]);
-      const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController()) : relaySseEagerBounded(src, new AbortController(), parityHooks);
+      const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController(), undefined, { onSyntheticTail: payload => noteRelaySyntheticTail(log, payload) }) : relaySseEagerBounded(src, new AbortController(), parityHooks, { onSyntheticTail: payload => noteRelaySyntheticTail(log, payload) });
       const { frames, terminals } = await wsPump(relayed, log);
       expect([copy, frames.find(frame => frame.type === "response.failed")?.response?.error?.code]).toEqual([copy, "upstream_server_error"]);
       expect([copy, terminals, httpStatusForRequestLogTerminal("failed", log)]).toEqual([copy, [["failed", 502]], 502]);
@@ -1766,7 +1779,7 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
       activeAttempt: {} as NonNullable<RequestLogContext["activeAttempt"]> };
     const error = { code: "rate_limit_exceeded", message: "flagged for possible cybersecurity risk" };
     const src = sourceStream([`event: error\ndata: ${JSON.stringify({ error })}\n\n`]);
-    const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController()) : relaySseEagerBounded(src, new AbortController(), parityHooks);
+    const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController(), undefined, { onSyntheticTail: payload => noteRelaySyntheticTail(log, payload) }) : relaySseEagerBounded(src, new AbortController(), parityHooks, { onSyntheticTail: payload => noteRelaySyntheticTail(log, payload) });
     const { frames, terminals } = await wsPump(relayed, log);
     expect(frames.find(frame => frame.type === "response.failed")?.response?.error?.code).toBe("rate_limit_exceeded");
     expect(terminals).toEqual([["failed", 429]]);
@@ -1788,6 +1801,20 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     const { frames, terminals } = await wsPump(relayed, log);
     expect(frames.find(frame => frame.type === "response.failed")?.response?.error?.code).toBe("cyber_policy");
     expect([terminals, httpStatusForRequestLogTerminal("failed", log)]).toEqual([[["failed", 400]], 400]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s keeps a genuine terminal in the relay's exact tail shape genuine on the WS log", async mode => {
+    // Byte-for-byte the shape the relay renders, but from upstream: only registered relay output is a tail.
+    const copy = "flagged for possible cybersecurity risk";
+    const error = { type: "rate_limit_error", code: "rate_limit_exceeded", message: copy };
+    const genuine = `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error, last_error: error } })}\n\n`;
+    const bare = `event: error\ndata: ${JSON.stringify({ error: { code: "rate_limit_exceeded", message: copy } })}\n\n`;
+    const wsLog: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const src = sourceStream([bare, genuine]);
+    const tail = { onSyntheticTail: (payload: string) => noteRelaySyntheticTail(wsLog, payload) };
+    const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController(), undefined, tail) : relaySseEagerBounded(src, new AbortController(), parityHooks, tail);
+    const { terminals } = await wsPump(relayed, wsLog);
+    expect([terminals, httpStatusForRequestLogTerminal("failed", wsLog)]).toEqual([[["failed", 400]], 400]);
   });
 
   test("a raw WS upstream body keeps an untyped envelope as the protocol error, off the row", async () => {

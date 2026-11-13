@@ -120,29 +120,28 @@ export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: He
 }
 
 /**
- * Whether a response.failed is the relay's own rendering of this verdict (upstreamErrorFailedPayload
- * in src/server/relay.ts), not a genuine upstream terminal that happens to share its fields. The
- * synthesized tail has an exact shape: only type and response at the root; only status, error, an
- * identical last_error and (for a refusal) retryable:false in response; exactly type, code and
- * message in the error, all equal to the verdict. A provider terminal carries its own response
- * fields (id, output, model, ...) or lacks the duplicated last_error, so it is classified normally.
+ * Exact payload texts the relay synthesized as bare-verdict tails for this request, registered by
+ * the relay as it frames them (passthrough-delivery's onSyntheticTail). A client-stream reader
+ * (the WebSocket log) sees those tails beside upstream frames; only a registered text is the
+ * relay's own, however closely a genuine upstream terminal resembles it. Each entry matches once.
  */
-function isRelayRenderedTail(json: UpstreamErrorPayload, verdict: BareUpstreamEvidence["verdict"]): boolean {
-  const root = json as Record<string, unknown>;
-  const response = root.response;
-  if (root.type !== "response.failed" || Object.keys(root).length !== 2 || !response || typeof response !== "object") return false;
-  const fields = response as Record<string, unknown>;
-  const refusal = verdict.refusalCode !== undefined;
-  const expectedKeys = refusal ? ["error", "last_error", "retryable", "status"] : ["error", "last_error", "status"];
-  if (Object.keys(fields).sort().join() !== expectedKeys.join() || fields.status !== "failed") return false;
-  if (refusal && fields.retryable !== false) return false;
-  const sameError = (value: unknown): boolean => {
-    if (!value || typeof value !== "object") return false;
-    const error = value as Record<string, unknown>;
-    return Object.keys(error).sort().join() === "code,message,type" && error.type === verdict.terminalType
-      && error.code === verdict.terminalCode && error.message === verdict.message;
-  };
-  return sameError(fields.error) && sameError(fields.last_error);
+const relaySyntheticTails = new WeakMap<TerminalStatusContext, string[]>();
+
+export function noteRelaySyntheticTail(logCtx: TerminalStatusContext, payload: string): void {
+  const tails = relaySyntheticTails.get(logCtx) ?? [];
+  tails.push(payload);
+  if (tails.length > 4) tails.shift();
+  relaySyntheticTails.set(logCtx, tails);
+}
+
+function consumeRelaySyntheticTail(logCtx: TerminalStatusContext, json: UpstreamErrorPayload): boolean {
+  const tails = relaySyntheticTails.get(logCtx);
+  if (!tails?.length) return false;
+  // The relay serializes with JSON.stringify, so the parsed frame re-serializes to the same text.
+  const index = tails.indexOf(JSON.stringify(json));
+  if (index < 0) return false;
+  tails.splice(index, 1);
+  return true;
 }
 
 export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext, json: UpstreamErrorPayload, untypedSse = false): void {
@@ -159,7 +158,7 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     // response.failed. It renders the winning bare verdict, so the row keeps that verdict, and the
     // evidence stays for the final row's code, instead of inferring a different class from the
     // provider copy it carries.
-    if (prior !== undefined && isRelayRenderedTail(json, prior.verdict)) return;
+    if (prior !== undefined && type === "response.failed" && consumeRelaySyntheticTail(logCtx, json)) return;
     bareEvidence.delete(logCtx);
     // Untyped evidence wrote the diagnostics; the terminal that retires it owns them now.
     if (prior !== undefined && !prior.typed) {
