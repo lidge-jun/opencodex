@@ -1265,8 +1265,8 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       // the proxy's shutdown handlers actually run; taskkill /F is the fallback inside.
       // Shared teardown is deferred to this process: it happens after the respawn
       // verification below, so a survivor does not get its client config pulled first.
-      // The receipt goes down first — the proxy honours the deferral only when it can
-      // see one, so an unrecordable claim degrades to the child doing its own teardown.
+      // The receipt goes down first; Windows refuses if it cannot be recorded.
+      // Other platforms retain the existing undeferred fallback.
       nativeRestoreHandledByProxy = await stopWithDeferral(pid);
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);
