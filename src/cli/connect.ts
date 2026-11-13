@@ -9,6 +9,7 @@ import {
   type ClientCatalogReadiness,
 } from "../client/catalog-compatibility";
 import {
+  assertDisconnectExpectation,
   disconnectClient,
   revokeConnectedClientKey,
   rotateConnectedClientKey,
@@ -18,6 +19,8 @@ import { inspectClientRotationRecoveryGate, readClientConnectionState } from "..
 import { readClientLinkState } from "../client/link-state";
 import { probeLinkTunnelStatus, type LinkTunnelStatus } from "../client/link-tunnel-status";
 import { teardownClientLink } from "../client/link-teardown";
+import { ClientSyncExpectationError } from "../client/sync-expectation";
+import { SYNC_EXPECTATION_MISMATCH_EXIT } from "./sync-expectation";
 import { reapOrphanTunnel } from "../client/link-tunnel";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import type { ClientLifecycleLockDeps } from "../client/lifecycle-lock";
@@ -87,8 +90,27 @@ export const CONNECT_USAGE = `Usage:
   ocx connect revoke --admin-token-stdin [--json]`;
 
 export const DISCONNECT_USAGE = `Usage:
-  ocx disconnect [--keep-catalog] [--json]
+  ocx disconnect [--keep-catalog] [--json] [--expect-link <link id>]
   ocx disconnect --orphaned-token --yes [--json]`;
+
+const DISCONNECT_LINK_ID = /^lnk_[0-9a-f]{16}$/;
+
+/** --expect-link <id> or --expect-link=<id>, given at most once; removed from args. */
+function takeExpectLink(args: string[]): string | undefined {
+  let found: string | undefined;
+  for (let index = 0; index < args.length;) {
+    const arg = args[index]!;
+    let value: string | undefined;
+    if (arg === "--expect-link") { value = args[index + 1] ?? ""; args.splice(index, 2); }
+    else if (arg.startsWith("--expect-link=")) { value = arg.slice("--expect-link=".length); args.splice(index, 1); }
+    else { index += 1; continue; }
+    if (found !== undefined || !DISCONNECT_LINK_ID.test(value)) {
+      throw new CliUsageError("--expect-link needs one link id of the form lnk_ followed by 16 hex digits (see ocx connect status --json).", DISCONNECT_USAGE);
+    }
+    found = value;
+  }
+  return found;
+}
 
 export type ClientConnectionStatus = {
   state: "disconnected" | "connected" | "invalid" | "mismatched";
@@ -568,15 +590,17 @@ export async function handleDisconnectCommand(
   argv: string[],
   deps: Pick<ClientCommandDeps, "lifecycleLockDeps" | "linkTeardownDeps"> & { orphanRecoveryDeps?: OrphanTokenRecoveryDeps } = {},
 ): Promise<number> {
-  return runCliAction(async () => {
+  let mismatch: ClientSyncExpectationError | null = null;
+  const code = await runCliAction(async () => {
     const args = [...argv];
     const keepCatalog = takeFlag(args, "--keep-catalog");
     const wantsJson = takeFlag(args, "--json");
     const orphanedToken = takeFlag(args, "--orphaned-token");
     const yes = takeFlag(args, "--yes");
+    const expectLink = takeExpectLink(args);
     rejectArgs(args, DISCONNECT_USAGE, { redactValues: true });
     if (orphanedToken) {
-      if (!yes || keepCatalog) throw new CliUsageError("--orphaned-token requires --yes and cannot be combined with --keep-catalog", DISCONNECT_USAGE);
+      if (!yes || keepCatalog || expectLink !== undefined) throw new CliUsageError("--orphaned-token requires --yes and cannot be combined with --keep-catalog or --expect-link", DISCONNECT_USAGE);
       const backup = await recoverOrphanedTokens({ ...deps.orphanRecoveryDeps, lifecycleLockDeps: deps.lifecycleLockDeps });
       const restore = "Stop OpenCodex and move the saved files back into its config directory only if the destination names are absent.";
       printData({ ...backup, restore }, wantsJson, [
@@ -586,6 +610,14 @@ export async function handleDisconnectCommand(
       return;
     }
     if (yes) throw new CliUsageError("--yes requires --orphaned-token", DISCONNECT_USAGE);
+    // A Home's revoke names the link it means; checked before the client-link teardown touches anything,
+    // and again inside disconnectClient under the locks it writes under.
+    if (expectLink !== undefined) {
+      try { assertDisconnectExpectation(expectLink, deps); } catch (error) {
+        if (error instanceof ClientSyncExpectationError) { mismatch = error; return; }
+        throw error;
+      }
+    }
     const teardown = await teardownClientLink({
       readSidecar: readClientLinkState,
       connectedLinkId: () => {
@@ -599,13 +631,15 @@ export async function handleDisconnectCommand(
       knownHostsFile: deps.linkTeardownDeps?.knownHostsFile ?? linkKnownHostsPath(),
       timeoutMs: deps.linkTeardownDeps?.timeoutMs,
     });
-    const result = await disconnectClient({ keepCatalog }, deps).catch((error: unknown) => {
+    const result = await disconnectClient({ keepCatalog, ...(expectLink !== undefined ? { expectLink } : {}) }, deps).catch((error: unknown) => {
+      if (error instanceof ClientSyncExpectationError) { mismatch = error; return null; }
       // The bare code left a Home-driven leave with nothing to act on; the remedy already exists.
       if (error instanceof Error && error.message === "client_catalog_ownership_changed") {
         throw new Error("client_catalog_ownership_changed: the Codex model catalog (opencodex-catalog.json in the Codex home) matches neither the catalog this connection wrote nor the one recorded before it connected, so something changed it after connecting and disconnect will not overwrite it. To disconnect and leave that file as it is, run: ocx disconnect --keep-catalog");
       }
       throw error;
     });
+    if (!result) return;
     const payload = {
       ...result,
       homeRevoke: teardown.homeRevoke,
@@ -629,4 +663,12 @@ export async function handleDisconnectCommand(
         : `The hub key ${result.apiKeyId} is still valid. Revoke it from Integrations → API Keys.`,
     ]);
   });
+  if (mismatch) {
+    // As ocx sync --expect-link: one human line, then the JSON a Home parses as the last stderr line.
+    const refused: ClientSyncExpectationError = mismatch;
+    console.error(`Disconnect refused (${refused.phase}: ${refused.reason}); nothing was changed.`);
+    console.error(JSON.stringify({ phase: refused.phase, reason: refused.reason }));
+    return SYNC_EXPECTATION_MISMATCH_EXIT;
+  }
+  return code;
 }

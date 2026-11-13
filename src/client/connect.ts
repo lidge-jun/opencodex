@@ -1122,8 +1122,17 @@ function restoreConnectedCodex(connection: OcxClientConnectionConfig): void {
   }
 }
 
+/**
+ * `ocx disconnect --expect-link <id>`: refuse unless this machine is connected to that link (the same
+ * check `ocx sync --expect-link` makes), read-only under the client lifecycle and config locks. A Home's
+ * delayed revoke of an old link then cannot disconnect a newer one. Throws ClientSyncExpectationError.
+ */
+export function assertDisconnectExpectation(linkId: string, deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {}): void {
+  withClientLifecycleSync(() => withConfigMutationLockSync(() => assertClientSyncExpectation({ kind: "link", linkId })), deps.lifecycleLockDeps);
+}
+
 export async function disconnectClient(
-  options: { keepCatalog?: boolean; expectedOwner?: DesktopRemoteOwner } = {},
+  options: { keepCatalog?: boolean; expectedOwner?: DesktopRemoteOwner; expectLink?: string } = {},
   deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {},
 ): Promise<{
   restored: boolean; tokenRemoved: boolean; catalogRemoved: boolean; catalogRestored: boolean; apiKeyId: string;
@@ -1136,6 +1145,8 @@ export async function disconnectClient(
   // with required ACLs, so each admits after overlapping config-root ACL work (#7815). A timeout
   // before phase 1 writes nothing; one before phase 2 leaves the prepared receipt it resumes from.
   const prepared = await withConfigDirHardeningSettled(getConfigDir(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+    // Checked first, under the same locks, before anything is read for writing or written.
+    if (options.expectLink !== undefined) assertClientSyncExpectation({ kind: "link", linkId: options.expectLink });
     const read = readDesktopDisconnectReceipt();
     if (read.kind === "unsafe") throw new Error("client_disconnect_receipt_unsafe");
     const state = readClientConnectionState();

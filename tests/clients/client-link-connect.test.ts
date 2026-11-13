@@ -311,6 +311,72 @@ describe("client link connection contracts", () => {
     });
   });
 
+  test("disconnect --expect-link for another link changes nothing and exits 5 with the child_link_mismatch line", async () => {
+    await withLinkHome(async home => {
+      await connectClient(linkOptions(), {
+        fetchImpl: async input => String(input).endsWith("/readyz")
+          ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+          : Response.json({ models: [] }),
+        lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+      });
+      const lines: string[] = [];
+      const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+      let exit: number;
+      try {
+        exit = await handleDisconnectCommand(["--expect-link", "lnk_ffffffffffffffff"], { lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") } });
+      } finally { errors.mockRestore(); }
+      expect(exit).toBe(5);
+      expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "other_link" });
+      expect(readClientConnectionState()).toMatchObject({ kind: "connected", value: { link: { linkId } } });
+      expect(readServiceApiTokenState()).toMatchObject({ kind: "present" });
+    });
+  });
+
+  test("disconnect --expect-link for its own link disconnects as a plain disconnect does", async () => {
+    await withLinkHome(async home => {
+      await connectClient(linkOptions(), {
+        fetchImpl: async input => String(input).endsWith("/readyz")
+          ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+          : Response.json({ models: [] }),
+        lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+      });
+      const logs = spyOn(console, "log").mockImplementation(() => {});
+      let exit: number;
+      try {
+        exit = await handleDisconnectCommand(["--expect-link", linkId, "--json"], { lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") } });
+      } finally { logs.mockRestore(); }
+      expect(exit).toBe(0);
+      expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+    });
+  });
+
+  test("disconnect --expect-link on a disconnected machine exits 5 (reason disconnected) before any teardown", async () => {
+    await withLinkHome(async home => {
+      const lines: string[] = [];
+      const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+      let exit: number;
+      try {
+        exit = await handleDisconnectCommand(["--expect-link", linkId], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+        });
+      } finally { errors.mockRestore(); }
+      expect(exit).toBe(5);
+      expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "disconnected" });
+      expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+    });
+  });
+
+  test("disconnect --expect-link without a valid link id is a usage error and changes nothing", async () => {
+    await withLinkHome(async () => {
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(await handleDisconnectCommand(["--expect-link", "not-a-link"])).toBe(2);
+        expect(await handleDisconnectCommand(["--expect-link", linkId, "--orphaned-token", "--yes"])).toBe(2);
+      } finally { errors.mockRestore(); }
+    });
+  });
+
   test("confirmed orphan recovery preserves both tokens privately without exposing their bytes", async () => {
     await withLinkHome(async home => {
       const tokenPath = join(home, "service-api-token");

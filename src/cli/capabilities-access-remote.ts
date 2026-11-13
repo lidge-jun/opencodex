@@ -4,10 +4,11 @@ import type { Capability } from "./capability-types";
 export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
   {
     command: ["disconnect"], summary: "Disconnect a client or preserve orphaned token files for recovery.",
-    usage: "ocx disconnect [--keep-catalog] [--json] | ocx disconnect --orphaned-token --yes [--json]",
+    usage: "ocx disconnect [--keep-catalog] [--json] [--expect-link <linkId>] | ocx disconnect --orphaned-token --yes [--json]",
     routes: [],
     flags: [
       { name: "--keep-catalog", value: "boolean", summary: "Keep the connected client's catalog during ordinary disconnect." },
+      { name: "--expect-link", value: "string", summary: "Disconnect only when this machine is the connected Child of that link; otherwise exit 5 with child_link_mismatch and change nothing." },
       { name: "--orphaned-token", value: "boolean", summary: "Preserve unowned service-token files in a private backup when disconnected." },
       { name: "--yes", value: "boolean", summary: "Explicitly confirm orphan-token recovery; requires --orphaned-token." },
       { name: "--json", value: "boolean", summary: "Emit the local result and backup location as JSON." },

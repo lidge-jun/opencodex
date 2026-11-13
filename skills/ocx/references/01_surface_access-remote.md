@@ -386,7 +386,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx disconnect`
 
-Usage: `ocx disconnect [--keep-catalog] [--json] | ocx disconnect --orphaned-token --yes [--json]`
+Usage: `ocx disconnect [--keep-catalog] [--json] [--expect-link <linkId>] | ocx disconnect --orphaned-token --yes [--json]`
 
 Disconnect a client or preserve orphaned token files for recovery.
 
@@ -397,6 +397,7 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--keep-catalog` | boolean | Keep the connected client's catalog during ordinary disconnect. |
+| `--expect-link` | string | Disconnect only when this machine is the connected Child of that link; otherwise exit 5 with child_link_mismatch and change nothing. |
 | `--orphaned-token` | boolean | Preserve unowned service-token files in a private backup when disconnected. |
 | `--yes` | boolean | Explicitly confirm orphan-token recovery; requires --orphaned-token. |
 | `--json` | boolean | Emit the local result and backup location as JSON. |
