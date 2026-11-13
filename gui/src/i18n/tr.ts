@@ -4235,6 +4235,7 @@ export const tr: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "Child hâlâ bağlı olabilir. Yeniden denemeden önce Child üzerinde {cmd} komutunu çalıştırın.",
   "remoteLink.residual.full": "Child hâlâ bağlı olabilir. Yeniden denemeden önce Child üzerinde ocx disconnect ve ocx restart komutlarını çalıştırın.",
   "remoteLink.residual.unknown": "Child hâlâ bağlı olabilir. Yeniden denemeden önce Child'ı kontrol edin ve bağlantıyı orada kesin.",
+  "remoteLink.residual.ownership": "Önce Child'ı kontrol edin: o zamandan beri başka bir bağlantıya, bir hub'a veya başka bir Home'a katıldıysa olduğu gibi bırakın.",
   "remoteLink.error.generic": "Uzak bağlantı isteği tamamlanamadı.",
   "remoteLink.reason.auth": "Kimlik doğrulama başarısız oldu.",
   "remoteLink.reason.hostkey": "Ana bilgisayar anahtarı doğrulanamadı.",

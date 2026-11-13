@@ -1410,7 +1410,7 @@ test.each(ENROLLMENT_CLEANUP_ERRORS.filter(([code]) => code !== "link_pin_confli
   expect(host.textContent).not.toContain("Remote link request could not be completed.");
 });
 
-const RESIDUAL_STEPS = ["purge", "purgeWindows", "purgeWindowsFallback", "purgeAny", "purgeAnyWindows", "ephemeral", "full", "unknown"] as const;
+const RESIDUAL_STEPS = ["purge", "purgeWindows", "purgeWindowsFallback", "purgeAny", "purgeAnyWindows", "ephemeral", "full", "unknown", "ownership"] as const;
 
 test("every locale translates the enrollment refusals and the Child steps instead of reusing English", async () => {
   const { DICTS } = await import("../src/i18n/catalogs");
@@ -1426,7 +1426,7 @@ test("every locale translates the enrollment refusals and the Child steps instea
       expect(typeof text, locale + " " + step).toBe("string");
       if (locale !== "en") expect(text, locale + " " + step).not.toBe((DICTS.en as Record<string, string>)["remoteLink.residual." + step]);
       // A single command is a chip in the {cmd} slot, never written into the translated prose.
-      const chip = step !== "full" && step !== "unknown";
+      const chip = step !== "full" && step !== "unknown" && step !== "ownership";
       expect(text.includes("{cmd}"), locale + " " + step).toBe(chip);
     }
   }
@@ -1441,6 +1441,8 @@ test.each([
   const host = await applyRefusal({ error: { code, message: "fixture" }, residual: true, ...fields });
   const step = host.querySelector(".remote-link-child-step");
   expect(step?.textContent).toContain("The Child may still be connected.");
+  // The step can be acted on long after the attempt, when the Child may belong to another link it would remove.
+  expect(step?.textContent).toContain("Check the Child first: if it has since joined another link, a hub or another Home, leave it as it is.");
   expect(step?.querySelector("code.chip")?.textContent).toBe(cmd);
   if ("remotePlatform" in fields && fields.remotePlatform === "windows") {
     // The plant's location on a Windows Child without LOCALAPPDATA is named too.

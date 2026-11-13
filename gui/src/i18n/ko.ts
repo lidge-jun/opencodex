@@ -4234,6 +4234,7 @@ export const ko: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "Child가 아직 연결되어 있을 수 있습니다. 다시 시도하기 전에 Child에서 {cmd}를 실행하세요.",
   "remoteLink.residual.full": "Child가 아직 연결되어 있을 수 있습니다. 다시 시도하기 전에 Child에서 ocx disconnect와 ocx restart를 실행하세요.",
   "remoteLink.residual.unknown": "Child가 아직 연결되어 있을 수 있습니다. 다시 시도하기 전에 Child를 확인하고 그곳에서 연결을 해제하세요.",
+  "remoteLink.residual.ownership": "먼저 Child를 확인하세요. 그사이 다른 링크, 허브 또는 다른 Home에 참여했다면 그대로 두세요.",
   "remoteLink.error.generic": "원격 연결 요청을 완료하지 못했습니다.",
   "remoteLink.reason.auth": "인증에 실패했습니다.",
   "remoteLink.reason.hostkey": "호스트 키를 확인하지 못했습니다.",

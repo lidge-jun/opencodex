@@ -4207,6 +4207,7 @@ export const pt: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "O Child pode ainda estar conectado. Execute {cmd} no Child antes de tentar novamente.",
   "remoteLink.residual.full": "O Child pode ainda estar conectado. Execute ocx disconnect e ocx restart no Child antes de tentar novamente.",
   "remoteLink.residual.unknown": "O Child pode ainda estar conectado. Verifique o Child e desconecte-o nele antes de tentar novamente.",
+  "remoteLink.residual.ownership": "Verifique o Child primeiro: se desde então ele entrou em outro vínculo, em um hub ou em outro Home, deixe-o como está.",
   "remoteLink.error.generic": "Não foi possível concluir a solicitação de vínculo remoto.",
   "remoteLink.reason.auth": "Falha na autenticação.",
   "remoteLink.reason.hostkey": "Não foi possível verificar a chave do host.",

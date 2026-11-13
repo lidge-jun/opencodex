@@ -4233,6 +4233,7 @@ export const zh: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "子设备可能仍处于连接状态。重试前，请在子设备上运行 {cmd}。",
   "remoteLink.residual.full": "子设备可能仍处于连接状态。重试前，请在子设备上运行 ocx disconnect 和 ocx restart。",
   "remoteLink.residual.unknown": "子设备可能仍处于连接状态。重试前，请检查子设备并在其上断开连接。",
+  "remoteLink.residual.ownership": "请先检查子设备：如果它此后已加入其他连接、Hub 或其他 Home，请保持原样。",
   "remoteLink.error.generic": "无法完成远程连接请求。",
   "remoteLink.reason.auth": "身份验证失败。",
   "remoteLink.reason.hostkey": "无法验证主机密钥。",

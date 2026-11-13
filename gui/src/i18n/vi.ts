@@ -4163,6 +4163,7 @@ export const vi: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "Máy con có thể vẫn đang kết nối. Trước khi thử lại, hãy chạy {cmd} trên máy con.",
   "remoteLink.residual.full": "Máy con có thể vẫn đang kết nối. Trước khi thử lại, hãy chạy ocx disconnect và ocx restart trên máy con.",
   "remoteLink.residual.unknown": "Máy con có thể vẫn đang kết nối. Trước khi thử lại, hãy kiểm tra máy con và ngắt kết nối trên đó.",
+  "remoteLink.residual.ownership": "Hãy kiểm tra máy con trước: nếu từ đó nó đã tham gia liên kết khác, một hub hoặc Home khác, hãy để nguyên.",
   "remoteLink.error.generic": "Không thể hoàn tất yêu cầu liên kết từ xa.",
   "remoteLink.reason.auth": "Xác thực không thành công.",
   "remoteLink.reason.hostkey": "Không thể xác minh khóa máy chủ.",

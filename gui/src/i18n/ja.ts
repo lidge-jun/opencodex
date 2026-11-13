@@ -4234,6 +4234,7 @@ export const ja: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "Child はまだ接続されている可能性があります。再試行する前に、Child で {cmd} を実行してください。",
   "remoteLink.residual.full": "Child はまだ接続されている可能性があります。再試行する前に、Child で ocx disconnect と ocx restart を実行してください。",
   "remoteLink.residual.unknown": "Child はまだ接続されている可能性があります。再試行する前に、Child を確認してそこで接続を解除してください。",
+  "remoteLink.residual.ownership": "まず Child を確認してください。その後に別のリンク、ハブ、または別の Home に参加している場合は、そのままにしてください。",
   "remoteLink.error.generic": "リモートリンクのリクエストを完了できませんでした。",
   "remoteLink.reason.auth": "認証に失敗しました。",
   "remoteLink.reason.hostkey": "ホストキーを確認できませんでした。",

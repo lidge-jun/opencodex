@@ -31,6 +31,8 @@ const HOME_CLEANUP: Record<string, string> = {
   link_cleanup_uncertain: "Enrollment did not complete, and the Home could not undo the attempt: whether the link is stored is unknown and its issued key could not be revoked. Run ocx link status, remove the link if it is listed (ocx link revoke), and revoke the leftover link key under API keys if it remains.",
 };
 const CHILD_MAY_BE_CONNECTED = "The Child may still be connected.";
+// A residual step can be read long after the attempt: the Child may have joined another link since, which the step would remove.
+const CHILD_OWNERSHIP_CHECK = "Check the Child first: if it has since joined another link, a hub or another Home, leave it as it is.";
 // A journalled answer names the Child's residual as a closed word; a replay never probed, so it cannot infer one.
 const RECOVERY_BY_KIND: Record<string, string> = {
   plant: "Run the planted ocx-child's managed copy with detach --purge on the Child before retrying: ~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux; "
@@ -324,7 +326,7 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       const homeCleanup = typeof code === "string" && Object.hasOwn(HOME_CLEANUP, code) ? HOME_CLEANUP[code] : undefined;
       if (homeCleanup) {
         const kindRecovery = typeof error.body.residualKind === "string" ? RECOVERY_BY_KIND[error.body.residualKind] : undefined;
-        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + (kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL)) : "";
+        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + (kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL)) + " " + CHILD_OWNERSHIP_CHECK : "";
         throw new Error(homeCleanup + childStep + " (code " + code + ")");
       }
       const phase = typeof code === "string" && Object.hasOwn(PHASES, code) ? PHASES[code] : undefined;
@@ -336,7 +338,7 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       const recovery = kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL);
       // The machine-readable code rides along so a script can branch without parsing prose.
       const codeSuffix = (phase || note) && typeof code === "string" ? " (code " + code + ")" : "";
-      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : "") + codeSuffix);
+      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery + " " + CHILD_OWNERSHIP_CHECK : "") + codeSuffix);
       // Keeps the 409 (exit 5) a full journal always gave.
       if (code === "operation_journal_full") throw new RuntimeApiError(journalFullGuidance(error.body, "add"), error.status, error.body);
       if (typeof code === "string" && Object.hasOwn(OPERATION_REFUSALS, code)) throw new Error(OPERATION_REFUSALS[code] + " (code " + code + ")");
