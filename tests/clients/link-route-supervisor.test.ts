@@ -1055,7 +1055,6 @@ test("a reload that changes a flagged link's record keeps it blocked while the e
   expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
 });
 
-
 test("a reload that changes a watched link's record keeps watching the earlier process after its pidfile is gone", async () => {
   let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
   let alive = true;
@@ -1122,7 +1121,6 @@ test("a pidfile unreadable at a reload that replaced the record is never acted o
   });
 });
 
-
 test("a watch whose pidfile turns unreadable does not lift the block when its process ends", async () => {
   await withPidfileDir(async (dir, path) => {
     writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 5151, argv: ["ssh"] }) + "\n");
@@ -1165,7 +1163,6 @@ test("a blocked link that is removed and added again with the same id is settled
     expect(h.runs.filter(run => run.kind === "probe" && run.destination === "alpha-lan")).toHaveLength(1);
   });
 });
-
 
 test("a pidfile replaced while unreadable, after the watched process ended, is only observed once readable", async () => {
   await withPidfileDir(async (dir, path) => {
@@ -1322,7 +1319,6 @@ test("a reload that stops a one-route link whose pidfile cannot be removed still
   expect(h.warns).toContain(`[link] stale pidfile could not be removed link=${LINK}`);
 });
 
-
 test.each(["changes its record in the same reload", "keeps its record"] as const)("a one-route link whose pidfile write failed and that gains routes while it %s settles from the older pidfile once its tunnel is stopped", async variant => {
   // The earlier tunnel could not be identified at start, so the one-route spawn went ahead (and cleared the flag),
   // but its pidfile write failed: the older pidfile, naming a live earlier ssh, is still there.
@@ -1348,7 +1344,6 @@ test.each(["changes its record in the same reload", "keeps its record"] as const
   expect(h.kills).toEqual([]);
 });
 
-
 test("a one-route tunnel stopped by the tick after its pidfile write failed survives a pidfile that cannot be removed", async () => {
   // The write landed the file and then failed (a directory sync after the rename, say): the link is failed with a
   // running child, so the next tick stops that child and removes the pidfile naming it.
@@ -1371,3 +1366,49 @@ test("a one-route tunnel stopped by the tick after its pidfile write failed surv
   expect(h.tunnels).toHaveLength(2);
 });
 
+const readOnlyPidfile = () => { throw Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" }); };
+
+test("a one-route tunnel the tick stops after its pidfile write failed is watched until it exits: SIGKILL after the grace, no second tunnel meanwhile", async () => {
+  const opts: Parameters<typeof harness>[0] = { store: oneRouteStore, stubborn: true, writePidfile: readOnlyPidfile };
+  const h = start(opts);
+  await flush();
+  expect(h.tunnels).toHaveLength(1);
+  await h.tick();
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM"]);
+  await h.advance(1_000);
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM"]);
+  await h.advance(1_000);
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  // The retry is due, but the stopped tunnel has not exited yet.
+  await h.advance(HOME_TUNNEL_RETRY_POLICY.retryFailedAfterMs.forward!);
+  expect(h.tunnels).toHaveLength(1);
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  opts.stubborn = false;
+  h.tunnels[0]!.exit(137);
+  await flush();
+  await h.tick();
+  expect(h.tunnels).toHaveLength(2);
+});
+
+test("a reload that gives routes while a stopped, unrecorded one-route tunnel is still exiting starts no round until it exits", async () => {
+  let current = oneRouteStore();
+  const opts: Parameters<typeof harness>[0] = { store: () => current, stubborn: true, writePidfile: readOnlyPidfile };
+  const h = start(opts);
+  await flush();
+  await h.tick();
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM"]);
+  current = { ...current, links: [record(["alpha-lan", "pen-alpha"])] };
+  const reload = h.supervisor.reload();
+  await flush();
+  // Past the failed link's retry: nothing may start while the old ssh is still exiting.
+  await h.advance(HOME_TUNNEL_RETRY_POLICY.retryFailedAfterMs.forward! + 5_000);
+  await h.tick();
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+  opts.stubborn = false;
+  h.tunnels[0]!.exit(137);
+  await reload;
+  await h.tick();
+  await h.tick();
+  // Only now does the first round start, at the first route.
+  expect(h.runs.find(run => run.kind === "probe")?.destination).toBe("alpha-lan");
+});

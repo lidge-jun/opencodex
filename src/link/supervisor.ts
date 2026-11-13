@@ -19,7 +19,7 @@ import {
   type TunnelState,
 } from "./tunnel-state";
 import { effectiveLinkRoutes, emptyLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
-import { createRouteRounds, type LinkRouteStatus } from "./route-rounds";
+import { CANDIDATE_KILL_GRACE_MS, createRouteRounds, type LinkRouteStatus } from "./route-rounds";
 import type { RouteProofRegistry } from "./route-proof";
 
 export type LinkTunnelStatus =
@@ -247,7 +247,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   let lifecycleRevision = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   const states = new Map<string, TunnelState>();
-  const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number }>();
+  /** stopAt/killed: a failed link's child the tick stopped, kept until its exit is seen. */
+  const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number; stopAt?: number; killed?: boolean }>();
   /** Per-link generation, advanced by spawns and explicit stop/removal reservations. */
   const generations = new Map<string, number>();
   /** The process-unique connection name of each link's current ssh child, minted at spawn. */
@@ -343,8 +344,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   /**
-   * Remove a pidfile whose process is gone (or this process's own exited child's). A removal that
-   * fails (a read-only directory, a sharing lock) is warned and never stops the caller: a tick goes on
+   * Remove a link's pidfile once its process is gone, or has been sent SIGTERM (an earlier one-route
+   * ssh matched at startup), or once this process's own child has exited or been stopped. A removal
+   * that fails (a read-only directory, a sharing lock) is warned and never stops the caller: a tick goes on
    * to every other link, an exit is still classified, a stop or reload completes, and the block it
    * was lifting stays lifted. The file left behind is mostly harmless: on Linux with a start time the
    * next start sees its process gone; without a start time, a pid reused by another process blocks a
@@ -618,8 +620,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       orphanUnverified.delete(record.id);
       history.spawned(record.id);
       setEvent(record.id, { type: "spawn", now: now() });
-      writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv });
+      // Watched before the pidfile write can fail, so a child whose write failed still has its exit seen.
       watchExit(record.id, child, generation);
+      writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv });
     } catch {
       failAttempt(record.id, prior, "forward", "spawn_failed");
     }
@@ -665,9 +668,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         // the failed state's retry instead of being killed with a link that may already be back.
         states.set(record.id, { ...next, inFlight: true });
       } else if (next.kind === "failed" && !next.inFlight && child) {
-        child.child.kill("SIGTERM");
-        children.delete(record.id);
-        conditionalRemovePidfile(record.id, child.child.pid);
+        // A failed link with a running child (its pidfile write failed): stop it, SIGKILL after the grace,
+        // and keep it until its exit is seen, as a stopped candidate is. watchExit then forgets it and
+        // removes the pidfile naming it; until then no retry and no round starts past it.
+        if (child.stopAt === undefined) {
+          child.stopAt = current;
+          try { child.child.kill("SIGTERM"); } catch { /* already gone */ }
+        } else if (!child.killed && current - child.stopAt >= CANDIDATE_KILL_GRACE_MS) {
+          child.killed = true;
+          try { child.child.kill("SIGKILL"); } catch { /* already gone */ }
+        }
       } else if (dueForSpawn(next, current)) {
         spawnFor(record);
       }
@@ -861,7 +871,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         for (const linkId of gainedOnChange) {
           const record = nextStore.links.find(link => link.id === linkId);
           if (!record || flaggedChanged.includes(linkId) || orphanWatches.has(linkId)) continue;
-          // Observe-only, as for any changed record: no watch acts for a replaced instance.
+          // Observe-only, as for a changed record (a route edit that restarts the child keeps its instance).
           recheckPidfile(record, false);
         }
         // A link new to this process settles from its pidfile as it would at startup.
