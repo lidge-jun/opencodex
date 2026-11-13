@@ -268,12 +268,15 @@ describe("a local upgrade that never opened", () => {
 
 describe("Codex's own end of a socket reaches the Home as it happened", () => {
   test("a close without a status becomes an empty close frame; a dropped Codex ends the Home connection without one", async () => {
-    const { port, home } = await child();
+    const traffic = createLinkTrafficBook("relayed");
+    const { port, home, identity } = await child({ websocket: { traffic } });
     const quiet = rawUpgrade(port);
     expect((await quiet.answer).status).toBe(101);
     const leg = home.sockets.at(-1)!;
     quiet.socket.write(encodeClientClose());
     expect(await leg.until(frame => frame.type === "close")).toEqual({ type: "close", code: null, reason: "" });
+    // A close frame ended it: a complete request.
+    expect(traffic.snapshot(identity.linkId)).toMatchObject({ requests: 1, incomplete: 0 });
     quiet.socket.destroy();
 
     const dropped = rawUpgrade(port);
@@ -282,5 +285,7 @@ describe("Codex's own end of a socket reaches the Home as it happened", () => {
     dropped.socket.destroy();
     await second.closed();
     expect(second.frames.some(frame => frame.type === "close")).toBe(false);
+    // No close frame ended it on either leg: incomplete, as the Home counts the same socket.
+    expect(traffic.snapshot(identity.linkId)).toMatchObject({ requests: 2, incomplete: 1 });
   });
 });

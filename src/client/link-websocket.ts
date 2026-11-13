@@ -280,7 +280,9 @@ export class HomeLeg {
     } else {
       this.closeHome(code === 1005 ? null : relayCloseCode(code), "");
     }
-    this.finish("client");
+    // A 1006 (Codex's drop, or Bun's own close of an oversized message) is no close frame from Codex: the
+    // request is incomplete, as the Home counts the same socket.
+    this.finish("client", code !== 1006);
   }
 
   /** A runtime stop: both legs close with 1001. */
@@ -343,7 +345,8 @@ export class HomeLeg {
     if (this.reader.closed) this.socket.end();
   }
 
-  private finish(reason: LinkWsCloseReason): void {
+  /** `complete`: a close frame ended the socket; by default true for home, client and stopped. */
+  private finish(reason: LinkWsCloseReason, complete = reason === "home" || reason === "client" || reason === "stopped"): void {
     if (this.ended) return;
     this.ended = true;
     this.clearAttachTimer();
@@ -351,7 +354,7 @@ export class HomeLeg {
     // A socket Codex never had (a failed local upgrade) counts nothing: no request, no close.
     if (!this.opened) return;
     // Complete when a close ended it, from either side; a drop, an overload or a refused message is incomplete.
-    this.flow?.end(reason === "home" || reason === "client" || reason === "stopped");
+    this.flow?.end(complete);
     this.onEnd(reason);
   }
 }
