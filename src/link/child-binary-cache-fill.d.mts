@@ -5,10 +5,17 @@ export declare function childReleaseAssetUrl(version: string, file: string): str
 export declare function childBinaryCacheDir(opencodexHome: string, version: string): string;
 export declare function compareReleaseVersions(left: string, right: string): -1 | 0 | 1 | null;
 
+/**
+ * Why the startup step's ownership claim stopped a fill before any write: an existing cache/ocx-child the
+ * ownership manifest does not list (an operator's), an uninstall in progress, or a manifest that is full
+ * or locked by another process (the next start tries again).
+ */
+export type ChildCacheClaimRefusal = "operator_cache" | "uninstall_in_progress" | "ownership_unavailable";
+
 export type ChildCacheFillOutcome =
   /** first_start: no record of an earlier version (a fresh install), so the version is recorded and nothing fetched. */
   /** invalid_digests: the package's digest file is there but unreadable or unusable (the record is left alone); busy: another process is filling. */
-  | { readonly kind: "skipped"; readonly reason: "invalid_version" | "no_digests" | "invalid_digests" | "downgrade" | "first_start" | "not_an_upgrade" | "busy" | "source_checkout" | "unsupported_platform" | "disabled" | "version_mismatch" }
+  | { readonly kind: "skipped"; readonly reason: "invalid_version" | "no_digests" | "invalid_digests" | "downgrade" | "first_start" | "not_an_upgrade" | "busy" | "source_checkout" | "unsupported_platform" | "disabled" | "version_mismatch" | ChildCacheClaimRefusal }
   /** cached: every verified build now in the cache; fetched: those downloaded now; failed: listed builds withdrawn from the manifest. */
   | { readonly kind: "filled"; readonly cached: readonly string[]; readonly fetched: readonly string[]; readonly failed: readonly string[] };
 
@@ -26,6 +33,8 @@ export interface ChildCacheFillOptions {
   readonly now?: () => number;
   /** The running code's own version (startup); a package.json that differs records nothing (version_mismatch). */
   readonly bundledVersion?: string;
+  /** Called once after the gates and before the first write; a refusal ends the fill with that reason. */
+  readonly claimCache?: () => ChildCacheClaimRefusal | null;
 }
 
 export declare function runningPackageRoot(): string;

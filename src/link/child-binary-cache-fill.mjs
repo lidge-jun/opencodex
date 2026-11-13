@@ -371,6 +371,9 @@ export async function fillChildBinaryCacheForVersion(options) {
   try {
     assertTrustedAncestors(home);
     if (newerVersionCached(home, options.version)) return { kind: "skipped", reason: "downgrade" };
+    // Before the first directory is created: the startup step claims for uninstall what the fill creates.
+    const refused = options.claimCache?.() ?? null;
+    if (refused) return { kind: "skipped", reason: refused };
     realDirectory(join(home, "cache"));
     rootIdentity = realDirectory(root);
     const early = decideFromRecord(readVersionRecord(root), options.version, digests, dir);

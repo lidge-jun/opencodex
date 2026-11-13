@@ -525,9 +525,57 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(existsSync(join(home, "cache"))).toBe(false);
   });
 
-  test("a new Home owns cache/ from its first owned write", () => {
+  const ownedPaths = () => (JSON.parse(readFileSync(join(home, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] }).paths;
+  const start = () => startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: VERSION, fetchImpl: release({}).fetchImpl }, quiet);
+
+  test("a new Home claims no cache/ until the fill creates it", () => {
     expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
-    expect((JSON.parse(readFileSync(join(home, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] }).paths).toContain("cache");
+    expect(ownedPaths().filter(path => path.startsWith("cache"))).toEqual([]);
+  });
+
+  test("an operator's existing cache/ocx-child is never claimed or filled, and survives uninstall", async () => {
+    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    const handPlaced = join(home, "cache", "ocx-child", "2.99.0", "ocx-child-linux-x64");
+    mkdirSync(join(home, "cache", "ocx-child", "2.99.0"), { recursive: true, mode: 0o700 });
+    writeFileSync(handPlaced, linuxBuild, { mode: 0o700 });
+    bothDigests();
+    expect(await start()).toEqual({ kind: "skipped", reason: "operator_cache" });
+    expect(ownedPaths().filter(path => path.startsWith("cache"))).toEqual([]);
+    expect(existsSync(versionsDir())).toBe(false);
+    expect(removeOwnedConfigState(home).status).toBe("partial");
+    expect(readFileSync(handPlaced)).toEqual(Buffer.from(linuxBuild));
+  });
+
+  test("beside other files in an existing cache/, the fill claims only cache/ocx-child", async () => {
+    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    mkdirSync(join(home, "cache"), { mode: 0o700 });
+    writeFileSync(join(home, "cache", "notes.txt"), "mine");
+    expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
+    expect(ownedPaths().filter(path => path.startsWith("cache"))).toEqual(["cache/ocx-child"]);
+    const removed = removeOwnedConfigState(home);
+    expect(removed.status).toBe("partial");
+    expect([existsSync(join(home, "cache", "ocx-child")), readFileSync(join(home, "cache", "notes.txt"), "utf8")]).toEqual([false, "mine"]);
+  });
+
+  test("a start during an uninstall stops and creates nothing", async () => {
+    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    const manifestPath = join(home, CONFIG_UNINSTALL_MANIFEST);
+    writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf8")), uninstallStartedAt: Date.now() }, null, 2) + "\n", { mode: 0o600 });
+    bothDigests();
+    expect(await start()).toEqual({ kind: "skipped", reason: "uninstall_in_progress" });
+    expect(existsSync(join(home, "cache"))).toBe(false);
+  });
+
+  test("a Home without ownership metadata fills as before (its uninstall removes nothing)", async () => {
+    writeFileSync(join(home, "config.json"), "{}");
+    expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
+    expect(readdirSync(versionsDir())).toEqual([VERSION + ".baseline"]);
+  });
+
+  test("a start stopped by a gate claims nothing", async () => {
+    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    expect(await startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: "2.99.9" }, quiet)).toEqual({ kind: "skipped", reason: "version_mismatch" });
+    expect(ownedPaths().filter(path => path.startsWith("cache"))).toEqual([]);
   });
 
   test("a client runtime records and writes nothing", async () => {
