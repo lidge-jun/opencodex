@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { __resetVertexTokenCache, getVertexAccessToken } from "../../../src/lib/gcp-adc";
 import { safeConfigDTO } from "../../../src/server/auth-cors";
 import { staticCatalogConnectionTest } from "../../../src/server/management/static-catalog-probe";
-import { usesUnverifiedVertexCredentials } from "../../../gui/src/provider-workspace/catalog";
+import { binProviderStatus, usesUnverifiedVertexCredentials } from "../../../gui/src/provider-workspace/catalog";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -69,6 +69,7 @@ describe("Vertex ADC verification", () => {
     const after = dashboardVertex();
     expect(after.vertexCredentialVerified).toBe(true);
     expect(usesUnverifiedVertexCredentials({ name: "google-vertex", ...after } as never)).toBe(false);
+    expect(binProviderStatus({ name: "google-vertex", ...after, hasApiKey: false } as never)).toBe("ready");
   });
 
   test("replacing the ADC file drops the earlier proof", async () => {

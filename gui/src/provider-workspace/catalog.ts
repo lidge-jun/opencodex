@@ -163,7 +163,8 @@ function isConfigurationReady(p: WorkspaceProvider): boolean {
     p.authMode === "forward" ||
     p.authMode === "local" ||
     hasLoopbackBaseUrl(p.baseUrl) ||
-    p.hasApiKey === true;
+    p.hasApiKey === true ||
+    p.vertexCredentialVerified === true;
 }
 
 /** A keyless Vertex row can use host credentials, but the dashboard has not verified them. */
