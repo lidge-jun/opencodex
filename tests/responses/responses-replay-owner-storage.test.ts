@@ -62,6 +62,12 @@ test("a response id cannot be overwritten by another owner", () => {
   expect(JSON.stringify(replay(ownerA).input)).toContain("private synthetic task");
   expect(JSON.stringify(replay(ownerA).input)).not.toContain("foreign replacement");
 });
+test("a legacy response cannot overwrite a bound response id", () => {
+  remember(ownerA);
+  remember(undefined, "legacy replacement");
+  expect(JSON.stringify(replay(ownerA).input)).toContain("private synthetic task");
+  expect(JSON.stringify(replay(ownerA).input)).not.toContain("legacy replacement");
+});
 
 test("authorized client-carried history stays distinct from proxy-restored input", () => {
   const output = [{ id: "msg-owned-prefix", type: "message", role: "assistant", content: "stored reply" }];
@@ -90,6 +96,16 @@ test("bound requests reject legacy entries and missing owner never authorizes re
 test("legacy API cannot read bound entries", () => {
   remember(ownerA);
   expect(previousResponseReplayFailure(replay(undefined))?.reason).toBe("scope_mismatch");
+});
+for (const spill of [false, true]) test(`legacy ${spill ? "spilled" : "resident"} state survives snapshot reload`, async () => {
+  if (spill) setResponseStateByteCapForTests(512);
+  remember(undefined, "private synthetic task".repeat(spill ? 200 : 1));
+  expect(JSON.stringify(replay(undefined).input)).toContain("private synthetic task");
+  await flushResponseState();
+  await runPendingResponseStatePersistForTests();
+  if (spill) expect(JSON.parse(readFileSync(join(getConfigDir(), "responses-state.json"), "utf8")).states[0][1].kind).toBe("spill");
+  clearResponseStateMemoryForTests();
+  expect(JSON.stringify(replay(undefined).input)).toContain("private synthetic task");
 });
 test("malformed snapshot binding cannot become legacy authority", async () => {
   remember(ownerA);

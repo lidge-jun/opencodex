@@ -439,13 +439,15 @@ export async function prepareResponsesRequest(
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
   const replayPrincipal = options.replayPrincipal
     ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
-  const replayOwnerKey = responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId);
+  const strictReplay = config.multiAgentMode === "v2-plaintext";
+  const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId) : undefined;
+  const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
   if (options.comboReplaySnapshot) {
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
   } else {
-    body = expandPreviousResponseInput(body, inboundOwnThreadId, replayOwnerKey);
+    body = expandPreviousResponseInput(body, replayThreadId, replayOwnerKey);
     const replayFailure = previousResponseReplayFailure(body);
     if (replayFailure?.reason === "scope_mismatch") {
       // Bounded and content-free: no task scope and nothing about the retained entry.
@@ -626,7 +628,7 @@ export async function prepareResponsesRequest(
   const responseStateOptions = (force = false) => ({
     replayOwnerKey,
     ...(force ? { force: true } : {}),
-    ...(inboundOwnThreadId ? { clientThreadId: inboundOwnThreadId } : {}),
+    ...((strictReplay ? inboundOwnThreadId : parsed._clientThreadId) ? { clientThreadId: strictReplay ? inboundOwnThreadId : parsed._clientThreadId } : {}),
   });
   const resolvedConversationId = conversationIdFromResponsesRequest({
     clientThreadId: parsed._clientThreadId,

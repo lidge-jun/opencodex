@@ -448,8 +448,9 @@ export async function executeComboResponses(
   // imageInput is disabled (and so targets see the full replayed input).
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
-  const replayOwnerKey = responseReplayOwnerKey(replayPrincipal.clientPrincipalId, inboundOwnThreadId);
-  const body = expandPreviousResponseInput(rawBody, inboundOwnThreadId, replayOwnerKey);
+  const strictReplay = config.multiAgentMode === "v2-plaintext";
+  const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal.clientPrincipalId, inboundOwnThreadId) : undefined;
+  const body = expandPreviousResponseInput(rawBody, strictReplay ? inboundOwnThreadId : inboundClientThreadId, replayOwnerKey);
   const replayFailure = previousResponseReplayFailure(body);
   if (replayFailure?.reason === "scope_mismatch") {
     console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");

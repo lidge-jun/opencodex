@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
 import { codexWebSocketAdmissionMetrics, MAX_TRACKED_CODEX_WEBSOCKETS } from "../../src/codex/websocket-registry";
 import {
   clearResponseStateForTests, clearResponseStateMemoryForTests, RESPONSE_TTL_MS,
@@ -102,7 +102,7 @@ beforeEach(() => {
     },
   });
   saveConfig({
-    port: 0, hostname: "127.0.0.1", codexAutoStart: false, websockets: true,
+    port: 0, hostname: "127.0.0.1", codexAutoStart: false, websockets: true, multiAgentMode: "v2-plaintext",
     // These socket fixtures exercise current config, not first-upgrade writes or native sync.
     clientIntegrations: { codex: false },
     openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
@@ -311,6 +311,18 @@ test("failed HTTP upgrade releases its reservation before the next handshake", a
   expect(upstreamRequests).toBe(1);
   expect(codexWebSocketAdmissionMetrics().active).toBe(baseline.active + 1);
 });
+
+test("v1 WebSocket continuation works without a caller principal", async () => {
+  await proxy!.stop(true);
+  saveConfig({ ...loadConfig(), multiAgentMode: "v1", apiKeys: [] });
+  proxy = startServer(0);
+  const client = await connect();
+  const first = await exchange(client, { input: "legacy socket history", store: false });
+  await exchange(client, { previous_response_id: first.response.id, input: "next turn", store: false });
+  expect(upstreamRequests).toBe(2);
+  expect(JSON.stringify(upstreamBodies[1]!.input)).toContain("legacy socket history");
+  expect(upstreamBodies[1]!.previous_response_id).toBeUndefined();
+}, 120_000);
 
 test.each([false, true])("stateless continuation after capacity reclamation preserves full history; expired=%s", async expired => {
   const headers = { "x-opencodex-api-key": REPLAY_API_KEY, "thread-id": "capacity-replay-thread" };

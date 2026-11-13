@@ -76,7 +76,7 @@ async function send(cfg: OcxConfig, own: string | undefined, key: string, parent
   await response.text();
   return response;
 }
-for (const combo of [false, true]) for (const mode of ["v2-plaintext", "v1"] as const) {
+for (const combo of [false, true]) for (const mode of ["v2-plaintext"] as const) {
   const label = `${combo ? "combo" : "direct"} ${mode}`;
   for (const [scenario, secondKey, parent] of [
     ["different callers without parent headers", "synthetic-b", undefined],
@@ -121,4 +121,47 @@ for (const combo of [false, true]) for (const mode of ["v2-plaintext", "v1"] as 
       expect(sent[1] ?? "").not.toContain("SYNTHETIC_PRIVATE_TASK");
     });
   }
+}
+
+for (const combo of [false, true]) {
+  test(`${combo ? "combo" : "direct"}: mode transitions cannot cross replay ownership boundaries`, async () => {
+    const sent = upstream();
+    expect((await send(config("v2-plaintext", combo), "own-a", "synthetic-a", "shared-parent")).status).toBe(200);
+    expect((await send(config("v1", combo), "own-a", "synthetic-a", "shared-parent", "resp-owner-a")).status).toBe(400);
+    expect(sent).toHaveLength(1);
+    clearResponseStateForTests();
+    expect((await send(config("v1", combo), "own-a", "synthetic-a", "shared-parent")).status).toBe(200);
+    expect((await send(config("v2-plaintext", combo), "own-a", "synthetic-a", "shared-parent", "resp-owner-b")).status).toBe(400);
+    expect(sent).toHaveLength(2);
+  });
+  test(`${combo ? "combo" : "direct"} v1: parent scope follows legacy behavior`, async () => {
+    const sent = upstream();
+    expect((await send(config("v1", combo), "own-a", "synthetic-a", "shared-parent")).status).toBe(200);
+    expect((await send(config("v1", combo), "own-b", "synthetic-b", "different-parent", "resp-owner-a")).status).toBe(400);
+    expect((await send(config("v1", combo), "own-b", "synthetic-b", "shared-parent", "resp-owner-a")).status).toBe(200);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain("SYNTHETIC_PRIVATE_TASK");
+  });
+  test(`${combo ? "combo" : "direct"} v1: default loopback expands a continuation without caller identity`, async () => {
+    const cfg = { ...config("v1", combo), apiKeys: undefined };
+    const sent: string[] = [];
+    globalThis.fetch = (async (_url, init) => {
+      sent.push(String(init?.body));
+      return Response.json({ id: `resp-default-${sent.length}`, status: "completed", output: [{
+        type: "message", role: "assistant", content: [{ type: "output_text", text: "previous reply" }],
+      }] });
+    }) as typeof fetch;
+    const sendLoopback = async (previous?: string) => {
+      const req = request(undefined, "", undefined, previous, combo);
+      req.headers.delete("x-opencodex-api-key");
+      const response = await handleResponses(req, cfg, { model: "", provider: "" }, { inboundWire: "responses" });
+      await response.text();
+      return response;
+    };
+    expect((await sendLoopback()).status).toBe(200);
+    expect((await sendLoopback("resp-default-1")).status).toBe(200);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain("previous reply");
+    expect(sent[1]).not.toContain("previous_response_id");
+  });
 }
