@@ -9,15 +9,16 @@ import { LINK_RELAY_WS_STATE_HEADER, LINK_RELAY_WS_STATE_PROOF_HEADER, linkRelay
  * that link, so a reply to a request sent before the last applied one is ignored, whoever produced it
  * and however late it arrives: an earlier Home's delayed reply, a reply from before a relink, a restart
  * or a downgrade. A verified answer without the state pair, or whose pair does not verify, applies as
- * off. The state lives in memory only, so a Child restart starts from off; a relink changes the link id,
- * which starts a new entry. At most 256 links are kept. Evicting a link keeps its ordering: its last
+ * off. The state lives in memory only, so a Child restart starts from unknown (no entry); a relink changes the
+ * link id, which starts a new entry. At most 256 links are kept. Evicting a link keeps its ordering: its last
  * applied number stays as a watermark (at most 1,024 of them), and an answer for that link applies only
  * above it, so an answer still in flight when its link was evicted can never land as the newest. Only
  * when a watermark itself is dropped does it raise a floor that answers for links without an entry or
  * a watermark must pass: conservative, and reached only after more than 1,280 distinct links.
  *
- * The cached state only decides whether an upgrade may try the Home at all. The upgrade's own preflight
- * answer decides whether it proceeds (linkWebsocketAnswer on that answer).
+ * The cached state only decides whether an upgrade may try the Home at all: a cached off does not try,
+ * on and unknown do (linkWebsocketAdvertisement). The upgrade's own preflight answer decides whether it
+ * proceeds (linkWebsocketAnswer on that answer), and is applied here like any other.
  */
 const MAX_LINKS = 256;
 const MAX_WATERMARKS = 1_024;
@@ -78,6 +79,18 @@ export function applyLinkWebsocketAnswer(linkId: string, preflight: number, answ
 /** advertisedSeen: "on" in the last answer applied for this link. */
 export function linkWebsocketAdvertised(linkId: string | undefined): boolean {
   return linkId !== undefined && links.get(linkId)?.on === true;
+}
+
+/**
+ * The cached state for a link: "on" or "off" from the last answer applied for it, or "unknown" when this process has
+ * no applied answer for that link (a Child just started, a new link, or an entry evicted past the 256 kept). An
+ * undefined link id is "off": nothing could be relayed for it.
+ */
+export function linkWebsocketAdvertisement(linkId: string | undefined): "on" | "off" | "unknown" {
+  if (linkId === undefined) return "off";
+  const entry = links.get(linkId);
+  if (!entry) return "unknown";
+  return entry.on ? "on" : "off";
 }
 
 export function forgetLinkWebsocketAdvertisementsForTests(): void {

@@ -45,6 +45,7 @@ export interface ServeOptionsContext {
   loopbackRouteAllowed: (url: URL, req: Request) => boolean;
   managementIngressRouteAllowed: (url: URL, req: Request) => boolean;
   linkRouteAllowed: (url: URL, req: Request) => boolean;
+  /** A key-admitted catalog request; routeProofId is a multi-route readiness proof it carried (src/link/route-proof.ts). */
   onAuthenticatedCatalog: (apiKeyId: string, routeProofId?: string) => void;
   linkPolicy: () => RequestPolicyView;
   packageTreeChangedResponse: (

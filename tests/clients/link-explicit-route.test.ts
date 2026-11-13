@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkExplicitRoute, explicitRouteSshOptions, type ExplicitRoute } from "../../src/link/explicit-route";
+import { checkExplicitRoute, explicitRouteSshOptions, identityFileProblem, sameExplicitRoute, type ExplicitRoute } from "../../src/link/explicit-route";
+import { readTombstones, recordTombstone } from "../../src/link/tombstones";
+import { enrollOperationDigest } from "../../src/server/management/link-operation";
 import {
   buildExecArgv, buildProbeArgv, buildRouteProbeArgv, buildTunnelArgv, buildWindowsProbeArgv, LinkSshArgumentError,
 } from "../../src/link/ssh-argv";
@@ -227,6 +229,18 @@ test("the supervisor starts an exclusive link's tunnel over its explicit route",
   expect(argv.at(-1)).toBe("pen-7f3a9c");
 });
 
+test("the supervisor's tunnel and link status use the identity file of a keyed route (O7)", () => {
+  const KEY = "/home/hub/.ssh/goat_hub_ed25519";
+  const keyed = { ...ROUTE, identityFile: KEY };
+  const argv = startedTunnel([record({ explicitRoute: keyed, exclusive: true })]);
+  expect({ only: options(argv, "IdentitiesOnly"), agent: options(argv, "IdentityAgent"), file: options(argv, "IdentityFile") }).toEqual({ only: ["yes"], agent: ["none"], file: [KEY] });
+  // The path is not a secret: link status names it, and the CLI accepts it.
+  const value: LinkStore = { version: 1, listenerPort: 19001, links: [record({ explicitRoute: keyed, exclusive: true })] };
+  const dto = projectLinkStatus(value, [], { state: "listening", port: 19001 }, { runtimeRole: "hub" }, { version: 1, entries: {} });
+  expect(dto.links[0]).toMatchObject({ explicitRoute: keyed });
+  expect(validateStatus(JSON.parse(JSON.stringify(dto))).links[0]).toMatchObject({ explicitRoute: keyed });
+});
+
 test("the supervisor starts a link without an explicit route exactly as before", () => {
   const argv = startedTunnel([record()]);
   expect(options(argv, "ProxyCommand")).toEqual([]);
@@ -261,6 +275,32 @@ test("a links.json edit of the explicit route on a running Home restarts the tun
   await supervisor.stop();
 });
 
+test("a links.json edit that only drops exclusive does not restart the tunnel: exclusive alone does not change its argv", async () => {
+  const spawned: string[][] = [];
+  let killed = 0;
+  const runner: SshRunner = {
+    async run() { return { code: 0, stdout: "", stderr: "" }; },
+    spawnTunnel(argv) {
+      spawned.push([...argv]);
+      let exit!: (code: number) => void;
+      const exited = new Promise<number>(resolve => { exit = resolve; });
+      return { pid: 4300 + spawned.length, argv: [...argv], exited, stderr: Promise.resolve(""), kill: () => { killed += 1; exit(143); } } as unknown as SshChild;
+    },
+  };
+  let value: LinkStore = { version: 1, listenerPort: 19001, links: [record({ exclusive: true })] };
+  const supervisor = createLinkSupervisor({
+    readStore: () => structuredClone(value), runner, now: () => 0, random: () => 0.5,
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: () => 1 as unknown as ReturnType<typeof setInterval>, clearTimer: () => {},
+  });
+  supervisor.start();
+  value = { ...value, links: [record()] };
+  await supervisor.reload();
+  expect({ killed, spawned: spawned.length }).toEqual({ killed: 0, spawned: 1 });
+  await supervisor.stop();
+});
+
+/** The configuration ssh would use if it read config: the argv from its first -o (dropping -F none) with -F <config>. */
 function effective(argv: readonly string[], config: string): Map<string, string> {
   const tail = argv.slice(argv.indexOf("-o"));
   const result = Bun.spawnSync([SSH!, "-G", "-F", config, ...tail], { stdin: "ignore" });
@@ -273,7 +313,10 @@ function effective(argv: readonly string[], config: string): Map<string, string>
   return values;
 }
 
-describe.skipIf(SSH === null)("an ssh_config edit after enrollment (ssh -G)", () => {
+// Second line of defence: effective() runs the argv from its first -o with -F <config>, so it reads ssh_config on purpose,
+// which an explicit-route link no longer does (-F none, link-explicit-route-no-ssh-config.test.ts). It shows the route on the
+// command line would still win if ssh_config were read.
+describe.skipIf(SSH === null)("an ssh_config edit after enrollment, were ssh_config read (ssh -G, second line of defence)", () => {
   const hostile = () => {
     const config = join(dir, "hostile.conf");
     writeFileSync(config, [
@@ -314,3 +357,139 @@ describe.skipIf(SSH === null)("an ssh_config edit after enrollment (ssh -G)", ()
   });
 });
 
+/**
+ * O7 (link.route/2): an explicit route may name the key the link authenticates with. ssh then offers that file alone:
+ * IdentitiesOnly=yes, IdentityAgent=none and IdentityFile=<path>, on the command line beside the route.
+ */
+describe("the explicit route's identity file", () => {
+  const KEY = "/home/hub/.ssh/goat_hub_ed25519";
+  const ROUTE_KEY: ExplicitRoute = { ...ROUTE, identityFile: KEY };
+  const builders = (route: ExplicitRoute) => ({
+    tunnel: buildTunnelArgv({ alias: "pen-7f3a9c", direction: "R", bindPort: 19002, targetPort: 19001, knownHostsFile: KNOWN_HOSTS, route }),
+    exec: buildExecArgv({ alias: "pen-7f3a9c", argv: ["sh", "-c", "true"], knownHostsFile: KNOWN_HOSTS, route }),
+    probe: buildProbeArgv({ alias: "pen-7f3a9c", tempKnownHostsFile: KNOWN_HOSTS, route }),
+    routeProbe: buildRouteProbeArgv({ alias: "pen-7f3a9c", destination: "pen-7f3a9c", knownHostsFile: KNOWN_HOSTS, route }),
+    windowsProbe: buildWindowsProbeArgv({ alias: "pen-7f3a9c", knownHostsFile: KNOWN_HOSTS, route }),
+  });
+  // What every builder emitted for an explicit route on origin/dev 28680d5c0, before the identity file existed.
+  const BEFORE_IDENTITY_FILE: Record<string, string[]> = {"tunnel":["ssh","-N","-T","-F","none","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ProxyCommand=/usr/local/bin/pen pipe --node 7f3a9c --noise noise-pub-7f3a9c 22","-o","ProxyUseFdpass=no","-o","User=ubuntu","-o","Port=22","-o","ExitOnForwardFailure=yes","-R","127.0.0.1:19002:127.0.0.1:19001","--","pen-7f3a9c"],"exec":["ssh","-T","-F","none","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ProxyCommand=/usr/local/bin/pen pipe --node 7f3a9c --noise noise-pub-7f3a9c 22","-o","ProxyUseFdpass=no","-o","User=ubuntu","-o","Port=22","-o","ClearAllForwardings=yes","--","pen-7f3a9c","sh '-c' 'true'"],"probe":["ssh","-T","-F","none","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=accept-new","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ProxyCommand=/usr/local/bin/pen pipe --node 7f3a9c --noise noise-pub-7f3a9c 22","-o","ProxyUseFdpass=no","-o","User=ubuntu","-o","Port=22","-o","ClearAllForwardings=yes","--","pen-7f3a9c","echo ocx-link-probe"],"routeProbe":["ssh","-T","-F","none","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ProxyCommand=/usr/local/bin/pen pipe --node 7f3a9c --noise noise-pub-7f3a9c 22","-o","ProxyUseFdpass=no","-o","User=ubuntu","-o","Port=22","-o","ClearAllForwardings=yes","--","pen-7f3a9c","echo ocx-link-probe"],"windowsProbe":["ssh","-T","-F","none","-o","BatchMode=yes","-o","ConnectTimeout=10","-o","ServerAliveInterval=15","-o","ServerAliveCountMax=3","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=pen-7f3a9c","-o","UserKnownHostsFile=/tmp/ocx-explicit-route/known_hosts","-o","HashKnownHosts=no","-o","GlobalKnownHostsFile=none","-o","KnownHostsCommand=none","-o","VerifyHostKeyDNS=no","-o","CheckHostIP=no","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none","-o","ForwardAgent=no","-o","ForwardX11=no","-o","PermitLocalCommand=no","-o","LogLevel=ERROR","-o","ProxyCommand=/usr/local/bin/pen pipe --node 7f3a9c --noise noise-pub-7f3a9c 22","-o","ProxyUseFdpass=no","-o","User=ubuntu","-o","Port=22","-o","ClearAllForwardings=yes","--","pen-7f3a9c","cmd /c echo %OS%"]};
+
+  test("a route without an identity file keeps every argv and its enrollment digest byte for byte", () => {
+    expect(builders(ROUTE)).toEqual(BEFORE_IDENTITY_FILE);
+    expect(enrollOperationDigest({ alias: "pen-7f3a9c", fingerprint: "SHA256:abcdefghijklmnopqrstu", route: { explicitRoute: ROUTE, exclusive: true }, requireEphemeral: false }))
+      .toBe("2ac5dbb274c7476f31fadaec0536751aea7dc5edb8285fb7e1df123f44236846");
+  });
+
+  test("an absolute, plain path is accepted and kept", () => {
+    expect(checkExplicitRoute(ROUTE_KEY)).toEqual({ ok: true, route: ROUTE_KEY });
+    expect(checkExplicitRoute({ ...ROUTE, identityFile: "/a/b-c_d.e+f/id_ed25519" })).toEqual({ ok: true, route: { ...ROUTE, identityFile: "/a/b-c_d.e+f/id_ed25519" } });
+  });
+
+  test.each([
+    ["a relative path", "id_ed25519"], ["a home path", "~/.ssh/id_ed25519"], ["a % token", "/home/%u/.ssh/id"], ["an environment variable", "/home/${USER}/.ssh/id"],
+    ["a space", "/home/hub/.ssh/my key"], ["a quote", '/home/hub/.ssh/"id"'], ["a newline", "/home/hub/.ssh/id\nIdentityFile=/x"], ["a NUL", "/home/hub/.ssh/id\u0000"],
+    ["a control character", "/home/hub/.ssh/\u001bid"], ["an equals sign", "/home/hub/.ssh/id=x"], ["a non-ASCII character", "/home/hub/.ssh/ключ"], ["a parent segment", "/home/hub/../root/.ssh/id"],
+    ["a doubled slash", "/home//hub/id"], ["a trailing slash", "/home/hub/.ssh/"], ["the root", "/"], ["an option", "-oProxyCommand=/bin/sh"], ["a Windows path", "C:\\Users\\hub\\id"],
+    ["an empty string", ""], ["1025 characters", "/" + "a".repeat(1024)], ["a number", 7], ["null", null],
+  ])("%s is refused", (_label, identityFile) => {
+    expect(checkExplicitRoute({ ...ROUTE, identityFile })).toEqual({ ok: false, reason: "identity_file_form" });
+  });
+
+  test("a Windows Home refuses an identity file whatever the path, before looking at the file", () => {
+    // A POSIX-looking path resolves against the current drive there, and owner and mode bits say nothing about its ACL.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-identity-win32-"));
+    const key = join(dir, "id_ed25519");
+    writeFileSync(key, "x\n", { mode: 0o600 });
+    try {
+      expect(identityFileProblem(key)).toBe(process.platform === "win32" ? "identity_file_unsupported_platform" : null);
+      expect(identityFileProblem(key, "win32")).toBe("identity_file_unsupported_platform");
+      expect(identityFileProblem(join(dir, "missing"), "win32")).toBe("identity_file_unsupported_platform");
+      expect(identityFileProblem(key, "linux")).toBe(null);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("the options are the route's, then IdentitiesOnly=yes, IdentityAgent=none and IdentityFile=<path>, one argument each", () => {
+    expect(explicitRouteSshOptions(ROUTE_KEY)).toEqual([
+      "-o", "ProxyCommand=" + ROUTE.proxyCommand, "-o", "ProxyUseFdpass=no", "-o", "User=ubuntu", "-o", "Port=22",
+      "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "IdentityFile=" + KEY,
+    ]);
+  });
+
+  test("every builder passes the three options once, after -F none and before the destination", () => {
+    for (const [name, argv] of Object.entries(builders(ROUTE_KEY))) {
+      expect({ name, only: options(argv, "IdentitiesOnly"), agent: options(argv, "IdentityAgent"), file: options(argv, "IdentityFile") })
+        .toEqual({ name, only: ["yes"], agent: ["none"], file: [KEY] });
+      expect(argv.slice(argv.indexOf("-F"), argv.indexOf("-F") + 2)).toEqual(["-F", "none"]);
+      expect(argv.indexOf("IdentityFile=" + KEY)).toBeLessThan(argv.indexOf("--"));
+      // Everything else is the argv of the same route without a key.
+      expect(argv.filter((value, index) => !/^Identit/.test(value) && !(value === "-o" && /^Identit/.test(argv[index + 1] ?? "")))).toEqual(BEFORE_IDENTITY_FILE[name]);
+    }
+  });
+
+  test("a link record with an identity file round-trips, and one without parses exactly as before", () => {
+    expect(parseLinkStore(store(record({ explicitRoute: ROUTE_KEY, exclusive: true }))).links[0]).toEqual(record({ explicitRoute: ROUTE_KEY, exclusive: true }));
+    expect(parseLinkStore(store(record({ explicitRoute: ROUTE, exclusive: true }))).links[0]).toEqual(record({ explicitRoute: ROUTE, exclusive: true }));
+    expect(() => parseLinkStore(store(record({ explicitRoute: { ...ROUTE, identityFile: "relative" }, exclusive: true })))).toThrow("links[0].explicitRoute is invalid");
+  });
+
+  test("a tombstone keeps the identity file, so recover reaches the machine with the link's key", () => {
+    const path = join(dir, "tombstones-identity.json");
+    const tombstone = { linkId: "lnk_0123456789abcdef", alias: "pen-7f3a9c", hostKeyFingerprint: "SHA256:abcdefghijklmnopqrstu", remotePlatform: "posix" as const,
+      explicitRoute: ROUTE_KEY, exclusive: true as const, revokedAt: "2026-11-14T00:00:00.000Z" };
+    recordTombstone(tombstone, path);
+    expect(readTombstones(path).tombstones[0]!.explicitRoute).toEqual(ROUTE_KEY);
+  });
+
+  test("the enrollment digest names the identity file, so a repeat of an operation id with another key does not match", () => {
+    const digest = (route: ExplicitRoute) => enrollOperationDigest({ alias: "pen-7f3a9c", fingerprint: "SHA256:abcdefghijklmnopqrstu", route: { explicitRoute: route, exclusive: true }, requireEphemeral: false });
+    expect(digest(ROUTE_KEY)).not.toBe(digest(ROUTE));
+    expect(digest(ROUTE_KEY)).not.toBe(digest({ ...ROUTE, identityFile: "/home/hub/.ssh/other_ed25519" }));
+    expect(digest(ROUTE_KEY)).toBe(digest({ ...ROUTE_KEY }));
+  });
+
+  test("two routes are the same only with the same identity file", () => {
+    expect(sameExplicitRoute(ROUTE_KEY, { ...ROUTE_KEY })).toBe(true);
+    expect(sameExplicitRoute(ROUTE_KEY, ROUTE)).toBe(false);
+    expect(sameExplicitRoute(ROUTE, { ...ROUTE })).toBe(true);
+  });
+});
+
+/** Every value ssh -G resolves for one keyword, in order (identityfile repeats). */
+function resolvedAll(args: readonly string[], keyword: string): string[] {
+  const result = Bun.spawnSync([SSH!, "-G", ...args], { stdin: "ignore" });
+  expect(result.exitCode).toBe(0);
+  return result.stdout.toString().split("\n").filter(line => line.startsWith(keyword + " ")).map(line => line.slice(keyword.length + 1));
+}
+
+describe.skipIf(SSH === null)("the identity file as ssh resolves it (ssh -G)", () => {
+  const KEY = "/home/hub/.ssh/goat_hub_ed25519";
+  const ROUTE_KEY: ExplicitRoute = { ...ROUTE, identityFile: KEY };
+  // A user's ssh_config that would add a key and an agent for every host.
+  const adding = () => {
+    const config = join(dir, "adds-identity.conf");
+    writeFileSync(config, ["Host *", "  IdentityFile /home/hub/.ssh/id_other", "  IdentityAgent /tmp/other-agent.sock", "  IdentitiesOnly no", ""].join("\n"));
+    return config;
+  };
+  const argvs = () => [
+    buildTunnelArgv({ alias: "pen-7f3a9c", direction: "R", bindPort: 19002, targetPort: 19001, knownHostsFile: KNOWN_HOSTS, route: ROUTE_KEY }),
+    buildExecArgv({ alias: "pen-7f3a9c", argv: ["sh", "-c", "true"], knownHostsFile: KNOWN_HOSTS, route: ROUTE_KEY }).slice(0, -1),
+    buildProbeArgv({ alias: "pen-7f3a9c", tempKnownHostsFile: KNOWN_HOSTS, route: ROUTE_KEY }).slice(0, -1),
+  ];
+
+  test("ssh offers exactly the route's key, with no agent and identities only, and no ssh_config can add one", () => {
+    adding();
+    for (const argv of argvs()) {
+      // From -F none on: the argv as the link runs it.
+      const args = argv.slice(argv.indexOf("-F"));
+      expect({ files: resolvedAll(args, "identityfile"), only: resolvedAll(args, "identitiesonly"), agent: resolvedAll(args, "identityagent") })
+        .toEqual({ files: [KEY], only: ["yes"], agent: ["none"] });
+    }
+  });
+
+  test("control: were ssh_config read, it would add its key, which -F none prevents", () => {
+    const argv = argvs()[1]!;
+    const files = resolvedAll(["-F", adding(), ...argv.slice(argv.indexOf("-F") + 2)], "identityfile");
+    expect(files).toContain(KEY);
+    expect(files).toContain("/home/hub/.ssh/id_other");
+  });
+});

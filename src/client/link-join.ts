@@ -317,15 +317,22 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
   const thisAlias = localAlias(deps);
   let result: SshRunResult;
   try {
-    result = await deps.runner.run(
+    const issue = (selectedClients?: OcxConnectedClientId[]) => deps.runner.run(
       buildExecArgv({
         alias: input.alias,
-        argv: remoteOcxArgv(["link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), "--json"]),
+        argv: remoteOcxArgv(["link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), ...(selectedClients ? ["--clients", selectedClients.join(",")] : []), "--json"]),
         knownHostsFile: deps.knownHostsFile,
         route: null,
       }),
       { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
     );
+    result = await issue(deps.selectedClients);
+    // The older CLI rejects unknown arguments before issuing a key. Retry only that
+    // definite no-write result; keep the selection for the Child's existing fallback.
+    if (deps.selectedClients && result.code === 2 && !result.stdout.trim()
+      && /^(?:Error: )?Unexpected argument\(s\): --clients(?:\s|$)/m.test(result.stderr)) {
+      result = await issue();
+    }
   } catch (error) {
     throw new ClientLinkJoinError("join_issue_failed", undefined, sshRunnerErrorHint(error));
   }
@@ -385,6 +392,7 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
       transport: "link",
       link: { tunnelPort, linkId: issued.linkId },
       selectedClients: deps.selectedClients ?? ["codex", "claude"],
+      selectedClientsExplicit: deps.selectedClients !== undefined,
       managementTransport: "direct",
     }, {
       fetchImpl: deps.fetchImpl,

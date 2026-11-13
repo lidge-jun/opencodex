@@ -9,7 +9,7 @@
  * secret: key ids, link ids, ports and the public explicit route only. links.json is unchanged by it.
  */
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWriteFile, isMissingPathError } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
@@ -18,6 +18,7 @@ import { hardenSecretDir } from "../lib/windows-secret-acl";
 import { parseExplicitRoute, type ExplicitRoute } from "./explicit-route";
 import { isLinkPort } from "./ports";
 import { linkDir } from "./paths";
+import { ALIAS_LOCK_WAIT_MS } from "./alias-lock";
 import { isSshAlias } from "./ssh-argv";
 
 export type OperationKind = "enroll" | "revoke";
@@ -74,6 +75,47 @@ export class OperationsJournalError extends Error {
 
 /** Committed and failed_clean entries, and resolved residual or unknown ones, stay this long. */
 export const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * At most this many unsettled entries: open ones and residual or unknown ones nobody resolved yet. Only these need a
+ * person (or O5) and only these refuse a new operation once the bound is reached; marks on existing entries are always
+ * written. A provisioning hub caps disposable machines at 10 by default, each with a handful of operations, so 256 is far
+ * past what a working fleet leaves unsettled.
+ */
+export const OPERATION_JOURNAL_MAX_UNSETTLED = 256;
+/**
+ * Settled entries (committed, failed_clean, and resolved residual or unknown ones) past this many are pruned before their
+ * 30 days, oldest first (by when they finished or were resolved), but only once they are past OPERATION_PRUNE_FLOOR_MS:
+ * a repeat with the same operation id and the same parameters (another set answers operation_mismatch) that reaches the
+ * journal within 2 hours of the answer gets the recorded outcome
+ * (status, code and outcome), whatever else ran meanwhile, except that a revoke whose own removal was interrupted (its
+ * retirement receipt is outstanding) resumes it first and answers that attempt; the alias lock busy past its wait changes
+ * nothing and is retried, and after an unreadable journal or a 5xx the caller repeats with the same id (neither proves
+ * that nothing changed: a replay after a resumed removal can meet them once that removal finished). Later the id may be treated as a new operation: an
+ * enrollment whose link is there meets link_exists and a revoke whose link is gone link_not_found, but an enrollment
+ * whose link was removed meanwhile enrolls the machine again. Unsettled entries are never pruned and the 30-day
+ * retention does not depend on this.
+ */
+export const OPERATION_JOURNAL_MAX_SETTLED = 256;
+/** The replay guarantee, however many operations follow an entry: 2 hours, far past any caller's retry of a lost answer. */
+export const OPERATION_REPLAY_MIN_MS = 2 * 60 * 60 * 1000;
+/**
+ * The age before which a settled entry is never pruned early: the 2-hour replay window, plus the longest alias-lock wait
+ * and a minute, so a retry that started within the window and then waited on the lock still finds its entry.
+ */
+export const OPERATION_PRUNE_FLOOR_MS = OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAIT_MS + 60_000;
+/**
+ * At this many entries settled within OPERATION_PRUNE_FLOOR_MS (2 hours and three minutes) a new operation is refused
+ * until the oldest is older. That is a throughput limit as much as a runaway guard: a burst of 1024, and about 500
+ * journalled operations per hour sustained (1024 / 2.05 h). Churn, not machine count, decides whether it is reached: ten
+ * disposable machines that each live ten minutes make about 120 add and revoke operations per hour, about 246 inside the
+ * window, a quarter of the bound. A runaway loop that retries with a fresh id after each failure is held for at most that
+ * window instead of locking the Home out for 30 days. With the three bounds the file holds about 256 unsettled plus
+ * 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at most about 1.5 MiB at the limit, plus the
+ * entries an outstanding retirement receipt pins (at most two per readable receipt, every revoke entry of a link whose
+ * receipt cannot be read; receipts have no cap of their own), so every
+ * whole-file rewrite under the config mutation lock stays small while receipts are settled.
+ */
+export const OPERATION_JOURNAL_MAX_RECENT_SETTLED = 1024;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
@@ -220,24 +262,67 @@ export function writeOperationsJournal(path: string, journal: OperationsJournal)
 /**
  * Drop what has outlived retention: a committed or failed_clean entry 30 days after it finished, a residual or
  * unknown one only 30 days after it was resolved. An open entry, and an unresolved residual or unknown one, stays.
+ * Past OPERATION_JOURNAL_MAX_SETTLED settled entries, the oldest settled ones older than OPERATION_PRUNE_FLOOR_MS go too.
  */
-export function pruneOperations(journal: OperationsJournal, nowMs: number): OperationsJournal {
+export function pruneOperations(journal: OperationsJournal, nowMs: number, keep?: (op: LinkOperation) => boolean): OperationsJournal {
   const expired = (at: string | undefined) => at !== undefined && nowMs - Date.parse(at) > OPERATION_RETENTION_MS;
-  return { version: 1, operations: journal.operations.filter(op => {
+  const retained = journal.operations.filter(op => {
+    // A caller-pinned entry stays past retention: a revoke that still owns a retirement receipt (#8416).
+    if (keep?.(op)) return true;
     if (op.state === "committed" || op.state === "failed_clean") return !expired(op.finishedAt);
     if (op.state === "residual" || op.state === "unknown") return !expired(op.resolvedAt);
     return true;
-  }) };
+  });
+  const settled = retained.filter(isSettled);
+  if (settled.length <= OPERATION_JOURNAL_MAX_SETTLED) return { version: 1, operations: retained };
+  // A stable sort: entries settled at the same moment go in journal order.
+  const candidates = settled.map((op, index) => ({ op, index })).filter(item => !keep?.(item.op) && nowMs - settledAt(item.op) > OPERATION_PRUNE_FLOOR_MS)
+    .sort((a, b) => settledAt(a.op) - settledAt(b.op) || a.index - b.index);
+  const dropped = new Set(candidates.slice(0, settled.length - OPERATION_JOURNAL_MAX_SETTLED).map(item => item.op));
+  return { version: 1, operations: retained.filter(op => !dropped.has(op)) };
 }
 
-/** Read, change and write the journal in one section of the config mutation lock, pruning on the way. */
-export function updateOperationsJournal<T>(path: string, nowMs: number, change: (journal: OperationsJournal) => T): T {
+function settledAt(op: LinkOperation): number {
+  return Date.parse(op.resolvedAt ?? op.finishedAt ?? op.updatedAt);
+}
+
+/** Committed, failed_clean, or residual or unknown and resolved: nothing about it waits on anyone. */
+function isSettled(op: LinkOperation): boolean {
+  return op.state === "committed" || op.state === "failed_clean" || ((op.state === "residual" || op.state === "unknown") && op.resolvedAt !== undefined);
+}
+
+/**
+ * Read, change and write the journal in one section of the config mutation lock, pruning on the way. Writes only
+ * when the change or the prune altered the journal: a read that finds nothing to do (an unknown id, a state that
+ * cannot be resolved) never rewrites the file, and never creates it, because its mere existence makes every plain
+ * apply and revoke take the alias lock (journalInUse). keep pins entries against pruning.
+ */
+export function updateOperationsJournal<T>(path: string, nowMs: number, change: (journal: OperationsJournal) => T, keep?: (op: LinkOperation) => boolean): T {
   return withConfigMutationLockSync(() => {
     const journal = readOperationsJournal(path);
+    const before = JSON.stringify(journal);
     const result = change(journal);
-    writeOperationsJournal(path, pruneOperations(journal, nowMs));
+    const next = pruneOperations(journal, nowMs, keep);
+    if (JSON.stringify(next) !== before) writeOperationsJournal(path, next);
     return result;
   });
+}
+
+export class OperationsJournalFullError extends Error {
+  /** unsettled: too many open or unresolved entries; recent: too many settled within OPERATION_PRUNE_FLOOR_MS. */
+  constructor(readonly bound: "unsettled" | "recent") {
+    super(bound === "unsettled"
+      ? "operations.json holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " unsettled entries"
+      : "operations.json holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " entries settled within 2 hours and three minutes");
+    this.name = "OperationsJournalFullError";
+  }
+}
+
+/** Throws before a new entry is added at OPERATION_JOURNAL_MAX_UNSETTLED unsettled or OPERATION_JOURNAL_MAX_RECENT_SETTLED recently settled entries. */
+export function assertRoomForNewOperation(journal: OperationsJournal, nowMs: number): void {
+  const kept = pruneOperations(journal, nowMs).operations;
+  if (kept.filter(op => !isSettled(op)).length >= OPERATION_JOURNAL_MAX_UNSETTLED) throw new OperationsJournalFullError("unsettled");
+  if (kept.filter(op => isSettled(op) && nowMs - settledAt(op) <= OPERATION_PRUNE_FLOOR_MS).length >= OPERATION_JOURNAL_MAX_RECENT_SETTLED) throw new OperationsJournalFullError("recent");
 }
 
 export function findOperation(journal: OperationsJournal, operationId: string): LinkOperation | undefined {
@@ -254,7 +339,7 @@ export function openEnrollmentFor(journal: OperationsJournal, alias: string, exc
  * Mark a residual or unknown entry resolved: O5 proved the Child clean, or a person accepted the loss. Its 30 days
  * of retention start now. An entry in any other state is not resolvable; a missing one is null.
  */
-export function resolveLinkOperation(path: string, operationId: string, nowMs: number): LinkOperation | "not_resolvable" | null {
+export function resolveLinkOperation(path: string, operationId: string, nowMs: number, keep?: (op: LinkOperation) => boolean): LinkOperation | "not_resolvable" | null {
   return updateOperationsJournal(path, nowMs, journal => {
     const op = findOperation(journal, operationId);
     if (!op) return null;
@@ -264,5 +349,60 @@ export function resolveLinkOperation(path: string, operationId: string, nowMs: n
       op.updatedAt = op.resolvedAt;
     }
     return structuredClone(op);
-  });
+  }, keep);
+}
+
+/**
+ * Revokes running in this process, by journal path and operation id. While one runs, its entry is open and the tunnel
+ * decisions are its own: a failed cleanup restarts the tunnel. An open entry no process runs belongs to a revoke that died.
+ */
+const liveRevokes = new Set<string>();
+
+export function markRevokeLive(path: string, operationId: string, live: boolean): void {
+  if (live) liveRevokes.add(path + "\0" + operationId);
+  else liveRevokes.delete(path + "\0" + operationId);
+}
+
+/**
+ * A revoke that reached the Child's cleanup and has not settled suspends its link's tunnel: the Child may be purged or
+ * disconnected, so the supervisor must not reconnect to it on a reload or after a restart. That is an unresolved unknown
+ * entry past its `remote_cleanup` intent (a cleanup that provably never ran settles failed_clean instead, and its revoke
+ * restarts the tunnel), and an open one no process in this Home runs (it died). Resolving the entry, or a revoke that
+ * removes the link, lifts it.
+ */
+export function revokeSuspendsLink(journal: OperationsJournal, linkId: string, isLive: (operationId: string) => boolean): boolean {
+  return suspendingRevoke(journal, linkId, isLive) !== undefined;
+}
+
+function suspendingRevoke(journal: OperationsJournal, linkId: string, isLive: (operationId: string) => boolean): LinkOperation | undefined {
+  return journal.operations.find(op => op.kind === "revoke" && op.linkId === linkId && op.resolvedAt === undefined
+    && hasEffect(op, "remote_cleanup", "intent")
+    && (op.state === "open" ? !isLive(op.operationId) : op.state === "unknown"));
+}
+
+/** The revoke that keeps a link down: its id, whether it is open (the process died) or unknown, and since when. */
+export interface LinkSuspension { operationId: string; state: "open" | "unknown"; since: string }
+
+/** Like linkSuspendedByRevoke, naming the revoke; null when the link is not suspended or the journal is unreadable. */
+export function revokeSuspendingLink(path: string, linkId: string): LinkSuspension | null {
+  return revokeSuspensions(path)(linkId);
+}
+
+/** One read of the journal, then a lookup per link: a status snapshot reads the file once. */
+export function revokeSuspensions(path: string): (linkId: string) => LinkSuspension | null {
+  if (!existsSync(path)) return () => null;
+  let journal: OperationsJournal;
+  try { journal = readOperationsJournal(path); } catch { return () => null; }
+  return linkId => {
+    const op = suspendingRevoke(journal, linkId, id => liveRevokes.has(path + "\0" + id));
+    return op ? { operationId: op.operationId, state: op.state === "open" ? "open" : "unknown", since: op.finishedAt ?? op.updatedAt } : null;
+  };
+}
+
+/**
+ * The supervisor's check: one stat on a Home that never journalled. A damaged journal suspends nothing (a tunnel toward
+ * a purged Child serves nothing without its key, and stopping every tunnel would be worse); its readers report it.
+ */
+export function linkSuspendedByRevoke(path: string, linkId: string): boolean {
+  return revokeSuspendingLink(path, linkId) !== null;
 }

@@ -22,18 +22,22 @@ Codex 整合會把 `web_search = "disabled"` 寫入 `~/.codex/config.toml`，這
 指令會回報由此觸發的 Codex 端寫入（`--json` 中的 `codexWebSearch`，否則為結尾的
 `Codex config:` 行），並在無法寫入時提示 `ocx sync`。該旗標對 `vision` 同樣有效。
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>>`
 
-管理 Codex 的 `multi_agent_v2` 功能旗標與三態多代理介面模式。
+管理 Codex 的 `multi_agent_v2` 功能旗標與四態多代理介面模式。
 
 | 子指令 | 動作 |
 | --- | --- |
 | `status`（預設） | 回報目前 v2 旗標、多代理模式與執行緒並行數。 |
-| `on` | 啟用 `multi_agent_v2` 功能並重新同步目錄。 |
+| `on` | 啟用 `multi_agent_v2` 功能並重新同步目錄；`v2-plaintext` 或混合 pin 生效時會拒絕，因為全域強制會蓋過目錄 pin。 |
 | `off` | 停用 `multi_agent_v2` 功能並重新同步目錄。 |
 | `mode v1` | 將所有模型強制為 v1、停用原生 v2，並保留現用執行緒上限。 |
 | `mode default` | 遵循上游模型介面 pin。 |
-| `mode v2` | 將所有模型強制為 v2、啟用原生 v2，並保留現用執行緒上限。 |
+| `mode v2` | 將所有模型設為 v2 並保留執行緒上限；`keep-native-v1` 關閉時啟用全域原生 v2，開啟時關閉全域強制並使用目錄 pin。 |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | 為新工作階段選擇 V2、關閉全域強制，並以明文傳遞符合條件的工作。進入需要 `--acknowledge-plaintext-agent-messages`。 |
+| `keep-native-v1 on\|off` | 在 `mode v2` 下讓原生 ChatGPT 使用 v1、路由模型使用 v2；啟用時關閉全域 V2 強制。 |
+| `mode-hint <text>` | 為所有模型與推理強度設定主動委派提示。 |
+| `mode-hint --clear` | 移除提示，恢復依推理強度決定的策略。 |
 | `threads <n>` | 將現用 v1/v2 執行緒上限設為不小於 1 的整數。 |
 
 ```bash
@@ -44,7 +48,7 @@ ocx v2 on
 ocx v2 threads 16
 ```
 
-`mode` 子指令將 `multiAgentMode` 寫入 opencodex 設定並重新同步 Codex 目錄。模式與旗標轉換會在有效的 v1/v2 Codex key 之間移動目前的數值執行緒上限；失敗的轉換會還原原始的 `config.toml`。變更套用於新的 Codex session，執行中的 session 則保留其 pin 的介面。
+`mode` 子指令將 `multiAgentMode` 寫入 opencodex 設定並重新同步 Codex 目錄。模式與旗標轉換會在有效的 v1/v2 Codex key 之間移動目前的數值執行緒上限；失敗的轉換會還原原始的 `config.toml`。目錄介面變更套用於新的 Codex session，執行中的 session 則保留其 pin；啟用明文編譯也會影響既有 V2 session 的後續合格請求。Subagents 的 Ultra 開啟開關需要已啟用原生功能且模式為 `v2`，或選擇 `v2-plaintext`（其全域強制保持關閉）；僅執行 `ocx v2 on` 不符合條件。
 
 ## 組合路由
 

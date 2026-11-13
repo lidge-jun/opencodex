@@ -10,6 +10,8 @@ import { SshRunnerError, SSH_MAX_OUTPUT_BYTES, SSH_OUTPUT_CAP_BYTES, type SshRun
 import { quoteRemote, remoteOcxArgv, WINDOWS_OS_PROBE } from "../../src/link/ssh-argv";
 import { windowsScriptData } from "../../src/link/remote-windows";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { readRouteIntentState, setRouteClientIntent } from "../../src/routing/route-intent-state";
+import { projectHomeRouteIntent } from "../../src/link/route-intent";
 
 let root: string;
 let previousHome: string | undefined;
@@ -25,7 +27,8 @@ afterEach(() => {
 });
 
 const fingerprint = "SHA256:abcdefghijklmnop";
-const recovery = "Run ocx disconnect and ocx restart on the Child before retrying.";
+// The Child's step is bound to the attempt's link id, which the answer names (#8691 final review).
+const recovery = expect.stringMatching(/^Run ocx disconnect --expect-link lnk_[0-9a-f]{16} on the Child and, if it disconnected, ocx restart, before retrying: it disconnects only while the Child is connected to this attempt's link /);
 const result = (stdout = "", code = 0): SshRunResult => ({ code, stdout, stderr: "" });
 const http = (body: unknown, status = 200) => result(`${JSON.stringify(body)}\n${status}`);
 const health = (role: string, restartCapability: string | null = "v1") => http({ service: "opencodex", pid: 4321, port: 10100, role, ...(restartCapability === null ? {} : { restartCapability }) });
@@ -210,6 +213,20 @@ function noEnrollmentEffects(h: ReturnType<typeof harness>) {
 }
 
 describe("Home enrollment of a standalone Child", () => {
+  test("enrollment without a selection inherits the Home policy", async () => {
+    const h = harness();
+    setRouteClientIntent("codex", { enabled: false });
+    setRouteClientIntent("claude", { enabled: false });
+    expect((await h.call("probe", { alias: "child" })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: "child", fingerprint })).status).toBe(200);
+    expect((await h.call("apply", { alias: "child", fingerprint })).status).toBe(202);
+    const id = h.store.links[0]!.id;
+    const state = readRouteIntentState();
+    expect(state.devices[id]).toBeUndefined();
+    const projected = projectHomeRouteIntent(h.config, "test", id, state);
+    expect(projected.clients.codex.enabled).toBe(false);
+    expect(projected.clients.claude.enabled).toBe(false);
+  });
   test("2.83 Child connects, restarts exactly once and needs a fresh complete catalog before success", async () => {
     const h = harness();
     const probed = await h.call("probe", { alias: "child" });

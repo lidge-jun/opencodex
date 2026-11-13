@@ -19,6 +19,7 @@ import {
   type PreparedLinkBody,
 } from "./link-request-compression";
 import type { InboundBodyBudget } from "../server/inbound-body-budget";
+import { linkChildRelayWaitObserver } from "./link-websocket-limits";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
@@ -60,6 +61,13 @@ export interface LinkTunnelGate {
    * when the tunnel stops being re-established (failed or stopped), or when too many requests wait.
    */
   waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Optional: `listener` runs once, synchronously, when the gate's owner starts stopping, before the
+   * tunnel goes away: the supervisor's stop(), or the link ending (its sidecar gone, naming another link,
+   * or the connected link id unreadable for several checks in a row) before the runtime recycles. The link
+   * WebSocket drains its sockets here.
+   */
+  onStopping?(listener: () => void): void;
 }
 
 /**
@@ -194,6 +202,24 @@ export function forwardLinkRequestHeaders(source: Headers, admissionKey: string,
   const validation = validateHubRelayRequestHeaders(linkFramingHeaders(source));
   if (!validation.ok) return new Headers();
   return linkRequestHeaders(source, admissionKey, pathname, validation.connectionNamed);
+}
+
+/** The handshake headers of Codex's own upgrade, which the Home leg replaces with its own (link-ws-transport.ts). */
+const UPGRADE_HANDSHAKE_HEADERS = ["connection", "upgrade", "origin", "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-protocol"];
+
+/**
+ * The headers a link WebSocket's upgrade sends to the Home: Codex's headers without its handshake, then
+ * the same filter an HTTP request gets (hop-by-hop, Connection-nominated and caller credentials dropped)
+ * and the link key as a Bearer. Null when the rest would be refused as malformed or too large.
+ */
+export function forwardLinkUpgradeHeaders(source: Headers, admissionKey: string): Headers | null {
+  const connectionNamed = new Set((source.get("connection") ?? "").split(",").map(token => token.trim().toLowerCase()).filter(Boolean));
+  const rest = new Headers(source);
+  for (const name of UPGRADE_HANDSHAKE_HEADERS) rest.delete(name);
+  const validation = validateHubRelayRequestHeaders(linkFramingHeaders(rest));
+  if (!validation.ok) return null;
+  const headers = linkRequestHeaders(rest, admissionKey, "/v1/responses", new Set([...validation.connectionNamed, ...connectionNamed]));
+  return headersWithinLimit(headers) ? headers : null;
 }
 
 function linkRequestHeaders(
@@ -356,6 +382,48 @@ function idleBoundedStream(
       cancelUpstream(reason, false);
     },
   });
+}
+
+/**
+ * Test-only (link-websocket-limits.ts): the relayed body passed through unchanged, with the observer told from each
+ * chunk handed over until the reader asks again, and when the body ends, errors or is cancelled. A high-water mark of 0
+ * means it reads only when the reader does, so the wait it reports is the reader's. `ended` runs from the relay's own
+ * cleanup, so a relay that ends underneath a reader holding a chunk (a caller abort, the SSE idle limit) stops being
+ * reported as waiting at once and is never reported again. The signal follows the relay's own lifetime: a Home
+ * failure the relay has not read yet (its read-ahead chunk is queued and nothing reads the Home) keeps it reported as
+ * waiting, as the Home's signal does, because the relay still holds that chunk and its request until its next read, a
+ * reader cancel, a caller abort or (SSE) the idle limit ends it. Used only while a test sets an observer.
+ */
+function waitObservation(observer: (waiting: boolean) => void) {
+  let waiting = false;
+  let ended = false;
+  const tell = (value: boolean): void => {
+    if (waiting === value || (value && ended)) return;
+    waiting = value;
+    try { observer(value); } catch { /* a test observer never breaks the relay */ }
+  };
+  const end = (): void => { ended = true; tell(false); };
+  const stream = (body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> => {
+    const reader = body.getReader();
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        tell(false);
+        try {
+          const next = await reader.read();
+          if (next.done) { controller.close(); return; }
+          controller.enqueue(next.value);
+          tell(true);
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        tell(false);
+        try { await reader.cancel(reason); } catch { /* best effort */ }
+      },
+    }, { highWaterMark: 0 });
+  };
+  return { ended: end, stream };
 }
 
 /**
@@ -588,9 +656,13 @@ export async function relayLinkDataRequest(
 
   // The header deadline ends once a response exists. The body owns cleanup after that.
   stopHeaderDeadline();
+  const waitObserver = linkChildRelayWaitObserver();
+  const observed = waitObserver ? waitObservation(waitObserver) : null;
+  const bodyCleanup = observed ? () => { observed.ended(); cleanup(); } : cleanup;
   const responseBody = sse
     ? idleBoundedStream(upstream.body, relayAbort.signal, clock,
-      deps.sseIdleTimeoutMs ?? LINK_RELAY_SSE_IDLE_TIMEOUT_MS, () => relayAbort.abort(new DOMException("link relay SSE idle timeout", "TimeoutError")), cleanup)
-    : boundedRelayResponseStream(upstream.body, bodyLimit, relayAbort.signal, cleanup);
-  return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
+      deps.sseIdleTimeoutMs ?? LINK_RELAY_SSE_IDLE_TIMEOUT_MS, () => relayAbort.abort(new DOMException("link relay SSE idle timeout", "TimeoutError")), bodyCleanup)
+    : boundedRelayResponseStream(upstream.body, bodyLimit, relayAbort.signal, bodyCleanup);
+  return new Response(observed ? observed.stream(responseBody) : responseBody,
+    { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
 }

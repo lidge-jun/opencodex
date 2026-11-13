@@ -19,6 +19,7 @@ import { prepareEffortNormalization, stripEmptyLadderEffort, supportedLadderFor 
 import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
 import { shouldPreparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { hasValidatedActiveReasoningEffort } from "../../responses/parser";
 import { responseTierAuthorityForProvider } from "../../providers/openai-tiers-destination";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -195,11 +196,12 @@ export async function applyFinalRouteRequestNormalization(args: {
     args.claudeGoAffinity ? args.claudeGoAffinity.sessionLane : getOrAllocateRequestSessionLane(req),
     routedProvider);
   parsed._plaintextV2AgentMessages = shouldPreparePlaintextV2AgentMessages({
-    enabled: config.plaintextV2AgentMessages === true,
+    enabled: parsed._plaintextV2Decision === true && isPlaintextV2AgentMessagesEnabled(config),
     inboundWire,
     canonicalChatGpt: isCanonicalOpenAiForwardProvider(route.provider),
     requestBody: parsed._rawBody,
   });
+  if (parsed._plaintextV2AgentMessages) parsed._plaintextV2EverPrepared = true;
   // Recompute from the original wire preference on every route, including fallback.
   // A provider default never converts raw reasoning into a summary.
   if (inboundWire === "responses" && parsed._rawBody) {

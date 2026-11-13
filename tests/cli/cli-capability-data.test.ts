@@ -8,6 +8,7 @@ import * as base from "../../src/cli/capabilities-base";
 import { PROVIDER_MODEL_CAPABILITIES } from "../../src/cli/capabilities-provider-models";
 import { ACCOUNT_CAPABILITIES } from "../../src/cli/capabilities-accounts";
 import { AGENT_ROUTING_CAPABILITIES } from "../../src/cli/capabilities-agents-routing";
+import { ROUTE_TO_CAPABILITIES } from "../../src/cli/capabilities-route-to";
 import { INTEGRATION_CAPABILITIES } from "../../src/cli/capabilities-integrations";
 import { OBSERVE_SYSTEM_CAPABILITIES } from "../../src/cli/capabilities-observe-system";
 import { ACCESS_REMOTE_CAPABILITIES } from "../../src/cli/capabilities-access-remote";
@@ -41,6 +42,12 @@ function checkFixture(changes: Record<string, string | undefined> = {}): string[
 }
 
 describe("checked capability dependency boundary", () => {
+  test("route-to metadata remains isolated from runtime settings and handlers", () => {
+    expect(checkFixture({ "capabilities-route-to.ts": `import { loadConfig } from '../config';` })
+      .join("\n")).toContain("forbidden edge");
+    expect(checkFixture({ "capabilities-route-to.ts": `import { runRouteTo } from './route-to';` })
+      .join("\n")).toContain("outside data graph");
+  });
   test("real graph and static type/value fixtures use the same predicate", () => {
     expect(capabilityDataBoundary(repoPath("src", "cli"))).toEqual([]);
     expect(checkFixture()).toEqual([]);
@@ -311,6 +318,7 @@ describe("capability facade and optional usage consumers", () => {
       ...OBSERVE_SYSTEM_CAPABILITIES,
       ...ACCESS_REMOTE_CAPABILITIES,
       ...LAB_CAPABILITIES,
+      ...ROUTE_TO_CAPABILITIES,
     ]);
     expect(facade.HEAD_CAPABILITIES).toBe(base.HEAD_CAPABILITIES);
     const matches = facade.capabilitiesForRoute("/api/providers/{provider}/model-costs");

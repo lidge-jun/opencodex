@@ -83,6 +83,7 @@ import {
 import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
+  providerAffinityGenerationIsCurrent,
   providerApiKeySelectionIsCurrent,
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
@@ -98,7 +99,7 @@ import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuo
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
-import { assignNativeLogConversationId, sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
+import { affinityLaneFromRequest, assignNativeLogConversationId, normalizeLogConversationId, sessionIdHeaderFromRequest } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
@@ -800,6 +801,7 @@ export async function prepareResponsesTransport(
         throw new Error("OAuth account selection changed before dispatch");
       }
     } else {
+      if (!providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)) throw new Error("Provider affinity selection is no longer available");
       let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
       if (!current && (route.provider._apiKeyAttempt?.distributed || (route.provider.requestPacing?.enabled
         && (route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin")))) {
@@ -886,7 +888,7 @@ export async function prepareResponsesTransport(
         const beforePhysicalSend = (): void => {
           incoming.abortSignal?.throwIfAborted();
           if (sent) {
-            if (binding?.kind === "api-key" && binding.provider._apiKeyAttempt?.distributed
+            if (binding?.kind === "api-key" && (binding.provider._apiKeyAttempt?.distributed || binding.provider._apiKeyAttempt?.cacheAffinity)
               && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
             return;
           }
@@ -1296,6 +1298,8 @@ export async function prepareResponsesTransport(
   // The Transport variant, not the bare picker: the picker answers with the PERSISTED row, and
   // a built-in provider stored in its valid minimal form would lose the adapter id, base URL
   // and static headers registry backfill supplies, throwing `Unknown adapter: undefined`.
+  const affinityLane = affinityLaneFromRequest(req, logCtx, config, options.admission, options.replayPrincipal);
+  if (affinityLane) logCtx.affinityLane = affinityLane;
   let proactiveKeyProvider: OcxProviderConfig | null;
   try {
     proactiveKeyProvider = selectProactiveApiKeyTransport(
@@ -1303,6 +1307,8 @@ export async function prepareResponsesTransport(
       route.providerName,
       route.provider,
       parsed.options.promptCacheKey,
+      Date.now(),
+      { lane: affinityLane, model: route.modelId, log: logCtx, continuation: parsed.context.messages.at(-1)?.role === "toolResult" },
     );
   } catch (err) {
     if (err instanceof OAuthAccountPausedError) {

@@ -1,4 +1,5 @@
 import { clientFacingModelText } from "../../lib/error-destination";
+import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { passthroughBuildErrorResponse } from "./passthrough-build-error";
@@ -26,7 +27,7 @@ import { renewMainQuotaDispatchForAttempt } from "../../codex/main-account-cache
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { resolveConnectTimeoutMs } from "../../stall-timeout";
-import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
+import { codexSafetyBufferingFilterOptions, createTerminalStatusTracker } from "../relay";
 import { imageGenToolCallAliases } from "../responses-image-gen-repair";
 import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
 import {
@@ -542,7 +543,6 @@ export async function preparePassthroughExchange(
     // untouched upstream stream, so it can still observe a `response.completed` the client never
     // received; checking the payload itself rather than a flag shared with the client relay keeps
     // this free of tee ordering races.
-    //
     // Checking only the terminal snapshot is not enough. An upstream can announce the undeclared
     // call in `response.output_item.added`, which trips the client guard, and then close with a
     // `response.completed` whose `output` is empty. The client gets `response.failed`, the terminal
@@ -552,12 +552,13 @@ export async function preparePassthroughExchange(
     let inspectedTerminal: ResponsesTerminalStatus | null = null;
     let inspectedCompletionSeen = false;
     let firstTerminalAllowsRecall = false;
+    const inspectedTerminalStatus = createTerminalStatusTracker();
     const passiveQuotaObserved = hasPassiveAccountQuota(route.providerName)
       && route.provider.authMode === "oauth";
     const noteInspectedPayload = (payload: unknown) => {
       // First terminal stays authoritative even in metadata-only inspection, which
       // intentionally continues parsing after a failed/incomplete terminal.
-      const terminal = terminalStatusFromParsed(payload);
+      const terminal = inspectedTerminalStatus(payload);
       if (inspectedTerminal === null && terminal !== null) {
         inspectedTerminal = terminal;
         // The client boundary accepts a terminal by event type, even without a
@@ -908,10 +909,9 @@ export async function preparePassthroughExchange(
         return clientCancelledResponse();
       }
       if (lastDistributedResponse) recordDistributedResponseFailure(lastDistributedResponse, config, route.providerName, options.abortSignal);
-      // A budget refusal is a proxy decision, not an upstream fault. Reporting it as
-      // 502 upstream_error would blame the provider for a limit this process applied, and
-      // would record a fake reachability failure against the account's health.
+      // A budget refusal is local; a 502 would falsely record an account reachability failure.
       if (err instanceof SendBudgetExhaustedError) {
+        logCtx.terminalSource = "synthetic";
         releaseUpstreamHostAdmission(nativeHostState.lease);
         nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
@@ -923,12 +923,13 @@ export async function preparePassthroughExchange(
         bindRefreshedAdapter(refusal.adapter);
         return handoffToChat(refusal.adapter);
       }
-      const dispatchRefusal = requestPacingOverloadResponse(refusal) ?? copilotRefusalResponse(refusal);
-      if (dispatchRefusal) {
-        releaseUpstreamHostAdmission(nativeHostState.lease);
-        nativeHostState.lease = null;
+      const pacingRefusal = requestPacingOverloadResponse(refusal);
+      if (pacingRefusal) logCtx.terminalSource = "synthetic";
+      const localDispatchRefusal = pacingRefusal ?? copilotRefusalResponse(refusal);
+      if (localDispatchRefusal) {
+        releaseUpstreamHostAdmission(nativeHostState.lease); nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return dispatchRefusal;
+        return localDispatchRefusal;
       }
       // Pacing may outlive the selected account's admission. No fetch occurred, so do
       // not turn an operator pause into a 502 or charge it to host/account health.
@@ -1203,7 +1204,6 @@ export async function preparePassthroughExchange(
         if ("failed" in recovered) return recovered.failed;
         upstreamResponse = recovered; continue passthroughRecovery;
       }
-
 
     if (
       upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
@@ -1541,7 +1541,7 @@ export async function preparePassthroughExchange(
    while (
      upstreamResponse.status === 429
       && !isNonReplayableResponse(upstreamResponse)
-     && rateLimitPolicy !== null
+     && rateLimitPolicy !== null && providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)
       && rateLimitRetries < rateLimitPolicy.attempts
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429
       // body, so a refusal discovered after the wait can no longer return the real rate-limit

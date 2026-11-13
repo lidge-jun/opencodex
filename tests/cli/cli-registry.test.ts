@@ -121,7 +121,7 @@ describe("CLI command registry parity", () => {
     expect(connect?.usage).not.toContain("--token <");
     expect(connect?.usage).not.toContain("--admin-token <");
     expect(connect?.details?.join(" ")).toContain("not supported");
-    expect(findCommand("disconnect")?.usage).toBe("ocx disconnect [--keep-catalog] [--json]");
+    expect(findCommand("disconnect")?.usage).toBe("ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] [--expect-link <linkId>]");
   });
 });
 

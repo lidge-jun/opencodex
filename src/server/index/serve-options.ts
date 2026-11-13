@@ -109,6 +109,7 @@ import {
   admissionFields,
   resolveApiAuth,
   resolveResponsesApiAuth,
+  resolveFilteredReplayPrincipal,
   type RequestPolicyView,
   withCors,
   withManagementCors,
@@ -337,6 +338,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(await handleLinkManagementRequest(
             req, requestUrl, config, requestManagementApiDeps, managementSessionControl,
             admission.kind === "configured" ? admission.keyId : undefined,
+            () => { const current = resolveApiAuth(req, linkPolicy()); return current?.kind === "configured" ? current.keyId : undefined; },
           ), req, policy);
         }
       }
@@ -567,17 +569,19 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const websocketLease = tryReserveCodexWebSocket();
         if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets", policy);
+        const forwardHeaders = selectForwardHeaders(req.headers);
+        const replayPrincipal = resolveFilteredReplayPrincipal(req, config, admission, forwardHeaders);
         // Upgrade on the server that RECEIVED this request, not the captured `server`
         // binding. They are the same object for the public listener, but the
         // unauthenticated loopback listener (#1102) is a second Bun.serve, and handing its
         // request to the public server's upgrade would fail or cross sockets.
         if (requestServer.upgrade(req, {
           data: buildResponsesWsData(
-            selectForwardHeaders(req.headers),
+            forwardHeaders,
             admission,
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
-            classifyUsageClient(req.headers),
+            classifyUsageClient(req.headers), replayPrincipal,
           ),
         })) return undefined as unknown as Response;
         websocketLease.release();
