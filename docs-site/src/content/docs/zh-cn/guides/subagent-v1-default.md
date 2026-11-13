@@ -46,6 +46,8 @@ ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
 
 在加密 v2 路径上，父代理以 ChatGPT 后端生成的 `encrypted_content` 发出任务。密钥留在该后端，OpenCodex 从未持有它，因此代理既无法解密也无法改写；该值确实是密文，并不是由标志隐藏的明文。明文编译器只能影响符合条件的新消息，不能修复已有密文。
 
+代理设置无法启用本地解密。实验性 `agentTaskRecovery` 可以请求 ChatGPT 后端恢复符合条件的任务，但不会在本地解密其密文。上述授权、适用条件和失败处理限制仍然有效。
+
 下表比较未启用明文编译器时的拓扑，也有助于理解失败发生的位置：
 
 | 拓扑 | v1 | v2 |

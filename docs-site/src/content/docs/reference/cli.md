@@ -87,7 +87,8 @@ fallback, capability JSON, and provider-specific error handling retain their exi
 `ocx message send (--thread <uuid> | --name <exact-name>) --stdin [--json]`
 submits one correlated peer message, without starting a daemon or resuming a thread.
 See [Local Codex Messaging](/reference/cli/messaging/) for sender context, kinds,
-the tested runtime and `not_sent`/`queued`/`unknown` receipts. No remote transport is included.
+the tested runtime and `not_sent`/`queued`/`unknown` receipts. Without `--host`, these operations are local.
+[Remote peer messaging over SSH](/reference/cli/messaging/#explicit-remote-peers) requires an enrolled host and `--host`; it does not autostart the receiver or automatically resend messages.
 
 ### `ocx provider`
 

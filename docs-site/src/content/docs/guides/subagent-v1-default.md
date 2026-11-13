@@ -11,6 +11,8 @@ The reason is narrow and specific: on the unchanged encrypted v2 path, a task ha
 model cannot be read by the routed model. That is the single most common way people delegate —
 a GPT parent spawning a Grok, Claude or GLM child. An unreadable encrypted task fails at that boundary. The experimental opt-in below changes how new task messages are produced; it does not decrypt existing ones.
 
+Explicit exceptions are `keepNativeChatGptOnV1`, which keeps native ChatGPT entries on v1 while routed entries use v2; an authorized destination that can process the encrypted task with `allowEncryptedV2AgentTasks: true`; or experimental `agentTaskRecovery`, described below.
+
 ## Optional V2 with plaintext task messages
 
 **V2 · plaintext tasks** (`v2-plaintext`) selects V2 for new chats while leaving the global V2 override off. It preserves V2 task names, hierarchy, follow-up messages, cancellation and concurrency, and reuses the experimental plaintext compiler for eligible canonical ChatGPT Responses requests. Existing chats retain their recorded selection. This is an additional explicit option; installing an update does not select it for you.
@@ -53,14 +55,16 @@ routed child receives something it can act on.
 On v2 the parent emits the task as `encrypted_content`, minted by the ChatGPT backend. The key
 stays in that backend. OpenCodex never had it, so there is nothing for a proxy to decrypt and
 nothing to rewrite — the value really is ciphertext, not plaintext behind a flag. That is why
-this is structural rather than a misconfiguration, and why no proxy-side setting can fix it.
+this is structural rather than a misconfiguration: no proxy-side setting enables local decryption.
+
+No proxy-side setting enables local decryption. Experimental `agentTaskRecovery` can instead ask the ChatGPT backend to recover eligible tasks; it does not decrypt their ciphertext locally. Its authorization, eligibility and failure limits described above still apply.
 
 Three topologies are unaffected, which is worth stating because it explains the shape of the
 failure rather than the failure being mysterious:
 
 | Topology | v1 | v2 |
 | --- | --- | --- |
-| ChatGPT parent to routed child | works | **fails** |
+| ChatGPT parent to routed child | works | **fails by default**; exceptions: `keepNativeChatGptOnV1` keeps the native parent on v1, an authorized destination uses `allowEncryptedV2AgentTasks: true`, or experimental `agentTaskRecovery` recovers the task |
 | Routed parent to routed child | works | works |
 | ChatGPT parent to ChatGPT child | works | works — the backend can decrypt what it minted |
 
@@ -83,13 +87,14 @@ OpenCodex recorded the consequence as [#92](https://github.com/lidge-jun/opencod
 closed as not planned: nothing in this repository can fix it, so the issue is a pointer to the
 upstream work rather than a task waiting on a maintainer here.
 
-## What the three modes do now
+## What the modes do now
 
 | Mode | Surface | When to choose it |
 | --- | --- | --- |
 | **v1** (default) | Every model advertises the classic namespaced spawn tools. A spawn can name another model directly. | Anyone who delegates across providers. This is the shipped default. |
 | **base** | Upstream model pins: Sol and Terra use v2, Luna uses v1, unpinned models follow Codex's own flag. | You want Codex's intended per-model surface and you only delegate within one provider. |
 | **v2** | Every model advertises the flat concurrent tools. | You want the newer concurrent session model and your parent and child are on the same side of the boundary. |
+| **v2-plaintext** | V2 for new sessions, with the global override off and plaintext compilation for eligible requests. | You accept the retention of plaintext task messages and want the experimental path. |
 
 base is listed second rather than first because its pins put Sol and Terra — the two models most
 people delegate *from* — on v2. base is not a middle setting for this problem; for a

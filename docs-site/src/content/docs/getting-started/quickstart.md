@@ -9,8 +9,9 @@ use. Steps 1 and 2 are the same for every tool; step 3 has one short branch per 
 
 ## Standalone binary (no npm)
 
-You can also use a release archive containing the `ocx` binary and Bun runtime without npm.
-Extract it with its `gui/dist` directory beside the binary, then run `./ocx start`.
+You can also use a release archive containing the `ocx` binary and Bun runtime without npm. Extract it with `gui/dist` beside the binary. Run the following setup steps using that executable.
+
+For the remaining commands, add the extracted binary directory to your terminal’s PATH, or replace `ocx` with the executable’s full path. Keep `gui/dist` beside it.
 
 ## 1. Run the setup wizard
 
@@ -81,10 +82,19 @@ adapter metadata.
 
 ## 2. Start the proxy
 
+Run one of these alternatives; each keeps the proxy in the foreground:
+
 ```bash
 ocx start            # defaults to port 10100
+```
+
+Alternatively, choose a different port:
+
+```bash
 ocx start --port 8080
 ```
+
+Keep that proxy terminal open. Run the following status and dashboard commands in a second terminal with the same `OPENCODEX_HOME`.
 
 On start, opencodex:
 
@@ -93,10 +103,11 @@ On start, opencodex:
   Codex's model catalog**,
 - listens on `http://localhost:<port>/v1`.
 
-If the requested port is busy, `ocx start` stops and tells you what holds it: run `ocx stop` first
-when the holder is an opencodex, or start on a free port with `ocx start --port <port>`. It does not
-move to another port by itself — that is what used to leave two proxies running with Codex pointed
-at the newer one.
+A live opencodex instance using the same `OPENCODEX_HOME` prevents a second start, even on a free port. Stop that instance first with `ocx stop`, or use a separate `OPENCODEX_HOME` for an independent instance. If an unrelated process holds the requested port, `ocx start` identifies it; choose a free port with `ocx start --port <port>`. It never changes ports automatically, which avoids leaving two proxies running with Codex pointed at the newer one.
+
+
+A separate `OPENCODEX_HOME` permits a sibling proxy, but does not independently route shared Codex, Grok or Claude configuration. The sibling serves direct requests on its own port while shared clients keep their existing proxy. A connected Hub client keeps its route on stop; stopping a sibling does not restore shared configuration. See [runtime ownership](/reference/cli/lifecycle/#runtime-ownership).
+
 
 Check it:
 
@@ -172,16 +183,12 @@ ocx integration client enable --client <id>
 
 Each tool's config file and when the change takes effect are listed in
 [Integrations](/guides/integrations/). Any other tool that accepts a custom endpoint can use the
-OpenAI-compatible base URL `http://localhost:10100/v1` or the Anthropic base URL
-`http://localhost:10100`.
+OpenAI-compatible base URL `http://localhost:<port>/v1` or the Anthropic base URL
+`http://localhost:<port>`.
 
 ## Choose sub-agent models (optional)
 
-A fresh config features five native models in Codex's sub-agent picker: `gpt-5.5`,
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-6-astra`. Open `ocx gui` to replace or
-reorder up to five native or routed models. The dashboard can also set one preferred sub-agent model
-and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and
-understand when guidance, native defaults, and fallback apply.
+A fresh config includes `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6-luna` in Codex's sub-agent picker. Open `ocx gui` to replace or reorder up to five native or routed models. The dashboard can also set one preferred sub-agent model and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and understand when guidance, native defaults, and fallback apply.
 
 ## Logging in instead of pasting a key
 
@@ -198,7 +205,7 @@ credentials straight through (see [Providers](/guides/providers/)).
 ## Stopping & restoring
 
 ```bash
-ocx stop          # stop the proxy and restore native Codex
+ocx stop      # stop this instance; restoration depends on ownership (see below)
 ocx restore       # restore native Codex without stopping (alias: ocx eject)
 ocx restore back  # route Codex through the still-running proxy again
 ```

@@ -165,9 +165,10 @@ developer item exists in that prefix. When guidance changes, leading tool protoc
 the replacement is inserted before current conversational input.
 
 These are instructions to the main agent, not a proxy-side spawn router. On v2, a full-history fork
-inherits the parent model and rejects model or effort overrides. Guidance therefore tells Codex to
-use `fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
-`reasoning_effort`, and to make the task message self-contained.
+inherits the parent model and rejects model or effort overrides. The generated guidance names the
+preferred model and roster but does not prescribe `fork_turns`; when you want that combination
+yourself, the spawn must set `fork_turns: "none"` (or a positive partial turn count such as `"3"`)
+alongside `model` or `reasoning_effort`, with a self-contained task message.
 
 Custom `injectionPrompt` text can use all four placeholders:
 

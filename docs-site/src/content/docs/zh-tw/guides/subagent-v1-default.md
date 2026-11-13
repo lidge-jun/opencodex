@@ -44,6 +44,8 @@ ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
 
 在未變更的加密 v2 路徑上，父代理送出的任務是由 ChatGPT 後端產生的 `encrypted_content`。金鑰留在該後端；OpenCodex 從未持有，所以代理無從解密或重寫。這個值是真正的密文，而非旗標掩蓋下的明文。因此既有密文的不可讀性是結構性限制；明文選項改變的是新任務的產生方式。
 
+代理設定無法啟用本機解密。實驗性 `agentTaskRecovery` 可以要求 ChatGPT 後端復原符合條件的任務，但不會在本機解密其密文。上述授權、適用條件和失敗處理限制仍然有效。
+
 有三種拓撲不受影響；了解它們有助於釐清失敗範圍：
 
 | 拓撲 | v1 | v2 |

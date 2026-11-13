@@ -76,6 +76,8 @@ proxy'nin çözebileceği veya yeniden yazabileceği bir şey yoktur: değer, bi
 bayrağın arkasındaki düz metin değil gerçekten şifreli metindir. Bu yüzden
 mevcut şifreli metnin sorunu yapılandırma hatası değil yapısaldır; düz metin seçeneği onu çözmez, yeni mesajları farklı üretir.
 
+Hiçbir proxy ayarı yerel şifre çözmeyi etkinleştirmez. Deneysel `agentTaskRecovery`, uygun görevleri kurtarmak için ChatGPT arka ucuna başvurabilir; şifreli metni yerel olarak çözmez. Yukarıdaki yetkilendirme, uygunluk ve hata sınırları geçerlidir.
+
 Aşağıdaki karşılaştırma şifreli v2 yolu içindir; düz metin seçeneği uygun yeni görevleri farklı üretir:
 
 | Topoloji | v1 | v2 |
