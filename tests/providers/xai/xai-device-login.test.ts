@@ -439,6 +439,31 @@ describe("xAI device login", () => {
     } finally { f.clock.mockRestore(); }
   });
 
+  test("400 slow_down honors Retry-After for one poll and retains its interval", async () => {
+    const f = clockFixture();
+    try {
+      mockXai(boundedDevice({ expires_in: 900, interval: 1 }), [
+        Response.json({ error: "slow_down" }, { status: 400, headers: { "retry-after": "60" } }),
+        pending(), granted(),
+      ]);
+      await loginXaiDevice({}, { sleep: f.sleep });
+      expect(f.waits).toEqual([1_000, 60_000, 6_000]);
+    } finally { f.clock.mockRestore(); }
+  });
+
+  test("400 slow_down throttle remains cancellable", async () => {
+    const cancel = new AbortController();
+    const calls = mockXai(boundedDevice({ expires_in: 900, interval: 1 }), [
+      Response.json({ error: "slow_down" }, { status: 400, headers: { "retry-after": "60" } }), granted(),
+    ]);
+    const waits: number[] = [];
+    await expect(loginXaiDevice({ signal: cancel.signal }, { sleep: async ms => {
+      waits.push(ms); if (waits.length === 2) { cancel.abort(); throw cancel.signal.reason; }
+    } })).rejects.toBeDefined();
+    expect(waits).toEqual([1_000, 60_000]);
+    expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
+  });
+
   test("slow_down with malformed throttle uses its persistent interval", async () => {
     const f = clockFixture();
     try {
@@ -545,6 +570,32 @@ describe("xAI device login", () => {
     } finally {
       oversized.clock.mockRestore();
     }
+  });
+
+  test("numeric Retry-After overflow waits for expiry across retriable poll responses", async () => {
+    for (const [status, body] of [[400, { error: "slow_down" }], [429, { error: "slow_down" }], [429, {}], [503, {}]] as const) {
+      const f = clockFixture();
+      try {
+        const calls = mockXai(boundedDevice({ expires_in: 10, interval: 1 }), [
+          Response.json(body, { status, headers: { "retry-after": "9".repeat(310) } }), granted(),
+        ]);
+        await expect(loginXaiDevice({}, { sleep: f.sleep })).rejects.toMatchObject({ oauthError: "expired_token" });
+        expect(f.waits).toEqual([1_000, 9_000]);
+        expect(f.waits.every(ms => Number.isFinite(ms) && ms <= 2 ** 31 - 1)).toBe(true);
+        expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
+      } finally { f.clock.mockRestore(); }
+    }
+  });
+
+  test("cancellation during an overflow throttle prevents another poll", async () => {
+    const cancel = new AbortController();
+    const calls = mockXai(boundedDevice({ expires_in: 10, interval: 1 }), [throttled("9".repeat(310)), granted()]);
+    const waits: number[] = [];
+    await expect(loginXaiDevice({ signal: cancel.signal }, { sleep: async ms => {
+      waits.push(ms); if (waits.length === 2) { cancel.abort(); throw cancel.signal.reason; }
+    } })).rejects.toBeDefined();
+    expect(waits).toEqual([1_000, 10_000]);
+    expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
   });
 
   test("a Retry-After past the grant deadline ends the login instead of polling after it", async () => {

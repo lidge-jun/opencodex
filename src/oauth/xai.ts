@@ -239,7 +239,7 @@ function parseRetryAfterMs(retryAfter: string | null): number | undefined {
   const text = retryAfter?.trim();
   if (!text) return undefined;
   if (/^\d+(?:\.\d+)?$/.test(text)) {
-    const ms = Math.ceil(Number(text) * 1000);
+    const ms = Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(Number(text) * 1000));
     return ms > 0 ? ms : undefined;
   }
   const now = Date.now();
@@ -285,7 +285,7 @@ async function sleepAbortable(
     signal.removeEventListener("abort", onAbort);
   }
 }
-async function readTokenError(response:Response):Promise<XaiTokenRequestError>{let oauthError:string|undefined,detail="";try{const body=await response.json() as {error?:unknown;error_description?:unknown};if(typeof body.error==="string")oauthError=body.error;if(typeof body.error_description==="string")detail=body.error_description;}catch{/* non-JSON error body: fall through to the generic message */}const suffix=detail?`: ${detail}`:oauthError?`: ${oauthError}`:"";const retryAfterMs=response.status===429||response.status>=500?parseRetryAfterMs(response.headers.get("retry-after")):undefined;return new XaiTokenRequestError(response.status,oauthError,`xAI token request failed: ${response.status}${suffix}`,undefined,retryAfterMs!==undefined&&Number.isFinite(retryAfterMs)?retryAfterMs:undefined);}
+async function readTokenError(response:Response):Promise<XaiTokenRequestError>{let oauthError:string|undefined,detail="";try{const body=await response.json() as {error?:unknown;error_description?:unknown};if(typeof body.error==="string")oauthError=body.error;if(typeof body.error_description==="string")detail=body.error_description;}catch{/* non-JSON error body: fall through to the generic message */}const suffix=detail?`: ${detail}`:oauthError?`: ${oauthError}`:"";const retryAfterMs=response.status===429||response.status>=500||(response.status===400&&oauthError==="slow_down")?parseRetryAfterMs(response.headers.get("retry-after")):undefined;return new XaiTokenRequestError(response.status,oauthError,`xAI token request failed: ${response.status}${suffix}`,undefined,retryAfterMs!==undefined&&Number.isFinite(retryAfterMs)?retryAfterMs:undefined);}
 export async function postXaiToken(
   tokenEndpoint: string,
   body: Record<string, string>,
