@@ -20,8 +20,9 @@ import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
 import type { Server } from "bun";
 
 // Lane T5f: the link WebSocket release gate of design T4 11.1 item 13, with the pinned Codex binary as the client (U13).
-// The pinned binary is codex-rs built at openai/codex 88c5856 (design section 0). These tests run only when
-// OCX_LINK_GATE_CODEX names an executable; otherwise each is skipped with that reason. A run is release evidence only
+// The pinned binary is codex-rs built at openai/codex 88c5856 (design section 0). The Codex scenarios run only when
+// OCX_LINK_GATE_CODEX names an executable file; otherwise every Codex scenario is skipped with that reason, and the pin
+// test always runs. A run is release evidence only
 // when the binary's sha256 equals the digest recorded for that revision in tests/fixtures/link-gate-codex.json, a file
 // that changes only through review; any other executable runs as a smoke check, and each Codex scenario's title says which. Codex reaches the Home through a test-only
 // stand-in for the Child's relay (tests/fixtures/link-child-relay-standin.ts), except in the 503 sequence, which needs the
