@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import {
   LinkApiError, parseRemoteLinkConfirmation, parseRemoteLinkStatus, readRuntimeHealth, requestLinkJson, waitForChildRuntime, type ChildRestartWaitDeps, type LinkCandidateView, type LinkConfirmHostView,
-  type LinkErrorCode, type LinkJoinDenied, type LinkProbeView, type LinkRowWire, type LinkWireState, type RemoteLinkStatusWire,
+  type LinkErrorCode, type LinkJoinDenied, type LinkProbeView, type LinkResidualStep, type LinkRowWire, type LinkWireState, type RemoteLinkStatusWire,
 } from "../remote-link-api";
 import { IconPlus, IconRefresh, IconTrash } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
@@ -149,7 +149,17 @@ function paritySynced(homeDigest: string | null, childDigest: string | null): bo
   return homeDigest !== null && childDigest !== null ? homeDigest === childDigest : null;
 }
 
-function linkActionError(error: unknown): LinkActionErrorView { return { key: errorKey(error), hint: error instanceof LinkApiError ? error.hint : null }; }
+const RESIDUAL_TKEY = {
+  purge: "remoteLink.residual.purge",
+  ephemeral: "remoteLink.residual.ephemeral",
+  full: "remoteLink.residual.full",
+  unknown: "remoteLink.residual.unknown",
+} as const satisfies Record<LinkResidualStep, TKey>;
+
+function linkActionError(error: unknown): LinkActionErrorView {
+  if (!(error instanceof LinkApiError)) return { key: errorKey(error), hint: null };
+  return { key: errorKey(error), hint: error.hint, childStep: error.residual ? RESIDUAL_TKEY[error.residual] : null };
+}
 
 export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
   const t = useT();

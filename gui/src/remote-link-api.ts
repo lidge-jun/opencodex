@@ -111,18 +111,33 @@ export interface RemoteLinkStatusWire {
 const LINK_STATES: readonly LinkWireState[] = ["connecting", "connected", "reconnecting", "failed", "idle"];
 const LINK_ROLES = ["standalone", "home", "child"] as const;
 
+/**
+ * The Child may still be connected after a refused apply (`residual: true`). The server's recovery
+ * line is matched against the fixed lines it writes (src/server/management/link-enrollment.ts) and
+ * kept only as one of these variants, so its text is never shown as such.
+ */
+export type LinkResidualStep = "purge" | "ephemeral" | "full" | "unknown";
+const RESIDUAL_RECOVERY: Readonly<Record<string, LinkResidualStep>> = {
+  "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying.": "purge",
+  "Run ocx-child detach (or ocx disconnect) on the Child before retrying.": "ephemeral",
+  "Run ocx disconnect and ocx restart on the Child before retrying.": "full",
+};
+
 export class LinkApiError extends Error {
   readonly code: string;
   readonly status: number;
   /** The server's bounded hint line (ssh stderr, the ssh runner's own failure, or the parsed remote version), shown under the translated message. */
   readonly hint: string | null;
+  /** Set when the server says the Child may still be connected; null otherwise. */
+  readonly residual: LinkResidualStep | null;
 
-  constructor(code: string, status: number, hint: string | null = null) {
+  constructor(code: string, status: number, hint: string | null = null, residual: LinkResidualStep | null = null) {
     super(code);
     this.name = "LinkApiError";
     this.code = code;
     this.status = status;
     this.hint = hint;
+    this.residual = residual;
   }
 }
 
@@ -210,7 +225,10 @@ export async function readLinkJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const error = isRecord(body) && isRecord(body.error) ? body.error : null;
     const code = error && typeof error.code === "string" ? error.code : "unknown";
-    throw new LinkApiError(code, response.status, boundLinkHint(error?.hint));
+    const residual = isRecord(body) && body.residual === true
+      ? (typeof body.recovery === "string" && Object.hasOwn(RESIDUAL_RECOVERY, body.recovery) ? RESIDUAL_RECOVERY[body.recovery]! : "unknown")
+      : null;
+    throw new LinkApiError(code, response.status, boundLinkHint(error?.hint), residual);
   }
   if (body === null || body === undefined) throw new LinkApiError("invalid_body", response.status);
   return body as T;
