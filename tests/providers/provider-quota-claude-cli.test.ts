@@ -258,6 +258,23 @@ test("publication uses the identity recorded after collection", async () => {
   expect(claudeRow(await fetchProviderQuotaReports(config(), true))?.quota.weeklyPercent).toBe(7);
 });
 
+test("concurrent readers both receive the reconciled Claude CLI observation", async () => {
+  seedObservation(Date.now() - 60_000);
+  let release!: () => void;
+  let started!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  setProviderQuotaBeforePublishForTests(async () => { started(); await waiting; });
+  const first = fetchProviderQuotaReports(config());
+  await entered;
+  const second = fetchProviderQuotaReports(config());
+  await new Promise(resolve => setTimeout(resolve, 10));
+  release();
+  const [one, two] = await Promise.all([first, second]);
+  expect(claudeRow(one)?.quota.weeklyPercent).toBe(51);
+  expect(claudeRow(two)?.quota.weeklyPercent).toBe(51);
+});
+
 test("a cached empty report becomes the newly recorded account without a forced refresh", async () => {
   signedIn = null;
   expect(claudeRow(await fetchProviderQuotaReports(config(), true))).toBeUndefined();

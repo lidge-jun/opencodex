@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { bootstrapApiSession, configureApiTargets, fetchAudioUpload, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
+import { bootstrapApiSession, configureApiTargets, fetchAudioUpload, fetchDesktopSession, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
 import { targetsFromMachineStatus, type MachineStatusV1 } from "../src/api-targets";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
@@ -52,6 +52,16 @@ async function installMockAuthFetch(handler: typeof fetch): Promise<void> {
   // installApiAuthFetch replaces window.fetch — keep globalThis in sync for bare `fetch()`.
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: window.fetch });
 }
+
+test("Desktop POST receives a single 401 without bootstrap, admin prompt or replay", async () => {
+  const requests: string[] = []; let prompts = 0;
+  resetApiAuthFetchForTests(async () => { prompts++; return "fixture-admin"; });
+  await installMockAuthFetch((async input => { requests.push(String(input)); return Response.json({ error: "unauthorized" }, { status: 401 }); }) as typeof fetch);
+  const response = await fetchDesktopSession("/api/codex/desktop-compatibility/runtime", { method: "POST", body: "{}" });
+  expect(response.status).toBe(401); expect(requests).toEqual(["/api/codex/desktop-compatibility/runtime"]); expect(prompts).toBe(0);
+  await expect(fetchDesktopSession("http://other.example.test/api/codex/desktop-compatibility/runtime", { method: "POST" })).rejects.toThrow("desktop_target_changed");
+  expect(requests).toHaveLength(1);
+});
 
 /**
  * Declare a bind that requires a typed credential, as `serveGuiFile` does from

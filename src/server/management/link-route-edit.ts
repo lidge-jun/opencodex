@@ -37,8 +37,13 @@ function sameList(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function routesBody(record: LinkRecord): { linkId: string; pin: string; routes: string[] } {
-  return { linkId: record.id, pin: record.alias, routes: effectiveLinkRoutes(record) };
+function routesBody(record: LinkRecord): { linkId: string; pin: string; routes: string[]; exclusive?: true } {
+  return { linkId: record.id, pin: record.alias, routes: effectiveLinkRoutes(record), ...(record.exclusive ? { exclusive: true as const } : {}) };
+}
+
+/** An exclusive link has one route, its alias, fixed at enrollment (structure/remote-link.md, "Explicit route"). */
+function exclusiveRefusal(): Response {
+  return fail("link_exclusive", "This link is exclusive: its one route is fixed, so routes cannot be added, removed or reordered.", 409);
 }
 
 function document(record: LinkRecord): Response {
@@ -66,6 +71,7 @@ export async function handleLinkRouteEdit(ctx: ManagementContext, state: LinkRou
   if (!record) return fail("link_not_found", "The link was not found.", 404);
   if (record.direction !== "hub-initiated") return fail("link_not_home_initiated", "Only a Home-initiated link has routes.", 409);
   if (ctx.req.method === "GET") return document(record);
+  if (record.exclusive) return exclusiveRefusal();
   const edit = parseEdit(await readManagementJsonBodyOr(ctx.req, null));
   if (!edit) return fail("invalid_body", "The body must be {op:\"add\",route,position?}, {op:\"remove\",route} or {op:\"order\",routes}.", 400);
   const current = effectiveLinkRoutes(record);
@@ -115,9 +121,10 @@ async function applyEdit(ctx: ManagementContext, state: LinkRouteState, record: 
     const refused = await proveRoute(ctx, record, added, pinned);
     if (refused) return refused;
   }
-  const outcome = withConfigMutationLockSync((): "link_changed" | "pin_changed" | LinkRecord => {
+  const outcome = withConfigMutationLockSync((): "link_changed" | "pin_changed" | "link_exclusive" | LinkRecord => {
     const fresh = readStoreFor(ctx);
     const target = fresh.links.find(link => link.id === record.id);
+    if (target?.exclusive) return "link_exclusive";
     if (!target || !sameIdentity(target, record) || !sameList(effectiveLinkRoutes(target), current)) return "link_changed";
     if (pinned !== null) {
       const trust = checkRouteTrust(readTrustFile(hostsPath), record.alias, record.hostKeyFingerprint);
@@ -128,6 +135,7 @@ async function applyEdit(ctx: ManagementContext, state: LinkRouteState, record: 
     writeStoreFor(ctx, fresh);
     return target;
   });
+  if (outcome === "link_exclusive") return exclusiveRefusal();
   if (outcome === "link_changed") return fail("link_changed", "The link changed while its routes were being edited; read it again.", 409);
   if (outcome === "pin_changed") return fail("pin_changed", "The link's pinned key changed while the route was being proved.", 409);
   try { await state.supervisor.reload(); } catch {
@@ -151,7 +159,7 @@ async function proveRoute(ctx: ManagementContext, record: LinkRecord, route: str
     writeFileSync(snapshot, pinned + "\n", { mode: 0o600 });
     let cause: string;
     try {
-      const result = await runnerFor(ctx).run(buildRouteProbeArgv({ alias: record.alias, destination: route, knownHostsFile: snapshot }), { timeoutMs: ROUTE_PROBE_TIMEOUT_MS });
+      const result = await runnerFor(ctx).run(buildRouteProbeArgv({ alias: record.alias, destination: route, knownHostsFile: snapshot, route: record.explicitRoute ?? null }), { timeoutMs: ROUTE_PROBE_TIMEOUT_MS });
       if (result.code === 0 && result.stdout.trim() === "ocx-link-probe") return null;
       cause = result.code === 0 ? "transient" : routeOutcomeOfStderr(result.stderr);
     } catch {

@@ -23,6 +23,12 @@ every account quota this Home already holds. GOAT owns the decoder
 `readQuotaPool` (`src/quota-pool/assemble.ts`) runs the whole assembly inside `runPassiveRead`, for
 every caller, and reads only caches other paths filled:
 
+OAuth roster and credential ownership checks may inspect the local auth store to detect external
+replacement and selection changes, including A→B→A revisions. The observe-only read does not
+repair or harden the store, publish the decision roster, refresh tokens, or change quota caches;
+an unreadable store leaves ownership unknown. This inspection is confined to passive management
+reads, not added to the response path.
+
 - Codex pool accounts: the passive `listCodexAuthAccountsSnapshot` (stored `StoredAccountQuota` per
   account and the cached main-account reading), with no WHAM probe, token refresh or native-main
   claim. Each account's window `source` is `header` when its newest quota-history sample came from
@@ -45,8 +51,25 @@ every caller, and reads only caches other paths filled:
   `pooled` windows only where account rows do not serve the configured provider: a provider with
   no account rows (an API-key provider's credits, for example) or a per-account provider configured
   with an API key (see [Pooled windows](#pooled-windows)). An in-band observed report is `header`,
-  any other report is `measured`. Credential-bound reports are withheld when their current owner
-  cannot be verified passively, including keychain references.
+  any other report is `measured`. Held key reports require the current enabled provider, key auth,
+  destination and credential to match the owner of the report. Literal and environment keys are
+  checked without publishing routing observations; keychain-backed reports are omitted because a
+  passive read cannot establish currentness without consulting the OS keychain. The same rule
+  applies to passive provider quota reads. Pool assembly selects enabled providers and validates
+  held reports after the Codex snapshot yields, against the configuration used for projection.
+  Meta Muse account and provider rows also require their captured selection and credential owner to
+  remain current; see the [provider contract](providers-and-adapters.md).
+
+Display-only `ProviderQuota` readings are excluded from both account and pooled decision windows.
+The rows remain present; without other evidence their quota is unknown. Account pause and reauth
+states remain independent. Dashboard reports and reset observations retain the original readings.
+This applies regardless of provider or window kind.
+Credential-bound key reports contribute only the producer's inference projection, and a report
+without that projection contributes no windows. The binding must still match the current passive
+credential and destination, authentication headers and single-key configuration. OAuth account rows
+and untagged account reports retain their existing mapping. Anthropic normalization preserves
+display-only provenance; account decision reads exclude such quotas, and the account cache does not
+persist them without provenance.
 
 `tests/server/quota-pool-relay.test.ts` reads the route on the Home, over the link relay and over
 the hub relay against a pool account with an expired token and an empty provider-report cache. It

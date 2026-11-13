@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
+import { isPassiveKeyTransparent, markPassiveKeyTransparent, markPassiveKeyDeferred, PASSIVE_KEY_SEND } from "../lib/passive-key-fetch-proof";
 import { configuredOutboundFetch } from "../lib/proxy-env";
 import { waitOutsideProviderHeaderDeadline } from "../lib/provider-admission-wait";
 import { markSameTargetRetryHold, sleepWithAbort } from "../lib/upstream-retry";
@@ -198,19 +199,27 @@ export function resolveMistralTransport(
   if (!isCanonicalMistralChat(provider) || (provider.fetch && wrapped.has(provider.fetch))) return provider;
   const baseFetch = provider.fetch
     ?? markEgressTransparentExecutor(((input, init) => configuredOutboundFetch(input, init)) as typeof globalThis.fetch);
+  if (!provider.fetch) markPassiveKeyTransparent(baseFetch);
   const attemptFetch = (async (input, init) => {
+    const send = () => {
+      const observe = (init as (RequestInit & { [PASSIVE_KEY_SEND]?: (input: RequestInfo | URL, init: RequestInit) => void }) | undefined)?.[PASSIVE_KEY_SEND];
+      if (!observe) return baseFetch(input, init);
+      const { [PASSIVE_KEY_SEND]: _hook, ...physicalInit } = init! as RequestInit & { [PASSIVE_KEY_SEND]?: typeof observe };
+      observe?.(input, physicalInit);
+      return baseFetch(input, physicalInit);
+    };
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.origin !== "https://api.mistral.ai" || url.pathname !== "/v1/chat/completions"
       || url.search || url.hash || init?.method?.toUpperCase() !== "POST" || typeof init.body !== "string") {
-      return baseFetch(input, init);
+      return send();
     }
     // The Chat adapter serializes model first. Read only that bounded prefix rather
     // than parsing/copying a potentially million-token conversation a second time.
     const encodedModel = /^\s*\{\s*"model"\s*:\s*("(?:[^"\\]|\\.)*")\s*[,}]/.exec(init.body.slice(0, 4096))?.[1];
     let model: unknown;
-    try { model = encodedModel === undefined ? undefined : JSON.parse(encodedModel); } catch { return baseFetch(input, init); }
+    try { model = encodedModel === undefined ? undefined : JSON.parse(encodedModel); } catch { return send(); }
     const authorization = new Headers(init.headers).get("authorization");
-    if (!authorization || typeof model !== "string" || !model || model.length > 256) return baseFetch(input, init);
+    if (!authorization || typeof model !== "string" || !model || model.length > 256) return send();
     // Bind to the actual send credential, including after pool rotation; keep no raw key.
     const identity = createHash("sha256").update(JSON.stringify([authorization, model])).digest("hex");
     const pacing = provider.requestPacing?.enabled !== false && provider.retryOn429?.respectRetryAfter !== false;
@@ -219,7 +228,7 @@ export function resolveMistralTransport(
     let response: Response;
     try {
       init.signal?.throwIfAborted();
-      response = await baseFetch(input, init);
+      response = await send();
       if (pacing) budgetPacer.observe(identity, response.headers, response.status);
     } catch (error) { release?.(); throw error; }
     release?.(response.ok);
@@ -235,6 +244,10 @@ export function resolveMistralTransport(
     return response;
   }) as typeof globalThis.fetch;
   if (isEgressTransparentExecutor(baseFetch)) markEgressTransparentExecutor(attemptFetch);
+  if (isPassiveKeyTransparent(baseFetch)) {
+    markPassiveKeyTransparent(attemptFetch);
+    markPassiveKeyDeferred(attemptFetch);
+  }
   wrapped.add(attemptFetch);
   return { ...provider, fetch: attemptFetch };
 }
