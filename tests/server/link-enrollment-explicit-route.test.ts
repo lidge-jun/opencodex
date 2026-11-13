@@ -75,7 +75,7 @@ function harness() {
         : command.includes("ocx-curl-preflight") ? "curl"
         : command.includes("'connect' '--link' '--key-stdin'") ? "connect"
         : command === remoteOcx(["restart"]) ? "restart"
-        : command === remoteOcx(["disconnect"]) ? "disconnect"
+        : command.includes("'disconnect' '--expect-link'") ? "disconnect"
         : command.includes("'ocx-child-http' '10100' 'healthz'") ? (restarted ? "health" : "before")
         : command.includes("'ocx-child-http' '10100' 'v1/catalog'") ? "catalog"
         : (() => { throw new Error("Unexpected SSH command: " + command.slice(0, 80)); })();

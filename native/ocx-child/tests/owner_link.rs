@@ -285,6 +285,37 @@ fn detach_expect_link_answers_residual_when_state_is_missing_but_the_owner_recor
 }
 
 #[test]
+fn detach_expect_link_finishes_a_detach_of_that_link_interrupted_after_the_state_went() {
+    // A detach marks the owner record detaching, then removes state.json before it releases the
+    // record; interrupted there, a plain detach finishes it, and so does the bound one.
+    let homes = Homes::new("owner-link-detach-resume");
+    let _home = homes.attach(LINK_A);
+    let mut owner = homes.owner();
+    owner["phase"] = serde_json::Value::String("detaching".to_owned());
+    homes.write_owner(&owner);
+    fs::remove_file(homes.state_path()).unwrap();
+    let (code, report, stderr) = homes.detach_expect(LINK_A);
+    assert_eq!(code, 0, "report={report} stderr={stderr}");
+    assert_eq!(report["linkId"], LINK_A);
+    assert_eq!(
+        fs::read(homes.codex.join("config.toml")).unwrap(),
+        ORIGINAL_CONFIG
+    );
+    assert!(!homes.owner_path().exists());
+}
+
+#[test]
+fn detach_expect_link_does_not_finish_another_links_interrupted_detach() {
+    let homes = Homes::new("owner-link-detach-other");
+    let _home = homes.attach(LINK_A);
+    let mut owner = homes.owner();
+    owner["phase"] = serde_json::Value::String("detaching".to_owned());
+    homes.write_owner(&owner);
+    fs::remove_file(homes.state_path()).unwrap();
+    assert_refused_untouched(&homes, LINK_B, 5, "conflict");
+}
+
+#[test]
 fn detach_expect_link_answers_conflict_for_an_unreadable_owner_record() {
     let homes = Homes::new("owner-link-corrupt");
     let _home = homes.attach(LINK_A);

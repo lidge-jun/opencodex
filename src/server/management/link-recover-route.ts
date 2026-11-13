@@ -2,6 +2,7 @@ import { recoverRemoteChild } from "../../link/link-recover";
 import { operationRecoveryResolver, type LinkRecoveryTarget } from "../../link/operation-recovery-slot";
 import { readTombstones, removeTombstone, tombstonesPath } from "../../link/tombstones";
 import { readLinkRetirement } from "../../link/retirement";
+import { effectiveLinkRoutes } from "../../link/store";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
@@ -82,10 +83,12 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
     }
     // A Home-initiated link that still names this alias may own the Child now: a re-enrollment, or one whose
     // revoke ran its disconnect but did not commit (journalled or not). Recover would then settle the old
-    // link and purge the binary under it, so it waits until no such link exists. Read under the lock.
+    // link and purge the binary under it, so it waits until no such link exists. Read under the lock. Every route a
+    // link may reach the machine by counts, not only its primary alias (effectiveLinkRoutes).
     const wanted = target.alias.toLowerCase();
-    if (readStoreFor(ctx).links.some(link => link.direction === "hub-initiated" && link.alias.toLowerCase() === wanted)) {
-      return fail("alias_linked", "A link to this machine's alias still exists, so its Child may belong to that link; settle any open operation on that link (ocx link operations), revoke the link, then recover.", 409);
+    if (readStoreFor(ctx).links.some(link => link.direction === "hub-initiated"
+      && [link.alias, ...effectiveLinkRoutes(link)].some(route => route.toLowerCase() === wanted))) {
+      return fail("alias_linked", "A link to this machine's alias still exists, so its Child may belong to that link. Only if that link is stale too (the machine does not run it), settle any open operation on it (ocx link operations), revoke it, then recover. If the machine runs that link, leave it: this tombstone waits until that link is removed, and recover runs then; or, once the machine is confirmed clean, a person on this Home can forget the tombstone.", 409);
     }
     const outcome = await recoverRemoteChild(runnerFor(ctx), target, knownHostsFile(ctx));
     if (!outcome.ok) return fail(outcome.code, outcome.message, outcome.status, outcome.hint);

@@ -7,7 +7,7 @@ import type { OcxConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 const ID = "lnk_0123456789abcdef";
-const RECOVERY = "Run ocx disconnect on the remote client.";
+const RECOVERY = "Run ocx disconnect on the remote client only if ocx connect status --json there shows this link's id or no connection, right after that check: an enrollment that lands between the two commands would be removed. If it shows another link, a hub or another Home, leave it as it is.";
 const nativeFetch = globalThis.fetch;
 let home: TempHome;
 let output: ReturnType<typeof spyOn>, errors: ReturnType<typeof spyOn>, network: ReturnType<typeof spyOn>;
@@ -154,6 +154,6 @@ describe("explicit forced link revoke", () => {
     const fEph = fixture();
     fEph.deps.readStore = () => ({ version: 1, listenerPort: 18181, links: [{ id: ID, alias: "barebox", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 24500, apiKeyId: "k1", createdAt: "2026-11-07T00:00:00Z", childKind: "ephemeral" }] });
     expect(await invoke(["--force", "--yes", "--json"], fEph.deps)).toBe(0);
-    expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: `Run ocx link recover --link-id ${ID} once the machine answers, or ~/.cache/opencodex/bin/ocx-child detach on it.` });
+    expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: `Run ocx link recover --link-id ${ID} once the machine answers: it cleans the machine only while it still belongs to this link.` });
   });
 });

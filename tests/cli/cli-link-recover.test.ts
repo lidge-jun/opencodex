@@ -81,6 +81,55 @@ describe("ocx link recover", () => {
       expect(output).not.toHaveBeenCalled();
     },
   );
+
+  // A refusal names its code (and a closed-form hint) so alias_linked is never mistaken for child_residual, whose remedy
+  // (ocx-child detach on the machine) would there detach the other link. The server's message is never printed.
+  const stderr = () => errors.mock.calls.flat().map(String).join("\n");
+
+  test("alias_linked says another Home-initiated link holds the alias and what to do, in text and --json", async () => {
+    for (const json of [false, true]) {
+      errors.mockClear();
+      const f = fixture({ error: { code: "alias_linked", message: "server text" } }, 409);
+      expect(await runLinkCommand(["recover", "--link-id", ID, ...(json ? ["--json"] : [])], f.deps)).toBe(5);
+      expect(stderr()).toContain("alias_linked");
+      expect(stderr()).toContain("another Home-initiated link");
+      expect(stderr()).toContain("ocx link revoke");
+      // The other link may be the live one: revoke it only if it is stale too, else leave it and let the tombstone wait (#8662 review).
+      expect(stderr()).toContain("only if that other link is stale too");
+      expect(stderr()).toContain("If the machine runs that link, leave it");
+      expect(stderr()).toContain("ocx link recover --forget --link-id <id> --yes");
+      expect(stderr()).not.toContain("Do not run ocx-child detach on the machine: settle");
+      expect(stderr()).not.toContain("server text");
+    }
+  });
+
+  // A full install refuses --purge (purge_unsupported), so link_present names --purge only for a lightweight Child.
+  test("link_present says to revoke the link, with --purge only for a lightweight Child", async () => {
+    const f = fixture({ error: { code: "link_present", message: "server text" } }, 409);
+    expect(await runLinkCommand(["recover", "--link-id", ID], f.deps)).toBe(5);
+    expect(stderr()).toContain("revoke it (ocx link revoke, with --purge for a lightweight Child)");
+    expect(stderr()).not.toContain("server text");
+  });
+
+
+  test("a code that names an Object prototype key prints only the code", async () => {
+    const f = fixture({ error: { code: "constructor", message: "server text" } }, 409);
+    await runLinkCommand(["recover", "--link-id", ID], f.deps);
+    expect(stderr()).toContain("constructor");
+    expect(stderr()).not.toContain("native code");
+  });
+
+  test.each([
+    [409, "child_residual", "codex-home-owner", "child_residual (codex-home-owner)"],
+    [502, "remote_recover_failed", "ssh_failed", "remote_recover_failed (ssh_failed)"],
+    [502, "remote_recover_failed", "/home/someone/.cache path", "remote_recover_failed"],
+  ])("HTTP %d %s names the code and only a closed-form hint", async (status, code, hint, shown) => {
+    const f = fixture({ error: { code, hint, message: "server text" } }, status);
+    await runLinkCommand(["recover", "--link-id", ID], f.deps);
+    expect(stderr()).toContain(shown);
+    expect(stderr()).not.toContain("server text");
+    expect(stderr()).not.toContain("/home/someone");
+  });
 });
 
 describe("ocx link recover contract", () => {
