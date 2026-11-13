@@ -15,11 +15,11 @@ import { repoPath } from "../helpers/repo-root";
 // upstream chunks run from 1 byte to 16 MiB around near-4 MiB events, each upstream stream is held after 16 MiB,
 // and the sockets are then cut in a seeded random order. The second run sends the same load through the HTTP link
 // relay. Accepted when both Homes reported their own stall and the WebSocket run's peak-over-idle RSS minus the HTTP
-// run's stays within n reservations (768 MiB at n = 24). The HTTP link relay has no stall signal yet (only the
-// upstream's hold is observed), so today the pair is a measurement and the acceptance cannot pass. What both share
-// (fetch read-ahead and request copies under a stalled reader) is a separate, pre-existing cost of the pipeline and
+// run's stays within n reservations (768 MiB at n = 24). Both Homes report their own stall: every link pump waiting
+// for a drain, or every relayed HTTP response waiting for its reader after handing it a chunk (#8600). What both share
+// (the pipeline's parsed and serialized request under a stalled reader, #8601) is a cost of the pipeline and
 // is not part of this bound.
-// The definition, the measured numbers (R1 to R5) and how they were taken are in structure/remote-link.md.
+// The definition, the measured numbers and how they were taken are in structure/remote-link.md.
 // The peak is the kernel's high-water mark (VmHWM, reset after the idle reading) on Linux 4.0 or later;
 // elsewhere the Home samples RSS on its own event loop, may miss a short peak, reports "sampled", and cannot pass.
 // Any other OCX_LINK_WS_RSS_* setting turns the run into a diagnostic: it prints its numbers and never reports an
@@ -58,11 +58,15 @@ function eventsText(count: number): string {
 }
 
 /**
- * How a run knew its load had stalled. "home-pumps-waiting": the Home reported every link pump waiting for a drain.
- * "upstream-held": only the fake upstream reached its hold point; the HTTP link relay exposes no stall signal of its
- * own (Bun stops pulling its body without saying so), so the Home's own stage at that moment is not established.
+ * How a run knew its load had stalled, always from the Home itself. "home-pumps-waiting": every link pump waits for a
+ * drain. "home-relays-waiting": every relayed HTTP response waits for its reader (Bun stops reading a body whose socket
+ * does not drain). Either announcement marks the first moment every load reader waits at once, which can come before
+ * the load's sustained stall: a paused reader's kernel buffer still takes bytes in flight, so a pump's wait can end
+ * without its reader resuming, and a relay also waits in the gap between two chunks. Bun exposes no sustained
+ * backpressure signal and this test uses no quiet period, so a run compares the two loads at their first all-waiting
+ * moment, and repeated runs vary (structure/remote-link.md).
  */
-type StallSync = "home-pumps-waiting" | "upstream-held";
+type StallSync = "home-pumps-waiting" | "home-relays-waiting";
 interface LoadResult { method: string; idle: number; peak: number; delta: number; sync: StallSync }
 
 /** One stalled load against a Home in its own process; prints its numbers and returns the peak reading. */
@@ -71,18 +75,11 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
     expect(SOCKETS).toBeLessThanOrEqual(LINK_WS_LIMITS.totalSockets);
     const root = mkdtempSync(join(tmpdir(), "ocx-link-ws-rss-"));
     const body = new TextEncoder().encode(eventsText(14));
-    // One promise pair per expected upstream request, created up front: no polling for arrivals.
+    // One promise per expected upstream request, created up front: no polling for arrivals.
     // Request 0 is a complete warm-up turn, so one-time first-request costs land before "idle".
     const signals = Array.from({ length: SOCKETS + 1 }, () => {
-      let stalled!: () => void;
       let gone!: () => void;
-      let heldAt!: () => void;
-      return {
-        reachedStall: new Promise<void>(resolve => { stalled = resolve; }),
-        cancelled: new Promise<void>(resolve => { gone = resolve; }),
-        reachedHold: new Promise<void>(resolve => { heldAt = resolve; }),
-        stalled: () => stalled(), gone: () => gone(), held: () => heldAt(),
-      };
+      return { cancelled: new Promise<void>(resolve => { gone = resolve; }), gone: () => gone() };
     });
     let requests = 0;
     let largestChunk = 0;
@@ -102,7 +99,7 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
           pull(controller) {
             if (offset >= body.byteLength) { controller.close(); signal.gone(); return; }
             // A held stream (not the warm-up) supplies nothing more after the stall point, until it is cancelled.
-            if (options.hold && stream > 0 && offset >= HOLD_BYTES) { signal.held(); return new Promise<void>(() => {}); }
+            if (options.hold && stream > 0 && offset >= HOLD_BYTES) return new Promise<void>(() => {});
             const size = Math.min(MAX_CHUNK, CHUNK_PLAN[pulls % CHUNK_PLAN.length]!);
             const chunk = body.subarray(offset, Math.min(body.byteLength, offset + size));
             offset += chunk.byteLength;
@@ -110,8 +107,6 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
             pulls += 1;
             largestChunk = Math.max(largestChunk, chunk.byteLength);
             controller.enqueue(chunk);
-            // By the third chunk the paused reader has an event to stall on (the 16 MiB chunk holds several).
-            if (pulls === 3) signal.stalled();
           },
           cancel() { signal.gone(); },
         }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
@@ -142,7 +137,7 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
     const ask = async (command: string): Promise<number> => { child.stdin.write(command + "\n"); child.stdin.flush(); return Number((await nextLine()).rss); };
     const clients: LinkWireClient[] = [];
     try {
-      child.stdin.write(JSON.stringify({ upstreamPort: upstream.port, keys, stalls: options.transport === "websocket" ? SOCKETS : Number.MAX_SAFE_INTEGER }) + "\n");
+      child.stdin.write(JSON.stringify({ upstreamPort: upstream.port, keys, stalls: SOCKETS }) + "\n");
       child.stdin.flush();
       const ready = await nextLine();
       const linkPort = Number(ready.linkPort);
@@ -172,16 +167,13 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
         }
         wire.pause();
       }
-      // The Home itself announces when every link pump is waiting on a drain at once. The HTTP
-      // diagnostic has no pump to observe and settles for the upstream having enqueued its third chunk.
-      if (options.transport === "websocket") {
-        const announced = (async () => { for (;;) if ((await nextLine()).stalled === true) return "stalled" as const; })();
-        const finished = Promise.all(signals.slice(1).map(signal => signal.cancelled)).then(() => "finished" as const);
-        // A load that completes before every pump waits never reached the condition being measured.
-        expect(await Promise.race([announced, finished])).toBe("stalled");
-      } else await Promise.all(signals.slice(1).map(signal => options.hold ? signal.reachedHold : signal.reachedStall));
-      // A link turn reads its upstream only as its socket drains (#8601), so a stalled WebSocket pump stops pulling before
-      // the upstream's hold point: the pumps' own stall is the synchronization, and the upstream is never waited for here.
+      // The Home itself announces when every link pump, or every relayed HTTP response, waits for its reader at once.
+      // A link turn reads its upstream only as its reader drains (#8601), so a stalled load stops pulling before the
+      // upstream's hold point: the Home's own stall is the synchronization, and the upstream is never waited for here.
+      const announced = (async () => { for (;;) if ((await nextLine()).stalled === true) return "stalled" as const; })();
+      const finished = Promise.all(signals.slice(1).map(signal => signal.cancelled)).then(() => "finished" as const);
+      // A load that completes before every reader stalls never reached the condition being measured.
+      expect(await Promise.race([announced, finished])).toBe("stalled");
       const enqueuedAtStallMiB = delivered.slice(1).map(bytes => Math.round(bytes / MiB));
       if (HEAP) { child.stdin.write("heap\n"); child.stdin.flush(); console.log(JSON.stringify(await nextLine())); }
       // Cut every socket in a seeded random order, at different points of its stalled stream.
@@ -199,7 +191,7 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
       const delta = peak - idle;
       const budget = SOCKETS * LINK_WS_LIMITS.socketReservationBytes;
       console.log(JSON.stringify({ method, transport: options.transport, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
-      return { method, idle, peak, delta, sync: options.transport === "websocket" ? "home-pumps-waiting" : "upstream-held" };
+      return { method, idle, peak, delta, sync: options.transport === "websocket" ? "home-pumps-waiting" : "home-relays-waiting" };
     } finally {
       for (const client of clients) client.destroy();
       try { child.stdin.write("stop\n"); child.stdin.flush(); child.stdin.end(); } catch { /* already gone */ }
@@ -212,8 +204,8 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
 describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance"
   + (ENABLED ? "" : " [skipped: opt-in with OCX_LINK_WS_RSS_ACCEPTANCE=1; it runs two Homes of several GiB each and is not part of the ordinary suite]"), () => {
   // Design T4 6.3, as decided after the T5g measurements: the reservation bounds what the link WebSocket transport
-  // itself adds. Both transports run the same stalled load against a held upstream, each synchronized on the stall it
-  // can observe (the WebSocket on its pumps, the HTTP relay on the upstream's hold; #8600 gives the relay its own), and
+  // itself adds. Both transports run the same stalled load against a held upstream, each synchronized on a stall its Home
+  // reports itself (the WebSocket's pumps waiting for a drain, the HTTP relays waiting for their readers), and
   // the WebSocket's peak minus the HTTP relay's peak must stay within the sockets' reservations.
   test.skipIf(!CANONICAL)("acceptance: the WebSocket's peak RSS over the HTTP relay's, under the same held load, stays within the link socket reservations"
     + (CANONICAL ? "" : " [skipped: diagnostic settings present (" + DIAGNOSTIC_SETTINGS.join(", ") + "); only the canonical load reports an acceptance]"), async () => {
@@ -225,9 +217,8 @@ describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance"
       expect(Number.isFinite(result.peak) && result.peak >= result.idle).toBe(true);
     }
     console.log(JSON.stringify({ acceptance: true, sockets: SOCKETS, websocketSync: websocket.sync, httpSync: http.sync, websocketMinusHttpMiB: (websocket.delta - http.delta) / MiB, budgetMiB: SOCKETS * LINK_WS_LIMITS.socketReservationBytes / MiB }));
-    // The subtraction compares like with like only when both Homes reported their own stall. Until the HTTP relay can
-    // (follow-up), the pair is a measurement and this acceptance cannot pass, whatever the difference.
-    expect({ websocket: websocket.sync, http: http.sync }).toEqual({ websocket: "home-pumps-waiting", http: "home-pumps-waiting" });
+    // The subtraction compares like with like only when both Homes reported their own stall.
+    expect({ websocket: websocket.sync, http: http.sync }).toEqual({ websocket: "home-pumps-waiting", http: "home-relays-waiting" });
     expect(websocket.delta - http.delta).toBeLessThanOrEqual(SOCKETS * LINK_WS_LIMITS.socketReservationBytes);
   });
 

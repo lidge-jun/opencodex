@@ -395,3 +395,31 @@ export function readJsonRequestBody(
 ): Promise<unknown> {
   return readBoundedJsonRequestBody(req, maxBytes, budget);
 }
+
+/**
+ * Admit a body the caller already parsed (a Remote Link WebSocket create, #8600) as if it had been read: its serialized
+ * size is held to the same limit and observed by the same budget as the parse at the end of the bounded reader.
+ */
+export function admitParsedJsonRequestBody(body: unknown, maxBytes: number, budget?: TranslatorBudget): unknown {
+  const parsedBytes = serializedJsonByteLength(body);
+  if (parsedBytes > maxBytes) throw new DecompressedBodyTooLargeError(parsedBytes, maxBytes, "decoded_exact");
+  budget?.observeAcceptedRequestCopy(parsedBytes);
+  return body;
+}
+
+/**
+ * A parsed body bound to the one Request it stands for (#8600). It goes with that request alone: a request the pipeline
+ * builds for a combo child, a recovery or a retry is another Request and reads its own body. Taken once, like a body.
+ */
+const parsedBodies = new WeakMap<Request, unknown>();
+
+export function attachParsedRequestBody(req: Request, body: unknown): void {
+  parsedBodies.set(req, body);
+}
+
+export function takeParsedRequestBody(req: Request): { body: unknown } | undefined {
+  if (!parsedBodies.has(req)) return undefined;
+  const body = parsedBodies.get(req);
+  parsedBodies.delete(req);
+  return { body };
+}

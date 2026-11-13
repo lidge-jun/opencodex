@@ -10,6 +10,7 @@ import { linkActivityCounts, type LinkActivity } from "../../link/child-activity
 import type { LinkSessionGrant, LinkUpgradeOutcome } from "./link-websocket";
 import type { LinkTrafficBook } from "../../link/traffic";
 import { LINK_HOME_FEATURES_HEADER } from "../../link/request-compression";
+import { linkRelayWaitObserver } from "./link-websocket-limits";
 
 /** A 200 `GET /v1/catalog` whose body the Child read to the end (wp2 catalog freshness). */
 export interface LinkCatalogServed { linkId: string | null; keyId: string | null; etag: string }
@@ -230,9 +231,14 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         let ended = false;
         // A cancel resolves a pending read as done; that end is not a completed body.
         let cancelled = false;
+        // Test-only stall signal (link-websocket-limits.ts): set from each chunk handed over until the reader asks again.
+        const waitObserver = sessionLink !== null ? linkRelayWaitObserver() : null;
+        let waiting = false;
+        const stopWaiting = (): void => { if (waiting) { waiting = false; waitObserver?.(false); } };
         const finish = () => {
           if (ended) return;
           ended = true;
+          stopWaiting();
           req.signal.removeEventListener("abort", aborted);
           release();
         };
@@ -246,10 +252,14 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         if (req.signal.aborted) aborted();
         const body = new ReadableStream<Uint8Array>({
           async pull(controller) {
+            stopWaiting();
             try {
               const next = await reader.read();
               if (next.done) { flow?.end(!cancelled); finish(); controller.close(); if (!cancelled) reportCatalog(); }
-              else { catalogHash?.update(next.value); flow?.fromHome(next.value.byteLength); controller.enqueue(next.value); }
+              else {
+                catalogHash?.update(next.value); flow?.fromHome(next.value.byteLength); controller.enqueue(next.value);
+                if (waitObserver && !ended) { waiting = true; waitObserver(true); }
+              }
             } catch (error) { flow?.end(false); finish(); controller.error(error); }
           },
           cancel,
