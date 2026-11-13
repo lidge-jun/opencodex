@@ -227,5 +227,10 @@
   "link-child-catalog-oracle.test.ts": "e2e-style",
   "link-ws-framer.test.ts": "clients",
   "link-ws-advertisement.test.ts": "clients",
-  "link-ws-transport.test.ts": "clients"
+  "link-ws-transport.test.ts": "clients",
+  "link-explicit-route.test.ts": "clients",
+  "link-explicit-route-paths.test.ts": "clients",
+  "link-route-edit-exclusive.test.ts": "server",
+  "link-enrollment-explicit-route.test.ts": "server",
+  "cli-link-explicit-route.test.ts": "cli"
 }

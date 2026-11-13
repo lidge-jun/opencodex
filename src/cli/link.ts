@@ -20,6 +20,7 @@ import { boundHint } from "../link/ssh-runner";
 import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
+import { parseExplicitRoute } from "../link/explicit-route";
 import type { LinkChildKind } from "../link/store";
 import { findAvailablePort } from "../server/ports";
 import { viaLocalControlSocket, type LocalControlDeps } from "./link-local-control";
@@ -40,8 +41,8 @@ import {
 } from "./runtime-api";
 
 export const LINK_USAGE = `Usage:
-  ocx link probe <alias> [--json]
-  ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--json]
+  ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
+  ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
   ocx link port [--json]
   ocx link issue --alias <alias> --tunnel-port <port> [--json]
   ocx link status [--json]
@@ -55,6 +56,7 @@ ${LINK_CHILD_OPS_USAGE.join("\n")}
 ${LINK_CAPTURE_USAGE.join("\n")}
 
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
+An explicit route (--proxy-command, --ssh-user and --ssh-port, with --exclusive) reaches ssh on the command line for every command and tunnel of the link, so ssh_config cannot change it; an exclusive link refuses route edits.
 Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
 Diagnostics reads this computer's bounded link diagnostics file directly; it contacts no proxy and writes nothing.
 Check reads each Home-initiated Child's installed version and update route; it changes no install.
@@ -177,12 +179,14 @@ export function validateStatus(value: unknown): LinkStatusPayload {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
-    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "child", "ws", "traffic", "routes", "route", "routeBlocked"], `link ${index}`);
+    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "exclusive", "explicitRoute", "child", "ws", "traffic", "routes", "route", "routeBlocked"], `link ${index}`);
     const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
       || (candidate.state !== "connecting" && candidate.state !== "connected" && candidate.state !== "reconnecting" && candidate.state !== "failed" && candidate.state !== "idle")
       || (candidate.childKind !== undefined && candidate.childKind !== "full" && candidate.childKind !== "ephemeral")
+      || (candidate.exclusive !== undefined && candidate.exclusive !== true)
+      || (candidate.explicitRoute !== undefined && (candidate.exclusive !== true || parseExplicitRoute(candidate.explicitRoute) === null))
       || !validString(candidate.since) || !validNullableString(candidate.reason) || !isLinkPort(candidate.tunnelPort)) {
       throw new Error(`invalid link API response: link ${index} fields`);
     }
@@ -195,6 +199,8 @@ export function validateStatus(value: unknown): LinkStatusPayload {
       reason: candidate.reason,
       tunnelPort: candidate.tunnelPort,
       ...(candidate.childKind !== undefined ? { childKind: candidate.childKind as LinkChildKind } : {}),
+      ...(candidate.exclusive === true ? { exclusive: true as const } : {}),
+      ...(candidate.explicitRoute !== undefined ? { explicitRoute: parseExplicitRoute(candidate.explicitRoute)! } : {}),
       ...parity,
       ...(candidate.peer !== undefined ? { peer: validatePeer(candidate.peer, index) } : {}),
       ...(candidate.tunnel !== undefined ? { tunnel: validateTunnel(candidate.tunnel, index) } : {}),
