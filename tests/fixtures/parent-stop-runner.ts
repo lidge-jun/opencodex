@@ -179,11 +179,27 @@ mock.module("../../src/config/process-state", () => ({
   removeRuntimePort() {},
 }));
 const service = await import("../../src/service");
-mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDetailed: () => {
+// The manager stop is a fixture on every host. Off Windows `ocx stop` calls the Detailed form. On Windows it
+// calls the Report form (src/cli/stop-windows-checked.ts), whose real Part A probes Task Scheduler and WinSW and
+// reads the proxy's command line through PowerShell or WMIC; dev run 43508374033 (windows 5/14) caught those as
+// unexpected execFileSync calls. Both forms answer the same outcome; the Report form carries the Part A result a
+// Windows host with no registered manager (or one that took the proxy down with it) reports.
+const fixtureServiceStop = (): "stopped" | "absent" => {
   calls.service++;
   if (options.managerCascades) { alive = false; return "stopped"; }
   return "absent";
-} }));
+};
+mock.module("../../src/service", () => ({ ...service,
+  stopServiceIfInstalledDetailed: fixtureServiceStop,
+  stopServiceIfInstalledReport: async () => {
+    const outcome = fixtureServiceStop();
+    return { outcome, windows: {
+      outcome, reason: null, detail: "fixture " + outcome,
+      registration: { scheduler: outcome === "absent" ? "absent" : "present", winsw: "nonexistent" },
+      bound: [], unbound: [], terminated: [], changed: outcome === "stopped",
+    } };
+  },
+}));
 if (options.guarded) {
   const approval = { pid: fakePid, ...endpoint, configHome: home, cliVersion: "2.93.0", compatibilityToken: "fixture" };
   const manager = options.windowsGuarded
