@@ -41,7 +41,7 @@ function scenario(windows: boolean, conflict = false, hashless = false) {
     const journal = {version:1,originalConfig:Buffer.from('model = "old-model"\\n').toString("base64"),originalProfile:null,
       ${hashless ? "" : "injectedConfigHash:hash(" + JSON.stringify(injected) + "),injectedProfileHash:null,"}
       injectedOpenaiBaseUrl:${JSON.stringify(url)},injectedRealtimeWsBaseUrl:${JSON.stringify(url)},
-      injectedCatalogPath:c+"/opencodex-catalog.json",owner:{kind:"client",apiKeyId:"client-1"},pid:999999,timestamp:"2026-11-07T00:00:00.000Z"};
+      injectedCatalogPath:${JSON.stringify(join(codex, "opencodex-catalog.json"))},owner:{kind:"client",apiKeyId:"client-1"},pid:999999,timestamp:"2026-11-07T00:00:00.000Z"};
     writeFileSync(c+"/opencodex-journal.json", JSON.stringify(journal));
     let result, error;
     try { result = await disconnectClient({}, {lifecycleLockDeps:{lockPath:h+"/lifecycle.sqlite"}}); }
