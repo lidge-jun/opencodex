@@ -900,19 +900,9 @@ The Qwen Cloud preset uses the separate Token Plan host that Qwen Cloud document
 See the [1017 model card](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017),
 [Chat reference](https://docs.qwencloud.com/api-reference/chat/openai-chat) and
 [Personal overview](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).
-**Morph (Ultra plan)** is an OpenAI-compatible endpoint at `https://api.morphllm.com/v1`
-served by [Morph](https://www.morphllm.com/products/ultra). The preset seeds only the models the
-Ultra subscription covers — `morph-kimik31` (Kimi K3.1) and `morph-dsv41flash-1017` (DeepSeek
-V4.1 Flash, October 17 snapshot). The undated `morph-dsv41flash` id is the same Flash pool and is
-left out only to keep one canonical name per model; every other Morph model bills per token, and
-`morph-dsv41flash-abliterated` needs privileged-access approval. Both seeded models publish a
-1,048,576-token window, accept text and images, and support tools, streaming and reasoning.
-Kimi K3.1 takes `none`/`low`/`medium`/`high`/`xhigh`/`max`; DeepSeek V4.1 Flash takes
-`none`/`low`/`high`/`xhigh`/`max` and folds `medium` onto `high`. Ultra removes the token
-meter but not the per-minute rate limits, so a `429` means retry after `Retry-After`. Create a key
-in the [Morph dashboard](https://www.morphllm.com/dashboard/api-keys), then run
-`ocx provider add morph` or select **Morph (Ultra plan)** in the dashboard. Live model discovery
-stays off on purpose: `GET /v1/models` also lists per-token models the plan does not include.
+**Morph (Ultra plan)** serves `https://api.morphllm.com/v1` and seeds only the Ultra-covered models, `morph-kimik31` (Kimi K3.1) and `morph-dsv41flash-1017` (DeepSeek V4.1 Flash, October 17 snapshot): every other Morph model bills per token and `morph-dsv41flash-abliterated` needs privileged-access approval.
+Both publish a 1,048,576-token window, accept text and images, and support tools, streaming and reasoning; Kimi takes `none`..`max` and DeepSeek Flash `none`/`low`/`high`/`xhigh`/`max` with `medium` folded onto `high`.
+Ultra removes the token meter but not the per-minute limits, so a `429` means retry after `Retry-After`. Create a key in the [Morph dashboard](https://www.morphllm.com/dashboard/api-keys), then run `ocx provider add morph`; live discovery stays off because `GET /v1/models` also lists per-token models the plan excludes.
 **OpenGateway** is an OpenAI-compatible gateway operated by Sionic AI at
 `https://apis.opengateway.ai/v1`. Its public catalog contains about 80 active models
 (as verified on 2026-10-02); the preset automatically refreshes the live model list from
