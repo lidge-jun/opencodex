@@ -98,7 +98,7 @@ export interface WindowsCheckedStopOptions {
   /** A snapshot that already ran (guarded: revalidateManager's), reused for the bind. */
   bindSnapshot?: readonly WindowsStopProcessEntry[];
   admission?: WindowsStopAdmission;
-  /** Throws to refuse. Runs at entry and before each terminate. */
+  /** Throws to refuse. Runs at entry, before each manager stop (/end, the WinSW stop) and before each terminate. */
   authorize?: () => MaybePromise<void>;
 }
 
@@ -257,7 +257,7 @@ export async function stopWindowsServiceChecked(
     }
 
     // Step 2: bind.
-    if (taskRegistered) {
+    if (taskRegistered || winswRegistered) {
       let processes = options.bindSnapshot ?? null;
       if (processes === null) {
         const snapshot = await runCapped(clock, C.enumeration, deps.enumerate);
@@ -267,7 +267,7 @@ export async function stopWindowsServiceChecked(
         processes = snapshot.value;
       }
       binding = bindWindowsStopWrappers({
-        ...bindContext, processes, taskRegistered: true, managerRegistered: true,
+        ...bindContext, processes, taskRegistered, managerRegistered: true,
         scheduleServicePid: schedulePid,
       });
     }
@@ -298,6 +298,8 @@ export async function stopWindowsServiceChecked(
 
     // Step 3: ask the manager.
     if (taskRegistered) {
+      // The updater re-checks its authority right before the manager stop, as before each terminate.
+      await authorize();
       result.changed = true;
       const ended = await runCapped(clock, C.taskEnd, deps.endTask);
       if (!ended.ok) return finish("unknown", "evidence-unreadable", "the task end command did not answer within its cap");
@@ -305,6 +307,7 @@ export async function stopWindowsServiceChecked(
       if (ended.value === "failed") return finish("unknown", "evidence-unreadable", "the task end command failed");
     }
     if (winswStarted) {
+      await authorize();
       result.changed = true;
       const stop = await runCapped(clock, C.winswStopCommand, deps.winswStop);
       if (!stop.ok) return finish("unknown", "evidence-unreadable", "the native service stop did not answer within its cap");
@@ -422,7 +425,7 @@ async function unboundOnlyVerdict(
   return unboundStillAlive(binding, watches);
 }
 
-/** The updater's variant: the authorizer runs at entry and before every terminate. */
+/** The updater's variant: the authorizer runs at entry, before each manager stop and before every terminate. */
 export function guardedStopWindowsServiceChecked(
   authorize: () => MaybePromise<void>,
   deps: WindowsCheckedStopDeps,
