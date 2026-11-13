@@ -44,6 +44,40 @@ const USAGE_OK = {
 describe("muse key quota probe", () => {
   beforeEach(() => { resetMuseKeyQuotaBackoff(); });
 
+  test("a replacement credential cannot mint concurrently or receive the old owner's quota", async () => {
+    let release!: (response: Response) => void;
+    let calls = 0;
+    let clock = 1_700_000_000_000;
+    const fetchImpl = (async () => {
+      calls++;
+      if (calls === 1) return await new Promise<Response>(resolve => { release = resolve; });
+      return Response.json({ subs_usage: { window: { used_percent: 7, window_duration_mins: 300 } } });
+    }) as typeof fetch;
+    const deps = { fetchImpl, now: () => clock };
+    const first = fetchMuseKeyQuotaSnapshot("same-account", TOKEN, deps, undefined, "old-owner");
+    const second = fetchMuseKeyQuotaSnapshot("same-account", "new-token", deps, undefined, "new-owner");
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    release(Response.json({ subs_usage: { window: { used_percent: 90, window_duration_mins: 300 } } }));
+    expect((await first)?.fiveHourPercent).toBe(90);
+    expect(await second).toBeNull();
+    expect(calls).toBe(1);
+    expect(await fetchMuseKeyQuotaSnapshot("same-account", "new-token", deps, undefined, "new-owner")).toBeNull();
+    clock += 5 * 60_000 + 1;
+    expect((await fetchMuseKeyQuotaSnapshot("same-account", "new-token", deps, undefined, "new-owner"))?.fiveHourPercent).toBe(7);
+    expect(calls).toBe(2);
+  });
+
+  test("a token replacement without an explicit owner cannot join the earlier mint", async () => {
+    let release!: (response: Response) => void;
+    const fetchImpl = (async () => await new Promise<Response>(resolve => { release = resolve; })) as typeof fetch;
+    const first = fetchMuseKeyQuotaSnapshot("same-account", TOKEN, { fetchImpl });
+    const replacement = fetchMuseKeyQuotaSnapshot("same-account", "different-token", { fetchImpl });
+    release(Response.json(USAGE_OK));
+    expect((await first)?.fiveHourPercent).toBe(12);
+    expect(await replacement).toBeNull();
+  });
+
   test("maps the five-hour window and the weekly window", async () => {
     const h = harness([{ body: USAGE_OK }]);
     const quota = await fetchMuseKeyQuotaSnapshot("acct-a", TOKEN, h.deps);

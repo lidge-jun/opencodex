@@ -1,5 +1,7 @@
 # Generic OAuth Account Pool
 
+Muse's in-band quota evidence follows the serving credential and its per-account incarnation independently of the operator's selection; selection still fences an in-flight publication. The physical-send and reset contracts are described in [Providers and adapters](../providers-and-adapters.md).
+
 ## Conversation affinity
 
 `src/oauth/generic-session-affinity.ts` owns opt-in generic-pool conversation bindings. Provider-local
