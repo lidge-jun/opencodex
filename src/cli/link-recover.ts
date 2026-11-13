@@ -38,13 +38,20 @@ const isObject = (value: unknown): value is Record<string, unknown> => Boolean(v
  * and no status check proves it does not (ocx-child's status reads only state.json, so an attach in progress can show no link
  * or an earlier one; unreadable state shows none). So the other link is left; ending it is the operator's own decision.
  */
-const aliasLinked = (link: string): string => "another Home-initiated link still uses this machine's alias, so the Child there may belong to that link. Do not run ocx-child detach on the machine. Leave that link: no status check on the machine can show it is stale, since an attach of it still in progress can show no link or an earlier one, and state that cannot be read shows none. This tombstone waits until that link is removed, and recover runs then. Revoking that link (ocx link revoke, after settling any open operation on it: ocx link operations) ends it and disconnects the machine if the machine runs it, so do that only if you mean to end that link. A person on this Home can instead forget this tombstone (ocx link recover --forget --link-id " + link + " --yes) once the machine is confirmed clean or gone.";
+type RecoverTarget = { readonly linkId: string } | { readonly operationId: string };
+/** The command that repeats this recover, and a person's way out when the machine is clean or gone, for its target. */
+const again = (t: RecoverTarget): string => "linkId" in t ? "ocx link recover --link-id " + t.linkId : "ocx link recover --operation-id " + t.operationId;
+const settleOperation = (operationId: string): string => "ocx link operations resolve --operation-id " + operationId + " --yes";
+const aliasLinked = (t: RecoverTarget): string => "another Home-initiated link still uses this machine's alias, so the Child there may belong to that link. Do not run ocx-child detach on the machine. Leave that link: no status check on the machine can show it is stale, since an attach of it still in progress can show no link or an earlier one, and state that cannot be read shows none. " + ("linkId" in t ? "This tombstone" : "This operation") + " waits until that link is removed; then run " + again(t) + " again. Revoking that link (ocx link revoke --link-id <that link's id>, shown by ocx link status, after settling any open operation on it: ocx link operations) ends it and disconnects the machine if the machine runs it, so do that only if you mean to end that link. "
+  + ("linkId" in t ? "A person on this Home can instead forget this tombstone (ocx link recover --forget --link-id " + t.linkId + " --yes) once the machine is confirmed clean or gone."
+    : "Once the machine is confirmed clean or gone, a person on this Home can instead resolve the operation (" + settleOperation(t.operationId) + ").");
 
 /**
  * child_recover_unsupported's step: the planted ocx-child cannot bind its detach to the link, and its status cannot show an
  * interrupted attach of another link that a plain detach would restore and then remove, so the machine is left.
  */
-const recoverUnsupported = (link: string): string => "the planted ocx-child predates detach --expect-link, so it cannot check which link it belongs to, and nothing was changed. Do not run its plain detach on the machine: its status cannot show an interrupted attach of another link, which a plain detach would restore and then remove. Leave the machine: recover cannot confirm its cleanup with this build. Once the machine is confirmed clean or gone, a person on this Home can run ocx link recover --forget --link-id " + link + " --yes.";
+const recoverUnsupported = (t: RecoverTarget): string => "the planted ocx-child predates detach --expect-link, so it cannot check which link it belongs to, and nothing was changed. Do not run its plain detach on the machine: its status cannot show an interrupted attach of another link, which a plain detach would restore and then remove. Leave the machine: recover cannot confirm its cleanup with this build. Once the machine is gone, or a person on that machine has checked and cleaned its ocx-child records by hand, a person on this Home can run "
+  + ("linkId" in t ? "ocx link recover --forget --link-id " + t.linkId + " --yes." : settleOperation(t.operationId) + ".");
 
 /** The CLI's own words for recover's refusals; any other code is shown as the code itself. */
 const RECOVER_REFUSALS: Record<string, string> = {
@@ -59,15 +66,15 @@ const RECOVER_REFUSALS: Record<string, string> = {
  * its hint when the hint is a plain word (a fixed hint or a record name). Only these closed or validated values reach
  * the terminal, never the server's message; the status is kept, so the exit code is unchanged.
  */
-function recoverRefusal(error: RuntimeApiError, linkId: string | undefined): RuntimeApiError {
+function recoverRefusal(error: RuntimeApiError, target: RecoverTarget): RuntimeApiError {
   const body = isObject(error.body) && isObject(error.body.error) ? error.body.error : null;
   const code = typeof body?.code === "string" && /^[a-z_]{1,64}$/.test(body.code) ? body.code : null;
   if (!code) return error;
   const hint = typeof body?.hint === "string" && /^[a-z0-9_-]{1,64}$/.test(body.hint) ? body.hint : null;
-  // A command is printed so that it runs as printed: only a validated link id, the placeholder otherwise (--operation-id).
-  const shown = linkId !== undefined && LINK_ID.test(linkId) ? linkId : "<id>";
-  const known = code === "alias_linked" ? aliasLinked(shown)
-    : code === "child_recover_unsupported" ? recoverUnsupported(shown)
+  // A command is printed so that it runs as printed: the link id or operation id this command validated. An --operation-id
+  // recover's target comes from the journal (--list shows only tombstones), so its way out resolves the operation.
+  const known = code === "alias_linked" ? aliasLinked(target)
+    : code === "child_recover_unsupported" ? recoverUnsupported(target)
       : Object.hasOwn(RECOVER_REFUSALS, code) ? RECOVER_REFUSALS[code] : undefined;
   const message = "Link recover refused (" + error.status + "): " + code + (hint ? " (" + hint + ")" : "") + (known ? ": " + known : "");
   return new RuntimeApiError(message, error.status, error.body);
@@ -136,7 +143,7 @@ export async function runLinkRecover(args: string[], deps: LinkCliDeps, linkRequ
       body: JSON.stringify(linkId !== undefined ? { linkId } : { operationId }),
     }, deps);
   } catch (error) {
-    throw error instanceof RuntimeApiError ? recoverRefusal(error, linkId) : error;
+    throw error instanceof RuntimeApiError ? recoverRefusal(error, linkId !== undefined ? { linkId } : { operationId: operationId! }) : error;
   }
   const receipt = validateReceipt(response, linkId ?? null);
   printData(receipt, wantsJson, [receipt.purged

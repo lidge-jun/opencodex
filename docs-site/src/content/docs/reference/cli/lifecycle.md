@@ -1566,8 +1566,8 @@ binary's `disconnect --purge --expect-link <id>`. The Child restores its
 `~/.codex` files and removes the planted binary only when its records name that
 link and no other: its state and its ownership record both name it, or an
 interrupted detach or attach of that link left the ownership record naming it
-without the state (an attach's rollback may name no link or that link, never
-another). Success prints
+without the state (any attach rollback left, including one a detach stopped
+while restoring, may name no link or that link, never another). Success prints
 `{linkId,outcome:"clean",purged:true}` and removes the tombstone; `purged:false`
 means the Child restored its state but kept the planted binary because another
 OpenCodex home on that machine runs a relay from it, and the tombstone is removed
@@ -1583,7 +1583,7 @@ home, and nothing was changed. `alias_linked` (exit 5) means another Home-initia
 alias, as its alias or one of its routes, so the machine may belong to that link: do not run
 `ocx-child detach` there. Leave that link: no status check on the machine can show it is stale,
 since an attach of it still in progress can show no link or an earlier one, and state that cannot be read
-shows none. The tombstone waits until that link is removed, then recover. Revoking that link (after
+shows none. The tombstone waits until that link is removed; then run recover again. Revoking that link (after
 settling any open operation on it) ends it and disconnects the machine if the machine runs it, so do that
 only if you mean to end that link. A person on the Home can instead forget the tombstone once the machine
 is confirmed clean or gone.

@@ -59,11 +59,12 @@ test("a recorded failure keeps its outcome in the error", async () => {
 });
 
 test("a replayed residual plant gets the CLI's own purge guidance for both platforms, never the disconnect step", async () => {
-  const h = harness([{ body: { operationId: OP, state: "unknown" } }, { status: 500, body: { error: { code: "key_issue_uncertain", message: "server text" }, operationId: OP, outcome: "unknown", residual: true, residualKind: "plant", recovery: "server recovery text" } }]); try {
+  const h = harness([{ body: { operationId: OP, state: "unknown" } }, { status: 500, body: { error: { code: "key_issue_uncertain", message: "server text" }, operationId: OP, outcome: "unknown", residual: true, residualKind: "plant", linkId: LINK, recovery: "server recovery text" } }]); try {
     expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP], h.deps)).toBe(1);
     const message = h.err.join("\n");
-    expect(message).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
-    expect(message).toContain('ocx-child.exe" detach --purge');
+    // Bound to the reserved link id the replay names (#8691 final review).
+    expect(message).toContain("~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + LINK);
+    expect(message).toContain('ocx-child.exe" detach --purge --expect-link ' + LINK);
     // %VAR% and a bare quoted path are Command Prompt syntax; PowerShell would need & and $env:.
     expect(message).toContain("in Command Prompt");
     expect(message).not.toContain("ocx disconnect");
@@ -73,10 +74,10 @@ test("a replayed residual plant gets the CLI's own purge guidance for both platf
 });
 
 test.each(["child_port_busy", "child_external_provider_conflict"])("a %s answer whose plant rollback failed gives purge guidance, not 'no Child files were modified'", async errorCode => {
-  const h = harness([notFound, { body: probe }, { body: confirm }, { status: 409, body: { error: { code: errorCode, message: "server text" }, operationId: OP, outcome: "residual", residual: true, residualKind: "plant" } }]); try {
+  const h = harness([notFound, { body: probe }, { body: confirm }, { status: 409, body: { error: { code: errorCode, message: "server text" }, operationId: OP, outcome: "residual", residual: true, residualKind: "plant", linkId: LINK } }]); try {
     expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP], h.deps)).toBe(1);
     const message = h.err.join("\n");
-    expect(message).toContain("ocx-child detach --purge");
+    expect(message).toContain("ocx-child detach --purge --expect-link " + LINK);
     expect(message).toContain("%USERPROFILE%");
     expect(message).not.toContain("no Child files were modified");
     expect(message).toContain("operation " + OP + ": residual");
@@ -356,7 +357,7 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
   // its outcome; child_disconnect_pending ends unknown, so its repeat guidance stays conditional.
   // A failed_clean entry only replays its answer, so its next step is a new operation id; an unknown one resumes under the same id.
   test.each([
-    ["child_link_mismatch", "failed_clean", ["who it belongs to or what state it is in", "Do not disconnect it there", "ocx connect status --json (on a lightweight Child, connect status --json of its planted ocx-child, ~/.cache/opencodex/bin/ocx-child, or in Command Prompt on Windows %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe, or %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe where LOCALAPPDATA is not set)", "revoke this link with --force once any enrollment of this link has finished", "If it shows this link's id, a connect or key rotation of it is in progress: let it finish on the Child, then revoke again with a new operation id (repeating this id only replays this answer)", "if you cannot, or the machine cannot be reached, revoke this link with --force once any enrollment of this link has finished", "revoke again with a new operation id (repeating this id only replays this answer)"], ["If it joined this Home by itself", "with the same operation id"]],
+    ["child_link_mismatch", "failed_clean", ["who it belongs to or what state it is in", "Do not disconnect it there", "ocx connect status --json (on a lightweight Child, connect status --json of its planted ocx-child, ~/.cache/opencodex/bin/ocx-child, or in Command Prompt on Windows %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe, or %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe where LOCALAPPDATA is not set)", "revoke this link with --force once any enrollment of this link has finished", "If it shows this link's id, a connect or key rotation of it may be in progress: let it finish on the Child, then revoke again with a new operation id (repeating this id only replays this answer); if the same answer comes back, revoke this link with --force once any enrollment of this link has finished", "if you cannot, or the machine cannot be reached, revoke this link with --force once any enrollment of this link has finished", "revoke again with a new operation id (repeating this id only replays this answer)"], ["If it joined this Home by itself", "with the same operation id", "of it is in progress"]],
     ["child_link_mismatch", "unknown", ["Do not disconnect it there", "let it finish on the Child, then repeat the revoke with the same operation id", "repair it on the Child, then repeat the revoke with the same operation id"], ["revoke again with a new operation id (repeating this id only replays this answer)"]],
     ["child_residual", "failed_clean", ["keeps records it cannot restore", "Do not run a plain ocx-child detach on it", "interrupted attach of another link", "Revoke this link with --force"], ["~/.cache/opencodex/bin/ocx-child detach", "with the same operation id", "Inspect them first"]],
     ["child_disconnect_pending", "unknown", ["unfinished disconnect", "may be partly cleaned", "Check it with ocx connect status --json, which cannot say whose disconnect it is", "only if it shows no connection, finish it there with ocx disconnect, then repeat the revoke with the same operation id", "If it shows any link, a hub or another Home, if its state cannot be read, or if the machine cannot be reached, leave it and revoke this link with --force", "if this id still owns an unfinished removal, the repeat resumes it"], ["revoke again with a new operation id (repeating this id only replays this answer)", "Check whose it is", "this link's id or no connection"]],

@@ -267,6 +267,11 @@ fn detach_expect_link_answers_residual_for_a_version_one_owner_record() {
     homes.write_owner(&owner);
     let report = assert_refused_untouched(&homes, LINK_A, 6, "residual");
     assert_eq!(report["record"], "codex-home-owner");
+    // A current build also writes /1 when it adopts a pre-ownership attachment, so the reason names no build.
+    assert_eq!(
+        report["reason"],
+        "the ownership record names no link (schema /1)"
+    );
     assert!(
         report["path"]
             .as_str()
@@ -496,6 +501,45 @@ fn detach_expect_link_finishes_its_own_attach_interrupted_before_the_state_write
         fs::read(homes.codex.join("config.toml")).unwrap(),
         ORIGINAL_CONFIG
     );
+    let (code, report, stderr) = homes.detach_expect(LINK_A);
+    assert_eq!(code, 0, "report={report} stderr={stderr}");
+    assert_eq!(report["linkId"], LINK_A);
+    assert_eq!(
+        fs::read(homes.codex.join("config.toml")).unwrap(),
+        ORIGINAL_CONFIG
+    );
+    assert!(!homes.owner_path().exists());
+    assert!(!rollback.exists());
+}
+
+#[test]
+fn detach_expect_link_finishes_its_own_detach_killed_while_it_restored_an_interrupted_attach() {
+    // The attach of A stopped before its state write, leaving its rollback (which names no prior link). A bound detach of A
+    // marks the record detaching, then dies while it restores that rollback: the record says detaching and the rollback
+    // is still there. Nothing names another link, so the next bound detach of A finishes it.
+    let homes = Homes::new("owner-link-own-attach-detach-killed");
+    attach_until_barrier(&homes, LINK_A, "attach-before-state-write", false);
+    let rollback = homes.ocx.join("child").join("attach-rollback.json");
+    assert!(rollback.exists());
+    let mut cmd = child_command(
+        &homes.ocx,
+        &homes.codex,
+        homes.port,
+        &["detach", "--purge", "--json", "--expect-link", LINK_A],
+    );
+    let barrier = Barrier::new(&homes.scratch.0, "detach-killed");
+    barrier.apply(&mut cmd, "restore-before-write");
+    let mut child = spawn_with_creds(cmd);
+    assert!(
+        barrier.wait_reached("restore-before-write", Duration::from_secs(20)),
+        "detach never reached restore-before-write"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(homes.owner()["phase"], "detaching");
+    assert_eq!(homes.owner()["linkId"], LINK_A);
+    assert!(rollback.exists());
+    assert!(!homes.state_path().exists());
     let (code, report, stderr) = homes.detach_expect(LINK_A);
     assert_eq!(code, 0, "report={report} stderr={stderr}");
     assert_eq!(report["linkId"], LINK_A);

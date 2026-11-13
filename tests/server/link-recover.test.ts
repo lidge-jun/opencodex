@@ -251,6 +251,7 @@ describe("POST /api/link/recover", () => {
     expect(error.message).toContain("Leave the machine");
     expect(error.message).not.toContain("only if it shows this link's id");
     expect(error.message).toContain("ocx link recover --forget --link-id " + ID + " --yes");
+    expect(error.message).toContain("Once the machine is gone, or a person on that machine has checked and cleaned its ocx-child records by hand");
     expect(error.message).not.toContain("<id>");
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });
@@ -842,7 +843,12 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     else expect(["child_link_mismatch", "child_residual", "child_disconnect_pending"]).not.toContain(body.error?.hint);
     // A remedy never sends the operator to disconnect a machine another link owns (#8662 review P2-1).
     expect(body.error?.message ?? "").not.toContain("joined this Home by itself");
-    if (hint === "child_link_mismatch") expect(body.error?.message).toContain("Do not disconnect it there");
+    if (hint === "child_link_mismatch") {
+      expect(body.error?.message).toContain("Do not disconnect it there");
+      // Nothing may be in progress (an unreadable rollback, a dead rotation): a repeat of the same answer ends in --force.
+      expect(body.error?.message).toContain("a connect or key rotation of it may be in progress");
+      expect(body.error?.message).toContain("if the same answer comes back, revoke this link with --force once any enrollment of this link has finished");
+    }
     expect(body.outcome).toBe(outcome);
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
   });
@@ -927,6 +933,8 @@ describe("recover while another link names the alias", () => {
     // That link may be the one the machine runs now, and no status check can show it is stale: the remedy leaves it.
     expect(error.message).toContain("Leave that link: no status check on the machine can show it is stale");
     expect(error.message).toContain("do that only if you mean to end that link");
+    expect(error.message).toContain("then run ocx link recover again");
+    expect(error.message).not.toContain("recover runs then");
     expect(error.message).not.toContain("Only if it shows");
     expect(error.message).toContain("A person on this Home can instead forget this tombstone once the machine is confirmed clean or gone.");
     expect(error.message).not.toContain("settle any open operation on that link (ocx link operations), revoke the link, then recover");

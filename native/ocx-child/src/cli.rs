@@ -1999,27 +1999,28 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
         };
     }
     let state_names_link = matches!(state, StateReadOutcome::Valid(_));
-    // A detach marks the record detaching, then removes state.json before it releases the record. Interrupted there,
-    // with no attach rollback left, the record still names this link, so the bound detach finishes it as a plain one
-    // would. An attach of this link interrupted before its state write (phase attaching) is finished the same way: any rollback
-    // it left names no link (the machine had none) or this one, since one naming another link was refused above, so restoring
-    // it puts back no other link.
-    let interrupted_detach =
-        rollback.is_none() && owner.is_some_and(|r| r.phase == OwnershipPhase::Detaching);
-    let own_interrupted_attach = owner.is_some_and(|r| r.phase == OwnershipPhase::Attaching)
-        && rollback
-            .as_ref()
-            .is_none_or(|prior| prior.as_deref().is_none_or(|id| id == link_id));
+    // The record names this link without its state: an attach of it stopped before its state write (phase attaching), or a
+    // detach of it stopped after marking the record detaching, whether before or after it removed state.json, and possibly
+    // while it restored an attach rollback (#8691 review). The bound detach finishes either as a plain one would. Any
+    // rollback left names no link (the machine had none) or this one, since one naming another link was refused above, so
+    // restoring it puts back no other link.
+    let own_interrupted = owner.is_some_and(|r| {
+        matches!(
+            r.phase,
+            OwnershipPhase::Attaching | OwnershipPhase::Detaching
+        )
+    }) && rollback
+        .as_ref()
+        .is_none_or(|prior| prior.as_deref().is_none_or(|id| id == link_id));
     match owner.map(|r| r.link_id.as_deref()) {
         Some(None) => refuse(
             ExpectLinkRefusal::Residual,
             "codex-home-owner",
             &owner_path,
-            "the ownership record names no link (schema /1, written by an older ocx-child)",
+            "the ownership record names no link (schema /1)",
         ),
         Some(Some(_)) if state_names_link => Ok(()),
-        Some(Some(_)) if interrupted_detach => Ok(()),
-        Some(Some(_)) if own_interrupted_attach => Ok(()),
+        Some(Some(_)) if own_interrupted => Ok(()),
         Some(Some(_)) => refuse(
             ExpectLinkRefusal::Residual,
             "codex-home-owner",

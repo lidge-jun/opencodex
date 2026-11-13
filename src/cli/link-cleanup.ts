@@ -27,7 +27,7 @@ export function windowsChildRecovery(linkId: string, alias: string): string[] {
   return [
     // The bound disconnect (#8662) acts only while the machine is connected to this link; an older ocx refuses the flag before it
     // acts on the link, and then the check comes first. The revoke runs as printed: --yes belongs to --force, which skips cleanup.
-    `On ${alias}, run 'ocx disconnect --expect-link ${linkId}' and then 'ocx restart': it disconnects only while the machine is connected to this link. An OpenCodex older than that flag refuses it as a usage error before it acts on the link; then run 'ocx disconnect' and 'ocx restart' only if 'ocx connect status --json' shows this link's id, right after that check. If it shows another link, a hub or another Home, or its state cannot be read, leave it.`,
+    `On ${alias}, run 'ocx disconnect --expect-link ${linkId}' and, if it disconnected, 'ocx restart': it disconnects only while the machine is connected to this link. An OpenCodex older than that flag refuses it as a usage error before it acts on the link; then run 'ocx disconnect' and 'ocx restart' only if 'ocx connect status --json' shows this link's id, right after that check. If it shows another link, a hub or another Home, or its state cannot be read, leave it.`,
     `On this Home, run 'ocx link revoke --link-id ${linkId}' to disconnect it through the recorded SSH trust; it disconnects only while the machine is connected to this link.`,
     `Retry Remote Link enrollment after updating Home if the remote shell or old installation cannot run the disconnect command.`,
   ];

@@ -3,6 +3,7 @@ import { plantUnavailableGuidance } from "../link/child-binary-source";
 import { assertSshAlias } from "../link/ssh-argv";
 import { checkExplicitRoute, type ExplicitRoute } from "../link/explicit-route";
 import { OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED } from "../link/operations-journal";
+import { residualRecovery, type ResidualChild } from "../link/residual-recovery";
 import { CliUsageError, RuntimeApiError, runtimeBaseUrl, rejectArgs, takeFlag, takeJsonFlag, takeOption, printData } from "./runtime-api";
 import type { LinkCliDeps } from "./link";
 
@@ -24,23 +25,24 @@ const PHASES: Record<string, string> = {
   child_runtime_not_client: "Child runtime role verification",
   remote_platform_unsupported: "remote platform verification", remote_ocx_missing: "remote OpenCodex discovery",
 };
-const RECOVERY_FULL = "Run ocx disconnect and ocx restart on the Child before retrying.";
-const RECOVERY_EPHEMERAL = "Run ~/.cache/opencodex/bin/ocx-child detach on the Child before retrying.";
 const HOME_CLEANUP: Record<string, string> = {
   key_cleanup_failed: "Enrollment did not complete, and the Home could not revoke the link key it issued; revoke the leftover link key under API keys before retrying.",
   link_cleanup_uncertain: "Enrollment did not complete, and the Home could not undo the attempt: whether the link is stored is unknown and its issued key could not be revoked. Run ocx link status, remove the link if it is listed (ocx link revoke), and revoke the leftover link key under API keys if it remains.",
 };
 const CHILD_MAY_BE_CONNECTED = "The Child may still be connected.";
-// A residual step can be read long after the attempt: the Child may have joined another link since, which the step would remove.
-// A live failure answer carries no link id, so the operator cannot tell this attempt's link from another's by id.
-const CHILD_OWNERSHIP_CHECK = "Before the next step, check the Child with ocx connect status (ocx-child connect status --json on a lightweight Child). "
-  + "This attempt's link id is not shown, so treat any link you do not recognise as another's: if the Child shows such a link, a hub or another Home, leave it as it is and skip the next step.";
-// A journalled answer names the Child's residual as a closed word; a replay never probed, so it cannot infer one.
-const RECOVERY_BY_KIND: Record<string, string> = {
-  plant: "Run the planted ocx-child's managed copy with detach --purge on the Child before retrying: ~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux; "
-    + "on Windows, in Command Prompt, \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge, or \"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge where LOCALAPPDATA is not set.",
-  enrollment: "Run ocx disconnect and ocx restart on the Child (~/.cache/opencodex/bin/ocx-child detach for an ocx-child) before retrying.",
-};
+/**
+ * The Child's step after a refused apply that may have left it connected, from the answer's closed words: a plant, the install
+ * the apply knew (residualInstall), a journalled enrollment whose install was not recorded, or, from a server that names neither,
+ * the kind this command probed. Bound to the attempt's link id the answer names (src/link/residual-recovery.ts): a step read long
+ * after the attempt never removes a link the machine joined since, and without an id the Child is left.
+ */
+function residualChildStep(body: Record<string, unknown>, ephemeralFlow: boolean): string {
+  const kind: ResidualChild = body.residualKind === "plant" ? "plant"
+    : body.residualInstall === "ephemeral" || body.residualInstall === "full" ? body.residualInstall
+      : body.residualKind === "enrollment" ? "enrollment" : ephemeralFlow ? "ephemeral" : "full";
+  const platform = body.remotePlatform === "posix" || body.remotePlatform === "windows" ? body.remotePlatform : undefined;
+  return residualRecovery(kind, typeof body.linkId === "string" ? body.linkId : undefined, platform);
+}
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 // Refusals of ocx link add --operation-id and --require-ephemeral (structure/remote-link.md, "Operation journal").
 const OPERATION_REFUSALS: Record<string, string> = {
@@ -327,8 +329,7 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       // prose is never echoed), plus the Child's own recovery step when it may still be connected.
       const homeCleanup = typeof code === "string" && Object.hasOwn(HOME_CLEANUP, code) ? HOME_CLEANUP[code] : undefined;
       if (homeCleanup) {
-        const kindRecovery = typeof error.body.residualKind === "string" ? RECOVERY_BY_KIND[error.body.residualKind] : undefined;
-        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + CHILD_OWNERSHIP_CHECK + " " + (kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL)) : "";
+        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + residualChildStep(error.body, ephemeralFlow) : "";
         throw new Error(homeCleanup + childStep + " (code " + code + ")");
       }
       const phase = typeof code === "string" && Object.hasOwn(PHASES, code) ? PHASES[code] : undefined;
@@ -336,11 +337,9 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       // alone left every failure to SSH reproduction and source reading.
       const hint = record(error.body.error) && typeof error.body.error.hint === "string" ? error.body.error.hint : "";
       const message = phase ? "Remote Link failed during " + phase + (hint ? ": " + hint : "") : error.message;
-      const kindRecovery = typeof error.body.residualKind === "string" ? RECOVERY_BY_KIND[error.body.residualKind] : undefined;
-      const recovery = kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL);
       // The machine-readable code rides along so a script can branch without parsing prose.
       const codeSuffix = (phase || note) && typeof code === "string" ? " (code " + code + ")" : "";
-      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + CHILD_OWNERSHIP_CHECK + " " + recovery : "") + codeSuffix);
+      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + CHILD_MAY_BE_CONNECTED + " " + residualChildStep(error.body, ephemeralFlow) : "") + codeSuffix);
       // Keeps the 409 (exit 5) a full journal always gave.
       if (code === "operation_journal_full") throw new RuntimeApiError(journalFullGuidance(error.body, "add"), error.status, error.body);
       if (typeof code === "string" && Object.hasOwn(OPERATION_REFUSALS, code)) throw new Error(OPERATION_REFUSALS[code] + " (code " + code + ")");
