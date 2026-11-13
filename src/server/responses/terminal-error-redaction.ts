@@ -9,7 +9,7 @@ import {
 } from "../../lib/outbound-credential-registry";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 import { isUntypedBareUpstreamError } from "../bare-upstream-error";
-import { isCyberPolicyCode, isTerminalRefusalCode, recognizedUpstreamError } from "../../lib/errors";
+import { CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, isCyberPolicyMessage, isTerminalRefusalCode, recognizedUpstreamError } from "../../lib/errors";
 
 /**
  * A custom header carries a credential when a credential word is a whole segment of its name
@@ -49,6 +49,32 @@ function isPublicClassValue(key: string, value: unknown): boolean {
 function isPublicErrorVocabulary(value: string): boolean {
   return value === "upstream_error" || value === "upstream_server_error" || value === "invalid_request_error"
     || isPublicClassValue("code", value) || isPublicClassValue("type", value);
+}
+
+/**
+ * Masking can remove the copy that makes a genuine terminal a policy refusal (policy wording that
+ * overlaps a credential). The terminal boundary behind the tee rewrite must still reach the verdict
+ * the eager boundary and the inspector reach from the original, so a record whose policy evidence
+ * masking removed carries the policy code instead. Nothing of the masked copy is restored.
+ */
+function keepPolicyEvidence(original: unknown, masked: unknown): unknown {
+  const record = (value: unknown): Record<string, unknown> | undefined =>
+    value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const isPolicy = (entry: Record<string, unknown> | undefined): boolean => !!entry && (
+    isCyberPolicyCode(typeof entry.code === "string" ? entry.code : undefined)
+    || (typeof entry.message === "string" && isCyberPolicyMessage(entry.message)));
+  const pick = (root: unknown): Array<Record<string, unknown> | undefined> => {
+    const top = record(root);
+    const response = record(top?.response);
+    return [record(top?.error), record(top?.last_error), record(response?.error), record(response?.incomplete_details)];
+  };
+  const before = pick(original);
+  const after = pick(masked);
+  if (after.some(isPolicy)) return masked;
+  const index = before.findIndex(isPolicy);
+  if (index < 0 || after[index] === undefined) return masked;
+  after[index]!.code = CYBER_POLICY_ERROR_CODE;
+  return masked;
 }
 
 /**
@@ -108,13 +134,17 @@ function createRedactionTools(outboundHeaders: Record<string, string>, maskCrede
   // `refuseSentValues`: a payload that is upstream copy throughout masks every sent value in its
   // strings and non-protocol keys, not only the selected credentials.
   const redactDiagnostic = (value: unknown, refuseSentValues = false): unknown => {
+    // A number is upstream text too once serialized: one that repeats a sent value is dropped from
+    // an object (keeping every field's type valid) and replaced inside an array.
+    const repeatsSentNumber = (entry: unknown): boolean => refuseSentValues && typeof entry === "number"
+      && maskSentValues(String(entry)) !== String(entry);
     const maskKnown = (entry: unknown, root = false): unknown => {
       if (typeof entry === "string") return refuseSentValues ? guardedText(entry) : maskCredential(entry);
-      if (Array.isArray(entry)) return entry.map(item => maskKnown(item));
+      if (Array.isArray(entry)) return entry.map(item => repeatsSentNumber(item) ? REDACTED_SECRET : maskKnown(item));
       if (entry && typeof entry === "object") {
         // A key is upstream text too: a rewritten terminal copies extra root fields verbatim. Its
         // sensitivity is decided before masking, which could rename a key such as authorization.
-        return Object.fromEntries(Object.entries(entry).map(([key, item]) => [
+        return Object.fromEntries(Object.entries(entry).filter(([, item]) => !repeatsSentNumber(item)).map(([key, item]) => [
           PROTOCOL_KEYS.has(key) ? key : refuseSentValues ? guardedText(key) : maskCredential(key),
           SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_SECRET
             : (root && key === "type") || isPublicClassValue(key, item) ? item : maskKnown(item),
@@ -195,7 +225,7 @@ export function createTerminalErrorRedactionBlockRewrite(
       // field so recognized classes survive for every reader.
       return [terminalFrame ? redactUpstreamCopyBlock(block, payload, event) : block];
     }
-    const safeEvent = redactDiagnostic(event);
+    const safeEvent = keepPolicyEvidence(event, redactDiagnostic(event));
     const rewritten = JSON.stringify(safeEvent);
     return [maskExtensionLines(rewritten === payload ? block : replaceSseDataPayload(block, rewritten))];
   };

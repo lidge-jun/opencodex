@@ -431,6 +431,38 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     });
   });
 
+  test.each(["tee", "eager"] as const)("%s typed policy terminal never keeps a sent value in its own lines", async mode => {
+    const credential = "abcdefghijklmnop123456";
+    const headers = { "x-auth-token": credential };
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, [`: ${credential}\ndata: ${JSON.stringify({ type: "error", code: "cyber_policy", message: "blocked" })}`]);
+      expect([out.includes(credential), out.includes('"code":"cyber_policy"')]).toEqual([false, true]);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s never emits a sent value as a JSON number", async mode => {
+    const headers = { "x-tenant": "123456789" };
+    await withRegistry(headers, async () => {
+      const typed = await deliver(mode, headers, [{ type: "error", code: "mystery_code", message: "fixture", extra: 123456789 }]);
+      const policy = await deliver(mode, headers, [{ error: { code: "cyber_policy", message: "blocked" }, sequence_number: 123456789 }]);
+      expect([typed.includes("123456789"), policy.includes("123456789")]).toEqual([false, false]);
+    });
+  });
+
+  test("excerpt indexing fails closed instead of growing past its cap", () => {
+    const guard = createSentValueGuard({ authorization: `Bearer ${"a".repeat(200_000)}` });
+    expect(guard("ordinary copy")).toBe(true);
+  });
+
+  test.each(["tee", "eager"] as const)("%s turns a genuine terminal into the policy terminal when masking removes its policy wording", async mode => {
+    const headers = { "x-auth-token": "high-risk cybersecurity" };
+    await withRegistry(headers, async () => {
+      const incomplete = { type: "response.incomplete", response: { status: "incomplete", error: { message: "high-risk cybersecurity" } } };
+      const out = await deliver(mode, headers, [`event: response.incomplete\ndata: ${JSON.stringify(incomplete)}`]);
+      expect([terminalTypes(out), out.includes('"code":"cyber_policy"'), out.includes("high-risk cybersecurity")]).toEqual([["response.failed"], true, false]);
+    });
+  });
+
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: "Bearer auth" });
     const failed = { type: "response.failed", response: { status: "failed", error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } } };

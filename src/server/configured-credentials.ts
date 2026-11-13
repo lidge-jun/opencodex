@@ -117,13 +117,18 @@ function build(configRead: StoreRead, authRead: StoreRead, signature: string, no
   // configured credential is refused like the whole value. Provider header values are matched whole
   // only: they are often ordinary text (titles, referrer URLs) whose words would refuse common copy.
   const windows = new Set<string>();
+  let producedWindows = 0;
   const envNames = new Set<string>();
   let complete = true;
   const add = (raw: string | undefined, credential = true) => {
     if (!raw) return;
     for (const part of credentialComponents(raw)) values.add(part);
-    if (credential) for (const window of credentialExcerptWindows(raw)) windows.add(window);
-    if (windows.size > MAX_CREDENTIAL_EXCERPT_WINDOWS) complete = false;
+    if (!credential || producedWindows > MAX_CREDENTIAL_EXCERPT_WINDOWS) return;
+    const produced = credentialExcerptWindows(raw, MAX_CREDENTIAL_EXCERPT_WINDOWS - producedWindows);
+    producedWindows += produced.length;
+    // Unbounded excerpt coverage would be unbounded work: past the cap the set fails closed.
+    if (producedWindows > MAX_CREDENTIAL_EXCERPT_WINDOWS) complete = false;
+    else for (const window of produced) windows.add(window);
   };
   const noteEnv = (raw: string) => {
     const name = envReference(raw);

@@ -405,7 +405,8 @@ export function createSseTerminalOutputBoundary(
         // lines), so its policy terminal is a fresh block; a typed terminal keeps its own lines.
         ? encoder.encode(parsed !== undefined && isUntypedBareUpstreamError(parsed)
           ? `event: response.failed\ndata: ${policyPayload}`
-          : rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload))
+          // A typed source keeps its own lines, so they pass the same redaction as a forwarded frame.
+          : (options?.redactForwardedEvidence ?? ((block: string) => block))(rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload)))
         : options?.redactForwardedEvidence !== undefined && asJsonRecord(parsed)?.type === "error"
           ? encoder.encode(options.redactForwardedEvidence(decoder.decode(frame.block)))
           : frame.block;
@@ -758,7 +759,10 @@ function policyFailurePayload(policyError: { message: string; type?: string }, p
   // Keep it (and any other non-error, non-response fields) while replacing only
   // the protocol type and error envelope.
   const preservedRoot = untyped
-    ? (typeof root?.sequence_number === "number" ? { sequence_number: root.sequence_number } : {})
+    // A sequence number that repeats a sent value is upstream copy like any other; it is omitted.
+    ? (typeof root?.sequence_number === "number"
+      && (mask === undefined || mask(String(root.sequence_number)) === String(root.sequence_number))
+      ? { sequence_number: root.sequence_number } : {})
     : root
     ? Object.fromEntries(Object.entries(root).filter(([key]) => (
       key !== "type"

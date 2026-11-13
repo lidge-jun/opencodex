@@ -39,6 +39,8 @@ export function isCorrelationHeaderName(name: string): boolean {
 
 /** Characters of a text a sent-value guard reads: a caller emits no copy beyond them. */
 export const SENT_VALUE_GUARD_SCAN_CHARS = 8_192;
+/** Excerpt windows produced beyond this many (repeats included) make a credential set fail closed. */
+export const MAX_CREDENTIAL_EXCERPT_WINDOWS = 65_536;
 
 function spellings(part: string): string[] {
   const escaped = JSON.stringify(part).slice(1, -1);
@@ -50,13 +52,16 @@ function spellings(part: string): string[] {
  * separators (whitespace, commas, semicolons, "=", quotes, backslashes), auth scheme words left out.
  * A window never spans a separator, so scheme or field-name text cannot form one, while an opaque
  * value containing "=" still has every token of 8+ characters covered.
+ * Generation stops once `max` windows are produced (repeats count), so a caller that sees more than
+ * `max` back knows coverage would be unbounded and fails closed.
  */
-export function credentialExcerptWindows(value: string): string[] {
+export function credentialExcerptWindows(value: string, max = MAX_CREDENTIAL_EXCERPT_WINDOWS): string[] {
   const windows: string[] = [];
   for (const token of value.split(/[\s,;="\\]+/)) {
     if (token.length < CREDENTIAL_SUBSTRING_MIN_LENGTH || AUTH_SCHEMES.has(token.toLowerCase())) continue;
     for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= token.length; at++) {
       windows.push(token.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
+      if (windows.length > max) return windows;
     }
   }
   return windows;
@@ -72,8 +77,6 @@ export function containsExcerptWindow(text: string, windows: ReadonlySet<string>
   return false;
 }
 
-/** Excerpt windows beyond this many make a credential set fail closed rather than grow. */
-export const MAX_CREDENTIAL_EXCERPT_WINDOWS = 65_536;
 
 /**
  * Whether text repeats a value these outbound headers carry, decided from this request's own
@@ -95,6 +98,7 @@ function indexSentValues(headers: Record<string, string>): SentValueIndex {
   const credentialWindows = new Set<string>();
   const contained: string[] = [];
   let overflow = false;
+  let produced = 0;
   for (const [name, value] of Object.entries(headers)) {
     const credentialNamed = isCredentialName(name);
     if (!credentialNamed && CORRELATION_HEADER_NAME.test(name)) continue;
@@ -105,8 +109,11 @@ function indexSentValues(headers: Record<string, string>): SentValueIndex {
       }
       for (const spelling of spellings(part)) {
         wholeCredential.add(spelling);
-        for (const window of credentialExcerptWindows(spelling)) credentialWindows.add(window);
-        if (credentialWindows.size > MAX_CREDENTIAL_EXCERPT_WINDOWS) overflow = true;
+        if (overflow) continue;
+        const windows = credentialExcerptWindows(spelling, MAX_CREDENTIAL_EXCERPT_WINDOWS - produced);
+        produced += windows.length;
+        if (produced > MAX_CREDENTIAL_EXCERPT_WINDOWS) overflow = true;
+        else for (const window of windows) credentialWindows.add(window);
       }
     }
   }
