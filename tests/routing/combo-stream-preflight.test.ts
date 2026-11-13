@@ -496,6 +496,18 @@ describe("combo stream preflight", () => {
     }
   });
 
+  test("commits an untyped error envelope instead of advancing the combo (#8216)", async () => {
+    // Not a control event, so it is never resent to another target; the relay reports it as failed.
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { error: { message: "openai_error", code: "bad_response_status_code" } },
+    );
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
   test("retries a zero-output opaque OpenRouter numeric 400 without a structured code", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",

@@ -3,8 +3,8 @@ import { ResponseBodyInactivityError } from "../../lib/response-body-inactivity"
 import {
   createSseInspector,
   createSseTerminalOutputBoundary,
+  createTerminalStatusTracker,
   SseAggregateLimitError,
-  terminalStatusFromParsed,
   type CodexSafetyBufferingFilterOptions,
   type SseInspector,
 } from "../relay";
@@ -110,6 +110,7 @@ function createBufferedTerminalInspector(maxSourceBytes: number): {
   let terminalCount = 0;
   let status: ResponsesTerminalStatus | undefined;
   let terminalResponse: Record<string, unknown> | undefined;
+  const classifyTerminal = createTerminalStatusTracker();
   const inspector = createSseInspector({
     terminalReconstruction: {
       maxItems: MAX_BUFFERED_RESPONSES_OUTPUT_ITEMS,
@@ -118,7 +119,7 @@ function createBufferedTerminalInspector(maxSourceBytes: number): {
       mergeSparseTerminalOutput: true,
     },
     onParsedPayload(payload) {
-      const candidateStatus = terminalStatusFromParsed(payload);
+      const candidateStatus = classifyTerminal(payload);
       if (!candidateStatus) return;
       terminalCount += 1;
       status ??= candidateStatus;
@@ -219,6 +220,8 @@ export async function collectBufferedResponsesSse(
     terminalBoundary?: CodexSafetyBufferingFilterOptions;
     read?: BufferedReadOptions;
     retainTranscript?: boolean;
+    /** Per-request outbound mask, applied to upstream copy before the boundary bounds it. */
+    maskCredential?: (text: string) => string;
   } = {},
 ): Promise<BufferedResponsesSseResult> {
   const maxBytes = options.read?.maxBytes ?? MAX_UPSTREAM_JSON_BODY_BYTES;
@@ -237,6 +240,7 @@ export async function collectBufferedResponsesSse(
   const reader = body.getReader();
   const boundary = createSseTerminalOutputBoundary({
     ...options.terminalBoundary,
+    maskCredential: options.maskCredential,
     maxInputBytes: maxBytes,
     maxOutputBytes: maxBytes,
     maxFrames,

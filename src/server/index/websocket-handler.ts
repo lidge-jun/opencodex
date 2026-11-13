@@ -404,7 +404,8 @@ export function createWebsocketHandler(
               : (payload: string) => inspectResponseLogSsePayload(logCtx, payload);
             const providerExecuted = responseToolOwnership(response);
             await sendResponseToWebSocket(ws, response, isCurrent, {
-              untilEof: nativeControl?.relayActive === true,
+              // A native-control body is the upstream itself, with no relay tail behind it.
+              untilEof: nativeControl?.relayActive === true, rawUpstream: nativeControl?.relayActive === true,
               onSsePayload: payload => {
                 ws.data.responsesActivity?.observePayload(payload, providerExecuted);
                 observeLog(payload);
