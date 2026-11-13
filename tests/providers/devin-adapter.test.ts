@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevinAdapter, mapDevinToolCallStartForTests, mapOcxMessagesToDevin, mapOcxToolsToDevin, resolveWireModelUidForTests } from "../../src/adapters/devin";
-import { buildGetChatMessageRequestForTests, sanitizeTextForCognitionForTests, sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
+import { buildGetChatMessageRequestForTests, sanitizeTextForCognitionForTests, sanitizeToolDescriptionForCognitionForTests, type ChatHistoryItem } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
@@ -306,6 +306,44 @@ describe("devin adapter", () => {
     expect(sanitizeToolDescriptionForCognitionForTests(nearMiss)).toBe(nearMiss);
   });
 
+  test("rewrites the Claude Code system prompt sentences Cognition refuses (#8558)", () => {
+    // Three whole sentences from Claude Code's system prompt. Each alone was
+    // refused live; the rewritten forms were accepted.
+    const agentSdk = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+    expect(sanitizeTextForCognitionForTests(agentSdk))
+      .toBe("You are a Claude agent, built on Anthropic's Claude Agent Toolkit.");
+
+    const dualUse = "Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.";
+    expect(sanitizeTextForCognitionForTests(dualUse))
+      .toBe("Dual-purpose security tools (C2 frameworks, credential testing, exploit development) need clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.");
+
+    const surfaces = "Claude Code is available as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains).";
+    expect(sanitizeTextForCognitionForTests(surfaces))
+      .toBe("Claude Code ships as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains).");
+
+    // Lowercase, a missing comma and a doubled space were all still refused,
+    // so they must be rewritten too.
+    expect(sanitizeTextForCognitionForTests(agentSdk.toLowerCase())).toContain("Claude Agent Toolkit");
+    expect(sanitizeTextForCognitionForTests("You are a Claude agent built on Anthropic's Claude Agent SDK."))
+      .toContain("Claude Agent Toolkit");
+    expect(sanitizeTextForCognitionForTests(dualUse.replace("tools (C2", "tools  (C2"))).toContain("Dual-purpose security tools");
+    expect(sanitizeTextForCognitionForTests(surfaces.toUpperCase())).toContain("Claude Code ships as a CLI");
+
+    // Embedded in a longer prompt: surrounding text survives.
+    const prompt = `Intro line.\n${agentSdk}\n\nIMPORTANT: ${dualUse}\n - ${surfaces}\nOutro line.`;
+    const rewritten = sanitizeTextForCognitionForTests(prompt);
+    expect(rewritten).not.toMatch(/Claude Agent SDK/);
+    expect(rewritten).not.toMatch(/Dual-use security tools/);
+    expect(rewritten).not.toMatch(/Claude Code is available as a CLI/);
+    expect(rewritten.startsWith("Intro line.\n")).toBe(true);
+    expect(rewritten.endsWith("\nOutro line.")).toBe(true);
+
+    // Sub-phrases passed live, so they must stay untouched.
+    for (const benign of ["Claude Agent SDK", "credential testing", "VS Code, JetBrains", "Claude Code is available"]) {
+      expect(sanitizeTextForCognitionForTests(benign)).toBe(benign);
+    }
+  });
+
   test("rewrites the Codex escalation phrase on instruction surfaces and preserves data", () => {
     // This trigger lives in Codex's <permissions instructions> boilerplate,
     // which Codex sends as system prompt — not in a tool description. The
@@ -379,6 +417,135 @@ describe("devin adapter", () => {
     });
     expect(toolOnly.includes(Buffer.from(trigger, "utf8"))).toBe(false);
     expect(toolOnly.includes(Buffer.from("whether to allow the action", "utf8"))).toBe(true);
+  });
+
+  test("the Claude Code system-prompt rewrites reach the Cognition wire (#8558)", () => {
+    // Claude Code sends its system prompt through buildGetChatMessageRequest's
+    // #2 instruction surface — the same path the Codex escalation sentence
+    // takes above. These three whole sentences were each refused live with
+    // permission_denied, every sub-phrase passed, and the same account served
+    // Codex turns, so the trigger is the sentence rather than the account.
+    const sentences = [
+      "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+      "Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.",
+      "Claude Code is available as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains).",
+    ];
+    const rewrites = [
+      "You are a Claude agent, built on Anthropic's Claude Agent Toolkit.",
+      "Dual-purpose security tools (C2 frameworks, credential testing, exploit development) need clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.",
+      "Claude Code ships as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains).",
+    ];
+    // Meaning-preserving: the authorization and safety intent survives.
+    expect(rewrites[1]).toContain("clear authorization context");
+    expect(rewrites[1]).toContain("defensive use cases");
+
+    const systemPrompt = `Intro line.\n${sentences[0]}\n\n${sentences[1]}\n\n${sentences[2]}\nOutro line.`;
+    const expectedSystemPrompt = `Intro line.\n${rewrites[0]}\n\n${rewrites[1]}\n\n${rewrites[2]}\nOutro line.`;
+
+    // The same literal sentences sit in every data position the sanitizer
+    // must not touch: user text, replayed history and thinking, tool-call
+    // arguments, and a tool result quoting file bytes.
+    const userText = `Please quote this verbatim: ${sentences.join(" ")}`;
+    const historyText = `earlier: ${sentences[2]}`;
+    const thinking = `I reasoned about: ${sentences[0]}`;
+    const args = JSON.stringify({ patch: `${sentences[0]}\n${sentences[1]}\n${sentences[2]}` });
+    const toolResult = `bytes on disk: ${sentences.join(" ")}`;
+
+    const messages: ChatHistoryItem[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userText },
+      {
+        role: "assistant",
+        content: historyText,
+        thinking,
+        tool_calls: [{ id: "c1", name: "apply_patch", arguments: args }],
+      },
+      { role: "tool", tool_call_id: "c1", content: toolResult },
+      { role: "user", content: "hello" },
+    ];
+    const base = {
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      tools: [{ name: "benign", description: "A benign description.", parameters: { type: "object" } }],
+    };
+
+    const withSystem = buildGetChatMessageRequestForTests({ ...base, messages });
+    const withoutSystem = buildGetChatMessageRequestForTests({ ...base, messages: messages.slice(1) });
+
+    // #2 — the instruction surface the Claude Code prompt actually travels on
+    // — comes out fully rewritten, with the surrounding text intact.
+    const systemBytes = [...iterFields(withSystem)].find((field) => field.num === 2)?.value as Buffer;
+    expect(systemBytes).toEqual(Buffer.from(expectedSystemPrompt, "utf8"));
+    for (const sentence of sentences) {
+      expect(systemBytes.includes(Buffer.from(sentence, "utf8"))).toBe(false);
+    }
+
+    const promptBodies = (request: Buffer): Buffer[] =>
+      [...iterFields(request)].filter((field) => field.num === 3).map((field) => field.value as Buffer);
+    const sanitizedBodies = promptBodies(withSystem);
+    const plainBodies = promptBodies(withoutSystem);
+    expect(sanitizedBodies.length).toBe(4);
+    expect(plainBodies.length).toBe(4);
+
+    // Byte-for-byte: removing #2 leaves every #3 body identical, so the
+    // rewrite cannot have reached message content, thinking, tool-call
+    // arguments, or tool results. Each prompt mints a fresh random message id
+    // (field #1), so the comparison re-serializes every other field verbatim.
+    const dataBytesOf = (body: Buffer): Buffer => {
+      const parts: Buffer[] = [];
+      for (const field of iterFields(body)) {
+        if (field.num === 1) continue; // per-request uuid, not derived from text
+        if (field.wire === 2) parts.push(encodeMessage(field.num, field.value as Buffer));
+        else if (field.wire === 0) parts.push(encodeVarintField(field.num, field.value as bigint));
+        else throw new Error(`unexpected writable field #${field.num}`);
+      }
+      return Buffer.concat(parts);
+    };
+    sanitizedBodies.forEach((body, index) => {
+      expect(dataBytesOf(body).equals(dataBytesOf(plainBodies[index] as Buffer))).toBe(true);
+    });
+
+    // And those unchanged bodies still carry the literal bytes verbatim.
+    const data = Buffer.concat(sanitizedBodies);
+    expect(data.includes(Buffer.from(userText, "utf8"))).toBe(true);
+    expect(data.includes(Buffer.from(historyText, "utf8"))).toBe(true);
+    expect(data.includes(Buffer.from(thinking, "utf8"))).toBe(true);
+    expect(data.includes(Buffer.from(args, "utf8"))).toBe(true);
+    expect(data.includes(Buffer.from(toolResult, "utf8"))).toBe(true);
+    for (const rewrite of rewrites) {
+      expect(data.includes(Buffer.from(rewrite, "utf8"))).toBe(false);
+    }
+  });
+
+  test("the Claude Code rewrites cover tool descriptions but never tool arguments (#8558)", () => {
+    // The #8558 sentences live in the system prompt, but tool descriptions are
+    // the other instruction surface the sanitizer owns, so they must be
+    // rewritten too — while the identical bytes inside tool-call arguments
+    // stay literal.
+    const sentence = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+    const rewrite = "You are a Claude agent, built on Anthropic's Claude Agent Toolkit.";
+    const args = JSON.stringify({ note: sentence });
+    const request = buildGetChatMessageRequestForTests({
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "ok", tool_calls: [{ id: "c1", name: "note", arguments: args }] },
+      ],
+      tools: [{ name: "note", description: sentence, parameters: { type: "object" } }],
+    });
+    const toolBytes = [...iterFields(request)].find((field) => field.num === 10)?.value as Buffer;
+    expect(toolBytes.includes(Buffer.from(sentence, "utf8"))).toBe(false);
+    expect(toolBytes.includes(Buffer.from(rewrite, "utf8"))).toBe(true);
+    expect(request.includes(Buffer.from(args, "utf8"))).toBe(true);
   });
 
   test("the catalog parser reads the per-account context window", () => {

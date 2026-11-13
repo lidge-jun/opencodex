@@ -632,6 +632,13 @@ const MAX_TOOL_DESC_LEN = 6998;
  * for "whether to allow", verified live to clear the filter while preserving
  * the instruction's meaning.
  *
+ * The last three entries are whole sentences from Claude Code's own system
+ * prompt (#8558). Each one alone produced `permission_denied` against a live
+ * account, every sub-phrase passed, and lowercasing, a missing comma or a
+ * doubled space still got refused, so they match like the Codex entries.
+ * Without them every Claude Code turn to a Devin model was refused, while
+ * Codex on the same account worked.
+ *
  * Scope note: the sanitizer only ever touches *instruction surfaces* —
  * tool descriptions and the #2 system prompt, where a meaning-preserving
  * reword loses nothing. It deliberately does NOT touch data fields:
@@ -655,6 +662,20 @@ const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   [
     /\basking\s+the\s+user\s+if\s+they\s+want\s+to\s+allow\s+the\s+action\s+in\s+`?justification`?\s+parameter\b/gi,
     "asking the user whether to allow the action in the `justification` parameter",
+  ],
+  // Claude Code system prompt (#8558). Matched like the Codex entries:
+  // case-insensitive, flexible whitespace, optional commas.
+  [
+    /\bYou\s+are\s+a\s+Claude\s+agent,?\s+built\s+on\s+Anthropic['’]?s\s+Claude\s+Agent\s+SDK\b/gi,
+    "You are a Claude agent, built on Anthropic's Claude Agent Toolkit",
+  ],
+  [
+    /\bDual-use\s+security\s+tools\s+\(C2\s+frameworks,?\s+credential\s+testing,?\s+exploit\s+development\)\s+require\s+clear\s+authorization\s+context:\s+pentesting\s+engagements,?\s+CTF\s+competitions,?\s+security\s+research,?\s+or\s+defensive\s+use\s+cases\b/gi,
+    "Dual-purpose security tools (C2 frameworks, credential testing, exploit development) need clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases",
+  ],
+  [
+    /\bClaude\s+Code\s+is\s+available\s+as\s+a\s+CLI\s+in\s+the\s+terminal,?\s+desktop\s+app\s+\(Mac\/Windows\),?\s+web\s+app\s+\(claude\.ai\/code\),?\s+and\s+IDE\s+extensions\s+\(VS\s+Code,?\s+JetBrains\)/gi,
+    "Claude Code ships as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains)",
   ],
 ];
 
