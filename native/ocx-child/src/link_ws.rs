@@ -612,6 +612,10 @@ fn write_frame(
             Leg::Home => (&shared.home_write, &shared.home),
         };
         let _guard = lock(lock_m);
+        #[cfg(test)]
+        if kind == Kind::Data {
+            tests::data_locked();
+        }
         if shared.closing.load(Ordering::SeqCst) && kind != Kind::Close {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -670,6 +674,8 @@ fn terminate(shared: &Arc<SocketShared>, codex: CloseAction, home: CloseAction) 
     if !claimed {
         return;
     }
+    #[cfg(test)]
+    tests::after_claim();
     for (leg, action) in [(Leg::Codex, &codex), (Leg::Home, &home)] {
         match close_bytes(action) {
             Some(payload) => {
@@ -824,7 +830,7 @@ pub enum Fallback {
     Stopping,
 }
 
-/// Serve one upgrade relay.rs decided to try. \`codex_reader\` is the worker's reader: bytes it already
+/// Serve one upgrade relay.rs decided to try. `codex_reader` is the worker's reader: bytes it already
 /// buffered after Codex's head are read before anything else.
 pub(crate) fn serve(
     codex_reader: &mut BufReader<DeadlineStream>,
@@ -1013,10 +1019,15 @@ fn open(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n{MAX_MESSAGE_HEADER}: {}\r\n\r\n",
         l.local_message
     );
-    if codex_writer
-        .write_all(reply.as_bytes())
-        .and_then(|()| codex_writer.flush())
-        .is_err()
+    #[cfg(test)]
+    let fail_101 = tests::FAIL_101.swap(false, Ordering::SeqCst);
+    #[cfg(not(test))]
+    let fail_101 = false;
+    if fail_101
+        || codex_writer
+            .write_all(reply.as_bytes())
+            .and_then(|()| codex_writer.flush())
+            .is_err()
     {
         terminate(&shared, CloseAction::Cut, CloseAction::Cut);
         finish(&shared, Some(handle));
@@ -1343,13 +1354,47 @@ mod tests {
 
     static SERIAL: Mutex<()> = Mutex::new(());
     pub(super) static FAIL_SPAWN: AtomicBool = AtomicBool::new(false);
+    pub(super) static FAIL_101: AtomicBool = AtomicBool::new(false);
     static BEFORE_START: Mutex<Option<fn()>> = Mutex::new(None);
+    /// Armed by a test: the next claiming terminal caller reports here, then waits for the release.
+    static CLAIM_GATE: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mutex::new(None);
+    /// Armed by a test: the next data write reports here once it holds its leg's write lock.
+    static DATA_LOCKED: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
 
     pub(super) fn before_start() {
         let hook = *lock(&BEFORE_START);
         if let Some(f) = hook {
             f();
         }
+    }
+
+    pub(super) fn after_claim() {
+        let gate = lock(&CLAIM_GATE).take();
+        if let Some((reached, release)) = gate {
+            let _ = reached.send(());
+            let _ = release.recv();
+        }
+    }
+
+    pub(super) fn data_locked() {
+        if let Some(tx) = lock(&DATA_LOCKED).take() {
+            let _ = tx.send(());
+        }
+    }
+
+    /// The one registered socket (tests run one session at a time).
+    fn only_socket() -> Arc<SocketShared> {
+        let (m, _) = registry();
+        let r = lock(m);
+        assert_eq!(r.sockets.len(), 1);
+        r.sockets.values().next().cloned().unwrap()
+    }
+
+    fn reaper_holds(token: u64) -> bool {
+        lock(&reaper().inner)
+            .entries
+            .iter()
+            .any(|(t, _, _)| *t == token)
     }
 
     const TOKEN: &str = "ocx-link-ws-test-token-0123456789";
@@ -1490,7 +1535,7 @@ mod tests {
         }
     }
 
-    /// Reads frames off a raw socket (either role) until \`count\` events arrived or the connection ended.
+    /// Reads frames off a raw socket (either role) until `count` events arrived or the connection ended.
     fn read_events(
         stream: &mut TcpStream,
         role: Role,
@@ -1533,7 +1578,7 @@ mod tests {
         worker: thread::JoinHandle<Result<(), Fallback>>,
     }
 
-    /// A Child worker serving one upgrade, and Codex's connection to it. \`first\` is sent with the head.
+    /// A Child worker serving one upgrade, and Codex's connection to it. `first` is sent with the head.
     fn session(home_port: u16, limits: Limits, extra: &str, first: &[u8]) -> Session {
         let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1555,7 +1600,16 @@ mod tests {
         );
         codex.write_all(&[head.as_bytes(), first].concat()).unwrap();
         let mut reader = BufReader::new(codex.try_clone().unwrap());
-        let resp = read_response_head(&mut reader).unwrap();
+        let Ok(resp) = read_response_head(&mut reader) else {
+            // The Child ended the connection without an answer.
+            return Session {
+                codex,
+                codex_leftover: Vec::new(),
+                status: 0,
+                response: String::new(),
+                worker,
+            };
+        };
         let leftover = reader.buffer().to_vec();
         let response = resp
             .headers
@@ -1625,6 +1679,269 @@ mod tests {
             .unwrap();
         assert!(s.worker.join().unwrap().is_ok());
         wait_all_released();
+    }
+
+    #[test]
+    fn a_failed_local_101_aborts_the_home_thread_and_cuts_the_home_connection() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        FAIL_101.store(true, Ordering::SeqCst);
+        let s = session(home_port, test_limits(), "", &[]);
+        assert_eq!(s.status, 0, "nothing is written after a failed 101");
+        assert_eq!(s.worker.join().unwrap(), Ok(()));
+        let mut home = homes.recv().unwrap();
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![],
+            "the Home connection ends without a close frame"
+        );
+        wait_all_released();
+    }
+
+    #[test]
+    fn a_close_claim_keeps_its_deadline_through_the_workers_cleanup() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        // A close bound that cannot fire during the test: only retirement can remove the entry.
+        let limits = Limits {
+            close_bound: Duration::from_secs(120),
+            ..test_limits()
+        };
+        let s = session(home_port, limits, "", &[]);
+        assert_eq!(s.status, 101);
+        let home = homes.recv().unwrap();
+        let shared = only_socket();
+        let (reached_tx, reached) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        *lock(&CLAIM_GATE) = Some((reached_tx, release_rx));
+        let closer = {
+            let shared = Arc::clone(&shared);
+            thread::spawn(move || {
+                terminate(
+                    &shared,
+                    CloseAction::Frame(1001, String::new()),
+                    CloseAction::Frame(1001, String::new()),
+                );
+            })
+        };
+        reached.recv().unwrap();
+        // Between the claim and the first close write, both peers leave and the worker cleans up.
+        home.stream.shutdown(Shutdown::Both).unwrap();
+        s.codex.shutdown(Shutdown::Both).unwrap();
+        assert!(s.worker.join().unwrap().is_ok());
+        let token = {
+            let st = lock(&shared.state);
+            assert!(st.cleanup_done);
+            assert_eq!(st.close_io, 1);
+            st.close_token
+                .expect("the claimed close keeps its deadline")
+        };
+        assert!(
+            reaper_holds(token),
+            "cleanup did not retire a claimed close entry"
+        );
+        release.send(()).unwrap();
+        closer.join().unwrap();
+        assert!(lock(&shared.state).close_token.is_none());
+        assert!(
+            !reaper_holds(token),
+            "the last close caller retires the entry"
+        );
+        drop(shared);
+        wait_all_released();
+    }
+
+    #[test]
+    fn a_close_behind_a_blocked_data_write_returns_at_the_close_deadline() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        // Default stall (300 s) and data (600 s) bounds: only the 300 ms close deadline can end this.
+        let s = session(home_port, test_limits(), "", &[]);
+        let _home = homes.recv().unwrap();
+        let shared = only_socket();
+        let (locked_tx, locked) = mpsc::channel();
+        *lock(&DATA_LOCKED) = Some(locked_tx);
+        let writer = {
+            let shared = Arc::clone(&shared);
+            // Codex never reads: 64 MiB cannot fit in the loopback buffers, so this write blocks.
+            thread::spawn(move || {
+                write_frame(&shared, Leg::Codex, 1, vec![b'w'; 64 * MIB], Kind::Data)
+            })
+        };
+        locked.recv().unwrap();
+        let started = Instant::now();
+        terminate(
+            &shared,
+            CloseAction::Frame(1001, String::new()),
+            CloseAction::Frame(1001, String::new()),
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "the close waited {elapsed:?} behind the data write"
+        );
+        assert!(writer.join().unwrap().is_err());
+        assert!(s.worker.join().unwrap().is_ok());
+        drop(s.codex);
+        drop(shared);
+        wait_all_released();
+    }
+
+    #[test]
+    fn maximum_messages_cross_in_both_directions_at_once() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        let l = test_limits();
+        let mut s = session(home_port, l, "", &[]);
+        let mut home = homes.recv().unwrap();
+        let up = "u".repeat(l.local_message);
+        let down = "d".repeat(l.home_message);
+        let mut codex_writer = s.codex.try_clone().unwrap();
+        let up_frame = client_frame(1, up.as_bytes());
+        let codex_send = thread::spawn(move || codex_writer.write_all(&up_frame).is_ok());
+        let mut home_writer = home.stream.try_clone().unwrap();
+        let down_frame = server_frame(1, down.as_bytes());
+        let home_send = thread::spawn(move || home_writer.write_all(&down_frame).is_ok());
+        let mut home_stream = home.stream.try_clone().unwrap();
+        let leftover = std::mem::take(&mut home.leftover);
+        let home_read =
+            thread::spawn(move || read_events(&mut home_stream, Role::FromClient, &leftover, 1));
+        let at_codex = read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1);
+        let at_home = home_read.join().unwrap();
+        assert!(codex_send.join().unwrap() && home_send.join().unwrap());
+        assert_eq!(at_codex, vec![FrameEvent::Text(down)]);
+        assert_eq!(at_home, vec![FrameEvent::Text(up)]);
+        s.codex.shutdown(Shutdown::Both).unwrap();
+        assert!(s.worker.join().unwrap().is_ok());
+        wait_all_released();
+    }
+
+    #[test]
+    fn pings_during_large_messages_get_whole_pongs_between_frames() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        let mut s = session(home_port, test_limits(), "", &[]);
+        let home = homes.recv().unwrap();
+        // Codex holds off reading while the Home sends large messages and Codex pings repeatedly.
+        let mut home_writer = home.stream.try_clone().unwrap();
+        let big = server_frame(1, &vec![b'm'; MIB]);
+        let home_send = thread::spawn(move || {
+            for _ in 0..3 {
+                home_writer.write_all(&big).unwrap();
+            }
+        });
+        let pings: Vec<u8> = (0..100u8).flat_map(|i| client_frame(9, &[i])).collect();
+        s.codex.write_all(&pings).unwrap();
+        let events = read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 103);
+        home_send.join().unwrap();
+        let texts: Vec<usize> = events
+            .iter()
+            .filter_map(|e| match e {
+                FrameEvent::Text(t) => Some(t.len()),
+                _ => None,
+            })
+            .collect();
+        let pongs: Vec<Vec<u8>> = events
+            .iter()
+            .filter_map(|e| match e {
+                FrameEvent::Pong(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec![MIB; 3]);
+        assert_eq!(pongs, (0..100u8).map(|i| vec![i]).collect::<Vec<_>>());
+        s.codex.shutdown(Shutdown::Both).unwrap();
+        assert!(s.worker.join().unwrap().is_ok());
+        wait_all_released();
+    }
+
+    #[test]
+    fn codex_lost_while_a_write_to_it_is_blocked_ends_both_legs() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        // Default write bounds: only Codex's departure can end this promptly.
+        let s = session(home_port, test_limits(), "", &[]);
+        let mut home = homes.recv().unwrap();
+        let (locked_tx, locked) = mpsc::channel();
+        *lock(&DATA_LOCKED) = Some(locked_tx);
+        let mut home_writer = home.stream.try_clone().unwrap();
+        let flood = thread::spawn(move || {
+            let message = server_frame(1, &vec![b'f'; MIB]);
+            for _ in 0..64 {
+                if home_writer.write_all(&message).is_err() {
+                    return;
+                }
+            }
+        });
+        locked.recv().unwrap();
+        s.codex.shutdown(Shutdown::Both).unwrap();
+        assert!(s.worker.join().unwrap().is_ok());
+        let mut rest = vec![0u8; 64 * KIB];
+        loop {
+            match home.stream.read(&mut rest) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+        let _ = flood.join();
+        wait_all_released();
+    }
+
+    #[test]
+    fn stop_with_writes_blocked_both_ways_on_several_sockets_ends() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        let mut sessions = Vec::new();
+        let mut floods = Vec::new();
+        for _ in 0..3 {
+            // Default write bounds; neither peer reads, both send.
+            let s = session(home_port, test_limits(), "", &[]);
+            assert_eq!(s.status, 101);
+            let home = homes.recv().unwrap();
+            let mut codex_writer = s.codex.try_clone().unwrap();
+            floods.push(thread::spawn(move || {
+                let message = client_frame(1, &vec![b'c'; MIB]);
+                for _ in 0..64 {
+                    if codex_writer.write_all(&message).is_err() {
+                        return;
+                    }
+                }
+            }));
+            let mut home_writer = home.stream.try_clone().unwrap();
+            floods.push(thread::spawn(move || {
+                let message = server_frame(1, &vec![b'h'; MIB]);
+                for _ in 0..64 {
+                    if home_writer.write_all(&message).is_err() {
+                        return;
+                    }
+                }
+            }));
+            sessions.push((s, home));
+        }
+        let started = Instant::now();
+        stop_all();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "stop took {elapsed:?} with writes blocked"
+        );
+        for (s, home) in sessions {
+            assert!(s.worker.join().unwrap().is_ok());
+            drop(home);
+            drop(s.codex);
+        }
+        for f in floods {
+            let _ = f.join();
+        }
+        wait_all_released();
+        reset_registry();
     }
 
     #[test]
