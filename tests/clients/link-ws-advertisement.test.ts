@@ -55,11 +55,12 @@ describe("ordering by preflight start", () => {
     expect(linkWebsocketAdvertised(LINK)).toBe(true);
   });
 
-  test("a relink is a new link id with its own state; a restart starts from off", () => {
+  test("a relink is a new link id with its own state; a restart starts with no entry (unknown)", () => {
     applyLinkWebsocketAnswer(LINK, nextLinkPreflightSequence(), "on");
     expect(linkWebsocketAdvertised("lnk_fedcba9876543210")).toBe(false);
     expect(linkWebsocketAdvertised(LINK)).toBe(true);
     forgetLinkWebsocketAdvertisementsForTests();
+    expect(linkWebsocketAdvertisement(LINK)).toBe("unknown");
     expect(linkWebsocketAdvertised(LINK)).toBe(false);
     expect(linkWebsocketAdvertised(undefined)).toBe(false);
   });
