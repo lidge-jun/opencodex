@@ -433,9 +433,11 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     });
   }
 
-  test("a package pnpm lists directly inside a v<N>/links directory must earn the store proof (decision B)", () => {
-    // Same hoisted tree as the legacy v1/links case, but listed at its own path with no symlink in between.
-    const globalRoot = join(root, "v1", "links", "g"), bin = join(root, "bin");
+  // Same hoisted tree as the legacy v1/links case, but listed at its own path with no symlink in between. A
+  // node_modules/.pnpm segment ABOVE the links directory does not make it an isolated install.
+  for (const prefix of [["v1", "links", "g"], ["node_modules", ".pnpm", "host", "v1", "links", "g"]]) {
+  test(`a package pnpm lists directly inside ${prefix.join("/")} must earn the store proof (decision B)`, () => {
+    const globalRoot = join(root, ...prefix), bin = join(root, "bin");
     const group = join(globalRoot, "node_modules"), pkg = join(group, ...PKG.split("/"));
     mkdirSync(join(pkg, "bin"), { recursive: true });
     mkdirSync(bin, { recursive: true });
@@ -454,7 +456,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
         calls.push([...args]);
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: pkg } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
-        if (args[0] === "config" && args[2] === "global-dir") return { status: 0, stdout: join(root, "v1", "links") };
+        if (args[0] === "config" && args[2] === "global-dir") return { status: 0, stdout: dirname(globalRoot) };
         if (args[0] === "config" && args[2] === "global-bin-dir") return { status: 0, stdout: bin };
         if (args[0] === "config") return { status: 0, stdout: "undefined" };
         return { status: 1 };
@@ -465,6 +467,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(calls.some(args => args[0] === "store")).toBe(false);
     expect(verifyPnpmInstallTree(pkg, "2.0.0")).toMatchObject({ ok: false, failures: ["pnpm global links are outside the selected store"] });
   });
+  }
 
   test("owner refusals before the store proof also carry the remedy for a store-like install", () => {
     // pnpm reports a different global root than its listing: the group and bin directory cannot be bound.

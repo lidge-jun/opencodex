@@ -134,6 +134,24 @@ function resolveStoreLinkChain(path, store, alias, alternateRoot, alternateAlias
   }
 }
 
+/**
+ * Whether a spelling has a v<N>/links component outside an isolated install. A pnpm global-store link
+ * instance never contains node_modules/.pnpm, so only a .pnpm virtual store BELOW the last v<N>/links
+ * component marks the location as an isolated install; a .pnpm segment above it hides nothing.
+ */
+function hasGlobalLinksComponent(path) {
+  const parts = String(path).split(/[\\/]+/);
+  let links = -1;
+  for (let i = 1; i < parts.length; i += 1) {
+    if (/^links$/i.test(parts[i]) && /^v\d+$/i.test(parts[i - 1])) links = i;
+  }
+  if (links < 0) return false;
+  for (let i = links + 1; i < parts.length - 1; i += 1) {
+    if (/^node_modules$/i.test(parts[i]) && /^\.pnpm$/i.test(parts[i + 1])) return false;
+  }
+  return true;
+}
+
 /** Retain intermediate spellings: realpath alone hides a links directory behind another symlink. */
 function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
   let path = resolve(packageDir);
@@ -151,8 +169,7 @@ function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
       if (lstatSync(prefix).isSymbolicLink()) {
         const target = resolve(dirname(prefix), readlinkSync(prefix));
         const remaining = parts.slice(i + 1);
-        found ||= (!/(?:^|[\\/])node_modules[\\/]\.pnpm(?:[\\/]|$)/i.test(target)
-          && /(?:^|[\\/])v\d+[\\/]links(?:[\\/]|$)/i.test(target))
+        found ||= hasGlobalLinksComponent(target)
           || (/(?:^|[\\/])v\d+$/i.test(target) && remaining[0]?.toLowerCase() === "links");
         path = resolve(target, ...remaining);
         changed = true;
@@ -161,9 +178,8 @@ function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
     }
     // The package's final location classifies by the same v<N>/links rule as a symlink target, so a package
     // pnpm lists directly inside such a directory must earn the store proof too (owner decision B). An isolated
-    // install that ends in pnpm's node_modules/.pnpm virtual store is not a global-store link.
-    if (!changed) return found || (!/(?:^|[\\/])node_modules[\\/]\.pnpm(?:[\\/]|$)/i.test(path)
-      && /(?:^|[\\/])v\d+[\\/]links(?:[\\/]|$)/i.test(path));
+    // install inside pnpm's node_modules/.pnpm virtual store below that component is not a global-store link.
+    if (!changed) return found || hasGlobalLinksComponent(path);
   }
   throw new Error("pnpm package symlink chain is too long");
 }
