@@ -778,6 +778,8 @@ fn pump<R: Read>(shared: &Arc<SocketShared>, from: Leg, mut source: R) {
         for event in events {
             match event {
                 FrameEvent::Text(text) => {
+                    #[cfg(test)]
+                    tests::maybe_panic(from);
                     if write_frame(shared, to, 1, text.into_bytes(), Kind::Data).is_err() {
                         terminate(
                             shared,
@@ -993,6 +995,8 @@ fn open(
         r.sockets.insert(slot.id, Arc::clone(&shared));
         shared
     };
+    // A panic from here on still unregisters the socket and frees its slot (every normal return calls finish).
+    let _unwind = UnwindCleanup(Arc::clone(&shared));
     // Open-socket timeouts (draft 9 S2/S3): no read timeout, 300 s of no write progress.
     for s in [&shared.codex, &shared.home] {
         let _ = s.set_read_timeout(None);
@@ -1020,6 +1024,8 @@ fn open(
             .stack_size(SPAWNED_STACK)
             .spawn(move || {
                 let shared = spawned_shared;
+                // Sets spawned_done however this thread ends, so the worker's finish never waits forever.
+                let _done = SpawnedDone(Arc::clone(&shared));
                 let started = {
                     let mut st = lock(&shared.state);
                     while st.lifecycle == Lifecycle::Registered {
@@ -1034,9 +1040,6 @@ fn open(
                         Cursor::new(home_buffered).chain(home_reader),
                     );
                 }
-                let mut st = lock(&shared.state);
-                st.spawned_done = true;
-                shared.cv.notify_all();
             })
     };
     let handle = match spawned {
@@ -1102,6 +1105,32 @@ fn open(
     pump(&shared, Leg::Codex, &mut *codex_reader);
     finish(&shared, Some(handle));
     Ok(())
+}
+
+/// Runs the worker's cleanup if the worker unwinds after registration (a panic): both connections end, the
+/// socket is unregistered, and its slot is freed once the spawned thread, which then reads EOF, has ended.
+struct UnwindCleanup(Arc<SocketShared>);
+
+impl Drop for UnwindCleanup {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            finish(&self.0, None);
+        }
+    }
+}
+
+/// The spawned Home reader's exit: on a panic both connections end first; spawned_done is always set.
+struct SpawnedDone(Arc<SocketShared>);
+
+impl Drop for SpawnedDone {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            terminate(&self.0, CloseAction::Cut, CloseAction::Cut);
+        }
+        let mut st = lock(&self.0.state);
+        st.spawned_done = true;
+        self.0.cv.notify_all();
+    }
 }
 
 /// The worker's cleanup: the terminal transition (idempotent), wait for the spawned thread (the reaper's
@@ -1548,6 +1577,66 @@ mod tests {
         lock(&REAL_STOP).take().unwrap().join().unwrap();
         wait_all_released();
         reset_registry();
+    }
+
+    /// Armed by a test: the reader of this leg panics on its next text message.
+    pub(super) static PANIC_IN: Mutex<Option<Leg>> = Mutex::new(None);
+
+    pub(super) fn maybe_panic(leg: Leg) {
+        let armed = {
+            let mut slot = lock(&PANIC_IN);
+            if *slot == Some(leg) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if armed.is_some() {
+            panic!("panic injected by a test");
+        }
+    }
+
+    #[test]
+    fn a_panic_in_the_worker_unregisters_the_socket_and_frees_its_slot() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        let mut s = session(home_port, test_limits(), "", &[]);
+        assert_eq!(s.status, 101);
+        let mut home = homes.recv().unwrap();
+        *lock(&PANIC_IN) = Some(Leg::Codex);
+        s.codex.write_all(&client_frame(1, b"boom")).unwrap();
+        assert!(s.worker.join().is_err(), "the worker panicked");
+        assert!(
+            lock(&registry().0).sockets.is_empty(),
+            "the socket was unregistered on unwind"
+        );
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![]
+        );
+        wait_all_released();
+    }
+
+    #[test]
+    fn a_panic_in_the_home_reader_ends_the_socket_and_the_worker_returns() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        let mut s = session(home_port, test_limits(), "", &[]);
+        assert_eq!(s.status, 101);
+        let mut home = homes.recv().unwrap();
+        *lock(&PANIC_IN) = Some(Leg::Home);
+        home.stream.write_all(&server_frame(1, b"boom")).unwrap();
+        assert!(
+            s.worker.join().unwrap().is_ok(),
+            "the worker ended instead of waiting for the spawned thread"
+        );
+        assert_eq!(
+            read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1),
+            vec![]
+        );
+        wait_all_released();
     }
 
     pub(super) fn after_claim() {
