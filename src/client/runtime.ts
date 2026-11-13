@@ -469,16 +469,13 @@ export async function startClientRuntime(
       isDesktopSupervised: () => supervisor === "desktop",
       serviceSupervised: () => supervisor === "service",
     }),
-    stop: async drainMs => {
-      // Fence Link syncs before the teardown: a sync already past admission would otherwise keep
-      // writing client files and receipts while the listener closes. Marking the record makes every
-      // later commit stand down under C; the replacement's record, or the fresh generation a
-      // rollback publishes, keeps those syncs refused and admits new ones.
-      if (linkMode && !(await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: servedPort, attestationSecret }))) {
-        console.warn("[client] restart: in-flight syncs could not be marked stopping; the next published runtime record still refuses them");
-      }
-      await stopServing(drainMs);
-    },
+    // Fence Link syncs before the teardown: a sync already past admission would otherwise keep
+    // writing client files and receipts while the listener closes. Marking the record makes every
+    // later commit stand down under C; the replacement's record, or the fresh generation a rollback
+    // publishes, keeps those syncs refused and admits new ones. A mark that cannot be written
+    // abandons the restart before anything stops.
+    fence: async () => !linkMode || await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: servedPort, attestationSecret }),
+    stop: stopServing,
     spawnReplacement: async deadlineAt => {
       const { replacementStartEnvironment } = await import("../server/management/system-restart");
       const { spawnReplacementStart } = await import("../server/restart-replacement");

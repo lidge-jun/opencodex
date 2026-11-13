@@ -120,3 +120,89 @@ test("a failed restart fences syncs admitted before it and admits new ones after
     removeTreeWithRetry(root);
   }
 }, watchdogMs(60_000));
+
+test("a restart whose sync fence cannot be written abandons the restart before the listener closes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-client-restart-fence-failed-"));
+  for (const dir of ["ocx", "codex", "home"]) mkdirSync(join(root, dir), { recursive: true });
+  const token = `ocx_data_${"c".repeat(40)}`;
+  const client = {
+    serverUrl: "http://127.0.0.1:34567", managementUrl: "http://127.0.0.1:34567", managementTransport: "direct",
+    transport: "link", link: { tunnelPort: 34567, linkId: "lnk_0123456789abcdef" }, selectedClients: ["codex"],
+    tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "key-1", tokenFingerprint: serviceApiTokenFingerprint(token),
+    protocolVersion: 1, connectedAt: "2026-09-25T00:00:00.000Z",
+  };
+  const source = `
+    import { mock } from "bun:test";
+    import { readFileSync, writeFileSync } from "node:fs";
+    import { join } from "node:path";
+    import { getDefaultConfig, saveConfig } from ${JSON.stringify(repoPath("src/config.ts"))};
+    import { createLocalAttestationChallenge } from ${JSON.stringify(repoPath("src/lib/local-management-attestation.ts"))};
+    import { createSystemRestartCapability, SYSTEM_RESTART_CAPABILITY_HEADER,
+      SYSTEM_RESTART_EXPECTED_PID_HEADER, SYSTEM_RESTART_NONCE_HEADER, SYSTEM_RESTART_PATH
+    } from ${JSON.stringify(repoPath("src/lib/system-restart-contract.ts"))};
+    const recordPath = join(process.env.OPENCODEX_HOME, "runtime-port.json");
+    const readRecord = () => JSON.parse(readFileSync(recordPath, "utf8"));
+    let fenceAttempted;
+    const attempted = new Promise(resolve => { fenceAttempted = resolve; });
+    let replacementStarted = false;
+    // The mark cannot be written, as when the config lock stays busy through every retry.
+    const syncRuntime = await import(${JSON.stringify(repoPath("src/client/sync-runtime.ts"))});
+    mock.module(${JSON.stringify(repoPath("src/client/sync-runtime.ts"))}, () => ({
+      ...syncRuntime,
+      markClientRuntimeStoppingWithRetry: async () => { fenceAttempted(); return false; },
+    }));
+    const replacement = await import(${JSON.stringify(repoPath("src/server/restart-replacement.ts"))});
+    mock.module(${JSON.stringify(repoPath("src/server/restart-replacement.ts"))}, () => ({
+      ...replacement,
+      spawnReplacementStart: async () => { replacementStarted = true; throw new Error("must not start"); },
+    }));
+    const { startClientRuntime } = await import(${JSON.stringify(repoPath("src/client/runtime.ts"))});
+    const config = getDefaultConfig();
+    config.port = ${freePort()};
+    config.runtimeRole = "client";
+    config.client = ${JSON.stringify(client)};
+    saveConfig(config);
+    await startClientRuntime({ block: false }, { restartSupervisor: async () => null });
+    const before = readRecord();
+    const nonce = createLocalAttestationChallenge();
+    const response = await fetch("http://127.0.0.1:" + before.port + SYSTEM_RESTART_PATH, {
+      method: "POST", headers: {
+        Connection: "close",
+        [SYSTEM_RESTART_EXPECTED_PID_HEADER]: String(process.pid),
+        [SYSTEM_RESTART_NONCE_HEADER]: nonce,
+        [SYSTEM_RESTART_CAPABILITY_HEADER]: createSystemRestartCapability(before.attestationSecret, nonce, "POST", SYSTEM_RESTART_PATH, process.pid, before.port),
+      },
+    });
+    await response.arrayBuffer();
+    if (response.status !== 202) throw new Error("restart refused: " + response.status);
+    await attempted;
+    // The abandoned restart returns right after the failed fence; one turn lets it settle.
+    await Bun.sleep(50);
+    const health = await fetch("http://127.0.0.1:" + before.port + "/healthz", { headers: { Connection: "close" } });
+    await health.arrayBuffer();
+    writeFileSync(join(process.env.OPENCODEX_HOME, "fence.json"), JSON.stringify({
+      replacementStarted,
+      stillServing: health.status === 200,
+      recordUnchanged: JSON.stringify(readRecord()) === JSON.stringify(before),
+    }));
+    process.exit(0);
+  `;
+  const child = Bun.spawn([process.execPath, "-e", source], {
+    cwd: root,
+    env: { ...process.env, HOME: join(root, "home"), USERPROFILE: join(root, "home"), CODEX_HOME: join(root, "codex"),
+      OPENCODEX_HOME: join(root, "ocx"), OCX_SERVICE_MANAGED: "0", OCX_SERVICE: "", OCX_DESKTOP_SUPERVISED: "" },
+    stdout: "ignore", stderr: "pipe",
+  });
+  const errors = new Response(child.stderr).text();
+  try {
+    const exit = await child.exited;
+    const stderr = await errors;
+    expect({ exit, fence: existsSync(join(root, "ocx", "fence.json")), stderr: exit === 0 ? "" : stderr }).toEqual({ exit: 0, fence: true, stderr: "" });
+    expect(JSON.parse(readFileSync(join(root, "ocx", "fence.json"), "utf8"))).toEqual({
+      replacementStarted: false, stillServing: true, recordUnchanged: true,
+    });
+  } finally {
+    if (child.exitCode === null) child.kill();
+    removeTreeWithRetry(root);
+  }
+}, watchdogMs(60_000));
