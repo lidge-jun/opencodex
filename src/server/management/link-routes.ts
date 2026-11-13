@@ -24,6 +24,8 @@ import { readManagementJsonBodyOr } from "./body";
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
+import { journalPathFor, NO_REVOKE_JOURNAL, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const isLinkPath = (path: string): boolean => path === "/api/link" || path.startsWith("/api/link/");
@@ -199,32 +201,62 @@ async function reconnect(ctx: ManagementContext, state: LinkRouteState, id: stri
   return Response.json({ linkId: id });
 }
 
+function validRemoveBody(payload: unknown): payload is Record<string, unknown> {
+  return isRecord(payload)
+    && !Object.keys(payload).some(key => key !== "force" && key !== "purge" && key !== "operationId")
+    && (payload.force === undefined || typeof payload.force === "boolean")
+    && (payload.purge === undefined || typeof payload.purge === "boolean")
+    && !(payload.force === true && payload.purge === true)
+    && (payload.operationId === undefined || isOperationId(payload.operationId));
+}
+
 async function remove(ctx: ManagementContext, state: LinkRouteState, id: string): Promise<Response> {
   if (!LINK_ID.test(id)) return fail("invalid_link_id", "The link id is invalid.", 400);
+  const body = await readManagementJsonBodyOr(ctx.req, {});
+  const payload = body === null ? {} : body;
+  const valid = validRemoveBody(payload);
+  const force = valid && payload.force === true, purge = valid && payload.purge === true;
+  // ocx link revoke --operation-id (structure/remote-link.md, "Operation journal"): a recorded revoke replays even
+  // after its link is gone, under the lock of the alias it recorded.
+  const operation = valid && typeof payload.operationId === "string" ? { id: payload.operationId, digest: revokeOperationDigest({ linkId: id, purge, force }) } : null;
+  if (operation) {
+    let recordedAlias: string | undefined;
+    try { recordedAlias = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id)?.alias; } catch {
+      return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+    }
+    if (recordedAlias !== undefined) return underAliasLock(ctx, recordedAlias, async () => (await replayOperation(ctx, state, operation, "revoke"))!);
+  }
   const current = readStoreFor(ctx);
   const record = current.links.find(link => link.id === id);
   if (!record) return fail("link_not_found", "The link was not found.", 404);
+  if (!valid) return fail("invalid_body", "force and purge must be booleans and cannot both be true.", 400);
   // A queued or running job would keep opening SSH sessions to a Child this removal disconnects, so removal takes the
   // link's job admission lock before its first teardown await and holds it to the end: a job submitted meanwhile gets
   // 409 (single link) or a busy item, and a link a job already holds is refused here, before anything is stopped.
   const { childOpsEngineFor } = await import("./link-child-ops-routes");
   const releaseLink = childOpsEngineFor(state).reserve(id);
   if (!releaseLink) return fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409);
-  try { return await removeReserved(ctx, state, id, record); } finally { releaseLink(); }
+  try {
+    // Enrollment and revoke of one alias are serialized: a force revoke cannot run between a purge and its receipt.
+    return await underAliasLock(ctx, record.alias, async () => {
+      if (operation) {
+        const replay = await replayOperation(ctx, state, operation, "revoke");
+        if (replay) return replay;
+      }
+      const fresh = readStoreFor(ctx).links.find(link => link.id === id);
+      if (!fresh) return fail("link_not_found", "The link was not found.", 404);
+      let journal: RevokeJournal = NO_REVOKE_JOURNAL;
+      if (operation) {
+        try { journal = openRevokeJournal(ctx, operation, fresh.alias, id); } catch {
+          return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+        }
+      }
+      return journal.finish(await removeReserved(ctx, state, id, fresh, force, purge, journal));
+    });
+  } finally { releaseLink(); }
 }
 
-async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id: string, record: LinkStore["links"][number]): Promise<Response> {
-  const body = await readManagementJsonBodyOr(ctx.req, {});
-  const payload = body === null ? {} : body;
-  if (!isRecord(payload)
-    || Object.keys(payload).some(key => key !== "force" && key !== "purge")
-    || (payload.force !== undefined && typeof payload.force !== "boolean")
-    || (payload.purge !== undefined && typeof payload.purge !== "boolean")
-    || (payload.force === true && payload.purge === true)) {
-    return fail("invalid_body", "force and purge must be booleans and cannot both be true.", 400);
-  }
-  const force = payload.force === true;
-  const purge = payload.purge === true;
+async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id: string, record: LinkStore["links"][number], force: boolean, purge: boolean, journal: RevokeJournal): Promise<Response> {
   const release = state.supervisor.holdLink?.(id);
   try {
     await state.supervisor.stopLink(id);
@@ -238,6 +270,7 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
       }
     };
     if (!force && record.direction === "hub-initiated") {
+      journal.intent("remote_cleanup");
       try {
         const runner = runnerFor(ctx);
         const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx));
@@ -247,19 +280,25 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
             await restartTunnel();
             return fail(purged.code, purged.message, purged.status, purged.hint);
           }
+          // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route.
+          journal.done("remote_cleanup", { purged: true, linkId: id });
         } else {
           const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 });
           if (result.code !== 0) {
             await restartTunnel();
             return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));
           }
+          journal.done("remote_cleanup");
         }
       } catch (error) {
         await restartTunnel();
         return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
       }
     }
+    journal.intent("key_revoked");
     if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
+    journal.done("key_revoked");
+    journal.intent("record_removed");
     let next: LinkStore;
     try {
       next = withConfigMutationLockSync(() => {
@@ -269,6 +308,7 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         return filtered;
       });
     } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
+    journal.done("record_removed");
     // Same task as the commit, before any fallible cleanup: an open link WebSocket must not outlive its link (design T4 2.4).
     state.listener.closeLinkSockets?.(id);
     try { clearCompensationFailed(id, compensationPath()); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }

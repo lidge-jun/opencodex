@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { AliasLockError, withAliasLock } from "../../link/alias-lock";
 import type { ExplicitRoute } from "../../link/explicit-route";
 import { findOperation, hasEffect, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, updateOperationsJournal,
-  type EnrollEffect, type LinkOperation, type OperationState } from "../../link/operations-journal";
+  type EnrollEffect, type LinkOperation, type OperationState, type RevokeEffect } from "../../link/operations-journal";
 import { newLinkId } from "../../link/store";
 import type { ManagementContext } from "./context";
 import { compensateNewLink, fail, readStoreFor, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
@@ -59,7 +59,8 @@ function outcomeBody(op: LinkOperation): Record<string, unknown> {
 /** The recorded outcome as a response: committed answers like the apply that committed. */
 export function replayResponse(op: LinkOperation): Response {
   if (op.state === "committed") {
-    return Response.json(op.kind === "enroll" ? { linkId: op.reserved!.linkId, ...outcomeBody(op) } : { linkId: op.linkId, ...outcomeBody(op) }, { status: op.kind === "enroll" ? 202 : 200 });
+    return Response.json(op.kind === "enroll" ? { linkId: op.reserved!.linkId, ...outcomeBody(op) }
+      : { linkId: op.linkId, ...outcomeBody(op), ...(op.receipt ? { purged: true } : {}) }, { status: op.kind === "enroll" ? 202 : 200 });
   }
   const error = op.error ?? { code: "operation_interrupted", status: 409 };
   return Response.json({
@@ -123,9 +124,9 @@ async function recoverEnroll(ctx: ManagementContext, state: LinkRouteState, op: 
 /** A revoke whose process died: what it reached is unknown until someone looks; the link state says the rest. */
 function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation {
   const removed = !readStoreFor(ctx).links.some(link => link.id === op.linkId);
-  const purgeAsked = hasEffect(op, "remote_cleanup", "intent");
-  if (removed && (op.receipt || !purgeAsked)) return settle(ctx, op.operationId, "committed");
-  return settle(ctx, op.operationId, removed ? "unknown" : (purgeAsked ? "unknown" : "failed_clean"), { code: "operation_interrupted", status: 409 });
+  const cleanupAsked = hasEffect(op, "remote_cleanup", "intent"), cleanupDone = hasEffect(op, "remote_cleanup", "done");
+  if (removed && (!cleanupAsked || cleanupDone)) return settle(ctx, op.operationId, "committed");
+  return settle(ctx, op.operationId, removed || cleanupAsked ? "unknown" : "failed_clean", { code: "operation_interrupted", status: 409 });
 }
 
 export interface EnrollJournal {
@@ -177,6 +178,50 @@ export function openEnrollJournal(ctx: ManagementContext, request: OperationRequ
         return response;
       }
       return Response.json({ ...body, ...outcomeBody(op) }, { status: response.status, headers: response.headers });
+    },
+  };
+}
+
+export function revokeOperationDigest(params: { linkId: string; purge: boolean; force: boolean }): string {
+  return operationDigest({ kind: "revoke", linkId: params.linkId, purge: params.purge, force: params.force });
+}
+
+export interface RevokeJournal {
+  intent(effect: RevokeEffect): void;
+  /** remote_cleanup done with the Child's purged:true for this link id records the receipt. */
+  done(effect: RevokeEffect, receipt?: { purged: true; linkId: string }): void;
+  finish(response: Response): Promise<Response>;
+}
+
+export const NO_REVOKE_JOURNAL: RevokeJournal = { intent() {}, done() {}, finish: async response => response };
+
+/** Write the open revoke entry; a write failure throws before the revoke changes anything. */
+export function openRevokeJournal(ctx: ManagementContext, request: OperationRequest, alias: string, linkId: string): RevokeJournal {
+  const path = journalPathFor(ctx);
+  updateOperationsJournal(path, nowOf(ctx), journal => {
+    journal.operations.push({ operationId: request.id, kind: "revoke", alias, linkId, digest: request.digest, createdAt: iso(ctx), updatedAt: iso(ctx), state: "open", effects: [] });
+  });
+  const change = (edit: (op: LinkOperation) => void) => updateOperationsJournal(path, nowOf(ctx), journal => {
+    const op = findOperation(journal, request.id)!;
+    edit(op);
+    op.updatedAt = iso(ctx);
+  });
+  return {
+    intent: effect => change(op => { op.effects.push({ effect, phase: "intent", at: iso(ctx) }); }),
+    done: (effect, receipt) => change(op => { op.effects.push({ effect, phase: "done", at: iso(ctx) }); if (receipt) op.receipt = receipt; }),
+    async finish(response) {
+      let body: Record<string, unknown> = {};
+      try { body = await response.clone().json() as Record<string, unknown>; } catch { /* keeps its status */ }
+      const errorCode = typeof (body.error as { code?: unknown } | undefined)?.code === "string" ? (body.error as { code: string }).code : "revoke_failed";
+      let current: LinkOperation | undefined;
+      try { current = findOperation(readOperationsJournal(path), request.id); } catch { current = undefined; }
+      // Clean only when neither the Child nor the record was touched: a cleanup that started (finished or not) or a
+      // record removal that started may have changed something the failed response does not describe.
+      const touched = !current || hasEffect(current, "remote_cleanup", "intent") || hasEffect(current, "record_removed", "intent");
+      const outcome: OperationState = response.status === 200 ? "committed" : touched ? "unknown" : "failed_clean";
+      let op: LinkOperation;
+      try { op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "revoke_failed", status: response.status }); } catch { return response; }
+      return Response.json({ ...body, ...outcomeBody(op), ...(op.state === "committed" && op.receipt ? { purged: true } : {}) }, { status: response.status, headers: response.headers });
     },
   };
 }
