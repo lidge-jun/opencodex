@@ -550,4 +550,17 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     expect(credentials.some(value => out.includes(value.slice(100, 140)))).toBe(false);
     expect(elapsed).toBeLessThan(1_500);
   });
+
+  test("exact masking of a self-overlapping credential stays linear in the frame size", () => {
+    // Restarting the search one character after each match rechecked the long overlapping secret at
+    // every position: a 16,000-character repetitive key over a 1 MB message took seconds.
+    const credential = "a".repeat(16_000);
+    const rewrite = createTerminalErrorRedactionBlockRewrite({ "x-api-key": credential });
+    const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message: `keep ${"a".repeat(1_000_000)} tail` } } };
+    const startedAt = performance.now();
+    const out = rewrite(`event: response.failed\ndata: ${JSON.stringify(failed)}`).join("\n");
+    const elapsed = performance.now() - startedAt;
+    expect([out.includes("aaaaaaaa"), out.includes("keep [REDACTED] tail")]).toEqual([false, true]);
+    expect(elapsed).toBeLessThan(1_500);
+  });
 });
