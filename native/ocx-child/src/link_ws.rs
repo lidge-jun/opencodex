@@ -2133,6 +2133,9 @@ mod tests {
                 Ok(_) => {}
             }
         }
+        // The flood is this test's own writer and may be blocked on a socket the Child has already shut down;
+        // shutting our end wakes it at once (otherwise it waits for the kernel to drop the orphaned connection).
+        let _ = home.stream.shutdown(Shutdown::Both);
         let _ = flood.join();
         wait_all_released();
     }
@@ -2178,8 +2181,9 @@ mod tests {
         );
         for (s, home) in sessions {
             assert!(s.worker.join().unwrap().is_ok());
-            drop(home);
-            drop(s.codex);
+            // The floods are this test's own writers: shutting our ends wakes them at once.
+            let _ = home.stream.shutdown(Shutdown::Both);
+            let _ = s.codex.shutdown(Shutdown::Both);
         }
         for f in floods {
             let _ = f.join();
@@ -2464,6 +2468,9 @@ mod tests {
         });
         // Codex never reads: the write toward it stalls, the operation bound shuts both legs down.
         assert!(s.worker.join().unwrap().is_ok());
+        // The flood is this test's own writer and may be blocked on a socket the Child has already shut down;
+        // shutting our end wakes it at once (otherwise it waits for the kernel to drop the orphaned connection).
+        let _ = home.stream.shutdown(Shutdown::Both);
         let _ = flood.join();
         drop(s.codex);
         wait_all_released();
@@ -2492,6 +2499,9 @@ mod tests {
         let events = read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1);
         assert_eq!(events, vec![FrameEvent::Close(Some(4000), "home".into())]);
         assert!(s.worker.join().unwrap().is_ok());
+        // The flood is this test's own writer and may be blocked on a socket the Child has already shut down;
+        // shutting our end wakes it at once (otherwise it waits for the kernel to drop the orphaned connection).
+        let _ = s.codex.shutdown(Shutdown::Both);
         let _ = flood.join();
         wait_all_released();
     }
