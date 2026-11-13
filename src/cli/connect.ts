@@ -9,6 +9,7 @@ import {
   type ClientCatalogReadiness,
 } from "../client/catalog-compatibility";
 import {
+  assertDisconnectExpectation,
   disconnectClient,
   revokeConnectedClientKey,
   rotateConnectedClientKey,
@@ -17,7 +18,9 @@ import {
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import { readClientLinkState } from "../client/link-state";
 import { probeLinkTunnelStatus, type LinkTunnelStatus } from "../client/link-tunnel-status";
-import { teardownClientLink } from "../client/link-teardown";
+import { teardownClientLink, type ClientLinkTeardownResult } from "../client/link-teardown";
+import { ClientSyncExpectationError } from "../client/sync-expectation";
+import { SYNC_EXPECTATION_MISMATCH_EXIT } from "./sync-expectation";
 import { reapOrphanTunnel } from "../client/link-tunnel";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import type { ClientLifecycleLockDeps } from "../client/lifecycle-lock";
@@ -89,8 +92,27 @@ export const CONNECT_USAGE = `Usage:
   Link client ids: ${ROUTE_CLIENT_IDS.join(", ")}`;
 
 export const DISCONNECT_USAGE = `Usage:
-  ocx disconnect [--keep-catalog] [--recover-config --yes] [--json]
+  ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] [--expect-link <link id>]
   ocx disconnect --orphaned-token --yes [--json]`;
+
+const DISCONNECT_LINK_ID = /^lnk_[0-9a-f]{16}$/;
+
+/** --expect-link <id> or --expect-link=<id>, given at most once; removed from args. */
+function takeExpectLink(args: string[]): string | undefined {
+  let found: string | undefined;
+  for (let index = 0; index < args.length;) {
+    const arg = args[index]!;
+    let value: string | undefined;
+    if (arg === "--expect-link") { value = args[index + 1] ?? ""; args.splice(index, 2); }
+    else if (arg.startsWith("--expect-link=")) { value = arg.slice("--expect-link=".length); args.splice(index, 1); }
+    else { index += 1; continue; }
+    if (found !== undefined || !DISCONNECT_LINK_ID.test(value)) {
+      throw new CliUsageError("--expect-link needs one link id of the form lnk_ followed by 16 hex digits (see ocx connect status --json).", DISCONNECT_USAGE);
+    }
+    found = value;
+  }
+  return found;
+}
 
 export type ClientConnectionStatus = {
   state: "disconnected" | "connected" | "invalid" | "mismatched";
@@ -575,17 +597,21 @@ export async function handleDisconnectCommand(
   argv: string[],
   deps: Pick<ClientCommandDeps, "lifecycleLockDeps" | "linkTeardownDeps"> & { orphanRecoveryDeps?: OrphanTokenRecoveryDeps } = {},
 ): Promise<number> {
-  return runCliAction(async () => {
+  let mismatch: { phase: string; reason: string } | null = null;
+  const code = await runCliAction(async () => {
     const args = [...argv];
     const keepCatalog = takeFlag(args, "--keep-catalog");
     const wantsJson = takeFlag(args, "--json");
     const orphanedToken = takeFlag(args, "--orphaned-token");
     const recoverConfig = takeFlag(args, "--recover-config");
     const yes = takeFlag(args, "--yes");
+    const expectLink = takeExpectLink(args);
     rejectArgs(args, DISCONNECT_USAGE, { redactValues: true });
     if (recoverConfig && (!yes || orphanedToken)) throw new CliUsageError("--recover-config requires --yes and cannot be combined with --orphaned-token", DISCONNECT_USAGE);
+    // A Home's link-bound disconnect never asks for config recovery; that stays a person's own plain disconnect.
+    if (recoverConfig && expectLink !== undefined) throw new CliUsageError("--recover-config cannot be combined with --expect-link", DISCONNECT_USAGE);
     if (orphanedToken) {
-      if (!yes || keepCatalog) throw new CliUsageError("--orphaned-token requires --yes and cannot be combined with --keep-catalog", DISCONNECT_USAGE);
+      if (!yes || keepCatalog || expectLink !== undefined) throw new CliUsageError("--orphaned-token requires --yes and cannot be combined with --keep-catalog or --expect-link", DISCONNECT_USAGE);
       const backup = await recoverOrphanedTokens({ ...deps.orphanRecoveryDeps, lifecycleLockDeps: deps.lifecycleLockDeps });
       const restore = "Stop OpenCodex and move the saved files back into its config directory only if the destination names are absent.";
       printData({ ...backup, restore }, wantsJson, [
@@ -595,7 +621,20 @@ export async function handleDisconnectCommand(
       return;
     }
     if (yes && !recoverConfig) throw new CliUsageError("--yes requires --orphaned-token or --recover-config", DISCONNECT_USAGE);
-    const teardown = await teardownClientLink({
+    // A Home's revoke names the link it means; checked before the client-link teardown touches anything,
+    // and again inside disconnectClient under the locks it writes under. A client-initiated link (its sidecar, or the
+    // marker that survives a lost sidecar, names this link) needs the client-link teardown this path skips, so the
+    // same check refuses it before anything changes.
+    if (expectLink !== undefined) {
+      try { assertDisconnectExpectation(expectLink, deps); } catch (error) {
+        if (error instanceof ClientSyncExpectationError) { mismatch = error; return; }
+        throw error;
+      }
+    }
+    // A Home's link-bound disconnect (--expect-link) comes from the Home that owns that link's tunnel and record,
+    // and it is sent only for Home-initiated links, which have no client-link sidecar. Running this Child's
+    // client-link teardown there would only open a gap between the identity check and the locked disconnect.
+    const teardown: ClientLinkTeardownResult = expectLink !== undefined ? { linkId: null, homeRevoke: "not_applicable", tunnel: null } : await teardownClientLink({
       readSidecar: readClientLinkState,
       connectedLinkId: () => {
         const state = readClientConnectionState();
@@ -608,13 +647,15 @@ export async function handleDisconnectCommand(
       knownHostsFile: deps.linkTeardownDeps?.knownHostsFile ?? linkKnownHostsPath(),
       timeoutMs: deps.linkTeardownDeps?.timeoutMs,
     });
-    const result = await disconnectClient({ keepCatalog, recoverConfig }, deps).catch((error: unknown) => {
+    const result = await disconnectClient({ keepCatalog, recoverConfig, ...(expectLink !== undefined ? { expectLink } : {}) }, deps).catch((error: unknown) => {
+      if (error instanceof ClientSyncExpectationError) { mismatch = error; return null; }
       // The bare code left a Home-driven leave with nothing to act on; the remedy already exists.
       if (error instanceof Error && error.message === "client_catalog_ownership_changed") {
         throw new Error("client_catalog_ownership_changed: the Codex model catalog (opencodex-catalog.json in the Codex home) matches neither the catalog this connection wrote nor the one recorded before it connected, so something changed it after connecting and disconnect will not overwrite it. To disconnect and leave that file as it is, run: ocx disconnect --keep-catalog");
       }
       throw error;
     });
+    if (!result) return;
     if (result.nativeIntentOnly) {
       printData(result, wantsJson, [
         "Not connected; restored the standalone native switches an interrupted Remote Link enrollment had changed.",
@@ -646,4 +687,12 @@ export async function handleDisconnectCommand(
         : `The hub key ${result.apiKeyId} is still valid. Revoke it from Integrations → API Keys.`,
     ]);
   });
+  if (mismatch) {
+    // As ocx sync --expect-link: one human line, then the JSON a Home parses as the last stderr line.
+    const refused: { phase: string; reason: string } = mismatch;
+    console.error(`Disconnect refused (${refused.phase}: ${refused.reason}); nothing was changed.${refused.reason === "client_initiated_link" ? " This machine joined its Home itself; run ocx disconnect without --expect-link." : ""}`);
+    console.error(JSON.stringify({ phase: refused.phase, reason: refused.reason }));
+    return SYNC_EXPECTATION_MISMATCH_EXIT;
+  }
+  return code;
 }
