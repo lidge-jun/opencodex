@@ -286,25 +286,26 @@ const removalMode = (force: boolean, purge: boolean): LinkRetirementMode => forc
 
 /**
  * A fresh removal that meets an interrupted removal's receipt continues it only under the same identity (#8416).
- * A journalled revoke continues only its own receipt: adopting another's would credit it with a removal (and for a
- * purge, a Child purge) it never ran, and would clear the receipt the owner needs to settle truthfully. A plain revoke
- * writes no journal, so it may finish a receipt with no owner or one whose owning entry the journal no longer holds,
- * but not one whose owner can still be repeated.
+ * While the owning entry is journalled, only that operation continues it (its replay resumes the receipt and settles
+ * the entry from its own evidence); anything else would be credited with a removal, or a Child purge, it never ran
+ * and would clear the receipt the owner settles from. A receipt with no owner, or whose owning entry the journal has
+ * pruned, has no evidence any new journal entry could truthfully settle from, not even one reusing the old id: only a
+ * plain revoke, which writes no journal and claims no outcome, may finish it.
  */
 function foreignRetirement(ctx: ManagementContext, receipt: ReturnType<typeof readLinkRetirement>, operationId: string | undefined): Response | null {
-  if (!receipt || receipt.operationId === operationId) return null;
-  if (operationId !== undefined) {
-    return receipt.operationId === undefined
-      ? fail("link_retirement_owned", "This link's removal was interrupted outside the operation journal; repeat ocx link revoke without --operation-id to finish it.", 409)
+  if (!receipt) return null;
+  let ownerJournalled = false;
+  if (receipt.operationId !== undefined) {
+    try { ownerJournalled = findOperation(readOperationsJournal(journalPathFor(ctx)), receipt.operationId) !== undefined; } catch {
+      return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+    }
+  }
+  if (ownerJournalled) {
+    return receipt.operationId === operationId ? null
       : fail("link_retirement_owned", `This link's removal was interrupted under operation ${receipt.operationId}; repeat it with --operation-id ${receipt.operationId} to finish it.`, 409);
   }
-  let ownerJournalled: boolean;
-  try { ownerJournalled = findOperation(readOperationsJournal(journalPathFor(ctx)), receipt.operationId!) !== undefined; } catch {
-    return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
-  }
-  return ownerJournalled
-    ? fail("link_retirement_owned", `This link's removal was interrupted under operation ${receipt.operationId}; repeat it with --operation-id ${receipt.operationId} to finish it.`, 409)
-    : null;
+  return operationId === undefined ? null
+    : fail("link_retirement_owned", "This link's removal was interrupted with no journalled operation left to settle it; repeat ocx link revoke without --operation-id to finish it.", 409);
 }
 
 /**

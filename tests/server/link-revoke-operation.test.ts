@@ -375,9 +375,16 @@ test("an unknown revoke's receipt is finished only by repeating that revoke, nev
   expect(h.ssh.length).toBe(ssh);
 });
 
-test("a plain revoke finishes a receipt whose owning operation the journal no longer holds", async () => {
+test("a receipt whose owning entry was pruned is finished only by a plain revoke, never by a journalled one", async () => {
   const h = harness();
-  claimLinkRetirement(record(), root, () => h.store, "force", "pruned-op");
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
+  // Not even the pruned owner's own id: a new entry would settle committed from evidence it does not hold.
+  for (const operationId of [OP, "other-op"]) {
+    const journalled = await h.revoke({ force: true, operationId });
+    expect({ status: journalled.status, code: code(journalled) }).toEqual({ status: 409, code: "link_retirement_owned" });
+    expect(readLinkRetirement(LINK, root)?.operationId).toBe(OP);
+  }
+  expect(h.journal().operations).toEqual([]);
   const plain = await h.revoke({ force: true });
   expect(plain.status).toBe(200);
   expect(h.store.links).toEqual([]);
