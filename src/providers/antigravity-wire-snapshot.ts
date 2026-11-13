@@ -32,7 +32,7 @@ function validatedSnapshot(value: unknown): AntigravityWireSnapshot | undefined 
     const map = candidate as Record<string, unknown>;
     if (!EFFORTS.every(effort => map[effort] === `${base}-${effort}` && isValidModelDiscoveryModelId(map[effort]))) return undefined;
     if (map.xhigh !== undefined && (map.xhigh !== `${base}-xhigh` || !isValidModelDiscoveryModelId(map.xhigh))) return undefined;
-    families[base] = { ...(map.xhigh ? { xhigh: `${base}-xhigh` } : {}), low: `${base}-low`, medium: `${base}-medium`, high: `${base}-high` };
+    families[base] = { low: `${base}-low`, medium: `${base}-medium`, high: `${base}-high`, ...(map.xhigh ? { xhigh: `${base}-xhigh` } : {}) };
   }
   return { version: 1, provider: row.provider, families };
 }

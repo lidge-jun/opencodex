@@ -292,9 +292,21 @@ function completeDiscoveredEffortWireModelIds(
   return suffixEffortMap;
 }
 
-// Vertex evidence from #8583’s author (2026-11-13); CCA Hydrogen is not live-verified.
+/**
+ * Default rung for a model known only from live discovery. Gemini 4 Hydrogen defaults to high:
+ * its low/medium/high/xhigh ladder and high default were verified on Vertex AI by #8583's author
+ * (2026-11-13). Hydrogen on CCA has not been live-verified, so this applies only once CCA
+ * discovery lists its family. Other discovered families keep medium when they have it.
+ */
+const ANTIGRAVITY_DISCOVERED_DEFAULT_EFFORT: Record<string, string> = {
+  "gemini-4-hydrogen": "high",
+};
+
+/** Default effort the catalog publishes, and routing applies, for a discovered effort family. */
 export function discoveredAntigravityDefaultEffort(modelId: string, hasMedium: boolean): string {
-  return modelId === "gemini-4-hydrogen" ? "high" : hasMedium ? "medium" : "high";
+  return Object.hasOwn(ANTIGRAVITY_DISCOVERED_DEFAULT_EFFORT, modelId)
+    ? ANTIGRAVITY_DISCOVERED_DEFAULT_EFFORT[modelId]!
+    : hasMedium ? "medium" : "high";
 }
 
 // ── Default effort per Gemini base model ──
@@ -586,7 +598,7 @@ function discoveredAntigravityEffortWireModelId(
     return effortMap[requestedEffort];
   }
 
-  const defaultEffort = modelId === "gemini-4-hydrogen" ? discoveredAntigravityDefaultEffort(modelId, !!effortMap.medium) : ANTIGRAVITY_DEFAULT_EFFORT[modelId]
+  const defaultEffort = ANTIGRAVITY_DEFAULT_EFFORT[modelId]
     ?? ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId]
     ?? discoveredAntigravityDefaultEffort(modelId, !!effortMap.medium);
   if (defaultEffort && isAntigravityDiscoveryEffort(defaultEffort) && effortMap[defaultEffort]) {

@@ -273,9 +273,9 @@ default), and high thinking levels. Google offers it on the paid Gemini API tier
 tier. On `google-antigravity`, Argon is listed with the same three levels, which map to the
 `gemini-4-argon-low`, `-medium`, and `-high` wire models. Google limits it there to AI Ultra and
 eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigravity CLI client, so
-OpenCodex sends Gemini 4 codename requests and model discovery with the CLI User-Agent (`antigravity/cli/1.3.4`); other models use the IDE User-Agent.
-Complete discovered low/medium/high families appear as one model, with xhigh included when discovered.
-Hydrogen and its low/medium/high/xhigh ladder and high default were verified on Vertex AI on 2026-11-13 by the author of #8583; Hydrogen has not been live-verified on CCA. It appears on Antigravity only when CCA discovery lists it.
+OpenCodex sends every Gemini 4 model request and model discovery with the CLI User-Agent
+(`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model. Gemini 4 Hydrogen (low, medium, high by default, and xhigh; verified on Vertex AI on 2026-11-13, not yet seen
+on Antigravity) appears on `google-antigravity` only when your account's model list includes it, each level mapping to its `gemini-4-hydrogen-*` wire model.
 
 On Vertex AI, `gemini-4-argon` receives images returned by tools, such as screenshots, inside
 the matching function response. This avoids the upstream 400 error "Requests ending with a
