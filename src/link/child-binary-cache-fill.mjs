@@ -1,7 +1,7 @@
 // Plain ESM shared by the Node launcher (bin/ocx.mjs) and the Bun updater (src/update/index.ts):
 // the launcher runs under Node and cannot import TypeScript. Types: child-binary-cache-fill.d.mts.
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,10 @@ import { detectInstallFromPath } from "../update/install-detection.mjs";
  * cache directory for a newer version means a downgrade. A listed build that cannot be verified loses its manifest line,
  * so it can never stay trusted under an older manifest, but its file is left in place (it may be an
  * operator's); the record stays behind until every listed build is verified, so the next start retries.
+ * A digest file that is there but unreadable or unusable is not an absent one: nothing is written and
+ * the record stays, so a repaired package still fills. One fill runs at a time per OPENCODEX_HOME
+ * (cache/ocx-child/.fill.lock, reclaimed once its process is gone or after an hour); the holder
+ * re-checks it before writing the manifest or the record, and a concurrent start skips.
  *
  * Nobody else can substitute a build: each of cache, cache/ocx-child and the version
  * directory must be a real directory (never a symlink; created 0700 when missing) owned by this user
@@ -100,13 +104,14 @@ function readRegular(path, maxBytes) {
   return readFileSync(path);
 }
 
+/** null: no digest file (every release so far); "invalid": there but unreadable or unusable; else the digests. */
 function readDigests(packageRoot) {
   let bytes;
-  try { bytes = readRegular(join(packageRoot, CHILD_RELEASE_DIGESTS_PATH), MAX_MANIFEST_BYTES); } catch { return null; }
-  if (!bytes || bytes.byteLength === 0) return null;
+  try { bytes = readRegular(join(packageRoot, CHILD_RELEASE_DIGESTS_PATH), MAX_MANIFEST_BYTES); } catch { return "invalid"; }
+  if (bytes === null) return null;
   const known = new Set(CHILD_CACHE_ARTIFACT_FILES);
   const digests = new Map([...parseManifest(bytes.toString("utf8"))].filter(([file, sha]) => known.has(file) && SHA256_HEX.test(sha)));
-  return digests.size > 0 ? digests : null;
+  return digests.size > 0 ? digests : "invalid";
 }
 
 function currentUid() {
@@ -216,64 +221,135 @@ export function runningPackageRoot() {
   return fileURLToPath(new URL("../../", import.meta.url));
 }
 
+/** Serializes the record and manifest across Home processes sharing one OPENCODEX_HOME. */
+const FILL_LOCK = ".fill.lock";
+/** A fill takes at most a few minutes (five builds, 20 s each); an older lock is a crash's leftover. */
+const STALE_LOCK_MS = 60 * 60 * 1000;
+
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error?.code === "EPERM"; }
+}
+
+function readLock(path) {
+  try {
+    const st = lstatSync(path);
+    if (!st.isFile() || st.isSymbolicLink() || st.size > 256) return null;
+    const token = readFileSync(path, "utf8").trim();
+    const pid = Number(token.split(".")[0]);
+    return Number.isSafeInteger(pid) && pid > 0 ? { token, pid, mtimeMs: st.mtimeMs } : null;
+  } catch { return null; }
+}
+
+function removeQuietly(path) {
+  try { unlinkSync(path); } catch { /* already gone */ }
+}
+
+/**
+ * The lock file appears whole or not at all (linked from a private temp), names "<pid>.<nonce>", and
+ * is reclaimed only when its process is gone or it is older than STALE_LOCK_MS. null: another fill runs.
+ */
+function acquireFillLock(root, rootIdentity, now) {
+  const path = join(root, FILL_LOCK);
+  const token = process.pid + "." + randomBytes(8).toString("hex");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!sameDirectory(root, rootIdentity)) throw new Error("cache directory changed");
+    const temp = join(root, ".ocx-child-cache." + token + ".lock.tmp");
+    const fd = openSync(temp, "wx", 0o600);
+    try { writeSync(fd, token + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
+    try { linkSync(temp, path); return { path, token }; }
+    catch (error) { if (error?.code !== "EEXIST") throw error; }
+    finally { removeQuietly(temp); }
+    const holder = readLock(path);
+    if (holder && processAlive(holder.pid) && now() - holder.mtimeMs < STALE_LOCK_MS) return null;
+    // Move the leftover aside, and put it back if a live fill took the lock in the meantime.
+    const aside = join(root, ".ocx-child-cache." + token + ".stale.tmp");
+    try { renameSync(path, aside); } catch { continue; }
+    if (readLock(aside)?.token !== holder?.token) {
+      try { linkSync(aside, path); } catch { /* a third fill holds it now */ }
+      removeQuietly(aside);
+      return null;
+    }
+    removeQuietly(aside);
+  }
+  return null;
+}
+
+function assertFillLockHeld(lock) {
+  if (readLock(lock.path)?.token !== lock.token) throw new Error("cache fill lock lost");
+}
+
+function releaseFillLock(lock) {
+  if (lock && readLock(lock.path)?.token === lock.token) removeQuietly(lock.path);
+}
+
 export async function fillChildBinaryCacheForVersion(options) {
   if (compareReleaseVersions(options.version, options.version) === null) return { kind: "skipped", reason: "invalid_version" };
   if ((options.platform ?? process.platform) === "win32") return { kind: "skipped", reason: "unsupported_platform" };
   const digests = readDigests(options.packageRoot);
+  // A digest file that is there but unusable is not "no digests": the record stays, so a repair still fills.
+  if (digests === "invalid") return { kind: "skipped", reason: "invalid_digests" };
   const home = options.opencodexHome || process.env.OPENCODEX_HOME?.trim() || join(process.env.HOME || homedir(), ".opencodex");
   const root = join(home, "cache", "ocx-child");
-  let rootIdentity, recorded;
+  let rootIdentity, lock = null, recorded;
   try {
     assertTrustedAncestors(home);
     if (newerVersionCached(home, options.version)) return { kind: "skipped", reason: "downgrade" };
     realDirectory(join(home, "cache"));
     rootIdentity = realDirectory(root);
+    lock = acquireFillLock(root, rootIdentity, options.now ?? Date.now);
+    if (!lock) return { kind: "skipped", reason: "busy" };
     recorded = readVersionRecord(root);
   } catch (error) {
+    releaseFillLock(lock);
     // Without digests only the baseline record was at stake: stay silent, as before this lane.
     if (!digests) return { kind: "skipped", reason: "no_digests" };
     throw error;
   }
-  const record = () => publish(root, rootIdentity, VERSION_RECORD, Buffer.from(options.version + "\n"));
-  if (!digests) {
-    // The baseline a later digest-bearing release needs to recognise its start as an upgrade.
-    if (recorded === null || compareReleaseVersions(options.version, recorded) === 1) { try { record(); } catch { /* best effort */ } }
-    return { kind: "skipped", reason: "no_digests" };
-  }
-  if (recorded === null) { record(); return { kind: "skipped", reason: "first_start" }; }
-  const order = compareReleaseVersions(options.version, recorded);
-  if (order === -1) return { kind: "skipped", reason: "downgrade" };
-  if (order === 0) return { kind: "skipped", reason: "not_an_upgrade" };
-  const dir = childBinaryCacheDir(home, options.version);
-  const identity = realDirectory(dir);
-  // Entries the release does not list (a build an operator placed by hand) keep their lines.
-  const manifest = new Map([...parseManifest((readRegular(join(dir, "SHA256SUMS"), MAX_MANIFEST_BYTES) ?? Buffer.alloc(0)).toString("utf8"))]
-    .filter(([file]) => !digests.has(file)));
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const timeoutMs = options.timeoutMs ?? 60_000;
-  const cached = [];
-  const fetched = [];
-  const failed = [];
-  for (const [file, expected] of [...digests].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    const present = readCachedBuild(join(dir, file));
-    if (present && sha256Hex(present) === expected) { manifest.set(file, expected); cached.push(file); continue; }
-    const bytes = await download(childReleaseAssetUrl(options.version, file), fetchImpl, timeoutMs);
-    if (bytes && sha256Hex(bytes) === expected) {
-      publish(dir, identity, file, bytes);
-      manifest.set(file, expected);
-      cached.push(file);
-      fetched.push(file);
-    } else {
-      // Never leave a build the current release does not vouch for under an older manifest line;
-      // the file itself stays (it may be an operator's), unlisted, so the reader refuses it.
-      failed.push(file);
+  try {
+    const record = () => { assertFillLockHeld(lock); publish(root, rootIdentity, VERSION_RECORD, Buffer.from(options.version + "\n")); };
+    if (!digests) {
+      // The baseline a later digest-bearing release needs to recognise its start as an upgrade.
+      if (recorded === null || compareReleaseVersions(options.version, recorded) === 1) { try { record(); } catch { /* best effort */ } }
+      return { kind: "skipped", reason: "no_digests" };
     }
+    if (recorded === null) { record(); return { kind: "skipped", reason: "first_start" }; }
+    const order = compareReleaseVersions(options.version, recorded);
+    if (order === -1) return { kind: "skipped", reason: "downgrade" };
+    if (order === 0) return { kind: "skipped", reason: "not_an_upgrade" };
+    const dir = childBinaryCacheDir(home, options.version);
+    const identity = realDirectory(dir);
+    // Entries the release does not list (a build an operator placed by hand) keep their lines.
+    const manifest = new Map([...parseManifest((readRegular(join(dir, "SHA256SUMS"), MAX_MANIFEST_BYTES) ?? Buffer.alloc(0)).toString("utf8"))]
+      .filter(([file]) => !digests.has(file)));
+    const fetchImpl = options.fetchImpl ?? fetch;
+    const timeoutMs = options.timeoutMs ?? 60_000;
+    const cached = [];
+    const fetched = [];
+    const failed = [];
+    for (const [file, expected] of [...digests].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      const present = readCachedBuild(join(dir, file));
+      if (present && sha256Hex(present) === expected) { manifest.set(file, expected); cached.push(file); continue; }
+      const bytes = await download(childReleaseAssetUrl(options.version, file), fetchImpl, timeoutMs);
+      if (bytes && sha256Hex(bytes) === expected) {
+        publish(dir, identity, file, bytes);
+        manifest.set(file, expected);
+        cached.push(file);
+        fetched.push(file);
+      } else {
+        // Never leave a build the current release does not vouch for under an older manifest line;
+        // the file itself stays (it may be an operator's), unlisted, so the reader refuses it.
+        failed.push(file);
+      }
+    }
+    assertFillLockHeld(lock);
+    if (manifest.size > 0) publish(dir, identity, "SHA256SUMS", Buffer.from([...manifest].map(([file, sha]) => sha + "  " + file + "\n").join("")));
+    else unpublish(dir, identity, "SHA256SUMS");
+    // An incomplete fill leaves the older record, so the next start of this version retries.
+    if (failed.length === 0) record();
+    return { kind: "filled", cached, fetched, failed };
+  } finally {
+    releaseFillLock(lock);
   }
-  if (manifest.size > 0) publish(dir, identity, "SHA256SUMS", Buffer.from([...manifest].map(([file, sha]) => sha + "  " + file + "\n").join("")));
-  else unpublish(dir, identity, "SHA256SUMS");
-  // An incomplete fill leaves the older record, so the next start of this version retries.
-  if (failed.length === 0) record();
-  return { kind: "filled", cached, fetched, failed };
 }
 
 /** The running package's version, from its own package.json; null when unreadable. */
@@ -305,5 +381,6 @@ export async function fillChildBinaryCacheOnStart(options = {}, out = { log: con
     if (fetched > 0) out.log("[link] cached " + fetched + " verified ocx-child build" + (fetched === 1 ? "" : "s") + " for v" + version + ".");
     if (outcome.failed.length > 0) out.warn("[link] " + outcome.failed.length + " ocx-child build" + (outcome.failed.length === 1 ? "" : "s") + " of this release could not be fetched or did not match the package digests; only verified builds are planted.");
   }
+  if (outcome.kind === "skipped" && outcome.reason === "invalid_digests") out.warn("[link] this package's ocx-child digest file could not be read; no ocx-child build was cached.");
   return outcome;
 }

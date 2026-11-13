@@ -173,18 +173,39 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(requested).toEqual([]);
   });
 
-  test.each([
-    ["a package without the digest file", null],
-    ["a digest file naming no ocx-child build", sha(linuxBuild) + "  ocx-linux-x64\n"],
-    ["a digest file with a malformed digest", "abc  ocx-child-linux-x64\n"],
-  ])("%s fetches nothing and only records its version", async (_name, digests) => {
-    if (digests !== null) shipDigests(digests);
+  test("a package without the digest file fetches nothing and only records its version", async () => {
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
     expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(requested).toEqual([]);
     expect(readdirSync(join(home, "cache", "ocx-child"))).toEqual([".home-version"]);
     expect(recorded()).toBe(VERSION);
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "artifact_not_found" });
+  });
+
+  test.each([
+    ["names no ocx-child build", sha(linuxBuild) + "  ocx-linux-x64\n"],
+    ["has a malformed digest", "abc  ocx-child-linux-x64\n"],
+    ["is empty", ""],
+  ])("a digest file that %s writes nothing and keeps the record, so a repaired file still fills", async (_name, digests) => {
+    ranBefore();
+    shipDigests(digests);
+    const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
+    expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "invalid_digests" });
+    expect([requested, recorded(), readdirSync(join(home, "cache", "ocx-child"))]).toEqual([[], "2.99.0", [".home-version"]]);
+    shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
+    expect(await fill(fetchImpl)).toMatchObject({ kind: "filled", fetched: ["ocx-child-linux-x64"], failed: [] });
+    expect(recorded()).toBe(VERSION);
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable digest file is not an absent one", async () => {
+    ranBefore();
+    shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
+    chmodSync(join(packageRoot, CHILD_RELEASE_DIGESTS_PATH), 0o000);
+    const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
+    expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "invalid_digests" });
+    expect([requested, recorded()]).toEqual([[], "2.99.0"]);
+    chmodSync(join(packageRoot, CHILD_RELEASE_DIGESTS_PATH), 0o600);
+    expect(await fill(fetchImpl)).toMatchObject({ kind: "filled", failed: [] });
   });
 
   test("the first release that ships digests fills: the release before it recorded the baseline", async () => {
@@ -270,6 +291,57 @@ describe.skipIf(process.platform === "win32")("nobody else can substitute a buil
   });
 });
 
+describe.skipIf(process.platform === "win32")("one fill at a time per OPENCODEX_HOME", () => {
+  const lockPath = () => join(home, "cache", "ocx-child", ".fill.lock");
+
+  test("an overlapping fill whose download would fail skips, and cannot undo the one that succeeds", async () => {
+    bothDigests();
+    ranBefore();
+    let releaseDownload!: () => void;
+    const gate = new Promise<void>(resolve => { releaseDownload = resolve; });
+    let entered!: () => void;
+    const inFetch = new Promise<void>(resolve => { entered = resolve; });
+    const good = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+    const slow = (async (input: RequestInfo | URL, init?: RequestInit) => { entered(); await gate; return good.fetchImpl(input, init); }) as typeof fetch;
+    const first = fill(slow);
+    await inFetch;
+    const failing = release({ "ocx-child-linux-x64": 503, "ocx-child-darwin-arm64": 503 });
+    expect(await fill(failing.fetchImpl)).toEqual({ kind: "skipped", reason: "busy" });
+    expect(failing.requested).toEqual([]);
+    releaseDownload();
+    expect(await first).toMatchObject({ kind: "filled", failed: [] });
+    expect(recorded()).toBe(VERSION);
+    expect(readFileSync(join(cacheDir(), "SHA256SUMS"), "utf8").trim().split("\n")).toHaveLength(2);
+    expect(existsSync(lockPath())).toBe(false);
+  });
+
+  test("a lock left by a process that is gone is reclaimed", async () => {
+    bothDigests();
+    ranBefore();
+    writeFileSync(lockPath(), "99999999.deadbeef\n", { mode: 0o600 });
+    expect(await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl)).toMatchObject({ kind: "filled", failed: [] });
+    expect(existsSync(lockPath())).toBe(false);
+  });
+
+  test("a live process's lock older than an hour is reclaimed; a fresh one is respected", async () => {
+    bothDigests();
+    ranBefore();
+    writeFileSync(lockPath(), process.pid + ".feedface\n", { mode: 0o600 });
+    const { fetchImpl } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+    expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "busy" });
+    const later = () => Date.now() + 2 * 60 * 60 * 1000;
+    expect(await fillChildBinaryCacheForVersion({ packageRoot, version: VERSION, opencodexHome: home, fetchImpl, now: later })).toMatchObject({ kind: "filled", failed: [] });
+  });
+
+  test("a fill that lost its lock during a download publishes no manifest and no record", async () => {
+    shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
+    ranBefore();
+    const { fetchImpl } = release({ "ocx-child-linux-x64": linuxBuild }, () => writeFileSync(lockPath(), "1.otherfill\n"));
+    await expect(fill(fetchImpl)).rejects.toThrow("cache fill lock lost");
+    expect([existsSync(join(cacheDir(), "SHA256SUMS")), recorded(), readFileSync(lockPath(), "utf8")]).toEqual([false, "2.99.0", "1.otherfill\n"]);
+  });
+});
+
 describe.skipIf(process.platform === "win32")("the cache is never written through a symlink", () => {
   test.each([
     ["the version directory", () => join(home, "cache", "ocx-child", VERSION), true],
@@ -339,6 +411,15 @@ describe("startup", () => {
     const out = { log: (line: string) => { logs.push(line); }, warn: (line: string) => { logs.push(line); } };
     expect(await fillChildBinaryCacheOnStart({ packageRoot: checkout, opencodexHome: home, fetchImpl }, out)).toEqual({ kind: "skipped", reason: "source_checkout" });
     expect([requested, logs, existsSync(cacheDir()), recorded()]).toEqual([[], [], false, "2.99.0"]);
+  });
+
+  test("a digest file that cannot be used is reported in one line", async () => {
+    ranBefore();
+    shipDigests("abc  ocx-child-linux-x64\n");
+    const warns: string[] = [];
+    const out = { log: () => {}, warn: (line: string) => { warns.push(line); } };
+    expect(await fillChildBinaryCacheOnStart({ packageRoot, opencodexHome: home }, out)).toEqual({ kind: "skipped", reason: "invalid_digests" });
+    expect(warns).toEqual(["[link] this package's ocx-child digest file could not be read; no ocx-child build was cached."]);
   });
 
   test("a package without digests says nothing and only records its version", async () => {

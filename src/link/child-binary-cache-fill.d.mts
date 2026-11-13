@@ -7,7 +7,8 @@ export declare function compareReleaseVersions(left: string, right: string): -1 
 
 export type ChildCacheFillOutcome =
   /** first_start: no record of an earlier version (a fresh install), so the version is recorded and nothing fetched. */
-  | { readonly kind: "skipped"; readonly reason: "invalid_version" | "no_digests" | "downgrade" | "first_start" | "not_an_upgrade" | "source_checkout" | "unsupported_platform" }
+  /** invalid_digests: the package's digest file is there but unreadable or unusable (the record is left alone); busy: another process is filling. */
+  | { readonly kind: "skipped"; readonly reason: "invalid_version" | "no_digests" | "invalid_digests" | "downgrade" | "first_start" | "not_an_upgrade" | "busy" | "source_checkout" | "unsupported_platform" }
   /** cached: every verified build now in the cache; fetched: those downloaded now; failed: listed builds withdrawn from the manifest. */
   | { readonly kind: "filled"; readonly cached: readonly string[]; readonly fetched: readonly string[]; readonly failed: readonly string[] };
 
@@ -21,6 +22,8 @@ export interface ChildCacheFillOptions {
   readonly timeoutMs?: number;
   /** Defaults to process.platform; on win32 the fill does nothing (no mode bits to prove the cache private). */
   readonly platform?: NodeJS.Platform;
+  /** Clock for the fill lock's age; defaults to Date.now. */
+  readonly now?: () => number;
 }
 
 export declare function runningPackageRoot(): string;
