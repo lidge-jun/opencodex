@@ -163,28 +163,34 @@ function validateConfirmed(value: unknown, alias: string, fingerprint: string, a
 
 /**
  * --proxy-command, --ssh-user and --ssh-port name one explicit route and go together; they need
- * --exclusive (structure/remote-link.md, "Explicit route"). The values are checked here and again on
- * the Home, which refuses any form explicit-route.ts does not accept.
+ * --exclusive (structure/remote-link.md, "Explicit route"). --ssh-identity-file adds the route's key and needs the
+ * other three. The values are checked here and again on the Home, which refuses any form explicit-route.ts does not
+ * accept and, for the key, a file that is not a usable private key file.
  */
 const ROUTE_FORM = {
   proxy_command_form: "--proxy-command must be an absolute path followed by words of letters, digits and . _ / : @ + , = - separated by single spaces (no %, quotes or other shell characters)",
   user_form: "--ssh-user must be a letter or _ followed by up to 31 letters, digits, ., _ or -",
   port_form: "--ssh-port must be an integer from 1 to 65535",
+  identity_file_form: "--ssh-identity-file must be an absolute path of letters, digits and . _ + - / (no ~, %, $, spaces, quotes, empty, . or .. segments), at most 1024 characters",
 } as const;
 
 function takeRouteFlags(args: string[], usage: string): { explicitRoute?: ExplicitRoute; exclusive?: true } {
   const proxyCommand = takeOption(args, "--proxy-command");
   const user = takeOption(args, "--ssh-user");
   const portText = takeOption(args, "--ssh-port");
+  // link.route/2: the route's key; it belongs to an explicit route and travels inside it.
+  const identityFile = takeOption(args, "--ssh-identity-file");
   const exclusive = takeFlag(args, "--exclusive");
   const given = [proxyCommand, user, portText].filter(value => value !== undefined).length;
+  if (identityFile !== undefined && given === 0) throw new CliUsageError("--ssh-identity-file needs an explicit route (--proxy-command, --ssh-user and --ssh-port)", usage);
   if (given === 0) return exclusive ? { exclusive: true } : {};
   if (given !== 3) throw new CliUsageError("--proxy-command, --ssh-user and --ssh-port go together", usage);
   if (!exclusive) throw new CliUsageError("An explicit route requires --exclusive", usage);
   const port = /^[0-9]{1,5}$/.test(portText!) ? Number(portText) : Number.NaN;
-  const checked = checkExplicitRoute({ proxyCommand, user, port });
+  const checked = checkExplicitRoute({ proxyCommand, user, port, ...(identityFile !== undefined ? { identityFile } : {}) });
   if (!checked.ok) {
-    throw new CliUsageError(ROUTE_FORM[checked.reason === "user_form" || checked.reason === "port_form" ? checked.reason : "proxy_command_form"], usage);
+    const reason = checked.reason === "user_form" || checked.reason === "port_form" || checked.reason === "identity_file_form" ? checked.reason : "proxy_command_form";
+    throw new CliUsageError(ROUTE_FORM[reason], usage);
   }
   return { explicitRoute: checked.route, exclusive: true };
 }
