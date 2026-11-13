@@ -156,7 +156,7 @@ describe("explicit forced link revoke", () => {
     const fEph = fixture();
     fEph.deps.readStore = () => ({ version: 1, listenerPort: 18181, links: [{ id: ID, alias: "barebox", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 24500, apiKeyId: "k1", createdAt: "2026-11-07T00:00:00Z", childKind: "ephemeral" }] });
     expect(await invoke(["--force", "--yes", "--json"], fEph.deps)).toBe(0);
-    expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: `Run ocx link recover --link-id ${ID} once the machine answers: it cleans the machine only while it still belongs to this link.` });
+    expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: `Run ocx link recover --link-id ${ID} once the machine answers: it acts only when the machine's records name this link or nothing at all, and refuses a machine another link owns.` });
 
     output.mockClear();
     const fFull = fixture();
