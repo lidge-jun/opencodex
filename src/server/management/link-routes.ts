@@ -269,7 +269,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       if (open) return open;
       const fresh = readRemovalTarget(ctx, id);
       if ("response" in fresh) return fresh.response;
-      const owned = foreignRetirement(ctx, fresh.receipt, operation?.id);
+      const owned = foreignRetirement(ctx, fresh.receipt, operation?.id, force);
       if (owned) return owned;
       let journal: RevokeJournal = NO_REVOKE_JOURNAL;
       if (operation) {
@@ -291,9 +291,12 @@ const removalMode = (force: boolean, purge: boolean): LinkRetirementMode => forc
  * and would clear the receipt the owner settles from. A receipt with no owner, or whose owning entry the journal has
  * pruned, has no evidence any new journal entry could truthfully settle from, not even one reusing the old id: only a
  * plain revoke, which writes no journal and claims no outcome, may finish it.
+ * A plain --force may finish any receipt: it removes the link and its key locally, claims no Child cleanup, writes no
+ * journal and leaves an owning entry with the outcome it recorded. It is the way out when the recorded cleanup cannot
+ * be repeated (a purge already removed the Child's executable).
  */
-function foreignRetirement(ctx: ManagementContext, receipt: ReturnType<typeof readLinkRetirement>, operationId: string | undefined): Response | null {
-  if (!receipt) return null;
+function foreignRetirement(ctx: ManagementContext, receipt: ReturnType<typeof readLinkRetirement>, operationId: string | undefined, force: boolean): Response | null {
+  if (!receipt || (operationId === undefined && force)) return null;
   let ownerJournalled = false;
   if (receipt.operationId !== undefined) {
     try { ownerJournalled = retirementOwner(readOperationsJournal(journalPathFor(ctx)), receipt) !== undefined; } catch {
@@ -302,10 +305,10 @@ function foreignRetirement(ctx: ManagementContext, receipt: ReturnType<typeof re
   }
   if (ownerJournalled) {
     return receipt.operationId === operationId ? null
-      : fail("link_retirement_owned", `This link's removal was interrupted under operation ${receipt.operationId}; repeat it with --operation-id ${receipt.operationId} to finish it.`, 409);
+      : fail("link_retirement_owned", `This link's removal was interrupted under operation ${receipt.operationId}; repeat it with --operation-id ${receipt.operationId} to finish it, or remove it locally with --force and no --operation-id.`, 409);
   }
   return operationId === undefined ? null
-    : fail("link_retirement_owned", "This link's removal was interrupted with no journalled operation left to settle it; repeat ocx link revoke without --operation-id to finish it.", 409);
+    : fail("link_retirement_owned", "This link's removal was interrupted with no journalled operation left to settle it; repeat ocx link revoke without --operation-id (with --force if its Child cleanup cannot run again) to finish it.", 409);
 }
 
 /**
@@ -373,19 +376,19 @@ async function removeReserved(
   journal: RevokeJournal,
 ): Promise<Response> {
   let receipt = initialReceipt;
-  // A receipt exists only after its removal's Child cleanup ran (or was skipped by force). A retry asking for another
-  // cleanup would skip it and still report success, so it is refused before anything is stopped (#8416).
-  if (receipt && record.direction === "hub-initiated" && (receipt.mode ?? "force") !== removalMode(force, purge)) {
-    return fail("link_retirement_mode_mismatch", `This link's removal was interrupted after its ${receipt.mode ?? "force"} cleanup; repeat it with the same options to finish it.`, 409);
+  // A receipt is never evidence that the Child was cleaned up (#8416): while the record is listed the cleanup runs
+  // again unless the owning journal entry recorded it (cleanupRecorded), as a removal on dev always runs it. Once the
+  // record is gone the commit already followed a cleanup, and the receipt only drives the local post-commit work.
+  let listed: boolean;
+  try { listed = readStoreFor(ctx).links.some(link => link.id === id); } catch { return fail("link_remove_failed", "The link store could not be read.", 503); }
+  const cleanupDone = receipt !== null && (!listed || cleanupRecorded(ctx, receipt));
+  // A retry asking for another cleanup than the one the receipt stands for, where that cleanup will not run again, would
+  // report success without it, so it is refused before anything is stopped. --force asks for no cleanup and is allowed.
+  if (receipt && cleanupDone && !force && record.direction === "hub-initiated" && (receipt.mode ?? "force") !== removalMode(force, purge)) {
+    return fail("link_retirement_mode_mismatch", `This link's removal was interrupted after its ${receipt.mode ?? "force"} cleanup; repeat it with the same options, or with --force, to finish it.`, 409);
   }
   const release = state.supervisor.holdLink?.(id);
   try {
-    // A receipt is never evidence that the Child was cleaned up (#8416): while the record is listed the cleanup runs
-    // again unless the owning journal entry recorded it (cleanupRecorded), as a removal on dev always runs it. Once the
-    // record is gone the commit already followed a cleanup, and the receipt only drives the local post-commit work.
-    let listed: boolean;
-    try { listed = readStoreFor(ctx).links.some(link => link.id === id); } catch { return fail("link_remove_failed", "The link store could not be read.", 503); }
-    const cleanupDone = receipt !== null && (!listed || cleanupRecorded(ctx, receipt));
     if (listed) await state.supervisor.stopLink(id);
     const restartTunnel = async (): Promise<void> => {
       release?.();

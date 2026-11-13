@@ -490,3 +490,35 @@ test("an owner whose journal did not record the Child purge runs it before settl
   expect(h.ssh.length).toBeGreaterThan(0);
   expect(h.journal().operations[0]!.receipt).toEqual({ purged: true, linkId: LINK });
 });
+
+test("a plain purge that cannot run again after its interruption is finished by a plain --force", async () => {
+  // The purge removed the Child's executable, then the process died after the receipt claim: a rerun cannot purge.
+  const h = harness({ purgeReport: '{"restored":true,"outcome":"Restored","daemonRunning":false}\n' });
+  claimLinkRetirement(record(), root, () => h.store, "purge");
+  expect((await h.revoke({ purge: true })).status).toBeGreaterThanOrEqual(400);
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  const ssh = h.ssh.length;
+  const forced = await h.revoke({ force: true });
+  expect(forced.status).toBe(200);
+  expect(h.ssh.length).toBe(ssh);
+  expect(h.store.links).toEqual([]);
+  expect(h.config.apiKeys).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+});
+
+test("a plain --force finishes an owned receipt whose purge cannot run again, and the owner keeps its unknown outcome", async () => {
+  const h = harness({ purgeReport: '{"restored":true,"outcome":"Restored","daemonRunning":false}\n' });
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: at, updatedAt: at, state: "unknown", finishedAt: at, error: { code: "operation_interrupted", status: 409 }, effects: [],
+  } as LinkOperation] });
+  expect((await h.revoke({ purge: true, operationId: OP })).status).toBeGreaterThanOrEqual(400);
+  const forced = await h.revoke({ force: true });
+  expect(forced.status).toBe(200);
+  expect(h.store.links).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+  const replay = await h.revoke({ purge: true, operationId: OP });
+  expect(replay.body.outcome).toBe("unknown");
+});
