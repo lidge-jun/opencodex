@@ -80,6 +80,8 @@ const INITIAL_OWNED_PATHS = [
   "auth.json",
   "auth.store.lock",
   "admin-api-token",
+  // The ocx-child build cache (src/link/child-binary-cache-start.ts records it for older Homes too).
+  "cache",
   "catalog-backup.json",
   "claude-env.sh",
   "codex-accounts.json",

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +10,8 @@ import {
 } from "../../src/link/child-binary-cache-fill.mjs";
 import { compareStrictSemver, parseStrictSemver } from "../../src/lib/strict-semver";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { startChildBinaryCacheFill } from "../../src/link/child-binary-cache-start";
+import { CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 
 // Lane O2: an updated Home of version V fills cache/ocx-child/V/ from the GitHub release of V, trusting
 // only the digests inside its own installed package, so a packaged Home can plant ocx-child after an update.
@@ -206,7 +208,8 @@ describe("filling the ocx-child cache for the running version", () => {
     rmSync(join(cacheDir(), "SHA256SUMS"));
     rmSync(join(cacheDir(), "ocx-child-darwin-arm64"));
     const again = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
-    expect(await fill(again.fetchImpl)).toEqual({ kind: "filled", cached: ["ocx-child-linux-x64"], fetched: [], failed: ["ocx-child-darwin-arm64"] });
+    // Nothing was attempted, so nothing is reported as failed (and startup warns about nothing).
+    expect(await fill(again.fetchImpl)).toEqual({ kind: "filled", cached: ["ocx-child-linux-x64"], fetched: [], failed: [] });
     expect([again.requested, resolve("linux-x64").ok, resolve("darwin-arm64").ok, recorded()]).toEqual([[], true, false, VERSION]);
   });
 
@@ -220,7 +223,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(readdirSync(versionsDir()).sort()).toEqual(["2.100.0.filled", "2.101.0.filled", "2.99.0.filled"]);
     // A start of the newer version is a restart, not an upgrade: it downloads nothing.
     const restart = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
-    expect(await fill(restart.fetchImpl, "2.101.0")).toMatchObject({ fetched: [] });
+    expect(await fill(restart.fetchImpl, "2.101.0")).toEqual({ kind: "skipped", reason: "not_an_upgrade" });
     expect(restart.requested).toEqual([]);
   });
 
@@ -506,5 +509,114 @@ describe("parity with the reader", () => {
       expect(compareReleaseVersions(left, right)).toBe(compareStrictSemver(parseStrictSemver(left)!, parseStrictSemver(right)!));
     }
     expect(compareReleaseVersions("../1.0.0", "1.0.0")).toBeNull();
+  });
+});
+
+describe("final review: uninstall, startup gates and download edges", () => {
+  const quiet = { log: () => {}, warn: () => {} };
+
+  test("ocx uninstall removes the cache the startup step created, which it records as owned", async () => {
+    const outcome = await startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: VERSION, fetchImpl: release({}).fetchImpl }, quiet);
+    expect(outcome).toEqual({ kind: "skipped", reason: "no_digests" });
+    expect(readdirSync(versionsDir())).toEqual([VERSION + ".baseline"]);
+    expect((JSON.parse(readFileSync(join(home, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] }).paths).toContain("cache");
+    const removed = removeOwnedConfigState(home);
+    expect(removed.status).toBe("removed");
+    expect(existsSync(join(home, "cache"))).toBe(false);
+  });
+
+  test("a new Home owns cache/ from its first owned write", () => {
+    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    expect((JSON.parse(readFileSync(join(home, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] }).paths).toContain("cache");
+  });
+
+  test("a client runtime records and writes nothing", async () => {
+    expect(await startChildBinaryCacheFill("client", { configDir: home, packageRoot, bundledVersion: VERSION }, quiet)).toBeNull();
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  test("OCX_DISABLE_CHILD_CACHE_FILL=1 reads and writes nothing", async () => {
+    bothDigests();
+    ranBefore();
+    const previous = process.env.OCX_DISABLE_CHILD_CACHE_FILL;
+    process.env.OCX_DISABLE_CHILD_CACHE_FILL = "1";
+    try {
+      const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+      expect(await fillChildBinaryCacheOnStart({ packageRoot, opencodexHome: home, fetchImpl }, quiet)).toEqual({ kind: "skipped", reason: "disabled" });
+      expect([requested, existsSync(cacheDir())]).toEqual([[], false]);
+    } finally {
+      if (previous === undefined) delete process.env.OCX_DISABLE_CHILD_CACHE_FILL; else process.env.OCX_DISABLE_CHILD_CACHE_FILL = previous;
+    }
+  });
+
+  test("a package.json that is not the running code's version records nothing", async () => {
+    expect(await fillChildBinaryCacheOnStart({ packageRoot, opencodexHome: home, bundledVersion: "2.99.9" }, quiet)).toEqual({ kind: "skipped", reason: "version_mismatch" });
+    expect(existsSync(join(home, "cache"))).toBe(false);
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a same-version restart takes no lock and writes nothing", async () => {
+    bothDigests();
+    ranBefore();
+    await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
+    const root = join(home, "cache", "ocx-child");
+    chmodSync(root, 0o500);
+    try {
+      expect(await fill(release({}).fetchImpl)).toEqual({ kind: "skipped", reason: "not_an_upgrade" });
+    } finally { chmodSync(root, 0o700); }
+  });
+
+  test("a version directory removed by hand after a completed fill stays removed and nothing is reported failed", async () => {
+    bothDigests();
+    ranBefore();
+    await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
+    rmSync(cacheDir(), { recursive: true });
+    expect(await fill(release({}).fetchImpl)).toEqual({ kind: "skipped", reason: "not_an_upgrade" });
+    expect(existsSync(cacheDir())).toBe(false);
+  });
+
+  test("a publish that cannot reach its final name leaves no temp file behind", async () => {
+    shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
+    ranBefore();
+    mkdirSync(join(cacheDir(), "ocx-child-linux-x64"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(cacheDir(), "ocx-child-linux-x64", "occupied"), "x");
+    await expect(fill(release({ "ocx-child-linux-x64": linuxBuild }).fetchImpl)).rejects.toThrow();
+    expect(readdirSync(cacheDir()).filter(name => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  const streamOf = (chunks: Uint8Array[], failAfter?: number) => new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (failAfter !== undefined && failAfter-- === 0) { controller.error(new Error("connection reset")); return; }
+      const next = chunks.shift();
+      if (next) controller.enqueue(next); else controller.close();
+    },
+  });
+
+  test.each([
+    ["a body larger than the cap without a content-length", () => new Response(streamOf(Array.from({ length: 33 }, () => new Uint8Array(1024 * 1024))))],
+    ["a body stream that errors part way", () => new Response(streamOf([linuxBuild.slice(0, 4), linuxBuild.slice(4)], 1))],
+  ])("%s is refused", async (_name, answer) => {
+    shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
+    ranBefore();
+    const fetchImpl = (async () => answer()) as unknown as typeof fetch;
+    expect(await fill(fetchImpl)).toEqual({ kind: "filled", cached: [], fetched: [], failed: ["ocx-child-linux-x64"] });
+  });
+
+  test("a download that hangs is abandoned at its deadline", async () => {
+    shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
+    ranBefore();
+    const hang = ((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+    })) as unknown as typeof fetch;
+    expect(await fillChildBinaryCacheForVersion({ packageRoot, version: VERSION, opencodexHome: home, fetchImpl: hang, timeoutMs: 5 }))
+      .toEqual({ kind: "filled", cached: [], fetched: [], failed: ["ocx-child-linux-x64"] });
+  });
+
+  test.skipIf(process.platform === "win32")("cache directories owned by another user are refused", async () => {
+    bothDigests();
+    ranBefore();
+    const uid = spyOn(process, "getuid").mockReturnValue((process.getuid?.() ?? 0) + 1);
+    try {
+      await expect(fill(release({}).fetchImpl)).rejects.toThrow("unsafe cache directory");
+    } finally { uid.mockRestore(); }
   });
 });

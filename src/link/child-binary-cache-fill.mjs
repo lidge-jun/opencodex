@@ -1,7 +1,7 @@
-// Plain ESM shared by the Node launcher (bin/ocx.mjs) and the Bun updater (src/update/index.ts):
-// the launcher runs under Node and cannot import TypeScript. Types: child-binary-cache-fill.d.mts.
+// Plain ESM with no Bun or TypeScript dependency; its one caller is the Home's startup step,
+// src/link/child-binary-cache-start.ts. Types: child-binary-cache-fill.d.mts.
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -165,9 +165,15 @@ function publish(dir, identity, name, bytes) {
   if (!sameDirectory(dir, identity)) throw new Error("cache directory changed");
   const temp = join(dir, ".ocx-child-cache." + process.pid + "." + randomBytes(6).toString("hex") + ".tmp");
   const fd = openSync(temp, "wx", 0o600);
-  try { writeSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
-  if (!sameDirectory(dir, identity)) { try { unlinkSync(temp); } catch { /* the directory moved away */ } throw new Error("cache directory changed"); }
-  renameSync(temp, join(dir, name));
+  try {
+    // writeFileSync on a descriptor writes every byte or throws; a short or failed write never reaches the name.
+    try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+    if (!sameDirectory(dir, identity)) throw new Error("cache directory changed");
+    renameSync(temp, join(dir, name));
+  } catch (error) {
+    try { unlinkSync(temp); } catch { /* already gone */ }
+    throw error;
+  }
 }
 
 function unpublish(dir, identity, name) {
@@ -330,6 +336,28 @@ function releaseFillLock(lock) {
   if (lock && readLock(lock.path)?.token === lock.token) removeQuietly(lock.path);
 }
 
+/** A real directory is there (a symlink or another error counts as present: the write path refuses it). */
+function directoryPresent(path) {
+  try { return lstatSync(path).isDirectory(); } catch (error) { return error?.code !== "ENOENT"; }
+}
+
+/**
+ * What the record alone decides, before any lock or write; null when there is work to do. A start
+ * that writes nothing (a same-version restart, a downgrade, a package without digests whose version
+ * is recorded) takes no lock and touches no file.
+ */
+function decideFromRecord(recorded, version, digests, dir) {
+  if (!digests) return recorded !== null && compareReleaseVersions(version, recorded.version) !== 1 ? { kind: "skipped", reason: "no_digests" } : null;
+  if (recorded === null) return null;
+  const order = compareReleaseVersions(version, recorded.version);
+  if (order === -1) return { kind: "skipped", reason: "downgrade" };
+  // A same-version start fetches nothing. It re-lists the builds still verified on disk only when a
+  // completed fill's manifest lost lines (fills that overlapped); a version directory removed by hand
+  // stays removed.
+  if (order === 0 && (!recorded.filled || !directoryPresent(dir) || manifestCovers(dir, digests))) return { kind: "skipped", reason: "not_an_upgrade" };
+  return null;
+}
+
 export async function fillChildBinaryCacheForVersion(options) {
   if (compareReleaseVersions(options.version, options.version) === null) return { kind: "skipped", reason: "invalid_version" };
   if ((options.platform ?? process.platform) === "win32") return { kind: "skipped", reason: "unsupported_platform" };
@@ -338,12 +366,15 @@ export async function fillChildBinaryCacheForVersion(options) {
   if (digests === "invalid") return { kind: "skipped", reason: "invalid_digests" };
   const home = options.opencodexHome || process.env.OPENCODEX_HOME?.trim() || join(process.env.HOME || homedir(), ".opencodex");
   const root = join(home, "cache", "ocx-child");
+  const dir = childBinaryCacheDir(home, options.version);
   let rootIdentity, lock = null, recorded;
   try {
     assertTrustedAncestors(home);
     if (newerVersionCached(home, options.version)) return { kind: "skipped", reason: "downgrade" };
     realDirectory(join(home, "cache"));
     rootIdentity = realDirectory(root);
+    const early = decideFromRecord(readVersionRecord(root), options.version, digests, dir);
+    if (early) return early;
     lock = acquireFillLock(root, rootIdentity, options.now ?? Date.now);
     if (!lock) return { kind: "skipped", reason: "busy" };
     recorded = readVersionRecord(root);
@@ -354,6 +385,9 @@ export async function fillChildBinaryCacheForVersion(options) {
     throw error;
   }
   try {
+    // Decided again under the lock: another start may have recorded meanwhile.
+    const settled = decideFromRecord(recorded, options.version, digests, dir);
+    if (settled) return settled;
     const record = kind => {
       assertFillLockHeld(lock);
       const versions = join(root, VERSIONS_DIR);
@@ -361,17 +395,11 @@ export async function fillChildBinaryCacheForVersion(options) {
     };
     if (!digests) {
       // The baseline a later digest-bearing release needs to recognise its start as an upgrade.
-      if (recorded === null || compareReleaseVersions(options.version, recorded.version) === 1) { try { record("baseline"); } catch { /* best effort */ } }
+      try { record("baseline"); } catch { /* best effort */ }
       return { kind: "skipped", reason: "no_digests" };
     }
     if (recorded === null) { record("baseline"); return { kind: "skipped", reason: "first_start" }; }
-    const order = compareReleaseVersions(options.version, recorded.version);
-    if (order === -1) return { kind: "skipped", reason: "downgrade" };
-    const dir = childBinaryCacheDir(home, options.version);
-    // The same version again fetches nothing. If its completed fill's manifest lost lines (fills that
-    // overlapped), the builds still verified on disk are listed again; nothing is downloaded.
-    const sameVersion = order === 0;
-    if (sameVersion && (!recorded.filled || manifestCovers(dir, digests))) return { kind: "skipped", reason: "not_an_upgrade" };
+    const sameVersion = compareReleaseVersions(options.version, recorded.version) === 0;
     const identity = realDirectory(dir);
     const fetchImpl = options.fetchImpl ?? fetch;
     const timeoutMs = options.timeoutMs ?? 60_000;
@@ -380,7 +408,7 @@ export async function fillChildBinaryCacheForVersion(options) {
     for (const [file, expected] of [...digests].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       const present = readCachedBuild(join(dir, file));
       if (present && sha256Hex(present) === expected) continue;
-      if (sameVersion) { failed.push(file); continue; }
+      if (sameVersion) continue;
       const bytes = await download(childReleaseAssetUrl(options.version, file), fetchImpl, timeoutMs);
       if (bytes && sha256Hex(bytes) === expected) {
         publish(dir, identity, file, bytes);
@@ -401,8 +429,9 @@ export async function fillChildBinaryCacheForVersion(options) {
     else unpublish(dir, identity, "SHA256SUMS");
     // An incomplete fill leaves the older record, so the next start of this version retries.
     if (verified.size === digests.size) record("filled");
+    // Counted from what is verified on disk now, never from what was written.
     const cached = [...verified.keys()].sort();
-    return { kind: "filled", cached, fetched, failed: failed.filter(file => !verified.has(file)) };
+    return { kind: "filled", cached, fetched: fetched.filter(file => verified.has(file)), failed: failed.filter(file => !verified.has(file)) };
   } finally {
     releaseFillLock(lock);
   }
@@ -422,11 +451,17 @@ export function runningPackageVersion(packageRoot = runningPackageRoot()) {
  */
 export async function fillChildBinaryCacheOnStart(options = {}, out = { log: console.log, warn: console.warn }) {
   let outcome;
+  // The documented opt-out (structure/remote-link.md, the Remote Link guide): nothing read or written.
+  if (process.env.OCX_DISABLE_CHILD_CACHE_FILL === "1") return { kind: "skipped", reason: "disabled" };
   const packageRoot = options.packageRoot ?? runningPackageRoot();
-  const version = options.version ?? runningPackageVersion(packageRoot) ?? "";
+  const onDisk = runningPackageVersion(packageRoot);
+  const version = options.version ?? onDisk ?? "";
   try {
     // A source checkout (a developer's server, the test suite) never fetches a release.
     if (detectInstallFromPath(packageRoot) === "source") return { kind: "skipped", reason: "source_checkout" };
+    // A package.json that is not the running code's version (an in-place install still extracting)
+    // records nothing: its baseline could suppress that version's upgrade fill.
+    if (options.bundledVersion !== undefined && onDisk !== options.bundledVersion) return { kind: "skipped", reason: "version_mismatch" };
     outcome = await fillChildBinaryCacheForVersion({ timeoutMs: 20_000, ...options, packageRoot, version });
   } catch {
     out.warn("[link] the ocx-child builds of this release could not be cached; planting on a bare machine needs a build supplied by hand.");
