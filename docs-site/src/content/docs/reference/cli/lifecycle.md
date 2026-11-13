@@ -1548,7 +1548,8 @@ run `ocx disconnect` only if `ocx connect status --json` shows this link's id or
 connection, right after that check (an enrollment that lands between the two
 commands would be removed), and leave it if it shows another link, a hub or
 another Home, or its state cannot be read. A lightweight Child uses
-`ocx link recover` (below).
+`ocx link recover` (below). A link saved before the Home recorded the Child type
+keeps no tombstone, so the instruction names both installs' link-bound commands.
 
 A forced revoke of a lightweight (`ocx-child`) Child that the Home reached over
 SSH leaves a tombstone on the Home naming the link, its alias and its pinned host

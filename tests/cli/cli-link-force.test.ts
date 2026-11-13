@@ -7,7 +7,9 @@ import type { OcxConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 const ID = "lnk_0123456789abcdef";
-const RECOVERY = `Run ocx disconnect --expect-link ${ID} on the remote client once it answers: it disconnects only while the machine is connected to this link, so a newer link is never removed. An OpenCodex older than that flag refuses it as a usage error before it acts on the link; then check ocx connect status --json there and run ocx disconnect only if it shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed). If it shows another link, a hub or another Home, or its state cannot be read, leave it as it is.`;
+// A link without a recorded Child type (or a record the CLI cannot read) gets the steps for either install (#8662 follow-up P3-d).
+const RECOVERY = `The Child type is not known here (the link was saved before the Home recorded it, or its record could not be read). If ocx link recover --list shows ${ID}, run ocx link recover --link-id ${ID} once the machine answers. Otherwise, once it answers, run ocx disconnect --expect-link ${ID} on a full install, or the planted ocx-child's detach --expect-link ${ID} on a lightweight Child (~/.cache/opencodex/bin/ocx-child; in Command Prompt on Windows %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe, or %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe where LOCALAPPDATA is not set): either refuses a machine that another link, a hub or another Home owns. A build older than that flag refuses it as a usage error before it acts on the link; then check its connect status --json and disconnect or detach only if it shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed). If it shows another link, a hub or another Home, or its state cannot be read, leave it as it is.`;
+const FULL_RECOVERY = `Run ocx disconnect --expect-link ${ID} on the remote client once it answers: it disconnects only while the machine is connected to this link, so a newer link is never removed. An OpenCodex older than that flag refuses it as a usage error before it acts on the link; then check ocx connect status --json there and run ocx disconnect only if it shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed). If it shows another link, a hub or another Home, or its state cannot be read, leave it as it is.`;
 const nativeFetch = globalThis.fetch;
 let home: TempHome;
 let output: ReturnType<typeof spyOn>, errors: ReturnType<typeof spyOn>, network: ReturnType<typeof spyOn>;
@@ -155,5 +157,11 @@ describe("explicit forced link revoke", () => {
     fEph.deps.readStore = () => ({ version: 1, listenerPort: 18181, links: [{ id: ID, alias: "barebox", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 24500, apiKeyId: "k1", createdAt: "2026-11-07T00:00:00Z", childKind: "ephemeral" }] });
     expect(await invoke(["--force", "--yes", "--json"], fEph.deps)).toBe(0);
     expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: `Run ocx link recover --link-id ${ID} once the machine answers: it cleans the machine only while it still belongs to this link.` });
+
+    output.mockClear();
+    const fFull = fixture();
+    fFull.deps.readStore = () => ({ version: 1, listenerPort: 18181, links: [{ id: ID, alias: "fullbox", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 24501, apiKeyId: "k2", createdAt: "2026-11-07T00:00:00Z", childKind: "full" }] });
+    expect(await invoke(["--force", "--yes", "--json"], fFull.deps)).toBe(0);
+    expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: FULL_RECOVERY });
   });
 });

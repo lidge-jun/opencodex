@@ -387,12 +387,15 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
   if (purge && force) throw new CliUsageError("--purge cannot be combined with --force", LINK_USAGE);
   if (force && !confirmed) throw new CliUsageError("forced revoke skips remote cleanup; pass --yes to confirm", LINK_USAGE);
   if (confirmed && !force) throw new CliUsageError("--yes requires --force", LINK_USAGE);
-  let wasEphemeral = false;
+  // The Child type the forced revoke's step depends on; unknown for a link saved before the Home recorded it, a link the store does
+  // not list, or a store the CLI cannot read (then no tombstone may have been kept, and the machine may run either install).
+  let childKind: "ephemeral" | "full" | "unknown" = "unknown";
   if (force) {
     try {
       const store = (deps.readStore ?? (() => readLinkStore(linkStorePath())))();
-      wasEphemeral = store.links.find(l => l.id === linkId)?.childKind === "ephemeral";
-    } catch { /* fallback to standard recovery message when store is unavailable */ }
+      const kind = store.links.find(l => l.id === linkId)?.childKind;
+      if (kind === "ephemeral" || kind === "full") childKind = kind;
+    } catch { /* the unknown-type step covers a store that cannot be read */ }
   }
   let remoteCleanup: "skipped" | "unverified" = "skipped";
   let recordedOutcome: unknown;
@@ -431,12 +434,14 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     remoteCleanup = "unverified";
   }
   if (force) {
-    const recovery = wasEphemeral
+    const recovery = childKind === "ephemeral"
       // Never a bare local disconnect: a forced revoke is also the remedy when the Child now belongs to another link, a hub or
       // another Home, and a disconnect run there would remove that link. The link-bound recover checks ownership itself.
       ? `Run ocx link recover --link-id ${linkId} once the machine answers: it cleans the machine only while it still belongs to this link.`
       // The bound disconnect (#8662) acts only while the machine is connected to this link, which closes the race between a check
       // and a plain disconnect; an ocx older than the flag refuses it before it acts on the link, and then the check comes first.
+      : childKind === "unknown"
+        ? `The Child type is not known here (the link was saved before the Home recorded it, or its record could not be read). If ocx link recover --list shows ${linkId}, run ocx link recover --link-id ${linkId} once the machine answers. Otherwise, once it answers, run ocx disconnect --expect-link ${linkId} on a full install, or the planted ocx-child's detach --expect-link ${linkId} on a lightweight Child (~/.cache/opencodex/bin/ocx-child; in Command Prompt on Windows %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe, or %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe where LOCALAPPDATA is not set): either refuses a machine that another link, a hub or another Home owns. A build older than that flag refuses it as a usage error before it acts on the link; then check its connect status --json and disconnect or detach only if it shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed). If it shows another link, a hub or another Home, or its state cannot be read, leave it as it is.`
       : `Run ocx disconnect --expect-link ${linkId} on the remote client once it answers: it disconnects only while the machine is connected to this link, so a newer link is never removed. An OpenCodex older than that flag refuses it as a usage error before it acts on the link; then check ocx connect status --json there and run ocx disconnect only if it shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed). If it shows another link, a hub or another Home, or its state cannot be read, leave it as it is.`;
     printData({ linkId, remoteCleanup, recovery, ...(operationId !== undefined && recordedOutcome !== undefined ? { operationId, outcome: recordedOutcome } : {}) }, wantsJson, [
       remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,

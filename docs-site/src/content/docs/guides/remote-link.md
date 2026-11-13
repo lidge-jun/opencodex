@@ -138,6 +138,8 @@ ocx link recover --link-id <id>     # on the Home, for a lightweight Child
 ocx disconnect --expect-link <id>   # on a full install
 ```
 
+A link saved before the Home recorded the Child type keeps no tombstone, and the Home does not know which install the machine runs. Use the full install's command, or the planted `ocx-child`'s `detach --expect-link <id>` on a lightweight Child; each refuses a machine that another link, a hub or another Home owns.
+
 To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disconnects the client tunnel and revokes the link on Home over SSH. If Home revocation fails, it prints: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
 ## Route clients per device
