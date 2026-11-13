@@ -12,7 +12,7 @@
  * organizations were recorded is never duplicated by re-login.
  */
 import { createHash } from "node:crypto";
-import { anthropicOrganization, matchesAnthropicImport, normalizeAnthropicIdentity,
+import { anthropicOrganization, anthropicOrganizationsConflict, matchesAnthropicImport, normalizeAnthropicIdentity,
   resolveAnthropicAccountIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import type { OAuthCredentials, ProviderAccount } from "./types";
 
@@ -109,4 +109,20 @@ export function anthropicOrganizationHeldElsewhere(
   const identity = loginIdentity(incoming);
   return organization !== undefined && accounts.some(row => row.id !== accountId
     && loginIdentity(row.credential) === identity && anthropicOrganization(row.credential) === organization);
+}
+
+/**
+ * Whether a reauth of `accountId` with `incoming` must be refused: the row now belongs to another
+ * account, is proven to serve another organization, or another row of the account already proves
+ * the incoming organization. The login checks it once for a fast answer and the serialized writer
+ * checks it again against the rows it loaded, so a login or reauth committed in between cannot
+ * leave two rows on one organization or overwrite a grant the earlier check no longer describes.
+ */
+export function anthropicReauthSlotRefused(
+  accounts: readonly ProviderAccount[], accountId: string, incoming: OAuthCredentials,
+): boolean {
+  const target = accounts.find(row => row.id === accountId)?.credential;
+  if (target?.accountId && incoming.accountId && target.accountId !== incoming.accountId) return true;
+  return (target !== undefined && anthropicOrganizationsConflict(target, incoming))
+    || anthropicOrganizationHeldElsewhere(accounts, accountId, incoming);
 }
