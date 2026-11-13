@@ -96,7 +96,7 @@ export const OPERATION_REPLAY_MIN_MS = 24 * 60 * 60 * 1000;
  */
 export const OPERATION_PRUNE_FLOOR_MS = OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAIT_MS + 60_000;
 /**
- * At this many entries settled within OPERATION_REPLAY_MIN_MS a new operation is refused until the oldest is a day old: a
+ * At this many entries settled within OPERATION_PRUNE_FLOOR_MS a new operation is refused until the oldest is older: a
  * burst no working fleet reaches (ten machines run a handful of operations each), so a runaway loop that retries with a
  * fresh id after each failure is held for at most a day instead of locking the Home out for 30 days. With the three
  * bounds the file holds about 256 unsettled plus 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at
@@ -249,7 +249,7 @@ export function writeOperationsJournal(path: string, journal: OperationsJournal)
 /**
  * Drop what has outlived retention: a committed or failed_clean entry 30 days after it finished, a residual or
  * unknown one only 30 days after it was resolved. An open entry, and an unresolved residual or unknown one, stays.
- * Past OPERATION_JOURNAL_MAX_SETTLED settled entries, the oldest settled ones that are at least a day old go too.
+ * Past OPERATION_JOURNAL_MAX_SETTLED settled entries, the oldest settled ones older than OPERATION_PRUNE_FLOOR_MS go too.
  */
 export function pruneOperations(journal: OperationsJournal, nowMs: number): OperationsJournal {
   const expired = (at: string | undefined) => at !== undefined && nowMs - Date.parse(at) > OPERATION_RETENTION_MS;
