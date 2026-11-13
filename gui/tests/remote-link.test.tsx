@@ -1631,13 +1631,16 @@ test("a journalled plant residual, which names no platform, lists every managed 
 });
 
 test("a residual without the attempt's link id leaves the Child as it is", async () => {
-  const host = await applyRefusal({ error: { code: "link_cleanup_uncertain", message: "fixture" }, residual: true, recovery: "Run ocx disconnect and ocx restart on the Child before retrying." });
+  const host = await applyRefusal({ error: { code: "link_cleanup_uncertain", message: "server text the page must not echo" }, residual: true, recovery: "Run ocx disconnect and ocx restart on the Child before retrying." });
   const text = host.textContent ?? "";
   expect(text).toContain("revoke the leftover link key");
   expect(text).toContain("The Child may still be connected.");
   expect(text).toContain("so no step on the Child can be bound to it: leave the Child as it is");
   expect(host.querySelector(".remote-link-child-step code.chip")).toBeNull();
   expect(text).not.toContain("was not connected");
+  // Neither the server's message nor its recovery prose is shown.
+  expect(text).not.toContain("server text the page must not echo");
+  expect(text).not.toContain("Run ocx disconnect and ocx restart");
 });
 
 test("a cleanup refusal without residual names no Child step", async () => {
