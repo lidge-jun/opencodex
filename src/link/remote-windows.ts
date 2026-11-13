@@ -201,7 +201,7 @@ export function windowsPurgePlantedChildArgv(): string[] {
   return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
 $r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$cd="$h\child";$cx=if($env:CODEX_HOME){$env:CODEX_HOME}else{"$r\.codex"}
 $rec=@(@("$cd\state.json","$cd\codex-journal.json","$cd\attach-rollback.json","$cx\.ocx-child-owner.json")|?{[IO.File]::Exists($_)-or[IO.Directory]::Exists($_)});$pend=$rec.Count -gt 0;if($pend){$m='ocx-child recovery record remains at '+$rec[0]+'; keeping the planted binary for detach.'}
-try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};try{[IO.File]::Delete($dst)}catch{$null=$_}}elseif($pend){[Console]::Error.WriteLine($m);exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif($pend){[Console]::Error.WriteLine($m);exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
+try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};if([IO.File]::Exists($dst)){[Console]::Error.WriteLine('ocx-child kept the planted binary: another ocx-child relay runs from it.')}}elseif($pend){[Console]::Error.WriteLine($m);exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif($pend){[Console]::Error.WriteLine($m);exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
 `);
 }
 
@@ -213,6 +213,8 @@ export function windowsRecoverReceiptArgv(linkId: string): string[] {
   if (!/^lnk_[0-9a-f]{16}$/.test(linkId)) throw new Error("invalid link id");
   return packedPowerShellArgv(NATIVE_PROCESS + String.raw`
 $r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$f="$h\link-receipts\${linkId}.json"
+$b=if($env:LOCALAPPDATA){"$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"}else{"$env:USERPROFILE\.cache\opencodex\bin\ocx-child.exe"};$bd=Split-Path $b
+try{if([IO.Directory]::Exists($bd)){$null=[IO.Directory]::GetFiles($bd)};if([IO.File]::Exists($b)-or[IO.Directory]::Exists($b)){exit 4}}catch{exit 4}
 try{if(-not[IO.File]::Exists($f)){exit 4};if(((Get-Item -LiteralPath $f -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){exit 4};[Console]::Out.Write([IO.File]::ReadAllText($f))}catch{exit 4};exit 0
 `);
 }

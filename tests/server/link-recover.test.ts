@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { inflateRawSync } from "node:zlib";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
@@ -10,7 +11,7 @@ import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { keyFingerprint } from "../../src/link/route-trust";
 import { tombstonesPath } from "../../src/link/tombstones";
 import { registerOperationRecoveryResolver } from "../../src/link/operation-recovery-slot";
-import { POSIX_RECOVER_RECEIPT_SCRIPT, remoteRecoverReceiptArgv } from "../../src/link/remote-plant";
+import { POSIX_RECOVER_RECEIPT_SCRIPT, remotePurgePlantedChildArgv, remoteRecoverReceiptArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Home side of lane O5: a forced revoke of an ephemeral link leaves a tombstone, and
@@ -329,7 +330,8 @@ describe("recover after a lost receipt and with remote failures", () => {
   });
 
   test("the receipt read only reads, and takes the link id as an argument, never as script text", () => {
-    expect(POSIX_RECOVER_RECEIPT_SCRIPT).not.toMatch(/\brm\b|\bexec\b|ocx-child|detach|--purge/);
+    expect(POSIX_RECOVER_RECEIPT_SCRIPT).not.toMatch(/\brm\b|\bexec\b|detach|--purge/);
+    expect(POSIX_RECOVER_RECEIPT_SCRIPT).not.toMatch(/^\s*"\$bin\/ocx-child"/m);
     expect(remoteRecoverReceiptArgv("posix", ID)).toEqual(["sh", "-c", POSIX_RECOVER_RECEIPT_SCRIPT, "ocx-recover-receipt", ID]);
     expect(() => remoteRecoverReceiptArgv("posix", "lnk_$(id)")).toThrow();
     expect(() => remoteRecoverReceiptArgv("windows", "lnk_'x")).toThrow();
@@ -350,4 +352,62 @@ test.skipIf(process.platform === "win32")("the POSIX receipt read prints only a 
   expect(run(OTHER).exitCode).toBe(4);
   symlinkSync(join(receipts, ID + ".json"), join(receipts, OTHER + ".json"));
   expect(run(OTHER).exitCode).toBe(4);
+});
+
+describe.skipIf(process.platform === "win32")("POSIX plant scripts keep a binary another relay uses", () => {
+  function fakeHome(behaviour: "keep" | "remove") {
+    const home = join(root, "plant-home-" + behaviour);
+    const bin = join(home, ".cache", "opencodex", "bin");
+    mkdirSync(bin, { recursive: true });
+    const dest = join(bin, "ocx-child");
+    // A stand-in for ocx-child detach --purge: either it removed itself, or it kept the binary
+    // because another home's relay holds the in-use lock (purged:false, exit 0).
+    writeFileSync(dest, behaviour === "remove"
+      ? "#!/bin/sh\nrm -f \"$0\"\necho '{\"restored\":true,\"outcome\":\"NotAttached\",\"daemonRunning\":false,\"purged\":true}'\n"
+      : "#!/bin/sh\necho '{\"restored\":true,\"outcome\":\"NotAttached\",\"daemonRunning\":false,\"purged\":false}'\n", { mode: 0o755 });
+    return { home, bin, dest };
+  }
+  const env = (home: string) => ({ PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, OPENCODEX_HOME: join(home, ".opencodex"), CODEX_HOME: join(home, ".codex") });
+
+  test("the enrollment rollback purge leaves a binary the Child kept", () => {
+    const kept = fakeHome("keep");
+    const run = Bun.spawnSync(remotePurgePlantedChildArgv("posix"), { env: env(kept.home) });
+    expect(run.exitCode).toBe(0);
+    expect(existsSync(kept.dest)).toBe(true);
+    const removed = fakeHome("remove");
+    expect(Bun.spawnSync(remotePurgePlantedChildArgv("posix"), { env: env(removed.home) }).exitCode).toBe(0);
+    expect(existsSync(removed.dest)).toBe(false);
+  });
+
+  test("a receipt proves nothing while a planted file remains or its directory cannot be read", () => {
+    const home = join(root, "receipt-home");
+    const receipts = join(home, ".opencodex", "link-receipts");
+    mkdirSync(receipts, { recursive: true });
+    writeFileSync(join(receipts, ID + ".json"), JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: ID, restored: true }) + "\n");
+    const bin = join(home, ".cache", "opencodex", "bin");
+    mkdirSync(bin, { recursive: true });
+    const read = () => Bun.spawnSync(remoteRecoverReceiptArgv("posix", ID), { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home } }).exitCode;
+    expect(read()).toBe(0);
+    writeFileSync(join(bin, "ocx-child"), "not executable", { mode: 0o644 });
+    expect(read()).toBe(4);
+    rmSync(join(bin, "ocx-child"));
+    if (process.getuid?.() !== 0) {
+      chmodSync(bin, 0o000);
+      try { expect(read()).toBe(4); } finally { chmodSync(bin, 0o700); }
+    }
+  });
+});
+
+test("the Windows scripts keep a kept binary and require the planted binary to be absent", () => {
+  const decode = (argv: string[]) => {
+    const outer = Buffer.from(argv.at(-1)!, "base64").toString("utf16le");
+    const packed = /\$ocxPacked='([^']+)'/.exec(outer)![1]!;
+    return inflateRawSync(Buffer.from(Array.from(packed, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+  };
+  const rollback = decode(remotePurgePlantedChildArgv("windows"));
+  expect(rollback).not.toMatch(/detach --purge'\)\);if\(\$rc -ne 0\)\{exit \$rc\};try\{\[IO\.File\]::Delete\(\$dst\)\}/);
+  expect(rollback).toContain("kept the planted binary");
+  const receipt = decode(remoteRecoverReceiptArgv("windows", ID));
+  expect(receipt).toContain("ocx-child.exe");
+  expect(receipt).toContain("exit 4");
 });

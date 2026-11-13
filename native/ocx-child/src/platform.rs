@@ -1429,9 +1429,8 @@ pub fn purge_managed_executable(
         }
     };
     crate::test_hooks::barrier("purge-holding-in-use");
-    // Removed while held, so the emptied directory can go; a relay opening it now gets a new file
-    // in a directory without a binary and has nothing to serve from.
-    let _ = fs::remove_file(&in_use_path);
+    // The lock file stays: unlinking it while held would let a relay lock a fresh file of the same
+    // name and keep serving while the binary goes. The emptied directory therefore stays as well.
     #[cfg(unix)]
     {
         fs::remove_file(exe_path).map_err(|e| {

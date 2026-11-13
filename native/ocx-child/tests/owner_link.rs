@@ -647,3 +647,50 @@ fn a_relay_of_another_home_keeps_the_planted_binary_from_being_purged() {
     assert!(removed.contains("\"purged\":true"), "{removed}");
     assert!(!planted.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn the_in_use_lock_file_stays_so_no_relay_can_lock_a_fresh_one_during_a_purge() {
+    let homes = Homes::new("owner-link-stable-lock");
+    let fake_home = homes.scratch.0.join("home");
+    let bin_dir = fake_home.join(".cache").join("opencodex").join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let planted = bin_dir.join("ocx-child");
+    fs::copy(env!("CARGO_BIN_EXE_ocx-child"), &planted).unwrap();
+    let lock_path = bin_dir.join(".ocx-child-in-use.lock");
+    let barrier = Barrier::new(&homes.scratch.0, "stable");
+    let mut cmd = planted_command(
+        &planted,
+        &fake_home,
+        &homes.ocx,
+        &homes.codex,
+        homes.port,
+        &["detach", "--purge", "--json", "--expect-link", LINK_A],
+    );
+    barrier.apply(&mut cmd, "purge-holding-in-use");
+    let child = cmd.spawn().unwrap();
+    assert!(
+        barrier.wait_reached("purge-holding-in-use", Duration::from_secs(20)),
+        "the purge never took the in-use lock"
+    );
+    // A relay starting now finds the purge holding the lock and must not serve.
+    let starting = FileLock::try_acquire_shared_in_existing_dir(&lock_path);
+    let refused = matches!(starting, Err(LockAcquireError::Busy));
+    drop(starting);
+    barrier.release("purge-holding-in-use");
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        refused,
+        "a relay could lock the in-use file during the purge"
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!planted.exists());
+    assert!(
+        lock_path.exists(),
+        "the lock file was unlinked; a relay could lock a fresh file of the same name"
+    );
+}

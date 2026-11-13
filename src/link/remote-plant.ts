@@ -204,7 +204,10 @@ export const POSIX_PURGE_PLANTED_SCRIPT = [
   "}",
   "if [ -f \"$dest\" ]; then",
   "  if [ -x \"$dest\" ]; then",
-  "    \"$dest\" detach --purge >/dev/null || exit $?",
+  "    out=$(\"$dest\" detach --purge --json) || exit $?",
+  // purged:false from the managed binary means it kept itself on purpose: a relay of another
+  // ocx-child home runs from it. Any other answer keeps the old belt-and-braces removal.
+  "    case \"$out\" in *'\"purged\":false'*) printf 'ocx-child kept the planted binary: another ocx-child relay runs from it.\\n' >&2; exit 0;; esac",
   "    rm -f \"$dest\" 2>/dev/null || true",
   "  elif recovery_pending; then",
   "    exit 1",
@@ -249,6 +252,11 @@ const LINK_ID = /^lnk_[0-9a-f]{16}$/;
  */
 export const POSIX_RECOVER_RECEIPT_SCRIPT = [
   "case \"$(uname -s 2>/dev/null)\" in Windows*|MSYS*|MINGW*|CYGWIN*) exit 125;; esac",
+  // The receipt proves the restore; the purge is proven only by a binary confirmed absent (an
+  // existing but non-executable file, or a directory that cannot be searched, proves nothing).
+  "bin=\"$HOME/.cache/opencodex/bin\"",
+  "if [ -e \"$bin\" ] && { [ ! -d \"$bin\" ] || [ ! -x \"$bin\" ]; }; then exit 4; fi",
+  "if [ -e \"$bin/ocx-child\" ] || [ -L \"$bin/ocx-child\" ]; then exit 4; fi",
   "f=\"${OPENCODEX_HOME:-$HOME/.opencodex}/link-receipts/$1.json\"",
   "if [ -L \"$f\" ] || [ ! -f \"$f\" ] || [ ! -r \"$f\" ]; then exit 4; fi",
   "cat -- \"$f\"",
