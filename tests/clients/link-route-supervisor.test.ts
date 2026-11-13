@@ -1437,3 +1437,26 @@ test.each(["a running child", "a child the tick already stopped"] as const)("a r
   await reload;
   expect(h.supervisor.status()).toEqual([]);
 });
+
+test.each(["during a reload's drain", "on its own"] as const)("shutdown %s still sends SIGKILL after the grace to a one-route child that ignores SIGTERM", async when => {
+  let current = oneRouteStore();
+  const opts: Parameters<typeof harness>[0] = { store: () => current, stubborn: true };
+  const h = start(opts);
+  await flush();
+  let reload: Promise<void> | undefined;
+  if (when === "during a reload's drain") {
+    current = { ...current, links: [] };
+    reload = h.supervisor.reload();
+    await flush();
+    await h.advance(1_000);
+  }
+  const stopped = h.supervisor.stop();
+  await flush();
+  expect(h.tunnels[0]!.signals).not.toContain("SIGKILL");
+  await h.advance(when === "on its own" ? 2_000 : 1_000);
+  expect(h.tunnels[0]!.signals.filter(signal => signal === "SIGKILL")).toHaveLength(1);
+  opts.stubborn = false;
+  h.tunnels[0]!.exit(137);
+  await reload;
+  await stopped;
+});

@@ -631,15 +631,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   const tick = (): void => {
-    if (stopping) return;
-    // Route deadlines run even while lifecycle work is pending, so a stuck reload cannot stretch a probe.
-    for (const record of store.links) if (rounds.isMultiRoute(record) && !holds.has(record.id)) rounds.tick(record.id);
-    // So does the SIGKILL for a one-route child a stop is draining: a reload never waits on an ssh that ignores SIGTERM.
+    // The SIGKILL for a one-route child a stop is draining runs even while lifecycle work is pending or the
+    // supervisor shuts down: no reload, reconnect or shutdown waits on an ssh that ignores SIGTERM.
     for (const drain of draining) {
       if (drain.killed || now() - drain.stopAt < CANDIDATE_KILL_GRACE_MS) continue;
       drain.killed = true;
       try { drain.child.kill("SIGKILL"); } catch { /* already gone */ }
     }
+    if (stopping) return;
+    // Route deadlines run even while lifecycle work is pending, so a stuck reload cannot stretch a probe.
+    for (const record of store.links) if (rounds.isMultiRoute(record) && !holds.has(record.id)) rounds.tick(record.id);
     if (lifecycleFlight) return;
     const current = now();
     tickOrphanWatches(current);
@@ -964,16 +965,17 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     async stop() {
       stopping = true;
       rounds.stop();
-      if (timer !== undefined) {
-        clearTimer(timer);
-        timer = undefined;
-      }
       await runLifecycle(async () => {
         await Promise.all([...children.keys()].map(stopChild));
         for (const record of store.links) {
           if (record.direction === "hub-initiated") put(record.id, IDLE);
         }
       });
+      // The timer runs until the stops above are done: it alone sends SIGKILL to a child that ignores SIGTERM.
+      if (timer !== undefined) {
+        clearTimer(timer);
+        timer = undefined;
+      }
       try { await deps.flushDiagnostics?.(); } catch { /* best effort */ }
     },
   };
