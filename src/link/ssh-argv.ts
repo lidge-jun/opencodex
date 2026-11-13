@@ -87,6 +87,11 @@ function routeOptions(route: ExplicitRoute | null | undefined, alias: string, de
 
 function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel, route: readonly string[]): string[] {
   return [
+    // An explicit route names the transport, user and port and the host key is pinned, so such a link reads no
+    // ssh_config at all: list-valued settings (forwards, SendEnv, IdentityFile) would add to ours, a RemoteCommand
+    // would break every exec, and no option can remove a configured forward from the tunnel. Links without a route
+    // keep reading the owner's ssh_config, which is how they reach their host.
+    ...(route.length > 0 ? ["-F", "none"] : []),
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     "-o", "ServerAliveInterval=15",
