@@ -271,13 +271,23 @@ describe("journal write failures during a revoke", () => {
     expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   });
 
-  test("a failed remote_cleanup completion after a good purge still removes the link and keeps the receipt, with no tunnel restart", async () => {
+  test("a purge receipt that cannot be written stops the revoke before the key, unknown, with no tunnel restart toward the purged Child", async () => {
+    // Removing the link on a receipt held only in memory would lose the Child's purged:true if the process then died.
     const h = harness({ markHook: (effect, phase) => { if (effect === "remote_cleanup" && phase === "done") throw new Error("disk full"); } });
     const revoked = await h.revoke({ purge: true, operationId: OP });
-    expect(revoked).toEqual({ status: 200, body: { linkId: LINK, operationId: OP, outcome: "committed", purged: true } });
-    expect(h.store.links).toEqual([]);
+    expect({ status: revoked.status, code: code(revoked), operationId: revoked.body.operationId, outcome: revoked.body.outcome })
+      .toEqual({ status: 500, code: "operation_journal_failed", operationId: OP, outcome: "unknown" });
+    expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+    expect(h.config.apiKeys!.map(key => key.id)).toEqual(["link-key"]);
     expect(h.restarts).toBe(0);
-    expect(h.journal().operations[0]!.receipt).toEqual({ purged: true, linkId: LINK });
+  });
+
+  test("a journalled force revoke whose first intent cannot be written leaves the tunnel running", async () => {
+    const h = harness({ markHook: (effect, phase) => { if (effect === "key_revoked" && phase === "intent") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ force: true, operationId: OP });
+    expect({ status: revoked.status, code: code(revoked), operationId: revoked.body.operationId }).toEqual({ status: 500, code: "operation_journal_failed", operationId: OP });
+    expect(h.stops).toEqual([]);
+    expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   });
 
   test("a failed record_removed completion still closes the link's sockets", async () => {

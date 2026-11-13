@@ -279,8 +279,9 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     try { journal.intent(effect); return true; } catch { return false; }
   };
   const cleanup = !force && record.direction === "hub-initiated";
-  // Before stopLink: a failed write leaves the tunnel as it was.
-  if (cleanup && !intend("remote_cleanup")) return journalFailed();
+  // The first intent (cleanup, or the key for a force revoke) is written before stopLink: a failed write leaves the
+  // tunnel as it was and nothing has been touched.
+  if (!intend(cleanup ? "remote_cleanup" : "key_revoked")) return journalFailed();
   const release = state.supervisor.holdLink?.(id);
   try {
     await state.supervisor.stopLink(id);
@@ -303,8 +304,10 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
             await restartTunnel();
             return fail(purged.code, purged.message, purged.status, purged.hint);
           }
-          // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route.
-          journal.done("remote_cleanup", { purged: true, linkId: id });
+          // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route. The
+          // receipt must be durable before the link goes; if it cannot be written, stop here (unknown) and leave the
+          // tunnel down, since the Child it would reach is purged.
+          try { journal.done("remote_cleanup", { purged: true, linkId: id }); } catch { return journalFailed(); }
         } else {
           const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 });
           if (result.code !== 0) {
@@ -318,7 +321,7 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
       }
     }
-    if (!intend("key_revoked")) return journalFailed();
+    if (cleanup && !intend("key_revoked")) return journalFailed();
     if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
     journal.done("key_revoked");
     if (!intend("record_removed")) return journalFailed();
