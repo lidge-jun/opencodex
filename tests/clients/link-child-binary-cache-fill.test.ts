@@ -124,7 +124,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(resolve("darwin-arm64")).toEqual({ ok: false, reason: "artifact_not_found" });
   });
 
-  test("a build the package no longer vouches for loses its manifest line when its refetch fails, and the fill deletes no file", async () => {
+  test("a build the package no longer vouches for loses its manifest line when its refetch fails, and the fill deletes no build file", async () => {
     ranBefore();
     const oldBuild = new TextEncoder().encode("earlier build");
     mkdirSync(cacheDir(), { recursive: true, mode: 0o700 });

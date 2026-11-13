@@ -22,7 +22,7 @@ import { detectInstallFromPath } from "../update/install-detection.mjs";
  * so the newest can never go down, and only a running version newer than it fills. A first start (no record: a fresh install) records
  * its version and fetches nothing, a restart of the same version fetches nothing, and a record or
  * cache directory for a newer version means a downgrade. A listed build that cannot be verified loses its manifest line,
- * so it can never stay trusted under an older manifest; the fill deletes no file (unlisted, the reader
+ * so it can never stay trusted under an older manifest; the fill deletes no build file (unlisted, the reader
  * refuses it); the record stays behind until every listed build is verified, so the next start retries.
  * A digest file that is there but unreadable or unusable is not an absent one: nothing is written and
  * the record stays, so a repaired package still fills. Overlapping fills cannot lose a build: the
@@ -434,7 +434,7 @@ export async function fillChildBinaryCacheForVersion(options) {
     }
     assertFillLockHeld(lock);
     // Rebuilt from the disk as it is now, so an overlapping fill's verified builds stay listed and a
-    // build the release does not vouch for never stays under an older line (the fill deletes no file;
+    // build the release does not vouch for never stays under an older line (the fill deletes no build file;
     // unlisted, the reader refuses it). Lines for targets the release does not list are left as they
     // are: the fill manages only the builds its digests name.
     const verified = verifiedOnDisk(dir, digests);
