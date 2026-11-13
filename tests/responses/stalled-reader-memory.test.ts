@@ -30,12 +30,12 @@ afterEach(() => { globalThis.fetch = savedFetch; releaseSpendHome?.(); releaseSp
 /** The fake upstream and every stream stage advance on promise jobs alone, so one event-loop turn settles them. */
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
-function upstream(): { pulls: number } {
+function upstream(upstreamFrames: readonly string[] = frames): { pulls: number } {
   const state = { pulls: 0 };
   globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
     pull(controller) {
-      if (state.pulls >= frames.length) { controller.close(); return; }
-      controller.enqueue(encoder.encode(frames[state.pulls++]!));
+      if (state.pulls >= upstreamFrames.length) { controller.close(); return; }
+      controller.enqueue(encoder.encode(upstreamFrames[state.pulls++]!));
     },
   }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
   return state;
@@ -47,9 +47,9 @@ const request = (headers: Record<string, string> = {}) => new Request("http://12
 });
 
 /** Pulls the upstream saw before the client read, and after each of its first reads; then the rest of the body. */
-async function stalledThenDrained(run: () => Promise<Response>) {
+async function stalledThenDrained(run: () => Promise<Response>, upstreamFrames: readonly string[] = frames) {
   releaseSpendHome = acquireOwnedSpendHome();
-  const state = upstream();
+  const state = upstream(upstreamFrames);
   const response = await run();
   await settle();
   const pulls = [state.pulls];
@@ -93,6 +93,18 @@ describe("upstream read-ahead under a stalled reader (#8601)", () => {
     run.pulls.forEach((pulls, reads) => expect(pulls).toBeLessThanOrEqual(reads + 1));
     expect(run.text).toBe(delivered);
   });
+  test("with upstream chunks smaller than a slice, no relay stage queues one ahead of the client", async () => {
+    // A stage that lost the paced mark would queue one more of these whole chunks, which the bound below catches.
+    const small = [
+      ...Array.from({ length: 64 }, (_, index) => "event: response.output_text.delta\ndata: "
+        + JSON.stringify({ type: "response.output_text.delta", index, delta: "y".repeat(16 * 1024) }) + "\n\n"),
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}\n\n',
+    ];
+    const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }, { linkTurn: observer(true) }), small);
+    // The client's chunk plus the one chunk the inspection branch may read ahead of it.
+    run.pulls.forEach((pulls, reads) => expect(pulls).toBeLessThanOrEqual(reads + 2));
+    expect(run.text).toBe(small.join("") + "data: [DONE]\n\n");
+  });
 });
 
 
@@ -103,7 +115,9 @@ describe("the eager relay under a stalled reader (#8601)", () => {
 
   test("a local request keeps the eager relay's queue", async () => {
     const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }));
+    // The eager queue (8 MiB), not the tee's 32 MiB allowance: the platform seam chose the eager relay.
     expect(run.pulls[0]).toBeGreaterThanOrEqual(8);
+    expect(run.pulls[0]).toBeLessThan(32);
     expect(run.text).toBe(delivered);
   });
 
