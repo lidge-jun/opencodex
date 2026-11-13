@@ -1,3 +1,4 @@
+import { seedRouteDeviceClients } from "../../routing/home-route-intent";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -446,6 +447,9 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
             ? fail("trust_file_unexpected", "The link known_hosts file has a pattern, host-list, marker or malformed line; remove that line, then probe and confirm the host again.", 409)
             : fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409));
       }
+      // An ephemeral ocx-child never reads route intent, so its enrollment saves none: seeding would
+      // also start ocx sync applying route intent to every Home client.
+      if (!ephemeralChild) withConfigMutationLockSync(() => seedRouteDeviceClients(ctx.config, ctx.version, id, undefined, readStoreFor(ctx).links.map(link => link.id)));
       journal.done("link_recorded");
       await state.listener.ensureStarted();
       if (state.listener.status().state !== "listening") return await failed(fail("listener_unavailable", "The link listener is unavailable.", 503));

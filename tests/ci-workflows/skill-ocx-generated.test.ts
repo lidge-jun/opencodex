@@ -166,7 +166,7 @@ describe("generated operating-skill chapter contract", () => {
             row.usage = "ocx " + row.command.join(" ") + " --unsafe-fixture";
         }
       `);
-      expect(result.status).toBe(0);
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
       expect(result.stdout).not.toContain("--unsafe-fixture");
     });
   });

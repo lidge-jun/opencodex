@@ -1,6 +1,6 @@
 import { readClientConnectionState } from "../client/state";
 import { readServiceApiTokenState, readTokenBackupState } from "../lib/service-secrets";
-import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { assertClientLifecycleHeld, withClientLifecycleSync, type ClientLifecycleHeld, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
 import { applyRemoteDesktopStore, inspectRemoteDesktopCleanup, restoreRemoteDesktopStore } from "./desktop-remote-store";
 import { canonicalDirectory } from "./desktop-remote-store-io";
 import {
@@ -571,6 +571,7 @@ export function removeDesktop3pStandardPivot(
   options: Desktop3pConfigLibraryOptions & {
     appliedFingerprint?: string | null; unlink?: (path: string) => void;
     lifecycleLockDeps?: ClientLifecycleLockDeps;
+    lifecycleHeld?: ClientLifecycleHeld;
     /**
      * The desired-state guard below exists for OFF flows racing a concurrent enable. A
      * mode switch (gateway → first-party) removes the profile while the integration stays
@@ -581,7 +582,7 @@ export function removeDesktop3pStandardPivot(
 ): Desktop3pRemovalResult {
   const libraryPath = resolveDesktop3pConfigLibraryPath(options);
   try {
-    return withClientLifecycleSync<Desktop3pRemovalResult>(held => withConfigMutationLockSync(() => {
+    const remove = (held: ClientLifecycleHeld): Desktop3pRemovalResult => withConfigMutationLockSync(() => {
       const connection = readClientConnectionState();
       if (connection.kind === "invalid" || connection.kind === "mismatched") {
         return { ok: false, changed: false, kind: "unsafe", libraryPath, reason: `desktop_client_state_${connection.kind}` };
@@ -621,7 +622,9 @@ export function removeDesktop3pStandardPivot(
       return result.ok
         ? { ok: true, changed: result.changed, kind: result.changed ? "removed" : "noop", libraryPath }
         : { ok: false, changed: result.changed, kind: result.reason === "cleanup_pending" ? "cleanup_incomplete" : "unsafe", reason: result.reason, libraryPath };
-    }), options.lifecycleLockDeps);
+    });
+    if (options.lifecycleHeld) { assertClientLifecycleHeld(options.lifecycleHeld); return remove(options.lifecycleHeld); }
+    return withClientLifecycleSync(remove, options.lifecycleLockDeps);
   } catch (error) {
     return { ok: false, changed: false, kind: "write_failed", libraryPath, reason: desktopMutationFailureReason(error) };
   }
@@ -724,9 +727,10 @@ export function writeDesktop3pConfig(
   nativeContextCap?: NativeContextLimitsInput,
   lifecycleLockDeps?: ClientLifecycleLockDeps,
   refreshOnly?: { appliedFingerprint: string; admit: () => boolean },
+  lifecycleHeld?: ClientLifecycleHeld,
 ): { written: boolean; path: string; reason?: string; fingerprint?: string } {
   try {
-    return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+    const write = () => withConfigMutationLockSync(() => {
       const connection = readClientConnectionState();
       if (connection.kind === "invalid" || connection.kind === "mismatched") {
         return { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: `desktop_client_state_${connection.kind}` };
@@ -785,7 +789,9 @@ export function writeDesktop3pConfig(
         generateDesktop3pConfig(destination.origin, nativeSlugs, routedModels, gatewayKey, mode, profile, nativeContextCap,
           desktop3pModelOptions(latest.config.claudeCode))
       ), requiredId && refreshOnly ? { requiredId, expectedFingerprint: refreshOnly.appliedFingerprint, admit: refreshOnly.admit } : undefined);
-    }), lifecycleLockDeps);
+    });
+    if (lifecycleHeld) { assertClientLifecycleHeld(lifecycleHeld); return write(); }
+    return withClientLifecycleSync(write, lifecycleLockDeps);
   } catch { return { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: "desktop_lifecycle_busy_or_unsafe" }; }
 }
 

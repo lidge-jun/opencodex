@@ -7,6 +7,7 @@ import {
 import { TUNNEL_CAUSES } from "../link/tunnel-history";
 import { isEpochMs, type LinkChildParity } from "../link/child-parity";
 import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
+import { isRouteClientId, parseRouteClientOutcomes, ROUTE_INTENT_DIGEST_PATTERN, routeClientOutcomesForPeer } from "../link/route-intent";
 import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
@@ -47,7 +48,7 @@ export const LINK_USAGE = `Usage:
   ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
   ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]
   ocx link port [--json]
-  ocx link issue --alias <alias> --tunnel-port <port> [--json]
+  ocx link issue --alias <alias> --tunnel-port <port> [--clients <id,...>] [--json]
   ocx link status [--json]
   ${LINK_DIAGNOSTICS_USAGE}
   ocx link revoke --link-id <id> [--purge] [--force --yes] [--operation-id <id>] [--json]
@@ -331,6 +332,9 @@ async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
 async function runIssue(args: string[], deps: LinkCliDeps): Promise<void> {
   takeJsonFlag(args);
   const alias = takeOption(args, "--alias");
+  const rawClients = takeOption(args, "--clients");
+  const selectedClients = rawClients?.split(",");
+  if (selectedClients && (!selectedClients.length || !selectedClients.every(isRouteClientId) || new Set(selectedClients).size !== selectedClients.length)) throw new CliUsageError("--clients needs unique supported client IDs", LINK_USAGE);
   const tunnelPort = takeIntegerOption(args, "--tunnel-port", { min: 1024 });
   if (!alias || tunnelPort === undefined || !isLinkPort(tunnelPort)) {
     throw new CliUsageError("issue requires --alias and --tunnel-port", LINK_USAGE);
@@ -341,7 +345,7 @@ async function runIssue(args: string[], deps: LinkCliDeps): Promise<void> {
   const result = validateIssue(await linkRequest<unknown>("/api/link/issue", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ alias, tunnelPort }),
+    body: JSON.stringify({ alias, tunnelPort, ...(selectedClients ? { selectedClients } : {}) }),
   }, deps));
   console.log(JSON.stringify(result));
 }
@@ -499,7 +503,7 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
   return code === 0 ? verdictExit : code;
 }
 
-const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt"] as const;
+const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt", "appliedRouteIntentDigest", "routeClientOutcomes"] as const;
 const ROUTE_OUTCOMES = new Set(["transient", "readiness", "grant_unobserved", "forward", "auth", "hostkey"]);
 const ROUTE_BLOCKS = new Set(["ssh_client_unsupported", "stop_unconfirmed"]);
 
@@ -573,10 +577,20 @@ function validateParity(candidate: Record<string, unknown>, index: number): Link
   if (digest !== undefined && digest !== null && (typeof digest !== "string" || !CODEX_SETTINGS_DIGEST_PATTERN.test(digest))) {
     throw new Error(`invalid link API response: link ${index} appliedCodexSettingsDigest`);
   }
+  let route: Pick<LinkChildParity, "appliedRouteIntentDigest" | "routeClientOutcomes"> = {};
+  if (candidate.appliedRouteIntentDigest !== undefined || candidate.routeClientOutcomes !== undefined) {
+    const routeDigest = candidate.appliedRouteIntentDigest;
+    const outcomes = parseRouteClientOutcomes(candidate.routeClientOutcomes);
+    if ((routeDigest !== null && (typeof routeDigest !== "string" || !ROUTE_INTENT_DIGEST_PATTERN.test(routeDigest))) || !outcomes) {
+      throw new Error(`invalid link API response: link ${index} route intent`);
+    }
+    route = { appliedRouteIntentDigest: routeDigest, routeClientOutcomes: routeClientOutcomesForPeer(outcomes) };
+  }
   return {
     lastApplyAt: time("lastApplyAt"),
     runtimeStartedAt: time("runtimeStartedAt"),
     appliedCodexSettingsDigest: typeof digest === "string" ? digest : null,
     reportedAt: time("reportedAt"),
+    ...route,
   };
 }

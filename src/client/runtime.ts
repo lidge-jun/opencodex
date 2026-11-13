@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { flushLinkDiagnostics, recordLinkDiagnostic } from "../link/diagnostics";
 import { existsSync } from "node:fs";
 import type { Server } from "bun";
@@ -35,11 +36,15 @@ import { createLinkParityReporter, type LinkParityReporter } from "./link-parity
 import { restoreLinkClientRouting } from "./stop-routing";
 import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
+import { startRouteIntentTick, type RouteIntentTick } from "../integrations/route-intent-tick";
+import { startRouteIntentWatch, type RouteIntentRuntimeWatch } from "./route-intent-watch";
 
 let activeServer: Server<unknown> | null = null;
 let activePort: number | null = null;
 let activeSupervisor: ClientLinkSupervisor | null = null;
 let activeReporter: LinkParityReporter | null = null;
+let activeRouteWatch: RouteIntentRuntimeWatch | null = null;
+let activeRouteSync: RouteIntentTick | null = null;
 let recycleScheduled = false;
 let recycleTimer: ReturnType<typeof setTimeout> | undefined;
 let recycleFlight: Promise<void> | null = null;
@@ -182,6 +187,9 @@ export async function recycleStandalone(
   const replacementEnv = port && !serviceSupervised
     ? withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)
     : null;
+  activeReporter?.stop(); activeReporter = null;
+  activeRouteWatch?.stop(); activeRouteWatch = null;
+  activeRouteSync?.stop(); activeRouteSync = null;
   try {
     await activeSupervisor?.stop();
   } catch (error) {
@@ -388,10 +396,15 @@ export async function startClientRuntime(
       supervisor?.start();
       credentialObservation ??= observeLocalCredentials();
       writePid(process.pid);
-      writeRuntimePort(clientRuntimeRecord(process.pid, boundPort, attestationSecret));
+      // A new generation per publication: syncs admitted before a failed restart refuse to commit
+      // into the runtime that serves again, while syncs admitted from here on proceed.
+      writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID() });
       if (linkMode && state.value.link && linkKey) {
         activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
         activeReporter.start();
+        const scheduler = startRouteIntentTick(state.value, { onApplied: () => activeReporter?.requestReport() });
+        activeRouteSync = scheduler;
+        activeRouteWatch = startRouteIntentWatch(state.value, linkKey, { requestSync: () => scheduler.requestSync() });
       }
     };
     if (!rollback) {
@@ -423,6 +436,8 @@ export async function startClientRuntime(
     credentialObservation = null;
     activeReporter?.stop();
     activeReporter = null;
+    activeRouteWatch?.stop(); activeRouteWatch = null;
+    activeRouteSync?.stop(); activeRouteSync = null;
     try {
       await activeSupervisor?.stop();
     } catch (error) {
@@ -454,6 +469,12 @@ export async function startClientRuntime(
       isDesktopSupervised: () => supervisor === "desktop",
       serviceSupervised: () => supervisor === "service",
     }),
+    // Fence Link syncs before the teardown: a sync already past admission would otherwise keep
+    // writing client files and receipts while the listener closes. Marking the record makes every
+    // later commit stand down under C; the replacement's record, or the fresh generation a rollback
+    // publishes, keeps those syncs refused and admits new ones. A mark that cannot be written
+    // abandons the restart before anything stops.
+    fence: async () => !linkMode || await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: servedPort, attestationSecret }),
     stop: stopServing,
     spawnReplacement: async deadlineAt => {
       const { replacementStartEnvironment } = await import("../server/management/system-restart");
@@ -508,6 +529,8 @@ export async function startClientRuntime(
       credentialObservation = null;
       activeReporter?.stop();
       activeReporter = null;
+      activeRouteWatch?.stop(); activeRouteWatch = null;
+      activeRouteSync?.stop(); activeRouteSync = null;
       try {
         await activeSupervisor?.stop();
       } catch (error) {

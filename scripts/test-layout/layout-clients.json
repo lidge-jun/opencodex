@@ -76,6 +76,7 @@
   "link-ssh-argv-discovery.test.ts": "clients",
   "link-ssh-config.test.ts": "clients",
   "link-store.test.ts": "clients",
+  "link-retirement.test.ts": "clients",
   "link-tunnel-state.test.ts": "clients",
   "link-routes-store.test.ts": "clients",
   "link-routes-argv.test.ts": "clients",
