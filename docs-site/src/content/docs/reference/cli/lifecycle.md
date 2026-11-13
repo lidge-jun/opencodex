@@ -80,7 +80,7 @@ ocx start --port 10100 --socks5
 ocx start --socks5-off
 ```
 
-### `ocx stop [--json]`
+### `ocx stop [--json] [--deadline-ms <ms>]`
 
 An unsupervised Link Child handling a shutdown signal restores native Codex and managed Grok before releasing its listener, rechecking the served connection before each write. Service/Desktop supervision, sibling ownership, restart/recycle handoff and pending parent stop receipts preserve integrations. Shutdown rejects bound restart with `409 runtime_stopping`. Forced termination can bypass signal handlers; parent `ocx stop` restoration remains necessary. To route Codex through Home again after such a stop, start the Child (`ocx start`, or `ocx service start` for an installed service) and then run `ocx sync --restart-codex`. Starting alone does not reapply routing. A sync run while the Child is stopped still reapplies routing, which points Codex at a listener that is not running, so start the Child first.
 
@@ -140,6 +140,46 @@ and is still owed, and 81 when a dashboard update that will restart the proxy ha
 and its catalog to the restarted proxy instead of restoring native Codex. With 81 the proxy is
 down, and the restarted proxy releases the kept teardown after its first sync; if it never starts,
 the next `ocx stop` restores native Codex.
+
+#### Windows service stop
+
+On Windows, `ocx stop` stops a registered Task Scheduler task or native WinSW service with a
+checked stop. It ends the task, then ends only the `wscript.exe` and `cmd.exe` wrapper processes
+it can tie to this installation (this home's launcher or service script, a parent chain that leads
+to the proxy or to the Task Scheduler service, and a recorded start time), and waits for them to
+exit. Only then does it stop the proxy gracefully. Afterwards it confirms that the port stays free
+for about six seconds and that no wrapper started again, so a wrapper's restart loop cannot bring
+the proxy back behind a successful stop.
+
+When the service cannot be proven stopped, `ocx stop` sends no stop request to the proxy, leaves
+your client configuration alone, and fails. With `--json` the summary keeps `outcome: "failed"`
+and `proxy: "unknown"`, and adds `serviceStopReason`:
+
+| `serviceStopReason` | Meaning | What to do |
+|---|---|---|
+| `access-denied` | Ending the task or a wrapper was denied, usually an elevated task stopped from an unelevated terminal | Run `ocx stop` from an elevated terminal |
+| `unbound-wrapper` | A wrapper running this home's service script could not be tied to the service, for example one started by hand | End that `wscript.exe`/`cmd.exe`, then retry |
+| `evidence-unreadable` | The service or process state could not be read, or the port could not be confirmed free | Check `ocx service status`, then retry |
+| `unverified-budget` | The time left could not hold a verified stop, so nothing was changed | Retry from a terminal |
+
+If another program is listening on the port after this installation's processes are gone, the
+stop still succeeds and `--json` reports `portHeldByForeign: true`. Both fields are additive and
+no new `outcome` value exists. `serviceStopReason` is omitted when there is nothing to report;
+`portHeldByForeign` appears (`true` or `false`) whenever the port check ran, and is omitted otherwise.
+
+`--deadline-ms <ms>` bounds the whole stop, measured from the moment the command started. Before
+changing anything the stop checks that the time left can hold its worst case (about 57 seconds for
+a registered Task Scheduler service with default settings) and otherwise refuses with
+`unverified-budget`. Without the flag the stop reads `OCX_STOP_DEADLINE_MS` (the desktop app sets
+it) and otherwise uses 60 seconds. macOS and Linux ignore both.
+
+The stop ends the running instance only. The task's logon and unlock triggers stay enabled, so the
+proxy comes back at the next logon or unlock; use `ocx service uninstall` to remove the service.
+`ocx service stop`, `ocx service uninstall`, `ocx uninstall` and `ocx service install` use the
+same checked stop: uninstall and install refuse before deleting or replacing the task when the
+service cannot be proven stopped, and install also stops when another program holds the port. On
+Windows on Arm the wrappers cannot be ended yet, so a stop that would need to end one reports
+`evidence-unreadable`; end the wrapper by hand, then retry.
 
 For a desktop-approved takeover, `ocx stop --json` also accepts the complete set of
 `--expect-*` values supplied by `ocx resolve --json`. On Windows, this guarded stop can

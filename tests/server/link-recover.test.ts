@@ -138,7 +138,7 @@ describe("force revoke tombstones", () => {
     expect(h.commands).toEqual([]);
     expect(tombstones()).toEqual([{
       linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, remotePlatform: "posix",
-      routes: ["devbox-direct", "devbox"], revokedAt: new Date(1_800_000_000_000).toISOString(),
+      routes: ["devbox-direct", "devbox"], revokedAt: new Date(1_800_000_000_000).toISOString(), attempt: expect.stringMatching(/^[0-9a-f]{16}$/),
     }]);
     if (process.platform !== "win32") expect((Bun.file(tombstonesPath()).size)).toBeGreaterThan(0);
   });
@@ -456,7 +456,7 @@ describe("recover over an exclusive explicit route (O6)", () => {
     await forceRevoke(h);
     expect(tombstones()).toEqual([{
       linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, remotePlatform: "posix",
-      explicitRoute: route, exclusive: true, revokedAt: new Date(1_800_000_000_000).toISOString(),
+      explicitRoute: route, exclusive: true, revokedAt: new Date(1_800_000_000_000).toISOString(), attempt: expect.stringMatching(/^[0-9a-f]{16}$/),
     }]);
     const res = await h.request("POST", "/api/link/recover", { linkId: ID });
     expect(res.status).toBe(200);
@@ -544,9 +544,11 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
 
   test.each([
     ["another process committed its own forced revoke of the link", true],
-    ["another process replaced the tombstone while the link stays", false],
+    ["another process replaced the tombstone while the link stays, in the same millisecond", false],
   ])("a failed revoke never removes a tombstone it did not write: %s", async (_name, linkGone) => {
-    const theirs = { ...tombstone(ID, "devbox"), revokedAt: "2026-11-02T00:00:00.000Z" };
+    // Identical to what this attempt writes except its random attempt token.
+    const theirs = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, remotePlatform: "posix" as const,
+      revokedAt: new Date(1_800_000_000_000).toISOString(), attempt: "0123456789abcdef" };
     const h = harness([link()], { keyRevokeFails: true, duringKeyRevoke: other => { recordTombstone(theirs); if (linkGone) other.dropLink(); } });
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
     expect([res.status, (await errorOf(res)).code]).toEqual([502, "key_revoke_failed"]);

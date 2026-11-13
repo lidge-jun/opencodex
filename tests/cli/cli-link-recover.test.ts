@@ -92,7 +92,7 @@ describe("ocx link recover contract", () => {
     expect(await runCapabilities(["--json"])).toBe(0);
     const document = JSON.parse(String(output.mock.calls.at(-1)![0])) as { capabilities: Array<{ command: string[]; routes: Array<{ method: string; path: string }> }> };
     const recover = document.capabilities.find(entry => entry.command.join(" ") === "link recover");
-    expect(recover?.routes).toEqual([{ method: "POST", path: "/api/link/recover" }]);
+    expect(recover?.routes).toEqual([{ method: "POST", path: "/api/link/recover" }, { method: "GET", path: "/api/link/recover" }]);
   });
 
   test("--list prints what waits, and validates the answer", async () => {

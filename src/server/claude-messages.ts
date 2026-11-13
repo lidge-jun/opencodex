@@ -46,6 +46,7 @@ import { captureAdmissionPolicy } from "./capture-admission-policy";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import { captureClaudeInbound } from "../claude/inbound-debug";
 import { declaredAnthropicServerTools, replayedAnthropicServerBlocks, systemCachePrefix } from "../claude/inbound-content-options";
+import { linkAdvisorPlanConfig } from "./responses/advisor-plan-slot";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { classifyInterceptClient } from "../claude/intercept/client-class";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
@@ -1265,12 +1266,13 @@ async function handleClaudeMessagesWithBudget(
   // BEFORE translation (the translated Anthropic stream has no response.completed
   // frame, so tapping it records a bogus 502 with no usage/cache detail).
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
-  const upstream = await handleResponses(internalReq, {
+  // The replay view is a new object; link it so the Advisor factory registered on `config` applies.
+  const upstream = await handleResponses(internalReq, linkAdvisorPlanConfig(config, {
     ...buildClaudeReplayConfig(config),
     // Operator config wins; otherwise the caller's explicit TTLs (all 1h, or a pinned 5m) carry
     // over, and TTL-less breakpoints take the destination default.
     cacheRetention: config.cacheRetention ?? callerCacheRetention(anthropicBody),
-  }, logCtx, {
+  }), logCtx, {
     ...(nativeComboSource && envelope && settledRoute?.combo ? {
       protocolSource: (await import("./messages-native")).createNativeMessagesComboSource({
         req, config, logCtx, envelope, requestedModel, translatorBudget, selector: nativeSelector,

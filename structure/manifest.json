@@ -1307,14 +1307,20 @@
       "path": "ops/windows-checked-stop.md",
       "tier": 6,
       "title": "Windows Checked Service Stop",
-      "scope": "Windows process evidence, the wrapper binding rule, and the checked manager stop and port confirmation that are not yet wired to a stop path.",
+      "scope": "Windows process evidence, the wrapper binding rule, the checked manager stop and port confirmation, and their wiring into every Windows stop path (ocx stop, uninstall, /api/stop, service commands, install/switch, updater).",
       "documents": [
+        "src/cli/stop-windows-checked.ts",
+        "src/server/stop-service-route.ts",
+        "src/service/cli-windows-stop.ts",
         "src/service/windows-checked-stop.ts",
+        "src/service/windows-checked-stop-live.ts",
         "src/service/windows-process-evidence.ts",
         "src/service/windows-process-native.ts",
+        "src/service/windows-service-stop.ts",
         "src/service/windows-stop-binding.ts",
         "src/service/windows-stop-budget.ts",
-        "src/service/windows-stop-confirm.ts"
+        "src/service/windows-stop-confirm.ts",
+        "src/service/windows-stop-deadline.ts"
       ]
     },
     {

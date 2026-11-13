@@ -351,3 +351,41 @@ export function classifyChildAttachConflict(stderr: string): ChildAttachConflict
   return null;
 }
 
+
+/**
+ * --require-ephemeral (structure/remote-link.md, "Operation journal"): every full ocx the gated argv could select,
+ * the served-runtime census, the Desktop and system paths and every PATH directory, each counted when it answers
+ * --version. Unlike runtime inspection it never stops at an ocx-child, so a Child holding both reports the full one.
+ * Prints ocx-census:full per runnable full ocx, then ocx-census:done.
+ */
+export const POSIX_FULL_INSTALL_CENSUS_SCRIPT = [
+  "export PATH=\"$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin\"",
+  "case \"$(uname -s 2>/dev/null)\" in Windows*|MSYS*|MINGW*|CYGWIN*) exit 125;; esac",
+  "ocx_entry=",
+  "census_full() {",
+  "  if [ -x \"$1\" ] && \"$1\" ${ocx_entry:+\"$ocx_entry\"} --version >/dev/null 2>&1; then printf '%s\\n' 'ocx-census:full'; fi",
+  "}",
+  REMOTE_SERVED_RUNTIME.trimEnd(),
+  remoteServedRuntimeAttempt("census_full \"$served_bin\""),
+  "for candidate in \"$HOME/.opencodex-desktop/bin/ocx\" \"/Applications/OpenCodex.app/Contents/MacOS/ocx\" \"/usr/bin/ocx\"; do",
+  "  census_full \"$candidate\"",
+  "done",
+  "remaining=$PATH",
+  "while :; do",
+  "  directory=${remaining%%:*}",
+  "  census_full \"${directory:-.}/ocx\"",
+  "  case \"$remaining\" in *:*) remaining=${remaining#*:};; *) break;; esac",
+  "done",
+  "printf '%s\\n' 'ocx-census:done'",
+].join("\n");
+
+export function remoteFullInstallCensusArgv(): string[] {
+  return ["sh", "-c", POSIX_FULL_INSTALL_CENSUS_SCRIPT, "ocx-census"];
+}
+
+/** present or none only after the closing marker; anything else is unknown (null) and refuses. */
+export function parseFullInstallCensus(stdout: string): "present" | "none" | null {
+  const lines = stdout.split(/\r?\n/).map(line => line.trim());
+  if (!lines.includes("ocx-census:done")) return null;
+  return lines.includes("ocx-census:full") ? "present" : "none";
+}

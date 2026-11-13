@@ -31,7 +31,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [agents-routing](01_surface_agents-routing.md) | 68 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 105 |
-| [access-remote](01_surface_access-remote.md) | 49 |
+| [access-remote](01_surface_access-remote.md) | 51 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -1535,6 +1535,14 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_access-remote.md#ocx-link-routes-order)
 
+### `ocx link operations`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-link-operations)
+
+### `ocx link operations resolve`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-operations-resolve)
+
 ### `ocx link activity clear`
 
 [State-changing task](01_surface_access-remote.md#ocx-link-activity-clear)
@@ -1625,6 +1633,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 394
-- of those, state-changing: 247
+- declared capabilities: 396
+- of those, state-changing: 248
 - head-resolved invocations: 2

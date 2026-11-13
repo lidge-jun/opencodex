@@ -41,8 +41,9 @@ En v2, le parent émet la tâche sous forme de `encrypted_content`, produit par
 le backend ChatGPT. La clé reste dans ce backend. OpenCodex ne l'a jamais eue :
 le proxy ne peut donc rien déchiffrer ni réécrire. La valeur est réellement du
 texte chiffré, et non du texte clair caché derrière un indicateur. La limite
-est structurelle, pas un défaut de configuration, et aucun réglage du proxy
-ne peut y remédier.
+est structurelle, pas un défaut de configuration : aucun réglage du proxy ne permet le déchiffrement local.
+
+Aucun réglage du proxy ne permet le déchiffrement local. L’option expérimentale `agentTaskRecovery` peut demander au backend ChatGPT de récupérer les tâches éligibles ; elle ne les déchiffre pas localement. Les règles d’autorisation, d’éligibilité et d’échec décrites plus haut restent applicables.
 
 Trois configurations restent possibles, ce qui éclaire la forme de l'échec :
 

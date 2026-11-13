@@ -27,6 +27,8 @@ export interface LinkTombstone {
   /** The link was exclusive: no other route may reach it. Required by explicitRoute. */
   exclusive?: true;
   revokedAt: string;
+  /** Random per revoke attempt, so a failed attempt's cleanup removes only the tombstone it wrote. */
+  attempt?: string;
   /**
    * Fields a later Home adds go here, never at the top level: this Home keeps them verbatim when it
    * rewrites the file and reads none of them, so a newer Home's tombstone never makes an older one
@@ -59,8 +61,9 @@ export class LinkTombstoneLimitError extends Error {
 }
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
+const ATTEMPT = /^[0-9a-f]{16}$/;
 const FINGERPRINT = /^[A-Z0-9]+:[A-Za-z0-9+/=]{16,128}$/;
-const KEYS = new Set(["linkId", "alias", "hostKeyFingerprint", "remotePlatform", "routes", "explicitRoute", "exclusive", "revokedAt", "ext"]);
+const KEYS = new Set(["linkId", "alias", "hostKeyFingerprint", "remotePlatform", "routes", "explicitRoute", "exclusive", "revokedAt", "attempt", "ext"]);
 
 export function tombstonesPath(configDir?: string): string {
   return join(linkDir(configDir), "tombstones.json");
@@ -86,6 +89,7 @@ function parseTombstone(value: unknown, index: number): LinkTombstone {
       || !routes.every(isAlias) || !routes.includes(raw.alias as string) || new Set(routes).size !== routes.length) fail();
   }
   if (typeof raw.revokedAt !== "string" || Number.isNaN(Date.parse(raw.revokedAt))) fail();
+  if (raw.attempt !== undefined && (typeof raw.attempt !== "string" || !ATTEMPT.test(raw.attempt))) fail();
   if (raw.exclusive !== undefined && (raw.exclusive !== true || raw.routes !== undefined)) fail();
   const explicitRoute = raw.explicitRoute === undefined ? undefined : parseExplicitRoute(raw.explicitRoute);
   if (explicitRoute === null || (explicitRoute && raw.exclusive !== true)) fail();
@@ -100,6 +104,7 @@ function parseTombstone(value: unknown, index: number): LinkTombstone {
     ...(explicitRoute ? { explicitRoute } : {}),
     ...(raw.exclusive === true ? { exclusive: true as const } : {}),
     revokedAt: raw.revokedAt as string,
+    ...(raw.attempt === undefined ? {} : { attempt: raw.attempt as string }),
     ...(ext === undefined ? {} : { ext: JSON.parse(JSON.stringify(ext)) as Record<string, unknown> }),
   };
 }
@@ -160,15 +165,16 @@ export function removeTombstone(linkId: string, path: string = tombstonesPath())
 }
 
 /**
- * Remove exactly `written`, the tombstone this revoke attempt wrote, and only while its link still
- * exists (the revoke did not commit). A tombstone another process's committed forced revoke wrote
- * for the same link is left alone. Callers hold the config mutation lock.
+ * Remove exactly `written`, the tombstone this revoke attempt wrote (matched by its random attempt
+ * token), and only while its link still exists (the revoke did not commit). A tombstone another
+ * attempt wrote for the same link, even in the same millisecond, is left alone. Callers hold the
+ * config mutation lock.
  */
 export function removeOwnTombstone(written: LinkTombstone, linkExists: boolean, path: string = tombstonesPath()): boolean {
-  if (!linkExists) return false;
+  if (!linkExists || written.attempt === undefined) return false;
   const current = readTombstones(path);
   const found = current.tombstones.find(t => t.linkId === written.linkId);
-  if (!found || JSON.stringify(found) !== JSON.stringify(parseTombstones(JSON.stringify({ version: 1, tombstones: [written] })).tombstones[0])) return false;
+  if (found?.attempt !== written.attempt) return false;
   return removeTombstone(written.linkId, path);
 }
 

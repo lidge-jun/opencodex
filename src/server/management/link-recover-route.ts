@@ -5,6 +5,7 @@ import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { serialized } from "./link-enrollment";
+import { underAliasLock } from "./link-operation";
 import { fail, isRecord, knownHostsFile, readStoreFor, runnerFor, type LinkRouteState } from "./link-route-state";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -64,7 +65,9 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
     target = lookup.target;
   }
 
-  return serialized(state, target.alias, async () => {
+  // Under the alias lock enrollment and revoke take (src/link/alias-lock.ts, across processes) and the per-alias
+  // operation set within this runtime, both keyed without case.
+  return underAliasLock(ctx, target.alias, true, () => serialized(state, target.alias, async () => {
     const outcome = await recoverRemoteChild(runnerFor(ctx), target, knownHostsFile(ctx));
     if (!outcome.ok) return fail(outcome.code, outcome.message, outcome.status, outcome.hint);
     try {
@@ -74,5 +77,5 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
       return fail("tombstone_remove_failed", "The Child was cleaned, but its tombstone could not be removed; run recover again.", 503);
     }
     return Response.json({ linkId: target.linkId, outcome: "clean", purged: true }, noStore);
-  });
+  }));
 }

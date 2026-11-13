@@ -66,10 +66,11 @@ consent is missing: it prints this disclosure and stops. `ocx advisor set` does 
   When the worker has produced its first orientation evidence (an assistant tool call OR a tool
   result after the latest user message), the proxy consults the advisor and injects the advice
   before the worker's next turn — even if the worker never calls the tool. The trigger is a
-  deterministic, documented approximation, not a semantic "model is stuck" detector. An
-  attempted consultation that FAILS is not silently treated as advice: the task retries after
-  the failure's ledger entry expires, so a temporary advisor outage does not permanently
-  silence the policy.
+  deterministic, documented approximation, not a semantic "model is stuck" detector. A
+  failed consultation does not inject valid advice or block the worker's task. A later
+  consultation becomes eligible after the failure's ledger entry expires, so a temporary
+  advisor outage does not permanently silence the policy. Dispatched failures report an
+  unavailable notice as described below; they do not restart the worker's task.
 - **`adaptive`** — adds failed-repair consultations to the initial preflight attempt. The proxy
   must observe a completed failing validation, a subsequent successful file-edit tool result,
   and a new execution of the **same command in the same working directory** failing again.
@@ -217,6 +218,12 @@ consultation never switches the session's main model.
 - Native OpenAI passthrough turns (ChatGPT-pool workers) do not get the synthetic tool; advisor
   support covers routed (translated) providers. Preflight consultation applies to run-turn
   adapters; the tool does not.
+- Translated `/v1/messages` requests (for example Claude Code routed to a translated provider)
+  get the synthetic tool and preflight like `/v1/responses` and `/v1/chat/completions`. The
+  same `policy` and context-sharing consent rules apply, and the settings are read from the live
+  config, so a consent revocation blocks consultations for requests already in flight that have
+  not yet been dispatched. It does not cancel a dispatched consultation or retract context that
+  already left the proxy.
 - No semantic stuck detection, completion review, escalation tiers, multiple advisors or voting.
   Adaptive consultation requires the structured validation/edit/retry evidence described above.
 - The preflight dedup ledger is process-local; after a proxy restart, a task in progress may
