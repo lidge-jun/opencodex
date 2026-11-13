@@ -14,6 +14,7 @@ import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link
 import { LINK_CHILD_OPS_USAGE, runLinkActivity, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
 import { LINK_ROUTES_USAGE, runLinkRoutes } from "./link-routes";
 import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
+import { LINK_RECOVER_USAGE, runLinkRecover } from "./link-recover";
 import { validateChildOps, validateLinkWs, type LinkChildOpsView, type LinkWsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
 import { boundHint } from "../link/ssh-runner";
@@ -47,6 +48,7 @@ export const LINK_USAGE = `Usage:
   ocx link status [--json]
   ${LINK_DIAGNOSTICS_USAGE}
   ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
+${LINK_RECOVER_USAGE}
   ocx link reconnect --link-id <id> [--json]
 ${LINK_ROUTES_USAGE.join("\n")}
   ocx link cleanup [--link-id <id>] [--json]
@@ -55,6 +57,7 @@ ${LINK_CHILD_OPS_USAGE.join("\n")}
 ${LINK_CAPTURE_USAGE.join("\n")}
 
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
+Recover cleans an ephemeral Child a forced revoke or an interrupted enrollment left behind, over the link's pinned SSH trust.
 Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
 Diagnostics reads this computer's bounded link diagnostics file directly; it contacts no proxy and writes nothing.
 Check reads each Home-initiated Child's installed version and update route; it changes no install.
@@ -386,7 +389,7 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
   }
   if (force) {
     const recovery = wasEphemeral
-      ? "Run ~/.cache/opencodex/bin/ocx-child detach on the remote client."
+      ? `Run ocx link recover --link-id ${linkId} once the machine answers, or ~/.cache/opencodex/bin/ocx-child detach on it.`
       : "Run ocx disconnect on the remote client.";
     printData({ linkId, remoteCleanup, recovery }, wantsJson, [
       remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,
@@ -422,6 +425,7 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "status") await runStatus(args, deps);
     else if (command === "diagnostics") await runLinkDiagnostics(args, deps, LINK_USAGE);
     else if (command === "revoke") await runRevoke(args, deps);
+    else if (command === "recover") await runLinkRecover(args, deps, linkRequest, LINK_USAGE);
     else if (command === "reconnect") await runReconnect(args, deps);
     else if (command === "cleanup") await runLinkCleanup(args, deps, LINK_USAGE);
     else if (command === "check") verdictExit = await runLinkCheck(args, deps, linkRequest, LINK_USAGE);
@@ -430,7 +434,7 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);
     else if (command === "routes") await runLinkRoutes(args, deps, linkRequest, LINK_USAGE);
     else if (command === "activity") await runLinkActivity(args, deps, linkRequest, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, routes, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, recover, reconnect, routes, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
   });
   return code === 0 ? verdictExit : code;
 }

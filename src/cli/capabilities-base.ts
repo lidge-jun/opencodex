@@ -87,6 +87,16 @@ export const CAPABILITIES: readonly Capability[] = [
     usage: "ocx link revoke --link-id <id> [--force --yes] [--json]",
   },
   {
+    command: ["link","recover"],
+    summary: "Clean an ephemeral Child that a forced revoke or an interrupted enrollment left behind.",
+    routes: [{"method":"POST","path":"/api/link/recover"}],
+    flags: [{"name":"--link-id","value":"string","summary":"Force-revoked ephemeral link whose tombstone names the machine; exactly one of --link-id or --operation-id."},{"name":"--operation-id","value":"string","summary":"Link operation whose journal entry names the machine; needs the link operation journal."},{"name":"--json","value":"boolean","summary":"Emit the {linkId, outcome, purged} receipt as JSON."}],
+    mutates: true,
+    json: "envelope",
+    usage: "ocx link recover (--link-id <id> | --operation-id <id>) [--json]",
+    details: ["Runs the managed planted ocx-child's disconnect --purge --expect-link <id> over the link's alias with its pinned host key, never a sibling route. The Child restores only when its state and its CODEX_HOME ownership record both name that link.","Succeeds only on the Child's receipt naming that link with purged:true; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; a residual one needs ocx-child detach on that machine.","A forced revoke of a Home-initiated ephemeral link writes the tombstone; a link that still exists answers link_present. Without a link operation journal, --operation-id answers operation_journal_unavailable."],
+  },
+  {
     command: ["link","reconnect"],
     summary: "Restart a Home-initiated link's SSH tunnel now.",
     routes: [{"method":"POST","path":"/api/link/{id}/reconnect"}],
