@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
@@ -23,6 +23,18 @@ import type { ManagementContext } from "../../src/server/management/context";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { OcxConfig } from "../../src/types";
 
+let builtChildBinary: string | undefined;
+
+/**
+ * Build once per process. A cold Cargo build downloads and compiles dependencies, which outlives
+ * a lifecycle test's 30 s deadline; the build gets its own budget in `beforeAll` below and every
+ * case reuses the result.
+ */
+function ocxChildBinary(): string {
+  builtChildBinary ??= findOrBuildOcxChildBinary();
+  return builtChildBinary;
+}
+
 function findOrBuildOcxChildBinary(): string {
   const exeSuffix = process.platform === "win32" ? ".exe" : "";
   // Cargo resolves a relative CARGO_TARGET_DIR against its working directory, which is ours.
@@ -38,7 +50,7 @@ function findOrBuildOcxChildBinary(): string {
         env: cargo.env,
         stdout: "pipe",
         stderr: "pipe",
-        timeout: 90_000,
+        timeout: 180_000,
       },
     );
     if (build.exitCode !== 0) {
@@ -87,8 +99,13 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("end-to-end Home <-> compiled ocx-child lifecycle", () => {
+  beforeAll(() => {
+    // Cold-build budget only: the cases below keep their own lifecycle deadlines.
+    ocxChildBinary();
+  }, 240_000);
+
   test("enrolls detached ocx-child, streams SSE with stripped caller credentials, runs Home ocx sync fan-out with OCX-6 rollover/parity, classifies --expect-link mismatch exit 5, and detaches cleanly (#1798) with zero leftover daemon", async () => {
-    const binaryPath = findOrBuildOcxChildBinary();
+    const binaryPath = ocxChildBinary();
     const childUserHome = join(scratch, "child-home");
     const childOcxHome = join(childUserHome, ".opencodex");
     const childCodexHome = join(childUserHome, ".codex");
@@ -471,7 +488,7 @@ describe.skipIf(process.platform === "win32")("end-to-end Home <-> compiled ocx-
   }, 30_000);
 
   test("streams verified ocx-child binary onto a bare Child host over SSH stdin, relays requests, and removes the planted binary on DELETE --purge", async () => {
-    const builtBinary = findOrBuildOcxChildBinary();
+    const builtBinary = ocxChildBinary();
     const hostTriple = hostChildTargetTriple();
     if (!hostTriple) return;
     const stagedBinDir = join(scratch, "staged-child-bin");
