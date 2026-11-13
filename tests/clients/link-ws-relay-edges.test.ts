@@ -90,12 +90,15 @@ describe("a Child restart drains its link sockets before the tunnel stops", () =
   test("the supervisor tells its listeners it is stopping before it signals the tunnel, once", async () => {
     const configDir = mkdtempSync(join(tmpdir(), "ocx-link-ws-drain-"));
     const spawned: Array<{ signals: string[] }> = [];
+    let tunnelSpawned!: () => void;
+    const spawnedOnce = new Promise<void>(resolve => { tunnelSpawned = resolve; });
     const runner: SshRunner = {
       async run() { return { code: 0, stdout: "", stderr: "" }; },
       spawnTunnel(argv) {
         let exit!: (code: number) => void;
         const item = { signals: [] as string[] };
         spawned.push(item);
+        tunnelSpawned();
         return { pid: 31_000 + spawned.length, argv: [...argv], exited: new Promise<number>(resolve => { exit = resolve; }), stderr: Promise.resolve(""),
           kill(signal = "SIGTERM") { item.signals.push(signal); if (signal === "SIGTERM") exit(143); } } satisfies SshChild;
       },
@@ -109,8 +112,7 @@ describe("a Child restart drains its link sockets before the tunnel stops", () =
       const seen: string[][] = [];
       supervisor.onStopping?.(() => seen.push([...(spawned[0]?.signals ?? [])]));
       supervisor.start();
-      await Promise.resolve();
-      await Promise.resolve();
+      await spawnedOnce; // milestone: the supervisor spawned its tunnel
       expect(spawned).toHaveLength(1);
       await supervisor.stop();
       await supervisor.stop();
@@ -154,12 +156,15 @@ describe("a Child restart drains its link sockets before the tunnel stops", () =
   test("a link that ends (sidecar gone) drains too, before the tunnel is signalled", async () => {
     const configDir = mkdtempSync(join(tmpdir(), "ocx-link-ws-drain-"));
     const spawned: Array<{ signals: string[] }> = [];
+    let tunnelSpawned!: () => void;
+    const spawnedOnce = new Promise<void>(resolve => { tunnelSpawned = resolve; });
     const runner: SshRunner = {
       async run() { return { code: 0, stdout: "", stderr: "" }; },
       spawnTunnel(argv) {
         let exit!: (code: number) => void;
         const item = { signals: [] as string[] };
         spawned.push(item);
+        tunnelSpawned();
         return { pid: 32_000 + spawned.length, argv: [...argv], exited: new Promise<number>(resolve => { exit = resolve; }), stderr: Promise.resolve(""),
           kill(signal = "SIGTERM") { item.signals.push(signal); if (signal === "SIGTERM") exit(143); } } satisfies SshChild;
       },
@@ -167,21 +172,25 @@ describe("a Child restart drains its link sockets before the tunnel stops", () =
     let current: ClientLinkState | null = { linkId: "lnk_0123456789abcdef", alias: "home.example.test", hubHostKeyFingerprint: "SHA256:abcdefghijklmnop", peerListenerPort: 19001, tunnelPort: 19002 };
     const ticks: Array<() => void> = [];
     let ended = 0;
+    let linkEnded!: () => void;
+    const endedOnce = new Promise<void>(resolve => { linkEnded = resolve; });
+    let initialized!: () => void;
+    const initializedOnce = new Promise<void>(resolve => { initialized = resolve; });
     try {
       const supervisor = createClientLinkSupervisor({
         configDir, runner, readSidecar: () => current, connectedLinkId: () => "lnk_0123456789abcdef",
         setTimer: (callback, ms) => { if (ms === 1_000) ticks.push(callback); return ticks.length as unknown as ReturnType<typeof setTimeout>; },
-        clearTimer: () => {}, onLinkEnded: () => { ended += 1; }, now: () => 0, random: () => 0.5,
+        clearTimer: () => {}, onLinkEnded: () => { ended += 1; linkEnded(); }, onInitialized: () => initialized(), now: () => 0, random: () => 0.5,
       });
       const seen: string[][] = [];
       supervisor.onStopping?.(() => seen.push([...(spawned[0]?.signals ?? [])]));
       supervisor.start();
-      await Promise.resolve();
-      await Promise.resolve();
+      await spawnedOnce; // milestone: the supervisor spawned its tunnel...
+      await initializedOnce; // ...and finished its start-up check, so its next tick acts
       expect(spawned).toHaveLength(1);
       current = null;
       ticks[0]!();
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await endedOnce; // milestone: the supervisor ended the link (the runtime would recycle now)
       expect(ended).toBe(1);
       expect(seen).toEqual([[]]);
       expect(spawned[0]!.signals).toContain("SIGTERM");

@@ -140,6 +140,8 @@ export interface ClientLinkSupervisorDeps extends ClientLinkTunnelDeps, OrphanRe
   connectedLinkId?: () => string | null | typeof CONNECTION_UNREADABLE;
   /** Called once after the tunnel stopped because the link ended (the runtime recycles here). */
   onLinkEnded?: () => void;
+  /** Test seam: called once the start-up check (leftover tunnel, first spawn) has finished. */
+  onInitialized?: () => void;
   /** The link key for the keyed readiness probe. The runtime passes its cached key source. */
   linkKey?: () => string | null;
   /** Async local IPv4 LISTEN ownership; an unknown or foreign owner never receives the link key. */
@@ -1001,6 +1003,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       initialized = true;
       initializing = false;
       settleWaiters();
+      try { deps.onInitialized?.(); } catch { /* a test seam never alters the supervisor */ }
     }
   };
 
