@@ -48,8 +48,8 @@ Bun.plugin({ name: "Messages refusal boundary fixture", setup(build) {
   build.onLoad({ filter: filters.upstream }, ({ path }) => {
     hooks.upstreamLoads++;
     return { loader: "ts", contents: replaceOnce(readOriginal(path),
-      "const upstream = await handleResponses(internalReq, {",
-      "const upstream = globalThis.__localRefusalReply ? (globalThis.__fixtureHooks.upstreamHits++, globalThis.__localRefusalReply) : await handleResponses(internalReq, {") };
+      "const upstream = await handleResponses(internalReq, ",
+      "const upstream = globalThis.__localRefusalReply ? (globalThis.__fixtureHooks.upstreamHits++, globalThis.__localRefusalReply) : await handleResponses(internalReq, ") };
   });
   build.onLoad({ filter: filters.native }, ({ path }) => {
     hooks.nativeLoads++;
