@@ -27,12 +27,12 @@ export const ANTIGRAVITY_DISCOVERY_UA = ANTIGRAVITY_CLI_REQUEST_UA;
 
 /**
  * Wire ids CCA serves only to the CLI client family: every Gemini 4 codename, bare or with a tier
- * suffix. Argon was verified 2026-10-14. On 2026-11-11 the CLI discovery list was exactly the IDE
- * list plus the Argon and Carbon tiers, and `gemini-4-carbon-medium` 404'd under the IDE UA while
- * answering 200 under the CLI UA. Matching the generation keeps a newly discovered codename
- * callable instead of listing it in the picker and 404ing every request.
+ * suffix. Argon and Carbon have been verified with CCA; Carbon medium requires the CLI UA.
+ * The local CCA snapshot from 2026-11-11 lists only Argon. Hydrogen and its four tiers and
+ * high default were verified on Vertex on 2026-11-13 by #8583’s author, not on CCA.
+ * CCA discovery governs availability; the generation rule anticipates newly discovered codenames.
  */
-const ANTIGRAVITY_CLI_ONLY_WIRE_MODEL = /^gemini-4-[a-z][a-z0-9]*(?:-(?:low|medium|high))?$/;
+const ANTIGRAVITY_CLI_ONLY_WIRE_MODEL = /^gemini-4-[a-z][a-z0-9]*(?:-(?:low|medium|high|xhigh))?$/;
 
 /** The User-Agent an Antigravity inference request for `wireModelId` must carry. */
 export function antigravityUserAgentForWireModel(wireModelId: string): string {

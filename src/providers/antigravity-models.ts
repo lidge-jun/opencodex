@@ -114,11 +114,11 @@ const ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL: Record<string, string[]> = Object.en
 }, {});
 
 const ANTIGRAVITY_DISCOVERY_EFFORTS = ["low", "medium", "high"] as const;
-type AntigravityDiscoveryEffort = typeof ANTIGRAVITY_DISCOVERY_EFFORTS[number];
+type AntigravityDiscoveryEffort = typeof ANTIGRAVITY_DISCOVERY_EFFORTS[number] | "xhigh";
 type AntigravityEffortWireModelIds = Partial<Record<AntigravityDiscoveryEffort, string>>;
 
 function isAntigravityDiscoveryEffort(value: string): value is AntigravityDiscoveryEffort {
-  return (ANTIGRAVITY_DISCOVERY_EFFORTS as readonly string[]).includes(value);
+  return [...ANTIGRAVITY_DISCOVERY_EFFORTS, "xhigh"].includes(value as AntigravityDiscoveryEffort);
 }
 
 function pickerModelIdForDiscoveredWireId(
@@ -144,7 +144,7 @@ function pickerModelIdForDiscoveredWireId(
     if (isKnownAntigravityPickerModelId(baseId)) return baseId;
   }
 
-  const effortMatch = /^(.*)-(low|medium|high)$/.exec(wireId);
+  const effortMatch = /^(.*)-(low|medium|high|xhigh)$/.exec(wireId);
   if (effortMatch) {
     const baseId = effortMatch[1]!;
     if (isValidModelDiscoveryModelId(baseId)
@@ -278,7 +278,7 @@ function completeDiscoveredEffortWireModelIds(
   const explicitEffortMap = Object.hasOwn(ANTIGRAVITY_EFFORT_WIRE_MAP, pickerId)
     ? ANTIGRAVITY_EFFORT_WIRE_MAP[pickerId] : undefined;
   if (explicitEffortMap && Object.values(explicitEffortMap).every(wireId => available.has(wireId))) {
-    return { ...explicitEffortMap };
+    return { ...explicitEffortMap, ...(available.has(`${pickerId}-xhigh`) ? { xhigh: `${pickerId}-xhigh` } : {}) };
   }
 
   if (!isValidModelDiscoveryModelId(pickerId)) return undefined;
@@ -288,7 +288,13 @@ function completeDiscoveredEffortWireModelIds(
     if (!available.has(wireId)) return undefined;
     suffixEffortMap[effort] = wireId;
   }
+  if (available.has(`${pickerId}-xhigh`)) suffixEffortMap.xhigh = `${pickerId}-xhigh`;
   return suffixEffortMap;
+}
+
+// Vertex evidence from #8583’s author (2026-11-13); CCA Hydrogen is not live-verified.
+export function discoveredAntigravityDefaultEffort(modelId: string, hasMedium: boolean): string {
+  return modelId === "gemini-4-hydrogen" ? "high" : hasMedium ? "medium" : "high";
 }
 
 // ── Default effort per Gemini base model ──
@@ -517,7 +523,7 @@ export function registerAntigravityDiscoveredWireModels(
     const families: Record<string, AntigravitySuffixMap> = Object.create(null);
     for (const model of models) {
       if (ANTIGRAVITY_DISCOVERY_EFFORTS.every(effort => model.effortWireModelIds?.[effort] === `${model.id}-${effort}`)) {
-        families[model.id] = { low: `${model.id}-low`, medium: `${model.id}-medium`, high: `${model.id}-high` };
+        families[model.id] = { low: `${model.id}-low`, medium: `${model.id}-medium`, high: `${model.id}-high`, ...(model.effortWireModelIds?.xhigh === `${model.id}-xhigh` ? { xhigh: `${model.id}-xhigh` } : {}) };
       }
     }
     writeAntigravityWireSnapshot(key, { version: 1, provider: generation.provider, families });
@@ -575,14 +581,14 @@ function discoveredAntigravityEffortWireModelId(
   const effortMap = discoveredAntigravityMapping(baseUrl)?.effortModels.get(modelId);
   if (!effortMap) return undefined;
 
-  const requestedEffort = effort ? resolveAntigravityThinkingLevel(effort) : undefined;
+  const requestedEffort = effort === "xhigh" && effortMap.xhigh ? "xhigh" : effort ? resolveAntigravityThinkingLevel(effort) : undefined;
   if (requestedEffort && isAntigravityDiscoveryEffort(requestedEffort) && effortMap[requestedEffort]) {
     return effortMap[requestedEffort];
   }
 
-  const defaultEffort = ANTIGRAVITY_DEFAULT_EFFORT[modelId]
+  const defaultEffort = modelId === "gemini-4-hydrogen" ? discoveredAntigravityDefaultEffort(modelId, !!effortMap.medium) : ANTIGRAVITY_DEFAULT_EFFORT[modelId]
     ?? ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId]
-    ?? "medium";
+    ?? discoveredAntigravityDefaultEffort(modelId, !!effortMap.medium);
   if (defaultEffort && isAntigravityDiscoveryEffort(defaultEffort) && effortMap[defaultEffort]) {
     return effortMap[defaultEffort];
   }
