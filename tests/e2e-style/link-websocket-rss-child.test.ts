@@ -194,7 +194,9 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
     let seed = 7;
     const order = clients.map((client, index) => ({ client, key: (seed = (seed * 48271) % 2147483647) + index }));
     for (const { client } of order.sort((a, b) => a.key - b.key)) client.destroy();
-    for (const socket of loadSockets) socket.destroy();
+    // The Child processes the cut before the peak is read (the Home acceptance's order): every Home-side connection of the
+    // load closes from the Child's side (its legs and relays); they are destroyed only in finally.
+    await Promise.all(loadSockets.map(socket => socket.closed ? Promise.resolve() : new Promise<void>(resolve => socket.once("close", () => resolve()))));
     child.stdin.write("peak\n"); child.stdin.flush();
     const peakAnswer = await nextLine();
     const peak = peakAnswer.rss === null ? Number.NaN : Number(peakAnswer.rss);
@@ -211,6 +213,7 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
     return { method, idle, peak, delta: deltaBytes, sync: transport === "websocket" ? "child-legs-paused" : "child-relays-waiting" };
   } finally {
     for (const client of clients) client.destroy();
+    for (const socket of loadSockets) socket.destroy();
     try { child.stdin.write("stop\n"); child.stdin.flush(); child.stdin.end(); } catch { /* already gone */ }
     await child.exited;
     await home.stop();
