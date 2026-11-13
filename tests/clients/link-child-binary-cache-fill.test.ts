@@ -177,13 +177,44 @@ describe("filling the ocx-child cache for the running version", () => {
     ["a package without the digest file", null],
     ["a digest file naming no ocx-child build", sha(linuxBuild) + "  ocx-linux-x64\n"],
     ["a digest file with a malformed digest", "abc  ocx-child-linux-x64\n"],
-  ])("%s keeps every Home as it is today: no request, no cache", async (_name, digests) => {
+  ])("%s fetches nothing and only records its version", async (_name, digests) => {
     if (digests !== null) shipDigests(digests);
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
     expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(requested).toEqual([]);
-    expect(existsSync(join(home, "cache"))).toBe(false);
+    expect(readdirSync(join(home, "cache", "ocx-child"))).toEqual([".home-version"]);
+    expect(recorded()).toBe(VERSION);
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "artifact_not_found" });
+  });
+
+  test("the first release that ships digests fills: the release before it recorded the baseline", async () => {
+    const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+    expect(await fill(fetchImpl, "2.99.0")).toEqual({ kind: "skipped", reason: "no_digests" });
+    expect(recorded()).toBe("2.99.0");
+    bothDigests();
+    expect(await fill(fetchImpl)).toMatchObject({ kind: "filled", fetched: ["ocx-child-darwin-arm64", "ocx-child-linux-x64"], failed: [] });
+    expect(requested).toHaveLength(2);
+    expect(resolve("linux-x64").ok).toBe(true);
+  });
+
+  test("a package without digests never lowers the record and never fails on an unsafe home", async () => {
+    ranBefore("2.101.0");
+    expect(await fill(release({}).fetchImpl)).toEqual({ kind: "skipped", reason: "no_digests" });
+    expect(recorded()).toBe("2.101.0");
+    if (process.platform !== "win32") {
+      chmodSync(home, 0o777);
+      expect(await fill(release({}).fetchImpl, "2.102.0")).toEqual({ kind: "skipped", reason: "no_digests" });
+      expect(recorded()).toBe("2.101.0");
+      chmodSync(home, 0o755);
+    }
+  });
+
+  test("Windows fetches and writes nothing: no mode bits prove the cache private", async () => {
+    bothDigests();
+    ranBefore();
+    const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+    expect(await fillChildBinaryCacheForVersion({ packageRoot, version: VERSION, opencodexHome: home, fetchImpl, platform: "win32" })).toEqual({ kind: "skipped", reason: "unsupported_platform" });
+    expect([requested, existsSync(cacheDir()), recorded()]).toEqual([[], false, "2.99.0"]);
   });
 
   test("an oversized download is refused", async () => {
@@ -195,6 +226,19 @@ describe("filling the ocx-child cache for the running version", () => {
 });
 
 describe.skipIf(process.platform === "win32")("nobody else can substitute a build", () => {
+  test("a matching cached build the reader would refuse (writable by others) is fetched again", async () => {
+    shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
+    ranBefore();
+    mkdirSync(cacheDir(), { recursive: true, mode: 0o700 });
+    writeFileSync(join(cacheDir(), "ocx-child-linux-x64"), linuxBuild);
+    chmodSync(join(cacheDir(), "ocx-child-linux-x64"), 0o666);
+    const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
+    expect(await fill(fetchImpl)).toEqual({ kind: "filled", cached: ["ocx-child-linux-x64"], fetched: ["ocx-child-linux-x64"], failed: [] });
+    expect(requested).toHaveLength(1);
+    expect(statSync(join(cacheDir(), "ocx-child-linux-x64")).mode & 0o777).toBe(0o600);
+    expect(resolve("linux-x64").ok).toBe(true);
+  });
+
   test.each([
     ["the version directory", () => join(home, "cache", "ocx-child", VERSION), true, 0o770],
     ["cache/ocx-child", () => join(home, "cache", "ocx-child"), true, 0o777],
@@ -297,12 +341,12 @@ describe("startup", () => {
     expect([requested, logs, existsSync(cacheDir()), recorded()]).toEqual([[], [], false, "2.99.0"]);
   });
 
-  test("a package without digests says nothing and touches nothing", async () => {
+  test("a package without digests says nothing and only records its version", async () => {
     const logs: string[] = [];
     const out = { log: (line: string) => { logs.push(line); }, warn: (line: string) => { logs.push(line); } };
     expect(await fillChildBinaryCacheOnStart({ packageRoot, opencodexHome: home }, out)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(logs).toEqual([]);
-    expect(existsSync(join(home, "cache"))).toBe(false);
+    expect([readdirSync(join(home, "cache", "ocx-child")), recorded()]).toEqual([[".home-version"], VERSION]);
   });
 });
 

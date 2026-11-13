@@ -15,20 +15,22 @@ import { detectInstallFromPath } from "../update/install-detection.mjs";
  * Trust is the update's own: the expected digests come from CHILD_RELEASE_DIGESTS_PATH inside the
  * running package tree, which its installer verified, and each binary, fetched from the GitHub
  * release of exactly that version, is cached only when its SHA-256 equals that digest. Nothing is
- * fetched without that file, from a source checkout, or without evidence of an upgrade:
- * cache/ocx-child/.home-version records the last version whose fill completed, and only a running
- * version newer than it fills. A first start (no record: a fresh install) records its version and
- * fetches nothing, a restart of the same version fetches nothing, and a record or cache directory for
- * a newer version means a downgrade. A listed build that cannot be verified loses its manifest line,
+ * fetched without that file, from a source checkout, on Windows, or without evidence of an upgrade:
+ * cache/ocx-child/.home-version records the last version whose fill completed (a package without
+ * digests records its version too, silently, so the first release that ships them sees an upgrade),
+ * and only a running version newer than it fills. A first start (no record: a fresh install) records
+ * its version and fetches nothing, a restart of the same version fetches nothing, and a record or
+ * cache directory for a newer version means a downgrade. A listed build that cannot be verified loses its manifest line,
  * so it can never stay trusted under an older manifest, but its file is left in place (it may be an
  * operator's); the record stays behind until every listed build is verified, so the next start retries.
  *
- * Nobody else can substitute a build: on POSIX each of cache, cache/ocx-child and the version
+ * Nobody else can substitute a build: each of cache, cache/ocx-child and the version
  * directory must be a real directory (never a symlink; created 0700 when missing) owned by this user
  * and writable by nobody else, and every directory above them must be owned by this user or root and
  * writable by nobody else unless sticky. Every write re-checks the target directory's identity, so a
- * directory swapped in during a download receives nothing. (On Windows the profile's ACLs stand in for
- * the mode checks; only the symlink and identity checks apply.)
+ * directory swapped in during a download receives nothing. An existing build counts only when it
+ * passes the reader's file checks as well as the digest. Windows has no mode bits to establish that
+ * privacy, so there the fill does nothing and builds are placed by hand.
  */
 
 /** Digests of the release's ocx-child builds, relative to the package root ("<sha256>  ocx-child-<triple>[.exe]"). */
@@ -173,6 +175,15 @@ function readVersionRecord(dir) {
   return parseVersion(value) ? value : null;
 }
 
+/** An existing build the reader would accept: a non-empty regular file, never a symlink, writable only by this user. */
+function readCachedBuild(path) {
+  let st;
+  try { st = lstatSync(path); } catch { return null; }
+  if (!st.isFile() || st.isSymbolicLink() || st.size <= 0 || st.size > MAX_CHILD_BINARY_BYTES) return null;
+  if (POSIX && (st.uid !== currentUid() || (st.mode & 0o022) !== 0)) return null;
+  try { return readFileSync(path); } catch { return null; }
+}
+
 async function download(url, fetchImpl, timeoutMs) {
   let response;
   try { response = await fetchImpl(url, { redirect: "follow", signal: AbortSignal.timeout(timeoutMs) }); } catch { return null; }
@@ -207,16 +218,28 @@ export function runningPackageRoot() {
 
 export async function fillChildBinaryCacheForVersion(options) {
   if (compareReleaseVersions(options.version, options.version) === null) return { kind: "skipped", reason: "invalid_version" };
+  if ((options.platform ?? process.platform) === "win32") return { kind: "skipped", reason: "unsupported_platform" };
   const digests = readDigests(options.packageRoot);
-  if (!digests) return { kind: "skipped", reason: "no_digests" };
   const home = options.opencodexHome || process.env.OPENCODEX_HOME?.trim() || join(process.env.HOME || homedir(), ".opencodex");
-  assertTrustedAncestors(home);
-  if (newerVersionCached(home, options.version)) return { kind: "skipped", reason: "downgrade" };
-  realDirectory(join(home, "cache"));
   const root = join(home, "cache", "ocx-child");
-  const rootIdentity = realDirectory(root);
-  const recorded = readVersionRecord(root);
+  let rootIdentity, recorded;
+  try {
+    assertTrustedAncestors(home);
+    if (newerVersionCached(home, options.version)) return { kind: "skipped", reason: "downgrade" };
+    realDirectory(join(home, "cache"));
+    rootIdentity = realDirectory(root);
+    recorded = readVersionRecord(root);
+  } catch (error) {
+    // Without digests only the baseline record was at stake: stay silent, as before this lane.
+    if (!digests) return { kind: "skipped", reason: "no_digests" };
+    throw error;
+  }
   const record = () => publish(root, rootIdentity, VERSION_RECORD, Buffer.from(options.version + "\n"));
+  if (!digests) {
+    // The baseline a later digest-bearing release needs to recognise its start as an upgrade.
+    if (recorded === null || compareReleaseVersions(options.version, recorded) === 1) { try { record(); } catch { /* best effort */ } }
+    return { kind: "skipped", reason: "no_digests" };
+  }
   if (recorded === null) { record(); return { kind: "skipped", reason: "first_start" }; }
   const order = compareReleaseVersions(options.version, recorded);
   if (order === -1) return { kind: "skipped", reason: "downgrade" };
@@ -232,8 +255,7 @@ export async function fillChildBinaryCacheForVersion(options) {
   const fetched = [];
   const failed = [];
   for (const [file, expected] of [...digests].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    let present = null;
-    try { present = readRegular(join(dir, file), MAX_CHILD_BINARY_BYTES); } catch { present = null; }
+    const present = readCachedBuild(join(dir, file));
     if (present && sha256Hex(present) === expected) { manifest.set(file, expected); cached.push(file); continue; }
     const bytes = await download(childReleaseAssetUrl(options.version, file), fetchImpl, timeoutMs);
     if (bytes && sha256Hex(bytes) === expected) {
