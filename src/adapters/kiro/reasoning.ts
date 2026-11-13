@@ -30,9 +30,19 @@ export const KIRO_NATIVE_EFFORT_FIELDS: Record<string, "reasoning" | "output_con
   "gpt-6.1-sol": "reasoning",
   // 261027 preemptive: GPT-6.1 Terra (mirrors GPT-6.1 Sol; see kiro-models.ts).
   "gpt-6.1-terra": "reasoning",
+  // Claude models whose output_config.effort was accepted by a live probe on 2026-11-07, at every
+  // ladder rung except xhigh on the 4.6 pair. Haiku 4.5, Opus 4.5 and Sonnet 4.5 reject the field
+  // (HTTP 400). The probe covered these nine ids individually; no other Claude id was measured, so
+  // this table stays a per-id allowlist rather than a `claude-*` rule.
   "claude-opus-5": "output_config",
-  // 260923 preemptive (see kiro-models.ts): same Claude-specific field as Opus 5.
   "claude-opus-5.5": "output_config",
+  "claude-opus-4.8": "output_config",
+  "claude-opus-4.7": "output_config",
+  "claude-opus-4.6": "output_config",
+  "claude-sonnet-5.5": "output_config",
+  "claude-sonnet-5": "output_config",
+  "claude-sonnet-4.6": "output_config",
+  "claude-haiku-5.5": "output_config",
 };
 
 export const KIRO_NATIVE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -40,6 +50,29 @@ export const KIRO_NATIVE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // The newly enabled models have evidence for these rungs only. Keep the previous
 // emulation for xhigh, and never widen their native wire when the shared ladder grows.
 const KIRO_LUNA_TERRA_NATIVE_EFFORTS = new Set(["low", "medium", "high", "max"]);
+// Kiro rejects a native xhigh for these two (HTTP 400, live probe 2026-11-07); it stays emulated.
+const KIRO_NO_XHIGH_NATIVE_MODELS = new Set(["claude-opus-4.6", "claude-sonnet-4.6"]);
+// These models used the emulated block for every effort before native effort was verified, so
+// `minimal` — the one value outside the native ladder that arrives as the caller's own request —
+// keeps that block rather than becoming an error. Models absent from this set still reject
+// `minimal`: it is an enumerated compatibility set, not a general unknown-effort fallback. The
+// value check is what keeps it that way: an effort this file has never seen still throws instead
+// of silently dropping reasoning.
+//
+// Caller-supplied `ultra` is folded by the Responses parser, but operator pins are applied
+// afterward. The Kiro payload builder folds `ultra` to `max` for native models; emulated
+// models retain their existing path, which has no `ultra` thinking budget.
+const KIRO_EMULATED_EXTRA_EFFORT_MODELS = new Set([
+  "claude-opus-4.8",
+  "claude-opus-4.7",
+  "claude-opus-4.6",
+  "claude-sonnet-5.5",
+  "claude-sonnet-5",
+  "claude-sonnet-4.6",
+  "claude-haiku-5.5",
+]);
+/** The one outside-ladder value that keeps the emulated block instead of failing the request. */
+const KIRO_EMULATED_LEGACY_EFFORT = "minimal";
 
 export function kiroNativeEffortField(
   modelId: string,
@@ -48,7 +81,17 @@ export function kiroNativeEffortField(
   const model = normalizeKiroModelId(modelId);
   if ((model === "gpt-5.6-luna" || model === "gpt-5.6-terra")
     && effort !== undefined && !KIRO_LUNA_TERRA_NATIVE_EFFORTS.has(effort)) return undefined;
+  if (KIRO_NO_XHIGH_NATIVE_MODELS.has(model) && effort === "xhigh") return undefined;
+  if (KIRO_EMULATED_EXTRA_EFFORT_MODELS.has(model) && effort === KIRO_EMULATED_LEGACY_EFFORT) {
+    return undefined;
+  }
   return KIRO_NATIVE_EFFORT_FIELDS[model];
+}
+
+/** True when an effort outside the native ladder keeps the emulated path instead of failing. */
+export function kiroEmulatesUnsupportedEffort(modelId: string, effort?: string): boolean {
+  return effort === KIRO_EMULATED_LEGACY_EFFORT
+    && KIRO_EMULATED_EXTRA_EFFORT_MODELS.has(normalizeKiroModelId(modelId));
 }
 
 export function kiroReasoningMode(modelId: string, effort?: string): KiroReasoningMode {

@@ -263,10 +263,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "logout", usage: "ocx logout <provider>", summary: "Remove a stored provider login." },
   {
     name: "gui",
-    usage: "ocx gui [pair --origin <browser-origin> [--json]]",
+    usage: "ocx gui [pair [--desktop] --origin <browser-origin> [--json]]",
     summary: "Open the opencodex dashboard or create a secret single-use remote pairing grant.",
     details: [
       "Pairing requires an explicit allowed --origin; there is no localhost or config-derived default.",
+        "--desktop authorizes only Desktop compatibility actions in an existing standalone local dashboard session, for at most five minutes; it does not authorize Remote Link or key disclosure.",
       "The printed grant is secret, single-use, short-lived, and must not be persisted.",
     ],
   },
@@ -417,7 +418,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "ocx advisor and ocx advisor status read the resolved settings; use --json for machine-readable output.",
       "ocx advisor on requires current context-sharing consent. Pass --ack-context-sharing to record consent v1 and enable. ocx advisor off disables the sidecar without granting consent.",
-      "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it and stops task-context transfer.",
+      "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it: consultations not yet dispatched are blocked, while a dispatched consultation cannot be cancelled and task content already sent cannot be retracted.",
       "ocx advisor set updates --model, --effort, --policy, --context-mode, --max-consultations and --timeout-ms; the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",
       "In the default context mode, policy manual consults only when the worker calls the synthetic advisor tool; policy preflight also attempts one automatic consultation per task with a stable conversation identity, once the task shows orientation evidence. Without a stable identity, each eligible request may trigger another consultation. Both require current consent before any task context is sent. The question-only mode pauses automatic consultations.",
     ],
