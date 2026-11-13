@@ -292,7 +292,7 @@ async function repairServiceWith(deps: RepairServiceDeps, restart: RestartReceip
       beforeStop,
       ...(schedulerBackend ? { stop: async (pid: number) => {
         const { stopProxyForServiceRestart } = await import("./restart-proxy-stop");
-        return stopProxyForServiceRestart(pid, null, holdRestartReceipt);
+        return stopProxyForServiceRestart(pid, holdRestartReceipt);
       } } : {}),
       stopManager: async () => {
         const { platformOps } = await import("./orchestration");

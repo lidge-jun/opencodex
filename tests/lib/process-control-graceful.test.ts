@@ -27,6 +27,19 @@ describe("gracefulStopHost", () => {
 });
 
 describe("stopProxyGracefully", () => {
+  test("runtimeEndpointOnly sends nothing without the resolved endpoint and never re-reads the record", async () => {
+    let reads = 0, requests = 0;
+    const result = await stopProxyGracefully(4242, {
+      // A record published after the caller resolved no endpoint, naming another port.
+      readRuntime: () => { reads++; return { port: 10200 }; },
+      runtimeEndpointOnly: true,
+      deferSharedTeardownNonce: "a".repeat(32),
+      fetchFn: (async () => { requests++; return new Response(null, { status: 500 }); }) as unknown as typeof fetch,
+      waitExit: () => true,
+    });
+    expect({ result, reads, requests }).toEqual({ result: false, reads: 0, requests: 0 });
+  });
+
   for (const [name, body] of [
     ["reported restore failure", JSON.stringify({ success: false, sharedTeardown: "performed" })],
     ["missing teardown result", JSON.stringify({ success: true })],

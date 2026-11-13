@@ -1366,7 +1366,10 @@ export async function disconnectClient(
 
   // This sibling step owns only file integrations; failures retain the prepared receipt/token.
   if (prepared.connection?.transport === "link" && !disconnectAtLeast(prepared.receipt, "desktop_restored")) {
-    await cleanupConnectedRouteIntent(prepared.connection, prepared.receipt, deps.lifecycleLockDeps, options.recoverConfig === true);
+    // It writes the route receipt and file integrations under the config root, so it admits after
+    // overlapping config-root ACL work like both disconnect phases (#7815).
+    const connection = prepared.connection;
+    await withConfigDirHardeningSettled(getConfigDir(), () => cleanupConnectedRouteIntent(connection, prepared.receipt, deps.lifecycleLockDeps, options.recoverConfig === true));
   }
   // The prepared receipt blocks even a sync queued for its actual N/C injection commit.
   // Codex-only restore MUST stay outside L; it never invokes Desktop cleanup.

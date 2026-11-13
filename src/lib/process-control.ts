@@ -61,6 +61,12 @@ export interface GracefulStopIo {
    * endpoint the stop never contacted — and recovery probes exactly that endpoint.
    */
   runtimeEndpoint?: { hostname: string; port: number };
+  /**
+   * Send the stop only to `runtimeEndpoint`: without one, no request is sent and the runtime
+   * record is not read again. A caller whose deferral receipt names the endpoint it resolved sets
+   * this, so a record published in between cannot direct the request, and the receipt, elsewhere.
+   */
+  runtimeEndpointOnly?: boolean;
 }
 
 /**
@@ -235,7 +241,7 @@ async function stopProxyGracefullyDetailed(
   const done = (result: GracefulStopResult): { result: GracefulStopResult; refusal: StopRefusal } =>
     ({ result, refusal });
   const readRuntime = io.readRuntime ?? readRuntimePort;
-  const runtime = io.runtimeEndpoint ?? readRuntime(pid);
+  const runtime = io.runtimeEndpoint ?? (io.runtimeEndpointOnly ? null : readRuntime(pid));
   if (!runtime?.port) return done(false);
   const env = io.env ?? process.env;
   const headers: Record<string, string> = {};

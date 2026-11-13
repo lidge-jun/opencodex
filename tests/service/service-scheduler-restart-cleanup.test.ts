@@ -9,7 +9,7 @@ import { windowsLauncherVbsPath, windowsServiceScriptPath, windowsTaskXmlPath } 
 import * as disconnectedCleanup from "../../src/service/disconnected-client-restart";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { stopProxyForServiceRestart, type HeldRestartReceipt } from "../../src/service/restart-proxy-stop";
-import { assertSchedulerRestartTargetAllowed, schedulerReplacementServing } from "../../src/service/orchestration";
+import { assertSchedulerRestartTargetAllowed, schedulerReplacementServing, stopTrackedProxyForServiceRestart } from "../../src/service/orchestration";
 import { ProxyOwnershipRefusedError } from "../../src/lib/process-control";
 
 const sid = "S-1-5-21-111-222-333-1001", launcher = "C:\\fixture\\launcher.vbs";
@@ -222,50 +222,76 @@ test("a refused second stop after wrapper cleanup says the proxy is unsupervised
 
 describe("the restart's deferred-teardown receipt", () => {
   const endpoint = { hostname: "127.0.0.1", port: 10100 };
-  const run = async (stop: () => Promise<boolean>) => {
+  const run = async (stop: () => Promise<boolean>, over: { record?: boolean; proven?: boolean } = {}) => {
     const events: string[] = [];
     const held: HeldRestartReceipt[] = [];
-    const outcome = await stopProxyForServiceRestart(4242, endpoint, receipt => { held.push(receipt); }, {
-      readRuntime: () => null,
+    const outcome = await stopProxyForServiceRestart(4242, receipt => { held.push(receipt); }, {
+      readRuntime: () => over.record === false ? null : { port: 10100 },
+      prove: async (_pid, at) => { events.push("prove:" + at.port); return over.proven ?? true; },
       claim: () => { events.push("claim"); return "a".repeat(32); },
       clear: nonce => { events.push("clear:" + nonce.length); return true; },
-      stop: async (_pid, io) => { events.push("stop:" + String(io?.deferSharedTeardownNonce?.length)); return stop(); },
-    }).then(value => String(value), (error: Error) => "throw:" + error.constructor.name);
+      stop: async (_pid, io) => { events.push("stop:" + String(io?.deferSharedTeardownNonce?.length) + ":" + String(io?.runtimeEndpointOnly)); return stop(); },
+    }).then(value => String(value), (error: Error) => "throw:" + error.constructor.name + ":" + error.message.slice(0, 40));
     return { outcome, events, held };
   };
 
   test("an accepted stop keeps the receipt for the caller to release once a replacement serves", async () => {
-    expect(await run(async () => true)).toEqual({ outcome: "true", events: ["claim", "stop:32"], held: [{ nonce: "a".repeat(32), pid: 4242, endpoint }] });
+    expect(await run(async () => true)).toEqual({ outcome: "true", events: ["prove:10100", "claim", "stop:32:true"], held: [{ nonce: "a".repeat(32), pid: 4242, endpoint }] });
   });
 
   test("a refusal deferred nothing, so it releases the receipt and propagates", async () => {
-    expect(await run(async () => { throw new ProxyOwnershipRefusedError("refused", "respawnable_service"); }))
-      .toEqual({ outcome: "throw:ProxyOwnershipRefusedError", events: ["claim", "stop:32", "clear:32"], held: [] });
+    const result = await run(async () => { throw new ProxyOwnershipRefusedError("refused", "respawnable_service"); });
+    expect(result.outcome.startsWith("throw:ProxyOwnershipRefusedError")).toBe(true);
+    expect(result.events).toEqual(["prove:10100", "claim", "stop:32:true", "clear:32"]);
+    expect(result.held).toEqual([]);
   });
 
   test("an ambiguous failure keeps the receipt: the proxy may already have exited keeping routing", async () => {
-    expect(await run(async () => { throw new Error("process 4242 did not exit"); }))
-      .toEqual({ outcome: "throw:Error", events: ["claim", "stop:32"], held: [{ nonce: "a".repeat(32), pid: 4242, endpoint }] });
+    const result = await run(async () => { throw new Error("process 4242 did not exit"); });
+    expect(result.outcome.startsWith("throw:Error")).toBe(true);
+    expect(result.held).toEqual([{ nonce: "a".repeat(32), pid: 4242, endpoint }]);
   });
 
-  test("the replacement check counts only a healthy, verified, new proxy on the receipt's own endpoint", async () => {
-    const endpoint = { hostname: "127.0.0.1", port: 10100 };
+  test("without this home's record or a fresh attestation, no token is sent, nothing is claimed and nothing is stopped", async () => {
+    const unrecorded = await run(async () => true, { record: false });
+    expect(unrecorded.outcome).toStartWith("throw:Error:No runtime record of this home names");
+    expect(unrecorded.events).toEqual([]);
+    const unproven = await run(async () => true, { proven: false });
+    expect(unproven.outcome).toStartWith("throw:Error:Proxy 4242 could not prove it serves");
+    expect(unproven.events).toEqual(["prove:10100"]);
+    expect([...unrecorded.held, ...unproven.held]).toEqual([]);
+  });
+
+  test("the replacement check counts only this home's freshly published, healthy, attested proxy on the receipt's endpoint", async () => {
     let clock = 0;
-    const probe = async (answers: Array<{ pid: number | null; packageTreeFenced?: true } | null>, window = 10_000) => {
+    const check = async (steps: Array<{ record: { pid: number; port: number } | null; identity?: { pid: number | null; packageTreeFenced?: true } | null; proven?: boolean }>, window = 10_000) => {
       clock = 0;
-      const probed: number[] = [];
-      const found = await schedulerReplacementServing(endpoint, [4242], {
-        identityAt: async target => { probed.push(target.port); return answers.shift() ?? null; },
-        verify: pid => pid ?? null, now: () => clock, sleep: async ms => { clock += ms; }, windowMs: window,
+      let step = steps[0]!;
+      let index = 0;
+      return schedulerReplacementServing(endpoint, [4242], {
+        readRecord: () => { step = steps[Math.min(index++, steps.length - 1)]!; return step.record; },
+        identityAt: async () => step.identity ?? null,
+        prove: async () => step.proven ?? false,
+        now: () => clock, sleep: async ms => { clock += ms; }, windowMs: window,
       });
-      return { found, probed: [...new Set(probed)] };
     };
-    // The stopped proxy still answering, then a fenced replacement, then a healthy one.
-    expect(await probe([{ pid: 4242 }, { pid: 5151, packageTreeFenced: true }, { pid: 5151 }])).toEqual({ found: true, probed: [10100] });
-    // A fenced replacement never counts, and the check gives up at its deadline.
-    expect(await probe(Array.from({ length: 10 }, () => ({ pid: 5151, packageTreeFenced: true as const })), 3_000)).toEqual({ found: false, probed: [10100] });
-    // Nothing on the receipt's endpoint: a proxy elsewhere is never asked about.
-    expect(await probe([], 2_000)).toEqual({ found: false, probed: [10100] });
+    // The stopped proxy's own record, a record for another port, a fenced answer, a pid mismatch,
+    // an unproven listener: none counts. Then the published replacement proves itself.
+    expect(await check([
+      { record: { pid: 4242, port: 10100 }, identity: { pid: 4242 }, proven: true },
+      { record: { pid: 5151, port: 10200 }, identity: { pid: 5151 }, proven: true },
+      { record: { pid: 5151, port: 10100 }, identity: { pid: 5151, packageTreeFenced: true }, proven: true },
+      { record: { pid: 5151, port: 10100 }, identity: { pid: 6161 }, proven: true },
+      { record: { pid: 5151, port: 10100 }, identity: { pid: 5151 }, proven: false },
+      { record: { pid: 5151, port: 10100 }, identity: { pid: 5151 }, proven: true },
+    ])).toBe(true);
+    // A listener that names a live pid but cannot prove the record's secret never releases it.
+    expect(await check([{ record: { pid: 5151, port: 10100 }, identity: { pid: 5151 }, proven: false }], 3_000)).toBe(false);
+    expect(await check([{ record: null }], 2_000)).toBe(false);
+  });
+
+  test("a Link connection that appears after the restart began refuses every later tracked stop", async () => {
+    await expect(stopTrackedProxyForServiceRestart(() => {}, { linkChild: () => true })).rejects.toThrow("unauthenticated loopback port");
   });
 
   test("a live Child connected over a Remote Link is refused before anything changes", async () => {
@@ -282,5 +308,4 @@ describe("the restart's deferred-teardown receipt", () => {
       expect(effects).toEqual([]);
     });
   });
-
 });

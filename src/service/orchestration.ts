@@ -1,9 +1,9 @@
-import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";
+import { findLiveProxy, proveLiveProxyOwnedByHome, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";
 import { existsSync, unlinkSync } from "node:fs";
 import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
 import { assertSelectedRuntimeWritable, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
 import { getConfigDir } from "../config";
-import { readPid, removePid, removeRuntimePort, verifyPidIdentity } from "../config/process-state";
+import { readPid, readRuntimePort, removePid, removeRuntimePort, verifyPidIdentity } from "../config/process-state";
 import { isWslRuntime } from "../codex/home";
 import { isProcessAlive, stopProxy } from "../lib/process-control";
 import { randomUUID } from "node:crypto";
@@ -243,24 +243,54 @@ export async function stopTrackedProxyIfRunning(options: TrackedProxyStopOptions
  * refusal does not apply to the restart that verifies the window, and refusing an unverifiable
  * survivor so the caller can stop before it removes the wrappers that supervise it.
  */
-export async function stopTrackedProxyForServiceRestart(hold: (receipt: HeldRestartReceipt) => void): Promise<TrackedProxyCleanupResult> {
+export async function stopTrackedProxyForServiceRestart(
+  hold: (receipt: HeldRestartReceipt) => void,
+  deps: { linkChild?: () => boolean } = {},
+): Promise<TrackedProxyCleanupResult> {
   const { stopProxyForServiceRestart } = await import("./restart-proxy-stop");
-  return stopTrackedProxyIfRunning({ stop: (pid, endpoint) => stopProxyForServiceRestart(pid, endpoint, hold), refuseUnverifiedLive: true });
+  // Re-decided before every stop, not only before the restart began: a Link connection or a Child
+  // that started meanwhile must not be stopped through a deferral that keeps its route.
+  assertNotLinkChildForRestart(deps.linkChild);
+  return stopTrackedProxyIfRunning({
+    stop: async pid => { assertNotLinkChildForRestart(deps.linkChild); return stopProxyForServiceRestart(pid, hold); },
+    refuseUnverifiedLive: true,
+  });
+}
+
+const LINK_CHILD_RESTART_REFUSAL = "Nothing was changed, and this Child keeps serving under its existing task. 'ocx service restart' does not restart a Child connected over a Remote Link under Task Scheduler: "
+  + "stopping its proxy keeps Codex routed to the Child's unauthenticated loopback port, which another local process could take if the restart then failed.";
+
+function linkChildConnected(read?: () => boolean): boolean {
+  try {
+    return (read ?? (() => {
+      const state = readClientConnectionState();
+      return state.kind === "connected" && state.value.transport === "link";
+    }))();
+  } catch {
+    throw new Error("The client connection state could not be read, so the restart cannot tell whether this is a linked Child; nothing was stopped.");
+  }
+}
+
+function assertNotLinkChildForRestart(read?: () => boolean): void {
+  if (linkChildConnected(read)) throw new Error(LINK_CHILD_RESTART_REFUSAL);
 }
 
 /**
- * Whether a replacement serves the endpoint a scheduler restart's receipt names: a healthy proxy
- * (a package-tree-fenced one cannot serve requests and does not count) answering on exactly that
- * port, whose pid this home verifies and is none of the stopped ones. Client routing still names
- * that endpoint, so a proxy on any other port is no evidence. Bounded; false is not proof of
- * failure, only that the restart cannot release the receipt on the replacement's behalf.
+ * Whether a replacement serves the endpoint a scheduler restart's receipt names. Client routing
+ * still names that endpoint, so only this home's freshly published runtime record counts: it must
+ * name that port and a pid other than the stopped ones, the listener there must answer healthy (a
+ * package-tree-fenced proxy cannot serve requests) as that pid, and it must prove possession of the
+ * record's attestation secret for a fresh challenge. A listener that merely names some live pid in
+ * an unattested /healthz never releases a receipt. Bounded; false is not proof of failure, only that
+ * the restart cannot release the receipt on the replacement's behalf.
  */
 export async function schedulerReplacementServing(
   endpoint: { hostname: string; port: number },
   stoppedPids: readonly number[],
   deps: {
-    identityAt?: (endpoint: { hostname: string; port: number }) => Promise<{ pid: number | null; packageTreeFenced?: true } | null>;
-    verify?: (pid: number | null | undefined) => number | null;
+    readRecord?: () => { pid: number; port: number } | null;
+    identityAt?: (endpoint: { hostname: string; port: number }, pid: number) => Promise<{ pid: number | null; packageTreeFenced?: true } | null>;
+    prove?: (pid: number, endpoint: { hostname: string; port: number }) => Promise<boolean>;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
     windowMs?: number;
@@ -269,13 +299,17 @@ export async function schedulerReplacementServing(
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const deadline = now() + (deps.windowMs ?? 30_000);
-  const identityAt = deps.identityAt ?? (target => proxyIdentityAt(target.port, { hostname: target.hostname }, { ...SERVICE_STOP_LIVENESS, deadlineAt: deadline }));
-  const verify = deps.verify ?? verifiedKillTarget;
+  const readRecord = deps.readRecord ?? (() => readRuntimePort());
+  const identityAt = deps.identityAt ?? ((target, pid) => proxyIdentityAt(target.port, { hostname: target.hostname, expectedPid: pid }, { ...SERVICE_STOP_LIVENESS, deadlineAt: deadline }));
+  const prove = deps.prove ?? (async (pid, target) =>
+    await proveLiveProxyOwnedByHome({ pid, port: target.port, hostname: target.hostname, source: "runtime" }, { ...SERVICE_STOP_LIVENESS, deadlineAt: deadline }) === "proven");
   for (;;) {
     try {
-      const identity = await identityAt(endpoint);
-      const pid = identity && !identity.packageTreeFenced ? verify(identity.pid) : null;
-      if (pid !== null && !stoppedPids.includes(pid)) return true;
+      const record = readRecord();
+      if (record && record.port === endpoint.port && !stoppedPids.includes(record.pid)) {
+        const identity = await identityAt(endpoint, record.pid);
+        if (identity && !identity.packageTreeFenced && identity.pid === record.pid && await prove(record.pid, endpoint)) return true;
+      }
     } catch {
       // A probe failure is not proof either way; keep looking until the deadline.
     }
@@ -290,26 +324,16 @@ export async function schedulerReplacementServing(
  * Its proxy can only be stopped by a deferred stop that keeps Codex routed to the Child's loopback
  * listener, which accepts unauthenticated local requests. If the restart then failed, nothing would
  * bind that port again and another local process could take it. A Link Child whose proxy is not
- * running has nothing to stop, and the restart proceeds.
+ * running has nothing to stop here; every later stop decides again (stopTrackedProxyForServiceRestart).
  */
 export async function assertSchedulerRestartTargetAllowed(deps: {
   linkChild?: () => boolean;
   findProxy?: () => Promise<unknown | null>;
 } = {}): Promise<void> {
-  let linkChild: boolean;
-  try {
-    linkChild = (deps.linkChild ?? (() => {
-      const state = readClientConnectionState();
-      return state.kind === "connected" && state.value.transport === "link";
-    }))();
-  } catch {
-    throw new Error("The client connection state could not be read, so the restart cannot tell whether this is a linked Child; nothing was changed.");
-  }
-  if (!linkChild) return;
+  if (!linkChildConnected(deps.linkChild)) return;
   const live = await (deps.findProxy ?? (() => findLiveProxy({ ...SERVICE_STOP_LIVENESS, acceptPackageTreeFenced: true })))();
   if (!live) return;
-  throw new Error("Nothing was changed, and this Child keeps serving under its existing task. 'ocx service restart' does not restart a Child connected over a Remote Link under Task Scheduler: "
-    + "stopping its proxy keeps Codex routed to the Child's unauthenticated loopback port, which another local process could take if the restart then failed.");
+  throw new Error(LINK_CHILD_RESTART_REFUSAL);
 }
 
 export async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult> {

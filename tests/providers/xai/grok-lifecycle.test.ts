@@ -253,7 +253,7 @@ describe("Grok fence lifecycle wiring", () => {
     const guessedBranch = stopFn.slice(stopFn.indexOf('if (read.receipt.endpointSource === "guessed")'), stopFn.indexOf("if (await abandonedTeardownIsSafeToFinish("));
     expect(guessedBranch).toContain("inheritedBlocks = true;");
     expect(guessedBranch).toContain("stopFailed = true;");
-    expect(controlSource).toContain("io.runtimeEndpoint ?? readRuntime(pid)");
+    expect(controlSource).toContain("io.runtimeEndpoint ?? (io.runtimeEndpointOnly ? null : readRuntime(pid))");
     // Inherited obligations are snapshotted BEFORE this run claims anything, so its own
     // receipt is never mistaken for one it inherited.
     expect(stopFn).toContain("isPendingTeardownAbandoned(read, teardownOwnerStillRunning)");

@@ -53,7 +53,7 @@ export async function prepareDisconnectedClientServiceRestart(deps: Disconnected
     // Receipt-backed: a Task Scheduler restart keeps the task registered, so a bare stop is refused.
     // The scheduler restart passes a stop that holds the receipt until its replacement serves; a
     // manager that already ended the process never reaches here, so the default releases at once.
-    await (deps.stop ?? (async (target: number) => (await import("./restart-proxy-stop")).stopProxyForServiceRestart(target, null,
+    await (deps.stop ?? (async (target: number) => (await import("./restart-proxy-stop")).stopProxyForServiceRestart(target,
       receipt => { clearPendingTeardown(receipt.nonce); })))(pid);
   }
   if (alive(pid)) throw new Error("Disconnected client did not exit; rerun 'ocx service restart'.");

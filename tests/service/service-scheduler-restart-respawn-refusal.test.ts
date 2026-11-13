@@ -54,7 +54,7 @@ type Proxy = {
  * Bun.serve has bound and the pid and runtime-port records are written, which is exactly
  * the state the restart consumes.
  */
-async function startProxy(root: TempHome, entryName = "ocx"): Promise<Proxy> {
+async function startProxy(root: TempHome, entryName = "ocx", extraEnv: Record<string, string> = {}): Promise<Proxy> {
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = ADMIN_TOKEN;
   // verifyPidIdentity accepts this home's proxy only when the command line names ocx and
   // the start verb. A symlink named "ocx" next to the fixture gives that command line
@@ -78,6 +78,7 @@ async function startProxy(root: TempHome, entryName = "ocx"): Promise<Proxy> {
       CODEX_HOME: root.codexHome,
       CLAUDE_CONFIG_DIR: root.path("claude-config"),
       OPENCODEX_ADMIN_AUTH_TOKEN: ADMIN_TOKEN,
+      ...extraEnv,
     },
     stdin: "ignore",
     stdout: "pipe",
@@ -319,6 +320,49 @@ test.each(["no replacement answers", "wrapper cleanup fails"] as const)("the res
   expect(effects).toEqual(mode === "wrapper cleanup fails"
     ? ["stop-scheduler", "kill-wrappers"]
     : ["stop-scheduler", "kill-wrappers", "write-assets", "start-scheduler", "write-state"]);
+}, RESTART_TIMEOUT_MS);
+
+test("a listener that cannot prove this home's attestation secret is sent no token and keeps its wrappers", async () => {
+  home = createTempHome("ocx-scheduler-restart-8416-unattested-");
+  const proxy = await startProxy(home, "ocx", { OCX_FIXTURE_NO_ATTESTATION: "1" });
+  const effects: string[] = [];
+  try {
+    await expect(repairService({
+      platform: "win32",
+      verb: "restart",
+      configDir: () => home!.configDir,
+      inspectSupervision: () => ({ kind: "none" }),
+      diagnose: () => ({
+        supported: true, installed: true, enabled: true, running: true, viable: true,
+        startable: true, stale: false, conflict: false, backend: "scheduler", summary: "fixture",
+      }),
+      readOwnership: () => ({ kind: "none", revision: 0 }),
+      assertEnv: () => {},
+      assertAuth: () => {},
+      selectRuntime: () => ({ path: process.execPath, source: "override", overrideEnv: "OPENCODEX_BUN_PATH" }),
+      assertRuntimeWritable: () => {},
+      launcherPathDiagnostic: () => null,
+      readSchedulerXml: () => healthy,
+      resolveExpectedUserId: () => sid,
+      schedulerLauncher: launcher,
+      prepareDisconnectedClientRestart: async () => {},
+      stopScheduler: () => { effects.push("stop-scheduler"); },
+      killServiceWrappers: () => { effects.push("kill-wrappers"); },
+      writeSchedulerAssets: () => { effects.push("write-assets"); },
+      startScheduler: () => { effects.push("start-scheduler"); },
+      writeSchedulerState: () => { effects.push("write-state"); },
+      reregisterScheduler: async () => { throw new Error("no re-register expected"); },
+      settleSchedulerRead: () => {},
+    })).rejects.toThrow("could not prove it serves this home's endpoint");
+    // No stop request (and so no admin token) reached it, no receipt was written, the wrappers
+    // were left in place, and it still serves.
+    expect(effects).toEqual(["stop-scheduler"]);
+    expect(existsSync(home.path("stop-response.json"))).toBe(false);
+    expect(readdirSync(home.configDir).filter(name => name.startsWith("pending-teardown-"))).toEqual([]);
+    expect((await fetch(`http://127.0.0.1:${proxy.port}/healthz`)).status).toBe(200);
+  } finally {
+    await proxy.stop();
+  }
 }, RESTART_TIMEOUT_MS);
 
 test("a receipt for another endpoint does not defer this proxy's stop", async () => {

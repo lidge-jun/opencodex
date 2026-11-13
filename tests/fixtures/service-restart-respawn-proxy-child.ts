@@ -77,6 +77,10 @@ mock.module(source("src/grok/inject.ts"), () => ({
 
 const { initializeManagementAuthState, managementPrincipal, requireManagementAuth } =
   await import(source("src/server/management-auth.ts"));
+// A real proxy proves it owns its runtime record by answering a fresh /healthz challenge with an
+// HMAC of the record's attestation secret; the restart sends no token to a listener that cannot.
+const attestation = await import(source("src/lib/local-management-attestation.ts"));
+const attestationSecret: string = attestation.createLocalAttestationSecret();
 const { handleManagementAPI } = await import(source("src/server/management-api.ts"));
 const { setServerRef } = await import(source("src/server/lifecycle.ts"));
 const processState = await import(source("src/config/process-state.ts"));
@@ -92,7 +96,13 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/healthz") {
-      return Response.json({ service: "opencodex", pid: process.pid });
+      const health = Response.json({ service: "opencodex", pid: process.pid });
+      const challenge = req.headers.get(attestation.LOCAL_ATTESTATION_CHALLENGE_HEADER);
+      // OCX_FIXTURE_NO_ATTESTATION plays a listener that claims this pid but holds no secret.
+      const proof = challenge && process.env.OCX_FIXTURE_NO_ATTESTATION !== "1"
+        ? attestation.createLocalAttestationProof(attestationSecret, challenge, process.pid, config.port) : null;
+      if (proof) health.headers.set(attestation.LOCAL_ATTESTATION_PROOF_HEADER, proof);
+      return health;
     }
     // The same admission startServer applies before the management handler.
     const refusal = requireManagementAuth(req, auth, config);
@@ -116,7 +126,7 @@ setServerRef(server);
 // The two records stopTrackedProxyIfRunning verifies before it may signal anything.
 Object.defineProperty(process, "platform", { value: hostPlatform, configurable: true });
 processState.writePid(process.pid);
-processState.writeRuntimePort({ pid: process.pid, port: config.port, hostname: "127.0.0.1" });
+processState.writeRuntimePort({ pid: process.pid, port: config.port, hostname: "127.0.0.1", attestationSecret });
 Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 writeFileSync(
   join(home, "config.json"),
