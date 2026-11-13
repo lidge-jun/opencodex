@@ -438,6 +438,23 @@ describe("a relayed POST whose traffic accounting throws (#8613 review)", () => 
     expect(decisions).toEqual([false]);
     expect(ended).toBe(1);
   });
+  test("returns its lease even when ending the broken flow throws too, before and after dispatch", async () => {
+    for (const where of ["before", "after"] as const) {
+      const decisions: boolean[] = [];
+      let ended = 0;
+      const flow = { toHome() { if (where === "before") throw new Error("count failed"); }, uncounted() {}, fromHome() {}, end() { throw new Error("end failed"); } };
+      const h = relayHarness({
+        activity: { begin: () => () => { ended += 1; } } as unknown as LinkActivity,
+        traffic: { begin: () => flow } as unknown as LinkTrafficBook,
+        observeResponsesRequest: () => accepted => { decisions.push(accepted); },
+      });
+      const nonce = await h.session(KEY.linkId);
+      const req = h.request("/v1/responses", { method: "POST", nonce, headers: { "content-type": "application/json", "content-length": "2" }, body: "{}" });
+      await expect(h.dispatch(req, async () => { throw new Error("dispatch failed"); })).rejects.toThrow(where === "before" ? "count failed" : "dispatch failed");
+      expect({ where, decisions, ended }).toEqual({ where, decisions: [false], ended: 1 });
+    }
+  });
+
 });
 
 describe("paced reads on the relay (#8601)", () => {
