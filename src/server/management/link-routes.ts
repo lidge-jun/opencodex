@@ -9,7 +9,7 @@ import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-arg
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
-import { claimLinkRetirement, clearLinkRetirement, readLinkRetirement } from "../../link/retirement";
+import { claimLinkRetirement, clearLinkRetirement, readLinkRetirement, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
@@ -27,7 +27,7 @@ import { readManagementJsonBodyOr, readOptionalManagementJsonBody, rethrowManage
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, settleRevokeAfterRetirement, underAliasLock, type RevokeJournal } from "./link-operation";
 import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -237,7 +237,10 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
     try { recordedAlias = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id)?.alias; } catch {
       return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
     }
-    if (recordedAlias !== undefined) return underAliasLock(ctx, recordedAlias, true, async () => (await replayOperation(ctx, state, operation, "revoke"))!);
+    if (recordedAlias !== undefined) {
+      return underAliasLock(ctx, recordedAlias, true, async () =>
+        (await resumeRetirementBeforeReplay(ctx, state, id, operation)) ?? (await replayOperation(ctx, state, operation, "revoke"))!);
+    }
   }
   // An interrupted removal resumes from its retirement receipt even after the record is gone.
   const target = readRemovalTarget(ctx, id);
@@ -257,6 +260,8 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
     const exclusive = (action: () => Promise<Response>) => admitted ? serialized(state, target.record.alias, action) : action();
     return await underAliasLock(ctx, target.record.alias, admitted, () => exclusive(async () => {
       if (operation) {
+        const resumed = await resumeRetirementBeforeReplay(ctx, state, id, operation);
+        if (resumed) return resumed;
         const replay = await replayOperation(ctx, state, operation, "revoke");
         if (replay) return replay;
       }
@@ -273,6 +278,34 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       return journal.finish(await removeReserved(ctx, state, id, fresh.record, fresh.receipt, force, purge, journal));
     }));
   } finally { releaseLink(); }
+}
+
+const removalMode = (force: boolean, purge: boolean): LinkRetirementMode => force ? "force" : purge ? "purge" : "disconnect";
+
+/**
+ * Before a recorded revoke replays its outcome, finish the retirement it left behind (#8416). A revoke interrupted
+ * after its record removal, or one whose post-commit cleanup failed, would otherwise replay as committed (or unknown)
+ * with the retired device's route intent, the listener reconciliation and the receipt still pending. The cleanup
+ * resumes in the receipt's own mode; once it finishes, a revoke whose removal intent preceded the record's
+ * disappearance is settled as committed. Returns the cleanup's failure, or null to replay.
+ */
+async function resumeRetirementBeforeReplay(
+  ctx: ManagementContext, state: LinkRouteState, id: string, operation: { id: string; digest: string },
+): Promise<Response | null> {
+  let receipt: ReturnType<typeof readLinkRetirement>;
+  try {
+    const op = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id);
+    if (!op || op.kind !== "revoke" || op.digest !== operation.digest || op.linkId !== id) return null;
+    receipt = readLinkRetirement(id);
+  } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
+  if (!receipt) return null;
+  const mode = receipt.mode ?? "force";
+  const resumed = await removeReserved(ctx, state, id, receipt.link, receipt, mode === "force", mode === "purge", NO_REVOKE_JOURNAL);
+  if (resumed.status !== 200) return resumed;
+  try { settleRevokeAfterRetirement(ctx, operation.id); } catch {
+    return fail("operation_journal_failed", "The link removal finished, but its operation journal could not be updated; repeat the request.", 500);
+  }
+  return null;
 }
 
 /** The link a removal acts on: its retirement receipt (an interrupted removal) or its stored record. */
@@ -301,6 +334,11 @@ async function removeReserved(
   journal: RevokeJournal,
 ): Promise<Response> {
   let receipt = initialReceipt;
+  // A receipt exists only after its removal's Child cleanup ran (or was skipped by force). A retry asking for another
+  // cleanup would skip it and still report success, so it is refused before anything is stopped (#8416).
+  if (receipt && record.direction === "hub-initiated" && (receipt.mode ?? "force") !== removalMode(force, purge)) {
+    return fail("link_retirement_mode_mismatch", `This link's removal was interrupted after its ${receipt.mode ?? "force"} cleanup; repeat it with the same options to finish it.`, 409);
+  }
   const release = state.supervisor.holdLink?.(id);
   try {
     if (!receipt) await state.supervisor.stopLink(id);
@@ -341,7 +379,7 @@ async function removeReserved(
     }
     try {
       if (!receipt) {
-        try { receipt = claimLinkRetirement(record, undefined, () => readStoreFor(ctx)); }
+        try { receipt = claimLinkRetirement(record, undefined, () => readStoreFor(ctx), removalMode(force, purge)); }
         catch {
           const latest = readStoreFor(ctx).links.find(link => link.id === id);
           if (!latest || JSON.stringify(latest) !== JSON.stringify(record)) {

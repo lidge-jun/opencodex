@@ -9,7 +9,9 @@ import { hardenSecretDir } from "../lib/windows-secret-acl";
 import { linkDir, linkStorePath } from "./paths";
 import { parseLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
 
-export interface LinkRetirement { version: 1; link: LinkRecord; nonce: string }
+/** How the removal that claimed the receipt cleaned up its Child before the commit: a retry must ask for the same. */
+export type LinkRetirementMode = "force" | "disconnect" | "purge";
+export interface LinkRetirement { version: 1; link: LinkRecord; nonce: string; mode?: LinkRetirementMode }
 export class LinkRetirementError extends Error {
   constructor(message: string) { super(message); this.name = "LinkRetirementError"; }
 }
@@ -25,14 +27,16 @@ function parse(text: string, id: string): LinkRetirement {
   try { raw = JSON.parse(text); } catch { throw new LinkRetirementError("invalid retirement JSON"); }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new LinkRetirementError("invalid retirement record");
   const value = raw as Record<string, unknown>;
-  if (Object.keys(value).sort().join(",") !== "link,nonce,version" || value.version !== 1 || typeof value.nonce !== "string" || !NONCE.test(value.nonce)) {
+  const keys = Object.keys(value).sort().join(",");
+  if ((keys !== "link,nonce,version" && keys !== "link,mode,nonce,version") || value.version !== 1 || typeof value.nonce !== "string" || !NONCE.test(value.nonce)
+    || (value.mode !== undefined && value.mode !== "force" && value.mode !== "disconnect" && value.mode !== "purge")) {
     throw new LinkRetirementError("invalid retirement record");
   }
   let link: LinkRecord;
   try { link = parseLinkStore(JSON.stringify({ version: 1, listenerPort: null, links: [value.link] })).links[0]!; }
   catch { throw new LinkRetirementError("invalid retirement link"); }
   if (link.id !== id) throw new LinkRetirementError("retirement id mismatch");
-  return { version: 1, link, nonce: value.nonce };
+  return { version: 1, link, nonce: value.nonce, ...(value.mode === undefined ? {} : { mode: value.mode as LinkRetirementMode }) };
 }
 function sameLink(a: LinkRecord, b: LinkRecord): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -45,8 +49,8 @@ export function readLinkRetirement(id: string, configDir: string = getConfigDir(
   return parse(text, id);
 }
 /** Claims only the still-current full link. A competing or damaged receipt is never replaced. */
-export function claimLinkRetirement(link: LinkRecord, configDir: string = getConfigDir(), readStore?: () => LinkStore): LinkRetirement {
-  const candidate = parse(JSON.stringify({ version: 1, link, nonce: randomBytes(32).toString("hex") }), link.id);
+export function claimLinkRetirement(link: LinkRecord, configDir: string = getConfigDir(), readStore?: () => LinkStore, mode?: LinkRetirementMode): LinkRetirement {
+  const candidate = parse(JSON.stringify({ version: 1, link, nonce: randomBytes(32).toString("hex"), ...(mode ? { mode } : {}) }), link.id);
   assertNotRealHomeUnderTest(configDir);
   return withConfigMutationLockSync(() => {
     const path = pathFor(candidate.link.id, configDir);

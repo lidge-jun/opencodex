@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import { revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
+import { claimLinkRetirement, readLinkRetirement } from "../../src/link/retirement";
 import { readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
@@ -211,4 +212,51 @@ test.each([
   const repeat = await h.revoke({ purge: true, operationId: OP });
   expect(repeat.body.outcome).toBe(outcome);
   expect(h.ssh).toEqual([]);
+});
+
+test("a journalled revoke whose cleanup failed after its commit finishes that cleanup on repeat and settles committed", async () => {
+  const h = harness();
+  const intent = join(root, "route-intent.json");
+  writeFileSync(intent, "invalid");
+  const first = await h.revoke({ force: true, operationId: OP });
+  expect({ status: first.status, outcome: first.body.outcome }).toEqual({ status: 503, outcome: "unknown" });
+  expect(h.store.links).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).not.toBeNull();
+  unlinkSync(intent);
+  const again = await h.revoke({ force: true, operationId: OP });
+  expect({ status: again.status, outcome: again.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+  expect(h.journal().operations[0]!.state).toBe("committed");
+  expect(h.ssh).toEqual([]);
+});
+
+test("a journalled revoke interrupted after its record removal finishes its retirement before replaying committed", async () => {
+  const h = harness();
+  // The process died between the record removal and the post-commit cleanup: the receipt and the open entry remain.
+  claimLinkRetirement(record(), root, () => h.store, "force");
+  h.store = { ...h.store, links: [] };
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "open",
+    effects: [{ effect: "key_revoked", phase: "intent", at }, { effect: "key_revoked", phase: "done", at }, { effect: "record_removed", phase: "intent", at }],
+  } as LinkOperation] });
+  const replayed = await h.revoke({ force: true, operationId: OP });
+  expect({ status: replayed.status, outcome: replayed.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+});
+
+test("a retry of an interrupted removal with another cleanup mode is refused before anything runs", async () => {
+  const h = harness();
+  const intent = join(root, "route-intent.json");
+  writeFileSync(intent, "invalid");
+  expect((await h.revoke({ force: true })).status).toBe(503);
+  unlinkSync(intent);
+  // The forced removal never purged the Child; a purge retry must not report one.
+  const purge = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: purge.status, code: code(purge), outcome: purge.body.outcome }).toEqual({ status: 409, code: "link_retirement_mode_mismatch", outcome: "failed_clean" });
+  expect(h.ssh).toEqual([]);
+  expect(readLinkRetirement(LINK, root)?.mode).toBe("force");
+  expect((await h.revoke({ force: true })).status).toBe(200);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
 });

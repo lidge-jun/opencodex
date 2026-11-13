@@ -174,6 +174,23 @@ function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation
   return settle(ctx, op.operationId, removed || touched ? "unknown" : "failed_clean", { code: "operation_interrupted", status: 409 });
 }
 
+/**
+ * A recorded revoke whose interrupted retirement was just finished (#8416): its own removal intent preceded the
+ * record's disappearance, so it committed, whatever its live response or an earlier recovery recorded.
+ */
+export function settleRevokeAfterRetirement(ctx: ManagementContext, operationId: string): void {
+  const op = findOperation(readOperationsJournal(journalPathFor(ctx)), operationId);
+  if (!op || op.kind !== "revoke" || (op.state !== "open" && op.state !== "unknown")) return;
+  if (!hasEffect(op, "record_removed", "intent") || readStoreFor(ctx).links.some(link => link.id === op.linkId)) return;
+  updateOperationsJournal(journalPathFor(ctx), nowOf(ctx), journal => {
+    const current = findOperation(journal, operationId)!;
+    current.state = "committed";
+    delete current.error;
+    current.updatedAt = iso(ctx);
+    current.finishedAt = current.updatedAt;
+  });
+}
+
 export interface EnrollJournal {
   readonly reservedLinkId?: string;
   readonly reservedKeyId?: string;
