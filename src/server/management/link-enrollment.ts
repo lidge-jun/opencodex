@@ -28,12 +28,12 @@ const REMOTE_OCX_VERSION = /^opencodex (\d{1,9})\.(\d{1,9})\.(\d{1,9})(-[0-9A-Za
  * The fixed recovery line a refused apply that may have left the Child connected answers, with the
  * closed words a client maps to its own guidance: residualKind (plant: only the managed binary's
  * purge removes it; enrollment) as journalled replies use, and the Child's platform when known. The
- * purge line names the managed binary where that platform keeps it.
+ * purge line names the managed binary where that platform keeps it (on Windows both locations the plant uses).
  */
 export function liveResidual(kind: "plant" | "ephemeral" | "full", platform: "posix" | "windows" | undefined): { residualKind: "plant" | "enrollment"; recovery: string; remotePlatform?: "posix" | "windows" } {
   const recovery = kind === "plant"
     ? platform === "windows"
-      ? 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child before retrying.'
+      ? 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child, or "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge where LOCALAPPDATA is not set, before retrying.'
       : "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying."
     : kind === "ephemeral"
       ? "Run ocx-child detach (or ocx disconnect) on the Child before retrying."

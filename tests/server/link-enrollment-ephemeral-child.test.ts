@@ -344,7 +344,7 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
 
   test("the live residual answer names the managed binary where the Child's platform keeps it", () => {
     expect(liveResidual("plant", "windows")).toEqual({ residualKind: "plant", remotePlatform: "windows",
-      recovery: 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child before retrying.' });
+      recovery: 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child, or "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge where LOCALAPPDATA is not set, before retrying.' });
     expect(liveResidual("ephemeral", "windows")).toEqual({ residualKind: "enrollment", remotePlatform: "windows", recovery: "Run ocx-child detach (or ocx disconnect) on the Child before retrying." });
     expect(liveResidual("full", undefined)).toEqual({ residualKind: "enrollment", recovery: "Run ocx disconnect and ocx restart on the Child before retrying." });
   });

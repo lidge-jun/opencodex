@@ -1349,7 +1349,7 @@ test.each(ENROLLMENT_CLEANUP_ERRORS.filter(([code]) => code !== "link_pin_confli
   expect(host.textContent).not.toContain("Remote link request could not be completed.");
 });
 
-const RESIDUAL_STEPS = ["purge", "purgeWindows", "ephemeral", "full", "unknown"] as const;
+const RESIDUAL_STEPS = ["purge", "purgeWindows", "purgeWindowsFallback", "purgeAny", "purgeAnyWindows", "ephemeral", "full", "unknown"] as const;
 
 test("every locale translates the enrollment refusals and the Child steps instead of reusing English", async () => {
   const { DICTS } = await import("../src/i18n/catalogs");
@@ -1365,7 +1365,7 @@ test("every locale translates the enrollment refusals and the Child steps instea
       expect(typeof text, locale + " " + step).toBe("string");
       if (locale !== "en") expect(text, locale + " " + step).not.toBe((DICTS.en as Record<string, string>)["remoteLink.residual." + step]);
       // A single command is a chip in the {cmd} slot, never written into the translated prose.
-      const chip = step === "purge" || step === "purgeWindows" || step === "ephemeral";
+      const chip = step !== "full" && step !== "unknown";
       expect(text.includes("{cmd}"), locale + " " + step).toBe(chip);
     }
   }
@@ -1381,8 +1381,27 @@ test.each([
   const step = host.querySelector(".remote-link-child-step");
   expect(step?.textContent).toContain("The Child may still be connected.");
   expect(step?.querySelector("code.chip")?.textContent).toBe(cmd);
+  if ("remotePlatform" in fields && fields.remotePlatform === "windows") {
+    // The plant's location on a Windows Child without LOCALAPPDATA is named too.
+    expect([...step!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([cmd, '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge']);
+    expect(step?.textContent).toContain("Where LOCALAPPDATA is not set");
+  }
   expect(step?.textContent).toContain(prose);
   expect(host.textContent).not.toContain("whatever the server wrote");
+});
+
+test("a journalled plant residual, which names no platform, lists every managed location as a chip", async () => {
+  // The shape a replay of a residual ocx link add --operation-id answers (src/server/management/link-operation.ts).
+  const host = await applyRefusal({ error: { code: "link_cleanup_uncertain", message: "fixture" }, operationId: "attach-1", outcome: "residual", residual: true, residualKind: "plant",
+    recovery: "The Child may still hold the planted ocx-child; run its managed copy with detach --purge before retrying: server text the page must not echo" });
+  const step = host.querySelector(".remote-link-child-step");
+  expect([...step!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([
+    "~/.cache/opencodex/bin/ocx-child detach --purge",
+    '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge',
+    '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge',
+  ]);
+  expect(step?.textContent).toContain("On macOS or Linux");
+  expect(host.textContent).not.toContain("server text the page must not echo");
 });
 
 test.each([
@@ -1412,9 +1431,9 @@ test("readLinkJson keeps whether the Child may still be connected, as a fixed va
   };
   expect((await read({ error: { code: "x" } })).residual).toBeNull();
   expect((await read({ error: { code: "x" }, residual: true, recovery: "Run ocx disconnect and ocx restart on the Child before retrying." })).residual).toBe("full");
-  expect((await read({ error: { code: "x" }, residual: true, recovery: 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child before retrying.' })).residual).toBe("purgeWindows");
+  expect((await read({ error: { code: "x" }, residual: true, recovery: 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child, or "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge where LOCALAPPDATA is not set, before retrying.' })).residual).toBe("purgeWindows");
   expect((await read({ error: { code: "x" }, residual: true, residualKind: "plant", remotePlatform: "windows" })).residual).toBe("purgeWindows");
-  expect((await read({ error: { code: "x" }, residual: true, residualKind: "plant" })).residual).toBe("unknown");
+  expect((await read({ error: { code: "x" }, residual: true, residualKind: "plant" })).residual).toBe("purgeAny");
   expect((await read({ error: { code: "x" }, residual: true })).residual).toBe("unknown");
   expect((await read({ error: { code: "x" }, residual: "yes" })).residual).toBeNull();
 });

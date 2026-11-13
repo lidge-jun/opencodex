@@ -118,16 +118,17 @@ const LINK_ROLES = ["standalone", "home", "child"] as const;
  * (src/server/management/link-enrollment.ts, liveResidual). Either way only one of these variants is
  * kept, so the server's text is never shown as such.
  */
-export type LinkResidualStep = "purge" | "purgeWindows" | "ephemeral" | "full" | "unknown";
+/** purgeAny: a plant whose Child platform is not known (a journalled reply), so every managed location is named. */
+export type LinkResidualStep = "purge" | "purgeWindows" | "purgeAny" | "ephemeral" | "full" | "unknown";
 const RESIDUAL_RECOVERY: Readonly<Record<string, LinkResidualStep>> = {
   "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying.": "purge",
-  "Run \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge in Command Prompt on the Child before retrying.": "purgeWindows",
+  "Run \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge in Command Prompt on the Child, or \"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge where LOCALAPPDATA is not set, before retrying.": "purgeWindows",
   "Run ocx-child detach (or ocx disconnect) on the Child before retrying.": "ephemeral",
   "Run ocx disconnect and ocx restart on the Child before retrying.": "full",
 };
 
 function residualStep(body: Record<string, unknown>): LinkResidualStep {
-  if (body.residualKind === "plant") return body.remotePlatform === "windows" ? "purgeWindows" : body.remotePlatform === "posix" ? "purge" : "unknown";
+  if (body.residualKind === "plant") return body.remotePlatform === "windows" ? "purgeWindows" : body.remotePlatform === "posix" ? "purge" : "purgeAny";
   return typeof body.recovery === "string" && Object.hasOwn(RESIDUAL_RECOVERY, body.recovery) ? RESIDUAL_RECOVERY[body.recovery]! : "unknown";
 }
 
