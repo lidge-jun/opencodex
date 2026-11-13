@@ -1,5 +1,5 @@
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
-import { assertWorkBuddyDestination } from "../providers/workbuddy";
+import { assertWorkBuddyDestination, workBuddyBaseUrl, workBuddyProfile } from "../providers/workbuddy";
 import { resolveDshAccountMessagesUrl } from "../providers/dsh-account-destination";
 import { redactSecretString } from "../lib/redact";
 import {
@@ -451,10 +451,11 @@ export function credentialPinnedProviderConfigError(
   providerName: string,
   provider: { adapter?: unknown; baseUrl?: unknown },
 ): string | null {
-  if (providerName === "workbuddy-ai" || provider.adapter === "workbuddy-ai") {
-    if (provider.adapter !== undefined && provider.adapter !== "workbuddy-ai") return 'adapter must stay "workbuddy-ai"';
-    try { if (typeof provider.baseUrl === "string") assertWorkBuddyDestination(provider.baseUrl); }
-    catch { return "WorkBuddy AI credentials require https://www.workbuddy.ai/v2"; }
+  const workBuddy = workBuddyProfile(providerName) ?? workBuddyProfile(provider.adapter);
+  if (workBuddy) {
+    if (provider.adapter !== undefined && provider.adapter !== workBuddy.id) return `adapter must stay "${workBuddy.id}"`;
+    try { if (typeof provider.baseUrl === "string") assertWorkBuddyDestination(provider.baseUrl, workBuddy); }
+    catch { return `${workBuddy.label} credentials require ${workBuddyBaseUrl(workBuddy)}`; }
     return null;
   }
   if (providerName !== "dsh-account") return null;

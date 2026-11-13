@@ -52,7 +52,8 @@ function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfi
     codebuddy: "https://www.codebuddy.ai",
   };
   // Semantic wrappers with provider-specific URL shapes must override the wire-family default here.
-  const baseUrl = adapterId === "workbuddy-ai" ? "https://www.workbuddy.ai/v2" : adapterId === "mimo-free"
+  const baseUrl = adapterId === "workbuddy-ai" ? "https://www.workbuddy.ai/v2"
+    : adapterId === "codebuddy-cn-ai" ? "https://copilot.tencent.com/v2" : adapterId === "mimo-free"
     ? "https://api.xiaomimimo.com/api/free-ai/openai/chat"
     : adapterId === "azure" || adapterId === "azure-openai"
       ? "https://example.openai.azure.com/openai/v1"

@@ -552,6 +552,15 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     note: "Use your WorkBuddy AI international subscription. Sign in in your browser; models follow your account catalog.",
   },
   {
+    id: "codebuddy-cn-ai", label: "CodeBuddy CN (subscription)", adapter: "codebuddy-cn-ai",
+    baseUrl: "https://copilot.tencent.com/v2", authKind: "oauth", oauthId: "codebuddy-cn-ai",
+    featured: false, dashboardPreset: true, liveModels: true,
+    defaultModel: "hy3", models: ["hy3"],
+    modelDiscovery: { path: "/v3/config", format: "workbuddy" },
+    dashboardUrl: "https://www.codebuddy.cn",
+    note: "Use your CodeBuddy China subscription without the CLI. Sign in in your browser; models follow your account catalog.",
+  },
+  {
     id: "dsh-account",
     label: "DeepSeek Account (DSH)",
     adapter: "dsh-account",

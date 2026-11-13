@@ -129,7 +129,7 @@ import type {
   CatalogTrustedOpenAiApiPolicySnapshot,
 } from "../convergence-types";
 import type { CapturedProviderGather, CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcome, ModelsAuthResolution, ModelsAuthResolver } from "./gather-capture";
-import { workBuddyCatalogIdentity } from "../../providers/workbuddy";
+import { isWorkBuddyProvider, workBuddyCatalogIdentity } from "../../providers/workbuddy";
 import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig, withVisionSidecarInput } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
 import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
@@ -680,7 +680,7 @@ export async function fetchProviderModelsWithAuth(
   const project = prov.project ?? auth.oauthProjectId;
   if (cloudCodeAssist && !project) return observed(configured, "degraded");
   // WorkBuddy model entitlements belong to the captured account and tenant.
-  const catalogAuthority = name === "workbuddy-ai"
+  const catalogAuthority = isWorkBuddyProvider(name)
     ? workBuddyCatalogIdentity(apiKey!, auth.workbuddy) : undefined;
   const fresh = getFreshCached(name, ttlMs, Date.now(), catalogAuthority);
   if (fresh) {
