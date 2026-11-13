@@ -345,10 +345,14 @@ export function createWebsocketHandler(
           const baseHeaders = ws.data.headers ?? new Headers();
           const fwd = new Headers({ "content-type": "application/json" });
           baseHeaders.forEach((value, key) => fwd.set(key, value));
+          // A Remote Link socket hands the pipeline the create it parsed (#8600): serializing it into the request and
+          // parsing it back would hold two more request-sized copies for the turn. Local sockets keep the request body.
+          const turnBody = { ...payload, stream: true };
+          const linkSocket = ws.data.link !== undefined;
           const req = new Request("http://localhost/v1/responses", {
             method: "POST",
             headers: fwd,
-            body: JSON.stringify({ ...payload, stream: true }),
+            ...(linkSocket ? {} : { body: JSON.stringify(turnBody) }),
           });
           try {
             // A socket can be the first ingress for a root. Admit every inference frame,
@@ -370,6 +374,7 @@ export function createWebsocketHandler(
               inboundTransport: "websocket",
               nativeControl,
               ...(ws.data.linkTurnObserver ? { linkTurn: ws.data.linkTurnObserver(turnId) } : {}),
+              ...(linkSocket ? { preparsedBody: turnBody } : {}),
               abortSignal: turnAbort.signal,
               turnAdmissionLease,
               onFirstOutput: () => recordFirstOutput(logCtx, start),

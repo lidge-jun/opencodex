@@ -14,6 +14,7 @@ import { LinkWireClient, frameType, type WireMessage } from "../helpers/link-ws-
 import { setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
 import * as nativeControl from "../../src/server/responses/native-response-control";
 import * as workflow from "../../src/server/workflow-refusal";
+import * as requestDecompress from "../../src/server/request-decompress";
 
 const originalMode = nativeControl.nativeResponseControlMode;
 
@@ -426,3 +427,36 @@ describe("link Responses WebSocket switched on", () => {
     expect(["close", "eof"]).toContain(after.type);
   });
 });
+
+describe("a link create reaches the pipeline once (#8600)", () => {
+  test("the pipeline takes the frame the socket parsed instead of reading it back from a request body; a local socket still reads one", async () => {
+    const port = await startHome();
+    const read = spyOn(requestDecompress, "readJsonRequestBody");
+    try {
+      const wire = await openSocket(port);
+      expect((await runTurn(wire, create("from the link"))).map(frameType)).toContain("response.completed");
+      expect(read).not.toHaveBeenCalled();
+      const local = new WebSocket(new URL("/v1/responses", server!.url).href.replace("http:", "ws:"));
+      await new Promise<void>((resolve, reject) => { local.onopen = () => resolve(); local.onerror = () => reject(new Error("local websocket failed")); });
+      const done = new Promise<void>(resolve => { local.onmessage = event => { if (String(event.data).includes("response.completed")) resolve(); }; });
+      local.send(JSON.stringify(create("from the local socket")));
+      await done;
+      expect(read).toHaveBeenCalledTimes(1);
+      local.close();
+    } finally { read.mockRestore(); }
+    // Both turns reached the upstream with their own input.
+    expect(JSON.stringify(upstreamRequests)).toContain("from the link");
+    expect(JSON.stringify(upstreamRequests)).toContain("from the local socket");
+  });
+
+  test("a link create past the configured inbound limit is refused as it was when it was read back", async () => {
+    const port = await startHome({ maxInboundBodyBytes: 1024 * 1024 });
+    const wire = await openSocket(port);
+    wire.sendJson(create("x".repeat(2 * 1024 * 1024)));
+    const error = await wire.until(message => frameType(message) === "error");
+    const frame = JSON.parse(String(error[error.length - 1]!.data)) as Record<string, unknown>;
+    expect({ status: frame.status, code: (frame.error as Record<string, unknown> | undefined)?.code }).toEqual({ status: 413, code: "inbound_body_too_large" });
+    expect(upstreamRequests).toHaveLength(0);
+  });
+});
+

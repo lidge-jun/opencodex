@@ -170,6 +170,11 @@ export interface HandleResponsesOptions {
   nativeControl?: NativeResponseControl;
   /** A Remote Link WebSocket turn: told the expanded input and the terminal (src/server/link-turn.ts). */
   linkTurn?: import("../link-turn").LinkTurnObserver;
+  /**
+   * A Remote Link WebSocket create the socket already parsed (#8600): preparation takes it as the request body instead
+   * of reading the request, under the same limit and budget accounting. Never set for any other request.
+   */
+  preparsedBody?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;

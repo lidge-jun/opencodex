@@ -395,3 +395,14 @@ export function readJsonRequestBody(
 ): Promise<unknown> {
   return readBoundedJsonRequestBody(req, maxBytes, budget);
 }
+
+/**
+ * Admit a body the caller already parsed (a Remote Link WebSocket create, #8600) as if it had been read: its serialized
+ * size is held to the same limit and observed by the same budget as the parse at the end of the bounded reader.
+ */
+export function admitParsedJsonRequestBody(body: unknown, maxBytes: number, budget?: TranslatorBudget): unknown {
+  const parsedBytes = serializedJsonByteLength(body);
+  if (parsedBytes > maxBytes) throw new DecompressedBodyTooLargeError(parsedBytes, maxBytes, "decoded_exact");
+  budget?.observeAcceptedRequestCopy(parsedBytes);
+  return body;
+}
