@@ -329,9 +329,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       // request may already have mutated live config and yielded before its save.
       const persistedBaseline = readConfigDiagnostics().config;
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
-      // Only code mode gets a flow id: it is what a later paste is pinned to. The callback
-      // flow's lifecycle argument stays exactly as it was.
-      const flowId = codeMode ? randomUUID() : undefined;
+      // The xAI device caller also needs its own flow identity for polling.
+      const flowId = codeMode || (provider === "xai" && device) ? randomUUID() : undefined;
       const { url: authUrl, instructions, deviceCode, expiresAt } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
@@ -370,7 +369,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         instructions,
         deviceCode,
         browserLaunch,
-        ...(codeMode ? { mode: "code", flowId, expiresAt } : {}),
+        ...(codeMode ? { mode: "code", flowId, expiresAt } : flowId ? { flowId } : {}),
       });
     } catch (err) {
       if (err instanceof OAuthMutationBusyError) throw err;
@@ -479,7 +478,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // Resolved here, at the request boundary that already holds the config, and passed down.
     // getLoginStatus stays free of config I/O. This route does not re-mask afterwards: it
     // consumes the already-projected status rather than redacting a second time.
-    const status = getLoginStatus(provider, emailMaskingEnabled(config));
+    const status = getLoginStatus(provider, emailMaskingEnabled(config), provider === "xai" ? url.searchParams.get("flowId") ?? undefined : undefined);
     return jsonResponse(status);
   }
 

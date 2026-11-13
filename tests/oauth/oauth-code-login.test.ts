@@ -742,7 +742,7 @@ describe("OAuth code-display login", () => {
      * interval is the smallest the client accepts (1s), so this costs one real interval and no
      * arbitrary wait: `waitForLoginSettled` is what bounds the assertions.
      */
-    function mockDevicePoll(poll: (url: string, init?: RequestInit) => Response): string[] {
+    function mockDevicePoll(poll: (url: string, init?: RequestInit) => Response | Promise<Response>): string[] {
       const originalFetch = globalThis.fetch;
       const tokenCalls: string[] = [];
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -825,9 +825,99 @@ describe("OAuth code-display login", () => {
       }
     });
 
+    test("account CLI does not adopt a replacement device login after cancellation", async () => {
+      const { handleAccountAuthCommand } = await import("../../src/cli/account-auth");
+      let releaseFirst: (() => void) | undefined;
+      let polls = 0;
+      mockDevicePoll(() => ++polls === 1
+        ? new Promise<Response>(resolve => { releaseFirst = () => resolve(Response.json({ error: "authorization_pending" }, { status: 400 })); })
+        : Response.json({ access_token: "synthetic-access", refresh_token: "synthetic-refresh", expires_in: 3600 }));
+      const server = startServer(0);
+      let firstId: string | undefined, secondId: string | undefined, statusUrl = "";
+      const logSpy = spyOn(console, "log").mockImplementation(() => {});
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const cliFetch: typeof globalThis.fetch = async (input, init) => {
+          const url = new URL(String(input));
+          if (url.pathname === "/api/oauth/login") {
+            const response = await fetch(input, init);
+            firstId = (await response.clone().json() as { flowId?: string }).flowId;
+            return response;
+          }
+          if (url.pathname === "/api/oauth/status") {
+            statusUrl = url.href;
+            const cancelled = await fetch(new URL("/api/oauth/login/cancel", server.url), {
+              method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "xai" }),
+            });
+            expect(await cancelled.json()).toMatchObject({ cancelled: true });
+            releaseFirst?.();
+            const replacement = await fetch(new URL("/api/oauth/login", server.url), {
+              method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "xai", device: true, addAccount: true }),
+            });
+            expect(replacement.ok).toBe(true);
+            secondId = (await replacement.json() as { flowId?: string }).flowId;
+            expect(await waitForLoginSettled("xai", 10_000)).toBe(true);
+          }
+          return fetch(input, init);
+        };
+        const result = await handleAccountAuthCommand("login", ["xai", "--device", "--json"], { baseUrl: String(server.url), fetchImpl: cliFetch });
+        expect(result).not.toBe(0);
+        expect(firstId).toBeTruthy(); expect(secondId).toBeTruthy(); expect(firstId).not.toBe(secondId);
+        expect(new URL(statusUrl).searchParams.get("flowId")).toBe(firstId);
+        const oldStatus = await (await fetch(new URL(`/api/oauth/status?provider=xai&flowId=${firstId}`, server.url))).json() as { status: string };
+        const newStatus = await (await fetch(new URL(`/api/oauth/status?provider=xai&flowId=${secondId}`, server.url))).json() as { status: string };
+        expect(oldStatus.status).toBe("error"); expect(newStatus.status).toBe("complete");
+      } finally {
+        logSpy.mockRestore(); errorSpy.mockRestore(); await server.stop(true);
+        cancelLoginFlow("xai"); clearLoginState("xai"); await removeCredential("xai"); globalThis.fetch = original;
+      }
+    }, 15_000);
+
+    for (const scenario of ["denial", "authorization-503"] as const) {
+      test(`xAI ${scenario} is classified at the headless CLI and settled status`, async () => {
+        const { handleLogin } = await import("../../src/oauth/login-cli");
+        const { loginXaiDevice } = await import("../../src/oauth/xai");
+        const originalFetch = globalThis.fetch;
+        const tokenCalls = mockDevicePoll(() => Response.json({ error: "access_denied", error_description: "synthetic-sensitive-body" }, { status: 400 }));
+        if (scenario === "authorization-503") {
+          const downstream = globalThis.fetch;
+          globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => String(input) === "https://auth.x.ai/oauth2/device/code"
+            ? Promise.resolve(Response.json({ error: "server_error", error_description: "synthetic-sensitive-body" }, { status: 503 }))
+            : downstream(input, init)) as typeof fetch;
+        }
+        const expected = scenario === "denial" ? "oauth_authentication_failed" : "provider_unreachable";
+        const server = startServer(0);
+        let stderr = "";
+        const logSpy = spyOn(console, "log").mockImplementation(() => {});
+        const errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => { stderr += args.join(" "); });
+        const exitSpy = spyOn(process, "exit").mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
+        try {
+          await expect(handleLogin("xai", { ask: async () => "", runLogin: async (_provider, ctrl) => {
+            await loginXaiDevice(ctrl, { sleep: async () => {} });
+          } }, { codeMode: true })).rejects.toThrow("exit 1");
+          const started = startLoginFlow("xai", { forceLogin: true, flow: "device" });
+          if (scenario === "authorization-503") await expect(started).rejects.toBeDefined();
+          else { await started; expect(await waitForLoginSettled("xai", 10_000)).toBe(true); }
+          const raw = await (await fetch(new URL("/api/oauth/status?provider=xai", server.url))).text();
+          expect(JSON.parse(raw)).toMatchObject({ status: "error", errorCode: expected });
+          expect(raw).not.toContain("synthetic-sensitive-body");
+          expect(raw).not.toContain("device-secret-code");
+          expect(stderr).toContain(`(${expected})`);
+          expect(stderr).not.toContain("synthetic-sensitive-body");
+          if (scenario === "denial") expect(tokenCalls.length).toBeGreaterThanOrEqual(2);
+        } finally {
+          logSpy.mockRestore(); errorSpy.mockRestore(); exitSpy.mockRestore();
+          await server.stop(true); cancelLoginFlow("xai"); clearLoginState("xai"); globalThis.fetch = originalFetch;
+        }
+      });
+    }
+
     test("the shared classifier names the refusal, and existing code failures keep their reason", async () => {
-      const { XaiRedirectRefusedError } = await import("../../src/oauth/xai");
+      const { XaiRedirectRefusedError, XaiTokenRequestError } = await import("../../src/oauth/xai");
       expect(classifyLoginCodeError(new XaiRedirectRefusedError())).toBe("oauth_authentication_failed");
+      expect(classifyLoginCodeError(new XaiTokenRequestError(undefined, "expired_token", "expired"))).toBe("invalid_or_expired_code");
+      expect(classifyLoginCodeError(new XaiTokenRequestError(400, "invalid_grant", "rejected"))).toBe("invalid_or_expired_code");
+      expect(classifyLoginCodeError(new XaiTokenRequestError(503, "expired_token", "server failed"))).toBe("provider_unreachable");
       // Unaffected by the new branch: a 4xx stays a code problem, a 5xx a provider problem.
       expect(classifyLoginCodeError(new AnthropicTokenError("body", 400, "invalid_grant"))).toBe("invalid_or_expired_code");
       expect(classifyLoginCodeError(new AnthropicTokenError("body", 503, "server_error"))).toBe("provider_unreachable");

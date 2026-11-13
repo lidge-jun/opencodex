@@ -1,6 +1,6 @@
 import { AnthropicTokenError } from "./anthropic";
 import { parseCallbackInput } from "./callback-server";
-import { XaiRedirectRefusedError } from "./xai";
+import { XaiRedirectRefusedError, XaiTokenRequestError } from "./xai";
 import { retainedUtf8Bytes } from "../lib/admission";
 import type { GenerationContext } from "../lib/state-store-sweeper";
 
@@ -184,8 +184,8 @@ export class CodeLoginUnsupportedError extends Error {
  * forwarded: a provider body can quote the submitted code back, and this response is the one
  * surface a hosted caller renders to a user.
  *
- * `AnthropicTokenError` is named because anthropic is the only provider with a code-display
- * redirect today; every other failure falls through the generic branches.
+ * Anthropic code exchanges and xAI device grants carry typed provider failures; other
+ * providers retain the generic branches.
  *
  * This is the single source of truth for the machine-readable reason: the code-mode paste
  * response, `GET /api/oauth/status` and the headless CLI all read it, so a new terminal cause is
@@ -199,6 +199,12 @@ export function classifyLoginCodeError(error: unknown): LoginCodeError {
   // refused identically. Checked before the status-less branches, which would otherwise read it
   // as a retriable network failure or as an invalid code.
   if (error instanceof XaiRedirectRefusedError) return "oauth_authentication_failed";
+  if (error instanceof XaiTokenRequestError) {
+    if (error.status === 429 || (error.status !== undefined && error.status >= 500)) return "provider_unreachable";
+    if (error.oauthError === "expired_token" || error.oauthError === "invalid_grant") return "invalid_or_expired_code";
+    if (error.status === undefined) return "provider_unreachable";
+    return "oauth_authentication_failed";
+  }
   if (error instanceof AnthropicTokenError) {
     return error.httpStatus !== undefined && error.httpStatus >= 500
       ? "provider_unreachable"

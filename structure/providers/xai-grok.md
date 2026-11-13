@@ -161,7 +161,9 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   code-mode paste response and `GET /api/oauth/status` all read, so the refusal reaches API
   callers as `oauth_authentication_failed` rather than the `invalid_or_expired_code` fallthrough
   that would tell them their device code was bad. A plain `TypeError` and a real connection
-  failure carry neither marker and stay retriable. The inherited browser-callback, code-exchange
+  failure carry neither marker and stay retriable. Device starts return a flow ID; the account CLI
+  polls that ID and requires its own successful completion. An older proxy without an ID cannot
+  safely support the waiting CLI path. The inherited browser-callback, code-exchange
   and refresh requests keep the runtime's default redirect policy. Regression coverage:
   `tests/providers/xai/xai-device-login.test.ts`, `tests/oauth/oauth-login-cli-errors.test.ts`,
   `tests/oauth/oauth-code-login.test.ts`.

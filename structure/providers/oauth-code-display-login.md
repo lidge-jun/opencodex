@@ -50,15 +50,15 @@ unchanged.
   as does one that races the start before the flow's state is registered.
   A code flow is single-use after that: once a paste is handed to the token exchange, further
   pastes answer `no_pending_login`, and a failed exchange settles the flow. `provider_unreachable` is reserved
-  for a network failure (`TimeoutError`/`AbortError`, or a fetch `TypeError` carrying a `code`);
-  `oauth_authentication_failed` is a definitive provider refusal the client will not retry (today,
-  a redirect the device poll refused to follow); any other error falls to
-  `invalid_or_expired_code`, with the original message kept on the flow. `classifyLoginCodeError`
+  for network failures and xAI server errors; `oauth_authentication_failed` covers an xAI
+  denial or definitive refusal such as a redirect the device poll refused to follow. Expired
+  and rejected xAI codes use `invalid_or_expired_code`. Public messages never include provider bodies. `classifyLoginCodeError`
   in `src/oauth/login-flow-state.ts` is the single source of these reasons: the paste response,
   `GET /api/oauth/status` (`errorCode`) and the headless CLI all read it.
   Without a `flowId` and with no code-mode flow, the legacy accept-only contract is unchanged.
 - **Status.** `GET /api/oauth/status` reports the provider's newest flow, including `mode` for a
-  code flow. An explicit flow id is honoured only for its own provider. A caller running several flows tracks each one through its own paste response.
+  code flow. An xAI status request can select its own flow by `flowId`; a missing or foreign id
+  cannot select another flow. A caller running code flows tracks each through its paste response.
 - **Account store semantics: single operator.** A successful code login writes the same credential
   store as any other login, and the store has one active account per provider. Two concurrent code
   logins that both succeed leave the **later** one active. This is a single-operator convenience

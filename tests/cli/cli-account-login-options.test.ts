@@ -145,13 +145,22 @@ describe("login flow-specific options", () => {
     expect(f.calls[0]?.body).toEqual({ provider: "xai", addAccount: true, device: true });
     expect(output().deviceCode).toBe("ABCD");
     // An already signed-in xAI provider reports loggedIn while the new device approval is pending.
-    const waiting = fixture([{ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" },
-      { loggedIn: true, done: false, status: "pending" }, { loggedIn: true, done: true, status: "done" }]);
+    const waiting = fixture([{ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD", flowId: "flow-1" },
+      { flowId: "flow-1", loggedIn: true, done: false, status: "pending" }, { flowId: "flow-1", loggedIn: true, done: true, status: "complete" }]);
     expect(await handleAccountAuthCommand("login", ["xai", "--device", "--json"], waiting.deps)).toBe(0);
     expect(waiting.calls).toHaveLength(3);
     const refused = fixture();
     expect(await handleAccountAuthCommand("login", ["anthropic", "--device", "--no-wait"], refused.deps)).toBe(2);
     expect(refused.calls).toHaveLength(0);
+  });
+  test("xAI device requires and polls its own flow id, refusing a replacement success", async () => {
+    const missing = fixture([{ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--json"], missing.deps)).not.toBe(0);
+    expect(missing.calls).toHaveLength(1);
+    const replacement = fixture([{ flowId: "first", deviceCode: "ABCD" },
+      { flowId: "second", loggedIn: true, done: true, status: "complete" }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--json"], replacement.deps)).not.toBe(0);
+    expect(replacement.calls[1]?.url).toContain("provider=xai&flowId=first");
   });
   test("Codex device omission preserves its device payload and public grant", async () => {
     const f = fixture([{ flowId: "flow-1", deviceCode: "USER-CODE", url: "https://example.test/verify", accessToken: SECRET }]);

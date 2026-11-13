@@ -365,15 +365,18 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     printData({ ...start, modelSelection: modelSelectionNextSteps(provider, true) }, wantsJson, modelSelectionGuidance(provider, true));
     return;
   }
+  const xaiDevice = provider === "xai" && device;
+  if (xaiDevice && !start.flowId) throw new CliUsageError("xAI device login did not return a flow id");
   // A device grant waits on a person at another machine: outlast xAI's 30-minute code.
   for (let attempt = 0; attempt < (device ? 930 : 100); attempt++) {
     await Bun.sleep(2_000);
-    const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}`, { redirect: "error" }, pinned);
+    const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}${xaiDevice ? `&flowId=${encodeURIComponent(start.flowId!)}` : ""}`, { redirect: "error" }, pinned);
     if (loginObject(raw).error) throw new Error("Provider login failed");
+    if (xaiDevice && (raw.flowId !== start.flowId || raw.status === "idle")) throw new Error("Device login flow is unavailable");
     const state = publicLoginStatus(raw);
     if (state.done === true && state.loggedIn !== true) throw new Error("Provider login ended without authentication");
     // A device login adds an account, so an already signed-in provider is not done until its flow is.
-    if (state.loggedIn === true && (!device || state.done === true)) {
+    if (state.loggedIn === true && (!device || (state.done === true && (!xaiDevice || raw.status === "complete")))) {
       printData({ ...state, modelSelection: modelSelectionNextSteps(provider) }, wantsJson, [`Logged in to ${provider}.`, ...modelSelectionGuidance(provider)]);
       return;
     }
