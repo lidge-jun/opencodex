@@ -643,7 +643,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--flow` | string | Required for Codex; selects a native Kiro flow when supplied. |
+| `--flow` | string | Required for Codex; selects a native Kiro or xAI flow when supplied. |
 | `--json` | boolean | Emit cancellation receipt. |
 
 - Codex cancellation sends flowId. Other providers send provider; Kiro additionally forwards a supplied flowId.

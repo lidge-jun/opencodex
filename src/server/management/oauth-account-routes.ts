@@ -394,6 +394,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const result = cancelKiroDeviceLogin(body.flowId, principal ?? "admin-token");
       return result ? jsonResponse(result) : jsonResponse({ error: "unknown login flow" }, 404);
     }
+    if (provider === "xai" && body.flowId !== undefined && (typeof body.flowId !== "string" || body.flowId.length > 128)) return jsonResponse({ error: "unknown login flow" }, 404);
     const { cancelLoginFlow } = await import("../../oauth");
     // Without a flow id this cancels the provider's newest in-flight login, which is what the
     // single-user GUI has always meant by "Cancel". A host running concurrent code logins for

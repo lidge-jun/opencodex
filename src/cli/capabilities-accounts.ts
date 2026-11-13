@@ -112,7 +112,7 @@ export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
     command: ["account", "cancel"], summary: "Cancel a pending account login flow.",
     usage: "ocx account cancel <provider> [--flow <flow-id>] [--json]",
     routes: [{ method: "POST", path: "/api/codex-auth/login/cancel" }, { method: "POST", path: "/api/oauth/login/cancel" }],
-    flags: [{ name: "--flow", value: "string", summary: "Required for Codex; selects a native Kiro flow when supplied." }, { name: "--json", value: "boolean", summary: "Emit cancellation receipt." }], mutates: true, json: "payload",
+    flags: [{ name: "--flow", value: "string", summary: "Required for Codex; selects a native Kiro or xAI flow when supplied." }, { name: "--json", value: "boolean", summary: "Emit cancellation receipt." }], mutates: true, json: "payload",
     details: ["Codex cancellation sends flowId. Other providers send provider; Kiro additionally forwards a supplied flowId."],
   },
   {

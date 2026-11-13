@@ -431,7 +431,7 @@ async function cancel(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
   const result = await runtimeRequest(codex ? "/api/codex-auth/login/cancel" : "/api/oauth/login/cancel", {
     method: "POST",
-    body: JSON.stringify(codex ? { flowId } : { provider, ...(provider === "kiro" && flowId ? { flowId } : {}) }),
+    body: JSON.stringify(codex ? { flowId } : { provider, ...((provider === "kiro" || provider === "xai") && flowId ? { flowId } : {}) }),
   }, deps);
   printData(result, wantsJson, [`Cancelled ${provider} login.`]);
 }

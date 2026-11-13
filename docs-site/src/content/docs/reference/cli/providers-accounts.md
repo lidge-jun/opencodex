@@ -1123,7 +1123,8 @@ device flow; a provider with no device grant rejects it. A device login has noth
 `--device` with `--code` is refused. For xAI device login, `--json` requires `--no-wait`:
 `ocx account login xai --device --no-wait --json` returns one JSON handoff with the
 verification URL, short code and flow ID. Complete authorization in a browser; the proxy
-continues the login in the background.
+continues the login in the background. Cancel that specific attempt with
+`ocx account cancel xai --flow <flow-id>`; omitting `--flow` cancels the latest attempt.
 
 The dashboard does not expose a provider's device grant this way. On the add-account modal the
 **"Don't open a browser on the proxy machine"** checkbox only stops the proxy from launching a
