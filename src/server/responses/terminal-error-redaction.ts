@@ -96,23 +96,17 @@ export function createSynthesizedCopyMask(
 }
 
 /**
- * Mask upstream diagnostics before either SSE delivery or buffered JSON reconstruction. Protocol
- * structure is never masked: the `event:` line, the root `type` and Responses field names stay as
- * they are, so the client always recognizes the frame the inspector saw. An untyped envelope passes
- * through unchanged: no client receives it (every delivery path ends in a terminal boundary or the
- * buffered collector, which withhold it and build the terminal from guarded copy), and the boundary
- * behind the tee rewrite must classify the provider's own frame, exactly as the inspector does.
+ * The redaction helpers one request's rewrite and terminal boundary share. Protocol structure is never
+ * masked: the `event:` line, the root `type`, Responses field names and recognized error classes stay
+ * as they are, so the client always recognizes the frame the inspector saw.
  */
-export function createTerminalErrorRedactionBlockRewrite(
-  outboundHeaders: Record<string, string>,
-  maskCredential = createOutboundCredentialMask(outboundHeaders),
-): SseBlockRewrite {
-  // Upstream text under a terminal line that is not a Responses terminal has every sent value masked
-  // in place (only the scanned head is emitted), so refusal wording survives for the tee boundary.
+function createRedactionTools(outboundHeaders: Record<string, string>, maskCredential: (text: string) => string) {
+  // Upstream copy that is not a Responses terminal has every sent value masked in place (only the
+  // scanned head is emitted), so refusal wording a reader classifies survives.
   const maskSentValues = createSentValueMask(outboundHeaders, REDACTED_SECRET);
   const guardedText = (text: string): string => maskCredential(maskSentValues(text));
-  // `refuseSentValues`: a payload under a terminal event line that is not a Responses terminal is
-  // upstream copy throughout, so every string in it that repeats a sent value is withheld whole.
+  // `refuseSentValues`: a payload that is upstream copy throughout masks every sent value in its
+  // strings and non-protocol keys, not only the selected credentials.
   const redactDiagnostic = (value: unknown, refuseSentValues = false): unknown => {
     const maskKnown = (entry: unknown, root = false): unknown => {
       if (typeof entry === "string") return refuseSentValues ? guardedText(entry) : maskCredential(entry);
@@ -132,38 +126,74 @@ export function createTerminalErrorRedactionBlockRewrite(
     // Bearer ...) would otherwise split it and leave a prefix the exact mask can no longer find.
     return redactSecrets(maskKnown(value, true));
   };
-  // SSE comments and extension fields can also carry upstream text: one that repeats a sent value
-  // becomes a redacted comment. The event name and the data payload (already masked structurally)
-  // are left as they are.
+  // SSE comments and extension fields can also carry upstream text. The event name and the data
+  // payload (already masked structurally) are left as they are.
   const maskExtensionLines = (block: string): string => block
     .split("\n")
     .map(line => /^(?:event|data):/.test(line) ? line : guardedText(line))
     .join("\n");
-  // A terminal frame this rewrite cannot restructure (unparsable or non-target JSON) still has its
-  // data payload masked, as text; only the event line is left as it is.
-  const maskTerminalBlock = (block: string, payload: string | null): string => {
+  // A frame that cannot be restructured (unparsable or non-object JSON) has its data masked as text.
+  const maskUnstructuredBlock = (block: string, payload: string | null): string => {
     if (payload === null) return maskExtensionLines(block);
     const masked = guardedText(payload);
     return maskExtensionLines(masked === payload ? block : replaceSseDataPayload(block, masked));
   };
+  // Upstream copy throughout (a non-terminal payload under a terminal line, a forwarded typed error).
+  const redactUpstreamCopyBlock = (block: string, payload: string | null, event: unknown): string => {
+    if (payload === null || !event || typeof event !== "object" || Array.isArray(event)) return maskUnstructuredBlock(block, payload);
+    const rewritten = JSON.stringify(redactDiagnostic(event, true));
+    return maskExtensionLines(rewritten === payload ? block : replaceSseDataPayload(block, rewritten));
+  };
+  return { redactDiagnostic, maskExtensionLines, maskUnstructuredBlock, redactUpstreamCopyBlock };
+}
+
+/**
+ * Redaction the terminal boundary applies to a typed bare `error` frame it forwards to the client,
+ * after it has reduced the frame's verdict from the original. Running it inside the boundary keeps
+ * classification on the provider's own words on both relays; the client still never receives a sent
+ * value from the frame.
+ */
+export function createForwardedEvidenceRedaction(
+  outboundHeaders: Record<string, string>,
+  maskCredential = createOutboundCredentialMask(outboundHeaders),
+): (block: string) => string {
+  const { redactUpstreamCopyBlock } = createRedactionTools(outboundHeaders, maskCredential);
+  return (block) => {
+    const payload = sseDataPayload(block);
+    let event: unknown;
+    try { event = payload === null ? undefined : JSON.parse(payload); } catch { event = undefined; }
+    return redactUpstreamCopyBlock(block, payload, event);
+  };
+}
+
+/**
+ * Mask upstream diagnostics before either SSE delivery or buffered JSON reconstruction. Bare evidence
+ * passes through unchanged: an untyped envelope reaches no client (every delivery path ends in a
+ * terminal boundary or the buffered collector, which withhold it and build the terminal from guarded
+ * copy), and a typed `error` frame is redacted by the boundary after it is classified
+ * ({@link createForwardedEvidenceRedaction}), so the boundary behind the tee rewrite classifies the
+ * provider's own frame exactly as the inspector does.
+ */
+export function createTerminalErrorRedactionBlockRewrite(
+  outboundHeaders: Record<string, string>,
+  maskCredential = createOutboundCredentialMask(outboundHeaders),
+): SseBlockRewrite {
+  const { redactDiagnostic, maskExtensionLines, maskUnstructuredBlock, redactUpstreamCopyBlock } = createRedactionTools(outboundHeaders, maskCredential);
   return (block) => {
     const terminalFrame = /^event:[ \t]*response\.(?:failed|incomplete)[ \t]*\r?$/m.test(block);
     const payload = sseDataPayload(block);
-    if (payload === null) return [terminalFrame ? maskTerminalBlock(block, payload) : block];
+    if (payload === null) return [terminalFrame ? maskUnstructuredBlock(block, payload) : block];
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
     } catch {
-      return [terminalFrame ? maskTerminalBlock(block, payload) : block];
+      return [terminalFrame ? maskUnstructuredBlock(block, payload) : block];
     }
-    if (isUntypedBareUpstreamError(event)) return [block];
+    if (isUntypedBareUpstreamError(event) || event?.type === "error") return [block];
     if (event?.type !== "response.failed" && event?.type !== "response.incomplete") {
-      if (!terminalFrame) return [block];
-      // A terminal event line over another JSON payload (a typed error, for one) is masked field by
-      // field like a terminal, so recognized classes survive for every reader.
-      if (!event || typeof event !== "object" || Array.isArray(event)) return [maskTerminalBlock(block, payload)];
-      const rewrittenOther = JSON.stringify(redactDiagnostic(event, true));
-      return [maskExtensionLines(rewrittenOther === payload ? block : replaceSseDataPayload(block, rewrittenOther))];
+      // A terminal event line over another JSON payload is upstream copy throughout, masked field by
+      // field so recognized classes survive for every reader.
+      return [terminalFrame ? redactUpstreamCopyBlock(block, payload, event) : block];
     }
     const safeEvent = redactDiagnostic(event);
     const rewritten = JSON.stringify(safeEvent);

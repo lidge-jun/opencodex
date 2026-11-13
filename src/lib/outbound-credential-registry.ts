@@ -39,12 +39,41 @@ export function isCorrelationHeaderName(name: string): boolean {
 
 /** Characters of a text a sent-value guard reads: a caller emits no copy beyond them. */
 export const SENT_VALUE_GUARD_SCAN_CHARS = 8_192;
-const MAX_SENT_CREDENTIAL_WINDOWS = 65_536;
 
 function spellings(part: string): string[] {
   const escaped = JSON.stringify(part).slice(1, -1);
   return escaped === part ? [part] : [part, escaped];
 }
+
+/**
+ * The 8-character excerpt windows of a credential value: every window of each token between
+ * separators (whitespace, commas, semicolons, "=", quotes, backslashes), auth scheme words left out.
+ * A window never spans a separator, so scheme or field-name text cannot form one, while an opaque
+ * value containing "=" still has every token of 8+ characters covered.
+ */
+export function credentialExcerptWindows(value: string): string[] {
+  const windows: string[] = [];
+  for (const token of value.split(/[\s,;="\\]+/)) {
+    if (token.length < CREDENTIAL_SUBSTRING_MIN_LENGTH || AUTH_SCHEMES.has(token.toLowerCase())) continue;
+    for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= token.length; at++) {
+      windows.push(token.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
+    }
+  }
+  return windows;
+}
+
+/** Whether text holds any of the excerpt windows, reading at most the guard's scan window. */
+export function containsExcerptWindow(text: string, windows: ReadonlySet<string>): boolean {
+  if (windows.size === 0) return false;
+  const head = text.length > SENT_VALUE_GUARD_SCAN_CHARS ? text.slice(0, SENT_VALUE_GUARD_SCAN_CHARS) : text;
+  for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= head.length; at++) {
+    if (windows.has(head.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH))) return true;
+  }
+  return false;
+}
+
+/** Excerpt windows beyond this many make a credential set fail closed rather than grow. */
+export const MAX_CREDENTIAL_EXCERPT_WINDOWS = 65_536;
 
 /**
  * Whether text repeats a value these outbound headers carry, decided from this request's own
@@ -74,16 +103,10 @@ function indexSentValues(headers: Record<string, string>): SentValueIndex {
         if (part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) contained.push(...spellings(part));
         continue;
       }
-      // Excerpt windows come from bare tokens only: a composite (an auth scheme and its token, a
-      // name=value pair) would yield windows of scheme or field-name text holding fewer than eight
-      // characters of secret. Its secret parts are components of their own.
-      const bareToken = !/[\s,;]/.test(part) && !/^[^=]+=[^=]/.test(part);
       for (const spelling of spellings(part)) {
         wholeCredential.add(spelling);
-        for (let at = 0; bareToken && at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= spelling.length && !overflow; at++) {
-          credentialWindows.add(spelling.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
-          if (credentialWindows.size > MAX_SENT_CREDENTIAL_WINDOWS) overflow = true;
-        }
+        for (const window of credentialExcerptWindows(spelling)) credentialWindows.add(window);
+        if (credentialWindows.size > MAX_CREDENTIAL_EXCERPT_WINDOWS) overflow = true;
       }
     }
   }

@@ -91,6 +91,8 @@ export type EagerRelayOptions = {
   terminalBoundary?: CodexSafetyBufferingFilterOptions;
   /** Mask the selected outbound credential in synthetic failures. */
   maskCredential?: (text: string) => string;
+  /** Redaction for forwarded typed error frames, applied after classification (see relay.ts). */
+  redactForwardedEvidence?: (block: string) => string;
   /** Receives the exact payload of every synthesized bare-verdict tail (see relaySseWithFailedTail). */
   onSyntheticTail?: (payload: string, verdict?: BareUpstreamError) => void;
   /** Injectable clock for tests. */
@@ -123,7 +125,7 @@ export function relaySseEagerBounded(
   const terminalEncoder = new TextEncoder();
   const adapterEofFrame = adapterEofIncompleteFrame(terminalEncoder);
   const terminalSentinel = doneFrame(terminalEncoder);
-  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential });
+  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential, redactForwardedEvidence: opts?.redactForwardedEvidence });
   const activeRewrite: SseBlockRewrite | undefined = hooks.rewriteBlocks
     ?? (hooks.rewritePayload ? payloadRewriteAsBlockRewrite(hooks.rewritePayload) : undefined);
   const encodeFailedTail = (error: unknown): Uint8Array | null => {

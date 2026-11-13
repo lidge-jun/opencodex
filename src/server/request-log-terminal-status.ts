@@ -12,7 +12,7 @@ import {
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { SENT_VALUE_GUARD_SCAN_CHARS, outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
-import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
+import { configuredCredentials, containsConfiguredCredentialExcerpt, type ConfiguredCredentials } from "./configured-credentials";
 import { isUntypedBareUpstreamError, reduceBareUpstreamEvidence, wrappedServerErrorStatus, type BareUpstreamError, type BareUpstreamEvidence } from "./bare-upstream-error";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
@@ -114,7 +114,7 @@ export function diagnosticValueAllowed(
   configured: ConfiguredCredentials = configuredCredentials(),
 ): boolean {
   if (!registry.complete() || !configured.complete) return false;
-  return !registry.matches(value) && !configured.matches(value);
+  return !registry.matches(value) && !configured.matches(value) && !containsConfiguredCredentialExcerpt(value);
 }
 
 /**

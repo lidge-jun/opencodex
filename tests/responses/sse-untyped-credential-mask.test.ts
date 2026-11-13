@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { addFinalRequestLog, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
-import { createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
+import { createForwardedEvidenceRedaction, createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
 import { OutboundCredentialRegistry, createSentValueGuard, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
 import { noteRequestSentValueGuard } from "../../src/server/request-log-terminal-status";
 
@@ -50,10 +50,12 @@ async function deliver(mode: "tee" | "eager", headers: Record<string, string>, p
     return `${typeof type === "string" ? `event: ${type}\n` : ""}data: ${JSON.stringify(payload)}`;
   });
   const chunks = (blocks: string[]): string[] => oneChunk ? [blocks.map(block => `${block}\n\n`).join("")] : blocks.map(block => `${block}\n\n`);
-  const rewrite = createTerminalErrorRedactionBlockRewrite(headers, createOutboundCredentialMask(headers));
+  const exact = createOutboundCredentialMask(headers);
+  const rewrite = createTerminalErrorRedactionBlockRewrite(headers, exact);
+  const redactForwardedEvidence = createForwardedEvidenceRedaction(headers, exact);
   // Production eager delivery applies the client rewrite to what its boundary emits.
-  if (mode === "eager") return drain(relaySseEagerBounded(sourceStream(chunks(raw)), new AbortController(), { ...hooks, rewriteBlocks: rewrite }, { maskCredential }));
-  return drain(relaySseWithFailedTail(sourceStream(chunks(raw.map(block => rewrite(block).join("\n")))), new AbortController(), undefined, { maskCredential }));
+  if (mode === "eager") return drain(relaySseEagerBounded(sourceStream(chunks(raw)), new AbortController(), { ...hooks, rewriteBlocks: rewrite }, { maskCredential, redactForwardedEvidence }));
+  return drain(relaySseWithFailedTail(sourceStream(chunks(raw.map(block => rewrite(block).join("\n")))), new AbortController(), undefined, { maskCredential, redactForwardedEvidence }));
 }
 
 const terminalTypes = (out: string): string[] => [...out.matchAll(/^event: (response\.[a-z_]+)$/gm)].map(match => match[1]!);
@@ -397,6 +399,36 @@ describe("untyped error envelopes never carry a value this request sent", () => 
   test("synthesized copy keeps a public error identity that equals a sent value", () => {
     const mask = createSynthesizedCopyMask({ "x-custom": "rate_limit_exceeded" });
     expect([mask("rate_limit_exceeded"), mask("rate_limit_error"), mask("echo rate_limit_exceeded")]).toEqual(["rate_limit_exceeded", "rate_limit_error", "[REDACTED]"]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s classifies a refusal whose wording overlaps a sent value from the provider's own frame", async mode => {
+    const headers = { "x-tenant": "safety systems" };
+    await withRegistry(headers, async () => {
+      const frame = { type: "error", message: "This request was blocked by our safety systems." };
+      const out = await deliver(mode, headers, [`event: response.failed\ndata: ${JSON.stringify(frame)}`]);
+      expect([out.includes("safety systems"), out.includes('"code":"invalid_prompt"'), out.includes("upstream_server_error")]).toEqual([false, true, false]);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s masks a sent credential in a typed error frame it forwards", async mode => {
+    const credential = "fixture-forwarded-cred-8415";
+    const headers = { authorization: `Bearer ${credential}` };
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, [{ type: "error", code: "mystery_code", message: `echo ${credential}` }]);
+      expect(out).not.toContain(credential);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s never repeats an excerpt of a sent credential that contains '='", async mode => {
+    const headers = { "x-api-key": "abcdefghijk=ZYXWVUTS987" };
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, [{ error: { code: "abcdefghijk", message: "echo abcdefghijk" } }]);
+      expect(out).not.toContain("abcdefghijk");
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      noteRequestSentValueGuard(log, createSentValueGuard(headers));
+      inspectResponseLogSsePayload(log, JSON.stringify({ error: { code: "abcdefghijk", message: "echo abcdefghijk" } }));
+      expect(`${log.upstreamError ?? ""} ${log.upstreamErrorCode ?? ""}`).not.toContain("abcdefghijk");
+    });
   });
 
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {

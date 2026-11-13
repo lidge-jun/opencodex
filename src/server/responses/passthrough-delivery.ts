@@ -13,7 +13,7 @@ import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
 import { attachResponseToolOwnership } from "./response-tool-ownership";
-import { createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
+import { createForwardedEvidenceRedaction, createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -876,6 +876,7 @@ export async function deliverPassthroughResponse(
       const repeatsSentValue = createSentValueGuard(nativeExchange.request.headers);
       noteRequestSentValueGuard(logCtx, repeatsSentValue);
       const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers, repeatsSentValue);
+      const forwardedEvidenceRedaction = createForwardedEvidenceRedaction(nativeExchange.request.headers, maskCredential);
       const requiredStreamEvidence = { replayUnsafe: !!webSearchBridgePlan };
       const normalizeRequiredToolItem = (item: unknown) => {
         item = restoreImageGenCalls(item, imageGenCallAliases).value;
@@ -1287,6 +1288,7 @@ export async function deliverPassthroughResponse(
           clientGoneSignal: options.abortSignal,
           terminalBoundary: codexSafetyBufferingOptions,
           maskCredential: synthesizedCopyMask,
+          redactForwardedEvidence: forwardedEvidenceRedaction,
           onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict),
           ...(inlineEagerRewrite ? { rewriteBudget: translatorBudget } : {}),
           ...(logCtx.upstreamError === undefined ? {} : { upstreamError: logCtx.upstreamError }),
@@ -1382,7 +1384,7 @@ export async function deliverPassthroughResponse(
           responseEffects.responseCompletionCancelled = true;
           clientGone.abort(reason);
         },
-        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential: synthesizedCopyMask,
+        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential: synthesizedCopyMask, redactForwardedEvidence: forwardedEvidenceRedaction,
           onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict) },
       );
       return markNativePassthroughSseResponse(new Response(clientBody, {

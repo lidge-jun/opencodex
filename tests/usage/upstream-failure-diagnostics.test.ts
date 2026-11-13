@@ -814,6 +814,13 @@ describe("configured credential source", () => {
     expect(bounded.upstreamError ?? "").not.toContain(long.slice(0, 64));
   });
 
+  test("a request row never keeps an excerpt of an unsent configured credential", () => {
+    writeConfig({ providers: { p: { apiKey: "alphaSECRET987654321omega" } } });
+    const log = context();
+    inspectResponseLogSsePayload(log, JSON.stringify({ error: { code: "SECRET987654321", message: "echo SECRET987654321" } }));
+    expect(`${log.upstreamError ?? ""} ${log.upstreamErrorCode ?? ""}`).not.toContain("SECRET987654321");
+  });
+
   test("an existing store with an unexpected shape is incomplete; a missing one is not", () => {
     expect(configuredCredentials().complete).toBe(true);
     writeConfig("null");

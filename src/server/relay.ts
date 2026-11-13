@@ -304,6 +304,11 @@ export type SseTerminalOutputBoundaryOptions = CodexSafetyBufferingFilterOptions
   maxFrames?: number;
   /** Per-request outbound mask, applied to upstream copy before the boundary bounds it. */
   maskCredential?: (text: string) => string;
+  /**
+   * Redaction for a typed bare `error` frame this boundary forwards, applied after the frame's
+   * verdict is reduced from the original so every relay classifies the provider's own words.
+   */
+  redactForwardedEvidence?: (block: string) => string;
 };
 
 /**
@@ -400,7 +405,9 @@ export function createSseTerminalOutputBoundary(
         ? encoder.encode(parsed !== undefined && isUntypedBareUpstreamError(parsed)
           ? `event: response.failed\ndata: ${policyPayload}`
           : rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload))
-        : frame.block;
+        : options?.redactForwardedEvidence !== undefined && asJsonRecord(parsed)?.type === "error"
+          ? encoder.encode(options.redactForwardedEvidence(decoder.decode(frame.block)))
+          : frame.block;
       if (safetyBuffering === "strip") {
         outboundBlock = encoder.encode(stripCodexSafetyBufferingField(
           decoder.decode(outboundBlock),
@@ -506,12 +513,14 @@ export function relaySseWithFailedTail(
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
   opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string;
+    /** See {@link SseTerminalOutputBoundaryOptions.redactForwardedEvidence}. */
+    redactForwardedEvidence?: (block: string) => string;
     /** Receives the exact payload of every synthesized bare-verdict tail, so a client-stream log can tell it from upstream. */
     onSyntheticTail?: (payload: string, verdict?: BareUpstreamError) => void },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
-  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential });
+  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential, redactForwardedEvidence: opts?.redactForwardedEvidence });
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,

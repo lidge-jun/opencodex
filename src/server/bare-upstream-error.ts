@@ -10,7 +10,7 @@ import {
 import { redactSecretString } from "../lib/redact";
 import { outboundCredentials } from "../lib/outbound-credential-registry";
 import { codexWsWrapperStatus } from "./responses/codex-ws-wire";
-import { configuredCredentials } from "./configured-credentials";
+import { configuredCredentials, containsConfiguredCredentialExcerpt } from "./configured-credentials";
 
 type JsonRecord = Record<string, unknown>;
 export const MAX_BARE_ERROR_MESSAGE_CHARS = 512;
@@ -130,7 +130,7 @@ export function bareUpstreamError(payload: unknown, mask?: BareCopyMask): BareUp
   const terminalStatus = httpStatus ?? 502;
   const configured = configuredCredentials();
   const rowCopyAllowed = configured.complete
-    && ![rawMessage, code, errorType].some(text => text !== undefined && configured.matches(text));
+    && ![rawMessage, code, errorType].some(text => text !== undefined && (configured.matches(text) || containsConfiguredCredentialExcerpt(text)));
   return {
     message: message ?? (refusalCode ? terminalRefusalFallbackMessage(refusalCode)
       : fallback ? `Upstream error without a message (${redactSecretString(guardBareCopy(fallback, mask))})` : "The upstream reported an error."),
