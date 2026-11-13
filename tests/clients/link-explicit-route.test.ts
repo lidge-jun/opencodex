@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkExplicitRoute, explicitRouteSshOptions, identityFileProblem, sameExplicitRoute, type ExplicitRoute } from "../../src/link/explicit-route";
@@ -405,6 +405,27 @@ describe("the explicit route's identity file", () => {
       expect(identityFileProblem(key, "win32")).toBe("identity_file_unsupported_platform");
       expect(identityFileProblem(join(dir, "missing"), "win32")).toBe("identity_file_unsupported_platform");
       expect(identityFileProblem(key, "linux")).toBe(null);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  // The owner of a symlink cannot be faked without chown, so the walk takes its lstat as a parameter (as it takes the platform):
+  // the link's real metadata with another owner.
+  test.skipIf(process.platform === "win32")("a symlink on the key's path must be owned by this user or root: another user could repoint it", () => {
+    // The walk follows the real path (on macOS the temp directory is reached through /var -> /private/var).
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "ocx-identity-link-")));
+    try {
+      mkdirSync(join(dir, "private"), { mode: 0o700 });
+      const key = join(dir, "private", "id_ed25519");
+      writeFileSync(key, "x\n", { mode: 0o600 });
+      symlinkSync(join(dir, "private"), join(dir, "link"));
+      const via = join(dir, "link", "id_ed25519");
+      const ownedBy = (uid: number) => (path: string): Stats => {
+        const stat = lstatSync(path);
+        return path === join(dir, "link") ? Object.create(stat, { uid: { value: uid } }) as Stats : stat;
+      };
+      expect(identityFileProblem(via, "linux", ownedBy(process.getuid!()))).toBe(null);
+      expect(identityFileProblem(via, "linux", ownedBy(0))).toBe(null);
+      expect(identityFileProblem(via, "linux", ownedBy(process.getuid!() + 4242))).toBe("identity_file_ancestor");
     } finally { removeTreeWithRetry(dir); }
   });
 

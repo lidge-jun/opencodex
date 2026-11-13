@@ -118,9 +118,10 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
     expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
-    // 20 with four shards: run 40766068492 cancelled two of three at the
-    // 20-minute wall with no failing tests. See the rationale in ci.yml.
-    expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(20);
+    // 30 with four shards: run 43508374033 cancelled all four at the 20-minute
+    // wall with no failing tests, and no fifth macOS slot exists for another
+    // shard. See the rationale in ci.yml.
+    expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(30);
     // 75, not 30: the unsharded control measured 50m39s for a complete run and had
     // therefore never finished inside 30. See the rationale in ci.yml and #4905.
     expect(ci.jobs?.["macos-control"]?.["timeout-minutes"]).toBe(75);
