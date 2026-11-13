@@ -958,6 +958,7 @@ and have the combo pick per request instead:
   the same pass-through the target applies on its own.
 - **Effort.** Under `"adaptive"`, a caller effort that a target's known ladder lacks is lowered to
   that target's highest rung at or below it (`xhigh` on a low/medium/high target is sent as `high`).
+- **Order of degradation.** A text-only target first gets the sidecar's description of the image. Images are dropped only when no description is possible, and that is logged as a warning. Effort drops to the target's nearest supported rung, logged at debug level with the requested and sent rungs.
 - **Nothing can serve.** When every enabled target is unable, `onUnservable: "degrade"` (the
   default) dispatches anyway: the target replaces each image with an omission note and the proxy
   logs a warning. `onUnservable: "reject"` answers HTTP 400 before any target is called.
