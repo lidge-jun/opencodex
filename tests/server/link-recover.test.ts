@@ -54,6 +54,7 @@ function harness(links: LinkRecord[]) {
   let answer: () => SshRunResult = () => report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true, linkId: ID });
   const storedReceipt = (body: Record<string, unknown>) => ok(JSON.stringify({ schema: "ocx.child.detach-receipt/1", linkId: ID, restored: true, outcome: "ExactRestore", ...body }) + "\n");
   let absent: () => SshRunResult = () => storedReceipt({});
+  let probes: string[] | null = null;
   const state: LinkRouteState = {
     pendingHosts: new Map(),
     operations: new Set(),
@@ -73,7 +74,11 @@ function harness(links: LinkRecord[]) {
       const command = argv.at(-1) ?? "";
       commands.push(argv.join(" "));
       if (command.includes("ocx-recover-receipt")) return absent();
-      if (!command.includes("ocx-managed-purge")) throw new Error("Unexpected SSH command: " + command);
+      if (!command.includes("ocx-managed-purge")) {
+        // Platform discovery for a tombstone without a recorded platform: not Windows, then uname.
+        if (probes) { probes.push(argv.join(" ")); return probes.length === 1 ? ok("", 1) : ok("Linux\n"); }
+        throw new Error("Unexpected SSH command: " + command);
+      }
       return answer();
     },
     spawnTunnel() { throw new Error("unused"); },
@@ -104,6 +109,7 @@ function harness(links: LinkRecord[]) {
     get store() { return store; },
     answer(next: () => SshRunResult) { answer = next; },
     receipt(next: () => SshRunResult) { absent = next; },
+    allowPlatformProbe() { probes = []; return probes; },
     storedReceipt,
   };
 }
@@ -446,4 +452,17 @@ describe("recover over an exclusive explicit route (O6)", () => {
     expect(res.status).toBe(503);
     expect((await errorOf(res)).code).toBe("tombstone_store_unreadable");
   });
+});
+
+test("an explicit route also carries the platform probe and the receipt read", async () => {
+  const route = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a 22", user: "builder", port: 22 };
+  const h = harness([link({ explicitRoute: route, exclusive: true, remotePlatform: undefined })]);
+  await forceRevoke(h);
+  const probes = h.allowPlatformProbe();
+  h.answer(() => ok("", 1, "ocx-purge-error:managed_child_missing\n"));
+  const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+  expect(res.status).toBe(200);
+  expect(probes.length).toBe(2);
+  for (const command of [...probes, ...h.commands]) expect(command).toContain("ProxyCommand=" + route.proxyCommand);
+  expect(h.commands.some(command => command.includes("ocx-recover-receipt"))).toBe(true);
 });
