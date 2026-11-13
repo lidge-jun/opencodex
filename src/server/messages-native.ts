@@ -72,6 +72,7 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner, recordDistributedResponseFailure } from "../providers/api-key-response-ownership";
+import { passiveKeyPhysicalFetch } from "../providers/passive-key-observation";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
@@ -759,9 +760,9 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
               physicalSendsUsed++;
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
-                distributedKeyPhysicalFetch(
+                passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(
                   anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
-                  route.providerName, activeProvider, wire.url, activeProvider.apiKeyTransport === "bearer" ? "authorization" : "x-api-key"),
+                  route.providerName, activeProvider, wire.url, activeProvider.apiKeyTransport === "bearer" ? "authorization" : "x-api-key"), config, route.providerName, activeProvider),
                 String(input), physicalInit, { providerName: route.providerName, provider: activeProvider },
               )) as typeof fetch;
               localUpstream = isLocalUpstream(wire.url);

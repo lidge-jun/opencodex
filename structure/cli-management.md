@@ -65,6 +65,12 @@ The agents/routing leaf declares local `message sessions` and `message send`, th
 
 The stop declaration in `src/cli/capabilities-observe-system.ts` covers the read-only preservation preflight and shutdown methods at `/api/stop`, both declared in `src/server/management/route-registry.ts`. Discovery and generated help describe the existing `ocx stop [--json]` envelope and ownership exceptions; the declaration grants no shutdown authority. [Runtime](runtime.md) owns refusal, absence and teardown semantics.
 
+`ocx gui pair --desktop --origin <dashboard-origin>` creates a Desktop-purpose one-use grant
+through the signed Desktop path and a private-home intent. It accepts the actual standalone
+loopback dashboard's `localhost` or matching literal origin and exact configured/listening port;
+the ordinary pairing-origin resolver and Hub pairing remain unchanged. The browser consumes
+the code for its current session's bounded [Desktop scope](clients/codex-desktop.md#certificate-setup-api).
+
 `scripts/generate-ocx-skill-surface.ts` renders the compact `skills/ocx/references/01_management_surface.md` index and eight flat domain chapters from the same capability data. The index retains canonical fragment forwarders and links to complete chapter entries. Counts derive from declarations; grouping does not choose runtime dispatch or grant authority. Unknown roots and duplicate anchors are rejected rather than silently omitted.
 
 Generated flag-table cells escape literal pipes, backslashes and line breaks, and absent value types render as empty cells. Rendered Markdown regressions verify that enum choices stay in the meaning cell.
@@ -156,6 +162,10 @@ Storage policy flags in `src/cli/storage.ts` preserve omitted enable/settings an
 `src/cli/companion-usage.ts` reads settings and two usage ranges sequentially on a pinned management target through `src/cli/observe-stream.ts`. Its safe projection follows the saved model/provider filters and measured-totals rules in `gui/src/pages/tray-data.ts` without importing GUI runtime code. It retains unknown/incomplete metrics, valid server defaults with null update time, and explicit corrupt/fallback flags. Malformed settings stop before usage reads. Range failure retains the other observed range, labels unavailable data, and returns partial/nonzero; signal cancellation emits no late report. The observation owner supplies a separate 10-second fetch/body deadline after discovery and 32 MiB cap for each fixed GET, not a command-wide budget. Snapshot context supplies truthful retry wording without altering default follow behavior.
 
 `src/cli/account-api.ts` forwards explicit quota/refresh intent to the existing per-key owner; ordinary key listing omits both. Opt-in requests reject redirects. `src/cli/account-key-quota.ts` rebuilds the public ProviderQuota projection, including custom windows and credits, with finite-field validation and no credential or private publication fields. Missing mode evidence is unverified/nonzero. Human rendering separates probe/passive/unsupported, unavailable and unmeasured from actual zero; Codex/OAuth rendering remains separate. This read can invoke upstream quota work but does not change key selection or provider aggregate caches. Account list/current rows additionally project, through `src/cli/account-next-actions.ts`, only an allow-listed server health label, a locally generated recovery command built from shell-safe selectors (never server summary/action text), and the Codex boolean `creditsAfterLimit` as read-only consent readback; empty listings add a fixed next-action note to human output and JSON `notes`.
+
+Provider and API-key quota output includes Mistral's labelled API and Vibe budgets and reset times;
+unusable budget entitlements remain unknown rather than becoming a zero-percent measurement. Stable
+window labels identify resets while separate display text carries the amounts and plan to human output.
 
 The operating guide's eight-domain workflow table is navigation rather than parity measurement. Handwritten JSON, recipe, recovery and target docs qualify bounded windows, model-only search, partial/default results and human-only/session actions. Generated chapter counts still derive exclusively from capability declarations. Each chapter renders mutation and JSON mode together so additive declarations retain all metadata within the chapter line budget. File integration help includes Gentle Shell through the `gentle-shell` client target.
 
