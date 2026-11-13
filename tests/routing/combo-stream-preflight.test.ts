@@ -1798,6 +1798,20 @@ describe("degenerate completion prelude", () => {
     }
   });
 
+  test("malformed reasons and non-retryable stall terminals stay accepted", async () => {
+    for (const terminal of [
+      { incomplete_details: { reason: { toString: null } }, output: [] },
+      { incomplete_details: { reason: "upstream_stall_timeout", retryable: false }, output: [] },
+      { end_turn: false, incomplete_details: { reason: "adapter_eof" }, output: [] },
+    ]) {
+      const result = await preflightComboStreamResponse(sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        { type: "response.incomplete", response: { id: "r1", status: "incomplete", ...terminal } },
+      ), logCtx, undefined, { degeneratePrelude: true });
+      expect(result.kind).toBe("accepted");
+    }
+  });
+
   test("without degeneratePrelude a commentary completion stays accepted", async () => {
     const result = await preflightComboStreamResponse(sse(
       { type: "response.created", response: { id: "r1", status: "in_progress" } },

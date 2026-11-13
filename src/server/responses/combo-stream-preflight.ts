@@ -268,7 +268,8 @@ function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean
   // output-limit contract especially keeps its own code and cooldown instead.
   const details = recordValue(response?.incomplete_details ?? event.incomplete_details);
   const reason = details?.reason;
-  if (reason !== undefined && !RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(String(reason))) return false;
+  if (reason !== undefined
+    && (typeof reason !== "string" || !RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason))) return false;
   if (isPausedTurn(context)) return false;
   const endTurn = response?.end_turn ?? event.end_turn;
   if (endTurn === false) return false;
@@ -476,16 +477,17 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
     : undefined;
   const reason = details?.reason;
   if (reason === undefined) return true;
+  // An explicit unfinished or non-retryable verdict outranks every defined reason, not
+  // just max_output_tokens: honoring it keeps a paused or refused turn from hopping.
+  const endTurn = target.end_turn ?? event.end_turn;
+  if (endTurn === false) return false;
+  if (details?.retryable === false) return false;
   if (reason === "max_output_tokens") {
     // Same evidence the run-turn classifier requires before it treats an output limit as a
-    // replayable zero-output terminal: an explicitly unfinished turn or an explicitly
-    // non-retryable limit is an answer, not a target failure. A normalized Anthropic
-    // `pause_turn` also reads as max_output_tokens on the wire, so the request-scoped marker
-    // keeps a paused turn the client must continue from hopping to another provider.
+    // replayable zero-output terminal. A normalized Anthropic `pause_turn` also reads as
+    // max_output_tokens on the wire, so the request-scoped marker keeps a paused turn the
+    // client must continue from hopping to another provider.
     if (isPausedTurn(context)) return false;
-    const endTurn = target.end_turn ?? event.end_turn;
-    if (endTurn === false) return false;
-    if (details?.retryable === false) return false;
     return true;
   }
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
