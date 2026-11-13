@@ -20,6 +20,14 @@ export const MAX_CREDIT_PRICE_USD = 1_000_000;
 /** Upper bound for the credits a single attempt may report. */
 export const MAX_PROVIDER_CREDITS = 1_000_000_000;
 
+/** Preserve invalid or incomplete credit evidence when usage snapshots are combined. */
+export function sumCreditReadings(values: readonly (number | undefined)[]): number | undefined {
+  const readings = values.filter((value): value is number => value !== undefined);
+  if (readings.length === 0) return undefined;
+  if (readings.some(value => !Number.isFinite(value) || value < 0)) return -1;
+  return readings.reduce((sum, value) => sum + value, 0);
+}
+
 /**
  * A price that can be multiplied by any admissible credit count without overflowing.
  * The product stays well inside the safe-integer range, so a sum over attempts stays exact

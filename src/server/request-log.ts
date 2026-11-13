@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { normalizeRecordedClient, type UsageClient } from "../usage/client";
+import { sumCreditReadings } from "../usage/credit-billing";
 import { anthropicAccountTagField, stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
@@ -1966,7 +1967,7 @@ export function aggregateAttemptUsage(
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
-  const providerCredits = sumOptional("providerCredits");
+  const providerCredits = sumCreditReadings(usages.map(usage => usage.providerCredits));
   const totalTokens = usages.reduce(
     (sum, usage) => sum + (usageTotalTokens(usage) ?? 0),
     0,

@@ -1,4 +1,5 @@
 import { assistantReplayContent } from "../../responses/assistant-replay";
+import { sumCreditReadings } from "../../usage/credit-billing";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -202,7 +203,7 @@ export function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undef
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
-  const providerCredits = sumOptional("providerCredits");
+  const providerCredits = sumCreditReadings([first.providerCredits, second.providerCredits]);
   const inputTokens = first.inputTokens + second.inputTokens;
   const outputTokens = first.outputTokens + second.outputTokens;
   return {

@@ -70,12 +70,16 @@ const USD_FORMAT = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 4,
   maximumFractionDigits: 4,
 });
+const USD_FLOOR_FORMAT = new Intl.NumberFormat("en-US", {
+  style: "currency", currency: "USD", currencyDisplay: "narrowSymbol",
+  minimumFractionDigits: 4, maximumFractionDigits: 4, roundingMode: "floor",
+});
+const USD_FLOOR_SUPPORTED = USD_FLOOR_FORMAT.resolvedOptions().roundingMode === "floor";
 
 /**
  * A credit count is not a token count: `formatTokens` would round 1.95 to "1.95" but a count
  * like 1,250 becomes "1.3K", and a credit charge is the number the operator reconciles against
- * a provider invoice. Keep the digits, group them for the locale, and cap fractions rather
- * than dropping them.
+ * a provider invoice. Keep significant digits and locale-specific grouping, including tiny values.
  */
 const CREDIT_FORMATS = new Map<string, Intl.NumberFormat>();
 
@@ -84,7 +88,7 @@ export function formatCredits(value: number, localeCode?: string): string {
   const key = localeCode ?? "";
   let formatter = CREDIT_FORMATS.get(key);
   if (!formatter) {
-    formatter = new Intl.NumberFormat(key || undefined, { maximumFractionDigits: 6 });
+    formatter = new Intl.NumberFormat(key || undefined, { maximumSignificantDigits: 15 });
     CREDIT_FORMATS.set(key, formatter);
   }
   return formatter.format(value);
@@ -115,7 +119,15 @@ export function formatEstimatedUsdValue(
   priorityLowerBound = false,
 ): string {
   if (!Number.isFinite(value) || value < 0) return t("logs.cost.unavailable");
-  const amount = USD_FORMAT.format(value);
+  let amount: string;
+  if (priorityLowerBound && !USD_FLOOR_SUPPORTED) {
+    // Older Intl implementations ignore roundingMode. Keep their displayed floor conservative.
+    const units = Math.floor(value * 10_000);
+    const rounded = Number.isSafeInteger(units) ? units / 10_000 : Math.floor(value);
+    amount = USD_FORMAT.format(rounded > value ? (units - 1) / 10_000 : rounded);
+  } else {
+    amount = (priorityLowerBound ? USD_FLOOR_FORMAT : USD_FORMAT).format(value);
+  }
   return t(priorityLowerBound ? "logs.cost.lowerBound" : "logs.cost.approximate", { amount });
 }
 
@@ -145,8 +157,7 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
   unmeteredRequests: number;
 } {
   let estimatedCostUsd = 0;
-  let everyPricedEstimateIsLowerBound = true;
-  let pricedEstimates = 0;
+  let anyPricedEstimateIsLowerBound = false;
   let unpricedRequests = 0;
   let unmeteredRequests = 0;
   for (const entry of entries) {
@@ -159,8 +170,7 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
       const total = cost.estimate.cost.total;
       if (Number.isFinite(total) && total >= 0) {
         estimatedCostUsd += total;
-        pricedEstimates += 1;
-        everyPricedEstimateIsLowerBound &&= effectivePriorityLowerBound(cost.estimate);
+        anyPricedEstimateIsLowerBound ||= effectivePriorityLowerBound(cost.estimate);
         continue;
       }
     }
@@ -168,7 +178,7 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
   }
   return {
     estimatedCostUsd,
-    priorityLowerBound: pricedEstimates > 0 && everyPricedEstimateIsLowerBound,
+    priorityLowerBound: anyPricedEstimateIsLowerBound,
     unpricedRequests,
     unmeteredRequests,
   };

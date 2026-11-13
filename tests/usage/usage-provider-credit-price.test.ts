@@ -1,6 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext } from "../../src/usage/cost";
-import { MAX_CREDIT_PRICE_USD, MAX_PROVIDER_CREDITS } from "../../src/usage/credit-billing";
+import { MAX_CREDIT_PRICE_USD, MAX_PROVIDER_CREDITS, sumCreditReadings } from "../../src/usage/credit-billing";
+import { mergeUsage as mergeEmptyUsage } from "../../src/server/responses/empty-completion-guard";
+import { mergeUsage as mergeTerminalUsage } from "../../src/server/responses/terminal-guard";
+
+test("combined credit evidence retains invalid readings through later additions", () => {
+  expect(sumCreditReadings([undefined, undefined])).toBeUndefined();
+  expect(sumCreditReadings([0, 2])).toBe(2);
+  expect(sumCreditReadings([-1, 10])).toBe(-1);
+  expect(sumCreditReadings([10, -1])).toBe(-1);
+  expect(sumCreditReadings([Number.NaN, 10])).toBe(-1);
+  for (const merge of [mergeEmptyUsage, mergeTerminalUsage]) {
+    const partial = { inputTokens: 1, outputTokens: 1, providerCredits: -1 };
+    const complete = { inputTokens: 1, outputTokens: 1, providerCredits: 10 };
+    expect(merge(partial, complete)?.providerCredits).toBe(-1);
+    expect(merge(complete, partial)?.providerCredits).toBe(-1);
+  }
+});
 import { activeCreditPrices, refreshUserCostOverlays, userCostOverlayVersion } from "../../src/usage/user-cost-overlays";
 import { sanitizeCreditPriceForLoad } from "../../src/config/load-degrade";
 import type { OcxConfig } from "../../src/types";
