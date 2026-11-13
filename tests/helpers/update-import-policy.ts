@@ -87,8 +87,8 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { removePid, removeRuntimePort } from \"../config/process-state\";",
     "import { dropWindowsTcpRowsForLocalPort } from \"../server/windows-tcp-drop\";",
     "import { stopWinswService } from \"../lib/winsw\";",
-    "import { stopWindows } from \"../service\";",
-    "import { killWindowsSchedulerWrappers } from \"../lib/windows-service-wrappers\";",
+    // #7771: Part A of the checked Windows stop; its authorizer is the service mutation gate.
+    "import { runWindowsServiceStopPartA } from \"../service/windows-service-stop\";",
     "import { guardedRun, guardedKill, guardedExecFileSync, materializeMutationData, UpdateMutationRefusedError, type UpdateMutationAuthorizer } from \"./mutation-guard.mjs\";"
   ],
   "src/update/guarded-tray-ops.ts": [
@@ -166,9 +166,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from \"./tray-update-plan.mjs\";"
   ],
   "src/update/job-windows-restart.ts": [
-    "import { join } from \"node:path\";",
-    "import { getConfigDir } from \"../config\";",
-    "import { guardedStopWinsw, guardedStopWindows, guardedKillWindowsWrappers } from \"./guarded-runtime-ops\";",
+    "import { guardedStopWinsw, guardedStopWindowsChecked } from \"./guarded-runtime-ops\";",
     "import { readServiceBackend } from \"../service\";"
   ],
   "src/update/job.ts": [
@@ -187,7 +185,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { guardedKillProxy, guardedRemovePid, guardedRemoveRuntimePort, guardedDropWindowsTcp, guardedPublishJob, type KillProxy } from \"./guarded-runtime-ops\";",
     "import { isHealthzVersion, isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity, } from \"../server/proxy-liveness\";",
     "import { isServiceInstalled, isServiceViable } from \"../service\";",
-    "import { stopWindowsServiceWrappersBestEffort } from \"./job-windows-restart\";",
+    "import { stopWindowsServiceForRestart, WINDOWS_SERVICE_STOP_ABORT } from \"./job-windows-restart\";",
     "import { createUpdateServiceHomePolicy, inspectUpdateServiceHome, type UpdateServiceHomeInspector } from \"./service-home-authority\";",
     "import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from \"./restart-ownership\";",
     "import { restartServiceManagerAfterUpdate, unsettledManagerRestartFailure, unsupervisedRestartFailure, type ManagerRestartFn } from \"./job-supervised-restart\";",

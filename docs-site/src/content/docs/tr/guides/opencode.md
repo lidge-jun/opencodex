@@ -114,9 +114,11 @@ Geri döngü örneği:
 
 Geri döngü olmayan örnek:
 
+Bu örnek uzak istemcide elle yapılandırılır. Önce bir TLS ön ucu yapılandırın ve HTTPS URL'sini kullanın; OpenCodex TLS sonlandırmaz ve `ocx opencode` bu URL'yi otomatik bulmaz. LAN üzerinde düz HTTP, kimlik bilgisini aktarım sırasında açığa çıkarır. Alternatif olarak proxy'yi loopback üzerinde tutup yerel bir SSH tüneli kullanın. Bkz. [Veri dinleyicisi için TLS](/tr/guides/remote-hub/#giving-the-data-listener-tls).
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

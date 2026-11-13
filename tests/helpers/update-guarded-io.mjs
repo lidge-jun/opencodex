@@ -23,8 +23,10 @@ export function guardedUpdateIo(deps) {
     guardedRemoveRuntimePort: auth => guardedRun(auth, "runtime", native("removeRuntimePort"), []),
     guardedDropWindowsTcp: (auth, ...args) => guardedRun(auth, "runtime", native("dropWindowsTcpRowsForLocalPort"), args),
     guardedStopWinsw: auth => guardedRun(auth, "service", native("stopWinswService"), []),
-    guardedStopWindows: auth => guardedRun(auth, "service", native("stopWindows"), []),
-    guardedKillWindowsWrappers: (auth, ...args) => guardedRun(auth, "service", native("killWindowsSchedulerWrappers"), args),
+    // #7771: Part A takes the service gate as its authorizer (entry and before each terminate).
+    guardedStopWindowsChecked: async auth => native("checkedStop")(() => {
+      if (auth("service") !== true) throw new UpdateMutationRefusedError();
+    }),
   };
 }
 

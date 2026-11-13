@@ -30,6 +30,28 @@ const HOME_CLEANUP: Record<string, string> = {
   link_cleanup_uncertain: "Enrollment did not complete, and the Home could not undo the attempt: whether the link is stored is unknown and its issued key could not be revoked. Run ocx link status, remove the link if it is listed (ocx link revoke), and revoke the leftover link key under API keys if it remains.",
 };
 const CHILD_MAY_BE_CONNECTED = "The Child may still be connected.";
+// A journalled answer names the Child's residual as a closed word; a replay never probed, so it cannot infer one.
+const RECOVERY_BY_KIND: Record<string, string> = {
+  plant: "Run the planted ocx-child's managed copy with detach --purge on the Child before retrying: ~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux; "
+    + "on Windows, in Command Prompt, \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge, or \"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge where LOCALAPPDATA is not set.",
+  enrollment: "Run ocx disconnect and ocx restart on the Child (~/.cache/opencodex/bin/ocx-child detach for an ocx-child) before retrying.",
+};
+const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+// Refusals of ocx link add --operation-id and --require-ephemeral (structure/remote-link.md, "Operation journal").
+const OPERATION_REFUSALS: Record<string, string> = {
+  operation_mismatch: "This operation id was already used with other parameters; use a new operation id.",
+  link_operation_open: "An unfinished enrollment holds this alias; repeat it with its own operation id to settle it first.",
+  link_operation_in_progress: "Another enrollment or revoke of this alias is running; retry when it ends.",
+  full_install_present: "A full OpenCodex install is on the Child; --require-ephemeral refused it before any change.",
+  full_install_census_failed: "The Child could not be checked for a full OpenCodex install; nothing was changed.",
+  require_ephemeral_unsupported: "--require-ephemeral is not supported for a Windows Child.",
+};
+
+/** " (operation <id>: <outcome>)" when the answer carries this operation's recorded outcome. */
+function operationNote(error: unknown, operationId: string | undefined): string {
+  if (operationId === undefined || !(error instanceof RuntimeApiError) || !record(error.body)) return "";
+  return error.body.operationId === operationId && typeof error.body.outcome === "string" ? " (operation " + operationId + ": " + error.body.outcome + ")" : "";
+}
 type LinkRequest = <T>(path: string, init: RequestInit, deps: LinkCliDeps) => Promise<T>;
 
 interface ParsedProbeOffer {
@@ -152,6 +174,8 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
   const plantFlag = takeFlag(args, "--plant");
   const expected = takeOption(args, "--expect-fingerprint");
   const routeBody = takeRouteFlags(args, usage);
+  const operationId = takeOption(args, "--operation-id");
+  const requireEphemeral = takeFlag(args, "--require-ephemeral");
   const alias = args.shift();
   if (!alias) throw new CliUsageError(command + " requires an SSH alias", usage);
   try { assertSshAlias(alias); } catch { throw new CliUsageError("Invalid SSH alias", usage); }
@@ -159,6 +183,11 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
   if (command === "probe" && expected !== undefined) throw new CliUsageError("--expect-fingerprint is only for link add", usage);
   if (command === "probe" && plantFlag) throw new CliUsageError("--plant is only for link add", usage);
   if (expected !== undefined && !FINGERPRINT.test(expected)) throw new CliUsageError("Expected a SHA256 SSH fingerprint", usage);
+  if (command === "probe" && (operationId !== undefined || requireEphemeral)) throw new CliUsageError("--operation-id and --require-ephemeral are only for link add", usage);
+  if (operationId !== undefined && !OPERATION_ID.test(operationId)) throw new CliUsageError("--operation-id must be 1-128 letters, digits, '.', '_', ':' or '-', not starting with a punctuation mark", usage);
+  // A repeat replays without probing, so the fingerprint that names the operation must be given, not offered.
+  if (operationId !== undefined && expected === undefined) throw new CliUsageError("--operation-id requires --expect-fingerprint", usage);
+  const operationBody = { ...(operationId !== undefined ? { operationId } : {}), ...(requireEphemeral ? { requireEphemeral: true } : {}) };
   const isTTY = Boolean((deps.stdinImpl ?? process.stdin).isTTY);
   if (command === "add" && !expected && !isTTY) {
     throw new CliUsageError("Non-interactive link add requires --expect-fingerprint", usage);
@@ -183,9 +212,35 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
     rl ??= createInterface({ input: deps.stdinImpl ?? process.stdin, output: process.stderr });
     return (await rl.question(promptText, { signal: controller.signal })).trim() === "yes";
   };
+  const get = async <T>(path: string): Promise<T> => {
+    controller.signal.throwIfAborted();
+    const result = await request<T>(path, { method: "GET", redirect: "error", signal: controller.signal }, boundDeps);
+    controller.signal.throwIfAborted();
+    return result;
+  };
+  const applied = (result: unknown, planted: boolean): void => {
+    const keys = record(result) ? Object.keys(result).sort().join(",") : "";
+    const shaped = operationId === undefined ? keys === "linkId"
+      : keys === "linkId,operationId,outcome" && record(result) && result.operationId === operationId && result.outcome === "committed";
+    if (!shaped || !record(result) || typeof result.linkId !== "string" || !/^lnk_[0-9a-f]{16}$/.test(result.linkId)) throw new Error("Invalid link apply response");
+    printData({ linkId: result.linkId, alias, state: "connected", childRole: "client", ...(planted ? { planted: true } : {}), ...(routeBody.exclusive ? { exclusive: true } : {}),
+      ...(operationId !== undefined ? { operationId, outcome: "committed" } : {}) }, wantsJson, ["Connected " + alias + " as a Child (" + result.linkId + ")."]);
+  };
   const work = async () => {
     boundDeps = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
     controller.signal.throwIfAborted();
+    if (command === "add" && operationId !== undefined) {
+      // A recorded operation replays its outcome: no new probe or confirmation, which a gone host could not answer.
+      let recorded = false;
+      try { await get<unknown>("/api/link/operations/" + encodeURIComponent(operationId)); recorded = true; } catch (error) {
+        const code = error instanceof RuntimeApiError && record(error.body) && record(error.body.error) ? error.body.error.code : undefined;
+        if (!(error instanceof RuntimeApiError && error.status === 404 && code === "operation_not_found")) throw error;
+      }
+      if (recorded) {
+        applied(await post<unknown>("/api/link/apply", { alias, fingerprint: expected, ...routeBody, ...operationBody }), false);
+        return;
+      }
+    }
     const probeReq = command === "add" ? { alias, includeVersion: true, allowMissing: true, ...routeBody } : { alias, includeVersion: true, ...routeBody };
     const probe = parseOffered(await post<unknown>("/api/link/probe", probeReq), command === "add");
     if (probe.alias !== alias) throw new Error("Host probe alias did not match");
@@ -229,23 +284,25 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
     const sendAllowMissing = shouldPlant || probe.runtimeKind === "missing";
     const confirm = await post<unknown>("/api/link/confirm-host", { alias, fingerprint: probe.fingerprint, ...(sendAllowMissing ? { allowMissing: true } : {}), ...routeBody });
     validateConfirmed(confirm, alias, probe.fingerprint, sendAllowMissing);
-    const result = await post<unknown>("/api/link/apply", { alias, fingerprint: probe.fingerprint, ...(shouldPlant ? { plant: true } : {}), ...routeBody });
-    if (!record(result) || Object.keys(result).join(",") !== "linkId" || typeof result.linkId !== "string" || !/^lnk_[0-9a-f]{16}$/.test(result.linkId)) throw new Error("Invalid link apply response");
-    printData({ linkId: result.linkId, alias, state: "connected", childRole: "client", ...(shouldPlant ? { planted: true } : {}), ...(routeBody.exclusive ? { exclusive: true } : {}) }, wantsJson, ["Connected " + alias + " as a Child (" + result.linkId + ")."]);
+    applied(await post<unknown>("/api/link/apply", { alias, fingerprint: probe.fingerprint, ...(shouldPlant ? { plant: true } : {}), ...routeBody, ...operationBody }), shouldPlant);
   };
   try { await Promise.race([work(), expiry]); }
   catch (error) {
+    const note = operationNote(error, operationId);
+    try {
     if (error instanceof RuntimeApiError && record(error.body)) {
       const code = record(error.body.error) ? error.body.error.code : undefined;
       if (code === "remote_platform_unsupported" && error.body.residual !== true) throw new Error("The remote shell cannot run this Remote Link workflow. Update OpenCodex on Home and check PowerShell on the Child.");
-      if (code === "child_port_busy") throw new Error("The target port on the Child is already in use by another process; no Child files were modified.");
+      // Both conflicts say no Child file changed, which holds only when nothing is left behind (a plant whose rollback failed is).
+      if (code === "child_port_busy" && error.body.residual !== true) throw new Error("The target port on the Child is already in use by another process; no Child files were modified.");
       if (code === "child_preflight_output_limit") throw new Error("The Child's ocx config show --json output exceeded the Remote Link preflight limit; trim the Child's saved configuration and retry.");
-      if (code === "child_external_provider_conflict") throw new Error("The Child's ~/.codex/config.toml is already managed by another model provider or custom base URL; no Child files were modified.");
+      if (code === "child_external_provider_conflict" && error.body.residual !== true) throw new Error("The Child's ~/.codex/config.toml is already managed by another model provider or custom base URL; no Child files were modified.");
       // Home-side cleanup that left a link key behind: fixed, locally written guidance (the server's
       // prose is never echoed), plus the Child's own recovery step when it may still be connected.
       const homeCleanup = typeof code === "string" && Object.hasOwn(HOME_CLEANUP, code) ? HOME_CLEANUP[code] : undefined;
       if (homeCleanup) {
-        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL) : "";
+        const kindRecovery = typeof error.body.residualKind === "string" ? RECOVERY_BY_KIND[error.body.residualKind] : undefined;
+        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + (kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL)) : "";
         throw new Error(homeCleanup + childStep + " (code " + code + ")");
       }
       const phase = typeof code === "string" && Object.hasOwn(PHASES, code) ? PHASES[code] : undefined;
@@ -253,12 +310,19 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       // alone left every failure to SSH reproduction and source reading.
       const hint = record(error.body.error) && typeof error.body.error.hint === "string" ? error.body.error.hint : "";
       const message = phase ? "Remote Link failed during " + phase + (hint ? ": " + hint : "") : error.message;
-      const recovery = ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL;
+      const kindRecovery = typeof error.body.residualKind === "string" ? RECOVERY_BY_KIND[error.body.residualKind] : undefined;
+      const recovery = kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL);
       // The machine-readable code rides along so a script can branch without parsing prose.
-      const codeSuffix = phase && typeof code === "string" ? " (code " + code + ")" : "";
+      const codeSuffix = (phase || note) && typeof code === "string" ? " (code " + code + ")" : "";
       if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : "") + codeSuffix);
+      if (typeof code === "string" && Object.hasOwn(OPERATION_REFUSALS, code)) throw new Error(OPERATION_REFUSALS[code] + " (code " + code + ")");
+      if (note && typeof code === "string") throw new Error(error.message + " (code " + code + ")");
     }
     throw error;
+    } catch (explained) {
+      if (note && explained instanceof Error) explained.message += note;
+      throw explained;
+    }
   } finally {
     if (timer) clearTimeout(timer);
     controller.abort();

@@ -19,7 +19,11 @@ npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
-Proxy'yi çalıştırmak için bir yol seçin:
+Kurulumda seçilen portu kullanmak için proxy başlamadan önce etkileşimli terminalde `ocx init` çalıştırın:
+
+```bash
+ocx init
+```
 
 ```bash
 # Ön plan: durdurulana kadar bu terminali kilitler.
@@ -27,13 +31,6 @@ ocx start
 
 # Arka plan: servisi kurar veya günceller, ardından başlatır.
 ocx service
-```
-
-Etkileşimli bir terminalde `ocx init` komutunu çalıştırın. Eğer `ocx start` ön
-planı işgal ediyorsa, ikinci bir terminal kullanın:
-
-```bash
-ocx init
 ```
 
 Sihirbaz `$OPENCODEX_HOME/config.json` (normalde `~/.opencodex/config.json`)
@@ -91,9 +88,11 @@ anahtarı önayarını ekler ve onu varsayılan sağlayıcı yapar:
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+Tek tırnakları koruyun: başvuruyu aynen geçirerek sırrın işlem argümanlarına veya yapılandırmaya değer olarak yazılmasını önler. `ANTHROPIC_API_KEY` değişkenini proxy başlamadan önce başlangıç ortamına ve model eşitleme gibi kimlik bilgilerini çözen CLI işlemlerine sağlayın. Sonradan başka bir terminalde export etmek çalışan proxy'yi güncellemez. Arka plan hizmetinde başlangıç ortamını yapılandırıp hizmeti yeniden başlatın; hizmet kurulumu terminaldeki rastgele sağlayıcı değişkenlerini otomatik olarak saklamaz.
 
 `ocx provider add` yerel yapılandırmayı yazar. Canlı bir proxy zaten çalışıyorsa
 ve modelleri hemen Codex ile senkronize etmek istiyorsanız `--sync` ekleyin;
@@ -105,7 +104,7 @@ devretme (failover) kombosu oluşturun:
 
 ```bash
 ocx combo set main \
-  --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
+  --targets anthropic-apikey/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
 
@@ -116,19 +115,11 @@ bakın.
 
 ## Uzak ve LAN Bağlantıları
 
-Varsayılan geri döngü (loopback) bağlantısı bir API belirteci gerektirmez.
-`0.0.0.0` gibi geri döngü olmayan bir bağlantı `OPENCODEX_API_AUTH_TOKEN`
-gerektirir; proxy bu olmadan başlamayı reddeder. Değişkeni `ocx start` öncesinde
-veya servisin alabilmesi için `ocx service install` öncesinde ayarlayın:
+Normal loopback model yolları veri token’ı gerektirmez. `0.0.0.0` gibi loopback dışı bir adrese bağlanmak için `config.apiKeys` içinde tanımlı bir istemci anahtarı veya `OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE` ya da yalnızca sahibinin okuyabildiği `service-api-token` dosyasından çözümlenen ortak bir token gerekir. Dosya yoksa `ocx service install` oluşturabilir. Token’ı ortam değişkeniyle veriyorsanız `ocx start` veya `ocx service install` öncesinde ayarlayın:
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="gizli-tokeniniz"
 ocx service install
 ```
 
-İstemciler daha sonra yönetim ve model isteklerinin kimliğini doğrulamalıdır.
-opencodex'i yerel makinenin ötesine açmadan önce
-[Yapılandırma](/tr/reference/configuration/) içindeki uzaktan erişim kurallarını
-okuyun.
-
-
+Model istekleri veri düzlemi kimlik doğrulamasını kullanır. Yönetim için ayrı `OPENCODEX_ADMIN_AUTH_TOKEN` veya korumalı dosyada oluşturulan yönetici token’ı kullanılır; veri token’ı yönetim erişimi vermez. Pano, [Yönetim API’sindeki](/tr/reference/management-api/#authentication-model) oturum ve erişim kurallarını izler. Yönetici token’ını hiçbir model istemcisine vermeyin. Proxy’yi dışarı açmadan önce [uzak erişimi](/tr/reference/configuration/server/#remote-access) okuyun.

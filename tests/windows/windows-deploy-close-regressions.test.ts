@@ -50,21 +50,19 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
     // update — the common Windows path — with a stale service it could have refreshed.
     expect(src).toContain('process.env.OCX_SERVICE === "1" && refreshRegisters');
     expect(src).toContain('const refreshRegisters = (svcArgs ?? []).includes("install")');
-    // Follow the extracted teardown helper through its import and restart call site.
-    expect(src).toContain('import { stopWindowsServiceWrappersBestEffort } from "./job-windows-restart"');
-    expect(src).toContain("(io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)(homePolicy.authorizeMutation);");
+    // Follow the extracted teardown helper through its import and restart call sites. Since
+    // #7771 every call site gets a return path: a service that is not proven stopped aborts.
+    expect(src).toContain('import { stopWindowsServiceForRestart, WINDOWS_SERVICE_STOP_ABORT } from "./job-windows-restart"');
+    expect(src.split("await (io.stopServiceWrappersFn ?? stopWindowsServiceForRestart)(homePolicy.authorizeMutation) === false) return windowsServiceStopAborted(job);").length - 1).toBe(3);
     const restart = read("src/update/job-windows-restart.ts");
-    expect(restart).toContain("export function stopWindowsServiceWrappersBestEffort(authorizeMutation: UpdateMutationAuthorizer)");
-    expect(restart).toContain('if (process.platform !== "win32") return;');
-    // Native WinSW installs stop and return before Task Scheduler /end or wrapper cleanup.
-    expect(restart).toMatch(/if \(readServiceBackend\(\) === "native"\) \{\s*if \(!authorizeMutation\("service"\)\) return;\s*guardedStopWinsw\(authorizeMutation\);\s*return;\s*\}\s*if \(!authorizeMutation\("service"\)\) return;\s*guardedStopWindows\(authorizeMutation\);/);
-    expect(restart.indexOf("killWindowsServiceWrapperProcesses(authorizeMutation);")).toBeGreaterThan(restart.indexOf("guardedStopWindows(authorizeMutation);"));
-    // The wrapper-killer script (and its self-exclusion) moved to the shared
-    // lib/windows-service-wrappers so the updater and the service teardown path
-    // cannot drift apart again. Follow the invariant to where it lives; the
-    // matching rules themselves are covered by windows-service-wrappers.test.ts.
-    expect(restart).toMatch(/const paths = \{\s*scriptPath: join\(getConfigDir\(\), "opencodex-service.cmd"\),\s*launcherPath: join\(getConfigDir\(\), "opencodex-service-launcher.vbs"\),\s*\};\s*if \(!authorizeMutation\("service"\)\) return;\s*guardedKillWindowsWrappers\(authorizeMutation, paths\);/);
-    expect(read("src/lib/windows-service-wrappers.ts")).toContain("$_.ProcessId -eq $PID");
+    expect(restart).toContain("export async function stopWindowsServiceForRestart(authorizeMutation: UpdateMutationAuthorizer): Promise<boolean>");
+    expect(restart).toContain('if (process.platform !== "win32") return true;');
+    // Both manager registrations are probed by the checked stop.
+    expect(restart).not.toContain("guardedStopWinsw");
+    // Task Scheduler: Part A ends the manager and the bound wrappers (the binding rule in
+    // windows-stop-binding.ts excludes the stopper itself); only stopped or absent continues.
+    expect(restart).toContain("const outcome = await guardedStopWindowsChecked(authorizeMutation);");
+    expect(restart).toContain('return outcome === "stopped" || outcome === "absent";');
     // Pinned-child cleanup is exercised through the retry loop in update/update-job.test.ts,
     // including exited children, live retry/final cleanup, and successful health probes.
   });

@@ -232,5 +232,12 @@
   "link-explicit-route-paths.test.ts": "clients",
   "link-route-edit-exclusive.test.ts": "server",
   "link-enrollment-explicit-route.test.ts": "server",
-  "cli-link-explicit-route.test.ts": "cli"
+  "cli-link-explicit-route.test.ts": "cli",
+  "link-alias-lock.test.ts": "clients",
+  "link-enrollment-operation.test.ts": "server",
+  "link-full-install-census.test.ts": "clients",
+  "link-revoke-operation.test.ts": "server",
+  "link-operations-routes.test.ts": "server",
+  "cli-link-operation.test.ts": "cli",
+  "link-operations-journal.test.ts": "clients"
 }

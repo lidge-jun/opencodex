@@ -50,7 +50,7 @@ for (const phase of ["identity", "liveness", "kill-liveness", "escalation", "sta
     if (phase !== "stable") { home = "same"; expect(policy.authorizeMutation("publish")).toBe(false); }
   });
 
-for (const operation of ["wrapper", "winsw", "scheduler", "tray", "pid", "runtime", "registry"])
+for (const operation of ["winsw", "tray", "pid", "runtime", "registry"])
   for (const changed of [true, false]) test(`leaf ${operation} gates after preparation (${changed})`, () => {
     let home: "same" | "unknown" = "same", effects = 0;
     const policy = createUpdateServiceHomePolicy(() => ({ kind: home }), () => {});
@@ -59,26 +59,12 @@ for (const operation of ["wrapper", "winsw", "scheduler", "tray", "pid", "runtim
       throw Object.assign(new Error("refused"), { code: "EUPDATEAUTHORITY" }); };
     const effect = () => { effects++; return "stopped"; };
     let invoke: () => unknown;
-    if (operation === "wrapper") {
-      const fn = load("src/lib/windows-service-wrappers.ts", "killWindowsSchedulerWrappers", {
-        process: { platform: "win32" }, resolveTrustedWindowsPowerShellExe: prepare,
-        windowsWrapperKillScript: () => "fixture", spawnSync: effect,
-      });
-      const wrapped = adapter("guardedKillWindowsWrappers", { killWindowsSchedulerWrappers: fn });
-      invoke = () => wrapped(policy.authorizeMutation, { scriptPath: "script", launcherPath: "launcher" });
-    } else if (operation === "winsw") {
+    if (operation === "winsw") {
       const run = load("src/lib/winsw.ts", "runWinsw", {
         winswExePath: prepare, execFileSync: effect, SERVICE_STOPWAIT_TIMEOUT_MS: 1, SERVICE_COMMAND_TIMEOUT_MS: 1,
       });
       const fn = load("src/lib/winsw.ts", "stopWinswService", { runWinsw: run, statusWinswRaw: () => "stopped" });
       invoke = () => adapter("guardedStopWinsw", { stopWinswService: fn })(policy.authorizeMutation);
-    } else if (operation === "scheduler") {
-      const query = load("src/service/windows-scheduler.ts", "querySchtasks", {
-        isTestHomeGuardArmed: () => false, querySchtasksForTests: null, windowsSchtasks: prepare, runFile: effect,
-      });
-      const schtasks = load("src/service/windows-scheduler.ts", "schtasks", { querySchtasks: query, toWindowsSchtasksError: (e: unknown) => e });
-      const stop = load("src/service/windows-ops.ts", "stopWindows", { schtasks, TASK: "fixture", isWindowsSchedulerEndBenign: () => false });
-      invoke = () => adapter("guardedStopWindows", { stopWindows: stop })(policy.authorizeMutation);
     } else if (operation === "tray") {
       const signal = load("src/tray/windows.ts", "signalTrayStop", {
         readHeartbeat: () => ({}), windowsPowerShellPath: prepare, currentEntry: () => ({}),
@@ -106,6 +92,24 @@ for (const operation of ["wrapper", "winsw", "scheduler", "tray", "pid", "runtim
     expect(effects).toBe(changed ? 0 : 1);
     if (changed) { home = "same"; expect(policy.authorizeMutation("publish")).toBe(false); }
   });
+
+// #7771: the scheduler stop and the wrapper sweep are one checked operation (Part A). Its service
+// gate is the authorizer Part A runs at entry and before every terminate.
+for (const changed of [true, false]) test(`leaf checked scheduler stop gates after preparation (${changed})`, async () => {
+  let home: "same" | "unknown" = "same", effects = 0;
+  const policy = createUpdateServiceHomePolicy(() => ({ kind: home }), () => {});
+  const runWindowsServiceStopPartA = async (request: { authorize: () => void; allowUnderOwnWrapper?: boolean }) => {
+    expect(request.allowUnderOwnWrapper).toBe(true);
+    if (changed) home = "unknown"; // preparation: the registration probe and the bind
+    await request.authorize();
+    effects++;
+    return { outcome: "stopped" };
+  };
+  const invoke = adapter("guardedStopWindowsChecked", { runWindowsServiceStopPartA })(policy.authorizeMutation);
+  if (changed) await expect(invoke).rejects.toThrow(); else expect(await invoke).toBe("stopped");
+  expect(effects).toBe(changed ? 0 : 1);
+  if (changed) { home = "same"; expect(policy.authorizeMutation("publish")).toBe(false); }
+});
 
 test("Windows kill refusal propagates even when a later liveness check would report exit", () => {
   let reads = 0;

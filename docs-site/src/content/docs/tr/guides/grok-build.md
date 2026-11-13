@@ -142,12 +142,11 @@ model = "anthropic/claude-opus-4-8"
 model_provider = "opencodex"
 ```
 
-Ağ üzerinden erişilebilen bir proxy için `base_url`'i `grok`'un gerçekten
-bağlanabileceği adrese yönlendirin ve kabul belirtecinizi kullanın:
+Tokenı sağlamadan önce bir TLS ön ucu yapılandırıp HTTPS URL'sini kullanın veya yerel tünelin loopback adresini kullanın. Grok, `api_key` değerini `~/.grok/config.toml` içinde saklar; dosya erişimini kısıtlayın, sürüm kontrolüne ve paylaşılan yedeklere eklemeyin.
 
 ```toml
 [model_providers.opencodex]
-base_url = "http://192.168.1.10:10100/v1"   # 127.0.0.1 değil, erişilebilir ana bilgisayar
+base_url = "https://proxy.example.com/v1"   # configured TLS frontend
 api_backend = "responses"
 api_key = "OPENCODEX_API_AUTH_TOKEN_DEGERINIZ"
 
