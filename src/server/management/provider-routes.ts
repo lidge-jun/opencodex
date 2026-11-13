@@ -1656,6 +1656,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // credential resolution/network access for providers such as Antigravity.
       return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
     }
+    if (prov.adapter === "trae-cn") {
+      return (await import("./trae-cn-provider-probe")).probeTraeCnProviderFromContext(ctx, name, prov);
+    }
     const { buildModelsRequest, getModelsOAuthAccessSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
     const snapshot = prov.authMode === "oauth" && mayResolveModelsOAuth(name, config.providers[name])

@@ -342,6 +342,8 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
+**TRAE CN**, elle yapılandırılan deneysel bir ACP bağdaştırıcısıdır. Dizinde yalnızca doğrulanmamış bir başvuru kaydı bulunur; yerleşik önayar etkin değildir. [TRAE CN kurulumu (İngilizce)](/guides/providers/#trae-cn-official-acp) bölümüne bakın.
+
 opencodex 107 yerleşik önayar ile birlikte gelir: 86 anahtar tabanlı, 17
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,

@@ -20,6 +20,9 @@ ocx init
 
 1. **选择 provider** — 从内置 registry 的 107 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
 2. **API key** — 粘贴一个 key，或引用一个环境变量，例如 `${ANTHROPIC_API_KEY}`。
+
+   **TRAE CN** 使用已登录的官方 CLI，无需 API 密钥。请先安装 CLI 并登录；向导若提示输入密钥，可直接留空。详见 [TRAE CN 配置说明（英文）](/guides/providers/#trae-cn-official-acp)。
+
 3. **默认模型** — 对于 key、本地和 custom provider，接受预设值或输入模型 id。
 4. **代理端口** — 默认为 `10100`。
 5. **注入到 Codex？** — 在常规 loopback 配置下，opencodex 会在 `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）根级添加 `openai_base_url`，让 Codex 内置的 `openai` provider 指向代理。远程/LAN 绑定则改用带 API 认证 header 的专用 provider 条目。

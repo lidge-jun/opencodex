@@ -1837,6 +1837,7 @@ export const tr: Record<TKey, string> = {
   "modal.freeTierTitle": "Ücretsiz katman",
   "modal.subscriptionCliTitle": "Abonelik CLI'si, API anahtarı değil",
   "modal.subscriptionCliWarning": "Bu sağlayıcı API anahtarı kullanmaz. Bu makinede oturum açılmış resmi Claude Code CLI'sini ({cmd}) çalıştırır ve ücreti o Claude abonelik hesabına yansıtır. OpenCodex bunun için anahtar saklamaz ve buraya girilen bir anahtar asla kullanılmaz. API anahtarıyla faturalandırma için bunun yerine {apiProvider} ekleyin.",
+  "modal.traeCnCliWarning": "Oturum açılmış resmi TRAE CN CLI uygulamasını ({cmd}) kullanır. Önce CLI uygulamasını proxy sunucusuna yükleyip o sunucuda oturum açın; API anahtarı gerekmez. Metin ve akıl yürütme akışlarını destekler; istemci araçları, görseller ve ses desteklenmez.",
   "modal.freeTierDefault": "API anahtarı gerekmez. Doğrudan çalışır.",
   "modal.tab.accounts": "Hesaplar",
   "modal.tab.free": "Ücretsiz",

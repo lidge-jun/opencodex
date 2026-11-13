@@ -23,6 +23,7 @@ import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, 
 import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
 import { chatHasInstructionImage } from "../adapters/claude-cli/instruction-images";
+import { chatHasUnsupportedInstructionMedia } from "../adapters/trae-cn/input-media";
 import {
   chatCompletionsErrorResponse,
   collectChatCompletion,
@@ -111,6 +112,8 @@ import { parseSyntheticRowId } from "./fast-row";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../codex/loopback-target";
 import { applyDroidReasoningDefault, droidReasoningDefault, DROID_DEFAULT_EFFORT_HEADER } from "./droid-reasoning-default";
+import { isShadowSourceModel } from "../lib/shadow-call";
+import { jsonUtf8Bytes } from "../lib/json-byte-size";
 
 type Rec = Record<string, unknown>;
 
@@ -401,6 +404,7 @@ async function handleChatCompletionsWithBudget(
 
   let internalBody: Rec;
   let directConversation: ChatIrConversation | undefined;
+  let chatReplayOriginalInboundBody: Rec | undefined;
   try {
     // Validate the full Chat boundary after routing. Native Chat keeps `chatBody` as
     // its wire source; this Responses projection is used only by the fallback path.
@@ -430,6 +434,17 @@ async function handleChatCompletionsWithBudget(
         ...(isRec(internalBody.reasoning) ? internalBody.reasoning : {}),
         effort: effortRow.effort,
       };
+    }
+    const intercept = config.shadowCallIntercept;
+    const mayRetryPolicy = settledRoute?.routeKind === "policy"
+      || Boolean(intercept?.enabled && intercept.model
+        && isShadowSourceModel(requestedModel, intercept.sourceModels));
+    if (mayRetryPolicy || Boolean(settledRoute?.combo)) {
+      // Policy retries and combo bridge children need the pre-projection conversation. Native
+      // combo targets keep the protocol envelope; ordinary non-replay Chat requests keep neither.
+      // Admit the serialized clone before allocating it and retain its charge with this request.
+      translatorBudget.chargeRetained(jsonUtf8Bytes(chatBody), { kind: "request_copies" });
+      chatReplayOriginalInboundBody = structuredClone(chatBody);
     }
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
@@ -577,7 +592,9 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    chatReplayOriginalInboundBody,
     chatInstructionImage: chatHasInstructionImage(chatBody),
+    chatUnsupportedInstructionMedia: chatHasUnsupportedInstructionMedia(chatBody),
     chatRawReasoningVisible: rawReasoningVisible,
     // A Chat caller may send an explicit empty `tools` array — a deny-all declaration the
     // translation drops along with the whole catalog. Carried separately so the

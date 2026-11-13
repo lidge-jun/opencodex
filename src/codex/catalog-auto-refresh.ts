@@ -253,15 +253,57 @@ async function tick(): Promise<void> {
     // Codex sources read Codex credentials and probe its binary; only a managed client needs them.
     if (codexManaged) await refreshCatalogAutoRefreshSources(config, () => entryGeneration === generation);
     if (entryGeneration !== generation) return;
-    const [{ createManagementConvergeCodex }, { createCatalogConvergeRequest }] = await Promise.all([
-      import("./management-convergence"),
-      import("./catalog-admission"),
+    const managementConvergenceModule = import("./management-convergence");
+    const catalogAdmissionModule = import("./catalog-admission");
+    const [managementConvergence, catalogAdmission] = await Promise.all([
+      managementConvergenceModule, catalogAdmissionModule,
     ]);
-    // A stop or restart landed while the funnel was loading: the result belongs to a
-    // generation that no longer owns the timer, so it must not publish.
+    const createManagementConvergeCodex = managementConvergence.createManagementConvergeCodex;
+    const createCatalogConvergeRequest = catalogAdmission.createCatalogConvergeRequest;
+    // Recheck timer ownership after both funnel modules settle. A stopped or restarted
+    // generation cannot publish the result prepared by this tick.
     if (entryGeneration !== generation) return;
-    const converge = createManagementConvergeCodex(config);
-    const outcome = await converge(createCatalogConvergeRequest({ deadlineMs: TICK_DEADLINE_MS }));
+    let converged = false;
+    let outcome: import("./convergence-types").CatalogOnlyOutcome | undefined;
+    const convergeOnce = async () => {
+      if (converged) return;
+      converged = true;
+      const result = await createManagementConvergeCodex(config)(createCatalogConvergeRequest({ deadlineMs: TICK_DEADLINE_MS }));
+      if (result.kind === "catalog-only") outcome = result;
+    };
+    let fannedOut = false;
+    const fanoutOnce = async () => {
+      if (fannedOut || !outcome?.changed || !clientFanout) return;
+      fannedOut = true;
+      try {
+        const failed = (await clientFanout(() => entryGeneration === generation)).filter(result => !result.ok).length;
+        if (failed > 0 && entryGeneration === generation) {
+          console.warn(`[catalog-auto-refresh] ${failed} client integration(s) were not refreshed; ocx sync retries them`);
+        }
+      } catch {
+        if (entryGeneration === generation) {
+          console.warn("[catalog-auto-refresh] client integrations were not refreshed; ocx sync retries them");
+        }
+      }
+    };
+    // CLI discovery belongs to the background source phase, before any catalog lock. Its
+    // successful roster remains pinned through convergence and connected-client refresh.
+    // Management callers meanwhile converge immediately from existing cached evidence.
+    if (Object.values(config.providers).some(provider =>
+      provider.adapter === "trae-cn" && !provider.disabled && provider.liveModels !== false)) {
+      const { refreshTraeCnCatalogSources } = await import("./catalog/trae-cn-models");
+      try {
+        await refreshTraeCnCatalogSources(config, () => entryGeneration === generation, async () => {
+          await convergeOnce();
+          await fanoutOnce();
+        });
+      } catch {
+        // Source failure still permits publication from the last confirmed roster.
+      }
+    }
+    if (entryGeneration !== generation) return;
+    await convergeOnce();
+    if (!outcome) return;
     if (entryGeneration !== generation) return;
     // createManagementConvergeCodex always projects catalog-only. Any other kind is a
     // funnel contract break, not something this scheduler should re-classify.
@@ -278,17 +320,7 @@ async function tick(): Promise<void> {
         ? "[catalog-auto-refresh] served model set changed; running Codex sessions keep the old list until restarted (ocx sync --restart-codex)"
         : "[catalog-auto-refresh] served model set changed");
     }
-    const fanout = clientFanout;
-    if (outcome.changed && fanout) {
-      const current = () => entryGeneration === generation;
-      try {
-        const failed = (await fanout(current)).filter(result => !result.ok).length;
-        // Outcomes can contain private paths and reasons; only the failure count leaves this hook.
-        if (current() && failed > 0) console.warn(`[catalog-auto-refresh] ${failed} client integration(s) were not refreshed; ocx sync retries them`);
-      } catch {
-        if (current()) console.warn("[catalog-auto-refresh] client integrations were not refreshed; ocx sync retries them");
-      }
-    }
+    await fanoutOnce();
   } catch {
     // A failed refresh is not an error worth surfacing: the next tick tries again.
   } finally {

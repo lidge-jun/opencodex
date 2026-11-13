@@ -781,9 +781,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
-ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it; validation is provider-specific. Notable entries:
+opencodex ships 107 built-in presets: 86 in the key-based registry category, 17 OAuth, three local, and one default ChatGPT-forward preset. Keyless CLI adapters use their official CLI for authentication; experimental TRAE CN is available through manual configuration only. For API-key providers, **Add provider** opens the provider’s dashboard, validates the key, and stores it; validation is provider-specific. Notable entries:
 
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
@@ -1480,6 +1478,8 @@ OpenCodex provides official adapter support for Tencent Cloud's CodeBuddy Code C
 - **Tool Choice Enforcement:** When a request specifies `tool_choice: "required"` or selects a specific named tool, the bridge expects a tool call from the model. If the CLI completes the turn with plain text instead of capturing a tool call, OpenCodex fails closed with a 502 `tool_call_required` error rather than returning an invalid text completion.
 - **Governance Status:** Whether routing this vendor automation surface behind a proxy for a third-party agent satisfies CodeBuddy's acceptable-use terms is an open question flagged for maintainer security review (see the governance note in the provider registry entry). Treat this provider as pending that review, and keep the tool bridge's ownership boundary in mind: the nested CLI advertises tools but never executes them, and approval, sandboxing, and execution remain with the external Codex client.
 - **Entitlements and Billing:** The provider uses the same vendor-documented CodeBuddy account/CLI authentication surface. Availability and billing of free, promotional, trial, or subscription credits remain determined by the user's CodeBuddy account entitlement.
+
+### [TRAE CN (official ACP)](/guides/trae-cn/)
 
 ### Official Qoder CLI (Global & CN)
 

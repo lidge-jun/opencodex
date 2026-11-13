@@ -17,7 +17,7 @@ const provider: OcxProviderConfig = {
   apiKey: "test",
 };
 
-function serialize(modelId: string, target = provider, messages?: OcxParsedRequest["context"]["messages"]): Array<{ role: string; content: string }> {
+function serialize(modelId: string, target = provider, messages?: OcxParsedRequest["context"]["messages"]): Array<{ role: string; content: unknown }> {
   const request = createOpenAIChatAdapter(target).buildRequest({
     modelId,
     context: {
@@ -117,6 +117,22 @@ describe("leading-system chat templates (Qwen3.8-27B, Flash-Next, OrcaSAQ-2-Cybe
     expect(messages.map(message => message.role)).toEqual(["system", "user", "assistant", "tool", "user"]);
     expect(messages[3]).toMatchObject({ role: "tool", tool_call_id: "call_1", content: "Contents." });
     expect(messages[4]).toEqual({ role: "user", content: "Keep the policy." });
+    expect(() => assertTemplateAccepts(messages)).not.toThrow();
+  });
+
+  test("a structured instruction image keeps detail and uses the template-compatible user role", () => {
+    const messages = serialize("Qwen3.8-27B", provider, [
+      { role: "user", content: "First turn.", timestamp: 0 },
+      { role: "developer", content: [
+        { type: "text", text: "Inspect the attachment." },
+        { type: "image", imageUrl: "data:image/png;base64,aGVsbG8=", detail: "high" },
+      ], timestamp: 0 },
+      { role: "user", content: "Second turn.", timestamp: 0 },
+    ]);
+    expect(messages[2]).toEqual({ role: "user", content: [
+      { type: "text", text: "Inspect the attachment." },
+      { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=", detail: "high" } },
+    ] });
     expect(() => assertTemplateAccepts(messages)).not.toThrow();
   });
 

@@ -32,31 +32,19 @@ import {
   CodexMainProfileDrainingError,
 } from "../../codex/auth-context";
 
-/** One responsibility of the Responses request pipeline; state owners are explicit. */
-export async function prepareResponsesSidecarAuth(
+/** Resolve the optional OpenAI helper without rewriting images or reserving a description. */
+export async function resolveResponsesOpenAiSidecar(
   requestContext: Pick<ResponsesRequestContext, "options" | "config" | "req">,
-  requestState: Pick<
-    PreparedResponsesRequest,
-    | "parsed"
-    | "route"
-    | "selectedForwardHeaders"
-    | "translatorBudget"
-  >,
+  requestState: Pick<PreparedResponsesRequest, "parsed" | "route">,
   transportState: Pick<ResponsesTransport, "adapter" | "isPassthrough">,
-) {
+  needsOpenAiVision: boolean,
+): Promise<ResolvedOpenAiForwardSidecar | undefined> {
   const { options, config, req } = requestContext;
-  const { parsed, route, translatorBudget } = requestState;
+  const { parsed, route } = requestState;
   const { isPassthrough } = transportState;
-
-
   let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
-  const visionDescribeTerminal = options.visionDescribeTerminal === true;
   const routedCompaction = parsed._compactionRequest === true
     && (!supportsNativeResponsesCompactionTrigger(route.provider) || parsed._portableCompaction === true);
-  const preserveCompactionPrefix = routedCompaction && transportState.adapter.name === "anthropic";
-  if (routedCompaction) parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
-  const needsOpenAiVision = !visionDescribeTerminal
-    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
   // LOCAL PATCH (runturn-websearch): runTurn adapters can run the web-search
   // sidecar through src/web-search/run-turn-loop.ts, so resolve the helper
   // credential for them too. The passthrough bridge stays fetch-only.
@@ -121,6 +109,38 @@ export async function prepareResponsesSidecarAuth(
       ) throw err;
     }
   }
+  return openAiSidecar;
+}
+
+/** One responsibility of the Responses request pipeline; state owners are explicit. */
+export async function prepareResponsesSidecarAuth(
+  requestContext: Pick<ResponsesRequestContext, "options" | "config" | "req">,
+  requestState: Pick<
+    PreparedResponsesRequest,
+    | "parsed"
+    | "route"
+    | "selectedForwardHeaders"
+    | "translatorBudget"
+  >,
+  transportState: Pick<ResponsesTransport, "adapter" | "isPassthrough">,
+  resolvedOpenAiSidecar?: ResolvedOpenAiForwardSidecar,
+) {
+  const { options, config } = requestContext;
+  const { parsed, route, translatorBudget } = requestState;
+  const routedCompaction = parsed._compactionRequest === true
+    && (!supportsNativeResponsesCompactionTrigger(route.provider) || parsed._portableCompaction === true);
+  const preserveCompactionPrefix = routedCompaction && transportState.adapter.name === "anthropic";
+  if (routedCompaction) parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
+  const visionDescribeTerminal = options.visionDescribeTerminal === true;
+  const needsOpenAiVision = !visionDescribeTerminal
+    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
+  const needsOpenAiSearch = !routedCompaction
+    && (transportState.adapter.runTurn
+      ? shouldResolveOpenAiWebSearchSidecar(config, parsed, transportState.isPassthrough)
+      : (shouldResolveOpenAiWebSearchSidecar(config, parsed, transportState.isPassthrough)
+        || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, transportState.isPassthrough)));
+  const openAiSidecar = resolvedOpenAiSidecar
+    ?? await resolveResponsesOpenAiSidecar(requestContext, requestState, transportState, needsOpenAiVision);
 
   // Vision sidecar: the routed model can't see images (provider.noVisionModels). Describe each
   // attached image through the selected sidecar backend and replace it with text BEFORE the main

@@ -765,8 +765,10 @@ async function gatherRoutedModelsUncached(
       }
       : mergedWithHardBounds;
     const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
+    const wireBounded = enrichedProvider?.adapter === "trae-cn"
+      ? { ...mergedWithAutoCompact, inputModalities: ["text"], supportsVerbosity: false } : mergedWithAutoCompact;
     // Reuse the request-time consumer predicate so custom rows cannot drift from catalog hints.
-    return withVisionSidecarInput(mergedWithAutoCompact, enrichedProvider, visionSidecarEnabled);
+    return withVisionSidecarInput(wireBounded, enrichedProvider, visionSidecarEnabled);
   });
   // Custom rows override discovered rows that encode to the same Codex-facing slug. A provider whose
   // captured discovery declares an order (preferFirst) keeps each replacement in the discovered row's

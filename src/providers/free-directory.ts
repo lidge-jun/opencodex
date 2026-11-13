@@ -12,7 +12,7 @@ export const FREE_PROVIDER_ACCESS_GROUPS = {
     "cloudflare-ai", "cohere", "coze", "duckduckgo-web", "felo-web", "friendliai", "gemini", "github-models",
     "groq", "hackclub", "huggingchat", "huggingface", "iflytek", "inference-net", "kiro", "liquid", "llm7",
     "mistral", "morph", "muse-spark-web", "nara", "navy", "nlpcloud", "ollama-cloud", "opencode", "openrouter",
-    "ovhcloud", "perch", "pollinations", "puter", "qwen-web", "reka", "runcrate", "sambanova", "sparkdesk", "t3-web", "uncloseai",
+    "ovhcloud", "perch", "pollinations", "puter", "qwen-web", "reka", "runcrate", "sambanova", "sparkdesk", "t3-web", "trae-cn", "uncloseai",
   ],
   "recurring-uncapped": [
     "agnes", "ainative", "aion", "baidu", "glm", "glm-cn", "kilo-gateway", "opencode-zen", "requesty",
@@ -235,6 +235,12 @@ export const FREE_PROVIDER_DIRECTORY: readonly FreeDirectoryProvider[] = Object.
       discovery: "unsupported",
       liveModels: false,
       ...(!override ? { note: referenceNote } : {}),
+      ...(id === "trae-cn" ? {
+        label: "TRAE CN CLI (ACP reference)",
+        documentationUrl: "https://docs.trae.cn/cli_agent-client-protocol",
+        dashboardUrl: "https://www.trae.cn",
+        note: "Official CLI ACP startup documentation is available. No canonical proxy preset is enabled: the discovery contract, forwarding authorization, and maintenance-owner commitment remain unverified.",
+      } : {}),
       ...override,
     } satisfies FreeDirectoryProvider;
   });

@@ -60,6 +60,8 @@ import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
 import { unboundPoolSpendRefusalMessage } from "../workflow-refusal";
 import { claudeUsagePreflight } from "../../adapters/claude-cli/usage-admission";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
+import { responsesHasUnsupportedInputMedia, responsesHasUnsupportedToolMedia } from "../../adapters/trae-cn/input-media";
+import { planVisionSidecar } from "../../vision";
 
 // LOCAL PATCH (runturn-websearch): top-level fields route binding or the
 // adapter itself may write during a turn. Iteration-local `turnParsed` objects
@@ -181,19 +183,32 @@ export async function executeResponsesRunTurn(
   };
   // Publish the known subscription pause before headers or a CLI turn, preserving its reset
   // across both Responses and translated Chat instead of presenting a retryable generic 502.
-  if (transportState.runTurnAdapter.name === "claude-cli") {
+  if (transportState.runTurnAdapter.name === "claude-cli" || transportState.runTurnAdapter.name === "trae-cn") {
     if (options.chatInstructionImage || options.responsesInstructionImage || responsesHasInstructionImage(parsed._rawBody)
+      || (transportState.runTurnAdapter.name === "trae-cn"
+        && (() => {
+          const captionUserImages = planVisionSidecar(config, route.provider, route.modelId, parsed, sidecarState.openAiSidecar,
+            { providerName: route.providerName }) !== undefined;
+          return options.chatUnsupportedInstructionMedia
+            || options.responsesUnsupportedInputMedia && !captionUserImages
+            || responsesHasUnsupportedToolMedia(parsed._rawBody)
+            || responsesHasUnsupportedInputMedia(parsed._rawBody, { captionUserImages });
+        })())
       || parsed.context.messages.some(message => message.role === "developer"
         && Array.isArray(message.content) && message.content.some(part => part.type === "image"))) {
       cancelResponseCompletion();
       releaseSearchProbeLease();
       const refusal = new Response(JSON.stringify({ error: {
         type: "invalid_request_error", code: "unsupported_input_modality", param: null,
-        message: "Claude Code CLI does not support images in developer instructions.",
+        message: transportState.runTurnAdapter.name === "trae-cn"
+          ? "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported."
+          : "Claude Code CLI does not support images in developer instructions.",
       } }), { status: 400, headers: { "Content-Type": "application/json" } });
-      markResponseNonReplayable(refusal);
+      if (transportState.runTurnAdapter.name === "claude-cli") markResponseNonReplayable(refusal);
       return refusal;
     }
+  }
+  if (transportState.runTurnAdapter.name === "claude-cli") {
     let usage: Awaited<ReturnType<typeof claudeUsagePreflight>>;
     try {
       usage = await claudeUsagePreflight(parsed.modelId);
@@ -301,6 +316,10 @@ export async function executeResponsesRunTurn(
       let sentKeyBinding: KeyBinding | undefined;
       const emit = (event: AdapterEvent) => {
         if (event.type === "error" && sentKeyBinding) failedKeyBindings.set(event, sentKeyBinding);
+        // A cancelled stream may have stopped draining; keep its latest attempt's reported usage.
+        if (event.type === "incomplete" && event.reason === "client_cancelled" && event.usage && attemptSeq === runTurnAttemptSeq) {
+          transportState.bindKeyUsageFromBridge(event.usage);
+        }
         options.onCompactionRecoveryAdapterEvent?.(event);
         targetQueue.push(event);
       };
@@ -1085,10 +1104,11 @@ export async function executeResponsesRunTurn(
           ? (zeroOutputLimit ?? (firstMeaningful ? classifyUndeclaredFirstTool(firstMeaningful) : undefined))
           : undefined;
         if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
-          if (classifiedError?.usage) transportState.bindKeyUsageFromBridge(classifiedError.usage);
-          const classified = adapterFailureFromEvent(classifiedError ?? (firstMeaningful?.type === "error"
+          const failureEvent: Extract<AdapterEvent, { type: "error" }> = classifiedError ?? (firstMeaningful?.type === "error"
             ? firstMeaningful
-            : { type: "error", status: 502, message: "Adapter ended before producing a response" }));
+            : { type: "error", status: 502, message: "Adapter ended before producing a response" });
+          if (failureEvent.usage) transportState.bindKeyUsageFromBridge(failureEvent.usage);
+          const classified = adapterFailureFromEvent(failureEvent);
           const storageRefusal = firstMeaningful?.type === "error" && firstMeaningful.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
           const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
             storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,

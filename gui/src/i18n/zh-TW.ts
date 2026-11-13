@@ -1514,6 +1514,7 @@ export const zhTW: Record<TKey, string> = {
   "modal.freeTierTitle": "免費層級",
   "modal.subscriptionCliTitle": "訂閱 CLI，而非 API 金鑰",
   "modal.subscriptionCliWarning": "此供應商不使用 API 金鑰。它會呼叫本機已登入的官方 Claude Code CLI（{cmd}），並向該 Claude 訂閱帳戶計費。OpenCodex 不會為其儲存任何金鑰，在此輸入的金鑰也永遠不會被使用。如需以 API 金鑰計費，請改為新增 {apiProvider}。",
+  "modal.traeCnCliWarning": "透過已登入的官方 TRAE CN CLI（{cmd}）連線。請先在代理主機上安裝 CLI 並登入，無需 API 金鑰。支援文字與推理串流，暫不支援用戶端工具、圖片及音訊。",
   "modal.freeTierDefault": "無需 API 金鑰，開箱即用。",
   "modal.tab.accounts": "帳號",
   "modal.tab.free": "免費",

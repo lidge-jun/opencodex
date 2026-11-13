@@ -1823,6 +1823,7 @@ export const vi: Record<TKey, string> = {
   "modal.freeTierTitle": "Gói miễn phí",
   "modal.subscriptionCliTitle": "CLI theo gói đăng ký, không phải API key",
   "modal.subscriptionCliWarning": "Nhà cung cấp này không dùng API key. Nó chạy Claude Code CLI chính thức đã đăng nhập trên máy này ({cmd}) và tính phí vào tài khoản gói đăng ký Claude đó. OpenCodex không lưu key nào cho nó, và key nhập ở đây sẽ không bao giờ được dùng. Để tính phí theo API key, hãy thêm {apiProvider} thay thế.",
+  "modal.traeCnCliWarning": "Sử dụng CLI TRAE CN chính thức đã đăng nhập ({cmd}). Hãy cài đặt CLI và đăng nhập trên máy chủ proxy trước; không cần khóa API. Hỗ trợ truyền văn bản và suy luận, nhưng chưa hỗ trợ công cụ phía máy khách, hình ảnh hoặc âm thanh.",
   "modal.freeTierDefault": "Không cần API key. Có thể sử dụng ngay.",
   "modal.tab.accounts": "Tài khoản",
   "modal.tab.free": "Miễn phí",

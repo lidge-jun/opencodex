@@ -24,6 +24,8 @@ ocx init
 1. **Pick a provider** — choose one of the 107 built-in registry presets or `custom` to type a base
    URL and adapter.
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
+   For **TRAE CN**, press Enter to leave the wizard’s key prompt empty: the signed-in official
+   CLI owns authentication. Install and sign in to the CLI first; see [TRAE CN setup](/guides/providers/#trae-cn-official-acp).
 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.
 4. **Proxy port** — defaults to `10100`.
 5. **Inject into Codex?** — on a normal loopback setup, opencodex adds a root `openai_base_url` to

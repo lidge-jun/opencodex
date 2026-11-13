@@ -61,6 +61,32 @@ async function anchoredLine(path: string, anchor: string): Promise<string> {
 }
 
 describe("documented provider preset counts match the registry", () => {
+  test("TRAE CN quickstart leaves the key empty and links CLI login setup", async () => {
+    const page = await Bun.file(repoPath(QUICKSTARTS[0].path)).text();
+    const note = page.match(/For \*\*TRAE CN\*\*[^\n]*(?:\n[^\n]+)*/)?.[0] ?? "";
+    expect(note).toMatch(/^For \*\*TRAE CN\*\*, press Enter to leave the wizard’s key prompt empty:/);
+    expect(note).toContain("CLI owns authentication. Install and sign in to the CLI first;");
+    expect(note).toContain("[TRAE CN setup](/guides/providers/#trae-cn-official-acp)");
+  });
+
+  const translatedTraeNotes: Record<string, string> = {
+    ja: "**TRAE CN** はログイン済みの公式 CLI を使用するため、API キーは不要です。CLI をインストールしてログインし、ウィザードのキー入力欄は空のまま進めてください。",
+    ko: "**TRAE CN**은 로그인된 공식 CLI를 사용하므로 API 키가 필요하지 않습니다. CLI를 설치하고 로그인한 후 마법사의 키 입력란은 비워 두세요.",
+    fr: "**TRAE CN** utilise le CLI officiel déjà connecté et ne nécessite pas de clé API. Installez le CLI, connectez-vous et laissez le champ de clé vide dans l’assistant.",
+    ru: "**TRAE CN** использует официальный CLI с выполненным входом и не требует ключа API. Установите CLI, войдите в аккаунт и оставьте поле ключа в мастере пустым.",
+    tr: "**TRAE CN**, oturum açılmış resmi CLI uygulamasını kullanır; API anahtarı gerekmez. CLI uygulamasını yükleyip oturum açın ve sihirbazdaki anahtar alanını boş bırakın.",
+    "zh-cn": "**TRAE CN** 使用已登录的官方 CLI，无需 API 密钥。请先安装 CLI 并登录；向导若提示输入密钥，可直接留空。",
+    "zh-tw": "**TRAE CN** 使用已登入的官方 CLI，無需 API 金鑰。請先安裝 CLI 並登入；精靈若要求輸入金鑰，可直接留空。",
+  };
+  for (const quickstart of QUICKSTARTS.filter(row => row.locale !== "en")) {
+    test(`${quickstart.locale} quickstart gives affirmative empty-key and CLI sign-in guidance`, async () => {
+      const page = await Bun.file(repoPath(quickstart.path)).text();
+      const note = page.split("\n").map(line => line.trim()).find(line => line.startsWith("**TRAE CN**")) ?? "";
+      expect(note.startsWith(translatedTraeNotes[quickstart.locale]!)).toBe(true);
+      expect(note).toContain("(/guides/providers/#trae-cn-official-acp)");
+    });
+  }
+
   test("the registry is the only source of the numbers under test", () => {
     // A derived count that collapsed to zero would make every assertion below vacuous.
     expect(TOTAL).toBeGreaterThan(0);
@@ -71,21 +97,24 @@ describe("documented provider preset counts match the registry", () => {
   for (const guide of GUIDES) {
     test(`${guide.locale} provider guide states ${TOTAL} presets and ${KEY_PRESETS} key-based`, async () => {
       const line = await anchoredLine(guide.path, guide.anchor);
-      expect(line, `${guide.path} total`).toContain(String(TOTAL));
-      expect(line, `${guide.path} key-based split`).toContain(String(KEY_PRESETS));
+      const counts = [...line.matchAll(/\d+/g)].map(match => Number(match[0]));
+      expect(counts[0], `${guide.path} total`).toBe(TOTAL);
+      expect(counts[1], `${guide.path} key-based split`).toBe(KEY_PRESETS);
     });
   }
 
   for (const quickstart of QUICKSTARTS) {
     test(`${quickstart.locale} quickstart states ${TOTAL} presets`, async () => {
       const line = await anchoredLine(quickstart.path, quickstart.anchor);
-      expect(line, `${quickstart.path} total`).toContain(String(TOTAL));
+      const prose = line.replace(/^\s*\d+[.)]\s+/, "");
+      expect(Number(prose.match(/\d+/)?.[0]), `${quickstart.path} total`).toBe(TOTAL);
     });
   }
 
   test("the structure ops record carries the same split", async () => {
     const line = await anchoredLine(STRUCTURE.path, STRUCTURE.anchor);
-    expect(line).toContain(String(TOTAL));
-    expect(line).toContain(String(KEY_PRESETS));
+    const counts = [...line.matchAll(/\d+/g)].map(match => Number(match[0]));
+    expect(counts[0]).toBe(TOTAL);
+    expect(counts[1]).toBe(KEY_PRESETS);
   });
 });

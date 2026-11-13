@@ -86,6 +86,7 @@ import type { OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
 import { parseRequest } from "../../responses/parser";
 import { responsesHasFileImage, responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
+import { responsesHasUnsupportedInputMedia } from "../../adapters/trae-cn/input-media";
 import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
@@ -260,6 +261,7 @@ export async function prepareResponsesRequest(
     return decodeRequestErrorResponse(err, "responses");
   }
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
+  options.responsesUnsupportedInputMedia ||= responsesHasUnsupportedInputMedia(body, { captionUserImages: true });
   options.responsesFileImage ||= responsesHasFileImage(body);
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
   const originalSelector = options.mainHardLockFallbackOverride?.sourceModel ?? options.compactionRoutingOverride?.sourceModel
@@ -473,6 +475,7 @@ export async function prepareResponsesRequest(
   if (!options.comboReplaySnapshot) observeLinkTurnExpansion(options.linkTurn, req, logCtx, body, previousResponseInputExpanded ? "chained"
     : body && typeof body === "object" && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string" ? "unexpanded" : "none");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
+  options.responsesUnsupportedInputMedia ||= responsesHasUnsupportedInputMedia(body, { captionUserImages: true });
   options.responsesFileImage ||= responsesHasFileImage(body);
   // Counted after replay expansion so the catalog this request pays for is the one measured:
   // input restored from stored continuation state is history, and the prefix removes it.

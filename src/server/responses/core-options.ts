@@ -167,6 +167,8 @@ export interface HandleResponsesOptions {
   onRequestBodyRead?: () => void;
   /** Internal handoff for retry wrappers that must reuse the already-accounted request body. */
   onRequestBodyParsed?: (body: unknown) => void;
+  /** Original Chat body retained only for eligible policy retries and translated combo children. */
+  chatReplayOriginalInboundBody?: unknown;
   forceEmptyResponseId?: boolean;
   /** Internal, connection-owned control channel; never reconstructed from headers. */
   nativeControl?: NativeResponseControl;
@@ -313,8 +315,12 @@ export interface HandleResponsesOptions {
   chatRawReasoningVisible?: boolean;
   /** Value-free fact retained before Chat instruction content is projected to text. */
   chatInstructionImage?: boolean;
+  /** Original Chat instruction content unsupported by the text-only TRAE adapter. */
+  chatUnsupportedInstructionMedia?: boolean;
   /** Original Responses instruction image, retained across preprocessing and combo replay. */
   responsesInstructionImage?: boolean;
+  /** Unsupported instruction/agent media retained before Responses parsing and combo replay. */
+  responsesUnsupportedInputMedia?: boolean;
   /** File-backed Responses image retained before parsing and replay. */
   responsesFileImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */

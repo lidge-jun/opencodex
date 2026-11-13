@@ -70,6 +70,7 @@ import {
   previousResponseProviderState,
 } from "../../responses/state";
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
+import { restoreChatInstructionMedia } from "./chat-policy-media";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
@@ -446,7 +447,8 @@ export async function executeComboResponses(
     : undefined;
   // Expand previous_response_id before image policy and child dispatch so a
   // continuation that only references prior images still fails closed when
-  // imageInput is disabled (and so targets see the full replayed input).
+  // imageInput is disabled (and so targets see the full replayed input). Chat projection can
+  // flatten instruction images, so its retained value-free fact participates in the same guard.
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
   const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
@@ -486,7 +488,7 @@ export async function executeComboResponses(
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     );
   }
-  if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
+  if (combo.imageInput === "disabled" && (options.chatInstructionImage || comboRequestHasImageInput(body))) {
     return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
   }
   // The combo ladder owns the whole logical request, so the catalog diagnostic is counted here for
@@ -1107,7 +1109,7 @@ export async function executeComboResponses(
       provider: targetRoute.provider,
       modelId: targetRoute.modelId,
     });
-    const childBody = concreteComboRequestBody(
+    const projectedChildBody = concreteComboRequestBody(
       childInput,
       pick.target,
       jevEffortApplies ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
@@ -1117,6 +1119,9 @@ export async function executeComboResponses(
         ? (initialJevDecision.effort === null ? "fallback" : "force")
         : combo.defaultEffortMode,
     );
+    const childBody = options.inboundWire === "chat" && options.chatReplayOriginalInboundBody !== undefined
+      ? restoreChatInstructionMedia(projectedChildBody, options.chatReplayOriginalInboundBody)
+      : projectedChildBody;
     if (initialJevDecision) {
       if (jevEffortApplies) delete childBody.service_tier;
       if (jevEffortApplies && initialJevDecision.effort !== null) {

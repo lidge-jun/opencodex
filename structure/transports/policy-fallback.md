@@ -6,6 +6,12 @@ Subagent selection and encrypted-task recovery keep that membership; a replaceme
 refused before dispatch, and policy fallback may continue with another originally eligible candidate.
 A shadow-intercept target is probed without that capture and is captured only once interception is
 accepted, so a declined policy target never scopes the request's own route.
+For Chat ingress, candidate replay retains the normalized settings from the first attempt, including effort decoded from a
+synthetic selector, while rebuilding only the conversation and instructions from the original inbound messages through the
+[media-preserving chronological projection](../providers/chat-compat.md#chronological-in-conversation-instructions).
+This keeps later media instructions in place without duplicating their text or replacing the normalized model and reasoning.
+The original Chat body is cloned only for a policy route or a shadow request that can enter one. Its serialized size is
+admitted to the request's translator `request_copies` budget before allocation; non-policy Chat requests retain no clone.
 The outer wrapper snapshots the original wire body of any request whose model a configured shadow
 intercept can rewrite: interception runs after that snapshot, so a routing-profile target selected
 by interception keeps the same candidate traversal and exhausted-refusal 400 a direct policy

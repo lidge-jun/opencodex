@@ -3031,6 +3031,7 @@ export const zh: Record<TKey, string> = {
   "modal.freeTierTitle": "免费层级",
   "modal.subscriptionCliTitle": "订阅 CLI，而非 API 密钥",
   "modal.subscriptionCliWarning": "此提供商不使用 API 密钥。它调用本机已登录的官方 Claude Code CLI（{cmd}），并向该 Claude 订阅账户计费。OpenCodex 不为其存储任何密钥，在此输入的密钥也永远不会被使用。如需按 API 密钥计费，请改为添加 {apiProvider}。",
+  "modal.traeCnCliWarning": "通过已登录的官方 TRAE CN CLI（{cmd}）连接。请先在代理主机上安装 CLI 并登录，无需 API 密钥。支持文本和推理流，暂不支持客户端工具、图片和音频。",
   "modal.freeTierDefault": "无需 API 密钥，开箱即用。",
   "modal.tab.accounts": "账户",
   "modal.tab.free": "免费",

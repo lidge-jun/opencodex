@@ -16,6 +16,9 @@ ocx init
 1. **選擇 provider** —— 從內建 registry 的 107 個預設中選擇一個，或選擇 `custom` 手動輸入
    base URL 和 adapter。
 2. **API key** —— 貼上一個 key,或引用一個環境變數,例如 `${ANTHROPIC_API_KEY}`。
+
+   **TRAE CN** 使用已登入的官方 CLI，無需 API 金鑰。請先安裝 CLI 並登入；精靈若要求輸入金鑰，可直接留空。詳見 [TRAE CN 設定說明（英文）](/guides/providers/#trae-cn-official-acp)。
+
 3. **預設模型** —— 對於 API key、本機和 custom provider，可接受預設值或輸入模型 id。
 4. **代理埠** —— 預設為 `10100`。
 5. **注入到 Codex？** —— 在通常的迴環地址設定中，opencodex 會在

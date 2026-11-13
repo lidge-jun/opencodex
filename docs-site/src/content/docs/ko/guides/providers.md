@@ -212,6 +212,8 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
+**TRAE CN**은 수동으로 구성하는 실험적 ACP 어댑터입니다. 디렉터리에는 미검증 참고 항목만 있으며 내장 프리셋은 활성화되어 있지 않습니다. [TRAE CN 설정 안내(영문)](/guides/providers/#trae-cn-official-acp)를 참고하세요.
+
 opencodex에는 빌트인 프리셋이 107개 들어 있습니다. 키 방식 86개, OAuth 17개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
