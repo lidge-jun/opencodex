@@ -42,6 +42,7 @@ export {
   comboCooldownRetryAfterSeconds,
   COMBO_REQUEST_RATE_COOLDOWN_MS,
   coolComboTarget,
+  coolComboTargetForCommittedTerminal,
   earliestComboCooldown,
   earliestComboCooldownExpiry,
   isComboTargetInCooldown,
@@ -52,6 +53,8 @@ export {
   comboFailureCooldownScope,
   type ComboFailureDecision,
   type ComboFailureCooldownScope,
+  type CommittedTerminalCooldownFacts,
+  type CommittedTerminalServingAttempt,
 } from "./failover";
 export {
   comboIdFromRawBody,
