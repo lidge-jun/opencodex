@@ -608,6 +608,11 @@ export function journalledRevokeError(error: unknown, operationId: string): unkn
   if (!/^[a-z_]{1,64}$/.test(code)) return error;
   if (code === "operation_journal_full") return new RuntimeApiError(journalFullGuidance(error.body), error.status, error.body);
   if (Object.hasOwn(REVOKE_REFUSALS, code)) return new RuntimeApiError(REVOKE_REFUSALS[code] + " (code " + code + ")", error.status, error.body);
+  // A fresh forced revoke is refused before its tombstone, first intent and tunnel stop and settles failed_clean; a resumed one may
+  // re-own its retirement receipt first and stay open or unknown (#8416). So neither "nothing changed" nor "use a new id" is claimed.
+  if (code === "tombstone_limit") {
+    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup, so the link and its key stay active; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover, or have a person on this Home run ocx link recover --forget for machines that are gone. Then check ocx link operations --operation-id " + operationId + ": if it reads failed_clean, a repeat of this id returns this refusal, so retry with a new operation id; otherwise repeat this one. (code tombstone_limit)", error.status, error.body);
+  }
   const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
   const resolve = outcome === "unknown" ? "; check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
   return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve, error.status, error.body);
@@ -623,7 +628,4 @@ const REVOKE_REFUSALS: Record<string, string> = {
   // A resumed revoke can re-own its retirement receipt before this 409 (#8416), so it claims only what holds for every path.
   link_operation_in_progress: "Another link operation for this alias or link is running. This attempt did not touch the link, its key or the Child; retry when it ends.",
   operation_journal_unreadable: "The link operation journal (<configDir>/link/operations.json) is damaged. Nothing was changed; keep a copy, move it aside and retry. ocx link revoke --force without --operation-id still runs.",
-  // Refused before the tombstone is written, before the first intent and before the tunnel stops (removeReserved).
-  // tombstone_write_failed stays generic: the file may have been written before its permissions step failed.
-  tombstone_limit: "Too many forced revokes of ephemeral Children are waiting for cleanup, so the link and its key stay active. Nothing was changed; recover them with ocx link recover, or have a person on this Home run ocx link recover --forget for machines that are gone. A repeat of this operation id returns this refusal (it is recorded as failed_clean); retry with a new operation id.",
 };

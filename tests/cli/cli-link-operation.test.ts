@@ -246,15 +246,16 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
     } finally { h.restore(); }
   });
 
-  // Only --force can meet the tombstone limit (#8612): refused before its tombstone, first intent and tunnel stop, and
-  // settled failed_clean, so a repeat of the same operation id replays this refusal even after tombstones were recovered.
-  test("a forced revoke refused at the tombstone limit says nothing changed and that a repeat of its id replays the refusal", async () => {
+  // Only --force can meet the tombstone limit (#8612). A fresh revoke is refused before anything and settles failed_clean, but a
+  // resumed one may re-own its retirement receipt first and stay open or unknown (#8416), so the text claims neither.
+  test("a forced revoke refused at the tombstone limit says the link and key stay, and to check the operation before reusing its id", async () => {
     const h = harness([{ status: 409, body: { error: { code: "tombstone_limit", message: "server-chosen text" } } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--force", "--yes", "--operation-id", "detach-8"], h.deps)).toBe(5);
       const printed = [...h.out, ...h.err].join("\n");
       expect(printed).toContain("waiting for cleanup");
-      expect(printed).toContain("Nothing was changed");
-      expect(printed).toContain("retry with a new operation id");
+      expect(printed).toContain("did not touch the link, its key or the Child");
+      expect(printed).toContain("ocx link operations --operation-id detach-8");
+      expect(printed).not.toContain("Nothing was changed");
       expect(printed).toContain("(code tombstone_limit)");
       expect(printed).not.toContain("server-chosen text");
     } finally { h.restore(); }
