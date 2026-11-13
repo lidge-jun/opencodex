@@ -33,7 +33,7 @@ With a price set, the estimate for a metered row follows these rules:
 - A row that reports credits costs `providerCredits x creditPriceUsd`. Its estimated token counts
   are still recorded, but they no longer set the price, so a long conversation that Kiro cached
   reads the way Kiro billed it.
-- A row with no credits and no output — refused or cancelled before generation — costs 0.
+- A row with no credits and no output has an unavailable cost: no output does not prove the request was free. An explicit zero credit reading remains zero.
 - A row with output but no reported credits keeps the token estimate, because Kiro reported no
   credit spend to price.
 - Account-suffixed rows such as `kiro-<account>` use the provider's price. An entry for an exact

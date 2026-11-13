@@ -89,6 +89,20 @@ export function mixedComboRow(requestId: string) {
   } as never);
 }
 
+/** A credit leg, a lower-bound token leg, and a separate exact token leg. */
+export function mixedThreeLegComboRow(requestId: string) {
+  const attempt = (overrides: Record<string, unknown>) => ({ ...baseRow, ...overrides });
+  return requestLogDto({
+    ...baseRow, requestId, provider: "combo", model: "combo/mixed-three",
+    usageStatus: "estimated", usage: { inputTokens: 901_100, outputTokens: 1_410, estimated: true },
+    attempts: [
+      attempt({ ordinal: 1, provider: "kiro", model: "claude-opus-5.5", adapter: "kiro", usageStatus: "estimated", usage: { inputTokens: 600_000, outputTokens: 400, providerCredits: 1.95, estimated: true } }),
+      attempt({ ordinal: 2, provider: "xai", model: "grok-4.7", adapter: "openai", usageStatus: "reported", usage: longUsage, tierOutcome: priorityTierOutcome }),
+      attempt({ ordinal: 3, provider: "xai", model: "grok-4.7", adapter: "openai", usageStatus: "reported", usage: { inputTokens: 100, outputTokens: 10 } }),
+    ],
+  } as never);
+}
+
 /**
  * The same two legs, but the token leg resolves an exact standard rate: under the long-context
  * band and with no Priority outcome, so nothing in the sum is a floor.

@@ -656,18 +656,10 @@ function creditCost(provider: string, usage: OcxUsage, creditPrices: ReadonlyMap
   if (price === undefined) return { kind: "absent" };
   const credits = usage.providerCredits;
   if (typeof credits !== "number") {
-    // A credit-billed provider reports credits on every metered response; no reading and no output
-    // means the request was refused or cancelled before generation, which the provider does not bill.
-    // With output present the reading is genuinely missing, so the token estimate still applies —
-    // that is the documented shape of an older or partial row, not an invented amount.
-    if (usage.outputTokens === 0) {
-      return {
-        kind: "billed",
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        // A zero charge still names its basis, so its four zeroes are never read as a token split.
-        billing: { source: "provider-credits", providerCredits: 0, creditPriceUsd: price },
-      };
-    }
+    // No output is not proof of a free request: locally synthesized and legacy usage can
+    // lack a credit observation even after a charge. Keep the legacy token fallback for
+    // rows with output, but do not invent an observed zero when output is absent.
+    if (usage.outputTokens === 0) return { kind: "unrepresentable" };
     return { kind: "absent" };
   }
   // A reading that exists but is corrupt (NaN, Infinity, negative) is not a missing reading: it is
@@ -807,7 +799,7 @@ function comboBilling(estimates: readonly AttemptCostEstimate[], total: number):
  * A credit charge is `credits x price`, exact for the configured price, so it can never be the
  * reason a total is a floor — and it must not veto one either. A mixed combo of an exact credit
  * leg beside a token leg under an unresolved Priority rate still sums to `>=` the true total:
- * `exact + >=token`. Consulting the token legs alone keeps that floor, while a credit leg whose
+ * `exact + >=token`. Consulting any token-priced lower bound keeps that floor, while a credit leg whose
  * own catalog rate happened to be a floor contributes nothing, because that rate priced neither
  * the leg nor the total.
  *
@@ -822,7 +814,9 @@ function comboIsLowerBound(
   const pricedFromTokens = billing
     ? estimates.filter(est => est.billing === undefined)
     : estimates;
-  return pricedFromTokens.length > 0 && pricedFromTokens.every(est => est.priorityLowerBound === true);
+  return billing
+    ? pricedFromTokens.some(est => est.priorityLowerBound === true)
+    : pricedFromTokens.length > 0 && pricedFromTokens.every(est => est.priorityLowerBound === true);
 }
 
 /**
@@ -858,7 +852,7 @@ export function estimateComboCost(
   }
   // A sum of individually representable charges can still leave the representable range. Fail
   // closed rather than serve a total that serializes as null.
-  if (!Number.isFinite(cost.total)) return null;
+  if (!Number.isFinite(cost.total) || Object.values(tokens).some(value => !Number.isFinite(value))) return null;
   const billing = comboBilling(estimates, cost.total);
   return {
     tokens,
