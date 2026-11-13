@@ -17,7 +17,7 @@ import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex
 import { isNativeMainTrafficBlocked, waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
 import { startServer } from "../../src/server";
 import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
-import { findAvailablePort } from "../../src/server/ports";
+import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse } from "../../src/server/ports";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { isTestHomeGuardArmed } from "../../src/lib/test-home-guard";
 import type { OcxConfig } from "../../src/types";
@@ -175,24 +175,37 @@ export async function reserveIngressFixture(options: {
       throw new Error("Unexpected outbound request in Reserve ingress fixture");
     }, { preconnect() { /* Never open an upstream socket from a fixture hint. */ } });
 
-    const localPort = await findAvailablePort(0, "127.0.0.1");
-    const publicPort = await findAvailablePort(0, "0.0.0.0", { reservedPort: localPort });
-    expect(publicPort).not.toBe(localPort);
     const hostname = options.primaryLoopback ? "127.0.0.1" : "0.0.0.0";
-    const config: OcxConfig = { port: publicPort, hostname, defaultProvider: "openai",
-      openaiProviderTierVersion: 2, codexDesktopAuthless: true, codexMainAccountHardLock: false,
-      websockets: true, subagentModels: [], codexAccounts: [], codexAccountNamespaces: { main: MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET },
-      unauthenticatedLoopbackListener: { enabled: true, port: localPort },
-      providers: {
-        openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", upstreamWebsocket: false,
-          baseUrl: "https://chatgpt.com/backend-api/codex" },
-        keyed: { adapter: "openai-responses", authMode: "key", apiKey: "sk-ingress-fixture", baseUrl: "https://reserve-keyed.example.test/v1" },
-      } };
-    options.configure?.(config);
-    saveConfig(config);
-    expect(loadConfig()).toMatchObject({ hostname, codexDesktopAuthless: config.codexDesktopAuthless,
-      codexAccountNamespaces: { main: MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET } });
-    server = startServer(publicPort, { inspectNativeCodexOwnership: ownedServiceHomeInspection("Reserve dual-listener fixture") });
+    // A probed port is free only until someone else binds it; on a shared runner another process can
+    // take it before startServer does (EADDRINUSE, run 43369456647). Pick fresh ports and start again,
+    // as the CLI's own start does, only for that bind collision.
+    let localPort = 0, publicPort = 0;
+    let config!: OcxConfig;
+    for (let attempt = 1; ; attempt++) {
+      localPort = await findAvailablePort(0, "127.0.0.1");
+      publicPort = await findAvailablePort(0, "0.0.0.0", { reservedPort: localPort });
+      expect(publicPort).not.toBe(localPort);
+      config = { port: publicPort, hostname, defaultProvider: "openai",
+        openaiProviderTierVersion: 2, codexDesktopAuthless: true, codexMainAccountHardLock: false,
+        websockets: true, subagentModels: [], codexAccounts: [], codexAccountNamespaces: { main: MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET },
+        unauthenticatedLoopbackListener: { enabled: true, port: localPort },
+        providers: {
+          openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", upstreamWebsocket: false,
+            baseUrl: "https://chatgpt.com/backend-api/codex" },
+          keyed: { adapter: "openai-responses", authMode: "key", apiKey: "sk-ingress-fixture", baseUrl: "https://reserve-keyed.example.test/v1" },
+        } };
+      options.configure?.(config);
+      saveConfig(config);
+      expect(loadConfig()).toMatchObject({ hostname, codexDesktopAuthless: config.codexDesktopAuthless,
+        codexAccountNamespaces: { main: MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET } });
+      try {
+        server = startServer(publicPort, { inspectNativeCodexOwnership: ownedServiceHomeInspection("Reserve dual-listener fixture") });
+        break;
+      } catch (error) {
+        const collided = isAddrInUse(error) || (error instanceof AuxiliaryListenerBindError && isAddrInUse(error.cause));
+        if (!collided || attempt >= 3) throw error;
+      }
+    }
     await waitForNativeMainStartupGate();
     expect(isNativeMainTrafficBlocked()).toBe(false);
     reconcileMainCodexAccountRuntimeState();
