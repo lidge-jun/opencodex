@@ -44,8 +44,10 @@ const OPERATION_REFUSALS: Record<string, string> = {
   link_operation_open: "An unfinished enrollment holds this alias; repeat it with its own operation id to settle it first.",
   // The same 409 answers a concurrent probe, confirmation, route edit, enrollment or revoke of the alias.
   link_operation_in_progress: "Another link operation for this alias is running; retry when it ends.",
-  full_install_present: "A full OpenCodex install is on the Child; --require-ephemeral refused it before any change.",
-  full_install_census_failed: "The Child could not be checked for a full OpenCodex install; nothing was changed.",
+  // The census runs inside the apply before any plant, key or Child change; with --operation-id the apply still records its
+  // entry, and confirm-host already wrote the known_hosts pin, so these name only what the apply left alone.
+  full_install_present: "A full OpenCodex install is on the Child; --require-ephemeral refused it before the apply changed the Child, a key or a link.",
+  full_install_census_failed: "The Child could not be checked for a full OpenCodex install; the apply changed no key, link or Child file.",
   require_ephemeral_unsupported: "--require-ephemeral is not supported for a Windows Child.",
 };
 
@@ -57,16 +59,17 @@ function operationNote(error: unknown, operationId: string | undefined): string 
 
 /**
  * The CLI's own text for 409 operation_journal_full, picked by the closed bound field (an older Home sends none). Never
- * the server's message; the code and the bound ride along for scripts.
+ * the server's message; the code and the bound ride along for scripts. The refusal comes before the entry is written; for
+ * an add, confirm-host already wrote the known_hosts pin, so only the apply changed nothing.
  */
-export function journalFullGuidance(body: unknown): string {
+export function journalFullGuidance(body: unknown, kind: "add" | "revoke"): string {
   const bound = record(body) && (body.bound === "unsettled" || body.bound === "recent") ? body.bound : undefined;
   const text = bound === "unsettled"
     ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " open or unresolved operations. Check the Child of each residual or unknown one, then run ocx link operations resolve --operation-id <id> --yes; repeat an open one with its operation id first. ocx link operations lists them."
     : bound === "recent"
       ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " operations that settled within the last 2 hours and three minutes; retry once the oldest of them is older than that."
       : "The link operation journal is full; ocx link operations lists its entries.";
-  return text + " Nothing was changed. (code operation_journal_full)" + (bound ? " (bound " + bound + ")" : "");
+  return text + (kind === "add" ? " The apply changed nothing." : " Nothing was changed.") + " (code operation_journal_full)" + (bound ? " (bound " + bound + ")" : "");
 }
 type LinkRequest = <T>(path: string, init: RequestInit, deps: LinkCliDeps) => Promise<T>;
 
@@ -335,7 +338,7 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       const codeSuffix = (phase || note) && typeof code === "string" ? " (code " + code + ")" : "";
       if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : "") + codeSuffix);
       // Keeps the 409 (exit 5) a full journal always gave.
-      if (code === "operation_journal_full") throw new RuntimeApiError(journalFullGuidance(error.body), error.status, error.body);
+      if (code === "operation_journal_full") throw new RuntimeApiError(journalFullGuidance(error.body, "add"), error.status, error.body);
       if (typeof code === "string" && Object.hasOwn(OPERATION_REFUSALS, code)) throw new Error(OPERATION_REFUSALS[code] + " (code " + code + ")");
       if (note && typeof code === "string") throw new Error(error.message + " (code " + code + ")");
     }

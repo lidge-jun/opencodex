@@ -182,6 +182,23 @@ describe("guidance for journal refusals and unfinished revokes (O1c)", () => {
       expect(printed).toContain(guidance);
       expect(printed).toContain("(code operation_journal_full)");
       if (boundNote) expect(printed).toContain(boundNote);
+      // confirm-host already wrote the known_hosts pin before this apply, so only the apply changed nothing.
+      expect(printed).toContain("The apply changed nothing");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  test.each([
+    ["full_install_present", 409, "refused it before the apply changed the Child, a key or a link"],
+    ["full_install_census_failed", 502, "the apply changed no key, link or Child file"],
+  ])("add --require-ephemeral refused with %s claims only what the apply left alone (its journal entry is recorded)", async (code, status, text) => {
+    const h = harness([notFound, { body: probe }, { body: confirm }, { status, body: { error: { code, message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP, "--require-ephemeral"], h.deps)).not.toBe(0);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain(text);
+      expect(printed).not.toContain("nothing was changed");
+      expect(printed).not.toContain("before any change");
       expect(printed).not.toContain("server-chosen text");
     } finally { h.restore(); }
   });
@@ -213,6 +230,8 @@ describe("guidance for journal refusals and unfinished revokes (O1c)", () => {
       const printed = [...h.out, ...h.err].join("\n");
       expect(printed).toContain("ocx link operations resolve --operation-id <id> --yes");
       expect(printed).toContain("(code operation_journal_full)");
+      // A revoke has no step before the refused request, so here nothing was changed.
+      expect(printed).toContain("Nothing was changed");
       expect(printed).not.toContain("server-chosen text");
     } finally { h.restore(); }
   });

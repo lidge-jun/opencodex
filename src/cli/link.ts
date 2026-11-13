@@ -608,7 +608,7 @@ export function journalledRevokeError(error: unknown, operationId: string, linkI
   if (!/^[a-z_]{1,64}$/.test(code)) return error;
   // Commands are printed so that they run as printed: only a validated link id, a placeholder otherwise.
   const shownLink = linkId !== undefined && LINK_ID.test(linkId) ? linkId : "<link id>";
-  if (code === "operation_journal_full") return new RuntimeApiError(journalFullGuidance(error.body), error.status, error.body);
+  if (code === "operation_journal_full") return new RuntimeApiError(journalFullGuidance(error.body, "revoke"), error.status, error.body);
   if (Object.hasOwn(REVOKE_REFUSALS, code)) return new RuntimeApiError(REVOKE_REFUSALS[code] + " (code " + code + ")", error.status, error.body);
   if (Object.hasOwn(RETIREMENT_GUIDANCE, code)) return new RuntimeApiError(RETIREMENT_GUIDANCE[code]!(shownLink) + " (code " + code + ")", error.status, error.body);
   // A fresh forced revoke is refused before its tombstone, first intent and tunnel stop and its refusal is recorded; a resumed one
