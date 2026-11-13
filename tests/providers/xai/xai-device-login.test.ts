@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { classifyLoginCodeError } from "../../../src/oauth/login-flow-state";
 import { loginXaiDevice, XaiRedirectRefusedError, XaiTokenRequestError } from "../../../src/oauth/xai";
 
 const DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
@@ -50,6 +51,20 @@ describe("xAI device login", () => {
     };
     return { waits, sleep, clock, now: { peek: () => now } };
   };
+
+  for (const [label, responses, expected] of [
+    ["outage", [503, 503], "provider_unreachable"],
+    ["pending", [400, 400], "invalid_or_expired_code"],
+  ] as const) test(`deadline after ${label} classifies the last poll`, async () => {
+    const f = clockFixture();
+    try {
+      const calls = mockXai({ device_code: "d", user_code: "u", verification_uri: "https://accounts.x.ai/oauth2/device", expires_in: 3, interval: 1 },
+        responses.map(status => Response.json(status === 400 ? { error: "authorization_pending" } : {}, { status })));
+      const error = await loginXaiDevice({}, { sleep: f.sleep }).catch(e => e);
+      expect(calls.filter(c => c.url === TOKEN)).toHaveLength(2);
+      expect(classifyLoginCodeError(error)).toBe(expected);
+    } finally { f.clock.mockRestore(); }
+  });
 
   test("shows the URL and code, polls at the interval, backs off on slow_down, and returns the token", async () => {
     const calls = mockXai(
@@ -157,7 +172,7 @@ describe("xAI device login", () => {
         });
       }) as typeof fetch;
       const error = await loginXaiDevice({}, { sleep: f.sleep }).catch(e => e);
-      expect(error.oauthError).toBe("expired_token");
+      expect(classifyLoginCodeError(error)).toBe("provider_unreachable");
       // One request, then the grant ran out: no retry after the deadline.
       expect(tokens).toBe(1);
       // The settled interval, then the 500ms the grant had left — never a full second past the
@@ -564,7 +579,7 @@ describe("xAI device login", () => {
     try {
       mockXai(boundedDevice({ expires_in: 60, interval: 5 }), [throttled("100000")]);
       const error = await loginXaiDevice({}, { sleep: oversized.sleep }).catch(e => e);
-      expect(error.oauthError).toBe("expired_token");
+      expect(classifyLoginCodeError(error)).toBe("provider_unreachable");
       expect(oversized.waits).toEqual([5_000, 55_000]);
       expect(oversized.waits.every(ms => ms <= 2 ** 31 - 1)).toBe(true);
     } finally {
@@ -579,7 +594,8 @@ describe("xAI device login", () => {
         const calls = mockXai(boundedDevice({ expires_in: 10, interval: 1 }), [
           Response.json(body, { status, headers: { "retry-after": "9".repeat(310) } }), granted(),
         ]);
-        await expect(loginXaiDevice({}, { sleep: f.sleep })).rejects.toMatchObject({ oauthError: "expired_token" });
+        const error = await loginXaiDevice({}, { sleep: f.sleep }).catch(e => e);
+        expect(classifyLoginCodeError(error)).toBe(body.error === "slow_down" ? "invalid_or_expired_code" : "provider_unreachable");
         expect(f.waits).toEqual([1_000, 9_000]);
         expect(f.waits.every(ms => Number.isFinite(ms) && ms <= 2 ** 31 - 1)).toBe(true);
         expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
@@ -603,7 +619,7 @@ describe("xAI device login", () => {
     try {
       const calls = mockXai(boundedDevice({ expires_in: 60, interval: 5 }), [throttled("120")]);
       const error = await loginXaiDevice({}, { sleep: f.sleep }).catch(e => e);
-      expect(error.oauthError).toBe("expired_token");
+      expect(classifyLoginCodeError(error)).toBe("provider_unreachable");
       // One poll; the throttle outlives the grant, so there is nothing left to wait for.
       expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
       expect(f.waits).toEqual([5_000, 55_000]);

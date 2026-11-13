@@ -140,7 +140,7 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   Both poll bounds come from the authorization response, so both are clamped before they reach a
   timer: `interval` into `[1s, lifetime]` and `expires_in` into `(0, 30m]`. RFC 8628 §3.2 makes
   `expires_in` required and sets no ceiling, so the 30-minute bound is this client's policy: an
-  issuer grant longer than that ends at the ceiling and reports `expired_token`. A delay above 2^31-1 ms
+  issuer grant longer than that ends at the ceiling. Pending approval at the deadline reports `expired_token`; the last transport or server failure instead reports `provider_unreachable`. A delay above 2^31-1 ms
   overflows `setTimeout` into a next-tick fire, which is a hot loop against the auth endpoint, and
   a `0`, negative or fractional `interval` is the same loop from below; an uncapped `expires_in`
   would make the deadline meaningless. `slow_down` still adds 5s, now under the same ceiling, and

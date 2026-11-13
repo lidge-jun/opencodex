@@ -510,6 +510,7 @@ export async function loginXaiDevice(
   // Wait for the next iteration. `slow_down` raises the grant interval itself; a 429/5xx
   // `Retry-After` applies to the response that carried it, so it is held for one poll.
   let nextWaitMs = waitMs;
+  let lastFailure: unknown;
   for (let remaining = deadline - Date.now(); remaining > 0; remaining = deadline - Date.now()) {
     await sleep(Math.min(nextWaitMs, remaining));
     nextWaitMs = waitMs;
@@ -534,6 +535,7 @@ export async function loginXaiDevice(
       if (error instanceof XaiRedirectRefusedError) throw error;
       if (error instanceof XaiTokenRequestError) {
         if (error.oauthError === "slow_down") {
+          lastFailure = undefined;
           // RFC 8628 §3.5: lengthen the interval by 5s and never poll faster than before. Kept
           // under the same ceiling so the sleep cannot overflow into an immediate retry.
           waitMs = Math.min(ttlMs, waitMs + 5_000);
@@ -543,6 +545,7 @@ export async function loginXaiDevice(
         // Still waiting for approval, or a network or server failure the grant can outlast.
         const status = error.status;
         if (error.oauthError === "authorization_pending" || status === undefined || status === 429 || status >= 500) {
+          lastFailure = error.oauthError === "authorization_pending" ? undefined : error;
           // The server's own throttle wins over this client's interval, but never over the
           // grant deadline: the loop still sleeps at most what the grant has left.
           if (error.retryAfterMs !== undefined) nextWaitMs = Math.min(ttlMs, Math.max(waitMs, error.retryAfterMs));
@@ -552,10 +555,11 @@ export async function loginXaiDevice(
       }
       // A timed-out poll (Bun reports it as TimeoutError or AbortError) is retried; the deadline still holds.
       const name = (error as { name?: string } | undefined)?.name;
-      if (name === "TimeoutError" || name === "AbortError") continue;
+      if (name === "TimeoutError" || name === "AbortError") { lastFailure = error; continue; }
       throw error;
     }
   }
+  if (lastFailure) throw lastFailure;
   throw new XaiTokenRequestError(undefined, "expired_token", "xAI device authorization expired");
 }
 
