@@ -163,8 +163,9 @@ and `proxy: "unknown"`, and adds `serviceStopReason`:
 | `unverified-budget` | The time left could not hold a verified stop, so nothing was changed | Retry from a terminal |
 
 If another program is listening on the port after this installation's processes are gone, the
-stop still succeeds and `--json` reports `portHeldByForeign: true`. Both fields are additive:
-they are omitted when there is nothing to report, and no new `outcome` value exists.
+stop still succeeds and `--json` reports `portHeldByForeign: true`. Both fields are additive and
+no new `outcome` value exists. `serviceStopReason` is omitted when there is nothing to report;
+`portHeldByForeign` appears (`true` or `false`) whenever the port check ran, and is omitted otherwise.
 
 `--deadline-ms <ms>` bounds the whole stop, measured from the moment the command started. Before
 changing anything the stop checks that the time left can hold its worst case (about 57 seconds for
