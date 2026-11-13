@@ -180,9 +180,11 @@ stop instead of sliding forward.
   the scheduler task registered, so a receipt-less POST answers `respawnable_service` (409) and
   the removal refuses with the proxy left running. The receipt is discharged only after the
   shared restore, and a failed claim sends no child stop. Part A `absent` says no manager is
-  registered, not that nothing serves, so removal then probes the endpoint it captured, tri-state:
-  only a definitive dead permits deleting the task, while live or unknown refuses and keeps the
-  receipt.
+  registered, not that nothing serves, so removal then proves every candidate endpoint
+  (`endpointsToProve(readRuntimePort(), loadConfig())`, the set `ocx uninstall` proves) tri-state:
+  only a definitive dead on all of them permits deleting the task, while live or unknown refuses
+  and keeps the receipt. The receipt endpoint alone is not enough — a stale runtime record naming
+  a closed port must not stand in for the configured port where a live listener can sit.
 - Every tracked-proxy stop takes its orphan-discovery cap from the caller
   (`TrackedProxyStopIo.orphanDiscoveryCapMs`). The checked Windows callers pass the admitted 3 s
   (`WINDOWS_STOP_CAPS.orphanDiscovery`), which is what admission priced; the omitted default stays
@@ -196,16 +198,33 @@ stop instead of sliding forward.
   when state changed. When Part A did not end stopped or absent the graceful POST still goes out
   with `allowForcedFallback: false`, and that unconfirmed wait is observational: it samples the
   port without `reclaimListenPort`'s kill eligibility, so a forbidden fallback cannot kill through
-  the reclaim path either.
+  the reclaim path either. An unconfirmed stop is not proof the proxy is down: `stopProxy` answers
+  false without contacting the endpoint when the tracked pid is already dead, so the step then
+  requires the tri-state `endpointProvenDown()` over every candidate before it reports
+  `provenDown`, exactly as the discovery path does. A different proxy on the configured port
+  would otherwise be missed and shared config restored under it (#3008).
 - `ocx uninstall` removes the Windows manager only after a Part A that ended stopped or absent
   (`serviceRemovalAllowed` in `src/cli/uninstall-plan.ts`); otherwise the step records `failed` and
   leaves the registration, as `ocx service uninstall` refuses. `uninstallServiceDetailed`
-  (`src/service/orchestration.ts`) re-reads `sc qc` `BINARY_PATH_NAME` immediately before the
-  native removal: a registration naming another installation's WinSW executable is left untouched,
-  and an unreadable one refuses and keeps install state. Non-Windows removal is unchanged.
+  (`src/service/orchestration.ts`) reads the scheduler probe, the native status and `sc qc`
+  `BINARY_PATH_NAME` before the first destructive step: a registration naming another
+  installation's WinSW executable is left untouched, and an unreadable status or ownership
+  refuses and keeps install state. The task used to be deleted first, so an unreadable `sc qc`
+  left a half-removed install with no task to retry from. Non-Windows removal is unchanged.
 - `prepareServiceInstall` refuses before replacing anything on a Part A other than stopped or
   absent and stops install and switch on any Part B result other than a free port, naming the
   owner. `ocx uninstall` runs Part B as its respawn window after a stopped Part A.
+- Install and backend switch claim a teardown receipt before their tracked stop when Part A
+  ended `stopped`: the task is still registered, so a receipt-less POST answers 409
+  `respawnable_service` and the install aborted while the old proxy kept serving. The receipt
+  carries Part A's record and its nonce travels on the POST. An install replaces the proxy, so
+  shared config stays pointed at OpenCodex and the receipt is cleared only after the new service
+  is installed and started; an install that fails after the stop keeps it for the next
+  `ocx stop`. A failed claim sends no child stop.
+- With Part A `absent`, install preparation skips Part B, and the tracked stop can return
+  `"none"` after its orphan-discovery cap while an unresponsive proxy still holds the port. The
+  candidate set is resolved before cleanup and every endpoint must be definitively dead before
+  the install callback runs; live or unknown throws like a Part B failure.
 - The updater (`src/update/job-windows-restart.ts`) uses `guardedStopWindowsChecked` for Task
   Scheduler, with the service mutation gate as the authorizer; WinSW keeps its stop. Each of the
   three call sites in `src/update/job.ts` aborts the restart unless the outcome is stopped or absent.
