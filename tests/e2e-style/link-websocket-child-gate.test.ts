@@ -138,7 +138,7 @@ async function tapChild(childPort: number): Promise<{ port: number; connections:
 const sseResponse = (body: string) => new Response(body, { headers: { "content-type": "text/event-stream" } });
 
 describe("link WebSocket release gate through the real Child (design 11.1 item 13, 11.2-8 (a))", () => {
-  gate("real Child, drain: the switch goes off under a running turn; it finishes and its tool result is admitted, the idle socket is fenced, and the next session ends on HTTP", async () => {
+  gate("real Child, drain: the switch goes off under a running turn; it finishes on the socket with its tool result, the socket then closes (from either side), and the next session ends on HTTP", async () => {
     const bodies: string[] = [];
     const pair = await linkPair((body, index) => {
       bodies.push(body);
@@ -162,7 +162,7 @@ describe("link WebSocket release gate through the real Child (design 11.1 item 1
     expect(pair.records.slice(2)).toEqual(["link_ws_fallback:not_advertised"]);
   });
 
-  gate("real Child, drain past its deadline: the session's next create is fenced on the socket, and the same request completes over HTTP", async () => {
+  gate("real Child, drain past its deadline: the tool result never reaches the upstream over the socket, the socket closes (from either side), and the same request completes over HTTP", async () => {
     setLinkWebsocketLimitsForTests({ drainDeadlineMs: 0 });
     const bodies: string[] = [];
     const pair = await linkPair((body, index) => {
