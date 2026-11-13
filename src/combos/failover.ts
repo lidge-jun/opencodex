@@ -1623,6 +1623,11 @@ function decideComboFailure(
   if (rawCode === "input_admission_refused" || error.code === "input_admission_refused") {
     return "hop";
   }
+  // A degenerate completion is target-local evidence: the child ended its turn carrying only
+  // reasoning/commentary prelude. Another target can still serve the same request.
+  if (rawCode === "degenerate_completion" || error.code === "degenerate_completion") {
+    return "hop";
+  }
   if (isProviderScopedQuotaCap(status, message, rawCode || error.code)) {
     return "hop";
   }

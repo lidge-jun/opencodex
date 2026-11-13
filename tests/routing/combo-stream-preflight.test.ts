@@ -1653,3 +1653,83 @@ describe("combo preflight replay under a stalled reader (#8601)", () => {
     expect(buffered.map(chunk => chunk.byteLength)).toEqual([0, 0, 0]);
   });
 });
+
+describe("degenerate completion prelude", () => {
+  const logCtx: RequestLogContext = { model: "m1", provider: "a" };
+  const commentaryItem = { type: "message", id: "msg_c", phase: "commentary", role: "assistant", content: [] };
+  const finalItem = { type: "message", id: "msg_f", phase: "final_answer", role: "assistant", content: [] };
+  const toolItem = { type: "function_call", id: "fc_1", call_id: "c1", name: "shell", arguments: "{}" };
+
+  test("completed with only commentary and reasoning hops as degenerate", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: { type: "reasoning", id: "rs_1" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_text.delta", item_id: "msg_c", delta: "Now let me examine the skill" },
+      { type: "response.output_item.done", item: commentaryItem },
+      {
+        type: "response.completed",
+        response: { id: "r1", status: "completed", output: [
+          { type: "reasoning", id: "rs_1" }, commentaryItem,
+        ] },
+      },
+    ), logCtx, undefined, { degeneratePrelude: true });
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      const body = await result.response.json();
+      expect(body.error.code).toBe("degenerate_completion");
+    }
+  });
+
+  test("completed with a final answer or tool call stays accepted", async () => {
+    for (const item of [finalItem, toolItem]) {
+      const result = await preflightComboStreamResponse(sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        { type: "response.output_item.added", item },
+        { type: "response.output_item.done", item },
+        { type: "response.completed", response: { id: "r1", status: "completed", output: [item] } },
+      ), logCtx, undefined, { degeneratePrelude: true });
+      expect(result.kind).toBe("accepted");
+    }
+  });
+
+  test("commentary followed by a tool call still commits the tool call", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_text.delta", item_id: "msg_c", delta: "checking" },
+      { type: "response.output_item.added", item: toolItem },
+      { type: "response.output_item.done", item: toolItem },
+      { type: "response.completed", response: { id: "r1", status: "completed", output: [commentaryItem, toolItem] } },
+    ), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("incomplete with only commentary output hops as degenerate", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_item.done", item: commentaryItem },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1", status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [commentaryItem],
+        },
+      },
+    ), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("failed");
+  });
+
+  test("without degeneratePrelude a commentary completion stays accepted", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_item.done", item: commentaryItem },
+      { type: "response.completed", response: { id: "r1", status: "completed", output: [commentaryItem] } },
+    ), logCtx);
+    expect(result.kind).toBe("accepted");
+  });
+});
