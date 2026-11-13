@@ -522,6 +522,12 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelInputModalities: MORPH_ULTRA_MODEL_INPUT_MODALITIES,
     modelReasoningEfforts: MORPH_ULTRA_REASONING_EFFORTS,
     modelReasoningEffortMap: MORPH_ULTRA_REASONING_EFFORT_MAPS,
+    // Both families require the complete assistant message to be replayed, reasoning_content
+    // included (https://www.morphllm.com/kimi-k3-1-api, "The Thinking-Replay Gotcha", read
+    // 2026-11-13): a harness that keeps only `content` erases earlier turns' reasoning and the
+    // model degrades after a few turns. Neither seeded id matches the DeepSeek/Reflection name
+    // fallback, so the preservation has to be declared here.
+    preserveReasoningContentModels: MORPH_ULTRA_MODELS,
     note: "Morph Ultra plan ($200/month, no token meter) on the OpenAI-compatible endpoint https://api.morphllm.com/v1. Seeded models are the Ultra-covered ones: morph-kimik31 (Kimi K3.1) and morph-dsv41flash-1017 (DeepSeek V4.1 Flash, Oct 17 snapshot). morph-dsv41flash is the same Flash pool under its undated id, and morph-dsv41flash-abliterated needs privileged-access approval, so neither is seeded. Every other Morph model (GLM-5.3, Fast Apply, WarpGrep, Router) bills per token and is not part of the plan. Ultra removes the token meter but not the per-minute rate limits, and a 429 means retry after Retry-After.",
   },
   { id: "huggingface", label: "Hugging Face", baseUrl: "https://router.huggingface.co/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://huggingface.co/settings/tokens" },

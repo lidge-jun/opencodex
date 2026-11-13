@@ -12,16 +12,18 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { parseRequest } from "../../src/responses/parser";
 import { buildCatalogEntries } from "../../src/codex/catalog";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { findExpectedPriceOverlay } from "../../src/usage/expected-prices";
 import { routeModel } from "../../src/router";
-import type { OcxConfig } from "../../src/types";
+import type { OcxConfig, OcxParsedRequest } from "../../src/types";
 
 const KIMI = "morph-kimik31";
 const FLASH = "morph-dsv41flash-1017";
+const REASONING = "I need to read the file before answering.";
 
 function entry() {
   const found = getProviderRegistryEntry("morph");
@@ -173,6 +175,32 @@ describe("Morph Ultra provider preset", () => {
     const routed = routeModel(config, "morph/custom-model");
     expect(routed.provider.baseUrl).toBe("https://custom-morph.example.test/v1");
     expect(routed.modelId).toBe("custom-model");
+  });
++  test("replays the assistant's reasoning_content on the next tool turn", () => {
+    // Morph requires the complete assistant message, reasoning_content included, to come back
+    // every turn (https://www.morphllm.com/kimi-k3-1-api, "The Thinking-Replay Gotcha"). Neither
+    // seeded id matches the DeepSeek name fallback, so without an explicit declaration the
+    // serializer drops the reasoning and the model degrades after a few turns.
+    for (const modelId of [KIMI, FLASH]) {
+      const parsed = parseRequest({
+        model: modelId,
+        stream: false,
+        input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "inspect the repo" }] },
+          { type: "reasoning", id: "rs_1", summary: [], content: [{ type: "reasoning_text", text: REASONING }] },
+          { type: "function_call", id: "fc_1", call_id: "call_1", name: "read_file", arguments: '{"path":"README.md"}' },
+          { type: "function_call_output", call_id: "call_1", output: "contents" },
+        ],
+      });
+      const provider = { ...providerConfigSeed(entry()), apiKey: "morph-test-key" };
+      const request = createOpenAIChatAdapter(provider).buildRequest({ ...parsed, modelId } as OcxParsedRequest);
+      const body = JSON.parse(request.body as string) as { messages: Array<Record<string, unknown>> };
+      const assistant = body.messages.find(message => message.role === "assistant" && Array.isArray(message.tool_calls));
+      expect(assistant, modelId).toBeDefined();
+      expect(assistant!["reasoning_content"], modelId).toBe(REASONING);
+      // The tool call itself must survive alongside the reasoning.
+      expect((assistant!["tool_calls"] as Array<Record<string, unknown>>).length, modelId).toBe(1);
+    }
   });
 
 });
