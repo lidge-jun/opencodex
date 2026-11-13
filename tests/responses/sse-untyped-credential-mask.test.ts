@@ -268,6 +268,16 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     } finally { restore(); }
   });
 
+  test.each([
+    ["unparsable JSON", 'data: {"message":"fixture-selected-credential"'],
+    ["a non-target JSON payload", `data: ${JSON.stringify({ type: "other", message: "fixture-selected-credential" })}`],
+  ] as const)("a terminal frame with %s still has its data masked", (_name, data) => {
+    const credential = "fixture-selected-credential";
+    const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: `Bearer ${credential}` });
+    const out = rewrite(`event: response.failed\n${data}`).join("\n");
+    expect([out.includes("fixture-selected-credential"), out.startsWith("event: response.failed")]).toEqual([false, true]);
+  });
+
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: "Bearer auth" });
     const failed = { type: "response.failed", response: { status: "failed", error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } } };

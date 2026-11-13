@@ -114,19 +114,26 @@ export function createTerminalErrorRedactionBlockRewrite(
     .split("\n")
     .map(line => /^(?:event|data):/.test(line) ? line : maskCredential(line))
     .join("\n");
+  // A terminal frame this rewrite cannot restructure (unparsable or non-target JSON) still has its
+  // data payload masked, as text; only the event line is left as it is.
+  const maskTerminalBlock = (block: string, payload: string | null): string => {
+    if (payload === null) return maskExtensionLines(block);
+    const masked = maskCredential(payload);
+    return maskExtensionLines(masked === payload ? block : replaceSseDataPayload(block, masked));
+  };
   return (block) => {
     const terminalFrame = /^event:[ \t]*response\.(?:failed|incomplete)[ \t]*\r?$/m.test(block);
     const payload = sseDataPayload(block);
-    if (payload === null) return [terminalFrame ? maskExtensionLines(block) : block];
+    if (payload === null) return [terminalFrame ? maskTerminalBlock(block, payload) : block];
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
     } catch {
-      return [terminalFrame ? maskExtensionLines(block) : block];
+      return [terminalFrame ? maskTerminalBlock(block, payload) : block];
     }
     if (isUntypedBareUpstreamError(event)) return [block];
     if (event?.type !== "response.failed" && event?.type !== "response.incomplete") {
-      return [terminalFrame ? maskExtensionLines(block) : block];
+      return [terminalFrame ? maskTerminalBlock(block, payload) : block];
     }
     const safeEvent = redactDiagnostic(event);
     const rewritten = JSON.stringify(safeEvent);
