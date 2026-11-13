@@ -592,6 +592,19 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     expect(elapsed).toBeLessThan(1_500);
   });
 
+  test("exact masking stays linear when a long credential's prefix repeats near the end of a frame", () => {
+    // Each candidate rebuilt the credential's border table before any budget was charged, even
+    // where the credential could not fit in the text left: a 1 MB credential took seconds.
+    const n = 1_000_000;
+    const tailRun = Math.floor(Math.sqrt(8 * n));
+    const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: `Bearer ${"a".repeat(n - 1)}b` });
+    const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message: "z".repeat(n - tailRun) + "a".repeat(tailRun) } } };
+    const startedAt = performance.now();
+    const out = rewrite(`event: response.failed\ndata: ${JSON.stringify(failed)}`).join("\n");
+    expect(out).not.toContain("aaaaaaaa");
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
+  });
+
   test("classifying an untyped envelope stays linear in its message size", () => {
     // Pattern redaction of the full message rescanned an unterminated line from every multipart
     // candidate, so a 176 KB message stalled the boundary for seconds.

@@ -217,21 +217,30 @@ function markSubstringSpans(text: string, substrings: Iterable<string>, initial:
   if (byPrefix.size === 0) return covered;
   const budget = { steps: MATCH_WORK_PER_CHAR * n + MATCH_WORK_FLOOR };
   const scanned = new Set<string>();
+  const bordered = new Map<string, boolean>();
   for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= n; at++) {
     const group = byPrefix.get(text.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
     if (group === undefined) continue;
     for (const secret of group) {
-      if (scanned.has(secret)) continue;
+      if (scanned.has(secret) || n - at < secret.length) continue;
       covered ??= new Uint8Array(n);
-      if (hasBorder(secret)) {
+      let selfOverlapping = bordered.get(secret);
+      if (selfOverlapping === undefined) {
+        // The border table is built once per secret, and its cost is charged before it is built.
+        budget.steps -= secret.length;
+        if (budget.steps < 0) return covered.fill(1);
+        selfOverlapping = hasBorder(secret);
+        bordered.set(secret, selfOverlapping);
+      }
+      if (selfOverlapping) {
         // A self-overlapping secret is found from here on by one Knuth-Morris-Pratt scan.
         scanned.add(secret);
-        budget.steps -= n - at;
+        budget.steps -= n - at + secret.length;
         if (budget.steps < 0) return covered.fill(1);
         markOverlappingOccurrences(text, secret, at, covered);
         continue;
       }
-      budget.steps -= Math.min(secret.length, n - at);
+      budget.steps -= secret.length;
       if (budget.steps < 0) return covered.fill(1);
       if (text.startsWith(secret, at)) covered.fill(1, at, at + secret.length);
     }
