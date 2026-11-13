@@ -2253,6 +2253,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.back": "返回",
   "codexAuth.oauthAlreadyInProgress": "登入已在進行中。請在瀏覽器中完成。",
   "codexAuth.oauthWaiting": "等待瀏覽器中完成 ChatGPT 登入...",
+  "codexAuth.deviceOnlyEnforced": "此代理僅允許 Codex 帳號使用裝置碼登入（codexAuthMethod: device-only）。",
   "codexAuth.oauthSubmittingCode": "正在提交程式碼…",
   "codexAuth.oauthCodeSubmitted": "程式碼已提交——正在等待登入完成…",
   "codexAuth.oauthStatusRetrying": "檢查登入狀態時發生網路或代理錯誤——正在重試…",

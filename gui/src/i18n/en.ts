@@ -3054,6 +3054,7 @@ export const en = {
   "codexAuth.back": "Back",
   "codexAuth.oauthAlreadyInProgress": "Login already in progress. Complete it in your browser.",
   "codexAuth.oauthWaiting": "Waiting for ChatGPT login to complete in your browser...",
+  "codexAuth.deviceOnlyEnforced": "This proxy only allows device code login for Codex accounts (codexAuthMethod: device-only).",
   "codexAuth.oauthSubmittingCode": "Submitting code…",
   "codexAuth.oauthCodeSubmitted": "Code submitted — waiting for login to finish…",
   "codexAuth.oauthStatusRetrying": "Network or proxy error while checking login status — retrying…",
