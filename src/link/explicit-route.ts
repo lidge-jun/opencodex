@@ -99,32 +99,49 @@ export function explicitRouteSshOptions(route: ExplicitRoute): string[] {
   ];
 }
 
-export type IdentityFileProblem = "identity_file_missing" | "identity_file_not_regular" | "identity_file_permissions" | "identity_file_directory" | "identity_file_unreadable" | "identity_file_unsupported_platform";
+export type IdentityFileProblem = "identity_file_missing" | "identity_file_not_regular" | "identity_file_permissions" | "identity_file_directory"
+  | "identity_file_ancestor" | "identity_file_unreadable" | "identity_file_unsupported_platform";
+
+/**
+ * What to fix for each refusal, written here once: the management API answers it as the message and the CLI prints it with
+ * the code and hint. None names the path or a part of it.
+ */
+export const IDENTITY_FILE_GUIDANCE: Readonly<Record<IdentityFileProblem, string>> = {
+  identity_file_missing: "The identity file does not exist.",
+  identity_file_not_regular: "The identity file must be a regular file, not a symlink or a directory.",
+  identity_file_permissions: "The identity file must be owned by this user with no group or other permissions (chmod 600 on it).",
+  identity_file_directory: "The directory that holds the identity file must be owned by this user or root and not writable by group or others (chmod g-w,o-w on it).",
+  identity_file_ancestor: "Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp, and every symlink on its path must be owned by this user or root. A home or state folder created under umask 002 (per-user groups on Ubuntu or Fedora) is group-writable: chmod g-w on that directory.",
+  identity_file_unreadable: "This user cannot read the identity file or a directory on its path.",
+  identity_file_unsupported_platform: "A Windows Home does not support an identity file yet.",
+};
 
 /**
  * Whether an identity file is usable as the link's key, decided from its metadata alone: the file is never opened or read.
  * It must be a regular file (a symlink is refused, so the path names the key itself), owned by this user with no group or
  * other permission bits (ssh ignores a key file of its owner that others can read, and the link would then fail public-key
  * authentication with nothing pointing at the cause), and readable by this user. Its directory must be owned by this user or
- * root and not writable by group or others (a world-writable sticky directory such as /tmp is refused too), and so must every
- * directory the path passes through as it resolves, symlinks followed and the directories holding them included, except that
- * a directory above it may be a sticky one such as /tmp, where no other user can rename this user's entries. So no other user
- * can put another file at the key's path after this check. It is a check of metadata at request time: ssh opens the path
- * later, and a change this user or root makes in between is not caught. Null when usable.
+ * root and not writable by group or others (a world-writable sticky directory such as /tmp is refused too:
+ * identity_file_directory). Every other directory the path passes through as it resolves, the directories holding its
+ * symlinks and their targets included, must be owned by this user or root and not writable by group or others unless it is
+ * sticky, and every symlink on the path must be owned by this user or root (identity_file_ancestor). A group-writable
+ * directory is refused even when the group is the user's own, as sshd's StrictModes does. It is a check of metadata at
+ * request time: ssh opens the path later, and a change this user or root makes in between is not caught. Null when usable.
+ * lstat is a parameter only so a test can give a symlink another owner.
  * A Windows Home refuses every identity file before looking at it: the accepted form is a POSIX path, which Windows resolves
  * against the current drive, and owner and mode bits there say nothing about the file's ACL.
  */
-export function identityFileProblem(path: string, platform: NodeJS.Platform = process.platform): IdentityFileProblem | null {
+export function identityFileProblem(path: string, platform: NodeJS.Platform = process.platform, lstat: (path: string) => Stats = lstatSync): IdentityFileProblem | null {
   if (platform === "win32") return "identity_file_unsupported_platform";
   let stat;
-  try { stat = lstatSync(path); } catch (error) {
+  try { stat = lstat(path); } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return code === "ENOENT" || code === "ENOTDIR" ? "identity_file_missing" : "identity_file_unreadable";
   }
   if (stat.isSymbolicLink() || !stat.isFile()) return "identity_file_not_regular";
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) return "identity_file_permissions";
   if ((stat.mode & 0o077) !== 0) return "identity_file_permissions";
-  const directory = resolvedDirectory(dirname(path));
+  const directory = resolvedDirectory(dirname(path), lstat);
   if (typeof directory === "string") return directory;
   if ((directory.mode & 0o022) !== 0) return "identity_file_directory";
   try { accessSync(path, constants.R_OK); } catch { return "identity_file_unreadable"; }
@@ -133,42 +150,49 @@ export function identityFileProblem(path: string, platform: NodeJS.Platform = pr
 
 const MAX_SYMLINKS = 40;
 
+/** Owned by this user or root. */
+function trustedOwner(stat: Stats): boolean {
+  return typeof process.getuid !== "function" || stat.uid === process.getuid() || stat.uid === 0;
+}
+
 /** Owned by this user or root, and not writable by group or others unless sticky. */
 function safeDirectory(stat: Stats): boolean {
-  if (typeof process.getuid === "function" && stat.uid !== process.getuid() && stat.uid !== 0) return false;
-  return (stat.mode & 0o022) === 0 || (stat.mode & 0o1000) !== 0;
+  return trustedOwner(stat) && ((stat.mode & 0o022) === 0 || (stat.mode & 0o1000) !== 0);
 }
 
 /**
  * Resolves an absolute directory path one entry at a time, as the kernel does, and checks every directory it passes
- * through with safeDirectory: the root, each directory on the way, the directory holding each symlink and each symlink's
- * target. Answers the final directory's metadata, or the problem.
+ * through with safeDirectory (the root, each directory on the way, the directory holding each symlink and each symlink's
+ * target) and every symlink's owner. A failure at the final directory is identity_file_directory, anywhere above it
+ * identity_file_ancestor. Answers the final directory's metadata, or the problem.
  */
-function resolvedDirectory(path: string): Stats | IdentityFileProblem {
+function resolvedDirectory(path: string, lstat: (path: string) => Stats): Stats | IdentityFileProblem {
   const failed = (error: unknown): IdentityFileProblem => {
     const code = (error as NodeJS.ErrnoException).code;
     return code === "ENOENT" || code === "ENOTDIR" ? "identity_file_missing" : "identity_file_unreadable";
   };
   try {
     let current = "/";
-    let stat = lstatSync(current);
-    if (!safeDirectory(stat)) return "identity_file_directory";
+    let stat = lstat(current);
     const pending = path.split("/").filter(name => name !== "" && name !== ".");
+    if (!safeDirectory(stat)) return pending.length === 0 ? "identity_file_directory" : "identity_file_ancestor";
     let links = 0;
     while (pending.length > 0) {
       const name = pending.shift()!;
-      if (name === "..") { current = dirname(current); stat = lstatSync(current); continue; }
+      if (name === "..") { current = dirname(current); stat = lstat(current); continue; }
       const next = current === "/" ? "/" + name : current + "/" + name;
-      const entry = lstatSync(next);
+      const entry = lstat(next);
       if (entry.isSymbolicLink()) {
+        // A link another user owns can be repointed by them, even in a sticky directory.
+        if (!trustedOwner(entry)) return "identity_file_ancestor";
         if (++links > MAX_SYMLINKS) return "identity_file_unreadable";
         const target = readlinkSync(next);
-        if (target.startsWith("/")) current = "/";
+        if (target.startsWith("/")) { current = "/"; stat = lstat(current); }
         pending.unshift(...target.split("/").filter(part => part !== "" && part !== "."));
         continue;
       }
       if (!entry.isDirectory()) return "identity_file_missing";
-      if (!safeDirectory(entry)) return "identity_file_directory";
+      if (!safeDirectory(entry)) return pending.length === 0 ? "identity_file_directory" : "identity_file_ancestor";
       current = next;
       stat = entry;
     }

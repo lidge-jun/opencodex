@@ -202,6 +202,10 @@ test.each([
  * that key alone, the path is kept on the link, and the file is checked (never read) when a request names it.
  */
 const KEY_CANARY = "PRIVATE-KEY-CANARY-NEVER-READ";
+// A Windows Home refuses every identity file before the checks below (identity_file_unsupported_platform), so the cases that
+// exercise those checks, or a keyed enrollment, run on POSIX only; the Windows refusal has its own cases.
+const WINDOWS = process.platform === "win32";
+const posixTest = test.skipIf(WINDOWS);
 function keyFile(mode = 0o600, name = "goat_hub_ed25519"): string {
   const path = join(root, name);
   writeFileSync(path, KEY_CANARY + "\n");
@@ -219,7 +223,7 @@ function keyInDirectory(directoryMode: number): string {
   return path;
 }
 
-test("every SSH command of an enrollment with an identity file offers that key alone, and the link keeps the path", async () => {
+posixTest("every SSH command of an enrollment with an identity file offers that key alone, and the link keeps the path", async () => {
   const h = harness();
   const key = keyFile();
   const keyed = { explicitRoute: { ...ROUTE, identityFile: key }, exclusive: true };
@@ -239,7 +243,7 @@ test("every SSH command of an enrollment with an identity file offers that key a
   expect(JSON.stringify(applied.body)).not.toContain(KEY_CANARY);
 });
 
-test("a confirm or apply that names another identity file than the probe is refused", async () => {
+posixTest("a confirm or apply that names another identity file than the probe is refused", async () => {
   const h = harness();
   const key = keyFile();
   const other = keyFile(0o600, "other_ed25519");
@@ -252,7 +256,7 @@ test("a confirm or apply that names another identity file than the probe is refu
   expect(h.ssh.length).toBe(probes);
 });
 
-test.each([
+posixTest.each([
   ["a missing file", (path: string) => path + ".gone", "identity_file_missing"],
   ["a symlink", (path: string) => { const link = path + ".link"; symlinkSync(path, link); return link; }, "identity_file_not_regular"],
   ["a directory", () => root, "identity_file_not_regular"],
@@ -277,7 +281,7 @@ test("an identity file that is not an accepted path form is refused with the rou
   expect(h.ssh).toEqual([]);
 });
 
-test("a repeat of a journalled enrollment replays its outcome after its key file is gone, and another key answers operation_mismatch", async () => {
+posixTest("a repeat of a journalled enrollment replays its outcome after its key file is gone, and another key answers operation_mismatch", async () => {
   const h = harness();
   const key = keyFile();
   const keyed = { explicitRoute: { ...ROUTE, identityFile: key }, exclusive: true };
@@ -295,7 +299,7 @@ test("a repeat of a journalled enrollment replays its outcome after its key file
   expect(h.ssh.length).toBe(before);
 });
 
-test("a new journalled enrollment whose key file went away after confirm-host is refused before its journal entry and any SSH", async () => {
+posixTest("a new journalled enrollment whose key file went away after confirm-host is refused before its journal entry and any SSH", async () => {
   const h = harness();
   const key = keyFile();
   const keyed = { explicitRoute: { ...ROUTE, identityFile: key }, exclusive: true };
@@ -313,10 +317,10 @@ test("a new journalled enrollment whose key file went away after confirm-host is
 test("a Windows Home refuses an identity file with a fixed hint, whatever the file", async () => {
   const refused = identityFileRefusal({ ...ROUTE, identityFile: keyFile() }, "win32")!;
   expect({ status: refused.status, body: await refused.json() }).toEqual({ status: 400, body: { error: { code: "invalid_identity_file",
-    message: "A Windows Home does not support explicitRoute.identityFile yet.", hint: "identity_file_unsupported_platform" } } });
+    message: "A Windows Home does not support an identity file yet.", hint: "identity_file_unsupported_platform" } } });
   expect(identityFileRefusal(ROUTE, "win32")).toBeNull();
 });
-test("confirm-host checks the identity file again: a key removed after the probe is refused before any new SSH", async () => {
+posixTest("confirm-host checks the identity file again: a key removed after the probe is refused before any new SSH", async () => {
   const h = harness();
   const key = keyFile();
   const keyed = { explicitRoute: { ...ROUTE, identityFile: key }, exclusive: true };
@@ -330,7 +334,7 @@ test("confirm-host checks the identity file again: a key removed after the probe
   expect(h.state.confirmedHosts?.size ?? 0).toBe(0);
 });
 
-test("a key whose directory is private, or owned by this user and only readable by others, is accepted", async () => {
+posixTest("a key whose directory is private, or owned by this user and only readable by others, is accepted", async () => {
   const h = harness();
   for (const mode of [0o700, 0o755]) {
     rmSync(join(root, "keys"), { recursive: true, force: true });
@@ -351,9 +355,11 @@ function keyUnder(ancestorMode: number): string {
   return path;
 }
 
-test.each([
-  ["under a directory others can write, which could rename the key's directory away", () => keyUnder(0o777)],
-  ["under a directory its group can write", () => keyUnder(0o775)],
+posixTest.each([
+  ["under a directory others can write, which could rename the key's directory away", () => keyUnder(0o777), "identity_file_ancestor"],
+  // A home or state folder this user created under umask 002 (Ubuntu or Fedora per-user groups): refused even though the group is
+  // the user's own, as sshd's StrictModes does; the fix is chmod g-w on it.
+  ["under a 0775 directory this user owns", () => keyUnder(0o775), "identity_file_ancestor"],
   ["reached through a symlink kept in a directory others can write", () => {
     mkdirSync(join(root, "private"), { mode: 0o700 });
     const path = join(root, "private", "goat_hub_ed25519");
@@ -363,7 +369,7 @@ test.each([
     symlinkSync(join(root, "private"), join(root, "shared", "link"));
     chmodSync(join(root, "shared"), 0o777);
     return join(root, "shared", "link", "goat_hub_ed25519");
-  }],
+  }, "identity_file_ancestor"],
   ["in a directory a symlink resolves to, which others can write", () => {
     mkdirSync(join(root, "open"));
     const path = join(root, "open", "goat_hub_ed25519");
@@ -372,18 +378,39 @@ test.each([
     chmodSync(join(root, "open"), 0o777);
     symlinkSync(join(root, "open"), join(root, "keys"));
     return join(root, "keys", "goat_hub_ed25519");
-  }],
-] as const)("a probe whose identity file is %s is refused before any SSH", async (_label, pick) => {
+  }, "identity_file_directory"],
+] as const)("a probe whose identity file is %s is refused before any SSH", async (_label, pick, hint) => {
   const h = harness();
   const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: pick() }, exclusive: true });
   expect({ status: refused.status, code: code(refused), hint: (refused.body.error as { hint?: string }).hint })
-    .toEqual({ status: 400, code: "invalid_identity_file", hint: "identity_file_directory" });
+    .toEqual({ status: 400, code: "invalid_identity_file", hint });
   expect(h.ssh).toEqual([]);
+  expect(JSON.stringify(refused.body)).not.toContain(root);
 });
 
-test("a key under a sticky directory such as /tmp, in a private directory of its own, is accepted", async () => {
+posixTest("a key under a sticky directory such as /tmp, in a private directory of its own, is accepted", async () => {
   const h = harness();
   const identityFile = keyUnder(0o1777);
   const probed = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile }, exclusive: true });
   expect(probed.status).toBe(200);
+});
+
+posixTest("each refusal says what to fix, the key's own directory apart from a directory above it, and never echoes the path", async () => {
+  const h = harness();
+  const own = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: keyInDirectory(0o770) }, exclusive: true });
+  rmSync(join(root, "keys"), { recursive: true, force: true });
+  const above = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: keyUnder(0o775) }, exclusive: true });
+  const message = (answer: { body: Record<string, unknown> }) => (answer.body.error as { message: string }).message;
+  expect(message(own)).toBe("The directory that holds the identity file must be owned by this user or root and not writable by group or others (chmod g-w,o-w on it).");
+  expect(message(above)).toContain("Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp");
+  expect(message(above)).toContain("umask 002");
+  for (const answer of [own, above]) expect(JSON.stringify(answer.body)).not.toContain(root);
+});
+
+test.if(WINDOWS)("on a Windows Home a probe that names an identity file is refused before any SSH", async () => {
+  const h = harness();
+  const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: "/keys/goat_hub_ed25519" }, exclusive: true });
+  expect({ status: refused.status, code: code(refused), hint: (refused.body.error as { hint?: string }).hint })
+    .toEqual({ status: 400, code: "invalid_identity_file", hint: "identity_file_unsupported_platform" });
+  expect(h.ssh).toEqual([]);
 });

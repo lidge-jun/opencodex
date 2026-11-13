@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { plantUnavailableGuidance } from "../link/child-binary-source";
 import { assertSshAlias } from "../link/ssh-argv";
-import { checkExplicitRoute, type ExplicitRoute } from "../link/explicit-route";
+import { checkExplicitRoute, IDENTITY_FILE_GUIDANCE, type ExplicitRoute } from "../link/explicit-route";
 import { OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED } from "../link/operations-journal";
 import { residualRecovery, type ResidualChild } from "../link/residual-recovery";
 import { CliUsageError, RuntimeApiError, runtimeBaseUrl, rejectArgs, takeFlag, takeJsonFlag, takeOption, printData } from "./runtime-api";
@@ -331,6 +331,11 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       if (code === "child_port_busy" && error.body.residual !== true) throw new Error("The target port on the Child is already in use by another process; no Child files were modified.");
       if (code === "child_preflight_output_limit") throw new Error("The Child's ocx config show --json output exceeded the Remote Link preflight limit; trim the Child's saved configuration and retry.");
       if (code === "child_external_provider_conflict" && error.body.residual !== true) throw new Error("The Child's ~/.codex/config.toml is already managed by another model provider or custom base URL; no Child files were modified.");
+      // A refused --ssh-identity-file: what to fix, from the closed hint (the same text the Home answers), never the path.
+      const keyHint = record(error.body.error) ? error.body.error.hint : undefined;
+      if (code === "invalid_identity_file" && typeof keyHint === "string" && Object.hasOwn(IDENTITY_FILE_GUIDANCE, keyHint)) {
+        throw new Error(IDENTITY_FILE_GUIDANCE[keyHint as keyof typeof IDENTITY_FILE_GUIDANCE] + " (code invalid_identity_file, hint " + keyHint + ")");
+      }
       // Home-side cleanup that left a link key behind: fixed, locally written guidance (the server's
       // prose is never echoed), plus the Child's own recovery step when it may still be connected.
       const homeCleanup = typeof code === "string" && Object.hasOwn(HOME_CLEANUP, code) ? HOME_CLEANUP[code] : undefined;
