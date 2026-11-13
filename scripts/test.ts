@@ -435,6 +435,9 @@ export const SERIAL_FULL_SUITE_FILES = [
   // test set; a cold build can take a minute, so each runs alone rather than inside a 12-file batch.
   "clients/link-ocx-child-ws-gate.test.ts",
   "clients/link-ocx-child-ws-feature.test.ts",
+  // The same cold build, for the conformance target; it is the only Cargo run of ocx-child on Windows (dev run
+  // 43483630535 cut it at 90 s while it was still compiling inside a shared batch).
+  "clients/link-ocx-child-conformance.test.ts",
 ] as const;
 
 type SerialLaneBasename = (typeof SERIAL_FULL_SUITE_FILES)[number] extends infer P
