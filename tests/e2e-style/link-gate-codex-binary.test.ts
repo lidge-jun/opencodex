@@ -40,10 +40,16 @@ describe("the pinned Codex binary of the release gate: what is hashed is what ru
     root = mkdtempSync(join(tmpdir(), "ocx-gate-binary-"));
     const cwd = join(root, "work"); const onPath = join(root, "bin"); const scratch = join(root, "scratch");
     const hashed = fakeCodex(cwd);
-    fakeCodex(onPath);
+    // The codex on PATH has other bytes than the hashed file, so the digest tells the two apart. It is executable
+    // (0755) but never has to run: the gate must not reach it.
+    mkdirSync(onPath);
+    const onPathFile = join(onPath, NAME);
+    writeFileSync(onPathFile, "another codex on PATH, not the hashed one\n");
+    chmodSync(onPathFile, 0o755);
     mkdirSync(scratch);
     const prepared = preparePinnedCodex(NAME, { cwd, scratch })!;
     expect(prepared.digest).toBe(sha256(hashed));
+    expect(prepared.digest).not.toBe(sha256(onPathFile));
     // The executable that runs is the file the gate names (the copy of the hashed file), never the codex on PATH.
     expect(await whoRan(prepared.path, cwd, onPath)).toBe(realpathSync(resolve(cwd, prepared.path)));
     expect(isAbsolute(prepared.path)).toBe(true);
