@@ -60,10 +60,11 @@ function eventsText(count: number): string {
 /**
  * How a run knew its load had stalled, always from the Home itself. "home-pumps-waiting": every link pump waits for a
  * drain. "home-relays-waiting": every relayed HTTP response waits for its reader (Bun stops reading a body whose socket
- * does not drain). Every load reader is paused before its first byte, so a pump's wait (Bun holds more than 1 MiB the
- * socket refused) never ends before the cut: the WebSocket announcement is a real stall. A relay also waits in the gap
- * between two chunks, so the HTTP announcement can come before the relay truly stalls; an early cut can only lower the
- * HTTP peak and raise the difference, so a pass still bounds what the WebSocket transport adds.
+ * does not drain). Either announcement marks the first moment every load reader waits at once, which can come before
+ * the load's sustained stall: a paused reader's kernel buffer still takes bytes in flight, so a pump's wait can end
+ * without its reader resuming, and a relay also waits in the gap between two chunks. Bun exposes no sustained
+ * backpressure signal and this test uses no quiet period, so a run compares the two loads at their first all-waiting
+ * moment, and repeated runs vary (structure/remote-link.md).
  */
 type StallSync = "home-pumps-waiting" | "home-relays-waiting";
 interface LoadResult { method: string; idle: number; peak: number; delta: number; sync: StallSync }

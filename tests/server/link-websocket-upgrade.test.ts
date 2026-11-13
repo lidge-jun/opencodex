@@ -467,4 +467,3 @@ describe("a link create reaches the pipeline once (#8600)", () => {
     expect(upstreamRequests).toHaveLength(0);
   });
 });
-
