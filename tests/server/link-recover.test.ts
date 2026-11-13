@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { inflateRawSync } from "node:zlib";
@@ -9,6 +9,7 @@ import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { keyFingerprint } from "../../src/link/route-trust";
+import * as tombstonesModule from "../../src/link/tombstones";
 import { MAX_TOMBSTONES, recordTombstone, tombstonesPath } from "../../src/link/tombstones";
 import { serialized } from "../../src/server/management/link-enrollment";
 import { registerOperationRecoveryResolver } from "../../src/link/operation-recovery-slot";
@@ -719,6 +720,22 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
 });
 
 describe("recover while another link names the alias", () => {
+  // The file can be written before recordTombstone throws (its chmod, or the lock's COMMIT): the revoke then answers
+  // tombstone_write_failed and keeps the link, so the tombstone it may have written goes too.
+  test("a tombstone write that throws after writing the file leaves no tombstone beside the kept link", async () => {
+    const h = harness([link()]);
+    const real = tombstonesModule.recordTombstone;
+    const spy = spyOn(tombstonesModule, "recordTombstone").mockImplementation((tombstone, path) => {
+      real(tombstone, path);
+      throw new Error("chmod failed after the write");
+    });
+    let res: Response;
+    try { res = await h.request("DELETE", "/api/link/" + ID, { force: true }); } finally { spy.mockRestore(); }
+    expect([res.status, (await errorOf(res)).code]).toEqual([503, "tombstone_write_failed"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
   test("is refused with 409 before any SSH, whatever the alias's case, and the tombstone stays", async () => {
     const h = harness([link()]);
     await forceRevoke(h);

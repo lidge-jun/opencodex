@@ -518,6 +518,10 @@ async function removeReserved(
       if (error instanceof LinkTombstoneLimitError) {
         return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
       }
+      // The file may already be written (a chmod or the lock's COMMIT failed after it); the link stays, so this
+      // attempt's tombstone, if any, goes too. Its random attempt token makes that removal touch nothing else.
+      written = tombstone;
+      dropOwnTombstone();
       return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
     }
   }
