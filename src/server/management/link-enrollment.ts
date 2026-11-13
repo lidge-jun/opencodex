@@ -15,6 +15,7 @@ import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
+import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
 const PROBE_TTL_MS = 5 * 60_000;
@@ -45,7 +46,9 @@ function isOutdatedVersion(parts: readonly number[]): boolean {
 }
 
 export async function probe(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
-  const value = await readManagementJsonBodyOr(ctx.req, null);
+  const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
+  if ("error" in split) return split.error;
+  const value = split.body, wanted = split.route, route = wanted.explicitRoute, bound = routeFields(wanted);
   const body = exactBody(value, ["alias"]) ?? exactBody(value, ["alias", "includeVersion"]) ?? exactBody(value, ["alias", "includeVersion", "allowMissing"]);
   if (!body || typeof body.alias !== "string"
     || (body.includeVersion !== undefined && body.includeVersion !== true)
@@ -62,7 +65,7 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
     const runner = runnerFor(ctx), now = ctx.deps.now ?? Date.now;
     try {
       const started = now();
-      const result = await runner.run(buildProbeArgv({ alias, tempKnownHostsFile: path }), { timeoutMs: 30_000 });
+      const result = await runner.run(buildProbeArgv({ alias, tempKnownHostsFile: path, route }), { timeoutMs: 30_000 });
       const latency = Math.max(0, now() - started);
       if (result.code !== 0 || result.stdout.trim() !== "ocx-link-probe") return fail("probe_failed", "SSH host probing failed.", 502, sshFailureHint(result.stderr));
       const fp = await runner.run(buildFingerprintArgv(path), { timeoutMs: 10_000 });
@@ -70,13 +73,13 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
       const parsed = parseFingerprintLine(fp.stdout.trim());
       const line = readFileSync(path, "utf8").trim().split(/\r?\n/).filter(Boolean).at(-1);
       if (!line) return fail("fingerprint_failed", "The SSH probe did not record a host key.", 502);
-      const remotePlatform = await requireRemotePlatform(runner, alias, path);
+      const remotePlatform = await requireRemotePlatform(runner, alias, route, path);
       if (body.includeVersion === true && body.allowMissing === true) {
-        const inspected = await inspectRemoteChildRuntime(runner, alias, path, remotePlatform);
+        const inspected = await inspectRemoteChildRuntime(runner, alias, route, path, remotePlatform);
         if (!inspected) return fail("version_probe_failed", "The remote OpenCodex runtime could not be inspected.", 502);
         if (inspected.runtimeKind === "missing") {
           const source = resolveBinary(inspected.targetTriple);
-          state.pendingHosts.set(alias, { alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, knownHostLine: line, probedAt: now(), sshLatencyMs: latency, remotePlatform, runtimeKind: "missing", targetTriple: inspected.targetTriple });
+          state.pendingHosts.set(alias, { alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, knownHostLine: line, probedAt: now(), sshLatencyMs: latency, remotePlatform, runtimeKind: "missing", targetTriple: inspected.targetTriple, ...bound });
           state.confirmedHosts?.delete(alias);
           return Response.json({
             alias,
@@ -91,7 +94,7 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
         }
         const parsedVersion = parseVersion(inspected.ocxVersionLine ?? "");
         if (!parsedVersion) return fail("remote_ocx_unrecognized", "The remote ocx did not report an OpenCodex version.", 502);
-        state.pendingHosts.set(alias, { alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, knownHostLine: line, probedAt: now(), sshLatencyMs: latency, remotePlatform, runtimeKind: inspected.runtimeKind, targetTriple: inspected.targetTriple });
+        state.pendingHosts.set(alias, { alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, knownHostLine: line, probedAt: now(), sshLatencyMs: latency, remotePlatform, runtimeKind: inspected.runtimeKind, targetTriple: inspected.targetTriple, ...bound });
         state.confirmedHosts?.delete(alias);
         return Response.json({
           alias,
@@ -105,14 +108,14 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
       }
       let ocxVersion: string | undefined;
       if (body.includeVersion === true) {
-        const versionResult = await runner.run(buildExecArgv({ alias, argv: remoteOcxArgv(["--version"], remotePlatform), knownHostsFile: path }), { timeoutMs: 30_000 });
+        const versionResult = await runner.run(buildExecArgv({ alias, argv: remoteOcxArgv(["--version"], remotePlatform), knownHostsFile: path, route }), { timeoutMs: 30_000 });
         const denied = remoteFailure(versionResult, "version_probe_failed", "The remote ocx version could not be read.");
         if (denied) return denied;
         const parsedVersion = parseVersion(versionResult.stdout);
         if (!parsedVersion) return fail("remote_ocx_unrecognized", "The remote ocx did not report an OpenCodex version.", 502);
         ocxVersion = parsedVersion.version;
       }
-      state.pendingHosts.set(alias, { alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, knownHostLine: line, probedAt: now(), sshLatencyMs: latency, remotePlatform });
+      state.pendingHosts.set(alias, { alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, knownHostLine: line, probedAt: now(), sshLatencyMs: latency, remotePlatform, ...bound });
       state.confirmedHosts?.delete(alias);
       return Response.json({ alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, ...(ocxVersion === undefined ? {} : { ocxVersion }) });
     } catch (error) { return fail("probe_failed", "SSH host probing failed.", 502, sshRunnerErrorHint(error)); }
@@ -121,7 +124,9 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
 }
 
 export async function confirmHost(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
-  const value = await readManagementJsonBodyOr(ctx.req, null);
+  const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
+  if ("error" in split) return split.error;
+  const value = split.body, wanted = split.route;
   const body = exactBody(value, ["alias", "fingerprint"]) ?? exactBody(value, ["alias", "fingerprint", "allowMissing"]);
   if (!body || typeof body.alias !== "string" || typeof body.fingerprint !== "string" || (body.allowMissing !== undefined && typeof body.allowMissing !== "boolean")) {
     return fail("invalid_body", "alias and fingerprint are required.", 400);
@@ -132,14 +137,16 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
     const pending = state.pendingHosts.get(alias), now = ctx.deps.now ?? Date.now;
     if (!pending || now() - pending.probedAt > PROBE_TTL_MS) return fail("host_confirmation_expired", "The SSH host probe has expired.", 409);
     if (pending.fingerprint !== body.fingerprint) return fail("host_fingerprint_mismatch", "The confirmed fingerprint does not match the probe.", 409);
+    if (!sameRouteRequest(routeOf(pending), wanted)) return routeMismatch();
+    const route = pending.explicitRoute ?? null;
     const dir = mkdtempSync(join(tmpdir(), "ocx-link-confirm-")), path = join(dir, "known_hosts");
     writeFileSync(path, pending.knownHostLine + "\n", { mode: 0o600 });
     try {
       const started = now();
       const runner = runnerFor(ctx);
-      const remotePlatform = pending.remotePlatform ?? await requireRemotePlatform(runner, alias, path);
+      const remotePlatform = pending.remotePlatform ?? await requireRemotePlatform(runner, alias, route, path);
       if (body.allowMissing === true) {
-        const inspected = await inspectRemoteChildRuntime(runner, alias, path, remotePlatform);
+        const inspected = await inspectRemoteChildRuntime(runner, alias, route, path, remotePlatform);
         if (!inspected) return fail("version_probe_failed", "The remote ocx version could not be confirmed.", 502);
         if (inspected.runtimeKind === "missing") {
           const source = resolveBinary(inspected.targetTriple);
@@ -184,7 +191,7 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
           plantable: false,
         });
       }
-      const result = await runner.run(buildExecArgv({ alias, argv: remoteOcxArgv(["--version"], remotePlatform), knownHostsFile: path }), { timeoutMs: 30_000 });
+      const result = await runner.run(buildExecArgv({ alias, argv: remoteOcxArgv(["--version"], remotePlatform), knownHostsFile: path, route }), { timeoutMs: 30_000 });
       const denied = remoteFailure(result, "version_probe_failed", "The remote ocx version could not be confirmed.");
       if (denied) return denied;
       const version = parseVersion(result.stdout);
@@ -217,7 +224,9 @@ function parsePort(stdout: string): number | null {
 }
 
 export async function apply(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
-  const value = await readManagementJsonBodyOr(ctx.req, null);
+  const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
+  if ("error" in split) return split.error;
+  const value = split.body, wanted = split.route;
   const body = exactBody(value, ["alias"]) ?? exactBody(value, ["alias", "fingerprint"]) ?? exactBody(value, ["alias", "plant"]) ?? exactBody(value, ["alias", "fingerprint", "plant"]);
   if (!body || typeof body.alias !== "string" || (body.fingerprint !== undefined && typeof body.fingerprint !== "string") || (body.plant !== undefined && typeof body.plant !== "boolean")) {
     return fail("invalid_body", "alias and optional fingerprint/plant are required.", 400);
@@ -229,6 +238,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     if (!confirmed) return fail("host_not_confirmed", "Confirm the SSH host before applying the link.", 409);
     if (now() - confirmed.probedAt > PROBE_TTL_MS) return fail("host_confirmation_expired", "The SSH host confirmation has expired.", 409);
     if (body.fingerprint !== undefined && body.fingerprint !== confirmed.fingerprint) return fail("host_fingerprint_mismatch", "The apply fingerprint does not match the confirmed host.", 409);
+    if (!sameRouteRequest(routeOf(confirmed), wanted)) return routeMismatch();
+    const route = confirmed.explicitRoute ?? null;
     if (readStoreFor(ctx).links.some(link => link.alias === alias && link.direction === "hub-initiated")) return fail("link_exists", "A link for this alias already exists.", 409);
     if (confirmed.runtimeKind === "missing" && body.plant !== true) {
       return fail("remote_ocx_missing", "ocx was not found on the remote host; confirm planting ocx-child before applying.", 409);
@@ -236,7 +247,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     const dir = mkdtempSync(join(tmpdir(), "ocx-link-apply-")), knownHosts = join(dir, "known_hosts");
     writeFileSync(knownHosts, confirmed.knownHostLine + "\n", { mode: 0o600 });
     const runner = runnerFor(ctx), budget = linkCommandBudget(confirmed.sshLatencyMs);
-    const run = (argv: readonly string[], timeoutMs = budget, maxOutputBytes?: number) => runner.run(buildExecArgv({ alias, argv, knownHostsFile: knownHosts }), { timeoutMs, ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }) });
+    const run = (argv: readonly string[], timeoutMs = budget, maxOutputBytes?: number) => runner.run(buildExecArgv({ alias, argv, knownHostsFile: knownHosts, route }), { timeoutMs, ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }) });
     let remotePlatform: "posix" | "windows";
     const ocx = (args: readonly string[]) => remoteOcxArgv(args, remotePlatform);
     let record: LinkStore["links"][number] | undefined, input: Uint8Array | undefined;
@@ -285,7 +296,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       return Response.json({ ...payload, residual: true, recovery }, { status: outcome.status });
     };
     try {
-      remotePlatform = confirmed.remotePlatform ?? await requireRemotePlatform(runner, alias, knownHosts);
+      remotePlatform = confirmed.remotePlatform ?? await requireRemotePlatform(runner, alias, route, knownHosts);
       if (body.plant === true && confirmed.runtimeKind === "missing") {
         phase = "remote_plant";
         const source = resolveBinary(confirmed.targetTriple ?? null);
@@ -293,7 +304,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
         let planted: SshRunResult;
         try {
           planted = await runner.run(
-            buildExecArgv({ alias, argv: remotePlantChildArgv(remotePlatform, source.artifact.sizeBytes, source.artifact.sha256), knownHostsFile: knownHosts }),
+            buildExecArgv({ alias, argv: remotePlantChildArgv(remotePlatform, source.artifact.sizeBytes, source.artifact.sha256), knownHostsFile: knownHosts, route }),
             { stdin: source.artifact.bytes, timeoutMs: Math.max(budget, 60_000) },
           );
         } catch (plantErr) {
@@ -341,7 +352,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       phase = "home_setup";
       const id = newLinkId(), issued = issueKey(ctx, "link:" + alias);
       unvalidatedKeyId = issued.id;
-      const candidate: LinkStore["links"][number] = { id, alias, direction: "hub-initiated", hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date(now()).toISOString(), remotePlatform, childKind: ephemeralChild ? "ephemeral" : "full" };
+      const candidate: LinkStore["links"][number] = { id, alias, direction: "hub-initiated", hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date(now()).toISOString(), remotePlatform, childKind: ephemeralChild ? "ephemeral" : "full", ...routeFields(routeOf(confirmed)) };
       // Under the same lock as the store write: no Home-initiated link may own this alias in any
       // case, and the live known_hosts must still trust exactly the confirmed key for it (another
       // confirmation, under any spelling, may have replaced it since this one). Only a record that
@@ -372,7 +383,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       phase = "remote_connect";
       input = new TextEncoder().encode(JSON.stringify({ apiKeyId: issued.id, key: issued.key }));
       remoteMayBeConnected = true;
-      const connected = await runner.run(buildExecArgv({ alias, argv: ocx(["connect", "--link", "--key-stdin", "--tunnel-port", String(remotePort), "--link-id", id]), knownHostsFile: knownHosts }), { stdin: input, timeoutMs: budget });
+      const connected = await runner.run(buildExecArgv({ alias, argv: ocx(["connect", "--link", "--key-stdin", "--tunnel-port", String(remotePort), "--link-id", id]), knownHostsFile: knownHosts, route }), { stdin: input, timeoutMs: budget });
       if (connected.code !== 0) {
         const conflict = classifyChildAttachConflict(connected.stderr);
         if (conflict === "child_port_busy") {

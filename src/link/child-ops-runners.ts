@@ -39,7 +39,7 @@ function unreachable(record: LinkRecord, env: ChildOpsEnv): ItemOutcome | null {
 
 async function platformOf(record: LinkRecord, env: ChildOpsEnv): Promise<Platform | ItemOutcome> {
   if (record.remotePlatform) return record.remotePlatform;
-  try { return await requireRemotePlatform(env.runner, record.alias, env.knownHostsFile); }
+  try { return await requireRemotePlatform(env.runner, record.alias, record.explicitRoute ?? null, env.knownHostsFile); }
   catch (error) {
     return error instanceof SshRunnerError && error.code === "timeout"
       ? { state: "offline", reason: "ssh-timeout" } : { state: "failed", reason: "platform-probe-failed" };
@@ -81,7 +81,7 @@ export function postUpdateSyncHint(linkId: string): string {
 async function runPinnedSync(record: LinkRecord, platform: Platform, restart: ChildRestart, env: ChildOpsEnv): Promise<PinnedSyncRun> {
   let argv: string[];
   try {
-    argv = buildExecArgv({ alias: record.alias, knownHostsFile: env.knownHostsFile,
+    argv = buildExecArgv({ alias: record.alias, knownHostsFile: env.knownHostsFile, route: record.explicitRoute ?? null,
       argv: remotePinnedSyncArgv(record.id, platform, restart === "none" ? {} : { restart }) });
   } catch (error) {
     if (error instanceof LinkSshArgumentError) return { sync: { state: "failed", reason: "ssh-argument-invalid" }, notRun: true };
@@ -260,7 +260,7 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
   let argv: string[];
   try {
     if (plan.planToken === null) throw new LinkSshArgumentError("invalid plan token");
-    argv = buildExecArgv({ alias: record.alias, knownHostsFile: env.knownHostsFile,
+    argv = buildExecArgv({ alias: record.alias, knownHostsFile: env.knownHostsFile, route: record.explicitRoute ?? null,
       argv: remoteUpdateApplyArgv({ homeVersion: target, planToken: plan.planToken, notAfter, viaLauncher }, "posix") });
   } catch (error) {
     if (error instanceof LinkSshArgumentError) return { state: "failed", reason: "ssh-argument-invalid", ...versions };
