@@ -30,6 +30,11 @@ const HOME_CLEANUP: Record<string, string> = {
   link_cleanup_uncertain: "Enrollment did not complete, and the Home could not undo the attempt: whether the link is stored is unknown and its issued key could not be revoked. Run ocx link status, remove the link if it is listed (ocx link revoke), and revoke the leftover link key under API keys if it remains.",
 };
 const CHILD_MAY_BE_CONNECTED = "The Child may still be connected.";
+// A journalled answer names the Child's residual as a closed word; a replay never probed, so it cannot infer one.
+const RECOVERY_BY_KIND: Record<string, string> = {
+  plant: "Run the planted ocx-child's managed copy with detach --purge on the Child before retrying: ~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux, %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe detach --purge on Windows.",
+  enrollment: "Run ocx disconnect and ocx restart on the Child (~/.cache/opencodex/bin/ocx-child detach for an ocx-child) before retrying.",
+};
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 // Refusals of ocx link add --operation-id and --require-ephemeral (structure/remote-link.md, "Operation journal").
 const OPERATION_REFUSALS: Record<string, string> = {
@@ -294,7 +299,8 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       // prose is never echoed), plus the Child's own recovery step when it may still be connected.
       const homeCleanup = typeof code === "string" && Object.hasOwn(HOME_CLEANUP, code) ? HOME_CLEANUP[code] : undefined;
       if (homeCleanup) {
-        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL) : "";
+        const kindRecovery = typeof error.body.residualKind === "string" ? RECOVERY_BY_KIND[error.body.residualKind] : undefined;
+        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + (kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL)) : "";
         throw new Error(homeCleanup + childStep + " (code " + code + ")");
       }
       const phase = typeof code === "string" && Object.hasOwn(PHASES, code) ? PHASES[code] : undefined;
@@ -302,9 +308,10 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       // alone left every failure to SSH reproduction and source reading.
       const hint = record(error.body.error) && typeof error.body.error.hint === "string" ? error.body.error.hint : "";
       const message = phase ? "Remote Link failed during " + phase + (hint ? ": " + hint : "") : error.message;
-      const recovery = ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL;
+      const kindRecovery = typeof error.body.residualKind === "string" ? RECOVERY_BY_KIND[error.body.residualKind] : undefined;
+      const recovery = kindRecovery ?? (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL);
       // The machine-readable code rides along so a script can branch without parsing prose.
-      const codeSuffix = phase && typeof code === "string" ? " (code " + code + ")" : "";
+      const codeSuffix = (phase || note) && typeof code === "string" ? " (code " + code + ")" : "";
       if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : "") + codeSuffix);
       if (typeof code === "string" && Object.hasOwn(OPERATION_REFUSALS, code)) throw new Error(OPERATION_REFUSALS[code] + " (code " + code + ")");
       if (note && typeof code === "string") throw new Error(error.message + " (code " + code + ")");

@@ -452,7 +452,9 @@ describe("review round 3", () => {
     const replay = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
     expect({ code: code(replay), outcome: replay.body.outcome, residual: replay.body.residual }).toEqual({ code: "key_issue_uncertain", outcome: "unknown", residual: true });
     // A plant is removed only by the managed binary's purge; a disconnect would leave it.
-    expect(replay.body.recovery).toContain("ocx-child detach --purge");
+    expect(replay.body.residualKind).toBe("plant");
+    expect(replay.body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
+    expect(replay.body.recovery).toContain("%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe detach --purge");
     expect(replay.body.recovery).not.toContain("ocx disconnect");
   });
 

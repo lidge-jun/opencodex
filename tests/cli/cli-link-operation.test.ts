@@ -57,6 +57,18 @@ test("a recorded failure keeps its outcome in the error", async () => {
   } finally { h.restore(); }
 });
 
+test("a replayed residual plant gets the CLI's own purge guidance for both platforms, never the disconnect step", async () => {
+  const h = harness([{ body: { operationId: OP, state: "unknown" } }, { status: 500, body: { error: { code: "key_issue_uncertain", message: "server text" }, operationId: OP, outcome: "unknown", residual: true, residualKind: "plant", recovery: "server recovery text" } }]); try {
+    expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP], h.deps)).toBe(1);
+    const message = h.err.join("\n");
+    expect(message).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
+    expect(message).toContain("ocx-child.exe detach --purge");
+    expect(message).not.toContain("ocx disconnect");
+    expect(message).not.toContain("server recovery text");
+    expect(message).toContain("operation " + OP + ": unknown");
+  } finally { h.restore(); }
+});
+
 test.each([
   ["--operation-id without --expect-fingerprint", ["add", ALIAS, "--operation-id", OP]],
   ["an invalid operation id", ["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", "-bad"]],

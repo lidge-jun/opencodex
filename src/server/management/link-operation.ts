@@ -17,8 +17,15 @@ import type { RouteRequest } from "./link-route-request";
 /** Compensation that could not finish: whether anything this operation created remains is unknown. */
 const UNKNOWN_CODES = new Set(["compensation_failed", "key_cleanup_failed", "link_cleanup_uncertain", "key_issue_uncertain"]);
 const RESIDUAL_RECOVERY = "The Child may still be enrolled; run ocx disconnect and ocx restart on the Child (ocx-child detach for an ocx-child) before retrying.";
-// Only the managed binary's purge removes a plant; a disconnect would leave it in place.
-const PLANT_RECOVERY = "The Child may still hold the planted ocx-child; run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying.";
+// Only the managed binary's purge removes a plant; a disconnect would leave it in place. Both managed locations.
+const PLANT_RECOVERY = "The Child may still hold the planted ocx-child; run its managed copy with detach --purge before retrying: "
+  + "~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux, %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe detach --purge on Windows.";
+
+/** The Child's side of a residual, as a closed word a client maps to its own guidance. */
+function residualKind(op: LinkOperation): "plant" | "enrollment" | undefined {
+  if (op.state !== "residual" && !op.childResidual) return undefined;
+  return hasEffect(op, "plant", "intent") ? "plant" : "enrollment";
+}
 
 export interface OperationRequest { id: string; digest: string }
 
@@ -96,7 +103,7 @@ export function replayResponse(op: LinkOperation): Response {
   return Response.json({
     error: { code: error.code, message: "The operation ended " + op.state + "; this is its recorded outcome." },
     ...outcomeBody(op),
-    ...(op.state === "residual" || op.childResidual ? { residual: true, recovery: hasEffect(op, "plant", "intent") ? PLANT_RECOVERY : RESIDUAL_RECOVERY } : {}),
+    ...(residualKind(op) ? { residual: true, residualKind: residualKind(op), recovery: residualKind(op) === "plant" ? PLANT_RECOVERY : RESIDUAL_RECOVERY } : {}),
   }, { status: error.status, headers: { "cache-control": "no-store" } });
 }
 
@@ -218,7 +225,8 @@ export function openEnrollJournal(ctx: ManagementContext, request: OperationRequ
         // The live outcome stands; the open entry is recovered by the next repeat.
         return response;
       }
-      return Response.json({ ...body, ...outcomeBody(op) }, { status: response.status, headers: response.headers });
+      const kind = residualKind(op);
+      return Response.json({ ...body, ...outcomeBody(op), ...(kind ? { residual: true, residualKind: kind } : {}) }, { status: response.status, headers: response.headers });
     },
   };
 }
