@@ -1,67 +1,81 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { preparePinnedCodex } from "../helpers/link-gate-binary";
 
 // The link WebSocket release gate labels a run "release gate" when the sha256 of OCX_LINK_GATE_CODEX matches the
 // reviewed digest (tests/fixtures/link-gate-codex.json). That label is only honest if the bytes it hashed are the bytes
-// it runs. These cases need no real Codex: two small scripts named codex stand in for it.
+// it runs. These cases need no real Codex: copies of the running Bun executable, named codex, stand in for it, and each
+// copy prints its own path, so a run shows which file executed. That works the same on every platform.
+
+const NAME = process.platform === "win32" ? "codex.exe" : "codex";
+const PRINT_SELF = ["-e", "console.log(process.execPath)"];
 
 let root = "";
 afterEach(() => { if (root) removeTreeWithRetry(root); root = ""; });
 
-function script(dir: string, says: string): string {
+/** A copy of this Bun named codex in `dir`. */
+function fakeCodex(dir: string): string {
   mkdirSync(dir, { recursive: true });
-  const file = join(dir, "codex");
-  writeFileSync(file, "#!/bin/sh\necho " + says + "\n");
+  const file = join(dir, NAME);
+  copyFileSync(process.execPath, file);
   chmodSync(file, 0o755);
   return file;
 }
 
 const sha256 = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
 
-async function run(path: string, cwd: string, pathDir: string): Promise<string> {
-  const child = Bun.spawn([path], { cwd, env: { PATH: pathDir + ":/usr/bin:/bin" }, stdout: "pipe", stderr: "pipe" });
+/** Runs `path` from `cwd` with only `pathDir` on PATH; resolves with the path of the executable that ran. */
+async function whoRan(path: string, cwd: string, pathDir: string): Promise<string> {
+  const child = Bun.spawn([path, ...PRINT_SELF], { cwd, env: { PATH: pathDir + delimiter + (process.env.PATH ?? "") }, stdout: "pipe", stderr: "pipe" });
   await child.exited;
-  return (await new Response(child.stdout).text()).trim();
+  return realpathSync((await new Response(child.stdout).text()).trim());
 }
 
 describe("the pinned Codex binary of the release gate: what is hashed is what runs", () => {
   test("a bare name runs the file that was hashed, not another codex on PATH", async () => {
     root = mkdtempSync(join(tmpdir(), "ocx-gate-binary-"));
     const cwd = join(root, "work"); const onPath = join(root, "bin"); const scratch = join(root, "scratch");
-    const hashed = script(cwd, "hashed-copy");
-    script(onPath, "path-copy");
+    const hashed = fakeCodex(cwd);
+    fakeCodex(onPath);
     mkdirSync(scratch);
-    const prepared = preparePinnedCodex("codex", { cwd, scratch })!;
+    const prepared = preparePinnedCodex(NAME, { cwd, scratch })!;
     expect(prepared.digest).toBe(sha256(hashed));
-    expect(await run(prepared.path, cwd, onPath)).toBe("hashed-copy");
+    // The executable that runs is the file the gate names (the copy of the hashed file), never the codex on PATH.
+    expect(await whoRan(prepared.path, cwd, onPath)).toBe(realpathSync(resolve(cwd, prepared.path)));
     expect(isAbsolute(prepared.path)).toBe(true);
+    expect(sha256(prepared.path)).toBe(prepared.digest);
   });
 
   test("replacing the file after it was hashed does not change what runs", async () => {
     root = mkdtempSync(join(tmpdir(), "ocx-gate-binary-"));
     const cwd = join(root, "work"); const scratch = join(root, "scratch");
-    const hashed = script(cwd, "hashed-copy");
+    const original = fakeCodex(cwd);
     mkdirSync(scratch);
-    const prepared = preparePinnedCodex(hashed, { cwd, scratch })!;
-    script(cwd, "replaced");
-    expect(await run(prepared.path, cwd, join(root, "none"))).toBe("hashed-copy");
+    const prepared = preparePinnedCodex(original, { cwd, scratch })!;
+    writeFileSync(original, "replaced after hashing");
+    expect(await whoRan(prepared.path, cwd, join(root, "none"))).toBe(realpathSync(prepared.path));
     expect(sha256(prepared.path)).toBe(prepared.digest);
     // The copy that runs is read-only.
-    expect(statSync(prepared.path).mode & 0o222).toBe(0);
+    if (process.platform !== "win32") expect(statSync(prepared.path).mode & 0o222).toBe(0);
   });
 
-  test("a value that names no executable file is refused", () => {
+  test("a value that names no file is refused", () => {
     root = mkdtempSync(join(tmpdir(), "ocx-gate-binary-"));
     const scratch = join(root, "scratch");
     mkdirSync(scratch);
     expect(preparePinnedCodex("", { cwd: root, scratch })).toBeNull();
     expect(preparePinnedCodex("missing", { cwd: root, scratch })).toBeNull();
     expect(preparePinnedCodex(root, { cwd: root, scratch })).toBeNull();
+  });
+
+  test.skipIf(process.platform === "win32")("a file without execute permission is refused (POSIX permissions)", () => {
+    root = mkdtempSync(join(tmpdir(), "ocx-gate-binary-"));
+    const scratch = join(root, "scratch");
+    mkdirSync(scratch);
     writeFileSync(join(root, "plain"), "not executable");
     expect(preparePinnedCodex("plain", { cwd: root, scratch })).toBeNull();
   });

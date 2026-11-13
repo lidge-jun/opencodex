@@ -30,8 +30,17 @@ import type { Server } from "bun";
 
 // OCX_LINK_GATE_CODEX is resolved once to an executable file and copied read-only into a scratch directory; that copy is
 // what is hashed and what every scenario spawns, by absolute path (tests/helpers/link-gate-binary.ts).
+// The scratch copy is removed after the file, and at once if preparing it throws or the value is refused.
 const BIN_SCRATCH = process.env.OCX_LINK_GATE_CODEX ? mkdtempSync(join(tmpdir(), "ocx-link-gate-bin-")) : "";
-const PREPARED = BIN_SCRATCH ? preparePinnedCodex(process.env.OCX_LINK_GATE_CODEX!, { scratch: BIN_SCRATCH }) : null;
+afterAll(() => { if (BIN_SCRATCH) removeTreeWithRetry(BIN_SCRATCH); });
+const PREPARED = (() => {
+  if (!BIN_SCRATCH) return null;
+  try {
+    const prepared = preparePinnedCodex(process.env.OCX_LINK_GATE_CODEX!, { scratch: BIN_SCRATCH });
+    if (!prepared) removeTreeWithRetry(BIN_SCRATCH);
+    return prepared;
+  } catch (error) { removeTreeWithRetry(BIN_SCRATCH); throw error; }
+})();
 const BIN = PREPARED?.path ?? "";
 const usable = PREPARED !== null;
 const PIN = JSON.parse(readFileSync(fixturePath("link-gate-codex.json"), "utf8")) as { revision: string; sha256: string | null };
@@ -77,8 +86,6 @@ let upstream: ReturnType<typeof Bun.serve> | null = null;
 let standin: RelayStandin | null = null;
 let childListener: Server<unknown> | null = null;
 const children: Array<ReturnType<typeof Bun.spawn>> = [];
-
-afterAll(() => { if (BIN_SCRATCH) removeTreeWithRetry(BIN_SCRATCH); });
 
 afterEach(async () => {
   setLinkWebsocketTransportReadyForTests(false);
