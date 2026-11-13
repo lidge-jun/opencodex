@@ -465,6 +465,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         knownHostsFile: linkKnownHostsPath(),
         // OpenSSH confirms the granted remote listener at DEBUG1; the tap keeps today's classifier lines only.
         logLevel: "DEBUG1",
+        // A record with a route list cannot carry an explicit route (store.ts), so this is null here.
+        route: record.explicitRoute ?? null,
       });
       const child = runner.spawnTunnel(argv, { stderrLine });
       const generation = (generations.get(record.id) ?? 0) + 1;
@@ -523,6 +525,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         targetPort: store.listenerPort,
         knownHostsFile: linkKnownHostsPath(),
         ...(capture ? { logLevel: capture.logLevel } : {}),
+        route: record.explicitRoute ?? null,
       });
       const child = capture ? runner.spawnTunnel(argv, { stderrLine: capture.stderrLine }) : runner.spawnTunnel(argv);
       const generation = (generations.get(record.id) ?? 0) + 1;

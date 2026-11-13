@@ -209,7 +209,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     round.phase = phase;
     let argv: string[];
     try {
-      argv = buildRouteProbeArgv({ alias: record.alias, destination: route, knownHostsFile: host.knownHostsFile() });
+      argv = buildRouteProbeArgv({ alias: record.alias, destination: route, knownHostsFile: host.knownHostsFile(), route: record.explicitRoute ?? null });
     } catch {
       fail(link, route, "transient", "probe");
       next(linkId, link, round);
@@ -297,7 +297,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
   };
 
   const execOnRoute = (record: LinkRecord, route: string, argv: readonly string[], deadline: number, signal: AbortSignal, maxOutputBytes?: number) =>
-    host.runner.run(buildExecArgv({ alias: record.alias, destination: route, argv, knownHostsFile: host.knownHostsFile() }), {
+    host.runner.run(buildExecArgv({ alias: record.alias, destination: route, argv, knownHostsFile: host.knownHostsFile(), route: record.explicitRoute ?? null }), {
       timeoutMs: Math.max(1, Math.ceil(deadline - host.now())),
       signal,
       ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }),
@@ -313,7 +313,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     const { proof, abort } = phase;
     try {
       if (!proof.platform) {
-        proof.platform = record.remotePlatform ?? await requireRemotePlatform(host.runner, record.alias, host.knownHostsFile(), {
+        proof.platform = record.remotePlatform ?? await requireRemotePlatform(host.runner, record.alias, record.explicitRoute ?? null, host.knownHostsFile(), {
           destination: phase.route, timeoutMs: Math.max(1, Math.min(10_000, Math.ceil(candidateDeadline - host.now()))), signal: abort.signal,
         });
         if (!live()) return;

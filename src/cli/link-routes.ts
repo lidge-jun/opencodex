@@ -20,7 +20,7 @@ const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 // The class words an unproven route can carry (RouteOutcomeClass); anything else is not echoed.
 const ROUTE_CAUSES = new Set(["transient", "readiness", "grant_unobserved", "forward", "auth", "hostkey"]);
 
-export interface LinkRoutesDocument { linkId: string; pin: string; routes: string[] }
+export interface LinkRoutesDocument { linkId: string; pin: string; routes: string[]; exclusive?: true }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -29,13 +29,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function validateRoutesDocument(value: unknown, linkId: string): LinkRoutesDocument {
   const fail = (): never => { throw new Error("invalid link API response: routes"); };
   if (!isRecord(value)) return fail();
-  const keys = Object.keys(value).sort();
-  if (keys.join(",") !== "linkId,pin,routes") fail();
+  const keys = Object.keys(value).sort().join(",");
+  if (keys !== "linkId,pin,routes" && keys !== "exclusive,linkId,pin,routes") fail();
   const { pin, routes } = value;
+  // An exclusive link (structure/remote-link.md, "Explicit route") lists exactly its pin.
+  if ("exclusive" in value && (value.exclusive !== true || !Array.isArray(routes) || routes.length !== 1)) fail();
   if (value.linkId !== linkId || typeof pin !== "string" || !isSshAlias(pin) || !Array.isArray(routes) || routes.length < 1
     || !routes.every(route => typeof route === "string" && isSshAlias(route)) || new Set(routes).size !== routes.length
     || !routes.includes(pin)) fail();
-  return { linkId, pin: pin as string, routes: [...routes as string[]] };
+  return { linkId, pin: pin as string, routes: [...routes as string[]], ...(value.exclusive === true ? { exclusive: true as const } : {}) };
 }
 
 function route(value: string | undefined, flag: string, usage: string): string {
@@ -80,6 +82,6 @@ export async function runLinkRoutes(args: string[], deps: LinkCliDeps, request: 
     throw error;
   }
   const document = validateRoutesDocument(response, linkId);
-  printData(document, json, document.routes.map((name, index) => index + "  " + name + (name === document.pin ? "  (pin)" : "")));
+  printData(document, json, document.routes.map((name, index) => index + "  " + name + (name === document.pin ? (document.exclusive ? "  (pin, exclusive)" : "  (pin)") : "")));
 }
 
