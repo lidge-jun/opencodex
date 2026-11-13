@@ -1005,7 +1005,7 @@ La salida `ocx logs` humana incluye `id=<request-id>`. Pase ese valor a `ocx log
 
 ## Estado de búsqueda del perfil de enrutamiento
 
-`ocx route policy show <id>` sale con 4 cuando el perfil no existe. Faltan o no son válidos los argumentos de comando. Los scripts pueden distinguir un perfil que falta del uso incorrecto.
+`ocx route policy show <id>` sale con 4 cuando el perfil no existe. Los argumentos de comando ausentes o no válidos producen el código de salida 2. Los scripts pueden distinguir un perfil que falta del uso incorrecto.
 
 <a id="upstream-error-details"></a>
 

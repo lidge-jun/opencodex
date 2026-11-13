@@ -454,7 +454,7 @@ ocx mmx text chat --model anthropic/claude-opus-5 --message "Hello"
 ocx mmx text repl --model openai/gpt-5.6-sol
 ```
 
-Sólo están representados `mmx text chat` y `mmx text repl`. Ejecute los comandos `mmx` para imagen, vídeo, voz, música, visión, búsqueda, cuota, autenticación, configuración, archivos y actualización nativos de MiniMax. El contenedor utiliza una configuración temporal que contiene solo un marcador de posición de loopback no secreto; nunca carga sus credenciales OAuth o de clave API de `~/.mmx`, y rechaza las anulaciones `--api-key`, `--base-url` y `--region`. Consulte [clientes MiniMax](/es/guides/minimax/) para conocer el flujo de trabajo y los límites completos.
+Solo se envían a través del proxy `mmx text chat` y `mmx text repl`. Ejecute los comandos `mmx` para imagen, vídeo, voz, música, visión, búsqueda, cuota, autenticación, configuración, archivos y actualización nativos de MiniMax. El contenedor utiliza una configuración temporal que contiene solo un marcador de posición de loopback no secreto; nunca carga sus credenciales OAuth o de clave API de `~/.mmx`, y rechaza las anulaciones `--api-key`, `--base-url` y `--region`. Consulte [clientes MiniMax](/es/guides/minimax/) para conocer el flujo de trabajo y los límites completos.
 
 `--confirm-drift` nunca se asume. Si el archivo cambió después de la operación que está restaurando, el comando se niega y le dice, porque reemplazar sus ediciones más recientes es su decisión de hacer.
 

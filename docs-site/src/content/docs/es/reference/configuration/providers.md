@@ -51,7 +51,7 @@ Un ID de modelo coincidente hace que **no** verifique la capacidad real de su re
 
 ## Selección inicial del modelo
 
-Nuevas conexiones no OAuth esperan una lista de modelos confiable antes de exponer los modelos. Si esa lista contiene al menos 20 filas de token Modelos distintas, todos los modificadores de modelo se inician en OFF; el proveedor en sí permanece activo. Las conexiones OAuth y de inicio de sesión de ChatGPT mantienen sus valores predeterminados, según el modo de autenticación efectivo.
+Nuevas conexiones no OAuth esperan una lista de modelos confiable antes de exponer los modelos. Si esa lista contiene al menos 20 filas distintas de la pestaña Modelos, todos los modificadores de modelo se inician en OFF; el proveedor en sí permanece activo. Las conexiones OAuth y de inicio de sesión de ChatGPT mantienen sus valores predeterminados, según el modo de autenticación efectivo.
 
 Esto se ejecuta solo para un nuevo registro de proveedor. Las selecciones existentes sobreviven a las actualizaciones, el re-login y el reemplazo de claves. Después de la inicialización, habilite los modelos que necesita en Modelos o con el CLI a continuación; la política de llegada de modelos nuevos por separado no cambia. Reemplace `<model-id>` con un ID de la lista.
 
