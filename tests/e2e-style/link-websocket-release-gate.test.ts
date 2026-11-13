@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { writeLinkStore, type LinkStore } from "../../src/link/store";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { STANDIN_MAX_MESSAGE_BYTES, startRelayStandin, type RelayStandin } from "../fixtures/link-child-relay-standin";
-import { completed, expectCompleted, gate, GATE_PIN as PIN, runGateCodex, toolCall } from "../helpers/link-gate-codex";
+import { completed, expectCompleted, gate, GATE_PIN as PIN, removePinnedCodexCopy, runGateCodex, toolCall } from "../helpers/link-gate-codex";
 import { startChild } from "../helpers/link-ws-child";
 import { probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
 import { forgetLinkWebsocketAdvertisementsForTests } from "../../src/client/link-ws-advertisement";
@@ -22,7 +22,7 @@ import type { Server } from "bun";
 // The pinned binary is codex-rs built at openai/codex 88c5856 (design section 0). These tests run only when
 // OCX_LINK_GATE_CODEX names an executable; otherwise each is skipped with that reason. A run is release evidence only
 // when the binary's sha256 equals the digest recorded for that revision in tests/fixtures/link-gate-codex.json, a file
-// that changes only through review; any other executable runs as a smoke check, and every test title says which. Codex reaches the Home through a test-only
+// that changes only through review; any other executable runs as a smoke check, and each Codex scenario's title says which. Codex reaches the Home through a test-only
 // stand-in for the Child's relay (tests/fixtures/link-child-relay-standin.ts), except in the 503 sequence, which needs the
 // Child's own relay and tunnel gate (lane T6, src/client/link-websocket.ts) and runs the real Child listener.
 // Codex is an external process with no clock to inject, so each test carries a per-test bound instead of sleeps.
@@ -42,6 +42,8 @@ let upstream: ReturnType<typeof Bun.serve> | null = null;
 let standin: RelayStandin | null = null;
 let childListener: Server<unknown> | null = null;
 const children: Array<ReturnType<typeof Bun.spawn>> = [];
+
+afterAll(removePinnedCodexCopy);
 
 afterEach(async () => {
   setLinkWebsocketTransportReadyForTests(false);

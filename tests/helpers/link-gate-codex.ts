@@ -1,24 +1,32 @@
 import { expect, test } from "bun:test";
-import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 import { fixturePath } from "./repo-root";
+import { preparePinnedCodex } from "./link-gate-binary";
+import { removeTreeWithRetry } from "./remove-tree";
 
 // The pinned Codex binary of the link WebSocket release gate (design T4 11.1 item 13, U13): codex-rs built at
 // openai/codex 88c5856. Tests that drive it run only when OCX_LINK_GATE_CODEX names an executable; otherwise each is
 // skipped with that reason. A run is release evidence only when the binary's sha256 equals the digest recorded for
 // that revision in tests/fixtures/link-gate-codex.json, a file that changes only through review; any other executable
-// runs as a smoke check, and every test title says which. Codex is an external process with no clock to inject, so
+// runs as a smoke check, and each Codex scenario's title says which. Codex is an external process with no clock to inject, so
 // each file carries a per-test bound instead of sleeps.
 
-export const GATE_BIN = process.env.OCX_LINK_GATE_CODEX ?? "";
-export const gateUsable = (() => { if (!GATE_BIN) return false; try { accessSync(GATE_BIN, constants.X_OK); return true; } catch { return false; } })();
+// OCX_LINK_GATE_CODEX is resolved once to an executable file and copied read-only into a scratch directory; that copy is
+// what is hashed and what every scenario spawns, by absolute path (tests/helpers/link-gate-binary.ts).
+const BIN_SCRATCH = process.env.OCX_LINK_GATE_CODEX ? mkdtempSync(join(tmpdir(), "ocx-link-gate-bin-")) : "";
+const PREPARED = BIN_SCRATCH ? preparePinnedCodex(process.env.OCX_LINK_GATE_CODEX!, { scratch: BIN_SCRATCH }) : null;
+export const GATE_BIN = PREPARED?.path ?? "";
+export const gateUsable = PREPARED !== null;
+/** Removes the scratch copy of the pinned Codex; each file that drives it calls this from afterAll. */
+export function removePinnedCodexCopy(): void { if (BIN_SCRATCH) removeTreeWithRetry(BIN_SCRATCH); }
 export const GATE_PIN = JSON.parse(readFileSync(fixturePath("link-gate-codex.json"), "utf8")) as { revision: string; sha256: string | null };
 const PINNED_SHA256 = typeof GATE_PIN.sha256 === "string" ? GATE_PIN.sha256.toLowerCase() : "";
-const digest = gateUsable ? createHash("sha256").update(readFileSync(GATE_BIN)).digest("hex") : "";
+const digest = PREPARED?.digest ?? "";
 const mode: "absent" | "gate" | "smoke" = !gateUsable ? "absent" : PINNED_SHA256 && digest === PINNED_SHA256 ? "gate" : "smoke";
 export const GATE_LABEL = {
-  absent: " [skipped: pinned Codex binary absent (U13); set OCX_LINK_GATE_CODEX to codex-rs built at openai/codex 88c5856]",
+  absent: " [skipped: pinned Codex binary absent (U13); set OCX_LINK_GATE_CODEX to an executable file of codex-rs built at openai/codex 88c5856]",
   gate: " [release gate: Codex sha256 " + digest + " matches the reviewed digest for openai/codex " + GATE_PIN.revision.slice(0, 7) + " in tests/fixtures/link-gate-codex.json]",
   smoke: " [smoke only, not release evidence: Codex sha256 " + digest + " is not the reviewed digest for openai/codex " + GATE_PIN.revision.slice(0, 7) + " (tests/fixtures/link-gate-codex.json" + (PINNED_SHA256 ? "" : " records none yet") + ")]",
 }[mode];
