@@ -239,8 +239,14 @@ function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation
 /** A plain --force's hold on the owner of the receipt it finishes (fenceRetirementOwnerForForce). */
 export interface ForceTakeover {
   readonly operationId: string;
-  /** The journal the force's removal runs with: no marks (the force claims nothing); release drops the owner's live mark. */
+  /**
+   * The journal the force's removal runs with: it writes no marks (the force claims nothing); its first intent, written just
+   * before the tunnel is held and stopped, marks the takeover begun; the owner settles before the receipt is cleared; release
+   * drops the owner's live mark with the tunnel hold.
+   */
   readonly journal: RevokeJournal;
+  /** Whether the force's removal reached the tunnel (its first intent). */
+  readonly began: boolean;
   /** Drop the live mark and settle the owner unknown and unresolved: it is never credited with the force's removal. */
   settle(): void;
   /** The takeover never began its removal: drop the live mark and restore the owner exactly as it was. */
@@ -272,15 +278,24 @@ export function fenceRetirementOwnerForForce(ctx: ManagementContext, receipt: Li
     }
   });
   markRevokeLive(path, operationId, true);
-  let live = true;
+  let live = true, began = false;
   const drop = (): void => { if (live) { live = false; markRevokeLive(path, operationId, false); } };
+  const settleOwner = (): void => {
+    const op = findOperation(readOperationsJournal(path), operationId);
+    if (op?.state === "open") settle(ctx, operationId, "unknown", { code: "operation_interrupted", status: 409 });
+  };
   return {
     operationId,
-    journal: { intent() {}, done() {}, cleanupNotRun() {}, release: drop, finish: async response => response },
+    get began() { return began; },
+    journal: {
+      intent() { began = true; }, done() {}, cleanupNotRun() {}, release: drop, finish: async response => response,
+      // Settled before the receipt is cleared: a crash after the clear cannot leave the owner open with its own removal
+      // intent and the record gone, which recovery would credit to it. A failed write keeps the receipt (and the owner).
+      beforeReceiptCleared: () => { drop(); settleOwner(); },
+    },
     settle() {
       drop();
-      const op = findOperation(readOperationsJournal(path), operationId);
-      if (op?.state === "open") settle(ctx, operationId, "unknown", { code: "operation_interrupted", status: 409 });
+      settleOwner();
     },
     abandon() {
       drop();

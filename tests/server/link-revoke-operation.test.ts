@@ -41,7 +41,7 @@ function record(): LinkRecord {
     createdAt: "2026-11-13T00:00:00.000Z", remotePlatform: "posix", childKind: "ephemeral", explicitRoute: ROUTE, exclusive: true };
 }
 
-function harness(options: { stopGate?: Promise<void>; onStop?: () => void; revokeFails?: boolean; operationsPath?: () => string | undefined; onReload?: () => void; purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void;
+function harness(options: { failStoreRead?: () => boolean; stopGate?: Promise<void>; onStop?: () => void; revokeFails?: boolean; operationsPath?: () => string | undefined; onReload?: () => void; purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void;
   markHook?: (effect: string, phase: "intent" | "done") => void } = {}) {
   const stops: string[] = [];
   const closedSockets: string[] = [];
@@ -75,7 +75,7 @@ function harness(options: { stopGate?: Promise<void>; onStop?: () => void; revok
   writeFileSync(join(root, "known_hosts"), ALIAS + " ssh-ed25519 AAAA\n");
   const deps: ManagementContext["deps"] = {
     now: () => NOW, sshRunner: runner,
-    readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
+    readLinkStore: () => { if (options.failStoreRead?.()) throw new Error("store unreadable"); return structuredClone(store); }, writeLinkStore: next => { store = structuredClone(next); },
     linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => options.operationsPath?.() ?? journalPathOf(),
     linkAliasLock: { lockDir: join(root, "locks"), waitMs: options.lockWaitMs ?? 0, pollMs: 250, now: () => NOW, ...(options.sleep ? { sleep: options.sleep } : {}) },
     ...(options.markHook ? { linkOperationMarkHook: options.markHook } : {}),
@@ -950,4 +950,43 @@ test.skipIf(process.platform !== "darwin")("a plain --force that cannot disown t
   expect({ state: owner.state, resolvedAt: owner.resolvedAt, finishedAt: owner.finishedAt }).toEqual({ state: "unknown", resolvedAt: AT_ISO, finishedAt: AT_ISO });
   expect(readLinkRetirement(LINK, root)?.operationId).toBe(OP);
   expect(h.stops).toEqual([]);
+});
+
+test("a plain --force settles the owner it took over before clearing the receipt, so a crash after the clear cannot credit the owner", async () => {
+  // The owner wrote its record_removed intent and died before the store write.
+  let broken = false;
+  writeFileSync(join(root, "not-a-dir"), "");
+  const h = harness({ operationsPath: () => broken ? join(root, "not-a-dir", "operations.json") : undefined, onReload: () => { broken = true; } });
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "open",
+    effects: [{ effect: "key_revoked", phase: "intent", at: AT_ISO }, { effect: "key_revoked", phase: "done", at: AT_ISO }, { effect: "record_removed", phase: "intent", at: AT_ISO }],
+  } as LinkOperation] });
+  // The force removes the record; the journal then becomes unwritable (at the post-commit reload) before the owner settles.
+  const forced = await h.revoke({ force: true });
+  expect(forced.status).toBe(500);
+  expect(h.store.links).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).not.toBeNull();
+  broken = false;
+  const replay = await harness().revoke({ force: true, operationId: OP });
+  expect(replay.body.outcome).toBe("unknown");
+});
+
+test.each([1, 2])("a plain --force whose store read fails after the disown (read %p) restores the owner and its receipt without touching the tunnel", async failAt => {
+  let disownedReads = 0;
+  const h = harness({ failStoreRead: () => readLinkRetirement(LINK, root)?.operationId === undefined && readLinkRetirement(LINK, root) !== null && ++disownedReads === failAt });
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, resolvedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 },
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }],
+  } as LinkOperation] });
+  const forced = await h.revoke({ force: true });
+  expect(forced.status).toBe(503);
+  expect(h.stops).toEqual([]);
+  const owner = h.journal().operations[0]!;
+  expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: AT_ISO });
+  expect(readLinkRetirement(LINK, root)?.operationId).toBe(OP);
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
 });

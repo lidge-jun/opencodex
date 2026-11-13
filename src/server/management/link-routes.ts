@@ -9,7 +9,7 @@ import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-arg
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
-import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, type LinkRetirementMode } from "../../link/retirement";
+import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, reownLinkRetirement, type LinkRetirement, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
@@ -310,7 +310,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       const owned = foreignRetirement(ctx, fresh.receipt, operation?.id, force);
       if (owned) return owned;
       let takeover: ForceTakeover | null = null;
-      let began = false;
+      let disownedReceipt: LinkRetirement | null = null;
       try {
         if (plainForce && forceReceipt) {
           if (journalReadable) {
@@ -319,7 +319,10 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
             }
           }
           let disowned: boolean;
-          try { disowned = forceReceipt.operationId === undefined || disownLinkRetirement(forceReceipt) !== null; } catch { disowned = false; }
+          try {
+            if (forceReceipt.operationId === undefined) disowned = true;
+            else { disownedReceipt = disownLinkRetirement(forceReceipt); disowned = disownedReceipt !== null; }
+          } catch { disowned = false; }
           if (!disowned) return fail("link_changed", "The link changed during removal.", 409);
           fresh = readRemovalTarget(ctx, id);
           if ("response" in fresh) return fresh.response;
@@ -330,10 +333,17 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
             return journalOpenFailure(error);
           }
         }
-        began = true;
         try { return await journal.finish(await removeReserved(ctx, state, id, fresh.record, fresh.receipt, force, purge, journal)); } finally { journal.release(); }
       } finally {
-        try { if (began) takeover?.settle(); else takeover?.abandon(); } catch { /* the owner stays open: suspended, and replayed on repeat */ }
+        if (takeover) {
+          if (takeover.began) {
+            try { takeover.settle(); } catch { /* the owner stays open: suspended, and replayed on repeat */ }
+          } else {
+            // The removal never reached the tunnel: the receipt goes back to its owner and the owner is restored as it was.
+            try { if (disownedReceipt && forceReceipt?.operationId) reownLinkRetirement(disownedReceipt, forceReceipt.operationId); } catch { /* a plain force can still finish it */ }
+            try { takeover.abandon(); } catch { /* the owner stays open: suspended, and replayed on repeat */ }
+          }
+        }
       }
     }));
   } finally { releaseLink(); }

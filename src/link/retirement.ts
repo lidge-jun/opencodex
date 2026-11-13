@@ -93,6 +93,21 @@ export function disownLinkRetirement(expected: LinkRetirement, configDir: string
     return next;
   }, configDir);
 }
+/**
+ * Undo disownLinkRetirement for a plain --force takeover that stopped before its removal began (#8416): give the exact
+ * receipt (same nonce and link, still without an owner) back to the operation that claimed it, under the config lock.
+ */
+export function reownLinkRetirement(expected: LinkRetirement, operationId: string, configDir: string = getConfigDir()): boolean {
+  const owner = parse(JSON.stringify(expected), expected.link.id);
+  assertNotRealHomeUnderTest(configDir);
+  return withConfigMutationLockSync(() => {
+    const current = readLinkRetirement(owner.link.id, configDir);
+    if (!current || current.nonce !== owner.nonce || !sameLink(current.link, owner.link) || current.operationId !== undefined) return false;
+    const next = parse(JSON.stringify({ ...current, operationId }), owner.link.id);
+    atomicWriteFileNoFollow(pathFor(owner.link.id, configDir), JSON.stringify(next, null, 2) + "\n");
+    return true;
+  }, configDir);
+}
 /** Clear only the exact receipt previously read or claimed, under the config mutation lock. */
 export function clearLinkRetirement(expected: LinkRetirement, configDir: string = getConfigDir(), safeToClear?: () => boolean): boolean {
   const owner = parse(JSON.stringify(expected), expected.link.id);
