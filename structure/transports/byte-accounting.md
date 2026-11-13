@@ -382,6 +382,11 @@ nothing ahead and marks its own output, so the chain reads as the client asks. O
 Link turn while the link WebSocket feature is on is paced (#8601, `remote-link.md`); its
 upstream chunks are also cut into 256 KiB views (`sliceChunks`), so each stage holds a slice
 rather than a whole source chunk. Unmarked streams keep every queue described above.
+A passthrough turn also keeps its outbound body only as the serialized text it sent
+(`src/server/responses/passthrough-dispatch.ts`): the parsed copy the undeclared-tool guard
+reads when the request is built is not kept, and the later readers (snapshot repair and Grok
+compatibility rewrites) parse that text again when they need it, so a large request is not held
+twice while its turn streams (#8601).
 One tee branch's cancellation is never awaited by the wrapper, because that
 promise may depend on its sibling. A hard owner abort discards pending candidates
 rather than flushing them as successful terminals; genuine EOF/read-error tail
