@@ -1846,4 +1846,44 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
       expect(log.upstreamError).not.toContain(credential);
     } finally { restore(); }
   });
+
+  test("a genuine terminal replaces a typed verdict's code and copy on the row", () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(log, typedFrame("rate_limit_exceeded", "typed quota"));
+    inspectResponseLogSsePayload(log, JSON.stringify({ type: "response.failed",
+      response: { status: "failed", error: { code: "server_is_overloaded", message: "fixture overloaded" } } }));
+    expect([log.terminalHttpStatus, log.upstreamErrorCode, log.upstreamError]).toEqual([503, "server_is_overloaded", "fixture overloaded"]);
+  });
+
+  test("a bare frame after a genuine terminal does not supply the row copy", () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(log, JSON.stringify({ type: "response.failed", response: { status: "failed", error: { code: "server_error" } } }));
+    inspectResponseLogSsePayload(log, untypedFrame("gateway_broken", "flagged for possible cybersecurity risk"));
+    expect(log.upstreamError ?? "").not.toContain("cybersecurity");
+  });
+
+  test("inspection without a request row reports the bare verdict's status at EOF", async () => {
+    const reported: Array<[string, number | undefined]> = [];
+    const src = sourceStream([`data: ${untypedFrame("rate_limit_exceeded", "untyped quota")}\n\n`]);
+    await new Promise<void>(resolve => consumeForInspection(src, (status, http) => { reported.push([status, http]); }, undefined, resolve));
+    expect(reported).toEqual([["failed", 429]]);
+  });
+
+  test("a completion after a policy terminal in the same stream is not kept as continuation state", async () => {
+    const completed = `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_fixture", status: "completed", output: [] } })}\n\n`;
+    const kept = async (chunks: string[]): Promise<number> => {
+      let count = 0;
+      await new Promise<void>(resolve => consumeForInspection(sourceStream(chunks), () => {}, undefined, resolve,
+        undefined, undefined, () => { count++; }));
+      return count;
+    };
+    expect(await kept([completed])).toBe(1);
+    expect(await kept([`data: ${untypedFrame("cyber_policy", "fixture blocked")}\n\n`, completed])).toBe(0);
+  });
+
+  test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
+    const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: "Bearer auth" });
+    const block = `data: ${JSON.stringify({ error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } })}`;
+    expect(rewrite(block).join("\n")).not.toContain("fixture-unpatterned-value-8415");
+  });
 });

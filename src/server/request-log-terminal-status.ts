@@ -144,7 +144,11 @@ function consumeRelaySyntheticTail(logCtx: TerminalStatusContext, json: Upstream
   return true;
 }
 
-export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext, json: UpstreamErrorPayload, untypedSse = false): void {
+/**
+ * Returns false when the frame is a bare frame after a genuine terminal: it owns nothing on the
+ * row, so the caller must not fall back to recording its copy either.
+ */
+export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext, json: UpstreamErrorPayload, untypedSse = false): boolean {
   const type = json.type;
   const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
   if (terminal) {
@@ -158,12 +162,14 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     // response.failed. It renders the winning bare verdict, so the row keeps that verdict, and the
     // evidence stays for the final row's code, instead of inferring a different class from the
     // provider copy it carries.
-    if (prior !== undefined && type === "response.failed" && consumeRelaySyntheticTail(logCtx, json)) return;
+    if (prior !== undefined && type === "response.failed" && consumeRelaySyntheticTail(logCtx, json)) return true;
     bareEvidence.delete(logCtx);
-    // Untyped evidence wrote the diagnostics; the terminal that retires it owns them now.
-    if (prior !== undefined && !prior.typed) {
+    // The evidence wrote the diagnostics and the copy; the terminal that retires it owns them now,
+    // so the row cannot keep a losing verdict's code or copy beside the terminal's status.
+    if (prior !== undefined) {
       delete logCtx.upstreamErrorCode;
       delete logCtx.upstreamErrorType;
+      delete logCtx.upstreamError;
     }
     // The classifier retires the provisional status it owns; clearing the map first would
     // hide that ownership from it and leave the stale status on the row.
@@ -174,7 +180,7 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
         ?? (typeof json.code === "string" && KNOWN_BARE_ERROR_CODES.has(json.code) ? json.code : undefined));
     noteBoundedDiagnostic(logCtx, "upstreamErrorType",
       json.error?.type ?? json.last_error?.type ?? json.response?.error?.type);
-    return;
+    return true;
   }
   // A buffered JSON body is not a stream in which a later frame could supersede an earlier one,
   // so it keeps the single-frame classifier. Only an SSE frame enters the reducer.
@@ -186,7 +192,7 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
         ?? (typeof json.code === "string" && KNOWN_BARE_ERROR_CODES.has(json.code) ? json.code : undefined));
     noteBoundedDiagnostic(logCtx, "upstreamErrorType",
       json.error?.type ?? json.last_error?.type ?? json.response?.error?.type);
-    return;
+    return true;
   }
   // The client already ended on the genuine terminal, so a bare frame after it is not the
   // turn's verdict: it may not restart evidence or touch status, code or type. Readers that
@@ -197,11 +203,11 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
       const message = upstreamErrorMessageFromPayload(json);
       if (typeof message === "string" && message.trim() && !diagnosticValueAllowed(message)) logCtx.upstreamError = "[REDACTED]";
     }
-    return;
+    return false;
   }
   const previousEvidence = bareEvidence.get(logCtx);
   const evidence = reduceBareUpstreamEvidence(previousEvidence, json);
-  if (evidence === undefined || evidence === previousEvidence) return;
+  if (evidence === undefined || evidence === previousEvidence) return true;
   bareEvidence.set(logCtx, evidence);
   const previous = provisionalStatuses.get(logCtx);
   // A status set by the caller or another path is not this reducer's to overwrite; only a
@@ -241,6 +247,7 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
   } else {
     logCtx.upstreamError = evidence.verdict.message;
   }
+  return true;
 }
 
 /**

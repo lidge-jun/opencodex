@@ -32,8 +32,12 @@ export function createTerminalErrorRedactionBlockRewrite(
       if (typeof entry === "string") return maskCredential(entry);
       if (Array.isArray(entry)) return entry.map(maskKnown);
       if (entry && typeof entry === "object") {
-        // A key is upstream text too: a rewritten terminal copies extra root fields verbatim.
-        return Object.fromEntries(Object.entries(entry).map(([key, item]) => [maskCredential(key), maskKnown(item)]));
+        // A key is upstream text too: a rewritten terminal copies extra root fields verbatim. Its
+        // sensitivity is decided before masking, which could rename a key such as authorization.
+        return Object.fromEntries(Object.entries(entry).map(([key, item]) => [
+          maskCredential(key),
+          SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_SECRET : maskKnown(item),
+        ]));
       }
       return entry;
     };

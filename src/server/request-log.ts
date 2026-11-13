@@ -1173,7 +1173,7 @@ function captureUpstreamErrorParsed(
 ): void {
   if (parsed !== undefined && parsed !== null) {
     const json = parsed as UpstreamErrorPayload;
-    captureUpstreamTerminalDiagnostics(logCtx, json, untypedSse);
+    if (!captureUpstreamTerminalDiagnostics(logCtx, json, untypedSse)) return;
     const reason = json?.response?.incomplete_details?.reason;
     if (json.type === "response.incomplete"
       && logCtx.terminalIncompleteReason === undefined

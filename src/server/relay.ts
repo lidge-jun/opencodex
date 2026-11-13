@@ -1193,6 +1193,9 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let decoder: TextDecoder | null = new TextDecoder();
   let reported = false;
   let sawTerminal = false;
+  // A policy terminal ends the client stream, so a later completion in the same stream is not a
+  // turn the client received and must not become continuation state.
+  let policyTerminalSeen = false;
   const classifyTerminal = createTerminalStatusTracker();
   let disposed = false;
   let delimiterTail: Uint8Array = EMPTY_BYTES;
@@ -1450,6 +1453,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     const policyTerminal = status === "failed"
       && isPolicyRewriteType(parsed)
       && cyberPolicyTerminalError(parsed) !== undefined;
+    if (policyTerminal) policyTerminalSeen = true;
     if (status) sawTerminal = true;
     try {
       if (!reported && handlers.onTerminal && status) {
@@ -1460,7 +1464,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
         }
         handlers.onTerminal(status, policyTerminal ? 400 : undefined);
       }
-      if (status === "completed" && reconstructedTerminalResponse && handlers.onCompletedResponse) {
+      if (status === "completed" && !policyTerminalSeen && reconstructedTerminalResponse && handlers.onCompletedResponse) {
         handlers.onCompletedResponse(reconstructedTerminalResponse);
       }
       if (status && reconstructedTerminalResponse && handlers.onTerminalResponse) {
@@ -1751,7 +1755,8 @@ export function consumeForInspection(
       if (!inspector.reported()) {
         if (logCtx) logCtx.terminalSource = "synthetic";
         if (bareEvidence !== undefined) {
-          onTerminal("failed", httpStatusForRequestLogTerminal("failed", logCtx));
+          // Without a request row, the verdict still carries the status every other reader uses.
+          onTerminal("failed", logCtx ? httpStatusForRequestLogTerminal("failed", logCtx) : bareEvidence.verdict.terminalStatus);
         } else {
           onTerminal("incomplete");
         }
