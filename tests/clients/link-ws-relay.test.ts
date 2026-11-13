@@ -447,6 +447,26 @@ describe("link WebSocket on the Child: accounting and diagnostics", () => {
     server.close();
   });
 
+  test("a message completed before a refused frame in one call to the relay is delivered first (HomeLeg, head bytes)", async () => {
+    const server = createServer(() => {});
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", () => resolve()));
+    const socket: Socket = connect({ host: "127.0.0.1", port: (server.address() as { port: number }).port });
+    await new Promise<void>(resolve => socket.once("connect", () => resolve()));
+    const completed = Buffer.from('{"type":"response.completed"}');
+    const head = Buffer.concat([Buffer.from([0x81, completed.length]), completed, Buffer.from([0xc1, 1, 0x78])]);
+    const ends: string[] = [];
+    const leg = new HomeLeg(socket, head, LINK_CHILD_WS_LIMITS, manualTimers().timers,
+      { toHome() {}, fromHome() {}, uncounted() {}, end() {} }, reason => ends.push(reason), () => {});
+    const calls: string[] = [];
+    // attach() feeds the whole head to the relay in one call.
+    leg.attach({ send: (data: string | Bun.BufferSource) => { calls.push("send:" + String(data)); return 1; }, getBufferedAmount: () => 0,
+      close: (code?: number) => { calls.push("close:" + code); } });
+    expect(calls).toEqual(['send:{"type":"response.completed"}', "close:1011"]);
+    expect(ends).toEqual(["protocol"]);
+    socket.destroy();
+    server.close();
+  });
+
   test("one socket counts as one request with its message payloads; a close ends it complete", async () => {
     const traffic = createLinkTrafficBook("relayed");
     const { port, home, identity } = await setup({ websocket: { traffic } });
