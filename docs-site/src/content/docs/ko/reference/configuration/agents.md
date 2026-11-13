@@ -23,14 +23,21 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 | `subagentModelFallbackPollMs?` | `number` | `60000` | 사용 가능성 검사 캐시 간격입니다. 1000 ms 미만의 값은 기본값으로 돌아갑니다. |
 | `effortCap?` | `string` | — | 자격을 갖춘 v2 메인 턴과 표시된 생성 하위 턴에 대한 하드 상한입니다. `low`부터 `ultra`까지 허용합니다. |
 | `subagentEffortCap?` | `string` | — | 생성된 하위 턴에만 적용되는 추가 상한입니다. 두 상한이 모두 적용되면 더 낮은 값이 이깁니다. |
+| `plaintextV2AgentMessages?` | `boolean` | — (설정되지 않음) | 실험적 선택 기능입니다. 명시적 `true` 또는 `multiAgentMode: "v2-plaintext"`는 적격 네이티브 ChatGPT v2 부모가 `spawn_agent`, `send_message`, `followup_task`의 메시지 인수를 평문으로 내보내도록 합니다. |
 
 이 표면은 대시보드나 `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>`로 관리합니다. `v2-plaintext` 진입에는 `--acknowledge-plaintext-agent-messages`가 필요합니다. 모드 변경은 새 세션에 적용됩니다. `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2` 필드입니다. `ocx v2 threads <n>`는 v2가 활성화된 뒤 Codex의 `$CODEX_HOME/config.toml` 안 `[features.multi_agent_v2]` 아래에 `max_concurrent_threads_per_session`을 기록합니다.
 
 관리 API는 `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`, `/api/subagent-models`, `/api/subagent-model-fallback`를 제공합니다. injection-model 업데이트는 부분 업데이트입니다. 사용자 지정 프롬프트는 이 API의 `prompt` 필드입니다.
 
+`PUT /api/v2`로 `v2-plaintext`에 진입하려면 `plaintextAgentMessagesAcknowledged: true`가 필요합니다. 일반 `config set`과 `config import`는 이 모드로 새로 진입할 수 없습니다. 해당 모드가 포함된 내보내기를 복원하려면 먼저 확인을 거쳐 모드로 전환한 뒤 가져오세요.
+
+새 설정에서 `plaintextV2AgentMessages`는 설정되지 않으며, 명시적으로 `true`로 설정하는 방법과 `v2-plaintext` 모드 선택은 독립적인 활성화 방법입니다. 호출자는 Responses 프로토콜을 사용하고 최종 대상은 `adapter: "openai-responses"`, `authMode: "forward"`, 정확한 기본 URL `https://chatgpt.com/backend-api/codex`를 사용하는 공식 ChatGPT 전달 경로여야 합니다. OpenAI API 키 제공자, 사용자 지정 호환 게이트웨이, 다른 제공자 라우트 및 Responses가 아닌 호출자는 제외됩니다. 독립 필드는 `ocx config set plaintextV2AgentMessages true`로 설정할 수 있으며 변경 후 프록시를 재시작하세요.
+
 ## 항상 능동 위임
 
 서브에이전트 → 고급의 **항상 능동 위임**(이전 이름: **울트라 모드**)은 추론 노력을 바꾸지 않고 위임을 시작하는 조건만 변경합니다. 권장 프리셋에서도 사용자 지침, 권한 경계, 작업 범위, 도구 규칙은 유지됩니다.
+
+대시보드 스위치를 켜려면 네이티브 기능이 활성화된 명시적 `multiAgentMode: "v2"` 또는 전역 강제를 끄고 카탈로그 pin을 사용하는 `multiAgentMode: "v2-plaintext"`가 필요합니다. `ocx v2 on`만으로는 조건을 충족하지 않습니다.
 
 `GET`과 `PUT /api/v2`는 `multiAgentModeHintRecommendation: { text, revision }`도 반환합니다. 대시보드는 프리셋을 켜거나 복원할 때 서버가 제공한 텍스트를 사용하며, 고정된 대체 문구는 사용하지 않습니다. 이전 서버가 권장값을 제공하지 않거나 잘못된 형식으로 반환하면 프리셋 적용·복원은 사용할 수 없으며, 기존 사용자 지정 힌트의 편집·삭제는 계속 사용할 수 있습니다. **프리셋 복원**은 로컬 초안만 바꾸고, **저장**을 눌러야 저장됩니다.
 
