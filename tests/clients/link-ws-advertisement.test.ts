@@ -68,6 +68,17 @@ describe("ordering by preflight start", () => {
     // The Home switched off; no preflight ran since.
     expect(linkWebsocketAdvertised(LINK)).toBe(true);
   });
+
+  test("a link evicted by 256 others keeps its ordering: an answer still in flight cannot land as the newest", () => {
+    const stale = nextLinkPreflightSequence(); // an "on" preflight for LINK still on its way
+    applyLinkWebsocketAnswer(LINK, nextLinkPreflightSequence(), "off");
+    for (let i = 0; i < 256; i += 1) applyLinkWebsocketAnswer("lnk_" + i.toString(16).padStart(16, "0"), nextLinkPreflightSequence(), "on");
+    expect(applyLinkWebsocketAnswer(LINK, stale, "on")).toBe(false);
+    expect(linkWebsocketAdvertised(LINK)).toBe(false);
+    // A preflight started after the eviction applies as usual.
+    expect(applyLinkWebsocketAnswer(LINK, nextLinkPreflightSequence(), "on")).toBe(true);
+    expect(linkWebsocketAdvertised(LINK)).toBe(true);
+  });
 });
 
 describe("learned from real relay preflights", () => {

@@ -10,13 +10,17 @@ import { LINK_RELAY_WS_STATE_HEADER, LINK_RELAY_WS_STATE_PROOF_HEADER, linkRelay
  * and however late it arrives: an earlier Home's delayed reply, a reply from before a relink, a restart
  * or a downgrade. A verified answer without the state pair, or whose pair does not verify, applies as
  * off. The state lives in memory only, so a Child restart starts from off; a relink changes the link id,
- * which starts a new entry. At most 256 links are kept.
+ * which starts a new entry. At most 256 links are kept. Evicting a link keeps the ordering: an answer for
+ * a link without an entry applies only when its preflight started after every evicted link's last
+ * applied one, so an answer still in flight when its link was evicted can never land as the newest.
  *
  * The cached state only decides whether an upgrade may try the Home at all. The upgrade's own preflight
  * answer decides whether it proceeds (linkWebsocketAnswer on that answer).
  */
 const MAX_LINKS = 256;
 let sequence = 0;
+/** The highest preflight number any evicted entry had applied. */
+let evictedFloor = 0;
 const links = new Map<string, { applied: number; on: boolean }>();
 
 export type LinkWebsocketAnswer = "on" | "off";
@@ -49,10 +53,14 @@ export function linkWebsocketAnswer(
 /** Apply a verified answer under the ordering rule. Returns whether it was applied. */
 export function applyLinkWebsocketAnswer(linkId: string, preflight: number, answer: LinkWebsocketAnswer): boolean {
   const entry = links.get(linkId);
-  if (entry && preflight <= entry.applied) return false;
+  if (preflight <= (entry ? entry.applied : evictedFloor)) return false;
   links.delete(linkId);
   links.set(linkId, { applied: preflight, on: answer === "on" });
-  if (links.size > MAX_LINKS) links.delete(links.keys().next().value!);
+  if (links.size > MAX_LINKS) {
+    const [oldest, evicted] = links.entries().next().value!;
+    links.delete(oldest);
+    evictedFloor = Math.max(evictedFloor, evicted.applied);
+  }
   return true;
 }
 
@@ -63,4 +71,5 @@ export function linkWebsocketAdvertised(linkId: string | undefined): boolean {
 
 export function forgetLinkWebsocketAdvertisementsForTests(): void {
   links.clear();
+  evictedFloor = 0;
 }

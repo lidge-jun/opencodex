@@ -115,6 +115,20 @@ describe("link WebSocket client framer: reading server frames", () => {
   test("a binary message is reported by size only", () => {
     expect(read(serverFrame(2, Buffer.from([1, 2, 3])))).toEqual([{ type: "binary", bytes: 3 }]);
   });
+
+  test("a leading U+FEFF in a text message or a close reason is kept as sent", () => {
+    expect(read(serverFrame(1, "\ufeffbom"))).toEqual([{ type: "text", data: "\ufeffbom", bytes: 6 }]);
+    expect(read(serverFrame(8, closePayload(1000, "\ufeffr")))).toEqual([{ type: "close", code: 1000, reason: "\ufeffr" }]);
+  });
+
+  test("a fragmented message at exactly the limit is reassembled in place, and the reader is reused for the next one", () => {
+    const reader = new LinkWsFrameReader({ maxMessageBytes: 1024, maxFragments: 8 });
+    const parts = ["a".repeat(400), "b".repeat(400), "c".repeat(224)];
+    const frames = parts.map((part, i) => serverFrame(i === 0 ? 1 : 0, part, { fin: i === parts.length - 1 }));
+    expect(reader.push(Buffer.concat(frames))).toEqual([{ type: "text", data: parts.join(""), bytes: 1024 }]);
+    expect(reader.push(Buffer.concat([serverFrame(1, "x", { fin: false }), serverFrame(0, "y")]))).toEqual([{ type: "text", data: "xy", bytes: 2 }]);
+    expect(reader.push(serverFrame(1, "z".repeat(1024)))).toEqual([{ type: "text", data: "z".repeat(1024), bytes: 1024 }]);
+  });
 });
 
 describe("link WebSocket client framer: writing client frames", () => {

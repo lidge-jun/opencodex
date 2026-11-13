@@ -13,7 +13,9 @@ import { randomBytes } from "node:crypto";
  * - UTF-8 validation of complete text messages and close reasons;
  * - close codes 1000-1003, 1007-1011 and 3000-4999 only;
  * - client frames masked, server frames refused when masked;
- * - at most the maximum message plus 14 header bytes held, and a bounded number of fragments.
+ * - at most the maximum message plus 14 header bytes held: an unfragmented message gets its own buffer,
+ *   and the fragments of a fragmented one are written into one reassembly buffer of the maximum size,
+ *   allocated once per reader; at most a bounded number of fragments.
  *
  * A violation throws LinkWsProtocolError with the close code to send. The reader never interprets a
  * message: text is passed on as it arrived.
@@ -44,20 +46,23 @@ export function isWireCloseCode(code: number): boolean {
   return Number.isInteger(code) && ((code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1011) || (code >= 3000 && code <= 4999));
 }
 
-const utf8 = new TextDecoder("utf-8", { fatal: true });
+// ignoreBOM: a leading U+FEFF is part of the text and is passed on unchanged.
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 function decodeUtf8(bytes: Uint8Array): string {
   try { return utf8.decode(bytes); } catch { throw new LinkWsProtocolError("utf8"); }
 }
 
-interface Frame { fin: boolean; opcode: number; payload: Buffer; filled: number }
+interface Frame { fin: boolean; opcode: number; payload: Buffer; filled: number; fragment: boolean }
 
 export class LinkWsFrameReader {
   private readonly header = Buffer.alloc(14);
   private headerLength = 0;
   private headerNeeded = 2;
   private frame: Frame | null = null;
-  private fragments: Buffer[] = [];
+  /** Reassembly buffer for fragmented messages, allocated once at the maximum message size. */
+  private assembly: Buffer | null = null;
+  private fragmentCount = 0;
   private fragmentBytes = 0;
   /** Opcode of the message in progress (1 or 2), or 0 outside a message. */
   private messageOpcode = 0;
@@ -96,7 +101,7 @@ export class LinkWsFrameReader {
       }
     } catch (error) {
       this.done = true;
-      this.fragments = [];
+      this.assembly = null;
       this.frame = null;
       throw error;
     }
@@ -130,12 +135,20 @@ export class LinkWsFrameReader {
       if (length <= 0xffff) throw new LinkWsProtocolError("protocol");
     }
     if (opcode < 8) {
-      if (this.fragments.length + 1 > this.limits.maxFragments) throw new LinkWsProtocolError("too_large");
+      if (this.fragmentCount + 1 > this.limits.maxFragments) throw new LinkWsProtocolError("too_large");
       if (this.fragmentBytes + length > this.limits.maxMessageBytes) throw new LinkWsProtocolError("too_large");
     }
     this.headerLength = 0;
     this.headerNeeded = 2;
-    const frame: Frame = { fin: (b0 & 0x80) !== 0, opcode, payload: Buffer.allocUnsafe(length), filled: 0 };
+    const fin = (b0 & 0x80) !== 0;
+    // A data frame that is part of a fragmented message lands in the reassembly buffer, after the earlier fragments.
+    const fragment = opcode < 8 && (opcode === 0 || !fin);
+    let payload: Buffer;
+    if (fragment) {
+      this.assembly ??= Buffer.allocUnsafe(this.limits.maxMessageBytes);
+      payload = this.assembly.subarray(this.fragmentBytes, this.fragmentBytes + length);
+    } else payload = Buffer.allocUnsafe(length);
+    const frame: Frame = { fin, opcode, payload, filled: 0, fragment };
     this.frame = frame;
     if (length === 0) this.endFrame(frame, events);
   }
@@ -155,12 +168,12 @@ export class LinkWsFrameReader {
       return;
     }
     if (opcode !== 0) this.messageOpcode = opcode;
-    this.fragments.push(payload);
-    this.fragmentBytes += payload.length;
+    this.fragmentCount += 1;
+    if (frame.fragment) this.fragmentBytes += payload.length;
     if (!frame.fin) return;
-    const message = this.fragments.length === 1 ? this.fragments[0]! : Buffer.concat(this.fragments, this.fragmentBytes);
+    const message = frame.fragment ? this.assembly!.subarray(0, this.fragmentBytes) : payload;
     const messageOpcode = this.messageOpcode;
-    this.fragments = [];
+    this.fragmentCount = 0;
     this.fragmentBytes = 0;
     this.messageOpcode = 0;
     if (messageOpcode === 1) events.push({ type: "text", data: decodeUtf8(message), bytes: message.length });
