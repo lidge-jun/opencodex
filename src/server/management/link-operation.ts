@@ -19,7 +19,7 @@ const UNKNOWN_CODES = new Set(["compensation_failed", "key_cleanup_failed", "lin
 const RESIDUAL_RECOVERY = "The Child may still be enrolled; run ocx disconnect and ocx restart on the Child (ocx-child detach for an ocx-child) before retrying.";
 // Only the managed binary's purge removes a plant; a disconnect would leave it in place. Both managed locations.
 const PLANT_RECOVERY = "The Child may still hold the planted ocx-child; run its managed copy with detach --purge before retrying: "
-  + "~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux; on Windows \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge, "
+  + "~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux; on Windows, in Command Prompt, \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge, "
   + "or \"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge where LOCALAPPDATA is not set.";
 
 /** The Child's side of a residual, as a closed word a client maps to its own guidance. */

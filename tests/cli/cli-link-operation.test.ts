@@ -63,6 +63,8 @@ test("a replayed residual plant gets the CLI's own purge guidance for both platf
     const message = h.err.join("\n");
     expect(message).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
     expect(message).toContain('ocx-child.exe" detach --purge');
+    // %VAR% and a bare quoted path are Command Prompt syntax; PowerShell would need & and $env:.
+    expect(message).toContain("in Command Prompt");
     expect(message).not.toContain("ocx disconnect");
     expect(message).not.toContain("server recovery text");
     expect(message).toContain("operation " + OP + ": unknown");

@@ -33,7 +33,7 @@ const CHILD_MAY_BE_CONNECTED = "The Child may still be connected.";
 // A journalled answer names the Child's residual as a closed word; a replay never probed, so it cannot infer one.
 const RECOVERY_BY_KIND: Record<string, string> = {
   plant: "Run the planted ocx-child's managed copy with detach --purge on the Child before retrying: ~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux; "
-    + "on Windows \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge, or \"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge where LOCALAPPDATA is not set.",
+    + "on Windows, in Command Prompt, \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge, or \"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge where LOCALAPPDATA is not set.",
   enrollment: "Run ocx disconnect and ocx restart on the Child (~/.cache/opencodex/bin/ocx-child detach for an ocx-child) before retrying.",
 };
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
