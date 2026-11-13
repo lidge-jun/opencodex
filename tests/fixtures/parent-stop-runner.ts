@@ -23,6 +23,8 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   guarded?: boolean;
   /** #7771: the guarded path on a simulated win32, with a bound scheduler manager (separate child stop). */
   windowsGuarded?: boolean;
+  /** Run the stop through the Windows checked-stop wiring on any host (it is always on, on a Windows host). */
+  windowsStopWiring?: boolean;
   orphan?: boolean;
   exitCleanup?: boolean;
   nativeSignal?: boolean;
@@ -150,6 +152,7 @@ mock.module("node:child_process", () => ({
 }));
 
 const receipts = await import("../../src/config/pending-teardown");
+if (options.windowsStopWiring) (await import("../../src/cli/stop-windows-checked")).resetOcxWindowsStopForTests("win32");
 process.on("exit", () => {
   receiptBlocker?.close();
   writeFileSync(join(home, "parent-stop-result.json"), JSON.stringify({
