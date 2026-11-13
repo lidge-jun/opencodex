@@ -917,6 +917,7 @@ fn attach_locked(guard: &mut CodexHomeGuard, request: AttachRequest) -> Result<(
             document: settings_doc,
         }),
     };
+    crate::test_hooks::barrier("attach-before-state-write");
     if let Err(e) = write_child_state(&paths.state_file, &state) {
         let restored = rollback.restore_and_report(guard);
         eprintln!("{e}");
@@ -1965,8 +1966,9 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
     };
     let owner = guard.owner_record();
     // Every link the records name. More than one means an attach replaced another link's
-    // attachment; an interrupted one (phase attaching, or a rollback left) is the owner's to
-    // finish with a plain detach, and any other mix is a conflict.
+    // attachment. An interrupted one (phase attaching, or a rollback left) that also names this
+    // link is residual: a plain detach would restore that other link and then remove it, so the
+    // bound detach leaves it. Any other mix is a conflict.
     let mut named: Vec<(&'static str, PathBuf, String)> = Vec::new();
     if let StateReadOutcome::Valid(st) = &state {
         named.push(("child-state", state_path.clone(), st.link_id.clone()));
@@ -1985,7 +1987,7 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
                 ExpectLinkRefusal::Residual,
                 record,
                 path,
-                "an interrupted attach replaced another link's attachment; run ocx-child detach on this machine",
+                "an interrupted attach replaced another link's attachment; a plain detach would restore and remove that link",
             )
         } else {
             refuse(
@@ -1997,19 +1999,33 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
         };
     }
     let state_names_link = matches!(state, StateReadOutcome::Valid(_));
+    // The record names this link without its state: an attach of it stopped before its state write (phase attaching), or a
+    // detach of it stopped after marking the record detaching, whether before or after it removed state.json, and possibly
+    // while it restored an attach rollback (#8691 review). The bound detach finishes either as a plain one would. Any
+    // rollback left names no link (the machine had none) or this one, since one naming another link was refused above, so
+    // restoring it puts back no other link.
+    let own_interrupted = owner.is_some_and(|r| {
+        matches!(
+            r.phase,
+            OwnershipPhase::Attaching | OwnershipPhase::Detaching
+        )
+    }) && rollback
+        .as_ref()
+        .is_none_or(|prior| prior.as_deref().is_none_or(|id| id == link_id));
     match owner.map(|r| r.link_id.as_deref()) {
         Some(None) => refuse(
             ExpectLinkRefusal::Residual,
             "codex-home-owner",
             &owner_path,
-            "the ownership record names no link (schema /1); run ocx-child detach on this machine",
+            "the ownership record names no link (schema /1)",
         ),
         Some(Some(_)) if state_names_link => Ok(()),
+        Some(Some(_)) if own_interrupted => Ok(()),
         Some(Some(_)) => refuse(
             ExpectLinkRefusal::Residual,
             "codex-home-owner",
             &owner_path,
-            "the Child state is missing while the ownership record names this link (an attach interrupted before it wrote the state, or an interrupted detach); run ocx-child detach on this machine",
+            "the Child state is missing while the ownership record names this link outside an interrupted attach or detach",
         ),
         None if state_names_link => refuse(
             ExpectLinkRefusal::Residual,

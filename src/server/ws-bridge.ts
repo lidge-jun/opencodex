@@ -11,6 +11,7 @@ import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
 import { BoundedSseFrameBuffer, MAX_CLIENT_SSE_FRAME_BYTES } from "./sse-frame-buffer";
+import type { LinkTrafficFlow } from "../link/traffic";
 import { sseDataPayload as parseSseBlock } from "./sse-payload-rewrite";
 import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
@@ -103,6 +104,8 @@ export interface LinkSocketBinding {
   readonly leases: { closed(): void };
   /** Set by the link pump while it waits for Bun's drain; the link handler calls it on drain and close. */
   drained?: () => void;
+  /** This socket's flow in the Home's per-link traffic book: message payload bytes each way (link-websocket.ts). */
+  traffic?: LinkTrafficFlow;
 }
 
 export interface LiveSidebandUpstreamFailure {
@@ -220,6 +223,9 @@ export function sendTextFrame(ws: ServerWebSocket<WsData>, payload: string): voi
   const result = ws.send(payload);
   if (result === 0) throw new WsSendDroppedError();
   // Bun returns -1 when queued with backpressure. That is accepted; a later 0 is the hard failure.
+  // A link socket counts what Bun took, queued or written; a local socket has no flow and pays one property read.
+  const flow = ws.data.link?.traffic;
+  if (flow) flow.fromHome(Buffer.byteLength(payload));
 }
 
 export function sendJsonFrame(ws: ServerWebSocket<WsData>, payload: Record<string, unknown>): void {

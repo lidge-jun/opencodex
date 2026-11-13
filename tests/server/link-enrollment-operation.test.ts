@@ -147,6 +147,8 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
     get store() { return store; }, set store(value: LinkStore) { store = value; },
     journal: () => readOperationsJournal(journalPath),
     advance: (ms: number) => { clock += ms; }, breakRevoke: () => { revokeWorks = false; }, failIssue: () => { issueWorks = false; },
+    /** What a revoke does to the Child: it serves standalone again. */
+    disconnectChild: () => { restarted = false; },
   };
 }
 
@@ -400,7 +402,14 @@ describe("review round 1", () => {
     const journal = openEnrollJournal(ctx, { id: OP, digest: digest() }, ALIAS, {});
     journal.intent("plant");
     const finished = await journal.finish(Response.json(body, { status: 502 }));
-    expect((await finished.json() as { outcome: string }).outcome).toBe(outcome);
+    const answer = await finished.json() as { outcome: string; linkId?: string; recovery?: string; residualKind?: string };
+    expect(answer.outcome).toBe(outcome);
+    if (outcome === "residual") {
+      // The first answer already binds the Child's step to the reserved link id, as a replay does (#8694 review).
+      expect(answer.linkId).toBe(journal.reservedLinkId);
+      expect(answer.residualKind).toBe("plant");
+      expect(answer.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + journal.reservedLinkId);
+    }
   });
 
   test("without an operation id and before this Home ever journalled, apply takes no lock and reads no journal", async () => {
@@ -466,9 +475,12 @@ describe("review round 3", () => {
     expect({ code: code(replay), outcome: replay.body.outcome, residual: replay.body.residual }).toEqual({ code: "key_issue_uncertain", outcome: "unknown", residual: true });
     // A plant is removed only by the managed binary's purge; a disconnect would leave it.
     expect(replay.body.residualKind).toBe("plant");
-    expect(replay.body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
-    expect(replay.body.recovery).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge');
-    expect(replay.body.recovery).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge');
+    // Bound to the reserved link id the journal recorded before anything changed (#8691 final review).
+    const linkId = replay.body.linkId as string;
+    expect(linkId).toMatch(/^lnk_[0-9a-f]{16}$/);
+    expect(replay.body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + linkId);
+    expect(replay.body.recovery).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + linkId);
+    expect(replay.body.recovery).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + linkId);
     expect(replay.body.recovery).not.toContain("ocx disconnect");
   });
 
@@ -516,6 +528,8 @@ describe("journal size limit", () => {
     const refused = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
     expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_journal_full" });
     expect((refused.body.error as { message: string }).message).toContain("ocx link operations resolve");
+    // A closed field naming the bound; an older CLI drops it and still refuses.
+    expect(refused.body.bound).toBe("unsettled");
     expect(h.ssh.length).toBe(before);
     expect(h.config.apiKeys).toEqual([]);
     expect((await h.call("apply", { alias: ALIAS, fingerprint })).status).toBe(202);
@@ -582,7 +596,7 @@ describe("replay survives the settled-entry bound", () => {
     const applied = await h.enroll();
     expect(applied.status).toBe(202);
     const committedOp = h.journal().operations[0]!;
-    // Many operations settle after it within the same day (a provisioning burst); a later write prunes.
+    // Many operations settle after it inside the replay window (a provisioning burst); a later write prunes, but not it.
     const newer = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 4 }, (_, i) => entry({ operationId: "later-" + i, alias: "pen-later-" + i, state: "committed",
       finishedAt: new Date(NOW + 1000 + i).toISOString(), digest: "e".repeat(64) }));
     writeOperationsJournal(h.journalPath, { version: 1, operations: [committedOp, ...newer] });
@@ -592,5 +606,31 @@ describe("replay survives the settled-entry bound", () => {
     const replayed = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
     expect({ status: replayed.status, body: replayed.body }).toEqual({ status: 202, body: applied.body });
     expect(h.ssh.length).toBe(calls);
+  });
+});
+
+describe("a repeat after the replay window (the documented limit of the guarantee)", () => {
+  test("an enrollment whose entry was pruned and whose link was removed meanwhile enrolls the machine again under the same id", async () => {
+    const h = harness();
+    const first = await h.enroll();
+    expect(first.status).toBe(202);
+    const firstLink = first.body.linkId as string;
+    // The link is revoked through the route (forced: no remote step), and the Child serves standalone again.
+    expect((await h.del(firstLink, { force: true })).status).toBe(200);
+    h.disconnectChild();
+    expect(h.store.links).toEqual([]);
+    // 256 operations settle after it; once it is past the prune floor, the next journal write prunes it.
+    const settled = h.journal().operations;
+    const later = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED }, (_, i) => entry({ operationId: "later-" + i, alias: "pen-later-" + i, state: "committed",
+      finishedAt: new Date(NOW + 1000 + i).toISOString(), digest: "e".repeat(64) }));
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [...settled, ...later] });
+    h.advance(OPERATION_PRUNE_FLOOR_MS + 1000);
+    updateOperationsJournal(h.journalPath, NOW + OPERATION_PRUNE_FLOOR_MS + 1000, () => {});
+    expect(h.journal().operations.map(op => op.operationId)).not.toContain(OP);
+    const again = await h.enroll();
+    // Not a refusal: callers must not repeat an operation id after the window and expect its old answer.
+    expect({ status: again.status, body: again.body }).toMatchObject({ status: 202 });
+    expect(again.body.linkId).not.toBe(firstLink);
+    expect(h.store.links.map(link => link.id)).toEqual([again.body.linkId]);
   });
 });

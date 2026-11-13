@@ -120,6 +120,11 @@ import {
   STEPFUN_MODEL_INPUT_MODALITIES,
   STEPFUN_NO_VISION_MODELS,
   STEPFUN_REASONING_EFFORTS,
+  MORPH_ULTRA_MODELS,
+  MORPH_ULTRA_MODEL_CONTEXT_WINDOWS,
+  MORPH_ULTRA_MODEL_INPUT_MODALITIES,
+  MORPH_ULTRA_REASONING_EFFORTS,
+  MORPH_ULTRA_REASONING_EFFORT_MAPS,
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
@@ -497,6 +502,33 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // /v1/chat/completions passthrough only folds on an explicit record, so record it here.
     foldDeveloperRoleToSystem: true,
     note: "International default (api.moonshot.ai). China accounts: choose China (.cn) or Custom for api.moonshot.cn.",
+  },
+  {
+    // Morph Ultra plan (https://www.morphllm.com/products/ultra, verified 2026-11-13): one
+    // subscription with no token meter on Kimi K3.1 and DeepSeek V4.1 Flash. Only the covered rows
+    // are seeded — every other Morph model bills per token, and the abliterated variant needs
+    // privileged-access approval. Discovery stays off for the same reason: GET /v1/models lists
+    // per-token rows too, and a live roster would re-add models this plan does not include.
+    id: "morph", label: "Morph (Ultra plan)", baseUrl: "https://api.morphllm.com/v1",
+    adapter: "openai-chat", authKind: "key",
+    // A user who already configured a custom provider named "morph" keeps that destination: the
+    // registry only claims rows that still point at Morph's own endpoint.
+    preserveCustomDestination: true,
+    dashboardUrl: "https://www.morphllm.com/dashboard/api-keys",
+    defaultModel: "morph-dsv41flash-1017",
+    models: MORPH_ULTRA_MODELS,
+    liveModels: false,
+    modelContextWindows: MORPH_ULTRA_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: MORPH_ULTRA_MODEL_INPUT_MODALITIES,
+    modelReasoningEfforts: MORPH_ULTRA_REASONING_EFFORTS,
+    modelReasoningEffortMap: MORPH_ULTRA_REASONING_EFFORT_MAPS,
+    // Both families require the complete assistant message to be replayed, reasoning_content
+    // included (https://www.morphllm.com/kimi-k3-1-api, "The Thinking-Replay Gotcha", read
+    // 2026-11-13): a harness that keeps only `content` erases earlier turns' reasoning and the
+    // model degrades after a few turns. Neither seeded id matches the DeepSeek/Reflection name
+    // fallback, so the preservation has to be declared here.
+    preserveReasoningContentModels: MORPH_ULTRA_MODELS,
+    note: "Morph Ultra plan ($200/month, no token meter) on the OpenAI-compatible endpoint https://api.morphllm.com/v1. Seeded models are the Ultra-covered ones: morph-kimik31 (Kimi K3.1) and morph-dsv41flash-1017 (DeepSeek V4.1 Flash, Oct 17 snapshot). morph-dsv41flash is the same Flash pool under its undated id, and morph-dsv41flash-abliterated needs privileged-access approval, so neither is seeded. Every other Morph model (GLM-5.3, Fast Apply, WarpGrep, Router) bills per token and is not part of the plan. Ultra removes the token meter but not the per-minute rate limits, and a 429 means retry after Retry-After.",
   },
   { id: "huggingface", label: "Hugging Face", baseUrl: "https://router.huggingface.co/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://huggingface.co/settings/tokens" },
   // 260715 NIM hardening (issue #126, devlog/_plan/260715_issue126_nim_kimi):

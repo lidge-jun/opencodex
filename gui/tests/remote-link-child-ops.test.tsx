@@ -81,7 +81,7 @@ const POLICY = { catalogFanout: "auto", childCodexRestart: "never", updates: "au
 
 function job(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { schema: "ocx.link.child-job/1", jobId: "ljob_0123456789abcdef", op: "update", trigger: "manual", restart: "none", state: "running", createdAt: "now", finishedAt: null,
-    items: [{ linkId: "l1", alias: "box-one", state: "running", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", startedAt: null, finishedAt: null }], ...overrides };
+    items: [{ linkId: "lnk_0000000000000011", alias: "box-one", state: "running", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", startedAt: null, finishedAt: null }], ...overrides };
 }
 
 async function mount(): Promise<HTMLDivElement> {
@@ -134,13 +134,13 @@ function openDialog(host: HTMLElement): HTMLDialogElement {
 }
 
 test("status is requested with children=1", async () => {
-  const calls = installFetch(() => response(status([row("l1", "box-one", childBlock())])));
+  const calls = installFetch(() => response(status([row("lnk_0000000000000011", "box-one", childBlock())])));
   await mount();
   expect(calls[0]?.path).toBe("/api/link/status?children=1");
 });
 
 test("an older Home renders today's row with no child controls", async () => {
-  const calls = installFetch(call => call.path.startsWith("/api/link/status") ? response(status([row("l1", "box-one", null)])) : response({ error: { code: "not_found" } }, 404));
+  const calls = installFetch(call => call.path.startsWith("/api/link/status") ? response(status([row("lnk_0000000000000011", "box-one", null)])) : response({ error: { code: "not_found" } }, 404));
   const host = await mount();
   expect(host.textContent).toContain("box-one");
   expect(host.querySelector(".remote-link-child-badges")).toBeNull();
@@ -153,8 +153,8 @@ test("an older Home renders today's row with no child controls", async () => {
 
 test("badges carry version, skew, catalog, Codex restart and owner action", async () => {
   installFetch(() => response(status([
-    row("l1", "box-one", childBlock({ codex: { appServers: "stale", staleCount: 2, catalogMatchesHome: false, catalogSyncedAt: null, reportedAt: 5 } })),
-    row("l2", "box-two", childBlock({ versionSkew: "same", update: { route: "owner-action", reason: "desktop-app-owned", observedAt: null }, catalog: { state: "current", pulledAt: 1, homeChangedAt: 1 } })),
+    row("lnk_0000000000000011", "box-one", childBlock({ codex: { appServers: "stale", staleCount: 2, catalogMatchesHome: false, catalogSyncedAt: null, reportedAt: 5 } })),
+    row("lnk_0000000000000012", "box-two", childBlock({ versionSkew: "same", update: { route: "owner-action", reason: "desktop-app-owned", observedAt: null }, catalog: { state: "current", pulledAt: 1, homeChangedAt: 1 } })),
   ])));
   const host = await mount();
   const first = host.querySelectorAll(".remote-link-child-badges")[0]!;
@@ -170,7 +170,7 @@ test("badges carry version, skew, catalog, Codex restart and owner action", asyn
 
 test("Check and Sync now post exact single-link bodies", async () => {
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock({ activity: { idle: false, inFlight: 1, lastDataEndAt: null } }))]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock({ activity: { idle: false, inFlight: 1, lastDataEndAt: null } }))]));
     if (call.path === "/api/link/children/operations") return response({ job: job({ op: "observe", state: "done", items: [] }) }, 202);
     return response({ error: { code: "not_found" } }, 404);
   });
@@ -178,12 +178,12 @@ test("Check and Sync now post exact single-link bodies", async () => {
   await click(button(host, "Check"));
   await click(button(host, "Sync now"));
   const posts = calls.filter(call => call.method === "POST");
-  expect(posts.map(call => call.body)).toEqual([{ op: "observe", linkIds: ["l1"] }, { op: "sync", linkIds: ["l1"] }]);
+  expect(posts.map(call => call.body)).toEqual([{ op: "observe", linkIds: ["lnk_0000000000000011"] }, { op: "sync", linkIds: ["lnk_0000000000000011"] }]);
 });
 
 test("Restart Codex picks a scope and states the app-server caveat", async () => {
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/operations") return response({ job: job({ op: "restart-codex", state: "done", items: [] }) }, 202);
     return response({ error: { code: "not_found" } }, 404);
   });
@@ -193,19 +193,19 @@ test("Restart Codex picks a scope and states the app-server caveat", async () =>
   expect(dialog.querySelectorAll<HTMLInputElement>("input[type=radio]")[0]?.checked).toBe(true);
   expect(dialog.textContent).toContain("The Codex desktop app's own app-server is not refreshed");
   await click([...dialog.querySelectorAll("button")].find(item => item.textContent === "Restart")!);
-  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "restart-codex", linkIds: ["l1"], restart: "app-server" });
+  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "restart-codex", linkIds: ["lnk_0000000000000011"], restart: "app-server" });
 
   await click(button(host, "Restart Codex"));
   const reopened = openDialog(host);
   await click(reopened.querySelectorAll<HTMLInputElement>("input[type=radio]")[1]!);
   expect(reopened.textContent).toContain("Quits and relaunches the Codex desktop app on box-one");
   await click([...reopened.querySelectorAll("button")].find(item => item.textContent === "Restart")!);
-  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "restart-codex", linkIds: ["l1"], restart: "codex" });
+  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "restart-codex", linkIds: ["lnk_0000000000000011"], restart: "codex" });
 });
 
 test("a cancelled restart dialog reopens at the app-server default", async () => {
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/operations") return response({ job: job({ op: "restart-codex", state: "done", items: [] }) }, 202);
     return response({ error: { code: "not_found" } }, 404);
   });
@@ -223,8 +223,8 @@ test("a cancelled restart dialog reopens at the app-server default", async () =>
 test("Update and Update all confirm the disruption and post their bodies", async () => {
   const calls = installFetch(call => {
     if (call.path.startsWith("/api/link/status")) return response(status([
-      row("l1", "box-one", childBlock()),
-      row("l2", "box-two", childBlock({ versionSkew: "same", update: { route: "orchestrated", reason: null, observedAt: null } })),
+      row("lnk_0000000000000011", "box-one", childBlock()),
+      row("lnk_0000000000000012", "box-two", childBlock({ versionSkew: "same", update: { route: "orchestrated", reason: null, observedAt: null } })),
     ]));
     if (call.path === "/api/link/children/operations") return response({ job: job({ state: "done", items: [] }) }, 202);
     return response({ error: { code: "not_found" } }, 404);
@@ -239,7 +239,7 @@ test("Update and Update all confirm the disruption and post their bodies", async
   expect(bulkDialog.textContent).toContain("ends any turn currently relayed for it");
   expect(bulkDialog.textContent).toContain("Automatic updates wait until a Child is idle.");
   await click([...bulkDialog.querySelectorAll("button")].find(item => item.textContent === "Update all")!);
-  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: ["l1"] });
+  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: ["lnk_0000000000000011"] });
 
   const firstRow = host.querySelectorAll(".remote-link-row")[0]!;
   await click([...firstRow.querySelectorAll("button")].find(item => item.textContent === "Update")!);
@@ -247,16 +247,16 @@ test("Update and Update all confirm the disruption and post their bodies", async
   expect(rowDialog.textContent).toContain("Update box-one to 2.35.0?");
   expect(rowDialog.textContent).toContain("ends any turn currently relayed for it");
   await click([...rowDialog.querySelectorAll("button")].find(item => item.textContent === "Update")!);
-  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: ["l1"] });
+  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: ["lnk_0000000000000011"] });
 });
 
 test("Update all and Check all name exactly the rows they cover", async () => {
   const calls = installFetch(call => {
     if (call.path.startsWith("/api/link/status")) return response(status([
-      row("l1", "box-one", childBlock()),
-      row("l2", "box-two", childBlock({ versionSkew: "same", update: { route: "orchestrated", reason: null, observedAt: null } })),
-      row("l3", "box-three", childBlock(), "client-initiated"),
-      row("l4", "box-four", childBlock()),
+      row("lnk_0000000000000011", "box-one", childBlock()),
+      row("lnk_0000000000000012", "box-two", childBlock({ versionSkew: "same", update: { route: "orchestrated", reason: null, observedAt: null } })),
+      row("lnk_0000000000000013", "box-three", childBlock(), "client-initiated"),
+      row("lnk_0000000000000014", "box-four", childBlock()),
     ]));
     if (call.path === "/api/link/children/operations") return response({ job: job({ state: "done", items: [] }) }, 202);
     return response({ error: { code: "not_found" } }, 404);
@@ -268,14 +268,14 @@ test("Update all and Check all name exactly the rows they cover", async () => {
   expect(bulkDialog.textContent).toContain("Update 2 Children to 2.35.0, one at a time.");
   await click([...bulkDialog.querySelectorAll("button")].find(item => item.textContent === "Update all")!);
   // l2 is current and l3 was started from itself, so neither is in the confirmation or the request.
-  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: ["l1", "l4"] });
+  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "update", linkIds: ["lnk_0000000000000011", "lnk_0000000000000014"] });
   await click(button(host, "Check all"));
-  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "observe", linkIds: ["l1", "l2", "l4"] });
+  expect(calls.filter(call => call.method === "POST").at(-1)?.body).toEqual({ op: "observe", linkIds: ["lnk_0000000000000011", "lnk_0000000000000012", "lnk_0000000000000014"] });
 });
 
 test("bulk actions split more than 64 Children into requests the server accepts", async () => {
   // The operations route refuses a body naming more than 64 links, and a Home's link count is unbounded.
-  const ids = Array.from({ length: 65 }, (_, index) => `l${index}`);
+  const ids = Array.from({ length: 65 }, (_, index) => `lnk_${index.toString(16).padStart(16, "0")}`);
   const calls = installFetch(call => {
     if (call.path.startsWith("/api/link/status")) return response(status(ids.map(id => row(id, `box-${id}`, childBlock()))));
     if (call.path === "/api/link/children/operations") return response({ job: job({ jobId: `ljob_${String(calls.length).padStart(16, "0")}`, state: "done", items: [] }) }, 202);
@@ -299,7 +299,7 @@ test("bulk actions split more than 64 Children into requests the server accepts"
 test("the GUI copy of the per-request link cap equals the route's, and groups are even and within it", () => {
   // gui/ cannot import the route; a drifted copy would turn every large bulk action into whole-group refusals.
   expect(CHILD_OPERATION_MAX_LINK_IDS).toBe(CHILD_OPS_MAX_LINK_IDS);
-  const ids = (count: number) => Array.from({ length: count }, (_, index) => `l${index}`);
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => `lnk_${index.toString(16).padStart(16, "0")}`);
   expect(chunkLinkIds(ids(64)).map(group => group.length)).toEqual([64]);
   expect(chunkLinkIds(ids(65)).map(group => group.length)).toEqual([33, 32]);
   expect(chunkLinkIds(ids(129)).map(group => group.length)).toEqual([43, 43, 43]);
@@ -317,19 +317,19 @@ test("a submit that never settles is abandoned at its deadline", async () => {
   // The bulk bar and row actions stay busy until the POST settles; one that hangs and ignores its signal must still end.
   globalThis.fetch = (() => new Promise<Response>(() => undefined)) as unknown as typeof fetch;
   const started = Date.now();
-  await expect(postChildOperation(HOME, { op: "observe", linkIds: ["l1"] }, 30)).rejects.toBeDefined();
+  await expect(postChildOperation(HOME, { op: "observe", linkIds: ["lnk_0000000000000011"] }, 30)).rejects.toBeDefined();
   expect(Date.now() - started).toBeLessThan(2_000);
 });
 
 test("a refused bulk group shows its error while the accepted group is still tracked", async () => {
-  const ids = Array.from({ length: 65 }, (_, index) => `l${index}`);
+  const ids = Array.from({ length: 65 }, (_, index) => `lnk_${index.toString(16).padStart(16, "0")}`);
   installFetch(call => {
     if (call.path.startsWith("/api/link/status")) return response(status(ids.map(id => row(id, `box-${id}`, childBlock()))));
     if (call.path === "/api/link/children/operations") {
       const linkIds = call.body?.linkIds as string[];
-      if (linkIds.includes("l64")) return response({ error: { code: "link_operation_in_progress" } }, 409);
+      if (linkIds.includes("lnk_0000000000000040")) return response({ error: { code: "link_operation_in_progress" } }, 409);
       return response({ job: job({ jobId: "ljob_bulkgroup0000000", op: "observe", items: [
-        { linkId: "l0", alias: "box-l0", state: "running", reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+        { linkId: "lnk_0000000000000000", alias: "box-lnk_0000000000000000", state: "running", reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
       ] }) }, 202);
     }
     if (call.path.startsWith("/api/link/children/jobs/")) return new Promise<Response>(() => undefined);
@@ -339,7 +339,7 @@ test("a refused bulk group shows its error while the accepted group is still tra
   await click(button(host, "Check all"));
   await settleUntil(() => host.textContent?.includes("Another operation is running on this Child.") === true);
   expect(host.textContent).toContain("Another operation is running on this Child.");
-  // The first group was accepted, so its job panel shows and the row its job names (l0) is held.
+  // The first group was accepted, so its job panel shows and the row its job names (the first) is held.
   expect(host.querySelector(".remote-link-job")).not.toBeNull();
   const firstRow = host.querySelectorAll(".remote-link-row")[0]!;
   const rowButtons = [...firstRow.querySelectorAll("button")];
@@ -354,11 +354,11 @@ test("a refused bulk group shows its error while the accepted group is still tra
 test("a running job shows per-item progress and refreshes status once when done", async () => {
   let jobPolls = 0;
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/operations") return response({ job: job() }, 202);
     if (call.path === "/api/link/children/jobs/ljob_0123456789abcdef") {
       jobPolls += 1;
-      return response({ job: job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", sync: { state: "synced", reason: null }, restart: { requested: "app-server", outcome: "requested" }, startedAt: null, finishedAt: null }] }) });
+      return response({ job: job({ state: "done", items: [{ linkId: "lnk_0000000000000011", alias: "box-one", state: "succeeded", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", sync: { state: "synced", reason: null }, restart: { requested: "app-server", outcome: "requested" }, startedAt: null, finishedAt: null }] }) });
     }
     return response({ error: { code: "not_found" } }, 404);
   });
@@ -380,9 +380,9 @@ test("a running job shows per-item progress and refreshes status once when done"
 
 test("a finished job renders item states, sync and restart outcomes", async () => {
   installFetch(call => call.path.startsWith("/api/link/children/jobs/")
-    ? response({ job: job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", sync: { state: "synced", reason: null }, restart: { requested: "app-server", outcome: "requested" }, startedAt: null, finishedAt: null }] }) })
+    ? response({ job: job({ state: "done", items: [{ linkId: "lnk_0000000000000011", alias: "box-one", state: "succeeded", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", sync: { state: "synced", reason: null }, restart: { requested: "app-server", outcome: "requested" }, startedAt: null, finishedAt: null }] }) })
     : response({ error: { code: "not_found" } }, 404));
-  const finished = job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", sync: { state: "synced", reason: null }, restart: { requested: "app-server", outcome: "requested" }, startedAt: null, finishedAt: null }] });
+  const finished = job({ state: "done", items: [{ linkId: "lnk_0000000000000011", alias: "box-one", state: "succeeded", reason: null, fromVersion: "2.34.0", toVersion: "2.35.0", sync: { state: "synced", reason: null }, restart: { requested: "app-server", outcome: "requested" }, startedAt: null, finishedAt: null }] });
   let doneCalls = 0;
   const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(finished)} onDone={() => { doneCalls += 1; }} />);
   const panel = host.querySelector(".remote-link-job")!;
@@ -395,7 +395,7 @@ test("a finished job renders item states, sync and restart outcomes", async () =
 
 test("a job_not_found answer stops polling and marks running items uncertain", async () => {
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/operations") return response({ job: job() }, 202);
     if (call.path.startsWith("/api/link/children/jobs/")) return response({ error: { code: "job_not_found" } }, 404);
     return response({ error: { code: "not_found" } }, 404);
@@ -422,7 +422,7 @@ test("a lost job says its progress is gone and marks a running item uncertain", 
 
 test("a 409 link_operation_in_progress is shown translated", async () => {
   installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/operations") return response({ error: { code: "link_operation_in_progress" } }, 409);
     return response({ error: { code: "not_found" } }, 404);
   });
@@ -434,8 +434,8 @@ test("a 409 link_operation_in_progress is shown translated", async () => {
 test("an active job holds the row and its progress is adopted on load", async () => {
   const calls = installFetch(call => {
     if (call.path.startsWith("/api/link/status")) return response(status([
-      row("l1", "box-one", childBlock({ activeJob: { jobId: "ljob_0123456789abcdef", op: "sync", state: "running" } })),
-      row("l2", "box-two", childBlock({ activeJob: { jobId: "ljob_fedcba9876543210", op: "update", state: "running" } })),
+      row("lnk_0000000000000011", "box-one", childBlock({ activeJob: { jobId: "ljob_0123456789abcdef", op: "sync", state: "running" } })),
+      row("lnk_0000000000000012", "box-two", childBlock({ activeJob: { jobId: "ljob_fedcba9876543210", op: "update", state: "running" } })),
     ]));
     if (call.path === "/api/link/children/jobs/ljob_0123456789abcdef") return response({ job: job({ jobId: "ljob_0123456789abcdef", op: "sync" }) });
     if (call.path === "/api/link/children/jobs/ljob_fedcba9876543210") return response({ job: job({ jobId: "ljob_fedcba9876543210", op: "update" }) });
@@ -458,7 +458,7 @@ test("an accepted job holds the row before the next status poll reports it", asy
     if (call.path.startsWith("/api/link/status")) {
       polls += 1;
       // The first read has no activeJob; the server only reports it on a later poll.
-      return response(status([row("l1", "box-one", childBlock()), row("l2", "box-two", childBlock())]));
+      return response(status([row("lnk_0000000000000011", "box-one", childBlock()), row("lnk_0000000000000012", "box-two", childBlock())]));
     }
     if (call.path === "/api/link/children/operations") return response({ job: job() }, 202);
     if (call.path.startsWith("/api/link/children/jobs/")) return response({ job: job() });
@@ -483,7 +483,7 @@ test("an accepted job holds the row before the next status poll reports it", asy
 });
 
 test("a client-initiated row shows badges but no actions", async () => {
-  installFetch(() => response(status([row("l1", "box-one", childBlock(), "client-initiated")])));
+  installFetch(() => response(status([row("lnk_0000000000000011", "box-one", childBlock(), "client-initiated")])));
   const host = await mount();
   expect(host.querySelector(".remote-link-child-badges")).not.toBeNull();
   expect(host.querySelector(".remote-link-child-actions")).toBeNull();
@@ -492,7 +492,7 @@ test("a client-initiated row shows badges but no actions", async () => {
 
 test("manual restart and update wait for in-flight activity only", async () => {
   installFetch(call => call.path.startsWith("/api/link/status")
-    ? response(status([row("l1", "box-one", childBlock({ activity: { idle: false, inFlight: 2, lastDataEndAt: 7 } }))]))
+    ? response(status([row("lnk_0000000000000011", "box-one", childBlock({ activity: { idle: false, inFlight: 2, lastDataEndAt: 7 } }))]))
     : response({ error: { code: "not_found" } }, 404));
   const host = await mount();
   expect(button(host, "Check").disabled).toBe(false);
@@ -503,7 +503,7 @@ test("manual restart and update wait for in-flight activity only", async () => {
 
 test("the policy panel loads once, keeps edits across a status poll, and saves only changed keys", async () => {
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/policy" && call.method === "GET") return response({ policy: POLICY, warning: null });
     if (call.path === "/api/link/children/policy" && call.method === "PUT") return response({ policy: { ...POLICY, catalogFanout: "manual" }, warning: null });
     return response({ error: { code: "not_found" } }, 404);
@@ -524,7 +524,7 @@ test("the policy panel loads once, keeps edits across a status poll, and saves o
 
 test("a damaged policy file warns and a save writes every knob", async () => {
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/policy" && call.method === "GET") return response({ policy: { catalogFanout: "manual", childCodexRestart: "never", updates: "off", idleAfterMs: 600_000 }, warning: "policy-file-invalid" });
     if (call.path === "/api/link/children/policy" && call.method === "PUT") return response({ policy: { ...POLICY }, warning: null });
     return response({ error: { code: "not_found" } }, 404);
@@ -541,7 +541,7 @@ test("a damaged policy file warns and a save writes every knob", async () => {
 test("a failed policy load shows an error with Retry, and Retry re-reads the policy", async () => {
   let reads = 0;
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/policy" && call.method === "GET") {
       reads += 1;
       return reads === 1 ? response({ error: { code: "policy_write_failed" } }, 500) : response({ policy: POLICY, warning: null });
@@ -563,7 +563,7 @@ test("a failed policy load shows an error with Retry, and Retry re-reads the pol
 
 test("the page Refresh also reloads the policy", async () => {
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/policy" && call.method === "GET") return response({ policy: POLICY, warning: null });
     return response({ error: { code: "not_found" } }, 404);
   });
@@ -581,7 +581,7 @@ test("the page Refresh also reloads the policy", async () => {
 
 test("the idle-minutes input only accepts digits in range", async () => {
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/policy" && call.method === "GET") return response({ policy: POLICY, warning: null });
     if (call.path === "/api/link/children/policy" && call.method === "PUT") return response({ policy: POLICY, warning: null });
     return response({ error: { code: "not_found" } }, 404);
@@ -606,7 +606,7 @@ test("the idle-minutes input only accepts digits in range", async () => {
 });
 
 test("a withheld restart says a request was in flight", async () => {
-  installFetch(() => response({ job: job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "skipped" }, startedAt: null, finishedAt: null }] }) }));
+  installFetch(() => response({ job: job({ state: "done", items: [{ linkId: "lnk_0000000000000011", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "skipped" }, startedAt: null, finishedAt: null }] }) }));
   const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(job({ op: "restart-codex" }))} onDone={() => {}} />);
   await settleUntil(() => (host.querySelector(".remote-link-job")?.textContent ?? "").includes("Restart withheld"));
   const panel = host.querySelector(".remote-link-job")!;
@@ -615,7 +615,7 @@ test("a withheld restart says a request was in flight", async () => {
 });
 
 test("an unknown last-operation state renders as code", async () => {
-  installFetch(() => response(status([row("l1", "box-one", childBlock({
+  installFetch(() => response(status([row("lnk_0000000000000011", "box-one", childBlock({
     lastOperation: { op: "update", jobId: "ljob_0123456789abcdef", state: "melted", reason: null, fromVersion: null, toVersion: null, finishedAt: null },
   }))])));
   const host = await mount();
@@ -626,7 +626,7 @@ test("an unknown last-operation state renders as code", async () => {
 });
 
 test("an unknown restart outcome renders as code instead of a guessed sentence", async () => {
-  const melted = job({ items: [{ linkId: "l1", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "melted" }, startedAt: null, finishedAt: null }] });
+  const melted = job({ items: [{ linkId: "lnk_0000000000000011", alias: "box-one", state: "succeeded", reason: null, fromVersion: null, toVersion: null, restart: { requested: "app-server", outcome: "melted" }, startedAt: null, finishedAt: null }] });
   installFetch(() => response({ job: melted }));
   const host = await mountNode(<ChildJobProgress apiBase={HOME} job={parseChildJob(melted)} onDone={() => {}} />);
   await settleUntil(() => [...host.querySelectorAll("code")].some(item => item.textContent === "melted"));
@@ -635,7 +635,7 @@ test("an unknown restart outcome renders as code instead of a guessed sentence",
 });
 
 test("a job item renders the hint the server attached to it", async () => {
-  const hinted = job({ state: "done", items: [{ linkId: "l1", alias: "box-one", state: "owner-action", reason: "launcher-node-missing",
+  const hinted = job({ state: "done", items: [{ linkId: "lnk_0000000000000011", alias: "box-one", state: "owner-action", reason: "launcher-node-missing",
     hint: "Install Node.js where the npm or pnpm that installed OpenCodex on this Child can find it, or update there with ocx update.",
     fromVersion: null, toVersion: null, startedAt: null, finishedAt: null }] });
   installFetch(() => response({ job: hinted }));
@@ -657,13 +657,13 @@ test("parsers reject a malformed child block and keep an unknown job state", () 
 
 test("a two-item job releases a row as soon as its own item finishes", async () => {
   const twoItemJob = (first: string) => job({ jobId: "ljob_twoitems00000000", state: "running", items: [
-    { linkId: "l1", alias: "box-one", state: first, reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
-    { linkId: "l2", alias: "box-two", state: "running", reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+    { linkId: "lnk_0000000000000011", alias: "box-one", state: first, reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+    { linkId: "lnk_0000000000000012", alias: "box-two", state: "running", reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
   ] });
   let reads = 0;
   installFetch(call => {
     // No status row carries activeJob: the page's accepted job is the only signal, as right after the POST.
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock()), row("l2", "box-two", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock()), row("lnk_0000000000000012", "box-two", childBlock())]));
     if (call.path === "/api/link/children/operations") return response({ job: twoItemJob("running") }, 202);
     if (call.path === "/api/link/children/jobs/ljob_twoitems00000000") {
       reads += 1;
@@ -696,7 +696,7 @@ test("a policy GET in flight when a save starts never overwrites the saved value
   const stale = deferred<Response>();
   let reads = 0;
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/policy" && call.method === "GET") {
       reads += 1;
       return reads === 1 ? response({ policy: POLICY, warning: null }) : stale.promise;
@@ -723,7 +723,7 @@ test("an edit made during a policy reload survives it", async () => {
   const slow = deferred<Response>();
   let reads = 0;
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/policy" && call.method === "GET") {
       reads += 1;
       return reads === 1 ? response({ policy: POLICY, warning: null }) : slow.promise;
@@ -755,11 +755,11 @@ test("a job poll that never settles times out, so the interval polls again and r
     setTimeout: (callback: () => void, ms?: number) => { if (ms === CHILD_JOB_POLL_TIMEOUT_MS) deadlines.push(callback); return setTimeoutReal(callback, ms === CHILD_JOB_POLL_TIMEOUT_MS ? 3_600_000 : ms); },
   });
   const items = (state: string) => job({ jobId: "ljob_hung000000000000", state: "running", items: [
-    { linkId: "l1", alias: "box-one", state, reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+    { linkId: "lnk_0000000000000011", alias: "box-one", state, reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
   ] });
   let reads = 0;
   installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/operations") return response({ job: items("running") }, 202);
     if (call.path === "/api/link/children/jobs/ljob_hung000000000000") {
       reads += 1;
@@ -789,11 +789,11 @@ test("an older poll landing after a newer one never restores a released hold", a
   const first = deferred<Response>();
   const second = deferred<Response>();
   const items = (state: string) => job({ jobId: "ljob_overlap000000000", state: "running", items: [
-    { linkId: "l1", alias: "box-one", state, reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
+    { linkId: "lnk_0000000000000011", alias: "box-one", state, reason: null, fromVersion: null, toVersion: null, startedAt: null, finishedAt: null },
   ] });
   let reads = 0;
   installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/operations") return response({ job: items("running") }, 202);
     if (call.path === "/api/link/children/jobs/ljob_overlap000000000") {
       reads += 1;
@@ -819,7 +819,7 @@ test("a reload merges only the fields the operator changed onto the server's ans
   const slow = deferred<Response>();
   let reads = 0;
   const calls = installFetch(call => {
-    if (call.path.startsWith("/api/link/status")) return response(status([row("l1", "box-one", childBlock())]));
+    if (call.path.startsWith("/api/link/status")) return response(status([row("lnk_0000000000000011", "box-one", childBlock())]));
     if (call.path === "/api/link/children/policy" && call.method === "GET") {
       reads += 1;
       // The reload reports updates: off, a field the operator never touched.
