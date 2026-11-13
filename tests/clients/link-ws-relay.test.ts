@@ -11,6 +11,9 @@ import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startStandinHome, standinIdentity, type StandinHome, type StandinHomeOptions } from "../fixtures/link-ws-standin-home";
 import { CodexSocket, manualTimers, RawCodex, rawUpgrade, startChild } from "../helpers/link-ws-child";
+import { connect, createServer, type Socket } from "node:net";
+import { HomeLeg } from "../../src/client/link-websocket";
+import { LINK_CHILD_WS_LIMITS } from "../../src/client/link-websocket-limits";
 
 // Lane T6, design T4 3.2 and 3.3: a Child carries Codex's Responses WebSocket over its link when the
 // Home advertises it, and answers today's 426 otherwise. The Home is a raw-TCP stand-in, so every byte
@@ -130,6 +133,11 @@ describe("link WebSocket on the Child: an advertising Home", () => {
 
   test("close codes are relayed both ways; a Home close without a code or a dropped Home becomes 1011", async () => {
     const { port, home } = await setup();
+    for (const code of [1012, 1013, 1014]) {
+      const registered = await CodexSocket.open(port);
+      home.sockets.at(-1)!.sendClose(code, "registered");
+      expect(await registered.closed()).toEqual({ code, reason: "registered" });
+    }
     const revoked = await CodexSocket.open(port);
     home.sockets.at(-1)!.sendClose(4401, "link revoked");
     expect(await revoked.closed()).toEqual({ code: 4401, reason: "link revoked" });
@@ -245,6 +253,71 @@ describe("link WebSocket on the Child: an advertising Home", () => {
 });
 
 describe("link WebSocket on the Child: limits and setup", () => {
+  test("a closing socket keeps its slot until the Home connection has actually closed", async () => {
+    const clock = manualTimers();
+    const { port, home } = await setup({ websocket: { timers: clock.timers, limits: { openSockets: 1 } } });
+    const first = await CodexSocket.open(port);
+    const leg = home.sockets.at(-1)!;
+    first.ws.close(1000);
+    await leg.until(frame => frame.type === "close"); // the stand-in never answers the close
+    await expectToday426(port);
+    expect(clock.fire(5_000)).toBe(1);
+    await leg.closed();
+    // Released only by the close event of the Home connection, which follows the destroy.
+    for (;;) {
+      const { socket, answer } = rawUpgrade(port);
+      const result = await answer;
+      socket.destroy();
+      if (result.status === 101) break;
+      expect(result.status).toBe(426);
+    }
+  });
+
+  test("a stop aborts upgrades still in setup, in the tunnel hold and at the Home, and keeps none of them", async () => {
+    let entered!: () => void;
+    const inHold = new Promise<void>(resolve => { entered = resolve; });
+    const holding: LinkTunnelGate = {
+      connected: () => ({ kind: "unavailable" }), pending: () => true,
+      waitForConnected: (_ms, signal) => new Promise<boolean>(resolve => { entered(); signal?.addEventListener("abort", () => resolve(false), { once: true }); }),
+    };
+    const hold = await setup({ tunnel: holding });
+    const waiting = rawUpgrade(hold.port);
+    await inHold;
+    await hold.child.stop(false);
+    children.splice(children.indexOf(hold.child), 1);
+    expect([426, 503]).toContain((await waiting.answer.catch(() => ({ status: 426 }))).status);
+    expect(hold.homeConnections()).toBe(0);
+
+    let arrived!: () => void;
+    const atHome = new Promise<void>(resolve => { arrived = resolve; });
+    const hang = await setup({ home: { upgrade: () => { arrived(); return { kind: "hang" }; } } });
+    const pending = rawUpgrade(hang.port);
+    await atHome;
+    await hang.child.stop(false);
+    children.splice(children.indexOf(hang.child), 1);
+    await hang.home.whenClosed(2);
+    pending.socket.destroy();
+  });
+
+  test("an ownership check that never answers is bounded by the setup budget, and its slot is freed", async () => {
+    const clock = manualTimers();
+    let calls = 0;
+    let asked!: () => void;
+    const firstAsked = new Promise<void>(resolve => { asked = resolve; });
+    const stalled: LinkTunnelGate = {
+      connected: () => { if (++calls === 1) { asked(); return new Promise(() => {}); } return { kind: "match" }; },
+      pending: () => false, waitForConnected: async () => false,
+    };
+    const { port } = await setup({ tunnel: stalled, websocket: { timers: clock.timers, limits: { settingUp: 1 } } });
+    const { socket, answer } = rawUpgrade(port);
+    await firstAsked; // the budget timer is armed before the first ownership check
+    expect(clock.fire(8_000)).toBe(1);
+    expect((await answer).status).toBe(426);
+    socket.destroy();
+    const codex = await CodexSocket.open(port);
+    expect(codex.ws.readyState).toBe(WebSocket.OPEN);
+  });
+
   test("open sockets past the cap, sockets in setup past their cap, and a refused memory reservation answer 426", async () => {
     const capped = await setup({ websocket: { limits: { openSockets: 2 } } });
     const first = await CodexSocket.open(capped.port), second = await CodexSocket.open(capped.port);
@@ -331,6 +404,26 @@ describe("link WebSocket on the Child: the tunnel gate", () => {
 });
 
 describe("link WebSocket on the Child: accounting and diagnostics", () => {
+  test("a Home that is gone before Bun opens Codex's socket still closes it (1011) once it opens", async () => {
+    const server = createServer(() => {});
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", () => resolve()));
+    const socket: Socket = connect({ host: "127.0.0.1", port: (server.address() as { port: number }).port });
+    await new Promise<void>(resolve => socket.once("connect", () => resolve()));
+    let released!: () => void;
+    const gone = new Promise<void>(resolve => { released = resolve; });
+    const ends: string[] = [];
+    const leg = new HomeLeg(socket, Buffer.alloc(0), LINK_CHILD_WS_LIMITS, manualTimers().timers,
+      { toHome() {}, fromHome() {}, uncounted() {}, end() {} }, reason => ends.push(reason), () => released());
+    // The connection fails (a reset, an error) after the upgrade and before Bun runs open().
+    socket.destroy();
+    await gone;
+    const closes: Array<[number, string]> = [];
+    leg.attach({ send: () => 1, getBufferedAmount: () => 0, close: (code?: number, reason?: string) => { closes.push([code!, reason!]); } });
+    expect(ends).toEqual(["home_dropped"]);
+    expect(closes).toEqual([[1011, "home connection ended"]]);
+    server.close();
+  });
+
   test("one socket counts as one request with its message payloads; a close ends it complete", async () => {
     const traffic = createLinkTrafficBook("relayed");
     const { port, home, identity } = await setup({ websocket: { traffic } });

@@ -3,7 +3,7 @@ import type { Socket } from "node:net";
 import type { LinkDiagnosticRecord, LinkDiagnosticSink } from "../link/diagnostics";
 import { childLinkTraffic, type LinkTrafficBook, type LinkTrafficFlow } from "../link/traffic";
 import { upgradeRequiredResponse } from "./link-ingress";
-import { forwardLinkUpgradeHeaders, type LinkTunnelGate } from "./link-relay";
+import { forwardLinkUpgradeHeaders, type LinkAdmissionResult, type LinkTunnelGate } from "./link-relay";
 import { CODEX_WS_MAX_MESSAGE_HEADER, LINK_CHILD_WS_LIMITS, linkWebsocketChildReady, type LinkChildWebsocketLimits } from "./link-websocket-limits";
 import { linkWebsocketAdvertised } from "./link-ws-advertisement";
 import { encodeClientClose, encodeClientPong, encodeClientText, isWireCloseCode, LinkWsFrameReader, LinkWsProtocolError, type LinkWsFrameEvent } from "./link-ws-framer";
@@ -92,16 +92,20 @@ const FAILURE_REASON: Record<LinkWebsocketSetupFailure, LinkWsFallbackReason> = 
 
 /**
  * One Codex socket and its Home leg. The leg is created paused; it starts reading once Bun has opened the
- * local socket, and the bytes the Home sent with its 101 are read first.
+ * local socket, and the bytes the Home sent with its 101 are read first. A close decided before Bun opened
+ * the local socket is kept and applied when it opens. The leg's reservation is released only once the Home
+ * connection has actually closed (`onReleased`), so a closing socket still counts against the caps.
  */
-class HomeLeg {
+export class HomeLeg {
   private readonly reader: LinkWsFrameReader;
-  private local: ServerWebSocket<LinkWebsocketData> | null = null;
+  private local: Pick<ServerWebSocket<LinkWebsocketData>, "send" | "close" | "getBufferedAmount"> | null = null;
   private paused = false;
   private homeClosed = false;
   private localClosed = false;
+  private pendingLocalClose: { code: number; reason: string } | null = null;
   private closeTimer: unknown;
   private ended = false;
+  private released = false;
 
   constructor(
     private readonly socket: Socket,
@@ -110,6 +114,7 @@ class HomeLeg {
     private readonly timers: LinkWebsocketTimers,
     private readonly flow: LinkTrafficFlow,
     private readonly onEnd: (reason: LinkWsCloseReason) => void,
+    private readonly onReleased: () => void,
     private readonly onPause?: (paused: boolean) => void,
   ) {
     this.reader = new LinkWsFrameReader({ maxMessageBytes: limits.homeMessageBytes, maxFragments: limits.maxFragments });
@@ -117,10 +122,18 @@ class HomeLeg {
     socket.on("data", chunk => this.fromHome(chunk as Buffer));
     socket.on("error", () => { /* the close below ends the leg */ });
     socket.on("close", () => this.homeGone());
+    // A connection that ended before this leg existed has already emitted its close.
+    if (socket.destroyed) queueMicrotask(() => this.homeGone());
   }
 
-  attach(local: ServerWebSocket<LinkWebsocketData>): void {
+  attach(local: Pick<ServerWebSocket<LinkWebsocketData>, "send" | "close" | "getBufferedAmount">): void {
     this.local = local;
+    if (this.pendingLocalClose) {
+      const { code, reason } = this.pendingLocalClose;
+      this.pendingLocalClose = null;
+      try { local.close(code, reason); } catch { /* already closed */ }
+      return;
+    }
     if (this.head.length) this.fromHome(this.head);
     if (!this.ended && !this.paused) this.socket.resume();
   }
@@ -153,9 +166,11 @@ class HomeLeg {
       } else if (event.type === "ping") {
         this.socket.write(encodeClientPong(event.payload));
       } else if (event.type === "close") {
-        // The Home closed: echo its close to finish the handshake, then relay it to Codex.
+        // The Home closed: echo its close to finish the handshake, then relay it to Codex. The Home ends the
+        // connection; if it does not within the bound, the Child does.
         this.homeClosed = true;
         try { this.socket.end(encodeClientClose(event.code ?? undefined, event.reason)); } catch { /* already gone */ }
+        this.armCloseTimer();
         this.closeLocal(relayCloseCode(event.code), event.reason);
         this.finish("home");
         return;
@@ -199,11 +214,15 @@ class HomeLeg {
 
   private homeGone(): void {
     if (this.closeTimer !== undefined) { this.timers.clearTimeout(this.closeTimer); this.closeTimer = undefined; }
-    if (this.ended) return;
-    // The Home's connection ended without a close frame (a tunnel drop, a killed Home): 1011 to Codex.
-    this.homeClosed = true;
-    this.closeLocal(1011, "home connection ended");
-    this.finish("home_dropped");
+    if (!this.ended) {
+      // The Home's connection ended without a close frame (a tunnel drop, a killed Home): 1011 to Codex.
+      this.homeClosed = true;
+      this.closeLocal(1011, "home connection ended");
+      this.finish("home_dropped");
+    }
+    if (this.released) return;
+    this.released = true;
+    this.onReleased();
   }
 
   private closeBoth(localCode: number, localReason: string, homeCode: number, why: LinkWsCloseReason): void {
@@ -215,7 +234,13 @@ class HomeLeg {
   private closeLocal(code: number, reason: string): void {
     if (this.localClosed) return;
     this.localClosed = true;
-    try { this.local?.close(code, reason); } catch { /* already closed */ }
+    if (!this.local) { this.pendingLocalClose = { code, reason }; return; }
+    try { this.local.close(code, reason); } catch { /* already closed */ }
+  }
+
+  private armCloseTimer(): void {
+    if (this.closeTimer !== undefined) return;
+    this.closeTimer = this.timers.setTimeout(() => { this.closeTimer = undefined; this.socket.destroy(); }, this.limits.closeHandshakeMs);
   }
 
   /** Start the close handshake on the Home leg; the Home's own close or the 5 s bound ends the connection. */
@@ -224,7 +249,7 @@ class HomeLeg {
     this.homeClosed = true;
     try { this.socket.write(encodeClientClose(code, reason)); } catch { /* already gone */ }
     this.socket.resume();
-    this.closeTimer = this.timers.setTimeout(() => { this.closeTimer = undefined; this.socket.destroy(); }, this.limits.closeHandshakeMs);
+    this.armCloseTimer();
     // The Home's close reply ends the handshake; anything else it still sends is dropped.
     this.socket.removeAllListeners("data");
     this.socket.on("data", chunk => {
@@ -259,6 +284,9 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
   let settingUp = 0;
   let reservedBytes = 0;
   const legs = new Set<HomeLeg>();
+  // Upgrades still in setup: a stop aborts them, and nothing set up after a stop is kept.
+  const setups = new Set<AbortController>();
+  let stopping = false;
 
   const diagnostic = (event: LinkDiagnosticRecord["event"], outcome: LinkDiagnosticRecord["outcome"]): void => {
     try { deps.diagnostic?.({ event, outcome }); } catch { /* diagnostics never alter the relay */ }
@@ -293,29 +321,40 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
         reservation = "released";
       };
       const budget = new AbortController();
+      setups.add(budget);
       const onLocalAbort = () => budget.abort(req.signal.reason);
       req.signal.addEventListener("abort", onLocalAbort, { once: true });
       if (req.signal.aborted) onLocalAbort();
       let expired = false;
       const budgetTimer = timers.setTimeout(() => { expired = true; budget.abort(new DOMException("link websocket setup budget", "TimeoutError")); }, limits.setupBudgetMs);
-      const stopBudget = (): void => { timers.clearTimeout(budgetTimer); req.signal.removeEventListener("abort", onLocalAbort); };
+      const stopBudget = (): void => { setups.delete(budget); timers.clearTimeout(budgetTimer); req.signal.removeEventListener("abort", onLocalAbort); };
       const failed = (reason: LinkWsFallbackReason): Response => {
         stopBudget();
         release();
         return fallback(expired && (reason === "aborted" || reason === "preflight") ? "timeout" : reason);
       };
+      // Every ownership check is raced against the budget: a stalled lookup cannot hold the request or its reservation.
+      const proof = async (gate: LinkTunnelGate): Promise<LinkAdmissionResult | null> => {
+        if (budget.signal.aborted) return null;
+        let onAbort!: () => void;
+        const aborted = new Promise<null>(resolve => { onAbort = () => resolve(null); budget.signal.addEventListener("abort", onAbort, { once: true }); });
+        try { return await Promise.race([Promise.resolve(gate.connected()), aborted]); }
+        finally { budget.signal.removeEventListener("abort", onAbort); }
+      };
       try {
         // Step 5: the tunnel gate. A Home-initiated link's gate always matches and goes straight on.
         const tunnel = deps.tunnel;
         if (!tunnel) return failed("tunnel_failed");
-        let admission = await tunnel.connected();
+        let admission = await proof(tunnel);
         // A deadline proves neither a foreign owner nor a broken tunnel: one fresh proof, as the HTTP relay gives it.
-        if (admission.kind === "deadline" && !budget.signal.aborted) admission = await tunnel.connected();
+        if (admission?.kind === "deadline") admission = await proof(tunnel);
+        if (!admission) return failed("aborted");
         if (admission.kind !== "match") {
           if (!tunnel.pending()) return failed(budget.signal.aborted ? "aborted" : "tunnel_failed");
           await tunnel.waitForConnected(limits.tunnelHoldMs, budget.signal);
           if (budget.signal.aborted) return failed("aborted");
-          admission = await tunnel.connected();
+          admission = await proof(tunnel);
+          if (!admission) return failed("aborted");
           if (admission.kind !== "match") {
             if (!tunnel.pending()) return failed("tunnel_failed");
             stopBudget();
@@ -330,13 +369,13 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
           { signal: budget.signal, preflightMs: limits.preflightMs });
         if (!setup.ok) return failed(FAILURE_REASON[setup.reason]);
         stopBudget();
-        if (req.signal.aborted || expired) { setup.socket.destroy(); release(); return fallback(expired ? "timeout" : "aborted"); }
+        if (req.signal.aborted || expired || stopping) { setup.socket.destroy(); release(); return fallback(expired ? "timeout" : "aborted"); }
         const flow = traffic.begin(target.linkId);
-        const leg = new HomeLeg(setup.socket, setup.head, limits, timers, flow, reason => {
-          legs.delete(leg);
-          release();
-          diagnostic("link_ws_close", reason);
-        }, deps.onDownlinkPause);
+        // The reservation is held until the Home connection has actually closed.
+        const leg = new HomeLeg(setup.socket, setup.head, limits, timers, flow,
+          reason => diagnostic("link_ws_close", reason),
+          () => { legs.delete(leg); release(); },
+          deps.onDownlinkPause);
         legs.add(leg);
         settingUp -= 1;
         openSockets += 1;
@@ -369,8 +408,10 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
       };
     },
 
-    /** A runtime stop: every link socket closes with 1001 on both legs. */
+    /** A runtime stop: every link socket closes with 1001 on both legs, and every upgrade still in setup is aborted. */
     closeAll(): number {
+      stopping = true;
+      for (const setup of [...setups]) setup.abort(new DOMException("link websocket stopping", "AbortError"));
       const all = [...legs];
       for (const leg of all) leg.stop();
       return all.length;
