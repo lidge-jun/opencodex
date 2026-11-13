@@ -62,7 +62,9 @@ export interface LinkTunnelGate {
   waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   /**
    * Optional: `listener` runs once, synchronously, when the gate's owner starts stopping, before the
-   * tunnel goes away (the supervisor's stop). The link WebSocket drains its sockets here.
+   * tunnel goes away: the supervisor's stop(), or the link ending (its sidecar gone, naming another link,
+   * or the connected link id unreadable for several checks in a row) before the runtime recycles. The link
+   * WebSocket drains its sockets here.
    */
   onStopping?(listener: () => void): void;
 }

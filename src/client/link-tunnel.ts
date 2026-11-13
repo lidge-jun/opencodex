@@ -609,7 +609,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   let timer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let stopping = false;
-  // Told once when stop() begins, before the tunnel is signalled (the link WebSocket drains here).
+  // Told once when stop() begins or the link ends (endLink), before the tunnel is signalled (the link
+  // WebSocket drains here).
   const stoppingListeners: Array<() => void> = [];
   const notifyStopping = (): void => {
     for (const listener of stoppingListeners.splice(0)) {
