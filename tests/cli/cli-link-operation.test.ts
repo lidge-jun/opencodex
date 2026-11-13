@@ -224,8 +224,6 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
     ["link_operation_open", 409, 5, "unfinished revoke holds this link"],
     ["link_operation_in_progress", 409, 5, "Another link operation"],
     ["operation_journal_unreadable", 500, 1, "journal"],
-    // A forced revoke of an ephemeral Child refused before its tombstone, its first intent and the tunnel stop (#8612).
-    ["tombstone_limit", 409, 5, "waiting for cleanup"],
   ])("%s prints local text that nothing was changed, with the code", async (code, status, exit, text) => {
     const h = harness([{ status, body: { error: { code, message: "server-chosen text" } } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-5"], h.deps)).toBe(exit);
@@ -233,6 +231,20 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
       expect(printed).toContain(text);
       expect(printed).toContain("Nothing was changed");
       expect(printed).toContain("(code " + code + ")");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  // Only --force can meet the tombstone limit (#8612): refused before its tombstone, first intent and tunnel stop, and
+  // settled failed_clean, so a repeat of the same operation id replays this refusal even after tombstones were recovered.
+  test("a forced revoke refused at the tombstone limit says nothing changed and that a repeat of its id replays the refusal", async () => {
+    const h = harness([{ status: 409, body: { error: { code: "tombstone_limit", message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--force", "--yes", "--operation-id", "detach-8"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("waiting for cleanup");
+      expect(printed).toContain("Nothing was changed");
+      expect(printed).toContain("retry with a new operation id");
+      expect(printed).toContain("(code tombstone_limit)");
       expect(printed).not.toContain("server-chosen text");
     } finally { h.restore(); }
   });

@@ -624,5 +624,5 @@ const REVOKE_REFUSALS: Record<string, string> = {
   operation_journal_unreadable: "The link operation journal (<configDir>/link/operations.json) is damaged. Nothing was changed; keep a copy, move it aside and retry. ocx link revoke --force without --operation-id still runs.",
   // Refused before the tombstone is written, before the first intent and before the tunnel stops (removeReserved).
   // tombstone_write_failed stays generic: the file may have been written before its permissions step failed.
-  tombstone_limit: "Too many forced revokes of ephemeral Children are waiting for cleanup, so the link and its key stay active. Nothing was changed; recover them with ocx link recover, or have a person on this Home run ocx link recover --forget for machines that are gone.",
+  tombstone_limit: "Too many forced revokes of ephemeral Children are waiting for cleanup, so the link and its key stay active. Nothing was changed; recover them with ocx link recover, or have a person on this Home run ocx link recover --forget for machines that are gone. A repeat of this operation id returns this refusal (it is recorded as failed_clean); retry with a new operation id.",
 };
