@@ -40,6 +40,10 @@ describe("Models manual price editor", () => {
   let getGate: ReturnType<typeof deferred> | null;
   let putGate: ReturnType<typeof deferred> | null;
   let catalogGate: ReturnType<typeof deferred> | null;
+  let storedMultiplier: number | null;
+  let multiplierPuts: Array<{ multiplier: number | null }>;
+  let pricingRefreshes: number;
+  let pricingRefreshResponse: (() => Response) | null;
   let getResponse: (() => Response) | null;
   let putResponse: ((body: Mutation) => Response) | null;
 
@@ -78,6 +82,10 @@ describe("Models manual price editor", () => {
     catalogGate = null;
     getResponse = null;
     putResponse = null;
+    storedMultiplier = null;
+    multiplierPuts = [];
+    pricingRefreshes = 0;
+    pricingRefreshResponse = null;
     testWindow.localStorage.setItem("ocx-lang", "en");
     testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
     testWindow.sessionStorage.setItem("ocx.models.catalog.v1:http://localhost", JSON.stringify({
@@ -99,7 +107,21 @@ describe("Models manual price editor", () => {
         reads.push({ url, init });
         if (getGate) await getGate.promise;
         if (getFailure) return Response.json({ error: "unavailable" }, { status: 503 });
-        return getResponse ? getResponse() : Response.json({ provider: "xai-demo", modelCosts });
+        return getResponse ? getResponse() : Response.json({
+          provider: "xai-demo", modelCosts, ...(storedMultiplier === null ? {} : { priceMultiplier: storedMultiplier }),
+        });
+      }
+      if (url.endsWith("/api/providers/xai-demo/price-multiplier")) {
+        const body = JSON.parse(String(init!.body)) as { multiplier: number | null };
+        multiplierPuts.push(body);
+        storedMultiplier = body.multiplier;
+        return Response.json({ ok: true, provider: "xai-demo", multiplier: body.multiplier });
+      }
+      if (url.endsWith("/api/pricing/refresh")) {
+        pricingRefreshes++;
+        return pricingRefreshResponse ? pricingRefreshResponse() : Response.json({
+          ok: true, sources: { "models-dev": { ok: true, count: 3 }, openrouter: { ok: true, count: 2 } },
+        });
       }
       if (url.endsWith("/api/models")) {
         catalogReads++;
@@ -153,7 +175,7 @@ describe("Models manual price editor", () => {
   }
 
   function inputs(): HTMLInputElement[] {
-    return [...container.querySelectorAll<HTMLInputElement>('dialog input[type="number"]')];
+    return [...container.querySelectorAll<HTMLInputElement>('dialog input[type="number"]:not([id$="-multiplier"])')];
   }
 
   function button(label: string): HTMLButtonElement {
@@ -626,5 +648,100 @@ describe("Models manual price editor", () => {
     await act(async () => putGate!.resolve());
     await flush();
     expect(container.querySelector("dialog")).toBeNull();
+  });
+  describe("price source, adoption, refresh and relay multiplier", () => {
+    const AUTO = { source: "models-dev" as const, input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0,
+      fetchedAt: "2026-11-13T00:00:00.000Z" };
+
+    function chip(model: string): HTMLElement {
+      return trigger(model).closest(".models-model-row")!.querySelector<HTMLElement>("[data-price-source]")!;
+    }
+
+    function setRows(price: ModelRow["price"]) {
+      rows = rows.map(row => row.id === "vendor/custom" ? { ...row, price } : row);
+    }
+
+    test("every non-combo row shows its price source chip with rates in the tooltip", async () => {
+      rows = rows.map(row => row.id === "vendor/custom"
+        ? { ...row, price: { ...AUTO, multiplier: 1.5, apiEquivalent: true as const } } : row);
+      await mount();
+      expect(chip("xai-demo/grok-4.6").dataset.priceSource).toBe("manual");
+      const automatic = chip("xai-demo/vendor/custom");
+      expect(automatic.dataset.priceSource).toBe("models-dev");
+      expect(automatic.textContent).toBe("models.dev price");
+      expect(automatic.title).toContain("input 0.3, output 1.2, cache read 0.03, cache write 0");
+      expect(automatic.title).toContain("×1.5");
+      expect(automatic.title).toContain("API-equivalent estimate");
+      expect(container.querySelector("[aria-label='Edit price for combo/balanced']")).toBeNull();
+    });
+
+    test("Automatic price block explains a manual price in effect and offers no adoption", async () => {
+      rows = rows.map(row => row.id === "grok-4.6" ? { ...row, price: { source: "manual" as const, ...SAVED } } : row);
+      await mount();
+      await open();
+      expect(container.querySelector("dialog")!.textContent).toContain("A manual price is in effect for this model");
+      expect(button("Adopt as manual")).toBeUndefined();
+    });
+
+    test("Adopt as manual saves the shown automatic rates through the model-costs PUT and closes", async () => {
+      setRows(AUTO);
+      await mount();
+      await open("xai-demo/vendor/custom");
+      expect(container.querySelector("dialog")!.textContent).toContain("models.dev price");
+      await click("Adopt as manual");
+      expect(mutations).toEqual([{ modelId: "vendor/custom", cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0 } }]);
+      expect(container.querySelector("dialog")).toBeNull();
+    });
+
+    test("Refresh prices posts, reloads the list, and keeps the dialog open showing the new price", async () => {
+      await mount();
+      await open("xai-demo/vendor/custom");
+      expect(container.querySelector("dialog")!.textContent).toContain("No automatic price is known");
+      expect(chip("xai-demo/vendor/custom").dataset.priceSource).toBe("unknown");
+      setRows(AUTO);
+      const before = catalogReads;
+      await click("Refresh prices");
+      expect(pricingRefreshes).toBe(1);
+      expect(catalogReads).toBeGreaterThan(before);
+      expect(container.querySelector("dialog")).not.toBeNull();
+      expect(container.querySelector("dialog")!.textContent).toContain("models.dev price");
+      expect(button("Adopt as manual").disabled).toBe(false);
+      expect(chip("xai-demo/vendor/custom").dataset.priceSource).toBe("models-dev");
+    });
+
+    test("Refresh prices reports failure when every source failed and unlocks editing", async () => {
+      pricingRefreshResponse = () => Response.json({ ok: true, sources: { "models-dev": { ok: false }, openrouter: { ok: false } } });
+      await mount();
+      await open("xai-demo/vendor/custom");
+      await click("Refresh prices");
+      expect(container.querySelector('dialog [role="alert"]')!.textContent).toContain("Could not refresh the online price catalogs");
+      expect(button("Save").disabled).toBe(false);
+    });
+
+    test("relay multiplier loads from the GET, saves a number, clears with null, and rejects invalid text", async () => {
+      storedMultiplier = 2;
+      await mount();
+      await open();
+      const field = () => container.querySelector<HTMLInputElement>('dialog input[id$="-multiplier"]')!;
+      const setField = async (value: string) => act(async () => {
+        Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(field(), value);
+        field().dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+      });
+      expect(field().value).toBe("2");
+      expect(button("Save multiplier").disabled).toBe(true);
+      await setField("1500");
+      await click("Save multiplier");
+      expect(multiplierPuts).toHaveLength(0);
+      expect(container.querySelector('dialog [role="alert"]')!.textContent).toContain("greater than 0 and at most 1000");
+      await setField("1.25");
+      await click("Save multiplier");
+      expect(multiplierPuts).toEqual([{ multiplier: 1.25 }]);
+      expect(mutations).toHaveLength(0);
+      expect(container.querySelector("dialog")).not.toBeNull();
+      await setField("");
+      await click("Save multiplier");
+      expect(multiplierPuts.at(-1)).toEqual({ multiplier: null });
+      expect(field().value).toBe("");
+    });
   });
 });

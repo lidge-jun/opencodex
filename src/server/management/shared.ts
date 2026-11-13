@@ -57,7 +57,7 @@ import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustom
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond, type MatchedPrice } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { usageModelPriceOptions } from "../../usage/model-identity";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
@@ -100,6 +100,9 @@ export type CostEstimateReason =
   | "cache_detail_missing"
   | "expected_price_overlay"
   | "provider_cost_overlay"
+  | "online_price_catalog"
+  | "relay_price_multiplier"
+  | "subscription_api_equivalent"
   | "priority_lower_bound";
 
 export type CostResult =
@@ -201,6 +204,10 @@ export function unavailableCostReason(entry: MetricSource): MetricUnavailableRea
   return "price_unmatched";
 }
 
+function anyPrice(estimate: NonNullable<ReturnType<typeof estimateRequestCost>>, test: (price: MatchedPrice) => boolean): boolean {
+  return (estimate.price !== undefined && test(estimate.price)) || estimate.attempts?.some(a => test(a.price)) === true;
+}
+
 /** Display-time cost estimate for one log entry (or its attempt list), including the reasons that qualify the estimate. */
 export function costResult(entry: MetricSource): CostResult {
   const tier = serviceTierContext(entry);
@@ -220,6 +227,10 @@ export function costResult(entry: MetricSource): CostResult {
       ? "expected_price_overlay" as const : undefined,
     estimate.price?.source === "user" || estimate.attempts?.some(a => a.price.source === "user")
       ? "provider_cost_overlay" as const : undefined,
+    anyPrice(estimate, price => price.source === "models-dev" || price.source === "openrouter")
+      ? "online_price_catalog" as const : undefined,
+    anyPrice(estimate, price => price.multiplier !== undefined) ? "relay_price_multiplier" as const : undefined,
+    anyPrice(estimate, price => price.apiEquivalent === true) ? "subscription_api_equivalent" as const : undefined,
     estimate.priorityLowerBound ? "priority_lower_bound" as const : undefined,
   ].filter((reason): reason is CostEstimateReason => reason !== undefined);
   return { kind: "value", estimate, estimateReasons };

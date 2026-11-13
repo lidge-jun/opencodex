@@ -57,6 +57,7 @@ import { initialModelSelectionPending, pendingModelSelectionProviders } from "..
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
 import { visionSidecarConsumerClassifier } from "../../vision/eligibility";
+import { modelRowPrice, type ModelRowPrice } from "./model-row-price";
 
 /**
  * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is
@@ -73,6 +74,8 @@ export type ManagementModelRow = Partial<CatalogModel> & {
   custom?: boolean;
   customId?: string;
   manualPricing?: boolean;
+  /** Effective price and its source; absent when no tier can price the model. Never set on combos. */
+  price?: ModelRowPrice;
   fastRowAvailable?: boolean;
   displayNameOverride?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
@@ -541,6 +544,7 @@ export async function listManagementModelRows(
     const supportsReasoning = row.exportMetadata?.supportsReasoning
       ?? row.supportsReasoning
       ?? knownReasoningSupport(row);
+    const price = row.provider !== "combo" ? modelRowPrice(row.provider, row.id) : undefined;
     return {
       ...row,
       // One shared definition with the request path: the GUI must not re-derive consumer
@@ -548,6 +552,7 @@ export async function listManagementModelRows(
       visionSidecarConsumer: isVisionSidecarConsumer(row.provider, row.id),
       ...(!row.native && modelCosts !== undefined && Object.hasOwn(modelCosts, row.id)
         ? { manualPricing: true } : {}),
+      ...(row.provider !== "combo" && price ? { price } : {}),
       ...(pending ? { disabled: true, initialSelectionPending: true } : {}),
       fastRowAvailable: !row.disabled && !pending
         && !knownIds.has(fastRowId(row.namespaced)) && catalogFastRowEligible(config, row),

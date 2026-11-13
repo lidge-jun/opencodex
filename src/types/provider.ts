@@ -766,6 +766,13 @@ export interface OcxProviderConfig {
    */
   modelCosts?: Record<string, ProviderCostOverlay>;
   /**
+   * Opt-in relay multiplier (finite, > 0, <= 1000) applied to every automatic price
+   * (official, models.dev, OpenRouter) for this provider in the `~$` estimate, for a relay that
+   * charges a markup or discount over the vendor's list price. Never applied to `modelCosts`.
+   * Absent means 1; the stored form is sparse.
+   */
+  priceMultiplier?: number;
+  /**
    * Provider-wide auto-review (approval) model for routed models of this provider.
    *
    * The value is a catalog selector: either a bare model id of this provider

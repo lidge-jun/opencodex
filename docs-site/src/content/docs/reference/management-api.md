@@ -552,6 +552,37 @@ All four rates must be finite numbers from 0 through 1,000,000, in USD per 1M to
 Unknown fields and malformed rates are rejected. A write preserves other models' overrides
 and returns `{ ok: true, provider, modelId, cost }`; reset returns `cost: null`.
 
+### Automatic prices
+
+A model with no manual price is priced, in this order, from a verified official price, then the
+public models.dev list, then the public OpenRouter list. The two public lists are fetched in the
+background (at most daily, plus one fetch when a model no source could price is first seen), never
+on a request path, and cached in `price-catalog-cache.json` in the OpenCodex home. Offline, the
+previous snapshot keeps answering. A price from a public list is always an estimate. A manual price
+always wins and is never scaled.
+
+Each non-combo row of `GET /api/models` carries `price` when a price is known and omits it when not:
+`{ source, input, output, cacheRead, cacheWrite }` in USD per 1M tokens, where `source` is `manual`,
+`official`, `models-dev` or `openrouter`. A public-list price also carries `fetchedAt` (ISO time).
+`multiplier` appears when the provider's relay multiplier was applied, and `apiEquivalent: true` when
+the provider bills through a subscription, so the figure is what the same tokens would cost on the API.
+
+`POST /api/pricing/refresh` forces an immediate refresh of both public lists, clears the retry
+cooldowns for models that could not be priced, and returns
+`{ ok: true, sources: { "models-dev": status, "openrouter": status } }`. A source `status` is
+`{ ok: true, fetchedAt, count }` or `{ ok: false, error }`, where `error` is a short code such as
+`fetch_failed`, `bad_json`, `empty` or `http_503`, never a response body.
+
+`PUT /api/providers/{provider}/price-multiplier` accepts `{ multiplier }`, a finite number greater
+than 0 and at most 1000, or `null` to remove it, and returns `{ ok: true, provider, multiplier }`.
+The multiplier models a relay that charges a markup or discount over the vendor's list price. It
+scales official, models.dev and OpenRouter prices for that provider and never a manual price.
+`GET /api/providers/{provider}/model-costs` also returns `priceMultiplier` when one is set. An unset
+multiplier is absent from `config.json`; an invalid stored value is ignored at load with a warning.
+
+`/api/logs` and `/api/usage` cost results add the reasons `online_price_catalog`,
+`relay_price_multiplier` and `subscription_api_equivalent` to `estimateReasons` when they apply.
+
 The **Model price** dialog offers **Automatic**, **Flat rate**, and **Custom threshold**
 prompt-length pricing. Automatic (also the default when the policy is absent) retains catalog
 context rules with the saved base rates. Flat disables context adjustments. Custom selects four

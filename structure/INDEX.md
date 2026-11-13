@@ -134,7 +134,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`dashboard-and-usage.md`](dashboard-and-usage.md) | Dashboard page contracts, usage accounting and request metrics, and per-surface management settings. |
 | [`usage-client-attribution.md`](usage-client-attribution.md) | Privacy-bounded client labels carried from request ingress into usage records. |
 | [`quota-pool.md`](quota-pool.md) | The passive GET /api/quota-pool read GOAT consumes (ocx.quota-pool/1): sources, window mapping, absent-not-zero, and the install identity behind homeId and accountRef. |
-| [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, persistence and estimate cache invalidation. |
+| [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, automatic price catalog tiers, relay multiplier, persistence and estimate cache invalidation. |
 | [`clients/export-model-names.md`](clients/export-model-names.md) | Per-connection naming policy, router-proven aliases and passive export previews. |
 | [`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) | Opt-in Responses dialect for the managed Pi-based omo export and its refresh lifecycle. |
 | [`clients/integrations.md`](clients/integrations.md) | Third-party client config ownership, snapshots, refresh, disable, and restore. |
@@ -479,6 +479,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/logs-usage-routes.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
+| `src/server/management/model-row-price.ts` | [`pricing.md`](pricing.md) |
 | `src/server/management/provider-overwrite-carry.ts` | [`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
 | `src/server/management/telemetry-routes.ts` | [`telemetry.md`](telemetry.md) |
@@ -579,6 +580,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/usage/cost.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/error-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/usage/link-log-fields.ts` | [`remote-link.md`](remote-link.md) |
+| `src/usage/price-catalog-version.ts` | [`pricing.md`](pricing.md) |
+| `src/usage/price-catalog.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/source-filter.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/summary.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/timeline.ts` | [`gui-and-management-api.md`](gui-and-management-api.md) |

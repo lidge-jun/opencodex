@@ -493,6 +493,8 @@ maintainers do not provide policy advice and cannot resolve provider enforcement
   measured usage. Active user `modelCosts` overlays take priority over bundled verified catalog and
   price fallbacks, and historical usage is re-estimated from the pricing active when the summary is
   read. The cost is an estimate for reconciliation, not a ChatGPT Plus/Pro subscription invoice.
+  A model with no bundled price is priced from the public models.dev or OpenRouter list and marked as
+  an online-list estimate; a manual price always wins.
   Historical bare `openai` rows that predate explicit attribution remain ambiguous rather than being
   assigned to the current main account.
 - **Target a specific Codex account from the model picker** is an explicit opt-in. When enabled,
