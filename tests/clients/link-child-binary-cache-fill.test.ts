@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CHILD_TARGET_TRIPLES, childArtifactFilename, resolveChildBinarySource } from "../../src/link/child-binary-source";
@@ -152,8 +152,8 @@ describe("filling the ocx-child cache for the running version", () => {
   });
 
   test.each([
-    ["a fresh install (no record) records its version", null, "first_start", VERSION],
-    ["a restart of the same version with a build missing", VERSION, "not_an_upgrade", VERSION],
+    ["a fresh install (no record) records its version as a baseline", null, "first_start", VERSION + " baseline"],
+    ["a restart of the same version after a first start", VERSION + " baseline", "not_an_upgrade", VERSION + " baseline"],
     ["a downgrade from a version that never made a cache directory", "2.101.0", "downgrade", "2.101.0"],
   ])("without evidence of an upgrade nothing is fetched: %s", async (_name, before, reason, after) => {
     bothDigests();
@@ -178,8 +178,40 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(requested).toEqual([]);
     expect(readdirSync(join(home, "cache", "ocx-child"))).toEqual([".home-version"]);
-    expect(recorded()).toBe(VERSION);
+    expect(recorded()).toBe(VERSION + " baseline");
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "artifact_not_found" });
+  });
+
+  test("a completed fill whose manifest lost lines (overlapping fills) is repaired from the verified files, without downloading", async () => {
+    bothDigests();
+    ranBefore();
+    await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
+    writeFileSync(join(cacheDir(), "SHA256SUMS"), sha(linuxBuild) + "  ocx-child-linux-x64\n", { mode: 0o600 });
+    expect(resolve("darwin-arm64").ok).toBe(false);
+    const again = release({});
+    expect(await fill(again.fetchImpl)).toEqual({ kind: "filled", cached: ["ocx-child-darwin-arm64", "ocx-child-linux-x64"], fetched: [], failed: [] });
+    expect([again.requested, resolve("darwin-arm64").ok, recorded()]).toEqual([[], true, VERSION]);
+  });
+
+  test("a completed fill whose manifest still covers the package fetches nothing, even with a build deleted", async () => {
+    bothDigests();
+    ranBefore();
+    await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
+    rmSync(join(cacheDir(), "ocx-child-darwin-arm64"));
+    const again = release({ "ocx-child-darwin-arm64": macBuild });
+    expect(await fill(again.fetchImpl)).toEqual({ kind: "skipped", reason: "not_an_upgrade" });
+    expect(again.requested).toEqual([]);
+  });
+
+  test("the manifest is rebuilt from the disk when written: a build another fill placed meanwhile stays listed", async () => {
+    bothDigests();
+    ranBefore();
+    // This fill's darwin download fails, but an overlapping fill publishes the verified build meanwhile.
+    const { fetchImpl } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": 503 }, () => {
+      if (existsSync(cacheDir())) writeFileSync(join(cacheDir(), "ocx-child-darwin-arm64"), macBuild, { mode: 0o600 });
+    });
+    expect(await fill(fetchImpl)).toEqual({ kind: "filled", cached: ["ocx-child-darwin-arm64", "ocx-child-linux-x64"], fetched: ["ocx-child-linux-x64"], failed: [] });
+    expect([resolve("darwin-arm64").ok, resolve("linux-x64").ok, recorded()]).toEqual([true, true, VERSION]);
   });
 
   test.each([
@@ -211,7 +243,7 @@ describe("filling the ocx-child cache for the running version", () => {
   test("the first release that ships digests fills: the release before it recorded the baseline", async () => {
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
     expect(await fill(fetchImpl, "2.99.0")).toEqual({ kind: "skipped", reason: "no_digests" });
-    expect(recorded()).toBe("2.99.0");
+    expect(recorded()).toBe("2.99.0 baseline");
     bothDigests();
     expect(await fill(fetchImpl)).toMatchObject({ kind: "filled", fetched: ["ocx-child-darwin-arm64", "ocx-child-linux-x64"], failed: [] });
     expect(requested).toHaveLength(2);
@@ -427,7 +459,7 @@ describe("startup", () => {
     const out = { log: (line: string) => { logs.push(line); }, warn: (line: string) => { logs.push(line); } };
     expect(await fillChildBinaryCacheOnStart({ packageRoot, opencodexHome: home }, out)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(logs).toEqual([]);
-    expect([readdirSync(join(home, "cache", "ocx-child")), recorded()]).toEqual([[".home-version"], VERSION]);
+    expect([readdirSync(join(home, "cache", "ocx-child")), recorded()]).toEqual([[".home-version"], VERSION + " baseline"]);
   });
 });
 
