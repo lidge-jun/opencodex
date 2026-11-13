@@ -5,7 +5,7 @@ description: "Cómo decide opencodex qué proveedor sirve un ID de modelo determ
 
 Cuando Codex solicita un modelo, `router.ts` lo resuelve exactamente a un proveedor configurado. Las reglas se comprueban **por orden**; el primer partido gana.
 
-Para OpenAI, un id `<selector>/gpt-*` configurado se asigna a través de `codexAccountNamespaces` a exactamente una cuenta Codex almacenada antes de considerar el combo o los espacios de nombres de proveedor. Los ids `gpt-*` sin calificar seleccionan en su lugar el proveedor canónico `openai`. Su `codexAccountMode` elige Pool (predeterminado, principal más cuentas añadidas) o Direct (el portador principal o del llamante actual) sin cambiar el id del modelo. `openai-apikey/<model>` selecciona explícitamente el transporte de clave API. Estas rutas de credenciales no se solapan entre sí.
+Para OpenAI, un id `<selector>/gpt-*` configurado se asigna a través de `codexAccountNamespaces` a exactamente una cuenta Codex almacenada antes de considerar el combo o los espacios de nombres de proveedor. Los ids `gpt-*` sin calificar seleccionan en su lugar el proveedor canónico `openai`. Su `codexAccountMode` elige Pool (predeterminado, principal más cuentas añadidas) o Direct (el portador principal o del llamante actual) sin cambiar el id del modelo. `openai-apikey/<model>` selecciona explícitamente el transporte de clave API. Estas rutas de credenciales no recurren unas a otras como alternativa.
 
 <a id="precedence"></a>
 
