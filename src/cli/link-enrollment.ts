@@ -7,7 +7,7 @@ import type { LinkCliDeps } from "./link";
 
 const FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{16,88}={0,2}$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]{1,128})?$/;
-const ENROLLMENT_DEADLINE_MS = 360_000;
+export const ENROLLMENT_DEADLINE_MS = 360_000;
 const PHASES: Record<string, string> = {
   remote_port_failed: "remote port selection", remote_port_timeout: "remote port selection",
   remote_plant_failed: "remote ocx-child planting", remote_plant_timeout: "remote ocx-child planting",

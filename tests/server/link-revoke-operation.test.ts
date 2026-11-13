@@ -74,10 +74,10 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     ...(options.markHook ? { linkOperationMarkHook: options.markHook } : {}),
     revokeApiKey: (cfg, id) => { const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
   };
-  async function revoke(body: Record<string, unknown>) {
+  async function revoke(body: Record<string, unknown>, signal?: AbortSignal) {
     const url = new URL("http://127.0.0.1:10100/api/link/" + LINK);
     const context: ManagementContext = {
-      req: new Request(url, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+      req: new Request(url, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(body), ...(signal ? { signal } : {}) }),
       url, config, deps, version: "2.99.0", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
       sessionControl: { isCurrent: () => true, isPaired: () => false, revokeCurrent: () => true },
       convergeCodexCatalog: async () => { throw new Error("no catalog convergence"); }, syncClaudeAgentDefsBestEffort: async () => {},
@@ -221,6 +221,21 @@ test("an invalid body on a link a Child job holds answers 409 as before journall
     const refused = await h.revoke({ force: "yes" });
     expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "link_operation_in_progress" });
   } finally { release?.(); }
+});
+
+test("a revoke whose client went away while waiting for the alias lock stops at once and changes nothing", async () => {
+  const controller = new AbortController();
+  let polls = 0;
+  // The harness clock stands still, so only the abort can end this wait; a wait that ignores it fails here, in bounded time.
+  const h = harness({ lockWaitMs: 100_000, sleep: async () => { polls += 1; if (polls === 1) controller.abort(); if (polls > 3) throw new Error("kept waiting after the abort"); } });
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [] });
+  const held = await acquireAliasLock(ALIAS, { lockDir: join(root, "locks") });
+  try {
+    const refused = await h.revoke({ force: true }, controller.signal);
+    expect(refused.status).toBe(409);
+    expect(polls).toBe(1);
+    expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  } finally { held.release(); }
 });
 
 describe("journal write failures during a revoke", () => {

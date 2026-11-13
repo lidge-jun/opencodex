@@ -60,11 +60,12 @@ export function journalInUse(ctx: ManagementContext): boolean {
  */
 export async function underAliasLock(ctx: ManagementContext, alias: string, required: boolean, action: () => Promise<Response>): Promise<Response> {
   if (!required) return await action();
-  try { return await withAliasLock(alias, ctx.deps.linkAliasLock ?? {}, action); } catch (error) {
+  try { return await withAliasLock(alias, { ...ctx.deps.linkAliasLock, signal: ctx.req.signal }, action); } catch (error) {
     if (error instanceof AliasLockError) {
-      return error.code === "link_alias_lock_busy"
-        ? fail("link_operation_in_progress", "Another enrollment or revoke of this alias is running; try again when it ends.", 409)
-        : fail("link_alias_lock_failed", "The alias lock could not be taken.", 500);
+      if (error.code === "link_alias_lock_busy") return fail("link_operation_in_progress", "Another enrollment or revoke of this alias is running; try again when it ends.", 409);
+      // The client went away while waiting: nothing ran, and nobody is left to read a longer answer.
+      if (error.code === "link_alias_lock_aborted") return fail("link_operation_in_progress", "The request ended while it waited for this alias; nothing was changed.", 409);
+      return fail("link_alias_lock_failed", "The alias lock could not be taken.", 500);
     }
     throw error;
   }
