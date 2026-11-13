@@ -11,7 +11,8 @@ import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { keyFingerprint } from "../../src/link/route-trust";
 import { tombstonesPath } from "../../src/link/tombstones";
 import { registerOperationRecoveryResolver } from "../../src/link/operation-recovery-slot";
-import { POSIX_RECOVER_RECEIPT_SCRIPT, remotePurgePlantedChildArgv, remoteRecoverReceiptArgv } from "../../src/link/remote-plant";
+import { POSIX_RECOVER_RECEIPT_SCRIPT, remoteManagedPurgeDisconnectArgv, remotePurgePlantedChildArgv, remoteRecoverReceiptArgv } from "../../src/link/remote-plant";
+import { windowsScriptData } from "../../src/link/remote-windows";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Home side of lane O5: a forced revoke of an ephemeral link leaves a tombstone, and
@@ -425,6 +426,24 @@ test("the Windows scripts keep a kept binary and require the planted binary to b
   const receipt = decode(remoteRecoverReceiptArgv("windows", ID));
   expect(receipt).toContain("ocx-child.exe");
   expect(receipt).toContain("exit 4");
+});
+
+test("the Windows recover scripts carry the link id as data, never spliced into their source", () => {
+  const outer = (argv: string[]) => Buffer.from(argv.at(-1)!, "base64").toString("utf16le");
+  const source = (argv: string[]) => {
+    const packed = /\$ocxPacked='([^']+)'/.exec(outer(argv))![1]!;
+    return inflateRawSync(Buffer.from(Array.from(packed, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+  };
+  const receipt = remoteRecoverReceiptArgv("windows", ID);
+  expect(windowsScriptData(outer(receipt))).toEqual({ args: [ID] });
+  expect(source(receipt)).toContain("$f=\"$h\\link-receipts\\\"+[string]$d.args[0]+\".json\"");
+  expect(source(receipt).replace(/\$d=\[Text\.Encoding\][^\n]*\n/, "")).not.toContain(ID);
+  expect(source(receipt)).not.toContain("${linkId}");
+  const purge = remoteManagedPurgeDisconnectArgv("windows", ID);
+  expect(windowsScriptData(outer(purge))).toEqual({ args: [ID] });
+  expect(source(purge).replace(/\$d=\[Text\.Encoding\][^\n]*\n/, "")).not.toContain(ID);
+  expect(source(purge)).toContain("' --expect-link '+(Quote-Native ([string]$x[0]))");
+  expect(windowsScriptData(outer(remoteManagedPurgeDisconnectArgv("windows")))).toEqual({ args: [] });
 });
 
 describe("recover over an exclusive explicit route (O6)", () => {
