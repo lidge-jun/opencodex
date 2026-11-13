@@ -22,7 +22,7 @@ Agent 設定控制要廣告哪個 Codex 協作介面，以及 opencodex 如何�
 | `plaintextV2AgentMessages?` | `boolean` | —（未設定） | 實驗性選項。明確設為 `true` 或選擇 `multiAgentMode: "v2-plaintext"` 會要求合格的原生 ChatGPT v2 父代理以明文產生 `spawn_agent`、`send_message`、`followup_task` 的訊息引數。詳見[明文 v2 代理訊息](#plaintext-v2-agent-messages)。 |
 | `subagentEffortCap?` | `string` | — | 僅針對生成子回合的額外上限。當兩個上限都適用時，取較低者。 |
 
-使用儀表板或 `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>` 管理介面。模式變更套用於新 session。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 欄位，不是 `config.json` key；`ocx v2 threads <n>` 在啟用 v2 後，將 `max_concurrent_threads_per_session` 寫入 Codex 的 `$CODEX_HOME/config.toml` 中 `[features.multi_agent_v2]` 之下。
+使用儀表板或 `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>` 管理介面。目錄 pin 變更適用於新工作階段；明文編譯器依目前設定處理合格請求，包括既有 V2 工作階段的後續請求。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 欄位，不是 `config.json` key；`ocx v2 threads <n>` 在啟用 v2 後，將 `max_concurrent_threads_per_session` 寫入 Codex 的 `$CODEX_HOME/config.toml` 中 `[features.multi_agent_v2]` 之下。
 
 ## Plaintext v2 agent messages
 

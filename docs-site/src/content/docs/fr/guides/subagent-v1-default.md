@@ -113,7 +113,7 @@ affiche l'avis une fois et attend votre réponse.
 Chaque réponse est enregistrée et l'avis ne revient pas. Si vous fermez
 l'avis sans répondre, il réapparaît à la prochaine ouverture du tableau de bord.
 
-Les changements de mode s'appliquent aux **nouvelles** sessions Codex. Lancez
+Les changements de choix du catalogue s'appliquent aux **nouvelles** sessions Codex ; le compilateur en clair suit le réglage actuel pour les requêtes admissibles, y compris les requêtes ultérieures des sessions V2 existantes. Lancez
 une nouvelle session après votre choix. Si un hôte App durable affiche encore
 l'ancienne surface, exécutez `ocx sync` et redémarrez cette surface Codex.
 

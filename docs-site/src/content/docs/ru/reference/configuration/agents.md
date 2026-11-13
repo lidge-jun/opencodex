@@ -10,7 +10,7 @@ description: Multi-agent surface, guidance при делегировании, pr
 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` штампует все модели как v1; `v2` штампует все модели как v2. `default` восстанавливает upstream pin'ы (Sol/Terra — v2, Luna — v1) и для остальных следует native flag `multi_agent_v2`. Применяется к новым сессиям. `v2-plaintext` выбирает V2 для новых сессий и передаёт подходящие задачи открытым текстом без глобального принуждения. Для включения нужен `--acknowledge-plaintext-agent-messages`. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` штампует все модели как v1; `v2` штампует все модели как v2. `default` восстанавливает upstream pin'ы (Sol/Terra — v2, Luna — v1) и для остальных следует native flag `multi_agent_v2`. Закрепления каталога применяются к новым сессиям. `v2-plaintext` выбирает V2 для новых сессий и передаёт подходящие задачи открытым текстом без глобального принуждения. Для включения нужен `--acknowledge-plaintext-agent-messages`. |
 | `plaintextV2AgentMessages?` | `boolean` | — (не задано) | Экспериментальная опция: явное `true` или `multiAgentMode: "v2-plaintext"` включает передачу аргументов сообщений `spawn_agent`, `send_message` и `followup_task` открытым текстом для подходящих запросов. |
 | `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | До пяти bare native-id, account-qualified id `<selector>/<native-openai-model>` или routed-id `provider/model`, которые показываются первыми в списке подагентов. Для нового выбора панель предлагает bare native- и routed-id. При сохранении она сохраняет уже настроенные точные account-qualified id, включая отсутствующие в текущем каталоге. Для добавления нового точного account-qualified id используйте `ocx agent subagents set` или измените конфигурацию. После [однократного обновления Astra](/reference/configuration/agents/#astra-roster-upgrade) явно пустой список сохраняется. |
 | `injectionModel?` | `string` | — | Предпочитаемая native- или routed-модель подагента, которую proxy использует в собственном guidance v2. |
@@ -25,7 +25,7 @@ description: Multi-agent surface, guidance при делегировании, pr
 | `subagentEffortCap?` | `string` | — | Дополнительный потолок только для spawned-child turn'ов. Если применимы оба cap'а, выигрывает более низкий. |
 
 Управляйте surface через дашборд или `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>`.
-Смена режима применяется к новым сессиям. `maxConcurrentThreadsPerSession` — это поле
+Изменения закреплений каталога применяются к новым сессиям; компилятор открытого текста следует текущей настройке для подходящих запросов, включая последующие запросы существующих V2-сессий. `maxConcurrentThreadsPerSession` — это поле
 `PUT /api/v2`, а не ключ `config.json`; `ocx v2 threads <n>` записывает
 `max_concurrent_threads_per_session` в `[features.multi_agent_v2]` файла
 `$CODEX_HOME/config.toml` после включения v2.

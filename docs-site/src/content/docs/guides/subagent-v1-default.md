@@ -110,7 +110,7 @@ existing setting; the dashboard raises the notice once and waits for an answer.
 Either answer is recorded, and the notice does not come back. Dismissing it without answering
 leaves it for the next time you open the dashboard.
 
-Mode changes apply to **new** Codex sessions. Start a new session after choosing; if a long-running
+Catalog pin changes apply to **new** Codex sessions; the plaintext compiler follows the current setting for eligible requests, including later requests from existing V2 sessions. Start a new session after choosing; if a long-running
 App host still shows the old surface, run `ocx sync` and restart that surface.
 
 ## If you want v2 anyway

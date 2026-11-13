@@ -94,7 +94,7 @@ La actualización no sobrescribe una elección existente. El panel muestra el av
 
 Ambas respuestas quedan registradas. Cerrar el aviso sin responder lo deja pendiente para la siguiente apertura del panel.
 
-El modo se aplica a las sesiones **nuevas** de Codex. Inicie otra sesión después del cambio. Si un proceso de la aplicación que lleva tiempo abierto todavía muestra la interfaz anterior, ejecute `ocx sync` y reinicie esa aplicación.
+Las asignaciones del catálogo se aplican a las sesiones **nuevas** de Codex; el compilador de texto sin cifrar sigue la configuración actual para las solicitudes aptas, incluidas las posteriores de sesiones V2 existentes. Inicie otra sesión después del cambio. Si un proceso de la aplicación que lleva tiempo abierto todavía muestra la interfaz anterior, ejecute `ocx sync` y reinicie esa aplicación.
 
 <a id="if-you-want-v2-anyway"></a>
 

@@ -27,8 +27,7 @@ kontrol eder.
 | `agentTaskRecovery?` | `object` | — | Yönlendirilen sağlayıcılara gönderilen arka uçta şifrelenmiş v2 görevleri için deneysel isteğe bağlı kurtarma. `enabled: true` olmadıkça devre dışıdır; bkz. [Şifrelenmiş v2 görev kurtarma](#şifrelenmiş-v2-görev-kurtarma). |
 
 Arayüzü kontrol paneli veya `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads
-<n>|mode-hint <text|--clear>` ile yönetin. Mod değişiklikleri yeni oturumlara
-uygulanır. `maxConcurrentThreadsPerSession`, bir `config.json` anahtarı değil,
+<n>|mode-hint <text|--clear>` ile yönetin. Katalog sabitlemesi değişiklikleri yeni oturumlara uygulanır; düz metin derleyicisi mevcut ayarı, mevcut V2 oturumlarının sonraki uygun istekleri dahil uygun isteklerde izler. `maxConcurrentThreadsPerSession`, bir `config.json` anahtarı değil,
 bir `PUT /api/v2` alanıdır; `ocx v2 threads <n>`, v2 etkinleştirildikten sonra
 Codex'in `$CODEX_HOME/config.toml` dosyasındaki `[features.multi_agent_v2]`
 altına `max_concurrent_threads_per_session` yazar.
