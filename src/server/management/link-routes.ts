@@ -8,7 +8,7 @@ import { clearCompensationFailed, compensationPath, readCompensation } from "../
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
-import { attachLinkPeers, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
+import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
 import { codexSettingsDigest, projectHomeCodexSettings } from "../../link/codex-settings";
 import { localLinkPeer } from "../../link/compatibility";
@@ -240,15 +240,15 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     if (!force && record.direction === "hub-initiated") {
       try {
         const runner = runnerFor(ctx);
-        const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, knownHostsFile(ctx));
+        const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx));
         if (purge) {
-          const purged = await purgeDisconnectRemote(runner, record.alias, knownHostsFile(ctx), platform, record.childKind);
+          const purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind);
           if (!purged.ok) {
             await restartTunnel();
             return fail(purged.code, purged.message, purged.status, purged.hint);
           }
         } else {
-          const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx) }), { timeoutMs: 30_000 });
+          const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 });
           if (result.code !== 0) {
             await restartTunnel();
             return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));
@@ -268,8 +268,10 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
         return filtered;
       });
-      clearCompensationFailed(id, compensationPath());
     } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
+    // Same task as the commit, before any fallible cleanup: an open link WebSocket must not outlive its link (design T4 2.4).
+    state.listener.closeLinkSockets?.(id);
+    try { clearCompensationFailed(id, compensationPath()); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
     state.compensationFailures?.delete(id);
     await state.supervisor.reload();
     if (next.links.length === 0) await state.listener.close();
@@ -329,8 +331,22 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
       attachLinkPeers(dto, localLinkPeer(packageVersion("0.0.0"), buildPeerFeatures()),
         linkId => state.listener.peerObservation?.(linkId) ?? { observed: null, refused: null });
     }
+    // The same opt-in for the body bytes each link carried (#3023).
+    if (url.searchParams.get("traffic") === "1") {
+      const { attachLinkTrafficForState } = await import("./link-traffic-status");
+      attachLinkTrafficForState(dto, state);
+    }
     // The same opt-in for each Home-initiated tunnel's retry progress and last failure cause.
     if (url.searchParams.get("diagnostics") === "1") attachLinkTunnelDiagnostics(dto, supervisorStates);
+    // The same opt-in for the route each multi-route link uses and why the others rest.
+    if (url.searchParams.get("routes") === "1") attachLinkRoutes(dto, supervisorStates);
+    // The same opt-in for each row's live link WebSocket counters and hold count (design 9.3).
+    if (url.searchParams.get("transport") === "1") {
+      attachLinkTransport(dto, linkId => state.listener.linkTransport?.(linkId) ?? null, linkId => {
+        const held = state.listener.linkHolds?.(linkId) ?? null;
+        return held ? held.holds.length + (held.unknown ? 1 : 0) : 0;
+      });
+    }
     // The same opt-in for each Home row's Child versions, catalog freshness, activity and operations.
     if (url.searchParams.get("children") === "1" && dto.role === "home") {
       const { attachLinkChildOpsForState } = await import("./link-child-ops-routes");
@@ -374,6 +390,16 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     return handleLinkChildOpsRoutes(ctx, state);
   }
   const reconnectPath = req.method === "POST" ? /^\/api\/link\/([^/]+)\/reconnect$/.exec(path) : null;
+  // Before the DELETE matcher, which would read "<id>/routes" as a link id.
+  const routesPath = req.method === "GET" || req.method === "POST" ? /^\/api\/link\/([^/]+)\/routes$/.exec(path) : null;
+  if (routesPath) {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    let id: string;
+    try { id = decodeURIComponent(routesPath[1]!); } catch { return fail("invalid_link_id", "The link id is invalid.", 400); }
+    const { handleLinkRouteEdit } = await import("./link-route-edit");
+    return handleLinkRouteEdit(ctx, state, id);
+  }
   if (reconnectPath) {
     const denied = auth(ctx, "either");
     if (denied) return denied;

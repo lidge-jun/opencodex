@@ -258,6 +258,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/client-integrations/restore/preview", module: "server/management/integration-routes", mutates: false },
   { method: "POST", path: "/api/client-integrations/commandcode/restore", module: "server/management/integration-routes", mutates: true },
   { method: "POST", path: "/api/client-integrations/commandcode/restore/preview", module: "server/management/integration-routes", mutates: false },
+  { method: "POST", path: "/api/client-integrations/pi/sync", module: "server/management/integration-routes", mutates: true, mechanism: "path-constant" },
   // server/management/lab-automation-routes
   { method: "GET", path: "/api/lab/automation", module: "server/management/lab-automation-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/automation/runs", module: "server/management/lab-automation-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
@@ -437,12 +438,15 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/link/apply", module: "server/management/link-routes", mutates: true },
   { method: "DELETE", path: "/api/link/{id}", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/link/{id}/reconnect", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
+  { method: "GET", path: "/api/link/{id}/routes", module: "server/management/link-routes", mutates: false, mechanism: "regex" },
+  { method: "POST", path: "/api/link/{id}/routes", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/link/issue", module: "server/management/link-routes", mutates: true },
   // server/management/link-child-ops-routes (reached through link-routes)
   { method: "POST", path: "/api/link/children/operations", module: "server/management/link-child-ops-routes", mutates: true },
   { method: "GET", path: "/api/link/children/jobs/{jobId}", module: "server/management/link-child-ops-routes", mutates: false, mechanism: "regex" },
   { method: "GET", path: "/api/link/children/policy", module: "server/management/link-child-ops-routes", mutates: false },
   { method: "PUT", path: "/api/link/children/policy", module: "server/management/link-child-ops-routes", mutates: true },
+  { method: "POST", path: "/api/link/children/activity/clear", module: "server/management/link-child-ops-routes", mutates: true },
   // server/management/remote-workspace-routes
   { method: "GET", path: "/api/remote-workspace", module: "server/management/remote-workspace-routes", mutates: false },
   { method: "GET", path: "/api/remote-workspace/runtimes", module: "server/management/remote-workspace-routes", mutates: false },

@@ -646,7 +646,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       ingressForServer,
       loopbackRouteAllowed,
       managementIngressRouteAllowed,
-      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy, onAuthenticatedCatalog: optionalListeners.notifyAuthenticatedCatalog,
+      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy,
+      onAuthenticatedCatalog: (apiKeyId, routeProofId) => { optionalListeners.notifyAuthenticatedCatalog(apiKeyId, routeProofId); deps.observeAuthenticatedCatalog?.(apiKeyId, routeProofId); },
       packageTreeChangedResponse,
       serverBusyResponse,
       runAdmittedHttpTurn,
@@ -713,7 +714,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     }
     configureInboundBodyBudget(config.maxConcurrentInboundBodyBytes);
     optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort, startProxy: deps.startClaudeInterceptProxy,
-      maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer) });
+      maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer), websocket: serveOptions.websocket, linkPolicy });
   } catch (error) {
     unregisterQuotaAutoRefresh?.();
     unregisterAnthropicCooldownRecovery?.();
