@@ -1920,6 +1920,22 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     expect(await kept([failed, `data: ${typedFrame("cyber_policy", "fixture blocked")}\n\n`, completed])).toBe(1);
   });
 
+  test.each([
+    ["untyped", untypedFrame("cyber_policy", "fixture blocked")],
+    ["typed", typedFrame("cyber_policy", "fixture blocked")],
+  ] as const)("metadata inspection keeps a %s policy verdict over a later genuine terminal", async (_kind, policy) => {
+    for (const later of [
+      { type: "response.completed", response: { status: "completed" } },
+      { type: "response.failed", response: { status: "failed", error: { code: "server_error", message: "fixture later" } } },
+    ]) {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      await new Promise<void>(resolve => consumeForResponseLogMetadata(sourceStream([
+        `data: ${policy}\n\n`, `event: ${later.type}\ndata: ${JSON.stringify(later)}\n\n`,
+      ]), log, undefined, resolve));
+      expect([httpStatusForRequestLogTerminal("failed", log), log.terminalErrorCode, log.upstreamErrorCode]).toEqual([400, "cyber_policy", "cyber_policy"]);
+    }
+  });
+
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: "Bearer auth" });
     const block = `data: ${JSON.stringify({ error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } })}`;

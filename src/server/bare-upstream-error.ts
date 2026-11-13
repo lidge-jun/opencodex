@@ -10,6 +10,7 @@ import {
 import { redactSecretString } from "../lib/redact";
 import { outboundCredentials } from "../lib/outbound-credential-registry";
 import { codexWsWrapperStatus } from "./responses/codex-ws-wire";
+import { configuredCredentials } from "./configured-credentials";
 
 type JsonRecord = Record<string, unknown>;
 export const MAX_BARE_ERROR_MESSAGE_CHARS = 512;
@@ -67,6 +68,12 @@ export interface BareUpstreamError {
    * still decides; {@link terminalStatus} is the synthetic wire status for the same verdict.
    */
   httpStatus: number | undefined;
+  /**
+   * Whether the copy may be kept on a request row. Decided on the full upstream text, before any
+   * bound, against every configured credential (not only the ones sent on this request), and false
+   * while that set cannot vouch for complete coverage. The client tail is unaffected.
+   */
+  rowCopyAllowed: boolean;
 }
 
 /** Preserve first-code precedence when deriving a bounded provisional stream verdict. */
@@ -121,6 +128,9 @@ export function bareUpstreamError(payload: unknown, mask?: BareCopyMask): BareUp
   const wrapped = wrappedServerErrorStatus(payload);
   const httpStatus = refusalCode !== undefined ? 400 : recognized?.httpStatus ?? wrapped;
   const terminalStatus = httpStatus ?? 502;
+  const configured = configuredCredentials();
+  const rowCopyAllowed = configured.complete
+    && ![rawMessage, code, errorType].some(text => text !== undefined && configured.matches(text));
   return {
     message: message ?? (refusalCode ? terminalRefusalFallbackMessage(refusalCode)
       : fallback ? `Upstream error without a message (${redactSecretString(guardBareCopy(fallback, mask))})` : "The upstream reported an error."),
@@ -131,6 +141,7 @@ export function bareUpstreamError(payload: unknown, mask?: BareCopyMask): BareUp
     terminalCode,
     terminalStatus,
     httpStatus,
+    rowCopyAllowed,
   };
 }
 

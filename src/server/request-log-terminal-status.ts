@@ -166,6 +166,10 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     // evidence" result would be read as "keep the previous bare verdict" and the terminal would
     // never claim the row.
     const prior = bareEvidence.get(logCtx);
+    // A policy verdict is itself the turn's terminal: the client stream ended on it. A reader that
+    // keeps inspecting (the metadata consumer, the WS observer) may see a later genuine terminal,
+    // which owns nothing on the row, exactly like a bare frame after a genuine terminal.
+    if (prior?.terminal === true) return false;
     genuineTerminals.add(logCtx);
     // A reader of the client stream (the WebSocket log) also sees the relay's own synthesized
     // response.failed. It renders the winning bare verdict, so the row keeps that verdict, and the
@@ -251,7 +255,8 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
   // from copy is recorded as that refusal rather than as the wrapper's unrelated code.
   noteBoundedDiagnostic(logCtx, "upstreamErrorCode", evidence.verdict.refusalCode ?? evidence.verdict.errorCode);
   noteBoundedDiagnostic(logCtx, "upstreamErrorType", evidence.verdict.errorType);
-  if (!evidence.typed && !diagnosticValueAllowed(evidence.verdict.message)) {
+  // Typed and untyped copy hold the same guard: the full-text configured check and the retained text.
+  if (!evidence.verdict.rowCopyAllowed || !diagnosticValueAllowed(evidence.verdict.message)) {
     logCtx.upstreamError = "[REDACTED]";
   } else {
     logCtx.upstreamError = evidence.verdict.message;
