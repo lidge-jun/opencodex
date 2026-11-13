@@ -9,7 +9,7 @@ import { sendTextFrame, type WsData } from "../../src/server/ws-bridge";
 
 // The Home counts a link socket in its per-link traffic book as the Child does (structure/remote-link.md, lane T6): one
 // request per socket, message payload bytes each way, without framing, handshake or control frames, complete when a
-// close ended it.
+// close frame ended it.
 
 const KEY = { id: "traffic-key", key: "traffic-secret-0123456789", linkId: "lnk_cccccccccccccccc" };
 
@@ -82,6 +82,22 @@ describe("the Home's traffic book counts a link socket", () => {
     result = -1;
     sendTextFrame(socket.ws, "queued");
     expect(traffic.snapshot(KEY.linkId).fromHomeBytes).toBe(Buffer.byteLength("queued"));
+  });
+
+  test("a refused or failed upgrade counts nothing", () => {
+    const traffic = createLinkTrafficBook("content-length");
+    const cases = [{ authorized: false, upgraded: true, status: 401 }, { authorized: true, upgraded: false, status: 426 }];
+    for (const { authorized, upgraded, status } of cases) {
+      const gate = createLinkWebsocketGate({
+        enabled: () => true, policy, authorized: () => authorized, draining: () => false, traffic,
+        timers: { setInterval: () => 0, clearInterval() {} },
+        reserveSocket: () => ({ bind() {}, release() {} }),
+      });
+      const outcome = gate.upgrade(upgradeRequest(), { upgrade: () => upgraded } as unknown as Server<unknown>,
+        { keyId: KEY.id, linkId: KEY.linkId, fingerprint: serviceApiTokenFingerprint(KEY.key), release() {} });
+      expect(outcome.handled && outcome.response?.status).toBe(status);
+    }
+    expect(traffic.snapshot(KEY.linkId)).toMatchObject({ requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0 });
   });
 
   test("a local socket is never counted", () => {
