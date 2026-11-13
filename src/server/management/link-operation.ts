@@ -236,14 +236,50 @@ function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation
   return settle(ctx, op.operationId, removed || touched ? "unknown" : "failed_clean", { code: "operation_interrupted", status: 409 });
 }
 
+/** A plain --force's hold on the owner of the receipt it finishes (fenceRetirementOwnerForForce). */
+export interface ForceTakeover {
+  readonly operationId: string;
+  /** The journal the force's removal runs with: no marks (the force claims nothing); release drops the owner's live mark. */
+  readonly journal: RevokeJournal;
+  /** Drop the live mark and settle the owner unknown and unresolved: it is never credited with the force's removal. */
+  settle(): void;
+}
+
 /**
- * Before a plain --force finishes a receipt, settle its owner if the owner is still open (#8416). The force holds the
- * alias lock and this runtime's per-alias set, so an open owner here belongs to a process that died: it is settled as
- * its own replay would settle it (unknown while its receipt is outstanding), and keeps that outcome afterwards.
+ * Before a plain --force finishes an owned receipt, fence its owner for the whole takeover (#8416). An open owner (its
+ * process died; the force holds the alias lock and this runtime's per-alias set) or an unknown one is reopened as an
+ * open, live revoke once that write is durable, so resolve refuses it while the force runs; the force's removal drops the
+ * live mark in the same step that releases the tunnel hold, and settle() leaves the owner unknown and unresolved, so a
+ * link the force could not remove stays suspended (revokeSuspendsLink). Null when there is no such owner to fence.
  */
-export function settleOpenRetirementOwner(ctx: ManagementContext, receipt: LinkRetirement): void {
-  const owner = retirementOwner(readOperationsJournal(journalPathFor(ctx)), receipt);
-  if (owner?.state === "open") recoverRevoke(ctx, owner);
+export function fenceRetirementOwnerForForce(ctx: ManagementContext, receipt: LinkRetirement): ForceTakeover | null {
+  const path = journalPathFor(ctx);
+  const owner = retirementOwner(readOperationsJournal(path), receipt);
+  if (!owner || (owner.state !== "open" && owner.state !== "unknown")) return null;
+  const operationId = owner.operationId;
+  updateJournalPinned(path, nowOf(ctx), journal => {
+    const op = findOperation(journal, operationId);
+    if (!op) throw new Error("the revoke operation is no longer journalled");
+    if (op.state !== "open") {
+      op.state = "open";
+      delete op.finishedAt;
+      delete op.resolvedAt;
+      delete op.error;
+      op.updatedAt = iso(ctx);
+    }
+  });
+  markRevokeLive(path, operationId, true);
+  let live = true;
+  const drop = (): void => { if (live) { live = false; markRevokeLive(path, operationId, false); } };
+  return {
+    operationId,
+    journal: { intent() {}, done() {}, cleanupNotRun() {}, release: drop, finish: async response => response },
+    settle() {
+      drop();
+      const op = findOperation(readOperationsJournal(path), operationId);
+      if (op?.state === "open") settle(ctx, operationId, "unknown", { code: "operation_interrupted", status: 409 });
+    },
+  };
 }
 
 /**
@@ -286,7 +322,9 @@ export function resumedRevokeJournal(ctx: ManagementContext, operationId: string
     updateJournalPinned(path, nowOf(ctx), journal => {
       const op = findOperation(journal, operationId);
       if (!op) throw new Error("the revoke operation is no longer journalled");
-      op.effects.push({ effect, phase, at: iso(ctx) });
+      // Recovery reads only whether a mark exists (hasEffect), so a mark already recorded is not appended again: repeated
+      // resumes of a pinned entry cannot grow it past one intent and one completion per effect.
+      if (!hasEffect(op, effect, phase)) op.effects.push({ effect, phase, at: iso(ctx) });
       if (receipt) op.receipt = receipt;
       op.updatedAt = iso(ctx);
       if (reopen && op.state !== "open") {
@@ -304,7 +342,14 @@ export function resumedRevokeJournal(ctx: ManagementContext, operationId: string
   return {
     operationId,
     keepsTunnelDown: true,
-    intent: effect => mark(effect, "intent"), done: (effect, receipt) => mark(effect, "done", receipt),
+    intent: effect => mark(effect, "intent"),
+    // As for a fresh revoke: a completion is best effort unless it carries the Child's purge receipt.
+    done: (effect, receipt) => {
+      try { mark(effect, "done", receipt); } catch (error) {
+        if (receipt) throw error;
+        console.warn("[link] resumed revoke journal mark not written operation=" + operationId + " mark=" + effect + ":done");
+      }
+    },
     beforeReceiptCleared: () => settleRevokeAfterRetirement(ctx, operationId),
     cleanupNotRun: () => {},
     release: () => { if (reopened) markRevokeLive(path, operationId, false); },

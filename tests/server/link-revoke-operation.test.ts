@@ -41,7 +41,7 @@ function record(): LinkRecord {
     createdAt: "2026-11-13T00:00:00.000Z", remotePlatform: "posix", childKind: "ephemeral", explicitRoute: ROUTE, exclusive: true };
 }
 
-function harness(options: { revokeFails?: boolean; operationsPath?: () => string | undefined; onReload?: () => void; purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void;
+function harness(options: { stopGate?: Promise<void>; onStop?: () => void; revokeFails?: boolean; operationsPath?: () => string | undefined; onReload?: () => void; purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void;
   markHook?: (effect: string, phase: "intent" | "done") => void } = {}) {
   const stops: string[] = [];
   const closedSockets: string[] = [];
@@ -60,7 +60,7 @@ function harness(options: { revokeFails?: boolean; operationsPath?: () => string
     pendingHosts: new Map(), confirmedHosts: new Map(), operations: new Set(),
     listener: { ensureStarted: async () => {}, status: () => ({ state: "listening", port: 18181, reason: null }), close: async () => {}, onAuthenticatedCatalog: () => () => {},
       closeLinkSockets: id => { closedSockets.push(id); return 0; } },
-    supervisor: { start() {}, ensureStarted: async () => { restarts += 1; suspendedAtRestart.push(linkSuspendedByRevoke(journalPathOf(), LINK)); }, reload: async () => { options.onReload?.(); }, stopLink: async id => { stops.push(id); }, reconnect: async () => true, status: () => [], stop: async () => {},
+    supervisor: { start() {}, ensureStarted: async () => { restarts += 1; suspendedAtRestart.push(linkSuspendedByRevoke(journalPathOf(), LINK)); }, reload: async () => { options.onReload?.(); }, stopLink: async id => { stops.push(id); options.onStop?.(); if (options.stopGate) await options.stopGate; }, reconnect: async () => true, status: () => [], stop: async () => {},
       holdLink: () => { let released = false; return () => { if (!released) { released = true; suspendedAtHoldRelease.push(linkSuspendedByRevoke(journalPathOf(), LINK)); } }; } },
   };
   const runner: SshRunner = {
@@ -796,21 +796,21 @@ test("a resolve during a resumed cleanup is refused, and an uncertain result lea
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
 });
 
-test.skipIf(process.platform !== "darwin")("a plain --force whose readable journal cannot settle the open owner refuses before disowning its receipt", async () => {
+test.skipIf(process.platform !== "darwin")("a plain --force whose readable journal cannot fence the unknown owner refuses before disowning its receipt", async () => {
   const h = harness();
   claimLinkRetirement(record(), root, () => h.store, "force", OP);
   writeOperationsJournal(h.journalPath, { version: 1, operations: [{
     operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
-    createdAt: AT_ISO, updatedAt: AT_ISO, state: "open", effects: [{ effect: "key_revoked", phase: "intent", at: AT_ISO }],
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 }, effects: [{ effect: "key_revoked", phase: "intent", at: AT_ISO }],
   } as LinkOperation] });
-  // The journal stays readable but cannot be replaced (the user immutable flag), so settling the owner fails.
+  // The journal stays readable but cannot be replaced (the user immutable flag), so reopening the owner fails.
   Bun.spawnSync(["chflags", "uchg", h.journalPath]);
   let forced: Awaited<ReturnType<typeof h.revoke>>;
   try { forced = await h.revoke({ force: true }); } finally { Bun.spawnSync(["chflags", "nouchg", h.journalPath]); }
   expect({ status: forced.status, code: code(forced) }).toEqual({ status: 500, code: "operation_journal_failed" });
   expect(readLinkRetirement(LINK, root)?.operationId).toBe(OP);
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
-  expect(h.journal().operations[0]!.state).toBe("open");
+  expect(h.journal().operations[0]!.state).toBe("unknown");
 });
 
 test("a resumed cleanup that fails before it runs keeps the tunnel down when an earlier attempt may have reached the Child", async () => {
@@ -864,4 +864,40 @@ test.skipIf(process.platform !== "darwin")("a resumed intent whose write fails l
   try { expect(() => journal.intent("remote_cleanup")).toThrow(); } finally { Bun.spawnSync(["chflags", "nouchg", h.journalPath]); }
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
   journal.release();
+});
+
+test("repeated resumes of a pinned owner do not grow its journal entry", async () => {
+  const h = harness({ revokeFails: true });
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 },
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }, { effect: "remote_cleanup", phase: "done", at: AT_ISO }], receipt: { purged: true, linkId: LINK },
+  } as LinkOperation] });
+  for (let attempt = 0; attempt < 4; attempt++) expect((await h.revoke({ purge: true, operationId: OP })).status).toBe(502);
+  const marks = h.journal().operations[0]!.effects.map(mark => mark.effect + ":" + mark.phase);
+  expect(marks).toEqual(["remote_cleanup:intent", "remote_cleanup:done", "key_revoked:intent"]);
+});
+
+test("a resolve during a plain --force takeover is refused, and a failed force leaves the owner unresolved and suspended", async () => {
+  let open!: () => void, stopping!: () => void;
+  const stopped = new Promise<void>(resolve => { stopping = resolve; });
+  const h = harness({ revokeFails: true, stopGate: new Promise<void>(resolve => { open = resolve; }), onStop: () => stopping() });
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  // The owner purged the Child, claimed its receipt and died before removing the record.
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "open",
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }, { effect: "remote_cleanup", phase: "done", at: AT_ISO }], receipt: { purged: true, linkId: LINK },
+  } as LinkOperation] });
+  const forced = h.revoke({ force: true });
+  await stopped;
+  expect(resolveLinkOperation(h.journalPath, OP, NOW)).toBe("not_resolvable");
+  open();
+  expect((await forced).status).toBe(502);
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  const owner = h.journal().operations[0]!;
+  expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: undefined });
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  expect(h.suspendedAtHoldRelease).toEqual([true]);
 });
