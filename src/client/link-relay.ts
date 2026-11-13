@@ -19,6 +19,7 @@ import {
   type PreparedLinkBody,
 } from "./link-request-compression";
 import type { InboundBodyBudget } from "../server/inbound-body-budget";
+import { linkChildRelayWaitObserver } from "./link-websocket-limits";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
@@ -384,6 +385,38 @@ function idleBoundedStream(
 }
 
 /**
+ * Test-only (link-websocket-limits.ts): the relayed body passed through unchanged, with the observer told from each
+ * chunk handed over until the reader asks again, and when the body ends or is cancelled. A high-water mark of 0 means
+ * it reads only when the reader does, so the wait it reports is the reader's. Used only while a test sets an observer.
+ */
+function waitObservedStream(body: ReadableStream<Uint8Array>, observer: (waiting: boolean) => void): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let waiting = false;
+  const tell = (value: boolean): void => {
+    if (waiting === value) return;
+    waiting = value;
+    try { observer(value); } catch { /* a test observer never breaks the relay */ }
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      tell(false);
+      try {
+        const next = await reader.read();
+        if (next.done) { controller.close(); return; }
+        controller.enqueue(next.value);
+        tell(true);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      tell(false);
+      try { await reader.cancel(reason); } catch { /* best effort */ }
+    },
+  }, { highWaterMark: 0 });
+}
+
+/**
  * The fetch seam has no relay-auth answer, so a prepared body is chosen from the Home's last
  * recorded features, as the transport would choose it from this connection's.
  */
@@ -617,5 +650,7 @@ export async function relayLinkDataRequest(
     ? idleBoundedStream(upstream.body, relayAbort.signal, clock,
       deps.sseIdleTimeoutMs ?? LINK_RELAY_SSE_IDLE_TIMEOUT_MS, () => relayAbort.abort(new DOMException("link relay SSE idle timeout", "TimeoutError")), cleanup)
     : boundedRelayResponseStream(upstream.body, bodyLimit, relayAbort.signal, cleanup);
-  return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
+  const waitObserver = linkChildRelayWaitObserver();
+  return new Response(waitObserver ? waitObservedStream(responseBody, waitObserver) : responseBody,
+    { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
 }
