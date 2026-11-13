@@ -129,3 +129,10 @@ test("a suspended link reads failed with the fixed reason revoke_unsettled, whic
   expect(Object.keys(suspended.links[0]!)).toEqual(Object.keys(plain.links[0]!));
   expect(plain.links[0]).toMatchObject({ state: "idle", reason: null });
 });
+
+test("a suspended link with an unverified orphan still reads revoke_unsettled: the suspension is what to act on", () => {
+  const store: LinkStore = { version: 1, listenerPort: 19001, links: [record()] };
+  const dto = projectLinkStatus(store, [{ linkId: LINK, direction: "hub-initiated", state: { kind: "idle" }, pid: null, orphan: "orphan-unverified", suspended: { operationId: "detach-1", since: AT } }],
+    { state: "listening", port: 19001 }, { runtimeRole: "hub" }, { version: 1, entries: {} });
+  expect(dto.links[0]).toMatchObject({ state: "failed", since: AT, reason: "revoke_unsettled" });
+});

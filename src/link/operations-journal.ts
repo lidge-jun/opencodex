@@ -82,12 +82,21 @@ export const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  */
 export const OPERATION_JOURNAL_MAX_UNSETTLED = 256;
 /**
- * At most this many settled entries (committed, failed_clean, and resolved residual or unknown ones). They never block:
- * past the bound the oldest (by when they finished or were resolved) are pruned before their 30 days, so a loop that
- * retries with a fresh id after each failure cannot lock the Home out. With both bounds the file holds at most 512 entries,
- * about 0.5 MiB at roughly 1 KiB each, so every whole-file rewrite under the config mutation lock stays small.
+ * Settled entries (committed, failed_clean, and resolved residual or unknown ones) past this many are pruned before their
+ * 30 days, oldest first (by when they finished or were resolved), but only once they are OPERATION_REPLAY_MIN_MS old: a
+ * caller that lost an answer can replay it by its operation id for at least a day, whatever else ran meanwhile.
  */
 export const OPERATION_JOURNAL_MAX_SETTLED = 256;
+/** How long a settled entry is kept for replay however many operations follow it: far past any retry or lock wait. */
+export const OPERATION_REPLAY_MIN_MS = 24 * 60 * 60 * 1000;
+/**
+ * At this many entries settled within OPERATION_REPLAY_MIN_MS a new operation is refused until the oldest is a day old: a
+ * burst no working fleet reaches (ten machines run a handful of operations each), so a runaway loop that retries with a
+ * fresh id after each failure is held for at most a day instead of locking the Home out for 30 days. With the three
+ * bounds the file holds about 256 unsettled plus 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at
+ * most about 1.5 MiB in such a burst, so every whole-file rewrite under the config mutation lock stays small.
+ */
+export const OPERATION_JOURNAL_MAX_RECENT_SETTLED = 1024;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
@@ -234,7 +243,7 @@ export function writeOperationsJournal(path: string, journal: OperationsJournal)
 /**
  * Drop what has outlived retention: a committed or failed_clean entry 30 days after it finished, a residual or
  * unknown one only 30 days after it was resolved. An open entry, and an unresolved residual or unknown one, stays.
- * Past OPERATION_JOURNAL_MAX_SETTLED settled entries, the oldest settled ones go too.
+ * Past OPERATION_JOURNAL_MAX_SETTLED settled entries, the oldest settled ones that are at least a day old go too.
  */
 export function pruneOperations(journal: OperationsJournal, nowMs: number): OperationsJournal {
   const expired = (at: string | undefined) => at !== undefined && nowMs - Date.parse(at) > OPERATION_RETENTION_MS;
@@ -245,11 +254,15 @@ export function pruneOperations(journal: OperationsJournal, nowMs: number): Oper
   });
   const settled = retained.filter(isSettled);
   if (settled.length <= OPERATION_JOURNAL_MAX_SETTLED) return { version: 1, operations: retained };
-  const at = (op: LinkOperation) => Date.parse(op.resolvedAt ?? op.finishedAt ?? op.updatedAt);
   // A stable sort: entries settled at the same moment go in journal order.
-  const dropped = new Set(settled.map((op, index) => ({ op, index })).sort((a, b) => at(a.op) - at(b.op) || a.index - b.index)
-    .slice(0, settled.length - OPERATION_JOURNAL_MAX_SETTLED).map(item => item.op));
+  const candidates = settled.map((op, index) => ({ op, index })).filter(item => nowMs - settledAt(item.op) >= OPERATION_REPLAY_MIN_MS)
+    .sort((a, b) => settledAt(a.op) - settledAt(b.op) || a.index - b.index);
+  const dropped = new Set(candidates.slice(0, settled.length - OPERATION_JOURNAL_MAX_SETTLED).map(item => item.op));
   return { version: 1, operations: retained.filter(op => !dropped.has(op)) };
+}
+
+function settledAt(op: LinkOperation): number {
+  return Date.parse(op.resolvedAt ?? op.finishedAt ?? op.updatedAt);
 }
 
 /** Committed, failed_clean, or residual or unknown and resolved: nothing about it waits on anyone. */
@@ -275,15 +288,20 @@ export function updateOperationsJournal<T>(path: string, nowMs: number, change: 
 }
 
 export class OperationsJournalFullError extends Error {
-  constructor() {
-    super("operations.json holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " unsettled entries");
+  /** unsettled: too many open or unresolved entries; recent: too many settled within a day. */
+  constructor(readonly bound: "unsettled" | "recent") {
+    super(bound === "unsettled"
+      ? "operations.json holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " unsettled entries"
+      : "operations.json holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " entries settled within a day");
     this.name = "OperationsJournalFullError";
   }
 }
 
-/** Throws before a new entry is added once the journal holds OPERATION_JOURNAL_MAX_UNSETTLED unsettled entries. */
+/** Throws before a new entry is added at OPERATION_JOURNAL_MAX_UNSETTLED unsettled or OPERATION_JOURNAL_MAX_RECENT_SETTLED recently settled entries. */
 export function assertRoomForNewOperation(journal: OperationsJournal, nowMs: number): void {
-  if (pruneOperations(journal, nowMs).operations.filter(op => !isSettled(op)).length >= OPERATION_JOURNAL_MAX_UNSETTLED) throw new OperationsJournalFullError();
+  const kept = pruneOperations(journal, nowMs).operations;
+  if (kept.filter(op => !isSettled(op)).length >= OPERATION_JOURNAL_MAX_UNSETTLED) throw new OperationsJournalFullError("unsettled");
+  if (kept.filter(op => isSettled(op) && nowMs - settledAt(op) < OPERATION_REPLAY_MIN_MS).length >= OPERATION_JOURNAL_MAX_RECENT_SETTLED) throw new OperationsJournalFullError("recent");
 }
 
 export function findOperation(journal: OperationsJournal, operationId: string): LinkOperation | undefined {
@@ -346,10 +364,18 @@ export interface LinkSuspension { operationId: string; state: "open" | "unknown"
 
 /** Like linkSuspendedByRevoke, naming the revoke; null when the link is not suspended or the journal is unreadable. */
 export function revokeSuspendingLink(path: string, linkId: string): LinkSuspension | null {
-  if (!existsSync(path)) return null;
-  let op: LinkOperation | undefined;
-  try { op = suspendingRevoke(readOperationsJournal(path), linkId, id => liveRevokes.has(path + "\0" + id)); } catch { return null; }
-  return op ? { operationId: op.operationId, state: op.state === "open" ? "open" : "unknown", since: op.finishedAt ?? op.updatedAt } : null;
+  return revokeSuspensions(path)(linkId);
+}
+
+/** One read of the journal, then a lookup per link: a status snapshot reads the file once. */
+export function revokeSuspensions(path: string): (linkId: string) => LinkSuspension | null {
+  if (!existsSync(path)) return () => null;
+  let journal: OperationsJournal;
+  try { journal = readOperationsJournal(path); } catch { return () => null; }
+  return linkId => {
+    const op = suspendingRevoke(journal, linkId, id => liveRevokes.has(path + "\0" + id));
+    return op ? { operationId: op.operationId, state: op.state === "open" ? "open" : "unknown", since: op.finishedAt ?? op.updatedAt } : null;
+  };
 }
 
 /**

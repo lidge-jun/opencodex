@@ -20,7 +20,7 @@ import {
 } from "./tunnel-state";
 import { effectiveLinkRoutes, emptyLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
 import { CANDIDATE_KILL_GRACE_MS, createRouteRounds, type LinkRouteStatus } from "./route-rounds";
-import { linkSuspendedByRevoke, operationsJournalPath, revokeSuspendingLink } from "./operations-journal";
+import { linkSuspendedByRevoke, operationsJournalPath, revokeSuspensions } from "./operations-journal";
 import type { RouteProofRegistry } from "./route-proof";
 
 export type LinkTunnelStatus =
@@ -962,6 +962,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       }
     },
     status() {
+      const suspensionOf = revokeSuspensions(journalPath);
       return store.links.map(record => {
         if (record.direction === "client-initiated") {
           return { linkId: record.id, direction: record.direction, state: "client-owned", pid: null };
@@ -969,7 +970,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const child = children.get(record.id);
         const recorded = history.get(record.id);
         const routes = rounds.isMultiRoute(record) ? rounds.status(record.id) : undefined;
-        const suspension = revokeSuspendingLink(journalPath, record.id);
+        const suspension = suspensionOf(record.id);
         return {
           linkId: record.id,
           direction: record.direction,

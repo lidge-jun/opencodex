@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { AliasLockError, withAliasLock } from "../../link/alias-lock";
 import type { ExplicitRoute } from "../../link/explicit-route";
-import { assertRoomForNewOperation, findOperation, hasEffect, isOperationId, markRevokeLive, OPERATION_JOURNAL_MAX_UNSETTLED, OperationsJournalFullError, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
+import { assertRoomForNewOperation, findOperation, hasEffect, isOperationId, markRevokeLive, OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, OperationsJournalFullError, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
   type EnrollEffect, type LinkOperation, type OperationState, type RevokeEffect } from "../../link/operations-journal";
 import { newLinkId } from "../../link/store";
 import type { ManagementContext } from "./context";
@@ -105,9 +105,10 @@ function outcomeBody(op: LinkOperation): Record<string, unknown> {
 /** The recorded outcome as a response: committed answers like the apply that committed. */
 /** A new operation's entry could not be written: 409 when the journal is full, 500 otherwise. Nothing ran either way. */
 export function journalOpenFailure(error: unknown): Response {
-  return error instanceof OperationsJournalFullError
+  if (!(error instanceof OperationsJournalFullError)) return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+  return error.bound === "unsettled"
     ? fail("operation_journal_full", "The link operation journal holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " unsettled operations. Check the Child of each residual or unknown one and run ocx link operations resolve --operation-id <id> --yes; repeat an open one with its operation id first (ocx link operations lists them). Nothing was changed.", 409)
-    : fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+    : fail("operation_journal_full", "The link operation journal holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " operations that settled within the last day; retry once the oldest of them is a day old. Nothing was changed.", 409);
 }
 
 export function replayResponse(op: LinkOperation): Response {

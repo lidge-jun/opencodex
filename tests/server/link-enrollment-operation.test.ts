@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { enrollOperationDigest, openEnrollJournal } from "../../src/server/management/link-operation";
 import { acquireAliasLock, type AliasLockDeps } from "../../src/link/alias-lock";
-import { OPERATION_JOURNAL_MAX_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { OPERATION_JOURNAL_MAX_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, OPERATION_REPLAY_MIN_MS, readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -491,9 +491,9 @@ describe("review round 3", () => {
 });
 
 describe("journal size limit", () => {
-  // Distinct, increasing finish times, so "oldest first" is well defined.
+  // Distinct, increasing finish times more than a day old (early pruning never takes a younger entry), so "oldest first" is well defined.
   const filled = (count: number, shape: Partial<LinkOperation> = {}): LinkOperation[] => Array.from({ length: count }, (_, i) => entry({
-    operationId: "old-" + i, alias: "pen-old-" + i, state: "committed", finishedAt: new Date(NOW - (count - i) * 1000).toISOString(), digest: "d".repeat(64), ...shape }));
+    operationId: "old-" + i, alias: "pen-old-" + i, state: "committed", finishedAt: new Date(NOW - OPERATION_REPLAY_MIN_MS - (count - i) * 1000).toISOString(), digest: "d".repeat(64), ...shape }));
 
   test("settled entries never block a new operation: past the bound the oldest are pruned instead", async () => {
     const h = harness();
@@ -573,5 +573,24 @@ describe("retention", () => {
     expect(h.journal().operations.map(op => op.operationId)).toEqual([OP]);
     updateOperationsJournal(h.journalPath, NOW + 2 * DAY, () => {});
     expect(h.journal().operations).toEqual([]);
+  });
+});
+
+describe("replay survives the settled-entry bound", () => {
+  test("a committed enrollment whose answer was lost still replays after 256 newer settled entries, without SSH", async () => {
+    const h = harness();
+    const applied = await h.enroll();
+    expect(applied.status).toBe(202);
+    const committedOp = h.journal().operations[0]!;
+    // Many operations settle after it within the same day (a provisioning burst); a later write prunes.
+    const newer = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 4 }, (_, i) => entry({ operationId: "later-" + i, alias: "pen-later-" + i, state: "committed",
+      finishedAt: new Date(NOW + 1000 + i).toISOString(), digest: "e".repeat(64) }));
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [committedOp, ...newer] });
+    updateOperationsJournal(h.journalPath, NOW + 3_600_000, () => {});
+    expect(h.journal().operations.map(op => op.operationId)).toContain(OP);
+    const calls = h.ssh.length;
+    const replayed = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
+    expect({ status: replayed.status, body: replayed.body }).toEqual({ status: 202, body: applied.body });
+    expect(h.ssh.length).toBe(calls);
   });
 });

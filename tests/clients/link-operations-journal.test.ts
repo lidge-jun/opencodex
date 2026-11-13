@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { operationDigest, parseOperationsJournal, pruneOperations, readOperationsJournal, writeOperationsJournal, OPERATION_JOURNAL_MAX_SETTLED, OPERATION_RETENTION_MS,
+import { assertRoomForNewOperation, operationDigest, parseOperationsJournal, pruneOperations, readOperationsJournal, writeOperationsJournal, OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_SETTLED,
+  OPERATION_JOURNAL_MAX_UNSETTLED, OPERATION_REPLAY_MIN_MS, OPERATION_RETENTION_MS, OperationsJournalFullError,
   OperationsJournalError, type LinkOperation } from "../../src/link/operations-journal";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -65,8 +66,8 @@ test("the digest ignores key order and undefined values", () => {
   expect(operationDigest({ a: 1 })).not.toBe(operationDigest({ a: 2 }));
 });
 
-test("past OPERATION_JOURNAL_MAX_SETTLED settled entries the oldest settled ones go first; open and unresolved entries always stay", () => {
-  const now = Date.parse(AT) + 60_000;
+test("past OPERATION_JOURNAL_MAX_SETTLED settled entries the oldest settled ones more than a day old go first; open and unresolved entries always stay", () => {
+  const now = Date.parse(AT) + OPERATION_REPLAY_MIN_MS + 60_000;
   const settled = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 3 }, (_, i) => entry({ operationId: "done-" + i, state: i % 2 ? "committed" : "failed_clean", finishedAt: new Date(Date.parse(AT) + i).toISOString() }));
   const resolvedOld = entry({ operationId: "resolved-old", state: "unknown", finishedAt: AT, resolvedAt: new Date(Date.parse(AT) - 1).toISOString() });
   const kept = pruneOperations({ version: 1, operations: [entry({ operationId: "open" }), entry({ operationId: "unresolved", state: "residual", finishedAt: AT }), resolvedOld, ...settled] }, now);
@@ -79,4 +80,21 @@ test("past OPERATION_JOURNAL_MAX_SETTLED settled entries the oldest settled ones
   expect(ids).not.toContain("done-0");
   expect(ids).not.toContain("done-2");
   expect(ids).toContain("done-3");
+});
+
+test("an entry settled less than a day ago is never pruned early, however many settled entries there are", () => {
+  const now = Date.parse(AT) + 60_000;
+  const recent = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 10 }, (_, i) => entry({ operationId: "done-" + i, state: "committed", finishedAt: new Date(Date.parse(AT) + i).toISOString() }));
+  expect(pruneOperations({ version: 1, operations: recent }, now).operations).toHaveLength(OPERATION_JOURNAL_MAX_SETTLED + 10);
+});
+
+test("a new operation is refused only for a burst of settled operations within a day, and the refusal says which bound", () => {
+  const burst = (ageMs: number) => ({ version: 1 as const, operations: Array.from({ length: OPERATION_JOURNAL_MAX_RECENT_SETTLED }, (_, i) => entry({ operationId: "done-" + i, state: "failed_clean", finishedAt: new Date(Date.parse(AT) - ageMs + i).toISOString() })) });
+  const now = Date.parse(AT);
+  expect(() => assertRoomForNewOperation(burst(60_000), now)).toThrow(OperationsJournalFullError);
+  try { assertRoomForNewOperation(burst(60_000), now); } catch (error) { expect((error as OperationsJournalFullError).bound).toBe("recent"); }
+  // The same number settled more than a day ago is pruned down instead.
+  expect(() => assertRoomForNewOperation(burst(OPERATION_REPLAY_MIN_MS + 60_000), now)).not.toThrow();
+  const unsettled = { version: 1 as const, operations: Array.from({ length: OPERATION_JOURNAL_MAX_UNSETTLED }, (_, i) => entry({ operationId: "open-" + i })) };
+  try { assertRoomForNewOperation(unsettled, now); throw new Error("not refused"); } catch (error) { expect((error as OperationsJournalFullError).bound).toBe("unsettled"); }
 });
