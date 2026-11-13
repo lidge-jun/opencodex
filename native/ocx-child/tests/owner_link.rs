@@ -463,6 +463,51 @@ fn an_attach_interrupted_before_it_wrote_anything_leaves_both_links_residual() {
 }
 
 #[test]
+fn detach_expect_link_finishes_its_own_attach_interrupted_before_any_write() {
+    // A first attach of A on a machine with no link, stopped right after it wrote the owner record (phase attaching): no
+    // other link is involved, so the bound detach finishes it as a plain detach would.
+    let homes = Homes::new("owner-link-own-attach-early");
+    attach_until_barrier(&homes, LINK_A, "attach-protected", false);
+    assert_eq!(homes.owner()["phase"], "attaching");
+    assert!(!homes.state_path().exists());
+    // Another link's bound detach still changes nothing.
+    assert_refused_untouched(&homes, LINK_B, 5, "conflict");
+    let (code, report, stderr) = homes.detach_expect(LINK_A);
+    assert_eq!(code, 0, "report={report} stderr={stderr}");
+    assert_eq!(report["linkId"], LINK_A);
+    assert_eq!(
+        fs::read(homes.codex.join("config.toml")).unwrap(),
+        ORIGINAL_CONFIG
+    );
+    assert!(!homes.owner_path().exists());
+}
+
+#[test]
+fn detach_expect_link_finishes_its_own_attach_interrupted_before_the_state_write() {
+    // Stopped after the attach changed CODEX_HOME and left its rollback snapshot (which names no prior link), before it
+    // wrote the state: the bound detach restores the snapshot and releases the record.
+    let homes = Homes::new("owner-link-own-attach-late");
+    attach_until_barrier(&homes, LINK_A, "attach-before-state-write", false);
+    assert_eq!(homes.owner()["phase"], "attaching");
+    assert!(!homes.state_path().exists());
+    let rollback = homes.ocx.join("child").join("attach-rollback.json");
+    assert!(rollback.exists());
+    assert_ne!(
+        fs::read(homes.codex.join("config.toml")).unwrap(),
+        ORIGINAL_CONFIG
+    );
+    let (code, report, stderr) = homes.detach_expect(LINK_A);
+    assert_eq!(code, 0, "report={report} stderr={stderr}");
+    assert_eq!(report["linkId"], LINK_A);
+    assert_eq!(
+        fs::read(homes.codex.join("config.toml")).unwrap(),
+        ORIGINAL_CONFIG
+    );
+    assert!(!homes.owner_path().exists());
+    assert!(!rollback.exists());
+}
+
+#[test]
 fn a_reattach_interrupted_after_its_state_write_never_restores_the_previous_link() {
     let homes = Homes::new("owner-link-reattach-late");
     let _home = homes.attach(LINK_A);
