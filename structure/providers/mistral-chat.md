@@ -18,3 +18,11 @@ into string `content`, and typed thinking joins `reasoning_content`; arrays neve
 Other choice fields, tool calls and usage survive. Unsupported blocks fail through the existing upstream
 error policy. Tests: `tests/adapters/openai/openai-chat-mistral-policy.test.ts` and
 `tests/responses/chat-native-mistral-content.test.ts`.
+
+The paired budget and subscription probes in `src/providers/quota/vendor-probes-key.ts` produce
+display-only API and Vibe budgets, including for per-key quota selection in `src/providers/key-failover.ts`.
+Measured windows keep stable API and Vibe labels for reset identity and carry amounts and the
+allow-listed plan separately as display text; neither contributes to inference eligibility.
+Either endpoint's terminal denial invalidates earlier readings even if the other request fails;
+transient failures leave the quota unavailable and retain only bounded last-good display data.
+`tests/providers/mistral-budget-quota.test.ts` covers both probe and key-selection behavior.

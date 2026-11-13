@@ -240,15 +240,15 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     if (!force && record.direction === "hub-initiated") {
       try {
         const runner = runnerFor(ctx);
-        const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, knownHostsFile(ctx));
+        const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx));
         if (purge) {
-          const purged = await purgeDisconnectRemote(runner, record.alias, knownHostsFile(ctx), platform, record.childKind);
+          const purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind);
           if (!purged.ok) {
             await restartTunnel();
             return fail(purged.code, purged.message, purged.status, purged.hint);
           }
         } else {
-          const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx) }), { timeoutMs: 30_000 });
+          const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 });
           if (result.code !== 0) {
             await restartTunnel();
             return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));

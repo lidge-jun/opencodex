@@ -7,6 +7,7 @@
  */
 import type { AccountQuota } from "./codex-quota-utils";
 import type { TKey } from "./i18n/en";
+import type { PassiveQuotaRow } from "./passive-quota-summary";
 import { quotaWindows, resetTimestamp } from "./pages/tray-data";
 import { accountQuotaFromReport, type ProviderQuotaReportView } from "./provider-workspace/report";
 
@@ -32,6 +33,8 @@ export interface QuotaSummaryWindow {
 }
 
 export interface QuotaSummaryRow {
+  /** A passively observed key rate limit, rendered instead of probe windows. */
+  passive?: PassiveQuotaRow;
   provider: string;
   label: string;
   headline: QuotaSummaryWindow;
@@ -39,6 +42,8 @@ export interface QuotaSummaryRow {
   updatedAt?: number;
   observed: boolean;
   severity: QuotaSummarySeverity;
+  /** A budget probe that must show every window rather than only the headline. */
+  showAllWindows?: boolean;
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -166,6 +171,11 @@ export function buildQuotaSummary(
     const windows = summaryWindows(quota);
     const headline = pickHeadline(windows);
     if (!headline) continue;
+    // A budget probe reports more than one meaningful window; its headline alone would hide
+    // the window that actually ran out, so the row carries every window and the worst severity.
+    const showAllWindows = report.source === "mistral:budget";
+    const severity = showAllWindows && windows.some(window => window.severity === "critical") ? "critical"
+      : showAllWindows && windows.some(window => window.severity === "warn") ? "warn" : headline.severity;
     rows.push({
       provider,
       label: report.label?.trim() || displayName(provider),
@@ -173,7 +183,8 @@ export function buildQuotaSummary(
       windows,
       ...(finite(report.updatedAt) ? { updatedAt: report.updatedAt } : {}),
       observed: report.observed === true,
-      severity: headline.severity,
+      severity,
+      ...(showAllWindows ? { showAllWindows: true } : {}),
     });
   }
   return rows;

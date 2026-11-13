@@ -39,7 +39,7 @@ export async function probeRemoteHost(ssh: string, budget: MessageBudget, capaci
   const path = join(root, "known_hosts");
   try {
     writeRemoteFile(path, "");
-    await runner(buildProbeArgv({ alias: ssh, tempKnownHostsFile: path }), budget, capacity);
+    await runner(buildProbeArgv({ alias: ssh, tempKnownHostsFile: path, route: null }), budget, capacity);
     const fingerprint = parseFingerprintLine((await runner(buildFingerprintArgv(path), budget, capacity)).trim()).fingerprint;
     const hostKey = readRemoteFile(path);
     if (!hostKey || hostKey.length > 8192 || hostKey.trim().split("\n").length !== 1
@@ -144,7 +144,7 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
     });
     let reply: Record<string, unknown>;
     try {
-      const value = JSON.parse(await runner(buildExecArgv({ alias: ssh, knownHostsFile: hostsPath,
+      const value = JSON.parse(await runner(buildExecArgv({ alias: ssh, knownHostsFile: hostsPath, route: null,
         argv: remoteOcxArgv(["message", "_control"]) }), budget, capacity, JSON.stringify(request)));
       reply = exactRecord(value, value?.rejected !== undefined ? ["protocol", "transaction", "rejected"]
         : ["protocol", "transaction", "machine", "port", "capability"]);
@@ -225,7 +225,7 @@ export async function removeRemoteHost(store: RemoteMessageStore, selector: stri
     const path = join(store.directory, `revocation_known_hosts-${peer.transaction}-${crypto.randomUUID()}`);
     try {
       writeRemoteFile(path, peer.hostKey!);
-      const reply = exactRecord(JSON.parse(await runner(buildExecArgv({ alias: peer.ssh, knownHostsFile: path,
+      const reply = exactRecord(JSON.parse(await runner(buildExecArgv({ alias: peer.ssh, knownHostsFile: path, route: null,
         argv: remoteOcxArgv(["message", "_control"]) }), budget, capacity, JSON.stringify({ protocol: REMOTE_PROTOCOL,
         action: "remove", params: { machineId: state.machine.id, transaction: peer.transaction } }))), ["protocol", "removed"]);
       if (reply.protocol === REMOTE_PROTOCOL && reply.removed === true) remote = "removed";
