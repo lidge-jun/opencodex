@@ -9,6 +9,7 @@ import { ja } from "./ja";
 import { tr } from "./tr";
 import { vi } from "./vi";
 import { pt } from "./pt";
+import { es } from "./es";
 import { LAB_CATALOG_OVERRIDES, type LabLocale } from "./lab-translations";
 
 /** React-free locale catalog registry for formatters and other shared helpers. */
@@ -35,6 +36,7 @@ export const DICTS: Record<Locale, Record<TKey, string>> = {
   tr: withLabTranslations("tr", tr),
   vi: withLabTranslations("vi", vi),
   pt: withLabTranslations("pt", pt),
+  es: withLabTranslations("es", es),
 };
 
 /** Native language names shown by the language picker, kept inside i18n rather than UI metadata. */

@@ -15,6 +15,7 @@ export const LOCALES: { code: Locale; htmlLang: string }[] = [
   { code: "tr", htmlLang: "tr" },
   { code: "vi", htmlLang: "vi" },
   { code: "pt", htmlLang: "pt-BR" },
+  { code: "es", htmlLang: "es" },
 ];
 
 const LANG_KEY = "ocx-lang";
@@ -24,7 +25,8 @@ let activeLocale: Locale | null = null;
 export function detectInitial(): Locale {
   try {
     const stored = localStorage.getItem(LANG_KEY);
-    if (stored === "en" || stored === "de" || stored === "fr" || stored === "ko" || stored === "zh" || stored === "zh-TW" || stored === "ru" || stored === "ja" || stored === "tr" || stored === "vi" || stored === "pt") return stored;
+    const saved = LOCALES.find(locale => locale.code === stored);
+    if (saved) return saved.code;
   } catch { /* ignore */ }
   const nav = typeof navigator !== "undefined" && navigator?.language ? navigator.language.toLowerCase() : "en";
   if (nav.startsWith("de")) return "de";
@@ -47,6 +49,7 @@ export function detectInitial(): Locale {
   if (nav.startsWith("tr")) return "tr";
   if (nav.startsWith("vi")) return "vi";
   if (nav.startsWith("pt")) return "pt";
+  if (/^es(?:-|$)/.test(nav)) return "es";
   return "en";
 }
 

@@ -1,6 +1,6 @@
 import type { TKey } from "./en";
 
-export type LabLocale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi" | "pt";
+export type LabLocale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi" | "pt" | "es";
 export type LabCatalogKey = Exclude<Extract<TKey, `lab.${string}`>, `lab.production.${string}`>;
 export type LabSupplementKey =
   | "subjectKindUnknown"
@@ -564,7 +564,58 @@ const pt: Record<LabCatalogKey, string> = {
   "lab.layer.task_effectiveness": "Eficácia nas tarefas",
 };
 
+const es: Record<LabCatalogKey, string> = {
+  "lab.title": "Laboratorio de compatibilidad",
+  "lab.subtitle": "Matriz de veredicto de compatibilidad de solo lectura a partir de pruebas de proyección de laboratorio.",
+  "lab.loadFailed": "No se pudo cargar los datos de laboratorio de compatibilidad",
+  "lab.projectionUnavailable": "La proyección de laboratorio no está disponible. Ejecutar la conformidad o sondas vivas primero.",
+  "lab.projectionIncompatible": "El esquema de proyección de laboratorio es incompatible. Reconstruir la proyección.",
+  "lab.statusTitle": "Estado de proyección",
+  "lab.matrixTitle": "Matriz de compatibilidad",
+  "lab.verdictsTitle": "Registros de veredicto",
+  "lab.filter.layer": "Capa de evidencia",
+  "lab.filter.verdict": "Veredicto",
+  "lab.filter.subject": "Identificación del sujeto",
+  "lab.filter.all": "Todos",
+  "lab.col.subject": "Sujeto",
+  "lab.col.layer": "Capa",
+  "lab.col.suite": "Suite",
+  "lab.col.verdict": "Veredicto",
+  "lab.col.asOf": "Datos al",
+  "lab.col.protocol": "Conformidad del protocolo",
+  "lab.col.live": "Compatibilidad de ruta en vivo",
+  "lab.col.task": "Eficacia de la tarea",
+  "lab.empty": "Todavía no hay veredictos de compatibilidad en la proyección.",
+  "lab.subjectKind": "Tipo",
+  "lab.observationCount": "Observaciones",
+  "lab.eventCount": "Eventos",
+  "lab.verdictCount": "Veredictos",
+  "lab.subjectCount": "Sujetos",
+  "lab.builtAt": "Generado el",
+  "lab.loading": "Cargando evidencia de compatibilidad…",
+  "lab.loadMore": "Cargar más",
+  "lab.detailTitle": "Detalle del veredicto",
+  "lab.detailClose": "Cerrar",
+  "lab.detailSubject": "Sujeto",
+  "lab.detailObservations": "Observaciones",
+  "lab.detailEvents": "Eventos de evidencia",
+  "lab.detailArtifacts": "Metadatos de artefactos",
+  "lab.detailLoadFailed": "No se pudo cargar el detalle del veredicto",
+  "lab.refresh": "Actualizar",
+  "lab.verdict.UNKNOWN": "Desconocido",
+  "lab.verdict.CLAIMED": "Declarado",
+  "lab.verdict.PROBED": "Sondeado",
+  "lab.verdict.VERIFIED": "Verificado",
+  "lab.verdict.DEGRADED": "Degradado",
+  "lab.verdict.BLOCKED": "Bloqueado",
+  "lab.verdict.UNSUPPORTED": "No compatible",
+  "lab.layer.protocol_conformance": "Conformidad del protocolo",
+  "lab.layer.live_route_compatibility": "Compatibilidad de ruta en vivo",
+  "lab.layer.task_effectiveness": "Eficacia de la tarea",
+};
+
 export const LAB_CATALOG_OVERRIDES: Record<LabLocale, Record<LabCatalogKey, string>> = {
+  es,
   en,
   de,
   fr,
@@ -590,6 +641,18 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "community.bundles": "Bundles",
     "community.activeRecords": "Active records",
     "community.revokedRecords": "Revoked records",
+  },
+  es: {
+    subjectKindUnknown: "Desconocido",
+    "artifact.present": "Presente",
+    "artifact.corrupt": "Corrupto",
+    "artifact.purged_unavailable": "Purgado / no disponible",
+    selectVerdict: "Ver veredicto para {subject}",
+    "community.title": "Pruebas comunitarias",
+    "community.notLocalVerdict": "Contexto de solo lectura no confiable. No incluido en este veredicto local.",
+    "community.bundles": "Paquetes",
+    "community.activeRecords": "Registros activos",
+    "community.revokedRecords": "Registros revocados",
   },
   de: {
     subjectKindUnknown: "Unbekannt",

@@ -1,12 +1,12 @@
 import { copyTable, type Row } from "./copy-table";
 
 /*
- * Copy for the v2 Startup protection, Remote Link and Remote Workspace pages. Columns: en, ko, de, fr, zh, zh-TW, ru, ja, tr, vi, pt.
+ * Copy for the v2 Startup protection, Remote Link and Remote Workspace pages. Columns: en, ko, de, fr, zh, zh-TW, ru, ja, tr, vi, pt, es.
  * Keys render as `startupV2.<key>`.
  */
 const rows = {
   // ---- Startup protection
-  about: ["About: {name}", "{name} 설명", "Info: {name}", "À propos : {name}", "说明：{name}", "說明：{name}", "Подробнее: {name}", "説明: {name}", "Hakkında: {name}", "Giới thiệu: {name}", "Sobre: {name}"],
+  about: ["About: {name}", "{name} 설명", "Info: {name}", "À propos : {name}", "说明：{name}", "說明：{name}", "Подробнее: {name}", "説明: {name}", "Hakkında: {name}", "Giới thiệu: {name}", "Sobre: {name}", "Acerca de {name}"],
   optionsTitle: [
     "Keep Codex working after a restart",
     "재부팅 후에도 Codex가 동작하게 하기",
@@ -19,6 +19,7 @@ const rows = {
     "Yeniden başlatmadan sonra Codex çalışmaya devam etsin",
     "Giữ Codex hoạt động sau khi khởi động lại",
     "Manter o Codex funcionando após reiniciar",
+    "Mantén Codex operativo después de reiniciar",
   ],
   optionsHint: [
     "One healthy option is enough. The background service covers the most ways Codex starts.",
@@ -32,10 +33,11 @@ const rows = {
     "Sağlıklı tek bir seçenek yeterli. Arka plan hizmeti, Codex'in en çok başlatılma yolunu kapsar.",
     "Chỉ cần một cách hoạt động tốt. Dịch vụ nền bao quát nhiều cách khởi động Codex nhất.",
     "Uma opção funcionando já basta. O serviço em segundo plano cobre a maioria das formas de iniciar o Codex.",
+    "Basta con una opción que funcione. El servicio en segundo plano cubre la mayoría de las formas de iniciar Codex.",
   ],
-  recommended: ["Recommended", "권장", "Empfohlen", "Recommandé", "推荐", "推薦", "Рекомендуется", "推奨", "Önerilen", "Khuyên dùng", "Recomendado"],
-  optional: ["Optional", "선택", "Optional", "Facultatif", "可选", "選用", "Необязательно", "任意", "İsteğe bağlı", "Tùy chọn", "Opcional"],
-  shimPlain: ["Start with Codex", "Codex와 함께 시작", "Mit Codex starten", "Démarrer avec Codex", "随 Codex 启动", "隨 Codex 啟動", "Запуск вместе с Codex", "Codex と一緒に起動", "Codex ile başlat", "Khởi động cùng Codex", "Iniciar com o Codex"],
+  recommended: ["Recommended", "권장", "Empfohlen", "Recommandé", "推荐", "推薦", "Рекомендуется", "推奨", "Önerilen", "Khuyên dùng", "Recomendado", "Recomendado"],
+  optional: ["Optional", "선택", "Optional", "Facultatif", "可选", "選用", "Необязательно", "任意", "İsteğe bağlı", "Tùy chọn", "Opcional", "Opcional"],
+  shimPlain: ["Start with Codex", "Codex와 함께 시작", "Mit Codex starten", "Démarrer avec Codex", "随 Codex 启动", "隨 Codex 啟動", "Запуск вместе с Codex", "Codex と一緒に起動", "Codex ile başlat", "Khởi động cùng Codex", "Iniciar com o Codex", "Iniciar con Codex"],
   recoveryMeta: [
     "Commands to run yourself",
     "직접 실행하는 명령",
@@ -48,10 +50,11 @@ const rows = {
     "Kendiniz çalıştıracağınız komutlar",
     "Lệnh để tự chạy",
     "Comandos para você executar",
+    "Comandos para ejecutar manualmente",
   ],
   // ---- Remote Link
-  off: ["Off", "꺼짐", "Aus", "Désactivé", "关闭", "關閉", "Выкл.", "オフ", "Kapalı", "Tắt", "Desligado"],
-  on: ["On", "켜짐", "An", "Activé", "开启", "開啟", "Вкл.", "オン", "Açık", "Bật", "Ligado"],
+  off: ["Off", "꺼짐", "Aus", "Désactivé", "关闭", "關閉", "Выкл.", "オフ", "Kapalı", "Tắt", "Desligado", "Desactivado"],
+  on: ["On", "켜짐", "An", "Activé", "开启", "開啟", "Вкл.", "オン", "Açık", "Bật", "Ligado", "Activado"],
   linkIntroTitle: [
     "Use one computer's setup on your other computers",
     "한 컴퓨터의 설정을 다른 컴퓨터에서도 쓰기",
@@ -64,6 +67,7 @@ const rows = {
     "Bir bilgisayarın kurulumunu diğer bilgisayarlarınızda kullanın",
     "Dùng thiết lập của một máy cho các máy khác",
     "Use a configuração de um computador nos outros",
+    "Usa la configuración de un equipo en tus otros equipos",
   ],
   linkIntroBody: [
     "Remote Link connects OpenCodex computers over SSH. The Home shares its providers, and a Child uses them without any setup of its own.",
@@ -77,12 +81,13 @@ const rows = {
     "Remote Link, OpenCodex bilgisayarlarını SSH üzerinden bağlar. Home sağlayıcılarını paylaşır, Child bunları kendi kurulumu olmadan kullanır.",
     "Remote Link kết nối các máy OpenCodex qua SSH. Máy Home chia sẻ nhà cung cấp, máy Child dùng lại mà không cần tự thiết lập.",
     "O Remote Link conecta computadores OpenCodex por SSH. O Home compartilha seus provedores e um Child os usa sem configuração própria.",
+    "Remote Link conecta equipos con OpenCodex por SSH. Home comparte sus proveedores y el Child los usa sin configuración propia.",
   ],
-  sshTunnel: ["SSH tunnel", "SSH 터널", "SSH-Tunnel", "Tunnel SSH", "SSH 隧道", "SSH 通道", "SSH-туннель", "SSH トンネル", "SSH tüneli", "Đường hầm SSH", "Túnel SSH"],
-  stepHost: ["Choose a host", "호스트 선택", "Host wählen", "Choisir un hôte", "选择主机", "選擇主機", "Выбор хоста", "ホストを選ぶ", "Ana bilgisayar seçin", "Chọn máy chủ", "Escolher o host"],
-  stepVerify: ["Check the host key", "호스트 키 확인", "Hostschlüssel prüfen", "Vérifier la clé d’hôte", "核对主机密钥", "核對主機金鑰", "Проверка ключа хоста", "ホストキーを確認", "Ana bilgisayar anahtarını doğrulayın", "Kiểm tra khóa máy chủ", "Conferir a chave do host"],
-  stepConnect: ["Connect", "연결", "Verbinden", "Connecter", "连接", "連線", "Подключение", "接続", "Bağlan", "Kết nối", "Conectar"],
-  steps: ["Steps", "단계", "Schritte", "Étapes", "步骤", "步驟", "Шаги", "手順", "Adımlar", "Các bước", "Etapas"],
+  sshTunnel: ["SSH tunnel", "SSH 터널", "SSH-Tunnel", "Tunnel SSH", "SSH 隧道", "SSH 通道", "SSH-туннель", "SSH トンネル", "SSH tüneli", "Đường hầm SSH", "Túnel SSH", "Túnel SSH"],
+  stepHost: ["Choose a host", "호스트 선택", "Host wählen", "Choisir un hôte", "选择主机", "選擇主機", "Выбор хоста", "ホストを選ぶ", "Ana bilgisayar seçin", "Chọn máy chủ", "Escolher o host", "Elige un host"],
+  stepVerify: ["Check the host key", "호스트 키 확인", "Hostschlüssel prüfen", "Vérifier la clé d’hôte", "核对主机密钥", "核對主機金鑰", "Проверка ключа хоста", "ホストキーを確認", "Ana bilgisayar anahtarını doğrulayın", "Kiểm tra khóa máy chủ", "Conferir a chave do host", "Comprueba la clave del host"],
+  stepConnect: ["Connect", "연결", "Verbinden", "Connecter", "连接", "連線", "Подключение", "接続", "Bağlan", "Kết nối", "Conectar", "Conectar"],
+  steps: ["Steps", "단계", "Schritte", "Étapes", "步骤", "步驟", "Шаги", "手順", "Adımlar", "Các bước", "Etapas", "Pasos"],
 } satisfies Record<string, Row>;
 
 export const startupV2Copy = copyTable("startupV2", rows);

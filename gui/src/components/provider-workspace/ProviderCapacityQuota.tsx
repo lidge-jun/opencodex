@@ -21,6 +21,7 @@ function bcp47(locale: Locale): string {
     case "en": return "en-GB";
     case "de": return "de-DE";
     case "fr": return "fr-FR";
+    case "es": return "es-ES";
     case "ko": return "ko-KR";
     case "zh": return "zh-CN";
     case "zh-TW": return "zh-TW";

@@ -12,6 +12,7 @@ const LOCALE_TAGS: Record<Locale, string> = {
   "zh-TW": "zh-TW",
   de: "de-DE",
   fr: "fr-FR",
+  es: "es-ES",
   ru: "ru-RU",
   tr: "tr-TR",
   vi: "vi-VN",
