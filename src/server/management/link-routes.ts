@@ -223,7 +223,7 @@ function suspendedRefusal(ctx: ManagementContext, id: string): Response {
   const resolve = "ocx link operations resolve --operation-id " + op + " --yes";
   const message = suspension.state === "unknown"
     ? "Revoke operation " + op + " ended unknown and may have disconnected or purged the Child, so this link's tunnel stays down. Check the Child, then run: " + resolve
-    : "Revoke operation " + op + " did not finish (the Home stopped during it), so this link's tunnel stays down. Repeat it with the same flags: ocx link revoke --link-id " + id + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve;
+    : "Revoke operation " + op + " did not record its outcome (the Home stopped or the revoke failed before writing it), so this link's tunnel stays down. Repeat it with the flags of the first attempt: ocx link revoke --link-id " + id + " --operation-id " + op + ", with --purge only if the first attempt had it (the journal keeps only a digest of the flags, so a different --purge answers operation_mismatch); if it then ends unknown, run: " + resolve;
   return Response.json({ error: { code: "link_suspended", message }, operationId: op, operationState: suspension.state }, { status: 409, headers });
 }
 
@@ -506,7 +506,9 @@ async function removeReserved(
     };
     try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); written = tombstone; } catch (error) {
       if (error instanceof LinkTombstoneLimitError) {
-        return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
+        // No state claim: an earlier, interrupted attempt of a resumed revoke may already have revoked the key and stopped the tunnel,
+        // and this one may have taken its receipt back (reownLinkRetirement), so it names only what this attempt left alone.
+        return fail("tombstone_limit", "Too many forced revokes are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them (ocx link recover --link-id <id>; ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget --link-id <id> --yes for machines that are gone.", 409);
       }
       return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
     }

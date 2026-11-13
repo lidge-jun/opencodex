@@ -84,23 +84,36 @@ export const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const OPERATION_JOURNAL_MAX_UNSETTLED = 256;
 /**
  * Settled entries (committed, failed_clean, and resolved residual or unknown ones) past this many are pruned before their
- * 30 days, oldest first (by when they finished or were resolved), but only once they are OPERATION_REPLAY_MIN_MS old: a
- * caller that lost an answer can replay it by its operation id for at least a day, whatever else ran meanwhile.
+ * 30 days, oldest first (by when they finished or were resolved), but only once they are past OPERATION_PRUNE_FLOOR_MS:
+ * a repeat with the same operation id and the same parameters (another set answers operation_mismatch) that reaches the
+ * journal within 2 hours of the answer gets the recorded outcome
+ * (status, code and outcome), whatever else ran meanwhile, except that a revoke whose own removal was interrupted (its
+ * retirement receipt is outstanding) resumes it first and answers that attempt; the alias lock busy past its wait changes
+ * nothing and is retried, and after an unreadable journal or a 5xx the caller repeats with the same id (neither proves
+ * that nothing changed: a replay after a resumed removal can meet them once that removal finished). Later the id may be treated as a new operation: an
+ * enrollment whose link is there meets link_exists and a revoke whose link is gone link_not_found, but an enrollment
+ * whose link was removed meanwhile enrolls the machine again. Unsettled entries are never pruned and the 30-day
+ * retention does not depend on this.
  */
 export const OPERATION_JOURNAL_MAX_SETTLED = 256;
-/** How long a settled entry is kept for replay however many operations follow it: far past any retry or lock wait. */
-export const OPERATION_REPLAY_MIN_MS = 24 * 60 * 60 * 1000;
+/** The replay guarantee, however many operations follow an entry: 2 hours, far past any caller's retry of a lost answer. */
+export const OPERATION_REPLAY_MIN_MS = 2 * 60 * 60 * 1000;
 /**
- * The age before which a settled entry is never pruned early: the replay day, plus the longest alias-lock wait and a
- * minute, so a retry that started within the day and then waited on the lock still finds its entry.
+ * The age before which a settled entry is never pruned early: the 2-hour replay window, plus the longest alias-lock wait
+ * and a minute, so a retry that started within the window and then waited on the lock still finds its entry.
  */
 export const OPERATION_PRUNE_FLOOR_MS = OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAIT_MS + 60_000;
 /**
- * At this many entries settled within OPERATION_PRUNE_FLOOR_MS a new operation is refused until the oldest is older: a
- * burst no working fleet reaches (ten machines run a handful of operations each), so a runaway loop that retries with a
- * fresh id after each failure is held for at most a day instead of locking the Home out for 30 days. With the three
- * bounds the file holds about 256 unsettled plus 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at
- * most about 1.5 MiB in such a burst, so every whole-file rewrite under the config mutation lock stays small.
+ * At this many entries settled within OPERATION_PRUNE_FLOOR_MS (2 hours and three minutes) a new operation is refused
+ * until the oldest is older. That is a throughput limit as much as a runaway guard: a burst of 1024, and about 500
+ * journalled operations per hour sustained (1024 / 2.05 h). Churn, not machine count, decides whether it is reached: ten
+ * disposable machines that each live ten minutes make about 120 add and revoke operations per hour, about 246 inside the
+ * window, a quarter of the bound. A runaway loop that retries with a fresh id after each failure is held for at most that
+ * window instead of locking the Home out for 30 days. With the three bounds the file holds about 256 unsettled plus
+ * 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at most about 1.5 MiB at the limit, plus the
+ * entries an outstanding retirement receipt pins (at most two per readable receipt, every revoke entry of a link whose
+ * receipt cannot be read; receipts have no cap of their own), so every
+ * whole-file rewrite under the config mutation lock stays small while receipts are settled.
  */
 export const OPERATION_JOURNAL_MAX_RECENT_SETTLED = 1024;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -296,11 +309,11 @@ export function updateOperationsJournal<T>(path: string, nowMs: number, change: 
 }
 
 export class OperationsJournalFullError extends Error {
-  /** unsettled: too many open or unresolved entries; recent: too many settled within a day. */
+  /** unsettled: too many open or unresolved entries; recent: too many settled within OPERATION_PRUNE_FLOOR_MS. */
   constructor(readonly bound: "unsettled" | "recent") {
     super(bound === "unsettled"
       ? "operations.json holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " unsettled entries"
-      : "operations.json holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " entries settled within a day");
+      : "operations.json holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " entries settled within 2 hours and three minutes");
     this.name = "OperationsJournalFullError";
   }
 }

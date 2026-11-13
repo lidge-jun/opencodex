@@ -30,8 +30,9 @@ export interface AliasLock { release(): void }
 
 /**
  * Two minutes: a third of the CLI's 360 s enrollment deadline (ENROLLMENT_DEADLINE_MS in src/cli/link-enrollment.ts),
- * so a waiter that gets the lock still has time to finish before the CLI calls the outcome uncertain, and a waiting
- * revoke holds its link's Child-operation reservation no longer than that.
+ * which bounds the wait itself. It does not promise the waiter time to finish: an apply's own worst case can outrun the
+ * deadline, and then the CLI reports the outcome uncertain and a repeat with the same operation id replays it. A waiting
+ * revoke holds its link's Child-operation reservation no longer than this.
  */
 export const ALIAS_LOCK_WAIT_MS = 120_000;
 const ALIAS_LOCK_POLL_MS = 250;
