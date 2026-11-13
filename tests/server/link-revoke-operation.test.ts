@@ -253,8 +253,11 @@ test("a retry of an interrupted removal with another cleanup mode is refused bef
   expect((await h.revoke({ force: true })).status).toBe(503);
   unlinkSync(intent);
   // The forced removal never purged the Child; a purge retry must not report one.
-  const purge = await h.revoke({ purge: true, operationId: OP });
-  expect({ status: purge.status, code: code(purge), outcome: purge.body.outcome }).toEqual({ status: 409, code: "link_retirement_mode_mismatch", outcome: "failed_clean" });
+  const purge = await h.revoke({ purge: true });
+  expect({ status: purge.status, code: code(purge) }).toEqual({ status: 409, code: "link_retirement_mode_mismatch" });
+  // Nor may a journalled purge adopt a receipt it did not claim.
+  const journalled = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: journalled.status, code: code(journalled) }).toEqual({ status: 409, code: "link_retirement_owned" });
   expect(h.ssh).toEqual([]);
   expect(readLinkRetirement(LINK, root)?.mode).toBe("force");
   expect((await h.revoke({ force: true })).status).toBe(200);
@@ -349,5 +352,34 @@ test("a resumed retirement settles its entry before clearing the receipt, so a f
   h2.store = { ...h2.store, links: [] };
   const again = await h2.revoke({ force: true, operationId: OP });
   expect({ status: again.status, outcome: again.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+});
+
+test("an unknown revoke's receipt is finished only by repeating that revoke, never by a plain or new one", async () => {
+  const h = harness();
+  const intent = join(root, "route-intent.json");
+  writeFileSync(intent, "invalid");
+  // Operation A purges the Child, removes the record, then fails its post-commit cleanup: unknown, receipt kept.
+  expect((await h.revoke({ purge: true, operationId: OP })).body.outcome).toBe("unknown");
+  unlinkSync(intent);
+  const ssh = h.ssh.length;
+  for (const body of [{ purge: true }, { purge: true, operationId: "other-op" }]) {
+    const other = await h.revoke(body);
+    expect({ status: other.status, code: code(other) }).toEqual({ status: 409, code: "link_retirement_owned" });
+    expect(readLinkRetirement(LINK, root)?.operationId).toBe(OP);
+  }
+  expect(h.journal().operations.map(op => op.operationId)).toEqual([OP]);
+  const owner = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: owner.status, outcome: owner.body.outcome, purged: owner.body.purged }).toEqual({ status: 200, outcome: "committed", purged: true });
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+  expect(h.ssh.length).toBe(ssh);
+});
+
+test("a plain revoke finishes a receipt whose owning operation the journal no longer holds", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "force", "pruned-op");
+  const plain = await h.revoke({ force: true });
+  expect(plain.status).toBe(200);
+  expect(h.store.links).toEqual([]);
   expect(readLinkRetirement(LINK, root)).toBeNull();
 });

@@ -269,6 +269,8 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       if (open) return open;
       const fresh = readRemovalTarget(ctx, id);
       if ("response" in fresh) return fresh.response;
+      const owned = foreignRetirement(ctx, fresh.receipt, operation?.id);
+      if (owned) return owned;
       let journal: RevokeJournal = NO_REVOKE_JOURNAL;
       if (operation) {
         try { journal = openRevokeJournal(ctx, operation, fresh.record.alias, id); } catch {
@@ -281,6 +283,29 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
 }
 
 const removalMode = (force: boolean, purge: boolean): LinkRetirementMode => force ? "force" : purge ? "purge" : "disconnect";
+
+/**
+ * A fresh removal that meets an interrupted removal's receipt continues it only under the same identity (#8416).
+ * A journalled revoke continues only its own receipt: adopting another's would credit it with a removal (and for a
+ * purge, a Child purge) it never ran, and would clear the receipt the owner needs to settle truthfully. A plain revoke
+ * writes no journal, so it may finish a receipt with no owner or one whose owning entry the journal no longer holds,
+ * but not one whose owner can still be repeated.
+ */
+function foreignRetirement(ctx: ManagementContext, receipt: ReturnType<typeof readLinkRetirement>, operationId: string | undefined): Response | null {
+  if (!receipt || receipt.operationId === operationId) return null;
+  if (operationId !== undefined) {
+    return receipt.operationId === undefined
+      ? fail("link_retirement_owned", "This link's removal was interrupted outside the operation journal; repeat ocx link revoke without --operation-id to finish it.", 409)
+      : fail("link_retirement_owned", `This link's removal was interrupted under operation ${receipt.operationId}; repeat it with --operation-id ${receipt.operationId} to finish it.`, 409);
+  }
+  let ownerJournalled: boolean;
+  try { ownerJournalled = findOperation(readOperationsJournal(journalPathFor(ctx)), receipt.operationId!) !== undefined; } catch {
+    return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+  }
+  return ownerJournalled
+    ? fail("link_retirement_owned", `This link's removal was interrupted under operation ${receipt.operationId}; repeat it with --operation-id ${receipt.operationId} to finish it.`, 409)
+    : null;
+}
 
 /**
  * Before a recorded revoke replays its outcome, finish the retirement it left behind (#8416). A revoke interrupted
