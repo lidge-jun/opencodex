@@ -23,7 +23,7 @@ Le tableau de bord demande de reconnaître que le texte peut rester dans l’his
 ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
 ```
 
-Omettez `--live` pour configurer la cible locale. Vérifiez ensuite `ocx v2 status --live --json` : l’état configuré et la convergence du catalogue ne prouvent pas qu’une délégation réelle réussit. Pour quitter ce mode, choisissez-en explicitement un autre ; la préférence indépendante `plaintextV2AgentMessages` est conservée.
+Pour la cible active, vérifiez ensuite `ocx v2 status --live --json`. Pour la cible locale, omettez `--live` dans les deux commandes et vérifiez `ocx v2 status --json` : l’état configuré et la convergence du catalogue ne prouvent pas qu’une délégation réelle réussit. Pour quitter ce mode, choisissez-en explicitement un autre ; la préférence indépendante `plaintextV2AgentMessages` est conservée.
 
 ## Ce que vous voyez alors
 

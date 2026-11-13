@@ -27,7 +27,7 @@ The dashboard requires acknowledgment that task text can remain in Codex history
 ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
 ```
 
-Omit `--live` to configure the local target. Read `ocx v2 status --live --json` afterward; configured state and catalog convergence are distinct from a successful real delegation. To leave this mode, explicitly choose another mode. Independently set `plaintextV2AgentMessages` values are preserved.
+Read `ocx v2 status --live --json` afterward for the live target. For the local target, omit `--live` from both commands and read `ocx v2 status --json`; configured state and catalog convergence are distinct from a successful real delegation. To leave this mode, explicitly choose another mode. Independently set `plaintextV2AgentMessages` values are preserved.
 
 ## What you see when it happens
 
@@ -57,10 +57,9 @@ stays in that backend. OpenCodex never had it, so there is nothing for a proxy t
 nothing to rewrite — the value really is ciphertext, not plaintext behind a flag. That is why
 this is structural rather than a misconfiguration: no proxy-side setting enables local decryption.
 
-No proxy-side setting enables local decryption. Experimental `agentTaskRecovery` can instead ask the ChatGPT backend to recover eligible tasks; it does not decrypt their ciphertext locally. Its authorization, eligibility and failure limits described above still apply.
+Experimental `agentTaskRecovery` can instead ask the ChatGPT backend to recover eligible tasks; it does not decrypt their ciphertext locally. Its authorization, eligibility and failure limits described above still apply.
 
-Three topologies are unaffected, which is worth stating because it explains the shape of the
-failure rather than the failure being mysterious:
+The following comparison describes the encrypted v2 path without plaintext compilation:
 
 | Topology | v1 | v2 |
 | --- | --- | --- |

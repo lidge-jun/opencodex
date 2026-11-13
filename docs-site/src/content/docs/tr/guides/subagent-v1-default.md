@@ -41,7 +41,7 @@ v1 ve karma yerel-v1/yönlendirilmiş-v2 modları kullanılabilir.
 ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
 ```
 
-Yerel hedefi yapılandırmak için `--live` seçeneğini çıkarın. Sonrasında `ocx v2 status --live --json`
+Canlı hedefi `ocx v2 status --live --json` ile kontrol edin. Yerel hedef için her iki komuttan `--live` seçeneğini çıkarın ve `ocx v2 status --json`
 ile durumu okuyun; yapılandırılan durum ve katalog yakınsaması, başarılı bir gerçek
 görev devriyle aynı şey değildir. Çıkmak için başka bir mod seçin; bağımsız olarak
 ayarlanmış `plaintextV2AgentMessages` değeri korunur.

@@ -21,7 +21,7 @@ OpenCodex 安装后的子代理界面默认为 **v1**。Dashboard、Models 和 S
 ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
 ```
 
-省略 `--live` 可配置本地目标。随后读取 `ocx v2 status --live --json`；配置状态和目录收敛并不等于真实委派成功。要退出该模式，请明确选择其他模式；独立设置的 `plaintextV2AgentMessages` 值会被保留。
+使用 `ocx v2 status --live --json` 查看实时目标。配置本地目标时，两个命令都省略 `--live`，并使用 `ocx v2 status --json` 查看；配置状态和目录收敛并不等于真实委派成功。要退出该模式，请明确选择其他模式；独立设置的 `plaintextV2AgentMessages` 值会被保留。
 
 ## 发生时会看到什么
 

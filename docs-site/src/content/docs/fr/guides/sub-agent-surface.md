@@ -16,8 +16,8 @@ Choisissez le mode pour les **nouvelles sessions**. Les sessions existantes cons
 
 | Mode | Ce que Codex obtient | Qui devrait le choisir |
 | --- | --- | --- |
-| **v1** | Outils classiques avec espace de noms `spawn_agent`, `send_input`, `resume_agent` et `close_agent`. Un spawn peut sélectionner directement un autre modèle. | Les débutants qui ont besoin d'une délégation fiable entre différents fournisseurs, en particulier les enfants natifs vers routés. |
-| **base** (par défaut) | Paramètres de modèle en amont : GPT-5.6 Sol/Terra utilisent la v2, Luna utilise la v1, et les modèles non définis explicitement suivent l’indicateur de fonctionnalité `multi_agent_v2` de Codex. | La plupart des utilisateurs. Ce mode respecte la surface prévue par Codex pour chaque modèle, sans en imposer une globalement. |
+| **v1** (par défaut pour une nouvelle installation) | Outils classiques avec espace de noms `spawn_agent`, `send_input`, `resume_agent` et `close_agent`. Un spawn peut sélectionner directement un autre modèle. | Les débutants qui ont besoin d'une délégation fiable entre différents fournisseurs, en particulier les enfants natifs vers routés. |
+| **base** | Paramètres de modèle en amont : GPT-5.6 Sol/Terra utilisent la v2, Luna utilise la v1, et les modèles non définis explicitement suivent l’indicateur de fonctionnalité `multi_agent_v2` de Codex. | La plupart des utilisateurs. Ce mode respecte la surface prévue par Codex pour chaque modèle, sans en imposer une globalement. |
 | **v2** | Outils plats `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent` et liste d'agents, avec sessions simultanées. | Utilisateurs souhaitant utiliser le flux de travail simultané le plus récent et comprenant l'héritage de modèle et la limitation des tâches chiffrées ci-dessous. |
 | **v2-plaintext** | V2 | Sélectionne V2 pour les nouvelles sessions et transmet les tâches admissibles en clair sans priorité globale. L’entrée exige `--acknowledge-plaintext-agent-messages`. |
 
@@ -28,7 +28,7 @@ restent sur v2, où les tâches enfants sont en texte clair. C'est un interrupte
 de v2, distinct du mode `v2-plaintext`. CLI : `ocx v2 mode v2` puis `ocx v2 keep-native-v1 on`.
 
 :::tip[Pas sûr ?]
-Commencez par **base**. Choisissez **v1** lorsque la délégation entre fournisseurs doit fonctionner de manière prévisible. Forcer **v2**
+Commencez par **v1**, le mode par défaut d’une nouvelle installation, pour une délégation prévisible entre fournisseurs. Choisissez **base** pour suivre les paramètres en amont. Forcer **v2**
 uniquement lorsque vous souhaitez spécifiquement son modèle de session le plus récent dans chaque entrée de catalogue.
 :::
 

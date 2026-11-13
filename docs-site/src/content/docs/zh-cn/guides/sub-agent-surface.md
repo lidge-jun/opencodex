@@ -13,13 +13,13 @@ description: 控制 Codex 如何在所有模型上生成和管理子代理。
 
 | 模式 | Codex 获得什么 | 适合谁 |
 | --- | --- | --- |
-| **v1** | 经典的命名空间 `spawn_agent`、`send_input`、`resume_agent` 和 `close_agent` 工具。spawn 可以直接选择另一个模型。 | 需要在不同 provider 之间可靠委派的初学者，尤其是原生到路由子级。 |
-| **base**（默认） | 上游模型固定值：GPT-5.6 Sol/Terra 使用 v2，Luna 使用 v1，未固定的模型遵循 Codex 的 `multi_agent_v2` 功能开关。 | 大多数用户。它按 Codex 对每个模型预期的界面运行，而不是全局强制一种。 |
+| **v1**（全新安装的默认值） | 经典的命名空间 `spawn_agent`、`send_input`、`resume_agent` 和 `close_agent` 工具。spawn 可以直接选择另一个模型。 | 需要在不同 provider 之间可靠委派的初学者，尤其是原生到路由子级。 |
+| **base** | 上游模型固定值：GPT-5.6 Sol/Terra 使用 v2，Luna 使用 v1，未固定的模型遵循 Codex 的 `multi_agent_v2` 功能开关。 | 大多数用户。它按 Codex 对每个模型预期的界面运行，而不是全局强制一种。 |
 | **v2** | 扁平的 `spawn_agent`、`send_message`、`followup_task`、`interrupt_agent` 和 agent-list 工具，并支持并发会话。 | 想要更新的并发工作流，并理解模型继承以及下面加密任务限制的用户。 |
 | **v2-plaintext** | 为新会话固定 V2 目录项，关闭全局强制，并在规范的 ChatGPT 转发路径上以明文编译符合条件的任务消息。 | 明确接受明文任务可能被保留的用户；进入时需要确认。 |
 
 :::tip[不确定？]
-先从 **base** 开始。只有当跨 provider 委派必须可预测地工作时才选 **v1**。只有在你明确想让所有目录条目都使用更新的会话模型时，才强制使用 **v2**。
+先从全新安装的默认模式 **v1** 开始，以便跨 provider 委派可预测地工作。要遵循上游固定值，请选择 **base**。只有在你明确想让所有目录条目都使用更新的会话模型时，才强制使用 **v2**。
 :::
 
 ## 工作原理

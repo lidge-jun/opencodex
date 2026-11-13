@@ -19,7 +19,7 @@ OpenCodex 安裝後，子代理介面預設為 **v1**。Dashboard、Models 與 S
 ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
 ```
 
-省略 `--live` 可設定本機目標。之後讀取 `ocx v2 status --live --json`；設定狀態和目錄收斂不代表實際委派成功。若要離開此模式，請明確選擇其他模式；獨立設定的 `plaintextV2AgentMessages` 值會保留。
+使用 `ocx v2 status --live --json` 查看即時目標。設定本機目標時，兩個指令都省略 `--live`，並使用 `ocx v2 status --json` 查看；設定狀態和目錄收斂不代表實際委派成功。若要離開此模式，請明確選擇其他模式；獨立設定的 `plaintextV2AgentMessages` 值會保留。
 
 ## 發生時會看到什麼
 
@@ -46,7 +46,7 @@ ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
 
 代理設定無法啟用本機解密。實驗性 `agentTaskRecovery` 可以要求 ChatGPT 後端復原符合條件的任務，但不會在本機解密其密文。上述授權、適用條件和失敗處理限制仍然有效。
 
-有三種拓撲不受影響；了解它們有助於釐清失敗範圍：
+下表比較未啟用明文編譯器時的加密 v2 路徑：
 
 | 拓撲 | v1 | v2 |
 | --- | --- | --- |
@@ -103,7 +103,7 @@ base 排在第二而非第一，因為其釘選讓大多數人用來*發起*委�
 
 ## 變更模式
 
-Dashboard、Models 與 Subagents 都提供 v1/base/v2/v2-plaintext 選擇，三個頁面在選擇 base 或 v2 前都會詢問。CLI 指令如下：
+Dashboard、Models 與 Subagents 都提供 v1/base/v2/v2-plaintext 選擇，三個頁面在選擇 base、v2 或 v2-plaintext 前都會要求確認。CLI 指令如下：
 
 ```bash
 ocx v2 status
