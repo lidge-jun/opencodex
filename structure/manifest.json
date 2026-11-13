@@ -1287,7 +1287,7 @@
       "tier": 6,
       "title": "Managed Service Logging",
       "scope": "Service-only console timestamps and bounded copy-truncate log retention. Producer bounds for combo positions, target providers and effort diagnostics.",
-      "documents": ["src/service/logging.ts", "src/combos/resolve.ts", "src/combos/request.ts", "src/server/responses/core-combo.ts"]
+      "documents": ["src/service/logging.ts", "src/combos/resolve.ts", "src/combos/request.ts", "src/combos/request-capability.ts", "src/server/responses/core-combo.ts"]
     },
     {
       "path": "ops/service-health-recovery.md",

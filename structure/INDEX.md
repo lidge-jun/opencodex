@@ -335,6 +335,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/windows-installation-files.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/windows-npm-execution.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/combos/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`fallback-policy.md`](fallback-policy.md) |
+| `src/combos/request-capability.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
 | `src/combos/request.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
 | `src/combos/resolve.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md)<br>[`ops/service-logging.md`](ops/service-logging.md) |
 | `src/companion/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`companion.md`](companion.md) |

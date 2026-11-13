@@ -69,6 +69,7 @@ import {
 } from "../../responses/state";
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
+import { clampComboCallerEffort, comboCapabilityGate } from "../../combos/request-capability";
 import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
@@ -484,6 +485,13 @@ export async function executeComboResponses(
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
     return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
   }
+  const capability = comboCapabilityGate(config, combo, body, target => {
+    try { return routeConcreteModel(config, `${target.provider}/${target.model}`); } catch { return undefined; }
+  });
+  if (capability.unservable && combo.onUnservable === "reject") {
+    return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept image input");
+  }
+  if (capability.unservable) console.warn("[opencodex] combo has no image-capable target; images will be omitted");
   // The combo ladder owns the whole logical request, so the catalog diagnostic is counted here for
   // combo-routed turns; children run as concrete selections and would otherwise never report it.
   // Counting after the replay expansion keeps restored history out of the tally.
@@ -603,6 +611,7 @@ export async function executeComboResponses(
   // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
   const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered)
+    && capability.eligible(target)
     && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
     && museToolEligible(target)
     && reasoningReplayEligible(target)
@@ -1112,6 +1121,9 @@ export async function executeComboResponses(
         ? (initialJevDecision.effort === null ? "fallback" : "force")
         : combo.defaultEffortMode,
     );
+    if (combo.capabilityPolicy === "union" && combo.reasoningEffortMode === "adaptive") {
+      clampComboCallerEffort(childBody, targetReasoningEfforts, pick.target);
+    }
     if (initialJevDecision) {
       if (jevEffortApplies) delete childBody.service_tier;
       if (jevEffortApplies && initialJevDecision.effort !== null) {
