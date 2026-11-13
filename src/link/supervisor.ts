@@ -775,14 +775,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
 
   const holdLink = (linkId: string): (() => void) => {
     holds.set(linkId, (holds.get(linkId) ?? 0) + 1);
-    invalidateLink(linkId);
     let released = false;
-    return () => {
+    const release = (): void => {
       if (released) return;
       released = true;
       const remaining = (holds.get(linkId) ?? 1) - 1;
       if (remaining) holds.set(linkId, remaining); else holds.delete(linkId);
     };
+    // A cancellation that throws must not leave a hold nobody can release.
+    try { invalidateLink(linkId); } catch (error) { release(); throw error; }
+    return release;
   };
 
   return {

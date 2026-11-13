@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as passthroughCompletion from "../../src/server/responses/passthrough-completion";
 import * as snapshotRepair from "../../src/server/responses-snapshot-repair";
+import * as outboundRequestBody from "../../src/server/responses/outbound-request-body";
+import { requiredToolFulfillments } from "../../src/server/responses/combo-required-tool-fulfillments";
+import { requiredToolContractOf } from "../../src/server/responses/combo-required-tool-contract";
+import type { AdapterRequest } from "../../src/adapters/base";
 import { handleResponses } from "../../src/server/responses";
 import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import { LINK_TURN_HEADER, registerLinkTurnToken, type LinkTurnObserver } from "../../src/server/link-turn";
@@ -67,6 +71,10 @@ async function stalledThenDrained(run: () => Promise<Response>, upstreamFrames: 
 }
 
 describe("upstream read-ahead under a stalled reader (#8601)", () => {
+  // Exercise the inspection tee on every host; Windows' eager relay is covered below.
+  beforeEach(() => setRelayPlatformForTests("linux"));
+  afterEach(() => setRelayPlatformForTests(undefined));
+
   test("a local request keeps the inspection read-ahead and its bytes", async () => {
     const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }));
     expect(run.pulls[0]).toBeGreaterThanOrEqual(32);
@@ -168,5 +176,40 @@ describe("request copies under a stalled reader (#8601)", () => {
       expect(await response.json()).toMatchObject({ status: "completed", tool_choice: "auto", tools });
       expect(parse).toHaveBeenCalledTimes(1);
     } finally { parse.mockRestore(); }
+  });
+});
+
+describe("a combo's required-tool check (#8601 review)", () => {
+  test("takes what it needs from the outbound body when it is built and keeps no reference to the parsed body", () => {
+    const parsed: Array<Record<string, unknown>> = [];
+    const parseOutboundRequestBody = outboundRequestBody.parseOutboundRequestBody;
+    const parse = spyOn(outboundRequestBody, "parseOutboundRequestBody").mockImplementation(text => {
+      const body = parseOutboundRequestBody(text);
+      if (body) parsed.push(body);
+      return body;
+    });
+    try {
+      const tools = [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }];
+      const caller = { tool_choice: "required", tools };
+      const contract = requiredToolContractOf(caller)!;
+      const request = { url: "https://fixture.test/v1/responses", method: "POST", headers: {}, body: JSON.stringify(caller) } as unknown as AdapterRequest;
+      const accepts = requiredToolFulfillments(caller, contract, item => item, request);
+      const call = { type: "function_call", name: "lookup" };
+      expect(parsed).toHaveLength(1);
+      expect(accepts(call, true)).toBe(true);
+      // A later change to that parsed body cannot reach the check: it read tool_choice when it was built.
+      parsed[0]!.tool_choice = "none";
+      expect(accepts(call, true)).toBe(true);
+    } finally { parse.mockRestore(); }
+  });
+
+  test("an outbound body that denies every tool still denies every call", () => {
+    const tools = [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }];
+    const caller = { tool_choice: "required", tools };
+    const request = { url: "https://fixture.test/v1/responses", method: "POST", headers: {}, body: JSON.stringify({ tool_choice: "none", tools }) } as unknown as AdapterRequest;
+    const accepts = requiredToolFulfillments(caller, requiredToolContractOf(caller)!, item => item, request);
+    expect(accepts({ type: "function_call", name: "lookup" }, true)).toBe(false);
+    const unreadable = { ...request, body: "not json" } as AdapterRequest;
+    expect(requiredToolFulfillments(caller, requiredToolContractOf(caller)!, item => item, unreadable)({ type: "function_call", name: "lookup" }, true)).toBe(false);
   });
 });

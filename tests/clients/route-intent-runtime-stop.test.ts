@@ -20,12 +20,17 @@ test("runtime recycle cancels its watch and tick before replacement handoff", ()
         const ticks = await import(${JSON.stringify(repoPath("src/integrations/route-intent-tick.ts"))});
         const watches = await import(${JSON.stringify(repoPath("src/client/route-intent-watch.ts"))});
         const reporters = await import(${JSON.stringify(repoPath("src/client/link-parity-reporter.ts"))});
+        const credentials = await import(${JSON.stringify(repoPath("src/local-credentials/runtime-observation.ts"))});
         const originalWatch = watches.startRouteIntentWatch;
         const events = []; let active = false;
         const tick = spyOn(ticks, 'startRouteIntentTick').mockImplementation(() => ({
           stop() { events.push('tick-stop'); }, requestSync: async () => {} }));
         const reporter = spyOn(reporters, 'createLinkParityReporter').mockImplementation(() => ({
           start() {}, stop() { events.push('reporter-stop'); }, requestReport() {} }));
+        // The local-credential observer watches directories under the config home. Left running after the
+        // recycle, it keeps those directory handles open, and Windows cannot delete a watched directory.
+        const observation = spyOn(credentials, 'observeLocalCredentials').mockImplementation(() => ({
+          stop() { events.push('credential-observation-stop'); } }));
         const watch = spyOn(watches, 'startRouteIntentWatch').mockImplementation((connection, key, deps) => originalWatch(connection, key, {
           ...deps, fetchImpl: async (_url, init) => new Promise((_resolve, reject) => {
             active = true;
@@ -54,10 +59,12 @@ test("runtime recycle cancels its watch and tick before replacement handoff", ()
           });
           expect(events.indexOf('watch-cancelled')).toBeGreaterThanOrEqual(0);
           expect(events.indexOf('tick-stop')).toBeGreaterThanOrEqual(0);
+          expect(events.filter(event => event === 'credential-observation-stop')).toHaveLength(1);
           expect(events.indexOf('watch-cancelled')).toBeLessThan(events.indexOf('listener-stop'));
           expect(events.indexOf('tick-stop')).toBeLessThan(events.indexOf('listener-stop'));
+          expect(events.indexOf('credential-observation-stop')).toBeLessThan(events.indexOf('replacement'));
           expect(events.at(-1)).toBe('exit:0');
-        } finally { tick.mockRestore(); watch.mockRestore(); reporter.mockRestore(); }
+        } finally { tick.mockRestore(); watch.mockRestore(); reporter.mockRestore(); observation.mockRestore(); }
       }, ${SPAWN_BUDGET_MS - 5_000});
     `);
     const child = spawnSync(process.execPath, ["test", "--preload", repoPath("tests/preload.ts"), fixture], {

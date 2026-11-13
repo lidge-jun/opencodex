@@ -74,3 +74,36 @@ test("without the new flags every request body is what it was", async () => {
     ]);
   } finally { h.restore(); }
 });
+
+/** O7 (link.route/2): --ssh-identity-file names the route's key and travels inside explicitRoute with the other three values. */
+const KEY = "/home/hub/.ssh/goat_hub_ed25519";
+const KEY_BODY = { explicitRoute: { proxyCommand: COMMAND, user: "ubuntu", port: 22, identityFile: KEY }, exclusive: true };
+
+test("add sends the identity file inside the explicit route with probe, confirm and apply; probe sends it too", async () => {
+  const h = harness(); try {
+    expect(await runLinkCommand(["add", "pen-7f3a9c", "--expect-fingerprint", fingerprint, ...ROUTE_FLAGS, "--ssh-identity-file", KEY, "--json"], h.deps)).toBe(0);
+    expect(h.calls).toEqual([
+      { path: "/api/link/probe", body: { alias: "pen-7f3a9c", includeVersion: true, allowMissing: true, ...KEY_BODY } },
+      { path: "/api/link/confirm-host", body: { alias: "pen-7f3a9c", fingerprint, ...KEY_BODY } },
+      { path: "/api/link/apply", body: { alias: "pen-7f3a9c", fingerprint, ...KEY_BODY } },
+    ]);
+  } finally { h.restore(); }
+  const g = harness([probe]); try {
+    expect(await runLinkCommand(["probe", "pen-7f3a9c", "--ssh-identity-file", KEY, ...ROUTE_FLAGS, "--json"], g.deps)).toBe(0);
+    expect(g.calls).toEqual([{ path: "/api/link/probe", body: { alias: "pen-7f3a9c", includeVersion: true, ...KEY_BODY } }]);
+  } finally { g.restore(); }
+});
+
+test.each([
+  ["an identity file without an explicit route", ["--ssh-identity-file", KEY, "--exclusive"]],
+  ["an identity file alone", ["--ssh-identity-file", KEY]],
+  ["a relative identity file", [...ROUTE_FLAGS, "--ssh-identity-file", "id_ed25519"]],
+  ["a home-relative identity file", [...ROUTE_FLAGS, "--ssh-identity-file", "~/.ssh/id_ed25519"]],
+  ["a % token in the identity file", [...ROUTE_FLAGS, "--ssh-identity-file", "/home/%u/.ssh/id"]],
+  ["an empty identity file", [...ROUTE_FLAGS, "--ssh-identity-file", ""]],
+])("%s is a usage error before any request", async (_label, flags) => {
+  const h = harness(); try {
+    expect(await runLinkCommand(["add", "pen-7f3a9c", "--expect-fingerprint", fingerprint, ...flags], h.deps)).toBe(2);
+    expect(h.calls).toEqual([]);
+  } finally { h.restore(); }
+});

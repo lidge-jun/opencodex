@@ -104,23 +104,45 @@ function parseStoreBody(body: string | null): Store {
       || typeof job.createdAt !== "string" || typeof job.updatedAt !== "string")) throw new Error("invalid_store");
   return value;
 }
+/**
+ * Readers take no lock, and writers replace the ledger with a renamed private temp file. A rename that
+ * lands after this read's open unlinks the file it opened (no link left) and makes the path name a
+ * newer one; either is a concurrent write, so the read starts over. Each attempt applies every check, a
+ * hard-linked file is still refused at once, and a store that is still being replaced at the last
+ * attempt is refused like any other unsafe store.
+ */
+const REPLACED_STORE_READ_ATTEMPTS = 5;
+type StoreReadStage = "opened" | "descriptor-checked";
+let storeReadHookForTests: ((stage: StoreReadStage) => void) | null = null;
+/** Test seam: runs inside each read attempt, after the open and after the descriptor checks. */
+export function setCodexCliJobStoreReadHookForTests(hook: ((stage: StoreReadStage) => void) | null): void {
+  storeReadHookForTests = hook;
+}
 function readStore(configDir?: string): Store {
   let p: ReturnType<typeof paths>;
   try { p = prepare(configDir); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, jobs: [] }; throw error; }
-  let fd: number | undefined;
-  try {
-    fd = openSync(p.file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > CODEX_CLI_JOB_STORE_MAX_BYTES || (stat.mode & 0o077) !== 0
-      || stat.uid !== process.geteuid?.() || stat.nlink !== 1) throw new Error("unsafe_store");
-    const lexical = lstatSync(p.file);
-    if (lexical.isSymbolicLink() || lexical.dev !== stat.dev || lexical.ino !== stat.ino) throw new Error("unsafe_store");
-    const bytes = Buffer.alloc(CODEX_CLI_JOB_STORE_MAX_BYTES + 1);
-    const length = readSync(fd, bytes, 0, bytes.length, 0);
-    if (length > CODEX_CLI_JOB_STORE_MAX_BYTES) throw new Error("unsafe_store");
-    return parseStoreBody(bytes.subarray(0, length).toString("utf8"));
-  } finally { if (fd !== undefined) closeSync(fd); }
+  for (let attempt = 1; ; attempt++) {
+    let fd: number | undefined;
+    try {
+      fd = openSync(p.file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      storeReadHookForTests?.("opened");
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.size > CODEX_CLI_JOB_STORE_MAX_BYTES || (stat.mode & 0o077) !== 0
+        || stat.uid !== process.geteuid?.() || stat.nlink > 1) throw new Error("unsafe_store");
+      storeReadHookForTests?.("descriptor-checked");
+      const lexical = lstatSync(p.file);
+      if (lexical.isSymbolicLink()) throw new Error("unsafe_store");
+      if (stat.nlink === 0 || lexical.dev !== stat.dev || lexical.ino !== stat.ino) {
+        if (attempt < REPLACED_STORE_READ_ATTEMPTS) continue;
+        throw new Error("unsafe_store");
+      }
+      const bytes = Buffer.alloc(CODEX_CLI_JOB_STORE_MAX_BYTES + 1);
+      const length = readSync(fd, bytes, 0, bytes.length, 0);
+      if (length > CODEX_CLI_JOB_STORE_MAX_BYTES) throw new Error("unsafe_store");
+      return parseStoreBody(bytes.subarray(0, length).toString("utf8"));
+    } finally { if (fd !== undefined) closeSync(fd); }
+  }
 }
 function rollbackInitializingLock(p: ReturnType<typeof paths>, lockIdentity: { dev: number; ino: number }, ownerIdentity?: { dev: number; ino: number }) {
   try {

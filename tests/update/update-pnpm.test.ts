@@ -132,7 +132,7 @@ describe("pnpm executable selection", () => {
 });
 
 // A real pnpm home and store: the global-store proof lstat()s the anchor and realpath()s the store.
-const fixtureHome = join(realpathSync(mkdtempSync(join(tmpdir(), "ocx-update-store-"))), "pnpm-home");
+const fixtureHome = join(realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-update-store-"))), "pnpm-home");
 const fixtureStore = join(fixtureHome, "store", "v11");
 mkdirSync(fixtureStore, { recursive: true });
 /** Where a global-store install of this version lives inside the fixture store. */
@@ -165,7 +165,7 @@ const storeOwnerFor = (): PnpmGlobalOwner => ({
 
 describe("pnpm global owner binding", () => {
   test("asks pnpm for its store at pnpm home, without a store override, for a custom store", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-pnpm-store-config-")));
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-pnpm-store-config-")));
     try {
       const home = join(root, "pnpm-home"), globalDir = join(home, "global"), globalRoot = join(globalDir, "v11");
       const globalBinDir = join(home, "bin"), store = join(root, "custom-store", "v11");

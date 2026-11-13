@@ -172,6 +172,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     // The same lifecycle-owned book relayed HTTP turns count in, so restart gates see link sockets.
     activity,
     holds,
+    // The same per-link traffic book as the relayed HTTP requests: a link socket is one request in it.
+    traffic,
     enabled: websocketEnabled,
     policy: () => startContext!.responsesWebsocket!.policy(),
     authorized: identity => fingerprintsFor(identity.keyId, identity.linkId).includes(identity.fingerprint),
