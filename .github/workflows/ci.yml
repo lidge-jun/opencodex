@@ -353,11 +353,14 @@ jobs:
             # real only on macOS and Windows, so its job lints and tests the crate on all three.
             remote_helper:
               - 'native/remote-workspace-helper/**'
-            # The Rust lightweight Child (native/ocx-child). Nothing else in CI builds or tests it; its
-            # job runs fmt, clippy and the crate's tests (including the process-level lifecycle suites)
-            # on Linux. ci.yml is listed so an edit to the job verifies itself.
+            # The Rust lightweight Child (native/ocx-child). Nothing else in CI reliably builds or tests
+            # it (the Bun suites run it only where the runner has cargo); its job runs fmt, clippy and the
+            # crate's tests, including the process-level lifecycle suites, on Linux. The conformance
+            # fixture is the crate's test input too (tests/conformance.rs), and ci.yml is listed so an
+            # edit to the job verifies itself.
             ocx_child:
               - 'native/ocx-child/**'
+              - 'tests/fixtures/link/ocx-child-conformance.json'
               - '.github/workflows/ci.yml'
             # docker-smoke and keyring-smoke on a pull request. Both used to run on every PR the
             # ci filter matched, which is nearly all of them, while each proves something narrow:
@@ -1463,20 +1466,14 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.changes.outputs.checkout_ref }}
 
+      # Pinned like catalog-async-contracts.yml: clippy runs with -D warnings, so a floating stable
+      # could fail unrelated pull requests the day it adds a lint. 1.100.0 is the stable this crate is
+      # linted with (1.99.0 clippy reports needless_borrows_for_generic_args on it); the crate needs 1.90+.
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master snapshot; the action publishes no release tags, so the toolchain is pinned explicitly
         with:
-          toolchain: stable
+          toolchain: 1.100.0
           components: rustfmt, clippy
-
-      - name: Cache cargo registry and build
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            native/ocx-child/target
-          key: ocx-child-${{ runner.os }}-${{ hashFiles('native/ocx-child/Cargo.lock') }}
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path native/ocx-child/Cargo.toml --check

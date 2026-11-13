@@ -251,6 +251,16 @@ describe("an edit to ocx-child alone", () => {
     expect(script).toContain("cargo test --locked");
   });
 
+  test("an edit to the conformance fixture the crate's tests read selects it", () => {
+    expect(jobsSelectedBy(filtersMatching("tests/fixtures/link/ocx-child-conformance.json")).map(([name]) => name)).toContain("ocx-child");
+  });
+
+  test("runs on the GitHub-hosted Ubuntu runner, which has cargo, with a pinned toolchain", () => {
+    expect(jobs["ocx-child"]?.["runs-on"]).toBe("ubuntu-latest");
+    const setup = (jobs["ocx-child"]?.steps ?? []).find(step => String(step.uses ?? "").startsWith("dtolnay/rust-toolchain@"));
+    expect(String(setup?.with?.toolchain)).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
   test("an ordinary source change does not select it", () => {
     for (const path of ["src/router.ts", "native/remote-workspace-helper/src/main.rs", "package.json"]) {
       expect(`${path}:${filtersMatching(path).includes("ocx_child")}`).toBe(`${path}:false`);
@@ -259,8 +269,8 @@ describe("an edit to ocx-child alone", () => {
 });
 
 describe("the narrow checks stay narrow", () => {
-  test("neither path starts the full suite or the native macOS jobs", () => {
-    for (const path of [ACTION_PATH, HELPER_PATH]) {
+  test("no narrow path starts the full suite or the native macOS jobs", () => {
+    for (const path of [ACTION_PATH, HELPER_PATH, "native/ocx-child/src/cli.rs"]) {
       expect(`${path}:ci=${matches(filters.ci, path)}`).toBe(`${path}:ci=false`);
       expect(`${path}:native=${matches(filters.native, path)}`).toBe(`${path}:native=false`);
     }
@@ -268,7 +278,7 @@ describe("the narrow checks stay narrow", () => {
 
   test("an ordinary source change selects neither job", () => {
     for (const path of ["src/router.ts", "tests/lab/core-lab-boundary.test.ts", "package.json"]) {
-      expect(`${path}:${filtersMatching(path).filter(name => name === "setup_action" || name === "remote_helper")}`).toBe(`${path}:`);
+      expect(`${path}:${filtersMatching(path).filter(name => name === "setup_action" || name === "remote_helper" || name === "ocx_child")}`).toBe(`${path}:`);
     }
   });
 
