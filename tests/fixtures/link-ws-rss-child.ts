@@ -8,8 +8,9 @@
  *
  * The stall is the Child's own. For the WebSocket, every link leg toward Codex has paused its Home leg (more than 1 MiB
  * waits toward Codex; the relay's onDownlinkPause seam). A leg that ends never reports "resumed", so the fixture also
- * counts the relay's releases (onReleased): the idle reading waits for the warm-up socket's release, and a release after
- * it and before the stall is announced reports the run invalid, so a dead leg can never count as a held one. For HTTP, every relayed response waits for its reader
+ * counts the relay's releases (onReleased): the idle reading waits for the warm-up socket's release (30 s at most, else
+ * the run is invalid), and a release after it and before the stall is announced reports the run invalid, so a dead leg
+ * can never count as a held one. For HTTP, every relayed response waits for its reader
  * (setLinkChildRelayWaitObserverForTests, #8680): the reader holds a chunk and the relay may hold one more queued, since
  * the relay reads one Home chunk ahead. The observer reports every relayed response, management reads included, so the
  * fixture counts every transition from the start: the idle reading reports how many waits are open (the test requires
@@ -65,6 +66,7 @@ const peakAnswer = (): { rss: number | null; method: string } => {
 const QUIET_WINDOW_MS = 2_500;
 const SETTLE_DEADLINE_MS = 180_000;
 const QUIET_TICK_MS = 100;
+const RELEASE_DEADLINE_MS = 30_000;
 let waiting = 0;
 let maxWaiting = 0;
 let minWaiting = 0;
@@ -135,8 +137,13 @@ for (;;) {
   const command = String(next.value).trim();
   if (command === "peak") console.log(JSON.stringify({ ...peakAnswer(), maxWaiting, minWaiting }));
   else if (command === "gc-rss") {
-    // The WebSocket run's warm-up socket must have released its slot before the idle reading.
-    if (armedAt === null && setup.transport === "websocket") await warmRelease;
+    // The WebSocket run's warm-up socket must have released its slot before the idle reading, within a bound that fails.
+    if (armedAt === null && setup.transport === "websocket") {
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      const released = await Promise.race([warmRelease.then(() => true), new Promise<boolean>(resolve => { bound = setTimeout(() => resolve(false), RELEASE_DEADLINE_MS); })]);
+      clearTimeout(bound);
+      if (!released) { console.log(JSON.stringify({ invalid: true, reason: "the warm-up socket was not released before the idle reading", releaseDeadlineMs: RELEASE_DEADLINE_MS })); continue; }
+    }
     Bun.gc(true);
     if (kernel && !resetKernelPeak()) resetFailed = true;
     highWater = process.memoryUsage().rss;

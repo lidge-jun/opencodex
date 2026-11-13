@@ -33,6 +33,7 @@ const EVENT_BYTES = Math.floor(3.9 * MiB);
 const CHUNK_PLAN = [1, 64 * 1024, 16 * MiB, MiB, 4 * MiB, 1, 16 * MiB];
 const HOLD_BYTES = 16 * MiB;
 const INPUT_BYTES = LINK_CHILD_WS_LIMITS.localMessageBytes - 64 * 1024;
+const CLOSE_DEADLINE_MS = 30_000;
 setDefaultTimeout(600_000);
 
 const eventJson = (index: number, delta: string) => JSON.stringify({ type: "response.output_text.delta", index, delta });
@@ -165,6 +166,7 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
     warm = false;
     child.stdin.write("gc-rss\n"); child.stdin.flush();
     const idleAnswer = await nextLine();
+    if (idleAnswer.invalid === true) throw new Error("invalid run: " + JSON.stringify(idleAnswer));
     const idle = Number(idleAnswer.rss);
     // No wait is open at the idle reading: the warm-up turns have ended theirs.
     expect(idleAnswer.waitingAtIdle).toBe(0);
@@ -199,7 +201,14 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
     for (const { client } of order.sort((a, b) => a.key - b.key)) client.destroy();
     // The Child processes the cut before the peak is read (the Home acceptance's order): every Home-side connection of the
     // load closes from the Child's side (its legs and relays); they are destroyed only in finally.
-    await Promise.all(loadSockets.map(socket => socket.closed ? Promise.resolve() : new Promise<void>(resolve => socket.once("close", () => resolve()))));
+    // Bounded: a Child that never closes its side fails the run here, and finally still stops it.
+    let closeBound: ReturnType<typeof setTimeout> | undefined;
+    const closedAll = await Promise.race([
+      Promise.all(loadSockets.map(socket => socket.closed ? Promise.resolve() : new Promise<void>(resolve => socket.once("close", () => resolve())))).then(() => true),
+      new Promise<boolean>(resolve => { closeBound = setTimeout(() => resolve(false), CLOSE_DEADLINE_MS); }),
+    ]);
+    clearTimeout(closeBound);
+    if (!closedAll) throw new Error("the Child did not close " + loadSockets.filter(socket => !socket.closed).length + " Home connections within " + CLOSE_DEADLINE_MS + " ms of the cut");
     child.stdin.write("peak\n"); child.stdin.flush();
     const peakAnswer = await nextLine();
     const peak = peakAnswer.rss === null ? Number.NaN : Number(peakAnswer.rss);
