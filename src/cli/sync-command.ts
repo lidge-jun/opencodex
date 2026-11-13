@@ -187,10 +187,13 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]));
+          }, ["mcode", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }
+        // Pi's raw nested selectors are proven by the serving proxy, so its refresh runs there.
+        const { refreshPiThroughServer } = await import("./pi-sync");
+        results.push(...await refreshPiThroughServer({ findLiveProxy: async () => live }));
       }
       // Even without a live proxy, report why Aside could not sync. Its server
       // owner is never bypassed, and another client's failure cannot hide it.
@@ -226,7 +229,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
       runChild: async (link, deadline, options) => {
         const runner = fanoutSshRunner(deadline);
         let platform: "posix" | "windows";
-        try { platform = link.remotePlatform ?? await requireRemotePlatformFramed(runner, link.alias, linkKnownHostsPath()); }
+        try { platform = link.remotePlatform ?? await requireRemotePlatformFramed(runner, link.alias, link.explicitRoute ?? null, linkKnownHostsPath()); }
         catch (error) {
           if (error instanceof FanoutProcessError && (error.reason === "deadline-exceeded" || error.reason === "termination-unconfirmed")) return { state: "timed-out", reason: error.reason, exit: null };
           return { state: "failed", reason: "platform-probe-failed", exit: null };
@@ -236,7 +239,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
           // Revision 6: with the shared deadline spent before the restarting sync, nothing is sent to the Child.
           if (restart !== "none" && deadline - Date.now() <= 0) return { sync: { state: "timed-out", reason: "deadline-exceeded", exit: null }, notRun: true };
           try {
-            const result = await runFanoutProcess(buildExecArgv({ alias: link.alias, knownHostsFile: linkKnownHostsPath(),
+            const result = await runFanoutProcess(buildExecArgv({ alias: link.alias, knownHostsFile: linkKnownHostsPath(), route: link.explicitRoute ?? null,
               argv: remotePinnedSyncArgv(link.id, platform, restart === "none" ? {} : { restart }) }), { timeoutMs: Math.max(0, deadline - Date.now()) });
             const verdict = classifySyncResult(result, { expectSelectedKind: restart !== "none" });
             return { sync: { ...verdict, exit: result.code }, notRun: pinnedSyncRanNothing(verdict, result) };

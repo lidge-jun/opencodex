@@ -1226,6 +1226,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ? storeProviderKeyInKeychain(config, name)
       : restoreProviderKeyFromKeychain(config, name);
     if (!result.ok) return jsonResponse({ error: result.error }, result.status);
+    (await import("../../providers/passive-key-observation")).clearPassiveKeyLimits(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ...result, name, store: providerKeyStoreKind(config.providers[name]) });

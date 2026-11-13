@@ -20,7 +20,6 @@
 import type { OcxConfig } from "../types";
 import { localInferenceDestination, selfFetchAdmissionToken, type LocalInferenceDestination } from "../lib/local-destinations";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
-import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import {
   ADVISOR_INTERNAL_CAPABILITY_HEADER,
@@ -258,7 +257,7 @@ export async function consultAdvisor(
     const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     return {
       ok: false, advice: "", advisorModel: input.advisorModel,
-      error: `advisor ${kind}: ${redactSecretString(e instanceof Error ? e.message : String(e))}`,
+      error: `advisor ${kind}`,
       durationMs,
     };
   } finally {

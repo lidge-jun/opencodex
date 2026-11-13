@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { LINK_MANAGEMENT_READ_PATHS } from "../../src/link/management-routes";
 import { LINK_RELAY_AUTH_VERSION } from "../../src/link/relay-auth";
+import { LINK_REQUEST_ZSTD_VERSION } from "../../src/link/request-compression";
 import { ensureQuotaPoolIdentity } from "../../src/quota-pool/identity";
 import {
   buildPeerFeatures,
@@ -35,6 +36,7 @@ const none: PeerFeatureSources = {
   servedByHeaderEmitted: false,
   relayAuthVersion: "2",
   linkPeerReportVersion: "1",
+  linkRequestZstdVersion: "",
 };
 const all: PeerFeatureSources = {
   managementRoutes: [{ method: "GET", path: QUOTA_POOL_PATH }, { method: "GET", path: FALLBACK_STATE_PATH }],
@@ -42,12 +44,13 @@ const all: PeerFeatureSources = {
   servedByHeaderEmitted: true,
   relayAuthVersion: "2",
   linkPeerReportVersion: "1",
+  linkRequestZstdVersion: "1",
 };
 
 describe("peer feature registry", () => {
   test("presence and absence follow each owning source", () => {
     expect(servedPeerFeatures(none)).toEqual(["relay-auth/2", "link-peer-report/1"]);
-    expect(servedPeerFeatures(all)).toEqual(["quota-pool/1", "fallback-policy/1", "link-management-relay", "served-by-header", "relay-auth/2", "link-peer-report/1"]);
+    expect(servedPeerFeatures(all)).toEqual(["quota-pool/1", "fallback-policy/1", "link-management-relay", "served-by-header", "relay-auth/2", "link-peer-report/1", "link-request-zstd/1"]);
     expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "PUT", path: FALLBACK_STATE_PATH }] })).toEqual(["relay-auth/2", "link-peer-report/1"]);
     expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "POST", path: QUOTA_POOL_PATH }] })).toEqual(["relay-auth/2", "link-peer-report/1"]);
     expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "GET", path: "/api/quota-pool/extra" }] })).toEqual(["relay-auth/2", "link-peer-report/1"]);
@@ -64,6 +67,7 @@ describe("peer feature registry", () => {
     expect(features.includes("link-management-relay")).toBe(LINK_MANAGEMENT_READ_PATHS.length > 0);
     expect(features.includes("served-by-header")).toBe(SERVED_BY_HEADER_EMITTED);
     expect(features).toContain(`relay-auth/${LINK_RELAY_AUTH_VERSION}`);
+    expect(features).toContain(`link-request-zstd/${LINK_REQUEST_ZSTD_VERSION}`);
   });
 
   test("every id fits the peer-side parser", () => {

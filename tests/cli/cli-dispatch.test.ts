@@ -180,6 +180,7 @@ describe("dispatchCommand exit codes", () => {
     const syncModule = await import("../../src/codex/sync");
     const catalogModule = await import("../../src/integrations/catalog-refresh");
     const asideModule = await import("../../src/cli/aside-profiles");
+    const piSyncModule = await import("../../src/cli/pi-sync");
     const order: string[] = [];
     const sync = spyOn(syncModule, "syncModelsToCodex").mockImplementation(async () => {
       order.push("catalog");
@@ -191,6 +192,7 @@ describe("dispatchCommand exit codes", () => {
       return [];
     });
     const aside = spyOn(asideModule, "refreshAsideProfilesThroughServer").mockResolvedValue([]);
+    const pi = spyOn(piSyncModule, "refreshPiThroughServer").mockResolvedValue([]);
     const log = spyOn(console, "log").mockImplementation(() => {});
     try {
       const args = ["sync"];
@@ -201,9 +203,11 @@ describe("dispatchCommand exit codes", () => {
       expect(code).toBe(0);
       expect(order).toEqual(["catalog", "refresh"]);
       expect(refresh).toHaveBeenCalledTimes(1);
-      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
+      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
+      // #8287: Pi refreshes through the serving proxy instead of the local fan-out.
+      expect(pi).toHaveBeenCalledTimes(1);
     } finally {
-      sync.mockRestore(); refresh.mockRestore(); aside.mockRestore(); log.mockRestore();
+      sync.mockRestore(); refresh.mockRestore(); aside.mockRestore(); pi.mockRestore(); log.mockRestore();
     }
   });
 

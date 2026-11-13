@@ -84,6 +84,8 @@ export interface ExportModel {
   namespaced: string;
   /** Provider-qualified alias proven equivalent by the shared management row loader. */
   aliasNamespaced?: string;
+  /** Raw nested upstream selector the serving proxy proved equivalent (#8172); Pi only. */
+  nestedNamespaced?: string;
   /** Hub-resolved Fast availability; exporters never infer it from local config. */
   fastRowAvailable?: boolean;
   provider: string;

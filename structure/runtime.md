@@ -149,7 +149,7 @@ there. Feature code is grouped by responsibility:
 `src/generated/` is committed build output, not hand-edited; `scripts/generate-model-metadata.ts` derives `kimi-responses` → Moonshot metadata from the registry's `jawcodeBundle` while keeping its provider row distinct. The generated vendor priority supplies bundled fallback for the Azure modality/limit lookup described in [the shared catalog contract](catalog.md#shared-catalog); discovery can refresh public Azure metadata independently of a release, without generation-time network fetches or static-policy changes. Snapshot refreshes preserve the separate public OpenAI API and native Codex bundles.
 
 `src/server/` is split by responsibility: `index.ts` owns the listener and the startup transaction
-while `index/serve-options.ts` owns route ordering; `responses.ts` and `responses/core.ts` compose
+while `index/serve-options.ts` owns route ordering and re-exports the ingress/context contract from `index/serve-contract.ts`; `responses.ts` and `responses/core.ts` compose
 Responses handling from the owners inventoried in [Responses transport](transports/responses.md),
 and `responses/compact.ts` and `responses/compaction-retention.ts` own v1/v2 compaction under the [routed reasoning-retention contract](transports/responses-failover.md#compaction-routing-overrides) implemented by `src/responses/reasoning-retention.ts`; `images.ts` owns the standalone Images relay;
 `responses/codex-auth-error.ts` owns the shared Responses/compact Codex auth-context HTTP mapping and audio's native-main refresh refusals.
@@ -407,7 +407,7 @@ A 429 rotation inside either loop splits the request into one attempt row per ac
 inference-wide projection. A matching credential alone does not grant veto authority. Display-only
 account, model-group, search and legacy MCP windows remain visible but cannot exclude a provider.
 The private WeakMap binds provider name, adapter, destination and captured credential; neither
-credential nor binding enters report JSON.
+credential nor binding enters report JSON. Provider reports capture auth mode, adapter and destination before a probe awaits; publication, cache reuse, joined callers and passive held reads require a matching enabled provider and reject unbound reports. Account-currentness and key-credential checks remain in force. Passive reads do not resolve OS keychain credentials or publish routing evidence; account-level DTOs are unchanged.
 
 `src/providers/quota-routing-cache.ts` rechecks the live single key, effective authentication,
 static credential headers and key-pool size. Unknown, invalid, future or 30-minute-old evidence
@@ -415,7 +415,7 @@ cannot rank or veto a provider. `src/combos/resolve.ts` uses that same scoped ge
 reset-window ordering and catalog inactivity. Changing a key, destination or adapter invalidates
 the old binding; restoring the same configuration may reuse still-fresh evidence. Account admission,
 cooldowns and response-driven retry retain [structured-code provenance](transports/responses-combo-boundaries.md#upstream-account-quota-exhaustion-failover); free-tier validation prose is not provider-wide exhaustion.
-
+Per-key selection in `src/providers/quota-key-accounts.ts` and `src/providers/key-failover.ts` uses the producer's inference projection, bound to each key and rechecked against current authentication and destination. Display retains Synthetic search and Mistral budgets; missing proof, expired evidence and failed probes are unknown for selection, while bounded last-good display survives transient failure. Selection never probes.
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
 see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota). JEV separately reads bounded loaded-only advisory snapshots, never this credential-resolving getter; publication, opt-in and privacy follow [loaded advisory quota](providers/jev-decision.md#loaded-advisory-quota).
 
