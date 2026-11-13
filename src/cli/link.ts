@@ -608,6 +608,7 @@ export function journalledRevokeError(error: unknown, operationId: string): unkn
   if (!/^[a-z_]{1,64}$/.test(code)) return error;
   if (code === "operation_journal_full") return new RuntimeApiError(journalFullGuidance(error.body), error.status, error.body);
   if (Object.hasOwn(REVOKE_REFUSALS, code)) return new RuntimeApiError(REVOKE_REFUSALS[code] + " (code " + code + ")", error.status, error.body);
+  if (Object.hasOwn(RETIREMENT_GUIDANCE, code)) return new RuntimeApiError(RETIREMENT_GUIDANCE[code] + " (code " + code + ")", error.status, error.body);
   // A fresh forced revoke is refused before its tombstone, first intent and tunnel stop and its refusal is recorded; a resumed one
   // (even one recorded failed_clean) may re-own its retirement receipt first and can finish under the same id once capacity is
   // freed, while a new id is refused with link_retirement_owned (#8416). A second refusal proves nothing (the live limit can still be
@@ -623,6 +624,15 @@ export function journalledRevokeError(error: unknown, operationId: string): unkn
   const resolve = outcome === "unknown" ? "; check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
   return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve, error.status, error.body);
 }
+
+/**
+ * #8416's refusals for an interrupted removal of the link. The owning operation and the way out are only in the server's message,
+ * which the CLI never prints, so these name where to look and make no claim about what an earlier attempt changed.
+ */
+const RETIREMENT_GUIDANCE: Record<string, string> = {
+  link_retirement_owned: "An unfinished removal holds this link. Repeat the operation id that owns it (ocx link operations lists this link's revokes), or finish it with ocx link revoke without --operation-id (add --force if its Child cleanup cannot run again).",
+  link_retirement_mode_mismatch: "This link's removal was interrupted after its cleanup ran. Repeat it with the same options as that attempt, or with --force, to finish it.",
+};
 
 /**
  * Refusals of a journalled revoke that come before it changes anything (a closed list; any other code, including ones

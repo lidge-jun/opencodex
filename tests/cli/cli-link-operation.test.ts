@@ -272,6 +272,21 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
     } finally { h.restore(); }
   });
 
+  // #8416's refusals for an interrupted removal: the owner and the way out live only in the server's message, which is dropped.
+  test.each([
+    ["link_retirement_owned", ["unfinished removal holds this link", "ocx link operations", "without --operation-id"]],
+    ["link_retirement_mode_mismatch", ["interrupted after its cleanup ran", "the same options", "--force"]],
+  ])("%s prints closed guidance that names the way out and makes no claim about state", async (code, parts) => {
+    const h = harness([{ status: 409, body: { error: { code, message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-10"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      for (const part of parts) expect(printed).toContain(part);
+      expect(printed).toContain("(code " + code + ")");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
   // tombstone_write_failed can come after the tombstone file was written (its permissions step failed), so it stays generic.
   test("a code that cannot promise nothing changed makes no such claim", async () => {
     const h = harness([{ status: 503, body: { error: { code: "tombstone_write_failed", message: "server-chosen text" } } }]); try {
