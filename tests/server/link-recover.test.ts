@@ -243,7 +243,13 @@ describe("POST /api/link/recover", () => {
     h.answer(() => ok("", 2, "Usage: ocx-child detach [--keep-catalog] [--purge] [--json]\n"));
     const res = await h.request("POST", "/api/link/recover", { linkId: ID });
     expect(res.status).toBe(409);
-    expect((await errorOf(res)).code).toBe("child_recover_unsupported");
+    const error = await errorOf(res);
+    expect(error.code).toBe("child_recover_unsupported");
+    // A way out that runs as printed: check first, detach by hand only for this link, otherwise leave it; then a person forgets.
+    expect(error.message).toContain("Check the machine with that ocx-child's connect status --json: only if it shows this link's id");
+    expect(error.message).toContain("if it shows another link or nothing, or cannot be read or reached, leave it");
+    expect(error.message).toContain("ocx link recover --forget --link-id " + ID + " --yes");
+    expect(error.message).not.toContain("<id>");
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });
 
