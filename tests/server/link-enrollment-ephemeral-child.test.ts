@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -12,6 +12,7 @@ import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { remoteInspectRuntimeArgv, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { routeIntentStatePath } from "../../src/routing/route-intent-state";
 
 let root: string;
 let previousHome: string | undefined;
@@ -201,6 +202,9 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     const body = await res.json() as { linkId: string };
     expect(body.linkId).toMatch(/^lnk_[0-9a-f]{16}$/);
     expect(h.store.links[0]?.childKind).toBe("ephemeral");
+    // An ephemeral ocx-child never reads route intent, so its enrollment saves none: no device
+    // policy, and no Home defaults that would make ocx sync apply route intent on the Home.
+    expect(existsSync(routeIntentStatePath())).toBe(false);
 
     const adminStatus = await (await h.request("GET", "/api/link/status", undefined, "admin-token")).json() as Record<string, unknown>;
     expect(adminStatus).not.toHaveProperty("homeCodexSettingsDigest");
@@ -228,6 +232,13 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     expect((await kept.json() as { error: { code: string; hint?: string } }).error).toMatchObject({ code: "remote_disconnect_failed", hint: "purge_incomplete" });
     expect(h.store.links).toHaveLength(1);
     expect(h.events).not.toContain("disconnectPurge");
+
+    // A binary kept because another Home's relay runs from it says so.
+    h.overrides.managedPurge = () => ok('{"restored":true,"outcome":"ExactRestore","daemonRunning":false,"purged":false}\n', 0, "ocx-purge-kept:binary_in_use\n");
+    const inUse = await h.request("DELETE", "/api/link/" + linkId, { purge: true });
+    expect(inUse.status).toBe(502);
+    expect((await inUse.json() as { error: { code: string; hint?: string } }).error).toMatchObject({ code: "remote_disconnect_failed", hint: "binary_in_use" });
+    expect(h.store.links).toHaveLength(1);
 
     h.overrides.managedPurge = () => ok("", 1, "ocx-purge-error:managed_child_missing\n");
     const missing = await h.request("DELETE", "/api/link/" + linkId, { purge: true });

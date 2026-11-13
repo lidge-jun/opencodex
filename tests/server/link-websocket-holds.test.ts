@@ -19,7 +19,7 @@ import { createInboundBodyBudget } from "../../src/server/inbound-body-budget";
 import { withRaisedInboundBodyAdmission } from "../../src/server/inbound-body-admission";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient } from "../helpers/link-ws-client";
-import { relayHarness } from "../helpers/link-relay-harness";
+import { chunkedResponse, relayHarness } from "../helpers/link-relay-harness";
 import type { LinkActivity } from "../../src/link/child-activity";
 import type { LinkTrafficBook } from "../../src/link/traffic";
 import { linkTurnPacesReads, observeLinkTurnExpansion } from "../../src/server/link-turn";
@@ -438,6 +438,36 @@ describe("a relayed POST whose traffic accounting throws (#8613 review)", () => 
     expect(decisions).toEqual([false]);
     expect(ended).toBe(1);
   });
+  test("returns its lease on the body paths too when ending the flow throws: a body read to its end and a cancelled body", async () => {
+    for (const how of ["read", "cancel"] as const) {
+      let ended = 0;
+      const flow = { toHome() {}, uncounted() {}, fromHome() {}, end() { throw new Error("end failed"); } };
+      const h = relayHarness({
+        activity: { begin: () => () => { ended += 1; } } as unknown as LinkActivity,
+        traffic: { begin: () => flow } as unknown as LinkTrafficBook,
+      });
+      const nonce = await h.session(KEY.linkId);
+      const req = h.request("/v1/responses", { method: "POST", nonce, headers: { "content-type": "application/json", "content-length": "2" }, body: "{}" });
+      const response = await h.dispatch(req, async () => chunkedResponse(["a", "b"]));
+      if (how === "read") expect(await response.text()).toBe("ab");
+      else { const reader = response.body!.getReader(); await reader.read(); await reader.cancel(); }
+      expect({ how, ended }).toEqual({ how, ended: 1 });
+    }
+  });
+
+  test("returns its lease for a body-less answer when ending the flow throws", async () => {
+    let ended = 0;
+    const flow = { toHome() {}, uncounted() {}, fromHome() {}, end() { throw new Error("end failed"); } };
+    const h = relayHarness({
+      activity: { begin: () => () => { ended += 1; } } as unknown as LinkActivity,
+      traffic: { begin: () => flow } as unknown as LinkTrafficBook,
+    });
+    const nonce = await h.session(KEY.linkId);
+    const req = h.request("/v1/responses", { method: "POST", nonce, headers: { "content-type": "application/json", "content-length": "2" }, body: "{}" });
+    expect((await h.dispatch(req, async () => new Response(null, { status: 204 }))).status).toBe(204);
+    expect(ended).toBe(1);
+  });
+
   test("returns its lease even when ending the broken flow throws too, before and after dispatch", async () => {
     for (const where of ["before", "after"] as const) {
       const decisions: boolean[] = [];

@@ -7,6 +7,7 @@ import {
 import { TUNNEL_CAUSES } from "../link/tunnel-history";
 import { isEpochMs, type LinkChildParity } from "../link/child-parity";
 import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
+import { isRouteClientId, parseRouteClientOutcomes, ROUTE_INTENT_DIGEST_PATTERN, routeClientOutcomesForPeer } from "../link/route-intent";
 import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
@@ -15,6 +16,7 @@ import { LINK_CHILD_OPS_USAGE, runLinkActivity, runLinkCheck, runLinkChildOp, ru
 import { LINK_ROUTES_USAGE, runLinkRoutes } from "./link-routes";
 import { LINK_OPERATIONS_USAGE, runLinkOperations } from "./link-operations";
 import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
+import { LINK_RECOVER_USAGE, runLinkRecover } from "./link-recover";
 import { validateChildOps, validateLinkWs, type LinkChildOpsView, type LinkWsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
 import { boundHint } from "../link/ssh-runner";
@@ -22,6 +24,7 @@ import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
 import { parseExplicitRoute } from "../link/explicit-route";
+import { isOperationId } from "../link/operations-journal";
 import type { LinkChildKind } from "../link/store";
 import { findAvailablePort } from "../server/ports";
 import { viaLocalControlSocket, type LocalControlDeps } from "./link-local-control";
@@ -45,10 +48,11 @@ export const LINK_USAGE = `Usage:
   ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
   ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]
   ocx link port [--json]
-  ocx link issue --alias <alias> --tunnel-port <port> [--json]
+  ocx link issue --alias <alias> --tunnel-port <port> [--clients <id,...>] [--json]
   ocx link status [--json]
   ${LINK_DIAGNOSTICS_USAGE}
   ocx link revoke --link-id <id> [--purge] [--force --yes] [--operation-id <id>] [--json]
+${LINK_RECOVER_USAGE}
   ocx link reconnect --link-id <id> [--json]
 ${LINK_ROUTES_USAGE.join("\n")}
 ${LINK_OPERATIONS_USAGE.join("\n")}
@@ -59,6 +63,7 @@ ${LINK_CAPTURE_USAGE.join("\n")}
 
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
 An explicit route (--proxy-command, --ssh-user and --ssh-port, with --exclusive) reaches ssh on the command line for every command and tunnel of the link, so ssh_config cannot change it; an exclusive link refuses route edits.
+Recover cleans an ephemeral Child a forced revoke or an interrupted enrollment left behind, over the link's pinned SSH trust.
 Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
 Diagnostics reads this computer's bounded link diagnostics file directly; it contacts no proxy and writes nothing.
 Check reads each Home-initiated Child's installed version and update route; it changes no install.
@@ -92,6 +97,8 @@ export interface LinkCliDeps extends RuntimeApiDeps, LocalControlDeps, LinkCaptu
   confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string; ocxVersion?: string | null; runtimeKind?: "full" | "ephemeral" | "missing"; binarySizeBytes?: number }) => Promise<boolean>;
   readStore?: () => LinkStore;
   readAdminToken?: () => string | null;
+  /** Test seam for ocx link recover --forget, which a person must run (src/cli/agent-driven.ts). */
+  agentDriven?: () => boolean;
   /** Test seam: the config directory whose link diagnostics `ocx link diagnostics` reads. */
   linkConfigDir?: string;
 }
@@ -294,7 +301,7 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
 
 const OPERATION_OUTCOMES = new Set(["committed", "failed_clean", "residual", "unknown"]);
 
-function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string; operationState?: "open" | "unknown" } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
   if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
@@ -308,8 +315,10 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string; c
   const operationId = typeof body.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.operationId) ? body.operationId : undefined;
   const outcome = typeof body.outcome === "string" && OPERATION_OUTCOMES.has(body.outcome) ? body.outcome : undefined;
   const residualKind = body.residualKind === "plant" || body.residualKind === "enrollment" ? body.residualKind : undefined;
+  // link_suspended names whether the revoke that keeps the link down is open (the Home stopped during it) or unknown.
+  const operationState = body.operationState === "open" || body.operationState === "unknown" ? body.operationState : undefined;
   return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}),
-    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}) };
+    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}), ...(operationState ? { operationState } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -323,6 +332,9 @@ async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
 async function runIssue(args: string[], deps: LinkCliDeps): Promise<void> {
   takeJsonFlag(args);
   const alias = takeOption(args, "--alias");
+  const rawClients = takeOption(args, "--clients");
+  const selectedClients = rawClients?.split(",");
+  if (selectedClients && (!selectedClients.length || !selectedClients.every(isRouteClientId) || new Set(selectedClients).size !== selectedClients.length)) throw new CliUsageError("--clients needs unique supported client IDs", LINK_USAGE);
   const tunnelPort = takeIntegerOption(args, "--tunnel-port", { min: 1024 });
   if (!alias || tunnelPort === undefined || !isLinkPort(tunnelPort)) {
     throw new CliUsageError("issue requires --alias and --tunnel-port", LINK_USAGE);
@@ -333,7 +345,7 @@ async function runIssue(args: string[], deps: LinkCliDeps): Promise<void> {
   const result = validateIssue(await linkRequest<unknown>("/api/link/issue", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ alias, tunnelPort }),
+    body: JSON.stringify({ alias, tunnelPort, ...(selectedClients ? { selectedClients } : {}) }),
   }, deps));
   console.log(JSON.stringify(result));
 }
@@ -412,11 +424,13 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
       if (force && !(error instanceof RuntimeApiError)) throw new Error("Forced link revoke failed; inspect link status before retrying.");
       throw error;
     }
+    // A journalled revoke must not read as done when nothing was journalled: the caller settles a vanished link itself.
+    if (operationId !== undefined) throw new RuntimeApiError("Link " + linkId + " is not on this Home; no revoke was journalled (code link_not_found).", 404, error instanceof RuntimeApiError ? error.body : null);
     remoteCleanup = "unverified";
   }
   if (force) {
     const recovery = wasEphemeral
-      ? "Run ~/.cache/opencodex/bin/ocx-child detach on the remote client."
+      ? `Run ocx link recover --link-id ${linkId} once the machine answers, or ~/.cache/opencodex/bin/ocx-child detach on it.`
       : "Run ocx disconnect on the remote client.";
     printData({ linkId, remoteCleanup, recovery, ...(operationId !== undefined && recordedOutcome !== undefined ? { operationId, outcome: recordedOutcome } : {}) }, wantsJson, [
       remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,
@@ -432,11 +446,33 @@ async function runReconnect(args: string[], deps: LinkCliDeps): Promise<void> {
   const linkId = takeOption(args, "--link-id");
   if (!linkId || !LINK_ID.test(linkId)) throw new CliUsageError("reconnect requires a valid --link-id", LINK_USAGE);
   rejectArgs(args, LINK_USAGE);
-  const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}/reconnect`, { method: "POST" }, deps);
+  let response: unknown;
+  try {
+    response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}/reconnect`, { method: "POST" }, deps);
+  } catch (error) {
+    throw suspendedReconnect(error, linkId) ?? error;
+  }
   if (!isRecord(response)) throw new Error("invalid link API response: reconnect object");
   assertExactKeys(response, ["linkId"], "reconnect");
   if (response.linkId !== linkId) throw new Error("invalid link API response: reconnect link id");
   console.log(JSON.stringify({ linkId }));
+}
+
+/**
+ * 409 link_suspended: an unsettled revoke keeps the link down. The next step is built here from the validated operation id,
+ * never from the server's text; a 409 keeps the CLI's exit 5.
+ */
+function suspendedReconnect(error: unknown, linkId: string): RuntimeApiError | null {
+  if (!(error instanceof RuntimeApiError) || error.status !== 409 || errorCodeBody(error.body)?.error.code !== "link_suspended") return null;
+  const body = isRecord(error.body) ? error.body : {};
+  const op = isOperationId(body.operationId) ? body.operationId : null;
+  const resolve = op ? "ocx link operations resolve --operation-id " + op + " --yes" : null;
+  const message = !op
+    ? "Link " + linkId + " is kept down by an unsettled revoke; find it with ocx link operations, then resolve it."
+    : body.operationState === "open"
+      ? "Link " + linkId + " is kept down: revoke operation " + op + " did not finish (the Home stopped during it). Repeat it with the same flags: ocx link revoke --link-id " + linkId + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve
+      : "Link " + linkId + " is kept down: revoke operation " + op + " ended unknown and may have disconnected or purged the Child. Check the Child, then run: " + resolve;
+  return new RuntimeApiError(message, 409, error.body);
 }
 
 export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}): Promise<number> {
@@ -452,6 +488,7 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "status") await runStatus(args, deps);
     else if (command === "diagnostics") await runLinkDiagnostics(args, deps, LINK_USAGE);
     else if (command === "revoke") await runRevoke(args, deps);
+    else if (command === "recover") await runLinkRecover(args, deps, linkRequest, LINK_USAGE);
     else if (command === "reconnect") await runReconnect(args, deps);
     else if (command === "cleanup") await runLinkCleanup(args, deps, LINK_USAGE);
     else if (command === "check") verdictExit = await runLinkCheck(args, deps, linkRequest, LINK_USAGE);
@@ -461,12 +498,12 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "routes") await runLinkRoutes(args, deps, linkRequest, LINK_USAGE);
     else if (command === "operations") await runLinkOperations(args, deps, linkRequest, LINK_USAGE);
     else if (command === "activity") await runLinkActivity(args, deps, linkRequest, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, routes, operations, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, recover, reconnect, routes, operations, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
   });
   return code === 0 ? verdictExit : code;
 }
 
-const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt"] as const;
+const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt", "appliedRouteIntentDigest", "routeClientOutcomes"] as const;
 const ROUTE_OUTCOMES = new Set(["transient", "readiness", "grant_unobserved", "forward", "auth", "hostkey"]);
 const ROUTE_BLOCKS = new Set(["ssh_client_unsupported", "stop_unconfirmed"]);
 
@@ -540,10 +577,20 @@ function validateParity(candidate: Record<string, unknown>, index: number): Link
   if (digest !== undefined && digest !== null && (typeof digest !== "string" || !CODEX_SETTINGS_DIGEST_PATTERN.test(digest))) {
     throw new Error(`invalid link API response: link ${index} appliedCodexSettingsDigest`);
   }
+  let route: Pick<LinkChildParity, "appliedRouteIntentDigest" | "routeClientOutcomes"> = {};
+  if (candidate.appliedRouteIntentDigest !== undefined || candidate.routeClientOutcomes !== undefined) {
+    const routeDigest = candidate.appliedRouteIntentDigest;
+    const outcomes = parseRouteClientOutcomes(candidate.routeClientOutcomes);
+    if ((routeDigest !== null && (typeof routeDigest !== "string" || !ROUTE_INTENT_DIGEST_PATTERN.test(routeDigest))) || !outcomes) {
+      throw new Error(`invalid link API response: link ${index} route intent`);
+    }
+    route = { appliedRouteIntentDigest: routeDigest, routeClientOutcomes: routeClientOutcomesForPeer(outcomes) };
+  }
   return {
     lastApplyAt: time("lastApplyAt"),
     runtimeStartedAt: time("runtimeStartedAt"),
     appliedCodexSettingsDigest: typeof digest === "string" ? digest : null,
     reportedAt: time("reportedAt"),
+    ...route,
   };
 }

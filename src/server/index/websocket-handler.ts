@@ -348,6 +348,8 @@ export function createWebsocketHandler(
           baseHeaders.forEach((value, key) => fwd.set(key, value));
           // A Remote Link socket hands the pipeline the create it parsed (#8600): serializing it into the request and
           // parsing it back would hold two more request-sized copies for the turn. Local sockets keep the request body.
+          // turnBody is a shallow copy: preparation's in-place edits to nested input reach frame.input too, which the
+          // socket's activity book reads again later, for the array's identity and each result's type and ids only.
           const turnBody = { ...payload, stream: true };
           const linkSocket = ws.data.link !== undefined;
           const req = new Request("http://localhost/v1/responses", {
@@ -404,7 +406,8 @@ export function createWebsocketHandler(
               : (payload: string) => inspectResponseLogSsePayload(logCtx, payload);
             const providerExecuted = responseToolOwnership(response);
             await sendResponseToWebSocket(ws, response, isCurrent, {
-              untilEof: nativeControl?.relayActive === true,
+              // A native-control body is the upstream itself, with no relay tail behind it.
+              untilEof: nativeControl?.relayActive === true, rawUpstream: nativeControl?.relayActive === true,
               onSsePayload: payload => {
                 ws.data.responsesActivity?.observePayload(payload, providerExecuted);
                 observeLog(payload);

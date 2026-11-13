@@ -140,6 +140,8 @@ export interface ClientLinkSupervisorDeps extends ClientLinkTunnelDeps, OrphanRe
   connectedLinkId?: () => string | null | typeof CONNECTION_UNREADABLE;
   /** Called once after the tunnel stopped because the link ended (the runtime recycles here). */
   onLinkEnded?: () => void;
+  /** Test seam: called once the start-up check (leftover tunnel, first spawn) has finished. */
+  onInitialized?: () => void;
   /** The link key for the keyed readiness probe. The runtime passes its cached key source. */
   linkKey?: () => string | null;
   /** Async local IPv4 LISTEN ownership; an unknown or foreign owner never receives the link key. */
@@ -607,6 +609,14 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   let timer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let stopping = false;
+  // Told once when stop() begins or the link ends (endLink), before the tunnel is signalled (the link
+  // WebSocket drains here).
+  const stoppingListeners: Array<() => void> = [];
+  const notifyStopping = (): void => {
+    for (const listener of stoppingListeners.splice(0)) {
+      try { listener(); } catch { /* a listener never delays the stop */ }
+    }
+  };
   let initialized = false;
   let initializing = false;
   let onLinkEndedCalled = false;
@@ -771,6 +781,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   };
 
   const endLink = async (): Promise<void> => {
+    // The link ended and the runtime recycles: listeners drain before the tunnel goes, as on stop().
+    notifyStopping();
     await stopTunnel();
     if (onLinkEndedCalled || stopping) return;
     linkId = null;
@@ -992,6 +1004,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       initialized = true;
       initializing = false;
       settleWaiters();
+      try { deps.onInitialized?.(); } catch { /* a test seam never alters the supervisor */ }
     }
   };
 
@@ -1014,6 +1027,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
         return;
       }
       stopping = true;
+      notifyStopping();
       abortProbe();
       settleWaiters();
       if (timer !== undefined) {
@@ -1023,6 +1037,9 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       if (tickFlight) await tickFlight;
       await stopTunnel();
       failure = undefined;
+    },
+    onStopping(listener: () => void): void {
+      stoppingListeners.push(listener);
     },
     connectionGeneration(): string | undefined {
       if (!started || stopping || failure !== undefined || state.kind !== "connected") return undefined;

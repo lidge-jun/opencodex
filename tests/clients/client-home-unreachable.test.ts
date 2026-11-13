@@ -27,6 +27,12 @@ describe("a Child or Hub client cannot serve from local providers", () => {
   test("control: the standalone server does reach provider dispatch, so the walk is not vacuous", () => {
     expect(firstLoadTimePathTo("src/server/index.ts", path => LOCAL_SERVING.test(path))).not.toBeNull();
   });
+  test("route-intent transport and receipt helpers do not eagerly load device writers", () => {
+    const writers = /\/src\/client\/route-intent-apply\.ts$|\/src\/integrations\/route-intent\.ts$/;
+    for (const entry of ["src/integrations/route-intent-connected.ts", "src/integrations/route-intent-disconnect.ts"]) {
+      expect(firstLoadTimePathTo(entry, path => writers.test(path))).toBeNull();
+    }
+  });
 });
 
 describe("home_unreachable answers", () => {

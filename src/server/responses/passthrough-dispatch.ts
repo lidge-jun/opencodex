@@ -27,7 +27,7 @@ import { renewMainQuotaDispatchForAttempt } from "../../codex/main-account-cache
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { resolveConnectTimeoutMs } from "../../stall-timeout";
-import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
+import { codexSafetyBufferingFilterOptions, createTerminalStatusTracker } from "../relay";
 import { imageGenToolCallAliases } from "../responses-image-gen-repair";
 import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
 import {
@@ -543,7 +543,6 @@ export async function preparePassthroughExchange(
     // untouched upstream stream, so it can still observe a `response.completed` the client never
     // received; checking the payload itself rather than a flag shared with the client relay keeps
     // this free of tee ordering races.
-    //
     // Checking only the terminal snapshot is not enough. An upstream can announce the undeclared
     // call in `response.output_item.added`, which trips the client guard, and then close with a
     // `response.completed` whose `output` is empty. The client gets `response.failed`, the terminal
@@ -553,12 +552,13 @@ export async function preparePassthroughExchange(
     let inspectedTerminal: ResponsesTerminalStatus | null = null;
     let inspectedCompletionSeen = false;
     let firstTerminalAllowsRecall = false;
+    const inspectedTerminalStatus = createTerminalStatusTracker();
     const passiveQuotaObserved = hasPassiveAccountQuota(route.providerName)
       && route.provider.authMode === "oauth";
     const noteInspectedPayload = (payload: unknown) => {
       // First terminal stays authoritative even in metadata-only inspection, which
       // intentionally continues parsing after a failed/incomplete terminal.
-      const terminal = terminalStatusFromParsed(payload);
+      const terminal = inspectedTerminalStatus(payload);
       if (inspectedTerminal === null && terminal !== null) {
         inspectedTerminal = terminal;
         // The client boundary accepts a terminal by event type, even without a
