@@ -77,17 +77,31 @@ export type SshLogLevel = "ERROR" | "DEBUG1";
  * anything in ssh_config. It names how to reach the link's own alias, so it is refused with any other
  * destination; null adds nothing, which is the argv of a link without one.
  */
-function routeOptions(route: ExplicitRoute | null | undefined, alias: string, destination: string): string[] {
-  if (!route) return [];
+function routeOptions(route: ExplicitRoute | null | undefined, alias: string, destination: string): RouteArgs {
+  if (!route) return NO_ROUTE;
   if (destination !== alias) throw new LinkSshArgumentError("an explicit route reaches the link alias only");
-  try { return explicitRouteSshOptions(route); } catch (error) {
+  try {
+    // Decided by the route itself, never by what its options happen to be: a link with a route reads no ssh_config.
+    return { configFile: ["-F", "none"], options: explicitRouteSshOptions(route) };
+  } catch (error) {
     if (error instanceof ExplicitRouteError) throw new LinkSshArgumentError(error.message);
     throw error;
   }
 }
 
-function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel, route: readonly string[]): string[] {
+/**
+ * What a route adds to the argv. configFile is ["-F", "none"] for every explicit route and comes first: an explicit route
+ * names the transport, user and port and the host key is pinned, so such a link reads no ssh_config at all (list-valued
+ * settings such as forwards, SendEnv and IdentityFile would add to ours, a RemoteCommand would break every exec, and no
+ * option can remove a configured forward from the tunnel). Links without a route keep reading the owner's ssh_config,
+ * which is how they reach their host.
+ */
+interface RouteArgs { configFile: readonly string[]; options: readonly string[] }
+const NO_ROUTE: RouteArgs = { configFile: [], options: [] };
+
+function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel, route: RouteArgs): string[] {
   return [
+    ...route.configFile,
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     "-o", "ServerAliveInterval=15",
@@ -107,7 +121,7 @@ function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "a
     "-o", "ForwardX11=no",
     "-o", "PermitLocalCommand=no",
     "-o", `LogLevel=${logLevel}`,
-    ...route,
+    ...route.options,
   ];
 }
 

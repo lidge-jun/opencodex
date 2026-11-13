@@ -237,6 +237,7 @@
   "link-ws-child-status.test.ts": "clients",
   "link-explicit-route.test.ts": "clients",
   "link-explicit-route-paths.test.ts": "clients",
+  "link-explicit-route-no-ssh-config.test.ts": "clients",
   "link-route-edit-exclusive.test.ts": "server",
   "link-enrollment-explicit-route.test.ts": "server",
   "cli-link-explicit-route.test.ts": "cli",
@@ -248,6 +249,7 @@
   "cli-link-operation.test.ts": "cli",
   "link-operations-journal.test.ts": "clients",
   "link-revoke-suspend.test.ts": "clients",
+  "link-ws-relay-edges.test.ts": "clients",
   "link-ocx-child-ws-gate.test.ts": "clients",
   "link-ocx-child-ws-feature.test.ts": "clients"
 }
