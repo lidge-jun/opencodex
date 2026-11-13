@@ -139,8 +139,11 @@ describe.skipIf(!ENABLED)("link WebSocket Child leg: Autobahn fuzzingserver clie
       else {
         // A refusal: the expected close code, nothing but a close frame received from the Child (no echoed or other
         // application data before it), and a clean close. Autobahn itself reports these as FAILED: it expected an echo.
-        const dataFrames = Object.entries(report.rxFrameStats ?? {}).filter(([opcode]) => Number(opcode) < 8).reduce((sum, [, n]) => sum + n, 0);
-        ok = report.remoteCloseCode === want.closeCode && dataFrames === 0 && cleanClose;
+        // Fail closed: a report without frame statistics cannot show that nothing was sent.
+        const stats = report.rxFrameStats;
+        const statsValid = typeof stats === "object" && stats !== null && Object.values(stats).every(n => typeof n === "number") && (stats["8"] ?? 0) >= 1;
+        const dataFrames = statsValid ? Object.entries(stats).filter(([opcode]) => Number(opcode) < 8).reduce((sum, [, n]) => sum + n, 0) : -1;
+        ok = statsValid && report.remoteCloseCode === want.closeCode && dataFrames === 0 && cleanClose;
       }
       const label = typeof want === "string" ? want : "close " + want.closeCode;
       byClass[label + (ok ? "" : " MISMATCH")] = (byClass[label + (ok ? "" : " MISMATCH")] ?? 0) + 1;
