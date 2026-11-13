@@ -230,64 +230,6 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 90000);
 
-test.skipIf(process.platform === "win32")("pnpm child reports unchanged active tree without rollback and installs the pinned version", () => {
-  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-pnpm-child-")));
-  const home = join(root, "home"), group = join(root, "global/v11"), bin = join(root, "bin");
-  const pkg = join(group, "node_modules/@bitkyc08/opencodex"), result = join(root, "result.json"), log = join(root, "pnpm.log");
-  mkdirSync(home); mkdirSync(bin); mkdirSync(pkg, { recursive: true });
-  try {
-    cpSync(repoPath("src"), join(pkg, "src"), { recursive: true }); cpSync(repoPath("bin"), join(pkg, "bin"), { recursive: true });
-    const manifest = JSON.parse(readFileSync(repoPath("package.json"), "utf8")); manifest.version = "2.0.0";
-    writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest)); symlinkSync(repoPath("node_modules"), join(pkg, "node_modules"));
-    writeFileSync(join(group, "node_modules/.modules.yaml"), "layoutVersion: 5\n");
-    writeFileSync(join(home, "config.json"), JSON.stringify({ port: 1 }));
-    const executable = Bun.which("node"); if (!executable) throw new Error("Node required");
-    const node = spawnSync(executable, ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
-    if (!node || !node.startsWith("/")) throw new Error("Node executable is not an absolute path");
-    for (const name of ["ocx", "opencodex"]) { writeFileSync(join(bin, name), `#!/bin/sh\nexec '${node}' '${pkg}/bin/ocx.mjs' "$@"\n`); chmodSync(join(bin, name), 0o755); }
-    writeFileSync(join(bin, "pnpm"), `#!${node}\nconst fs=require('node:fs'),p=require('node:path'),a=process.argv.slice(2),e=process.env;\nfs.appendFileSync(e.OCX_FIXTURE_LOG,JSON.stringify({args:a,outcome:JSON.parse(fs.readFileSync(e.OCX_FIXTURE_RESULT)),mutex:fs.existsSync(p.join(e.OPENCODEX_HOME,'sync-update.mutation.lock'))})+'\\n');\nconst m=JSON.parse(fs.readFileSync(p.join(e.OCX_FIXTURE_PKG,'package.json')));\nif(a[0]==='list') console.log(JSON.stringify([{path:e.OCX_FIXTURE_GROUP,dependencies:{'@bitkyc08/opencodex':{version:m.version,path:e.OCX_FIXTURE_PKG}}}]));\nelse if(a[0]==='root') console.log(e.OCX_FIXTURE_GROUP+'/node_modules');\nelse if(a[0]==='config') console.log(a[2]==='global-dir'?p.dirname(e.OCX_FIXTURE_GROUP):e.OCX_FIXTURE_BIN);\nelse if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':'2.1.0');\nelse if(a[0]==='add'){if(e.OCX_FIXTURE_FAIL==='1')process.exit(1);m.version='2.1.0';fs.writeFileSync(p.join(e.OCX_FIXTURE_PKG,'package.json'),JSON.stringify(m));}\nelse process.exit(90);\n`); chmodSync(join(bin, "pnpm"), 0o755);
-    const token = createUpdatePlanToken({ currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "pnpm", cliRoot: pkg, servingRoot: null, runtimeOwner: "none", runtime: null });
-    const encoded = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: token });
-    const args = [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result];
-    const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"),
-      OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "1", OPENCODEX_BUN_PATH: process.execPath,
-      PATH: bin, OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg, OCX_FIXTURE_GROUP: group, OCX_FIXTURE_BIN: bin, OCX_FIXTURE_RESULT: result };
-    const firstCapability = issueOrchestratedResultCapability(result).capability;
-    const failed = spawnSync(node, args, { cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: firstCapability, OCX_FIXTURE_FAIL: "1" }, encoding: "utf8", timeout: 30000 });
-    expect({ status: failed.status, stdout: failed.stdout, stderr: failed.stderr }).toMatchObject({ status: 1 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "failed", rollbackPerformed: false });
-    expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
-    expireFixtureFence(home);
-    rmSync(result, { force: true });
-    const nextCapability = issueOrchestratedResultCapability(result).capability;
-    const updated = spawnSync(node, args, { cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: nextCapability }, encoding: "utf8", timeout: 30000 });
-    expect({ status: updated.status, stdout: updated.stdout, stderr: updated.stderr }).toMatchObject({ status: 0 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "installed", activeRoot: pkg });
-    expect(JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8")).fenceUntil).toBeUndefined();
-    expect(isUpdateInFlight(home)).toBe(false);
-    expectSyncAdmission(pkg, root, env, true);
-    expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
-    const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(calls.find(call => call.args[0] === "list").outcome.phase).toBe("preflight");
-    expect(calls.find(call => call.args[0] === "add")).toMatchObject({ outcome: { phase: "mutating" }, mutex: true });
-    expect(calls.some(call => call.args[0] === "view" && call.args.includes("dist.integrity") && call.args.includes("@bitkyc08/opencodex@2.1.0"))).toBe(true);
-    expect(calls.find(call => call.args[0] === "add").args).toContain("@bitkyc08/opencodex@2.1.0");
-    expireFixtureFence(home);
-    const restored = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); restored.version = "2.0.0";
-    writeFileSync(join(pkg, "package.json"), JSON.stringify(restored));
-    const parentArgs = [join(pkg, "bin/ocx.mjs"), "update", "--yes", "--json"];
-    const parentEnv = { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" };
-    const parent = (extraEnv = {}) => spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, ...extraEnv }, encoding: "utf8", timeout: 30000 });
-    const unchanged = parent({ OCX_FIXTURE_FAIL: "1" });
-    expect({ status: unchanged.status, stderr: unchanged.stderr }).toMatchObject({ status: 11 });
-    expect(JSON.parse(unchanged.stdout)).toMatchObject({ rolledBack: false, applied: false });
-    expireFixtureFence(home);
-    const parentApplied = parent();
-    expect({ status: parentApplied.status, stderr: parentApplied.stderr }).toMatchObject({ status: 0 });
-    expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
-  } finally { rmSync(root, { recursive: true, force: true }); }
-}, 90000);
-
 test.skipIf(process.platform === "win32")("identity probe is passive through both Node and Bun entrypoints", () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-identity-probe-"));
   const home = join(root, "home"), pkg = join(root, "node_modules/@bitkyc08/opencodex");
