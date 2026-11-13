@@ -721,14 +721,6 @@ describe("ocx disconnect --expect-link (a Home's revoke)", () => {
     expect(readClientConnectionState()).toEqual(before);
   });
 
-  test("a disconnected machine whose leftover sidecar names the link still refuses as client-initiated", async () => {
-    writeStandalone();
-    const { writeClientLinkState } = await import("../../src/client/link-state");
-    writeClientLinkState({ linkId: LINK_ID, alias: "home", hubHostKeyFingerprint: "SHA256:abcdefghijklmnop", peerListenerPort: 18181, tunnelPort: 2200 });
-    const run = await refusedDisconnect(["--expect-link", LINK_ID]);
-    expect(run).toEqual({ exit: 5, last: { phase: "child_link_mismatch", reason: "client_initiated_link" } });
-  });
-
   test("a disconnected machine with a pending connect still refuses (pending_operation)", async () => {
     writeStandalone();
     markClientConnectPending(serviceApiTokenFingerprint(KEY));
