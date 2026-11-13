@@ -67,6 +67,10 @@ async function stalledThenDrained(run: () => Promise<Response>, upstreamFrames: 
 }
 
 describe("upstream read-ahead under a stalled reader (#8601)", () => {
+  // Exercise the inspection tee on every host; Windows' eager relay is covered below.
+  beforeEach(() => setRelayPlatformForTests("linux"));
+  afterEach(() => setRelayPlatformForTests(undefined));
+
   test("a local request keeps the inspection read-ahead and its bytes", async () => {
     const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }));
     expect(run.pulls[0]).toBeGreaterThanOrEqual(32);
