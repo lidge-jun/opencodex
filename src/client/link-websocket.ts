@@ -21,11 +21,14 @@ import { openLinkWebsocket, type LinkWebsocketSetupFailure } from "./link-ws-tra
  * makes Codex use HTTP for that session.
  *
  * After the upgrade the Child relays whole text messages both ways without parsing or writing any of its
- * own: a binary message from Codex closes both legs with 1003; close codes are relayed, with 1005, 1006 and
- * 1015 as 1011; pings stay per hop. A second message from Codex while the previous one is still unflushed
- * toward the Home closes both legs (1013 to Codex, 1001 to the Home), and the Home leg is paused while more
- * than 1 MiB waits toward Codex. Nothing closes a socket on a timer; a runtime stop closes every socket with
- * 1001 on both legs. When the tunnel supervisor starts stopping (a Child restart), the relay drains first:
+ * own: a binary message from Codex closes both legs with 1003; close codes are relayed (toward Codex 1005,
+ * 1006 and 1015 become 1011; toward the Home, Codex's drop ends the connection without a close frame and a
+ * close without a status becomes an empty close frame); pings stay per hop. A second message from Codex while
+ * the previous one is still unflushed toward the Home closes both legs (1013 to Codex, 1001 to the Home), and
+ * the Home leg is paused while more than 1 MiB waits toward Codex. No timer closes a socket Codex has open;
+ * the only timers are the 5 s close bound and the same bound for a socket Bun upgraded but never opened. A
+ * runtime stop closes every socket with 1001 on both legs. When the tunnel supervisor starts stopping (a Child
+ * restart, or a link that ended and is about to be recycled), the relay drains first:
  * open sockets close with 1001 and every upgrade from then on, new or still in setup, gets the transient 503,
  * so Codex keeps its WebSocket session for the replacement instead of falling back to HTTP.
  */
