@@ -231,6 +231,21 @@ describe("JEV session pin (#7525)", () => {
     expect(decisions).toHaveLength(2);
   });
 
+  for (const method of ["typesafe", "generic"] as const) {
+    test(`${method} loopback session-pin behavior stays unchanged`, async () => {
+      const decisions: string[] = [];
+      const config = makeConfig("sol/gpt-5.6-sol:high", decisions, true, method);
+      config.apiKeys = [
+        { id: "alice", name: "Alice", key: "local-alice", createdAt: "2026-01-01T00:00:00.000Z" },
+        { id: "bob", name: "Bob", key: "local-bob", createdAt: "2026-01-01T00:00:00.000Z" },
+      ];
+      await turn(config, { admission: LOOPBACK, apiKey: "local-alice" });
+      await turn(config, { admission: LOOPBACK, apiKey: "local-bob" });
+      await turn(config, { admission: LOOPBACK, apiKey: "local-alice" });
+      expect(decisions).toHaveLength(1);
+    });
+  }
+
   test("a failed pinned send hops over and the next turn is decided afresh", async () => {
     const decisions: string[] = [];
     const config = makeConfig("sol/gpt-5.6-sol:high", decisions, true);

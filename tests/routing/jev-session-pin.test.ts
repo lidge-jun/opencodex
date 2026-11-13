@@ -171,6 +171,15 @@ describe("JEV session pin scope", () => {
     }
   });
 
+  test("resolved loopback principals affect only native OpenAI pin scopes", () => {
+    const native = { combo: { strategy: "jev" as const }, openAIDecisions: true };
+    scope({ ...native, clientPrincipalId: "p-alice" }).complete(sol.key, applied, captureConfigGeneration());
+    expect(scope({ ...native, clientPrincipalId: "p-bob" }).reuse([sol])).toEqual({});
+
+    scope({ clientPrincipalId: "p-alice" }).complete(sol.key, applied, captureConfigGeneration());
+    expect(scope({ clientPrincipalId: "p-bob" }).reuse([sol]).decision?.pinned).toBe(true);
+  });
+
   test("an explicit idle window expires the pin and each completion on the pinned target renews it", () => {
     const pin = scope();
     pin.complete(sol.key, applied, captureConfigGeneration());

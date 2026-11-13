@@ -133,12 +133,15 @@ export function jevSessionPinScope(args: {
   const ttlMs = args.combo.sessionPin === false ? undefined : args.combo.sessionPin?.ttlMs;
   if (args.combo.strategy !== "jev" || args.combo.sessionPin === false || !args.lane
     || !args.openAIDecisions && ttlMs === undefined) return undefined;
-  const key = `${callerNamespace(args.admission, args.clientPrincipalId)}\u0000`
+  // Only native OpenAI Decisions uses a resolved loopback key to split local callers. Other JEV
+  // backends keep their existing admission-based identity, even when a request has a client key.
+  const clientPrincipalId = args.openAIDecisions ? args.clientPrincipalId : undefined;
+  const key = `${callerNamespace(args.admission, clientPrincipalId)}\u0000`
     + `${args.comboId}\u0000${args.lane}`;
   // The process-local generation cannot be compared across restarts. The normalized Combo
   // fingerprint detects edits while the proxy was down without persisting config or credentials.
   const comboFingerprint = args.openAIDecisions && args.admission?.kind === "loopback"
-    && !args.clientPrincipalId
+    && !clientPrincipalId
     ? createHash("sha256").update(JSON.stringify(args.combo)).digest("hex")
     : undefined;
   const now = args.now ?? Date.now;

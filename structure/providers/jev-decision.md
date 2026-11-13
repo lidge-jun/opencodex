@@ -260,9 +260,10 @@ Validation accepts `false` for JEV and `{}` only for native OpenAI Decisions; sp
 default-on settings, omitted-field preservation supports older clients, and switching strategies
 removes the setting. Without a session lane, or when the selected method has no explicit timed pin,
 `src/server/responses/core-combo.ts` asks the chosen JEV method on each request.
-`src/server/responses/jev-session-pin.ts` keys a pin by the resolved caller principal (including
-a valid API key presented on loopback; otherwise the admitted key id or anonymous `loopback`),
-the Combo id and the explicit session lane from `sessionLaneIdFromRequest`; a request
+`src/server/responses/jev-session-pin.ts` keys pins by caller, Combo id and explicit session lane
+from `sessionLaneIdFromRequest`. Native OpenAI Decisions uses a valid API key presented on loopback
+to distinguish callers; other JEV methods retain their existing admission-based identity (context
+principal, configured key id or shared `loopback`). A request
 without a lane never pins and no body field is an identity. A pin is written only when the target of an applied
 (`gate: "apply"`) decision completes through the Combo callback gate, and every completion on that target
 (tool-loop continuations included) refreshes an explicitly configured idle timeout. Reuse runs after current eligibility: the pinned

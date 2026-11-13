@@ -702,19 +702,20 @@ export async function executeComboResponses(
     eligible: targetEligible,
     now: initialNow,
   });
+  const nativeOpenAIDecisions = !combo.decisionModel && isOpenAIDecisionProvider({
+    name: combo.decisionProvider,
+    adapter: config.providers[combo.decisionProvider ?? ""]?.adapter,
+    baseUrl: config.providers[combo.decisionProvider ?? ""]?.baseUrl,
+  });
   // Native OpenAI Decisions defaults on; other JEV backends need an explicit timed pin.
   const jevPin = options.compactionRoutingOverride || options.mainHardLockFallbackOverride
     ? undefined
     : jevSessionPinScope({
         combo,
-        openAIDecisions: !combo.decisionModel && isOpenAIDecisionProvider({
-          name: combo.decisionProvider,
-          adapter: config.providers[combo.decisionProvider ?? ""]?.adapter,
-          baseUrl: config.providers[combo.decisionProvider ?? ""]?.baseUrl,
-        }),
+        openAIDecisions: nativeOpenAIDecisions,
         comboId,
         admission: options.admission,
-        clientPrincipalId: replayPrincipal.clientPrincipalId,
+        clientPrincipalId: nativeOpenAIDecisions ? replayPrincipal.clientPrincipalId : undefined,
         lane: sessionLaneIdFromRequest(req.headers),
       });
 
