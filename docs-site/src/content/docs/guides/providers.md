@@ -781,7 +781,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
+opencodex ships 108 built-in presets: 87 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -857,6 +857,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Morph (Ultra plan) | `https://api.morphllm.com/v1` |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai` — Responses at `/api/v1/responses` by default; Chat Completions at `/api/coding/paas/v4/chat/completions` per model through `modelAdapters` |
@@ -899,7 +900,9 @@ The Qwen Cloud preset uses the separate Token Plan host that Qwen Cloud document
 See the [1017 model card](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017),
 [Chat reference](https://docs.qwencloud.com/api-reference/chat/openai-chat) and
 [Personal overview](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).
-
+**Morph (Ultra plan)** serves `https://api.morphllm.com/v1` and seeds only the Ultra-covered models, `morph-kimik31` (Kimi K3.1) and `morph-dsv41flash-1017` (DeepSeek V4.1 Flash, October 17 snapshot): every other Morph model bills per token, and `morph-dsv41flash-abliterated` is Ultra-covered only for accounts approved for privileged access.
+Both publish a 1,048,576-token window, accept text and images, and support tools, streaming and reasoning; Kimi takes `none`..`max` and DeepSeek Flash `none`/`low`/`high`/`xhigh`/`max` with `medium` folded onto `high`.
+Ultra removes the token meter but not the per-minute limits, so a `429` means retry after `Retry-After`. Create a key in the [Morph dashboard](https://www.morphllm.com/dashboard/api-keys), then run `ocx provider add morph`; live discovery stays off because `GET /v1/models` also lists per-token models the plan excludes.
 **OpenGateway** is an OpenAI-compatible gateway operated by Sionic AI at
 `https://apis.opengateway.ai/v1`. Its public catalog contains about 80 active models
 (as verified on 2026-10-02); the preset automatically refreshes the live model list from

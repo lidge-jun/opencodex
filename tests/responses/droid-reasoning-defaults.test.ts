@@ -11,6 +11,15 @@ const upstreamServers: Array<ReturnType<typeof Bun.serve>> = [];
 let releaseSpendHome: (() => void) | undefined;
 let testHome: TempHome;
 
+/**
+ * Each fixture upstream listens on an ephemeral loopback port, and on a shared CI host a port can reach
+ * it already known to another process: dev run 43508374033 (test 5/5) delivered a bodiless
+ * GET /healthz to one, whose JSON read threw and failed the case mid-send. Only a POST can be the
+ * request under test, so anything else is answered 404 and never captured. The path of every captured
+ * request is still asserted where it matters.
+ */
+const notTheRequestUnderTest = (req: Request) => req.method !== "POST";
+
 beforeEach(() => {
   testHome = createTempHome("ocx-droid-reasoning-default-");
 });
@@ -29,6 +38,7 @@ function upstream() {
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
+      if (notTheRequestUnderTest(req)) return new Response(null, { status: 404 });
       const body = await req.json() as Record<string, unknown>;
       captured.push({ path: new URL(req.url).pathname, headers: new Headers(req.headers), body });
       if (body.stream === true) {
@@ -55,6 +65,7 @@ function failingUpstream() {
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
+      if (notTheRequestUnderTest(req)) return new Response(null, { status: 404 });
       captured.push({ headers: new Headers(req.headers), body: await req.json() as Record<string, unknown> });
       return Response.json({
         error: { type: "server_error", code: "upstream_server_error", message: "busy" },

@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { initFixtureRepo, type GitRunner } from "./helpers/git-fixture";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 import { repoPath, repoRoot } from "./helpers/repo-root";
 import { listTestFiles, planMoves } from "../scripts/test-layout/plan";
@@ -369,16 +370,9 @@ describe("membership oracle", () => {
 });
 
 describe("move end to end", () => {
-  function scratchRepo(): { root: string; cleanup(): void } {
+  function scratchRepo(): { root: string; git: GitRunner; cleanup(): void } {
     const root = mkdtempSync(join(tmpdir(), "ocx-test-layout-"));
-    const git = (...args: string[]) => {
-      const proc = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
-      if (proc.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${proc.stderr.toString()}`);
-      return proc.stdout.toString();
-    };
-    git("init", "-q");
-    git("config", "user.email", ["a", "b.com"].join("@"));
-    git("config", "user.name", "t");
+    const git = initFixtureRepo(root);
     mkdirSync(join(root, "tests", "helpers"), { recursive: true });
     mkdirSync(join(root, "tests", "providers"), { recursive: true });
     mkdirSync(join(root, "scripts", "test-layout"), { recursive: true });
@@ -403,11 +397,11 @@ describe("move end to end", () => {
     writeFileSync(join(root, "scripts", "test-layout", "seeds.json"), JSON.stringify({ keepAtRoot: layout.keepAtRoot, domains: layout.domains, migrated: layout.migrated }, null, 2));
     git("add", "-A");
     git("commit", "-q", "-m", "seed");
-    return { root, cleanup: () => removeTreeWithRetry(root) };
+    return { root, git, cleanup: () => removeTreeWithRetry(root) };
   }
 
   test("moves, rewrites, appends migrated, and refuses a dirty write set", () => {
-    const { root, cleanup } = scratchRepo();
+    const { root, git, cleanup } = scratchRepo();
     try {
       const layoutPath = join(root, "scripts", "test-layout", "layout.json");
       const layoutBefore = readFileSync(layoutPath, "utf8");
@@ -423,14 +417,14 @@ describe("move end to end", () => {
       writeFileSync(join(root, "scripts", "test.ts"), 'export const SERIAL_FULL_SUITE_FILES = [\n  "cursor-b.test.ts", // dirty\n] as const;\n');
       expect(() => runMove({ root, domains: ["server", "providers"], dryRun: false, layoutPath, log: l => logs.push(l) })).toThrow(/dirty files in the write set/);
       expect(readFileSync(join(root, "tests", "server-a.test.ts"), "utf8")).toContain("./helpers/remove-tree");
-      Bun.spawnSync(["git", "checkout", "--", "scripts/test.ts"], { cwd: root });
+      git("checkout", "--", "scripts/test.ts");
 
       // Dirt outside the write set does not abort.
       writeFileSync(join(root, "src", "thing.ts"), "export const thing = 2;\n");
       const dry = runMove({ root, domains: ["server", "providers"], dryRun: true, layoutPath, log: l => logs.push(l) });
       expect(dry.exitCode).toBe(0);
       expect(dry.manual).toEqual([]);
-      expect(Bun.spawnSync(["git", "status", "--porcelain"], { cwd: root }).stdout.toString()).toBe(" M src/thing.ts\n");
+      expect(git("status", "--porcelain")).toBe(" M src/thing.ts\n");
       const report = runMove({ root, domains: ["server", "providers"], dryRun: false, layoutPath, skipVerify: true, log: l => logs.push(l) });
       expect(report.exitCode).toBe(0);
       expect(report.manual).toEqual([]);
@@ -461,7 +455,7 @@ describe("move end to end", () => {
       expect(readFileSync(layoutPath, "utf8")).toBe(layoutBefore);
       expect(JSON.parse(readFileSync(join(root, "scripts", "test-layout", "seeds.json"), "utf8")).migrated).toEqual(["providers", "server"]);
       expect(readFileSync(join(root, "src", "thing.ts"), "utf8")).toBe("export const thing = 2;\n");
-      const status = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: root }).stdout.toString();
+      const status = git("status", "--porcelain");
       // Renamed in the index, then rewritten in the worktree: git reports "RM".
       expect(status).toContain("RM tests/server-a.test.ts -> tests/server/server-a.test.ts");
       expect(status).toContain("RM tests/cursor-b.test.ts -> tests/providers/cursor/cursor-b.test.ts");

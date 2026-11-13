@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { inflateRawSync } from "node:zlib";
@@ -9,7 +9,11 @@ import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { keyFingerprint } from "../../src/link/route-trust";
-import { MAX_TOMBSTONES, recordTombstone, tombstonesPath } from "../../src/link/tombstones";
+import * as tombstonesModule from "../../src/link/tombstones";
+import { MAX_TOMBSTONES, recordTombstone, removeTombstone, tombstonesPath } from "../../src/link/tombstones";
+
+/** Another writer swapping the tombstone for a link (recordTombstone itself keeps an existing one). */
+const replaceTombstone = (t: Parameters<typeof recordTombstone>[0]) => { removeTombstone(t.linkId); recordTombstone(t); };
 import { serialized } from "../../src/server/management/link-enrollment";
 import { registerOperationRecoveryResolver } from "../../src/link/operation-recovery-slot";
 import { POSIX_RECOVER_RECEIPT_SCRIPT, remoteManagedPurgeDisconnectArgv, remotePurgePlantedChildArgv, remoteRecoverReceiptArgv } from "../../src/link/remote-plant";
@@ -47,7 +51,7 @@ function link(over: Partial<LinkRecord> = {}): LinkRecord {
   };
 }
 
-function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string; holdThrows?: boolean } = {}) {
+function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string; holdThrows?: boolean; reloadThrows?: boolean; ordinary?: (command: string) => SshRunResult | undefined } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: (opts.keyRevokeFails ? [{ id: "fixture-key" }] : []) as OcxConfig["apiKeys"] };
   const knownHosts = join(root, "known_hosts");
@@ -68,7 +72,7 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
       onAuthenticatedCatalog: () => () => {},
     },
     supervisor: {
-      start() {}, ensureStarted: async () => {}, reload: async () => {}, holdLink: () => { if (opts.holdThrows) throw new Error("hold failed"); return () => {}; },
+      start() {}, ensureStarted: async () => {}, reload: async () => { if (opts.reloadThrows) throw new Error("reload failed"); }, holdLink: () => { if (opts.holdThrows) throw new Error("hold failed"); return () => {}; },
       stopLink: async () => { opts.duringStop?.(); }, reconnect: async () => true, status: () => [], stop: async () => {},
     },
   };
@@ -78,6 +82,8 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
       commands.push(argv.join(" "));
       if (command.includes("ocx-recover-receipt")) return absent();
       if (!command.includes("ocx-managed-purge")) {
+        const plain = command.includes("disconnect") ? opts.ordinary?.(command) : undefined;
+        if (plain) return plain;
         // Platform discovery for a tombstone without a recorded platform: not Windows, then uname.
         if (probes) { probes.push(argv.join(" ")); return probes.length === 1 ? ok("", 1) : ok("Linux\n"); }
         throw new Error("Unexpected SSH command: " + command);
@@ -237,7 +243,16 @@ describe("POST /api/link/recover", () => {
     h.answer(() => ok("", 2, "Usage: ocx-child detach [--keep-catalog] [--purge] [--json]\n"));
     const res = await h.request("POST", "/api/link/recover", { linkId: ID });
     expect(res.status).toBe(409);
-    expect((await errorOf(res)).code).toBe("child_recover_unsupported");
+    const error = await errorOf(res);
+    expect(error.code).toBe("child_recover_unsupported");
+    // No plain detach on the strength of a status check: status cannot show an interrupted attach of another link, which a
+    // plain detach would restore and remove (#8691 review). The machine is left, and a person forgets the tombstone.
+    expect(error.message).toContain("Do not run its plain detach on that machine");
+    expect(error.message).toContain("Leave the machine");
+    expect(error.message).not.toContain("only if it shows this link's id");
+    expect(error.message).toContain("ocx link recover --forget --link-id " + ID + " --yes");
+    expect(error.message).toContain("Once the machine is gone, or a person on that machine has checked and cleaned its ocx-child records by hand");
+    expect(error.message).not.toContain("<id>");
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });
 
@@ -472,6 +487,17 @@ describe("recover over an exclusive explicit route (O6)", () => {
     expect(tombstones()).toEqual([]);
   });
 
+  test("a keyed route's tombstone keeps its identity file, and recover offers that key alone (O7)", async () => {
+    const keyed = { ...route, identityFile: "/home/builder/.ssh/hub_ed25519" };
+    const h = harness([link({ explicitRoute: keyed, exclusive: true })]);
+    await forceRevoke(h);
+    expect(tombstones()[0]).toMatchObject({ explicitRoute: keyed, exclusive: true });
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(200);
+    expect(h.commands).toHaveLength(1);
+    for (const option of ["IdentitiesOnly=yes", "IdentityAgent=none", "IdentityFile=" + keyed.identityFile]) expect(h.commands[0]).toContain(option);
+  });
+
   test("an explicit route in a tombstone needs exclusive, as on a link record", async () => {
     await Bun.write(tombstonesPath(), JSON.stringify({ version: 1, tombstones: [{ linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, explicitRoute: route, revokedAt: "2026-11-13T00:00:00.000Z" }] }));
     const h = harness([]);
@@ -509,21 +535,35 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     expect(tombstones()).toEqual([]);
   });
 
-  test("a purge revoke that cleans the Child settles a tombstone an earlier forced revoke left", async () => {
+  // A tombstone beside a listed link belongs to a forced revoke still in flight elsewhere (or one that died); a revoke
+  // never removes it, and recover settles it once the link is gone.
+  test("a purge revoke leaves a tombstone an earlier forced revoke left, and recover then settles it", async () => {
     const h = harness([link()]);
     recordTombstone(tombstone(ID, "devbox"));
     const res = await h.request("DELETE", "/api/link/" + ID, { purge: true });
     expect(res.status).toBe(200);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+    h.allowPlatformProbe();
+    const recovered = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(recovered.status).toBe(200);
     expect(tombstones()).toEqual([]);
   });
 
   test("forced revokes beyond the bound are refused, never dropped, and the link stays", async () => {
     for (let i = 0; i < MAX_TOMBSTONES; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
-    const h = harness([link()]);
+    // A fresh forced revoke at the limit stops nothing and revokes no key; the CLI (journalledRevokeError in src/cli/link.ts)
+    // says only that the attempt did not touch the link, its key or the Child, which also holds for a resumed revoke.
+    let stops = 0, keyRevokes = 0;
+    const h = harness([link()], { duringStop: () => { stops += 1; }, duringKeyRevoke: () => { keyRevokes += 1; } });
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
-    expect([res.status, (await errorOf(res)).code]).toEqual([409, "tombstone_limit"]);
+    const refusal = await errorOf(res);
+    expect([res.status, refusal.code]).toEqual([409, "tombstone_limit"]);
+    // A resumed revoke may take its receipt back before the limit, so the message names only what holds on both paths.
+    expect(refusal.message).toContain("did not touch the link, its key or the Child");
+    expect(refusal.message).not.toContain("before its own effects");
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
     expect(tombstones()).toHaveLength(MAX_TOMBSTONES);
+    expect({ stops, keyRevokes }).toEqual({ stops: 0, keyRevokes: 0 });
   });
 
   test("a newer Home's field under ext is kept verbatim and does not refuse forced revokes", async () => {
@@ -554,10 +594,88 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     // Identical to what this attempt writes except its random attempt token.
     const theirs = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, remotePlatform: "posix" as const,
       revokedAt: new Date(1_800_000_000_000).toISOString(), attempt: "0123456789abcdef" };
-    const h = harness([link()], { keyRevokeFails: true, duringKeyRevoke: other => { recordTombstone(theirs); if (linkGone) other.dropLink(); } });
+    const h = harness([link()], { keyRevokeFails: true, duringKeyRevoke: other => { replaceTombstone(theirs); if (linkGone) other.dropLink(); } });
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
     expect([res.status, (await errorOf(res)).code]).toEqual([502, "key_revoke_failed"]);
     expect(tombstones()).toEqual([theirs]);
+  });
+
+  // F0 (another runtime, no alias lock: it started with no journal and no tombstone) wrote T0 and has not committed;
+  // this runtime's forced revoke F1 then fails before its commit. Replacing T0 and dropping the replacement would
+  // leave F0's committed revoke with no tombstone, so F1 keeps T0 and owns nothing it could drop.
+  test("a failed forced revoke keeps the tombstone a forced revoke in flight elsewhere wrote", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, remotePlatform: "posix" as const,
+      revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    recordTombstone(t0);
+    const h = harness([link()], { keyRevokeFails: true });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect([res.status, (await errorOf(res)).code]).toEqual([502, "key_revoke_failed"]);
+    expect(tombstones()).toEqual([t0]);
+  });
+
+  // The reverse ordering: F1 keeps F0's T0, then F0 fails while the link is listed and drops T0, then F1 commits. The
+  // commit re-establishes a tombstone under the same lock as the record removal, so the Child keeps its evidence.
+  test("a forced revoke whose kept tombstone was dropped by its failed owner writes its own at the commit", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    recordTombstone(t0);
+    const h = harness([link()], { duringStop: () => { removeTombstone(ID); } });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect(res.status).toBe(200);
+    expect(h.store.links).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+    expect(tombstones()[0]?.attempt).not.toBe(t0.attempt);
+  });
+
+  test("a commit-time tombstone write that throws after writing leaves no tombstone beside the kept link", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    recordTombstone(t0);
+    const h = harness([link()], { duringStop: () => { removeTombstone(ID); } });
+    const real = tombstonesModule.recordTombstone;
+    let calls = 0;
+    const spy = spyOn(tombstonesModule, "recordTombstone").mockImplementation((tombstone, path) => {
+      const result = real(tombstone, path);
+      if (++calls === 2) throw new Error("chmod failed after the write");
+      return result;
+    });
+    let res: Response;
+    try { res = await h.request("DELETE", "/api/link/" + ID, { force: true }); } finally { spy.mockRestore(); }
+    expect([res.status, (await errorOf(res)).code]).toEqual([503, "tombstone_write_failed"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
+  test("a commit-time tombstone the cap refuses answers tombstone_limit, with no key revoked and no record removed", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    for (let i = 0; i < MAX_TOMBSTONES - 1; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
+    recordTombstone(t0);
+    // While this revoke stops the tunnel, T0's owner drops it and another forced revoke fills the last slot.
+    const h = harness([link()], { keyRevokeFails: true, duringStop: () => { removeTombstone(ID); recordTombstone(tombstone("lnk_" + "f".repeat(16))); } });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect([res.status, (await errorOf(res)).code]).toEqual([409, "tombstone_limit"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones().some(t => t.linkId === ID)).toBe(false);
+  });
+
+  // A fresh journalled revoke refused at the commit-time check has written its key_revoked intent, so it settles unknown.
+  test("a journalled forced revoke refused by the cap at the commit settles unknown and keeps the record", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    for (let i = 0; i < MAX_TOMBSTONES - 1; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
+    recordTombstone(t0);
+    const operationsPath = join(root, "operations.json");
+    const h = harness([link()], { operationsPath, duringStop: () => { removeTombstone(ID); recordTombstone(tombstone("lnk_" + "f".repeat(16))); } });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true, operationId: "revoke-9" });
+    const body = await res.json() as { error?: { code?: string }; outcome?: string };
+    expect([res.status, body.error?.code, body.outcome]).toEqual([409, "tombstone_limit", "unknown"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+  });
+
+  test("a forced revoke that commits beside an existing tombstone for its link keeps that one", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    recordTombstone(t0);
+    const h = harness([link()]);
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect(res.status).toBe(200);
+    expect(tombstones()).toEqual([t0]);
   });
 
   test("operations on one alias are serialized whatever its case", async () => {
@@ -628,14 +746,209 @@ describe("final review follow-ups", () => {
   });
 });
 
+describe("ordinary and --purge revokes are bound to their link (--expect-link)", () => {
+  const leftTombstone = () => recordTombstone({ linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-01T00:00:00.000Z" });
+
+  // A force revoke in another process may have written this tombstone just before, and still be removing the record
+  // while an enrollment attaches the Child: even a bound answer leaves it, and recover settles it once the link is gone.
+  test("an ordinary revoke whose Child confirms the link leaves a tombstone for recover", async () => {
+    const h = harness([link()], { ordinary: command => (command.includes("--expect-link") ? ok() : undefined) });
+    leftTombstone();
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect(res.status).toBe(200);
+    expect(h.commands.filter(c => c.includes("disconnect")).map(c => c.includes("--expect-link"))).toEqual([true]);
+    expect(h.store.links).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+    h.allowPlatformProbe();
+    const recovered = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(recovered.status).toBe(200);
+    expect(tombstones()).toEqual([]);
+  });
+
+  test("an older Child that rejects --expect-link (exit 2) is disconnected unbound, and the tombstone stays for recover", async () => {
+    const h = harness([link()], { ordinary: command => (command.includes("--expect-link") ? ok("", 2, "Error: Unexpected argument(s)") : ok()) });
+    leftTombstone();
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect(res.status).toBe(200);
+    expect(h.commands.filter(c => c.includes("disconnect")).map(c => c.includes("--expect-link"))).toEqual([true, false]);
+    expect(h.store.links).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
+
+  // A force revoke in another process can write its own tombstone for this link while the bound command is in flight
+  // (for example against a Child an enrollment has not attached yet); that evidence stays.
+  test.each([
+    ["no tombstone before", false],
+    ["an older tombstone before", true],
+  ] as const)("a tombstone written during the bound command stays (%s)", async (_name, older) => {
+    const fresh = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "00112233aabbccdd" };
+    const h = harness([link()], { ordinary: command => {
+      if (!command.includes("--expect-link")) return undefined;
+      replaceTombstone(fresh);
+      return ok();
+    } });
+    if (older) leftTombstone();
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect(res.status).toBe(200);
+    expect(tombstones()).toEqual([fresh]);
+  });
+
+  test("a Child attached to another link refuses (exit 5): nothing is disconnected and the link stays", async () => {
+    const h = harness([link()], { ordinary: () => ok("", 5, '{"phase":"child_link_mismatch","reason":"other_link"}') });
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect([res.status, (await errorOf(res)).hint]).toEqual([502, "child_link_mismatch"]);
+    expect(h.commands.filter(c => c.includes("disconnect"))).toHaveLength(1);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+  });
+
+  // Enrollment refuses a second link with the same primary alias, so the cases that matter are the same machine under
+  // another alias (same pinned key) or a link that reaches this alias through its routes.
+  const sameMachine = [
+    ["the same machine enrolled under another alias (same pinned key)", { id: OTHER, alias: "devbox-ip" }],
+    ["a link that lists this alias among its routes", { id: OTHER, alias: "other-box", hostKeyFingerprint: "SHA256:" + "B".repeat(43), routes: ["other-box", "DEVBOX"] }],
+  ] as const;
+
+  test.each(sameMachine)("an older Child is not disconnected unbound while %s", async (_name, other) => {
+    const h = harness([link(), link(other)], { ordinary: () => ok("", 2, "Error: Unexpected argument(s)") });
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    const error = await errorOf(res);
+    expect([res.status, error.hint]).toEqual([502, "expect_link_unsupported"]);
+    // No status check can show the other link is stale, so the way out is --force on this link, never that link's revoke.
+    expect(error.message).toContain("Otherwise revoke this link with --force");
+    expect(error.message).toContain("no status check can show it is stale");
+    expect(error.message).not.toContain("only if it is stale too");
+    expect(h.commands.filter(c => c.includes("disconnect"))).toHaveLength(1);
+    expect(h.store.links.map(l => l.id)).toEqual([ID, OTHER]);
+  });
+
+  test.each(sameMachine)("a --purge on a planted binary older than --expect-link is not run unbound while %s", async (_name, other) => {
+    const h = harness([link(), link(other)]);
+    h.answer(() => ok("", 2, "Usage: ocx-child detach [--keep-catalog] [--purge] [--json]\n"));
+    const res = await h.request("DELETE", "/api/link/" + ID, { purge: true });
+    expect([res.status, (await errorOf(res)).hint]).toEqual([502, "expect_link_unsupported"]);
+    expect(h.commands.filter(c => c.includes("ocx-managed-purge")).map(c => c.includes("--expect-link"))).toEqual([true]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID, OTHER]);
+  });
+
+  // Which outcome a journalled revoke settles as for each bound answer: only a refusal the Home recognises as one that
+  // changed nothing (the full ocx JSON line with a closed reason, or ocx-child naming this link) is failed_clean; any
+  // other exit 5 or 6 (an unknown reason, garbled or extra output) may have followed a change, so it settles unknown.
+  const conflictLine = "detach --expect-link " + ID + " refused (conflict): the Child is linked to another link; record /x; nothing was restored.";
+  const residualLine = "detach --expect-link " + ID + " refused (residual): the ownership record names no link; record /x; nothing was restored.";
+  test.each([
+    ["full ocx: another link", 5, '{"phase":"child_link_mismatch","reason":"other_link"}', "child_link_mismatch", "failed_clean"],
+    ["full ocx: an unfinished disconnect", 5, '{"phase":"child_link_mismatch","reason":"disconnect_pending"}', "child_disconnect_pending", "unknown"],
+    ["full ocx: an unknown reason", 5, '{"phase":"child_link_mismatch","reason":"brand_new"}', undefined, "unknown"],
+    ["exit 5 with garbled output", 5, "something went wrong", undefined, "unknown"],
+    ["ocx-child: conflict naming this link", 5, conflictLine, "child_link_mismatch", "failed_clean"],
+    ["ocx-child: residual naming this link", 6, residualLine, "child_residual", "failed_clean"],
+    ["exit 6 with extra output after the refusal", 6, residualLine + "\nextra", undefined, "unknown"],
+  ] as const)("a journalled ordinary revoke whose Child answers %s settles as expected", async (_name, code, stderr, hint, outcome) => {
+    const operationsPath = join(root, "operations.json");
+    const h = harness([link()], { operationsPath, ordinary: () => ok("", code, stderr) });
+    const res = await h.request("DELETE", "/api/link/" + ID, { operationId: "revoke-1" });
+    const body = await res.json() as { error?: { code?: string; hint?: string; message?: string }; outcome?: string };
+    expect(res.status).toBe(502);
+    expect(body.error?.code).toBe("remote_disconnect_failed");
+    if (hint) expect(body.error?.hint).toBe(hint);
+    else expect(["child_link_mismatch", "child_residual", "child_disconnect_pending"]).not.toContain(body.error?.hint);
+    // A remedy never sends the operator to disconnect a machine another link owns (#8662 review P2-1).
+    expect(body.error?.message ?? "").not.toContain("joined this Home by itself");
+    if (hint === "child_link_mismatch") {
+      expect(body.error?.message).toContain("Do not disconnect it there");
+      // Nothing may be in progress (an unreadable rollback, a dead rotation): a repeat of the same answer ends in --force.
+      expect(body.error?.message).toContain("a connect or key rotation of it may be in progress");
+      expect(body.error?.message).toContain("if the same answer comes back, revoke this link with --force once any enrollment of this link has finished");
+    }
+    expect(body.outcome).toBe(outcome);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+  });
+
+  test.each([
+    ["ocx-child: conflict naming this link", 5, conflictLine, "child_link_mismatch", "failed_clean"],
+    ["exit 5 with garbled output", 5, "something went wrong", undefined, "unknown"],
+  ] as const)("a journalled --purge revoke whose Child answers %s settles as expected", async (_name, code, stderr, hint, outcome) => {
+    const operationsPath = join(root, "operations.json");
+    const h = harness([link()], { operationsPath });
+    h.answer(() => ok("", code, stderr));
+    const res = await h.request("DELETE", "/api/link/" + ID, { purge: true, operationId: "revoke-1" });
+    const body = await res.json() as { error?: { code?: string; hint?: string }; outcome?: string };
+    expect(res.status).toBe(502);
+    if (hint) expect(body.error?.hint).toBe(hint);
+    else expect(["child_link_mismatch", "child_residual"]).not.toContain(body.error?.hint);
+    expect(body.outcome).toBe(outcome);
+  });
+
+  test("a journalled revoke refused the unbound fallback (expect_link_unsupported) settles failed_clean", async () => {
+    const operationsPath = join(root, "operations.json");
+    const h = harness([link(), link({ id: OTHER, alias: "devbox-ip" })], { operationsPath, ordinary: () => ok("", 2, "Error: Unexpected argument(s)") });
+    const res = await h.request("DELETE", "/api/link/" + ID, { operationId: "revoke-1" });
+    const body = await res.json() as { error?: { hint?: string }; outcome?: string };
+    expect([res.status, body.error?.hint, body.outcome]).toEqual([502, "expect_link_unsupported", "failed_clean"]);
+  });
+
+  test("an unfinished disconnect the Child cannot bind to the link counts as cleanup attempted", async () => {
+    const h = harness([link()], { ordinary: () => ok("", 5, 'Disconnect refused\n{"phase":"child_link_mismatch","reason":"disconnect_pending"}') });
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect([res.status, (await errorOf(res)).hint]).toEqual([502, "child_disconnect_pending"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+  });
+
+  test("a --purge revoke on a planted binary older than --expect-link runs unbound and keeps the tombstone", async () => {
+    const h = harness([link()]);
+    let calls = 0;
+    h.answer(() => (calls++ === 0 ? ok("", 2, "Usage: ocx-child detach [--keep-catalog] [--purge] [--json]\n") : report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true })));
+    leftTombstone();
+    const res = await h.request("DELETE", "/api/link/" + ID, { purge: true });
+    expect(res.status).toBe(200);
+    expect(h.commands.filter(c => c.includes("ocx-managed-purge")).map(c => c.includes("--expect-link"))).toEqual([true, false]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
+});
+
 describe("recover while another link names the alias", () => {
+  // The file can be written before recordTombstone throws (its chmod, or the lock's COMMIT): the revoke then answers
+  // tombstone_write_failed and keeps the link, so the tombstone it may have written goes too.
+  // After the commit the link is gone: a later step that throws (here the supervisor reload) answers link_remove_failed,
+  // but the tombstone is the only cleanup evidence for that Child and stays.
+  test("a forced revoke that throws after its commit keeps its tombstone", async () => {
+    const h = harness([link()], { reloadThrows: true });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect([res.status, (await errorOf(res)).code]).toEqual([503, "link_remove_failed"]);
+    expect(h.store.links).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
+
+  test("a tombstone write that throws after writing the file leaves no tombstone beside the kept link", async () => {
+    const h = harness([link()]);
+    const real = tombstonesModule.recordTombstone;
+    const spy = spyOn(tombstonesModule, "recordTombstone").mockImplementation((tombstone, path) => {
+      real(tombstone, path);
+      throw new Error("chmod failed after the write");
+    });
+    let res: Response;
+    try { res = await h.request("DELETE", "/api/link/" + ID, { force: true }); } finally { spy.mockRestore(); }
+    expect([res.status, (await errorOf(res)).code]).toEqual([503, "tombstone_write_failed"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
   test("is refused with 409 before any SSH, whatever the alias's case, and the tombstone stays", async () => {
     const h = harness([link()]);
     await forceRevoke(h);
     // The machine was enrolled again under the same alias (spelled differently), and that link still exists.
     h.store.links.push(link({ id: OTHER, alias: "DevBox" }));
     const res = await h.request("POST", "/api/link/recover", { linkId: ID });
-    expect([res.status, (await errorOf(res)).code]).toEqual([409, "alias_linked"]);
+    const error = await errorOf(res);
+    expect([res.status, error.code]).toEqual([409, "alias_linked"]);
+    // That link may be the one the machine runs now, and no status check can show it is stale: the remedy leaves it.
+    expect(error.message).toContain("Leave that link: no status check on the machine can show it is stale");
+    expect(error.message).toContain("do that only if you mean to end that link");
+    expect(error.message).toContain("then run ocx link recover again");
+    expect(error.message).not.toContain("recover runs then");
+    expect(error.message).not.toContain("Only if it shows");
+    expect(error.message).toContain("A person on this Home can instead forget this tombstone once the machine is confirmed clean or gone.");
+    expect(error.message).not.toContain("settle any open operation on that link (ocx link operations), revoke the link, then recover");
     expect(h.commands.filter(c => c.includes("ocx-managed-purge"))).toEqual([]);
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });
@@ -647,5 +960,15 @@ describe("recover while another link names the alias", () => {
     const res = await h.request("POST", "/api/link/recover", { linkId: ID });
     expect(res.status).toBe(200);
     expect(tombstones()).toEqual([]);
+  });
+
+  test("a Home-initiated link that lists the alias among its routes blocks it too", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    h.store.links.push(link({ id: OTHER, alias: "other-box", routes: ["other-box", "DEVBOX"] }));
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect([res.status, (await errorOf(res)).code]).toEqual([409, "alias_linked"]);
+    expect(h.commands.filter(c => c.includes("ocx-managed-purge"))).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });
 });

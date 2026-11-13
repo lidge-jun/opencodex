@@ -162,7 +162,7 @@ describe("holds", () => {
   });
 });
 
-describe("crash points (SIGKILL)", () => {
+describe("crash points (abrupt termination)", () => {
   test.each([
     ["during the fence write", "during-fence-write", null],
     ["after the fence write", "after-fence-write", "crash"],
@@ -170,11 +170,15 @@ describe("crash points (SIGKILL)", () => {
     ["after the holds write, before clean", "after-holds-before-clean", "crash"],
   ] as const)("killed %s, the Home comes back as the design requires", async (_label, point, expected) => {
     writeFileSync(join(dir, "activity-holds.json"), JSON.stringify({ version: 1, keyId: null, links: {} }));
-    const child = Bun.spawn(["bun", repoPath("tests/fixtures/link-ws-holds-crash.ts")], { cwd: repoPath(), stdin: "pipe", stdout: "ignore", stderr: "ignore" });
+    const child = Bun.spawn(["bun", repoPath("tests/fixtures/link-ws-holds-crash.ts")], { cwd: repoPath(), stdin: "pipe", stdout: "pipe", stderr: "inherit" });
     child.stdin.write(JSON.stringify({ dir, point, links: LINKS }));
     child.stdin.end();
-    await child.exited;
-    expect(child.signalCode).toBe("SIGKILL");
+    const [exitCode, reached] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+    // Exactly the point and nothing after it: the fixture's exit handler (an orderly exit) never ran.
+    expect(reached).toBe(point);
+    // Windows has no signals: the same kill is TerminateProcess, reported as a nonzero exit code.
+    if (process.platform === "win32") { expect(child.signalCode).toBeNull(); expect(exitCode).not.toBe(0); }
+    else expect(child.signalCode).toBe("SIGKILL");
     const holds = store();
     // Killed before the fence landed, no link upgrade could have been admitted, so nothing was in flight.
     expect(LINKS.map(link => holds.describe(link).unknown)).toEqual([expected, expected]);

@@ -316,6 +316,9 @@ export async function purgeDisconnectRemote(
   knownHostsFile: string,
   platform: "posix" | "windows",
   childKind: "ephemeral" | "full" | undefined,
+  expectLink?: string,
+  /** Asked before the unbound retry for a binary older than --expect-link; false refuses it (nothing changed). */
+  unboundStillSafe: () => boolean = () => true,
 ): Promise<PurgeDisconnectOutcome> {
   const failed = (message: string, hint?: string): PurgeDisconnectOutcome => ({ ok: false, status: 502, code: "remote_disconnect_failed", message, ...(hint ? { hint } : {}) });
   const notAttempted = (message: string, hint?: string): PurgeDisconnectOutcome => ({ ok: false, status: 502, code: "remote_disconnect_failed", message, ...(hint ? { hint } : {}), notAttempted: true });
@@ -329,8 +332,24 @@ export async function purgeDisconnectRemote(
   if (kind !== "ephemeral") {
     return { ok: false, status: 409, code: "purge_unsupported", message: "This Child runs a full OpenCodex install; --purge removes only a planted ocx-child. Disconnect without --purge.", notAttempted: true };
   }
+  const purgeArgv = (link?: string) => buildExecArgv({ alias, argv: remoteManagedPurgeDisconnectArgv(platform, link), knownHostsFile, route });
   let result;
-  try { result = await runner.run(buildExecArgv({ alias, argv: remoteManagedPurgeDisconnectArgv(platform), knownHostsFile, route }), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
+  let bound = expectLink !== undefined;
+  try { result = await runner.run(purgeArgv(expectLink), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
+  // A planted binary older than --expect-link rejects it as a usage error (exit 2) before doing anything: run unbound.
+  if (bound && result.code === CHILD_USAGE_EXIT) {
+    // The route answers this hint with its own fixed message (BOUND_REFUSAL_MESSAGES in link-routes.ts), which covers a planted
+    // ocx-child too, so this text names only what happened.
+    if (!unboundStillSafe()) return notAttempted("The planted ocx-child predates --expect-link and another Home-initiated link of this Home may reach the same machine, so it was not purged.", "expect_link_unsupported");
+    bound = false;
+    try { result = await runner.run(purgeArgv(), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
+  }
+  // detach --expect-link refused without changing anything: another link owns this Child (5), or it keeps state it
+  // cannot restore (6). Only a refusal recognised as such; anything else below counts as a cleanup attempted.
+  const refusal = bound ? classifyBoundRefusal(result.code, result.stderr, expectLink!) : null;
+  if (refusal === "mismatch" || refusal === "residual") {
+    return notAttempted("The Child is not attached to this link, so it was not disconnected.", refusal === "mismatch" ? "child_link_mismatch" : "child_residual");
+  }
   if (result.code !== 0) {
     // The script prints the marker and exits before it runs the binary.
     if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) return notAttempted("No planted ocx-child was found in the managed directory, so nothing was purged.", "managed_child_missing");
@@ -341,6 +360,37 @@ export async function purgeDisconnectRemote(
     return failed("The Child disconnected but did not report removing the planted ocx-child binary.", "purge_incomplete");
   }
   return { ok: true };
+}
+
+/** Exit codes of a Child refusing a link-bound command (ocx-child detach, ocx disconnect --expect-link). */
+export const CHILD_USAGE_EXIT = 2;
+export const CHILD_EXPECT_CONFLICT_EXIT = 5;
+export const CHILD_EXPECT_RESIDUAL_EXIT = 6;
+
+/** Reasons full ocx gives for a link-bound refusal that changed nothing (ClientSyncMismatchReason without disconnect_pending). */
+const NO_WRITE_MISMATCH_REASONS = new Set(["disconnected", "invalid_state", "pending_operation", "hub_client", "link_client", "other_link", "other_key", "client_initiated_link"]);
+
+/**
+ * What a link-bound refusal (exit 5 or 6) proves, read from the last stderr line only and from a closed set:
+ * "mismatch" or "residual" changed nothing on the Child (full ocx's {"phase":"child_link_mismatch","reason"} with a
+ * no-write reason, or ocx-child's "detach --expect-link <this link> refused (conflict|residual)"); "pending" is an
+ * unfinished disconnect the Child could not bind to this link, so an earlier attempt may have cleaned part of it. Any
+ * other answer (an unknown reason, garbled or extra output) is null: the caller treats it as a cleanup attempted.
+ */
+export function classifyBoundRefusal(code: number, stderr: string, linkId: string): "mismatch" | "residual" | "pending" | null {
+  if (code !== CHILD_EXPECT_CONFLICT_EXIT && code !== CHILD_EXPECT_RESIDUAL_EXIT) return null;
+  const line = stderr.trim().split(/\r?\n/).at(-1) ?? "";
+  const childLine = (outcome: "conflict" | "residual") => line.startsWith("detach --expect-link " + linkId + " refused (" + outcome + "): ");
+  if (code === CHILD_EXPECT_RESIDUAL_EXIT) return childLine("residual") ? "residual" : null;
+  if (childLine("conflict")) return "mismatch";
+  if (!line.startsWith("{")) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const { phase, reason } = parsed as { phase?: unknown; reason?: unknown };
+  if (phase !== "child_link_mismatch" || typeof reason !== "string") return null;
+  if (reason === "disconnect_pending") return "pending";
+  return NO_WRITE_MISMATCH_REASONS.has(reason) ? "mismatch" : null;
 }
 
 /** The distinct reason a plant failed on the Child, when the plant script reported one. */
