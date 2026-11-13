@@ -302,7 +302,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const conditionalRemovePidfile = (linkId: string, pid: number): void => {
     const path = pidfilePath(linkId);
     const current = readPidfile(path);
-    if (current?.linkId === linkId && current.pid === pid) removePidfile(path);
+    if (current?.linkId === linkId && current.pid === pid) dropStalePidfile(linkId);
   };
 
   const reapOrphans = (): void => {
@@ -320,7 +320,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       }
       const actualArgv = readProcessArgv(pidfile.pid);
       if (actualArgv && sameArgv(actualArgv, pidfile.argv)) {
-        try { killProcess(pidfile.pid); } finally { removePidfile(pidfilePath(record.id)); }
+        try { killProcess(pidfile.pid); } finally { dropStalePidfile(record.id); }
       } else {
         orphanUnverified.add(record.id);
       }
@@ -340,9 +340,12 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   /**
-   * Remove a pidfile whose process is gone. Such a file is harmless (the next start finds its process
-   * gone again), so a removal that fails (a read-only directory, a sharing lock) is warned and never
-   * stops the caller: a tick goes on to every other link, and the block it was lifting stays lifted.
+   * Remove a pidfile whose process is gone (or this process's own exited child's). A removal that
+   * fails (a read-only directory, a sharing lock) is warned and never stops the caller: a tick goes on
+   * to every other link, an exit is still classified, a stop or reload completes, and the block it
+   * was lifting stays lifted. The file left behind is mostly harmless: on Linux with a start time the
+   * next start sees its process gone; without a start time, a pid reused by another process blocks a
+   * multi-route link at the next start until that process exits.
    */
   const dropStalePidfile = (linkId: string): void => {
     try { removePidfile(pidfilePath(linkId)); } catch { warn(`[link] stale pidfile could not be removed link=${linkId}`); }
@@ -757,9 +760,14 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const changed = new Set<string>();
         const routesEdited: LinkRecord[] = [];
         const gainedRoutes: LinkRecord[] = [];
+        const gainedOnChange: string[] = [];
         for (const record of nextStore.links) {
           if (recordInstances.get(record.id) !== undefined && recordInstances.get(record.id) !== nextInstances.get(record.id)) {
             changed.add(record.id);
+            // A changed record that also goes from one route to several with no child never reaches the
+            // gained-routes check below; it settles from its pidfile with the flagged changed links.
+            const before = store.links.find(link => link.id === record.id);
+            if (before && !rounds.isMultiRoute(before) && rounds.isMultiRoute(record) && !children.has(record.id)) gainedOnChange.push(record.id);
             continue;
           }
           const before = store.links.find(link => link.id === record.id);
@@ -843,6 +851,12 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           if (!record || !rounds.isMultiRoute(record)) continue;
           if (orphanWatches.has(linkId)) orphanUnverified.add(linkId);
           else recheckPidfile(record, false);
+        }
+        for (const linkId of gainedOnChange) {
+          const record = nextStore.links.find(link => link.id === linkId);
+          if (!record || flaggedChanged.includes(linkId) || orphanWatches.has(linkId)) continue;
+          // Observe-only, as for any changed record: no watch acts for a replaced instance.
+          recheckPidfile(record, false);
         }
         // A link new to this process settles from its pidfile as it would at startup.
         for (const record of nextStore.links) if (!knownBefore.has(record.id) && rounds.isMultiRoute(record)) recheckPidfile(record);
