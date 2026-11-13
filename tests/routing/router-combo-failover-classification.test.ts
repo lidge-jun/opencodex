@@ -1873,7 +1873,6 @@ describe("committed-terminal combo cooldown", () => {
   const committed = { provider: "a", model: "m1", status: 200 };
 
   test("output_limit on a committed incomplete cools the serving target for the local cap", () => {
-    const now = Date.now();
     coolComboTargetForCommittedTerminal({
       comboId: "free",
       terminalStatus: "incomplete",
@@ -1881,6 +1880,9 @@ describe("committed-terminal combo cooldown", () => {
       servingAttempt: committed,
       httpStatus: 200,
     });
+    // Capture after the write: the stored expiry can only be earlier than now + cap,
+    // so the boundary assertions stay deterministic without mocking the clock.
+    const now = Date.now();
     expect(isComboTargetInCooldown("free", first, now + 60_000)).toBe(true);
     // The next pick skips the exhausted target instead of re-burning its output ceiling.
     const pick = pickComboTarget(comboConfig(), "free", {
@@ -1893,7 +1895,6 @@ describe("committed-terminal combo cooldown", () => {
   });
 
   test("stall_timeout on a committed incomplete cools briefly", () => {
-    const now = Date.now();
     coolComboTargetForCommittedTerminal({
       comboId: "free",
       terminalStatus: "incomplete",
@@ -1901,6 +1902,7 @@ describe("committed-terminal combo cooldown", () => {
       servingAttempt: { ...committed, status: 502 },
       httpStatus: 502,
     });
+    const now = Date.now();
     expect(isComboTargetInCooldown("free", first, now + 30_000)).toBe(true);
     expect(isComboTargetInCooldown("free", first, now + 61_000)).toBe(false);
   });

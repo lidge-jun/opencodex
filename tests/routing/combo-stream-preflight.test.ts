@@ -1744,12 +1744,58 @@ describe("degenerate completion prelude", () => {
         type: "response.incomplete",
         response: {
           id: "r1", status: "incomplete",
-          incomplete_details: { reason: "max_output_tokens" },
+          incomplete_details: { reason: "upstream_stall_timeout" },
           output: [commentaryItem],
         },
       },
     ), logCtx, undefined, { degeneratePrelude: true });
     expect(result.kind).toBe("failed");
+  });
+
+  test("incomplete degenerate hop also works alongside requiredToolPrelude", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_item.done", item: commentaryItem },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1", status: "incomplete",
+          incomplete_details: { reason: "upstream_stall_timeout" },
+          output: [commentaryItem],
+        },
+      },
+    ), logCtx, undefined, { degeneratePrelude: true, requiredToolPrelude: true });
+    expect(result.kind).toBe("failed");
+  });
+
+  test("a tool call present only at event level blocks the degenerate hop", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      {
+        type: "response.incomplete",
+        output: [toolItem],
+        response: { id: "r1", status: "incomplete", output: [] },
+      },
+    ), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("non-retryable and output-limit incompletes never hop as degenerate", async () => {
+    for (const terminal of [
+      { incomplete_details: { reason: "max_output_tokens" }, output: [commentaryItem] },
+      { incomplete_details: { reason: "upstream_stall_timeout", retryable: false }, output: [commentaryItem] },
+      { end_turn: false, incomplete_details: { reason: "upstream_stall_timeout" }, output: [commentaryItem] },
+      { incomplete_details: { reason: "content_filter" }, output: [commentaryItem] },
+    ]) {
+      const result = await preflightComboStreamResponse(sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        { type: "response.output_item.added", item: commentaryItem },
+        { type: "response.output_item.done", item: commentaryItem },
+        { type: "response.incomplete", response: { id: "r1", status: "incomplete", ...terminal } },
+      ), logCtx, undefined, { degeneratePrelude: true });
+      expect(result.kind).toBe("accepted");
+    }
   });
 
   test("without degeneratePrelude a commentary completion stays accepted", async () => {

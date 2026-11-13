@@ -244,18 +244,36 @@ function comboStreamDegeneratePrelude(payload: unknown, commentaryItemIds: Set<s
  * caller can act on: the model announced work and stopped. Verified against the terminal
  * snapshot itself so a final answer or tool call seen only there still commits.
  */
-function isDegenerateStreamTerminal(payload: unknown): boolean {
+function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean {
   const event = recordValue(payload);
   if (!event || (event.type !== "response.completed" && event.type !== "response.incomplete")) return false;
   const response = recordValue(event.response);
-  const output = response?.output;
-  if (!Array.isArray(output)) return true;
-  return output.every(item => {
-    const record = recordValue(item);
-    if (!record) return false;
-    if (record.type === "reasoning") return true;
-    return record.type === "message" && record.phase === "commentary";
-  });
+  // Both carriers count: an item that exists only at event level is still client-visible
+  // output the hop would lose, exactly as retryableZeroOutputTerminal treats it.
+  const carriers = [event.output, response?.output].filter(value => value !== undefined);
+  for (const carrier of carriers) {
+    if (!Array.isArray(carrier)) return false;
+    for (const item of carrier) {
+      const record = recordValue(item);
+      if (!record) return false;
+      if (record.type === "reasoning") continue;
+      if (record.type === "message" && record.phase === "commentary") continue;
+      return false;
+    }
+  }
+  if (event.type !== "response.incomplete") return true;
+  // Incomplete terminals keep every replay-safety guard the zero-output path owns: paused
+  // turns, explicitly unfinished turns, non-retryable limits, and reasons outside the
+  // retryable set (content_filter, max_output_tokens, ...) never hop as degenerate — the
+  // output-limit contract especially keeps its own code and cooldown instead.
+  const details = recordValue(response?.incomplete_details ?? event.incomplete_details);
+  const reason = details?.reason;
+  if (reason !== undefined && !RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(String(reason))) return false;
+  if (isPausedTurn(context)) return false;
+  const endTurn = response?.end_turn ?? event.end_turn;
+  if (endTurn === false) return false;
+  if (details?.retryable === false) return false;
+  return true;
 }
 
 export function explicitErrorEventStatus(payload: unknown): number | undefined {
@@ -744,6 +762,8 @@ export async function preflightComboStreamResponse(
       });
       const degeneratePrelude = options?.degeneratePrelude === true
         && comboStreamDegeneratePrelude(payload, commentaryItemIds);
+      const degenerateTerminal = options?.degeneratePrelude === true
+        && isDegenerateStreamTerminal(payload, logCtx);
       if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning && !degeneratePrelude) outputCommitted = true;
       if (options?.requiredToolPrelude && payload && typeof payload === "object") {
         const event = payload as { type?: unknown; response?: { output?: unknown; error?: { code?: unknown; retryable?: unknown } } };
@@ -754,12 +774,11 @@ export async function preflightComboStreamResponse(
             && ["message", "reasoning"].includes((item as { type: string }).type));
         // Other lifecycle/terminal snapshots can hide effects too. Only our checked contract
         // failure may discard a terminal-only text snapshot that was held in its entirety.
-        if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure) outputCommitted = true;
+        if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure && !degenerateTerminal) outputCommitted = true;
       }
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
       if (retryable) retryableTerminalPayload = payload as Record<string, unknown>;
-      if (options?.degeneratePrelude === true && !degenerateTerminalPayload
-        && isDegenerateStreamTerminal(payload)) {
+      if (degenerateTerminal && !degenerateTerminalPayload) {
         const response = recordValue((payload as Record<string, unknown>).response);
         degenerateTerminalPayload = {
           ...(payload as Record<string, unknown>),
