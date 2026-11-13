@@ -1565,7 +1565,11 @@ too. `child_residual`
 ownership record written by an older `ocx-child`; run
 `~/.cache/opencodex/bin/ocx-child detach` on that machine, then recover again.
 `child_conflict` (exit 5) means the Child belongs to another link or OpenCodex
-home, and nothing was changed. `--operation-id` recovers a Child that an
+home, and nothing was changed. `alias_linked` (exit 5) means another Home-initiated link still uses that
+alias, as its alias or one of its routes, so the machine may belong to that link: do not run
+`ocx-child detach` there; settle any open operation on that link, revoke it, then recover.
+`link_present` (exit 5) means the link itself still exists; revoke it with `--purge` instead.
+`--operation-id` recovers a Child that an
 interrupted enrollment left behind; it needs the link operation journal and
 otherwise answers `operation_journal_unavailable`.
 Automation can discover support with `ocx capabilities --contracts --json`: the
