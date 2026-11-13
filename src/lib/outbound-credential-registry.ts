@@ -126,6 +126,7 @@ function scanHead(text: string): string {
 
 export function createSentValueGuard(headers: Record<string, string>): (text: string) => boolean {
   const { wholeCredential, credentialWindows, contained, overflow } = indexSentValues(headers);
+  const containedIndex = new SecretIndex(contained);
   return (text) => {
     if (overflow) return true;
     const head = scanHead(text);
@@ -133,7 +134,7 @@ export function createSentValueGuard(headers: Record<string, string>): (text: st
     for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= head.length; at++) {
       if (credentialWindows.has(head.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH))) return true;
     }
-    return contained.some(part => head.includes(part));
+    return markSubstringSpans(head, containedIndex, undefined) !== undefined;
   };
 }
 
@@ -154,6 +155,7 @@ export function createSentValueMask(
   // `wholeText`: read and return all of the text (linear work), for genuine Responses terminals whose
   // output must not be cut; the default reads and returns only the guard's scan window.
   const { wholeCredential, credentialWindows, contained, overflow } = indexSentValues(headers, options.credentialOnly);
+  const containedIndex = new SecretIndex(contained);
   return (text) => {
     if (overflow) return replacement;
     const head = options.wholeText ? text : scanHead(text);
@@ -166,7 +168,7 @@ export function createSentValueMask(
       covered ??= new Uint8Array(head.length);
       covered.fill(1, at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH);
     }
-    covered = markSubstringSpans(head, contained, covered);
+    covered = markSubstringSpans(head, containedIndex, covered);
     return covered === undefined ? head : renderCoveredSpans(head, covered, replacement);
   };
 }
@@ -175,71 +177,86 @@ export function createSentValueMask(
  * Replace every span of text a secret covers: the whole text when it equals a whole-only value, and
  * every occurrence of each substring value. Coverage is marked on the original text before anything
  * is replaced, so overlapping values are replaced as one union and no part of either survives
- * between them. Each secret marks only characters past its previous occurrence, so the work and the
- * one coverage array stay linear in the text length however often a secret repeats.
+ * between them. Pass a {@link SecretIndex} built once when the same secrets mask many strings: the
+ * work per call is then linear in that string, independent of how many secrets there are.
  */
-export function maskSecretSpans(text: string, replacement: string, substrings: Iterable<string>, wholeOnly: Iterable<string> = []): string {
+export function maskSecretSpans(text: string, replacement: string, substrings: Iterable<string> | SecretIndex, wholeOnly: Iterable<string> = []): string {
   for (const value of wholeOnly) if (value && text === value) return replacement;
-  const covered = markSubstringSpans(text, substrings, undefined);
+  const covered = markSubstringSpans(text, substrings instanceof SecretIndex ? substrings : new SecretIndex(substrings), undefined);
   return covered === undefined ? text : renderCoveredSpans(text, covered, replacement);
 }
 
-function markSubstringSpans(text: string, substrings: Iterable<string>, initial: Uint8Array | undefined): Uint8Array | undefined {
+/**
+ * Secrets prepared for {@link maskSecretSpans}: deduplicated, 8+ character secrets grouped by their
+ * first 8 characters with each group sorted by length, shorter ones grouped by length. Built once
+ * per request, so masking each string of a frame does not rebuild it. Border tables are computed
+ * lazily, at most once per secret, and charged to the call that needs them.
+ */
+export class SecretIndex {
+  readonly byPrefix = new Map<string, string[]>();
+  readonly shortByLength = new Map<number, Set<string>>();
+  readonly bordered = new Map<string, boolean>();
+
+  constructor(substrings: Iterable<string>) {
+    for (const secret of new Set(substrings)) {
+      if (!secret) continue;
+      if (secret.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) {
+        const prefix = secret.slice(0, CREDENTIAL_SUBSTRING_MIN_LENGTH);
+        const group = this.byPrefix.get(prefix);
+        if (group) group.push(secret);
+        else this.byPrefix.set(prefix, [secret]);
+      } else {
+        const group = this.shortByLength.get(secret.length) ?? new Set<string>();
+        group.add(secret);
+        this.shortByLength.set(secret.length, group);
+      }
+    }
+    for (const group of this.byPrefix.values()) group.sort((a, b) => a.length - b.length);
+  }
+}
+
+function markSubstringSpans(text: string, index: SecretIndex, initial: Uint8Array | undefined): Uint8Array | undefined {
   // One pass over the text finds every secret, however many there are: secrets of 8+ characters are
   // looked up by the 8 characters at each position, shorter ones by a slice of their own length (at
-  // most seven passes). Confirming a candidate and the scan of a self-overlapping secret are charged
-  // to a budget proportional to the text; past it the whole text is covered (fail closed), so a
-  // frame that repeats near-copies of a secret at every position cannot make the work superlinear.
+  // most seven passes). A prefix group is walked shortest first and stops at the first secret that
+  // cannot fit in the text left, so only candidates that fit are visited, and each is charged:
+  // confirming it, building its border table, and the one scan of a confirmed self-overlapping
+  // secret. The budget is proportional to the text; past it the whole text is covered (fail closed),
+  // so neither the frame nor the secret set can make the work superlinear.
   const n = text.length;
-  const byPrefix = new Map<string, string[]>();
-  const shortByLength = new Map<number, Set<string>>();
-  for (const secret of new Set(substrings)) {
-    if (!secret || secret.length > n) continue;
-    if (secret.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) {
-      const prefix = secret.slice(0, CREDENTIAL_SUBSTRING_MIN_LENGTH);
-      const group = byPrefix.get(prefix);
-      if (group) group.push(secret);
-      else byPrefix.set(prefix, [secret]);
-    } else {
-      const group = shortByLength.get(secret.length) ?? new Set<string>();
-      group.add(secret);
-      shortByLength.set(secret.length, group);
-    }
-  }
   let covered = initial;
-  for (const [length, group] of shortByLength) {
+  for (const [length, group] of index.shortByLength) {
     for (let at = 0; at + length <= n; at++) {
       if (!group.has(text.slice(at, at + length))) continue;
       covered ??= new Uint8Array(n);
       covered.fill(1, at, at + length);
     }
   }
-  if (byPrefix.size === 0) return covered;
+  if (index.byPrefix.size === 0) return covered;
   const budget = { steps: MATCH_WORK_PER_CHAR * n + MATCH_WORK_FLOOR };
   const scanned = new Set<string>();
-  const bordered = new Map<string, boolean>();
   for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= n; at++) {
-    const group = byPrefix.get(text.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
+    const group = index.byPrefix.get(text.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
     if (group === undefined) continue;
     for (const secret of group) {
-      if (scanned.has(secret) || n - at < secret.length) continue;
+      if (secret.length > n - at) break;
+      if (scanned.has(secret)) continue;
+      budget.steps -= secret.length;
+      if (budget.steps < 0) return (covered ?? new Uint8Array(n)).fill(1);
+      if (!text.startsWith(secret, at)) continue;
       covered ??= new Uint8Array(n);
-      let selfOverlapping = bordered.get(secret);
+      let selfOverlapping = index.bordered.get(secret);
       if (selfOverlapping === undefined) {
-        // The border table is built once per secret, and its cost is charged before it is built.
         budget.steps -= secret.length;
         if (budget.steps < 0) return covered.fill(1);
         selfOverlapping = hasBorder(secret);
-        bordered.set(secret, selfOverlapping);
+        index.bordered.set(secret, selfOverlapping);
       }
-      budget.steps -= secret.length;
-      if (budget.steps < 0) return covered.fill(1);
-      if (!text.startsWith(secret, at)) continue;
       if (selfOverlapping) {
         // A confirmed self-overlapping secret is found from here on by one Knuth-Morris-Pratt scan,
         // so a prefix shared by many secrets that are absent never starts a scan.
         scanned.add(secret);
-        budget.steps -= n - at + secret.length;
+        budget.steps -= n - at;
         if (budget.steps < 0) return covered.fill(1);
         markOverlappingOccurrences(text, secret, at, covered);
         continue;
@@ -252,7 +269,7 @@ function markSubstringSpans(text: string, substrings: Iterable<string>, initial:
 
 /** Confirmation and scan work one masking call may spend per text character before it fails closed. */
 const MATCH_WORK_PER_CHAR = 8;
-const MATCH_WORK_FLOOR = 65_536;
+const MATCH_WORK_FLOOR = 256;
 
 /** Whether a proper prefix of the secret is also its suffix, so two occurrences can overlap. */
 function hasBorder(secret: string): boolean {

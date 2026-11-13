@@ -2,6 +2,7 @@ import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecretString, redactSecre
 import {
   CREDENTIAL_SUBSTRING_MIN_LENGTH,
   SENT_VALUE_GUARD_SCAN_CHARS,
+  SecretIndex,
   createSentValueGuard,
   createSentValueMask,
   credentialComponents,
@@ -99,7 +100,9 @@ export function createOutboundCredentialMask(outboundHeaders: Record<string, str
         .filter(part => part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH && !PROTOCOL_WORD.test(part))]);
       return [...parts].flatMap(withEscapedSpelling);
     });
-  return (text) => maskSecretSpans(text, REDACTED_SECRET, secrets);
+  // Indexed once per request: masking each string of a frame is then linear in that string alone.
+  const index = new SecretIndex(secrets);
+  return (text) => maskSecretSpans(text, REDACTED_SECRET, index);
 }
 
 /**

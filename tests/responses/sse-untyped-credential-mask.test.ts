@@ -616,6 +616,20 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     expect([out.includes("is a project key prefix"), out.includes("END-OF-MESSAGE")]).toEqual([true, true]);
   });
 
+  test("masking a terminal with many fields stays linear in the frame, not fields times credentials", () => {
+    // The exact mask rebuilt and walked its secret set for every string of the frame: thousands of
+    // short metadata strings times thousands of credential components stalled the rewrite.
+    const components = Array.from({ length: 5_000 }, (_, i) => `k${String(i).padStart(8, "0")}`);
+    const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: `Bearer ${components.join(",")}` });
+    const metadata = Object.fromEntries(Array.from({ length: 20_000 }, (_, i) => [`m${i}`, `value-${i}`]));
+    const failed = { type: "response.failed", response: { status: "failed", metadata, error: { code: "server_error", message: `echo ${components[7]}` } } };
+    const startedAt = performance.now();
+    const out = rewrite(`event: response.failed\ndata: ${JSON.stringify(failed)}`).join("\n");
+    const elapsed = performance.now() - startedAt;
+    expect([out.includes(components[7]!), out.includes("value-19999")]).toEqual([false, true]);
+    expect(elapsed).toBeLessThan(1_500);
+  });
+
   test("classifying an untyped envelope stays linear in its message size", () => {
     // Pattern redaction of the full message rescanned an unterminated line from every multipart
     // candidate, so a 176 KB message stalled the boundary for seconds.
