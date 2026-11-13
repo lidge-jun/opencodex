@@ -1298,3 +1298,48 @@ test("a bare host Home cannot plant names the verified build Home needs and wher
   await act(async () => { root?.render(sheet("unsupported_target")); });
   expect(host.textContent ?? "").not.toContain("OPENCODEX_CHILD_BIN_DIR");
 });
+
+const ENROLLMENT_CLEANUP_ERRORS = [
+  ["link_pin_conflict", "already pins another host key"],
+  ["host_key_changed", "no longer the one trusted"],
+  ["trust_file_unexpected", "known_hosts file"],
+  ["key_cleanup_failed", "revoke the leftover link key"],
+  ["link_cleanup_uncertain", "revoke the leftover link key"],
+] as const;
+
+test.each(ENROLLMENT_CLEANUP_ERRORS)("apply refusal %s names what to do instead of a generic failure", async (code, expected) => {
+  globalThis.fetch = (async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh config" }] });
+    if (path === "/api/link/probe") return response({ alias: "child-one", fingerprint: "SHA256:test", keyType: "ed25519" });
+    if (path === "/api/link/confirm-host") return response({ alias: "child-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
+    if (path === "/api/link/apply") return response({ error: { code, message: "server text" } }, code === "key_cleanup_failed" || code === "link_cleanup_uncertain" ? 500 : 409);
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('[data-action="continue"]') as HTMLButtonElement).click(); });
+  await flush();
+  await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Confirm host"))?.click(); });
+  await flush();
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Connect child"))?.click(); });
+  await flush();
+  expect(host.textContent).toContain(expected);
+  expect(host.textContent).not.toContain("Remote link request could not be completed.");
+});
+
+test("every locale translates the enrollment refusals instead of reusing its generic failure", async () => {
+  const { DICTS } = await import("../src/i18n/catalogs");
+  for (const [locale, dict] of Object.entries(DICTS)) {
+    for (const [code] of ENROLLMENT_CLEANUP_ERRORS) {
+      const text = (dict as Record<string, string>)["remoteLink.error." + code];
+      expect(typeof text, locale + " " + code).toBe("string");
+      expect(text, locale + " " + code).not.toBe((dict as Record<string, string>)["remoteLink.error.generic"]);
+      if (locale !== "en") expect(text, locale + " " + code).not.toBe((DICTS.en as Record<string, string>)["remoteLink.error." + code]);
+    }
+  }
+});

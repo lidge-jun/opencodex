@@ -98,6 +98,11 @@ const ERROR_TKEY: Record<LinkErrorCode, TKey> = {
   standalone_required: "remoteLink.error.standalone_required",
   tailscale_session_refused: "remoteLink.error.tailscale_session_refused",
   version_probe_failed: "remoteLink.error.version_probe_failed",
+  link_pin_conflict: "remoteLink.error.link_pin_conflict",
+  host_key_changed: "remoteLink.error.host_key_changed",
+  trust_file_unexpected: "remoteLink.error.trust_file_unexpected",
+  key_cleanup_failed: "remoteLink.error.key_cleanup_failed",
+  link_cleanup_uncertain: "remoteLink.error.link_cleanup_uncertain",
 };
 const REASON_TKEY: Record<string, TKey> = {
   auth: "remoteLink.reason.auth",
