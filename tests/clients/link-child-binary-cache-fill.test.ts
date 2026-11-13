@@ -804,3 +804,25 @@ describe("the fill lock's temp file", () => {
     expect(readdirSync(join(home, "ocx-child-builds")).filter(name => name.endsWith(".tmp"))).toEqual([]);
   });
 });
+
+describe("uninstall after a full fill", () => {
+  test("builds, manifest, markers, a stale lock and leftover temps all go, and uninstall ends removed", async () => {
+    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    bothDigests();
+    const quiet = { log: () => {}, warn: () => {} };
+    expect(await startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: VERSION, fetchImpl: release({}).fetchImpl }, quiet))
+      .toEqual({ kind: "skipped", reason: "first_start" });
+    rmSync(versionsDir(), { recursive: true });
+    ranBefore();
+    const { fetchImpl } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+    expect((await startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: VERSION, fetchImpl }, quiet))?.kind).toBe("filled");
+    const fillRoot = join(home, "ocx-child-builds");
+    writeFileSync(join(fillRoot, ".fill.lock"), "999999999.deadbeef\n", { mode: 0o600 });
+    writeFileSync(join(fillRoot, ".ocx-child-cache.999999999.0011223344aa.tmp"), "partial", { mode: 0o600 });
+    writeFileSync(join(cacheDir(), ".ocx-child-cache.999999999.5566778899bb.tmp"), "partial", { mode: 0o600 });
+    expect(readdirSync(cacheDir()).sort()).toContain("SHA256SUMS");
+    writeFileSync(join(home, "config.json"), "{}");
+    expect(removeOwnedConfigState(home)).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(home)).toBe(false);
+  });
+});
