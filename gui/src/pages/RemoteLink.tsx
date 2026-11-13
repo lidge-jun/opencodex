@@ -168,13 +168,23 @@ function residualChildStep(residual: LinkResidual): LinkChildStep {
   const olderFull = { key: "remoteLink.residual.olderFull", cmd: "ocx connect status --json", vars } as const;
   const olderLightweight = { key: "remoteLink.residual.olderLightweight" } as const;
   const fallback = { key: "remoteLink.residual.purgeWindowsFallback", cmd: bound(WINDOWS_FALLBACK_PURGE) } as const;
+  // The lightweight agent by its managed path for the Child's platform (not necessarily on PATH), then a copy placed by hand.
+  const posixDetach = bound("~/.cache/opencodex/bin/ocx-child detach");
+  const windowsDetach = bound('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach');
+  const windowsFallbackDetach = { key: "remoteLink.residual.purgeWindowsFallback", cmd: bound('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach') } as const;
+  const placed = residual.platform === "windows" ? { key: "remoteLink.residual.lightweightPlacedWindows", cmd: "where.exe ocx-child" } as const
+    : { key: "remoteLink.residual.lightweightPlaced", cmd: "command -v ocx-child" } as const;
+  const lightweightMore = residual.platform === "windows" ? [windowsFallbackDetach, placed]
+    : residual.platform === "posix" ? [placed] : [{ key: "remoteLink.residual.purgeAnyWindows", cmd: windowsDetach } as const, windowsFallbackDetach, placed];
   switch (residual.step) {
     case "purge": return { key: "remoteLink.residual.purge", cmd: bound(POSIX_PURGE), more: [boundLine] };
     case "purgeWindows": return { key: "remoteLink.residual.purgeWindows", cmd: bound(WINDOWS_PURGE), more: [fallback, boundLine] };
     case "purgeAny": return { key: "remoteLink.residual.purgeAny", cmd: bound(POSIX_PURGE), more: [{ key: "remoteLink.residual.purgeAnyWindows", cmd: bound(WINDOWS_PURGE) }, fallback, boundLine] };
-    case "ephemeral": return { key: "remoteLink.residual.ephemeral", cmd: bound("ocx-child detach"), more: [boundLine, olderLightweight] };
+    case "ephemeral": return residual.platform === "windows"
+      ? { key: "remoteLink.residual.purgeWindows", cmd: windowsDetach, more: [...lightweightMore, boundLine, olderLightweight] }
+      : { key: residual.platform === "posix" ? "remoteLink.residual.ephemeral" : "remoteLink.residual.purgeAny", cmd: posixDetach, more: [...lightweightMore, boundLine, olderLightweight] };
     case "full": return { key: "remoteLink.residual.full", cmd: bound("ocx disconnect"), more: [boundLine, olderFull] };
-    case "unknown": return { key: "remoteLink.residual.unknown", cmd: bound("ocx disconnect"), more: [{ key: "remoteLink.residual.unknownLightweight", cmd: bound("ocx-child detach") }, boundLine, olderLightweight, olderFull] };
+    case "unknown": return { key: "remoteLink.residual.unknown", cmd: bound("ocx disconnect"), more: [{ key: "remoteLink.residual.unknownLightweight", cmd: residual.platform === "windows" ? windowsDetach : posixDetach }, ...lightweightMore, boundLine, olderLightweight, olderFull] };
   }
 }
 

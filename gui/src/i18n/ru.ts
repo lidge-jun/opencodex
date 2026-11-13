@@ -4236,6 +4236,8 @@ export const ru: Record<TKey, string> = {
   "remoteLink.residual.full": "Child, возможно, всё ещё подключён. Перед повтором выполните на Child {cmd}, а если он отключился, — ocx restart.",
   "remoteLink.residual.unknown": "Child, возможно, всё ещё подключён. На полной установке перед повтором выполните {cmd}, а если он отключился, — ocx restart.",
   "remoteLink.residual.unknownLightweight": "На лёгком Child выполните вместо этого {cmd}.",
+  "remoteLink.residual.lightweightPlaced": "Для копии, положенной вручную, выполните ту же команду по пути, который выводит {cmd} (в Windows — where.exe ocx-child).",
+  "remoteLink.residual.lightweightPlacedWindows": "Для копии, положенной вручную, выполните ту же команду по пути, который выводит {cmd}.",
   "remoteLink.residual.bound": "Каждый шаг действует, только пока записи Child называют связь этой попытки ({linkId}) или ничего, и не трогает Child, принадлежащий другой связи, хабу или другому Home.",
   "remoteLink.residual.olderFull": "OpenCodex старше этого флага отклоняет его, прежде чем тронуть связь; тогда выполните ocx disconnect и ocx restart, только если {cmd} показывает {linkId}, сразу после этой проверки, а иначе оставьте Child как есть.",
   "remoteLink.residual.olderLightweight": "ocx-child старше этого флага отклоняет его, прежде чем что-либо сделать; тогда оставьте Child как есть: его статус не может показать прерванное подключение другой связи, которое обычный detach восстановил бы, а затем удалил.",

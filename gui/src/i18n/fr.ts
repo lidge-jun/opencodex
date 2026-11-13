@@ -4202,6 +4202,8 @@ export const fr: Record<TKey, string> = {
   "remoteLink.residual.full": "L’Enfant est peut-être encore connecté. Exécutez {cmd} sur l’Enfant puis, s’il s’est déconnecté, ocx restart, avant de réessayer.",
   "remoteLink.residual.unknown": "L’Enfant est peut-être encore connecté. Sur une installation complète, exécutez {cmd} puis, s’il s’est déconnecté, ocx restart, avant de réessayer.",
   "remoteLink.residual.unknownLightweight": "Sur un Enfant léger, exécutez plutôt {cmd}.",
+  "remoteLink.residual.lightweightPlaced": "Pour une copie placée à la main, exécutez la même commande avec le chemin qu’affiche {cmd} (where.exe ocx-child sous Windows).",
+  "remoteLink.residual.lightweightPlacedWindows": "Pour une copie placée à la main, exécutez la même commande avec le chemin qu’affiche {cmd}.",
   "remoteLink.residual.bound": "Chaque étape n’agit que tant que les enregistrements de l’Enfant nomment le lien de cette tentative ({linkId}) ou rien du tout, et laisse un Enfant qui appartient à un autre lien, à un hub ou à un autre Home.",
   "remoteLink.residual.olderFull": "Un OpenCodex antérieur à cette option la refuse avant de toucher au lien ; exécutez alors ocx disconnect et ocx restart seulement si {cmd} affiche {linkId}, juste après cette vérification, et sinon laissez l’Enfant tel quel.",
   "remoteLink.residual.olderLightweight": "Un ocx-child antérieur à cette option la refuse avant d’agir ; laissez alors l’Enfant tel quel : son état ne peut pas montrer une connexion interrompue d’un autre lien, qu’un detach simple restaurerait puis supprimerait.",

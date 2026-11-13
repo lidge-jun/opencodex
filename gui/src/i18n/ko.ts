@@ -4235,6 +4235,8 @@ export const ko: Record<TKey, string> = {
   "remoteLink.residual.full": "Child가 아직 연결되어 있을 수 있습니다. 다시 시도하기 전에 Child에서 {cmd}를 실행하고, 연결이 해제되었다면 ocx restart를 실행하세요.",
   "remoteLink.residual.unknown": "Child가 아직 연결되어 있을 수 있습니다. 전체 설치에서는 다시 시도하기 전에 {cmd}를 실행하고, 연결이 해제되었다면 ocx restart를 실행하세요.",
   "remoteLink.residual.unknownLightweight": "경량 Child에서는 대신 {cmd}를 실행하세요.",
+  "remoteLink.residual.lightweightPlaced": "직접 둔 사본이라면 {cmd}가 출력하는 경로로 같은 명령을 실행하세요(Windows에서는 where.exe ocx-child).",
+  "remoteLink.residual.lightweightPlacedWindows": "직접 둔 사본이라면 {cmd}가 출력하는 경로로 같은 명령을 실행하세요.",
   "remoteLink.residual.bound": "각 단계는 Child의 기록이 이 시도의 링크({linkId})를 가리키거나 아무것도 가리키지 않을 때만 동작하며, 다른 링크, 허브 또는 다른 Home이 소유한 Child는 그대로 둡니다.",
   "remoteLink.residual.olderFull": "이 옵션보다 오래된 OpenCodex는 링크를 건드리기 전에 이를 거부합니다. 그러면 {cmd}가 {linkId}를 표시할 때만 그 확인 직후에 ocx disconnect와 ocx restart를 실행하고, 그 밖에는 Child를 그대로 두세요.",
   "remoteLink.residual.olderLightweight": "이 옵션보다 오래된 ocx-child는 동작하기 전에 이를 거부합니다. 그러면 Child를 그대로 두세요. 그 상태 확인으로는 다른 링크의 중단된 연결을 볼 수 없고, 일반 detach는 그것을 복원한 뒤 지워 버립니다.",

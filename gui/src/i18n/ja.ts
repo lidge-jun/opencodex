@@ -4235,6 +4235,8 @@ export const ja: Record<TKey, string> = {
   "remoteLink.residual.full": "Child はまだ接続されている可能性があります。再試行する前に、Child で {cmd} を実行し、接続が解除された場合は ocx restart を実行してください。",
   "remoteLink.residual.unknown": "Child はまだ接続されている可能性があります。完全インストールでは、再試行する前に {cmd} を実行し、接続が解除された場合は ocx restart を実行してください。",
   "remoteLink.residual.unknownLightweight": "軽量な Child では、代わりに {cmd} を実行してください。",
+  "remoteLink.residual.lightweightPlaced": "手動で置いたコピーでは、{cmd} が表示するパスで同じコマンドを実行してください（Windows では where.exe ocx-child）。",
+  "remoteLink.residual.lightweightPlacedWindows": "手動で置いたコピーでは、{cmd} が表示するパスで同じコマンドを実行してください。",
   "remoteLink.residual.bound": "各手順は、Child の記録がこの試行のリンク（{linkId}）を示すか何も示さない間だけ動作し、別のリンク、ハブ、または別の Home が所有する Child には触れません。",
   "remoteLink.residual.olderFull": "このオプションより古い OpenCodex はリンクに触れる前にそれを拒否します。その場合、{cmd} が {linkId} を示すときだけ、その確認の直後に ocx disconnect と ocx restart を実行し、それ以外は Child をそのままにしてください。",
   "remoteLink.residual.olderLightweight": "このオプションより古い ocx-child は動作する前にそれを拒否します。その場合は Child をそのままにしてください。その状態表示には別のリンクの中断された接続が表示されず、通常の detach はそれを復元してから削除してしまいます。",

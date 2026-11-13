@@ -9,7 +9,7 @@ const linkId = "lnk_0123456789abcdef";
 // Written out here, not imported: the test pins the sentences an operator reads. The Child's step is bound to the attempt's link
 // id the answer names, so it never removes a link the machine joined since (#8691 final review).
 const FULL_STEP = "Run ocx disconnect --expect-link " + linkId + " on the Child and, if it disconnected, ocx restart, before retrying: it disconnects only while the Child is connected to this attempt's link (" + linkId + ").";
-const LIGHT_STEP = "Run ocx-child detach --expect-link " + linkId + " on the Child (the planted copy is ~/.cache/opencodex/bin/ocx-child) before retrying";
+const LIGHT_STEP = "Run ~/.cache/opencodex/bin/ocx-child detach --expect-link " + linkId + " on the Child before retrying (on Windows, in Command Prompt, \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --expect-link " + linkId;
 const NO_LINK = "This answer does not name the attempt's link id, so no step on the Child can be bound to it: leave the Child as it is.";
 function harness(bodies: unknown[] = [probe, confirm, { linkId }], status = 200) {
   const calls: { url: string; init?: RequestInit }[] = [], out: string[] = [], err: string[] = [];

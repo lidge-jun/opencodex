@@ -360,11 +360,19 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
   test("the live residual answer binds the Child's step to the attempt's link and names the closed words", () => {
     const id = "lnk_00000000000000a1";
     expect(liveResidual("plant", "windows", id)).toEqual({ residualKind: "plant", remotePlatform: "windows", linkId: id, recovery: residualRecovery("plant", id, "windows") });
-    expect(liveResidual("ephemeral", "windows", id)).toEqual({ residualKind: "enrollment", residualInstall: "ephemeral", remotePlatform: "windows", linkId: id, recovery: residualRecovery("ephemeral", id) });
+    expect(liveResidual("ephemeral", "windows", id)).toEqual({ residualKind: "enrollment", residualInstall: "ephemeral", remotePlatform: "windows", linkId: id, recovery: residualRecovery("ephemeral", id, "windows") });
     expect(liveResidual("full", undefined, id)).toEqual({ residualKind: "enrollment", residualInstall: "full", linkId: id, recovery: residualRecovery("full", id) });
     expect(residualRecovery("plant", id, "windows")).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + id);
     expect(residualRecovery("plant", id, "windows")).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + id);
-    expect(residualRecovery("ephemeral", id)).toContain("ocx-child detach --expect-link " + id);
+    // The lightweight agent is named by its managed path, which need not be on PATH, with the copy placed by hand (#8694 review).
+    expect(residualRecovery("ephemeral", id, "posix")).toContain("Run ~/.cache/opencodex/bin/ocx-child detach --expect-link " + id + " on the Child");
+    expect(residualRecovery("ephemeral", id, "posix")).toContain("command -v ocx-child");
+    expect(residualRecovery("ephemeral", id, "windows")).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + id);
+    expect(residualRecovery("ephemeral", id, "windows")).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + id);
+    expect(residualRecovery("ephemeral", id, "windows")).toContain("where.exe ocx-child");
+    expect(residualRecovery("ephemeral", id)).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + id);
+    expect(residualRecovery("enrollment", id)).toContain("~/.cache/opencodex/bin/ocx-child detach --expect-link " + id);
+    for (const kind of ["ephemeral", "enrollment"] as const) expect(residualRecovery(kind, id)).not.toContain(" ocx-child detach --expect-link");
     expect(residualRecovery("full", id)).toContain("ocx disconnect --expect-link " + id + " on the Child and, if it disconnected, ocx restart");
     // Never a plain disconnect or detach without the link's id first.
     for (const kind of ["plant", "ephemeral", "full", "enrollment"] as const) {
@@ -443,8 +451,8 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     expect(res.status).toBe(502);
     const body = await res.json() as { residual: boolean; recovery: string; linkId: string };
     expect(body.residual).toBe(true);
-    expect(body.recovery).toBe(residualRecovery("ephemeral", body.linkId));
-    expect(body.recovery).toContain("ocx-child detach --expect-link " + body.linkId);
+    expect(body.recovery).toBe(residualRecovery("ephemeral", body.linkId, "posix"));
+    expect(body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --expect-link " + body.linkId);
     expect(body.recovery).not.toContain("ocx restart");
   });
 });

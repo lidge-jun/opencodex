@@ -119,13 +119,15 @@ const LINK_ROLES = ["standalone", "home", "child"] as const;
  */
 /** purgeAny: a plant whose Child platform is not known (a journalled reply), so every managed location is named. */
 export type LinkResidualStep = "purge" | "purgeWindows" | "purgeAny" | "ephemeral" | "full" | "unknown" | "noLink";
-export interface LinkResidual { readonly step: LinkResidualStep; readonly linkId: string | null }
+/** platform: the Child's, when the answer names it; it picks the lightweight agent's managed path. */
+export interface LinkResidual { readonly step: LinkResidualStep; readonly linkId: string | null; readonly platform?: "posix" | "windows" }
 
 function residualStep(body: Record<string, unknown>): LinkResidual {
   const linkId = typeof body.linkId === "string" && /^lnk_[0-9a-f]{16}$/.test(body.linkId) ? body.linkId : null;
   if (linkId === null) return { step: "noLink", linkId: null };
   if (body.residualKind === "plant") return { step: body.remotePlatform === "windows" ? "purgeWindows" : body.remotePlatform === "posix" ? "purge" : "purgeAny", linkId };
-  return { step: body.residualInstall === "ephemeral" || body.residualInstall === "full" ? body.residualInstall : "unknown", linkId };
+  const platform = body.remotePlatform === "posix" || body.remotePlatform === "windows" ? body.remotePlatform : undefined;
+  return { step: body.residualInstall === "ephemeral" || body.residualInstall === "full" ? body.residualInstall : "unknown", linkId, ...(platform ? { platform } : {}) };
 }
 
 export class LinkApiError extends Error {

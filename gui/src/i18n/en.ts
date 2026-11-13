@@ -4247,6 +4247,8 @@ export const en = {
   "remoteLink.residual.full": "The Child may still be connected. Run {cmd} on the Child and, if it disconnected, ocx restart, before retrying.",
   "remoteLink.residual.unknown": "The Child may still be connected. On a full install, run {cmd} and, if it disconnected, ocx restart, before retrying.",
   "remoteLink.residual.unknownLightweight": "On a lightweight Child, run {cmd} instead.",
+  "remoteLink.residual.lightweightPlaced": "For a copy placed by hand, run the same command through the path {cmd} prints (where.exe ocx-child on Windows).",
+  "remoteLink.residual.lightweightPlacedWindows": "For a copy placed by hand, run the same command through the path {cmd} prints.",
   "remoteLink.residual.bound": "Each step acts only while the Child's records name this attempt's link ({linkId}) or nothing at all, and leaves a Child that another link, a hub or another Home owns.",
   "remoteLink.residual.olderFull": "An OpenCodex older than that flag refuses it before it acts on the link; then run ocx disconnect and ocx restart only if {cmd} shows {linkId}, right after that check, and otherwise leave the Child as it is.",
   "remoteLink.residual.olderLightweight": "An ocx-child older than that flag refuses it before it acts; then leave the Child as it is: its status cannot show an interrupted attach of another link, which a plain detach would restore and then remove.",

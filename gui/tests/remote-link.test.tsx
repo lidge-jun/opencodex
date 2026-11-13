@@ -1564,7 +1564,7 @@ test.each(ENROLLMENT_CLEANUP_ERRORS.filter(([code]) => code !== "link_pin_confli
   expect(host.textContent).not.toContain("Remote link request could not be completed.");
 });
 
-const RESIDUAL_STEPS = ["purge", "purgeWindows", "purgeWindowsFallback", "purgeAny", "purgeAnyWindows", "ephemeral", "full", "unknown", "unknownLightweight", "bound", "olderFull", "olderLightweight", "noLink"] as const;
+const RESIDUAL_STEPS = ["purge", "purgeWindows", "purgeWindowsFallback", "purgeAny", "purgeAnyWindows", "ephemeral", "full", "unknown", "unknownLightweight", "lightweightPlaced", "lightweightPlacedWindows", "bound", "olderFull", "olderLightweight", "noLink"] as const;
 // Lines that carry no command chip; bound and olderFull name the attempt's link id.
 const RESIDUAL_PROSE: readonly string[] = ["bound", "olderLightweight", "noLink"];
 
@@ -1593,12 +1593,18 @@ test("every locale translates the enrollment refusals and the Child steps instea
 const RESIDUAL_ID = "lnk_00000000000000c1";
 const WINDOWS_PURGE_BOUND = '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + RESIDUAL_ID;
 const WINDOWS_FALLBACK_BOUND = '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + RESIDUAL_ID;
+// The lightweight agent by its managed paths (not necessarily on PATH), then the copy placed by hand (#8694 review).
+const POSIX_DETACH = "~/.cache/opencodex/bin/ocx-child detach --expect-link " + RESIDUAL_ID;
+const WINDOWS_DETACH = '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + RESIDUAL_ID;
+const WINDOWS_FALLBACK_DETACH = '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + RESIDUAL_ID;
 test.each([
   ["a posix plant", { residualKind: "plant", remotePlatform: "posix" }, ["~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + RESIDUAL_ID], "Run ~/.cache"],
   ["a windows plant", { residualKind: "plant", remotePlatform: "windows" }, [WINDOWS_PURGE_BOUND, WINDOWS_FALLBACK_BOUND], "Command Prompt"],
-  ["a lightweight Child", { residualKind: "enrollment", residualInstall: "ephemeral" }, ["ocx-child detach --expect-link " + RESIDUAL_ID], "An ocx-child older than that flag refuses it before it acts; then leave the Child as it is"],
+  ["a lightweight Child", { residualKind: "enrollment", residualInstall: "ephemeral", remotePlatform: "posix" }, [POSIX_DETACH, "command -v ocx-child"], "An ocx-child older than that flag refuses it before it acts; then leave the Child as it is"],
+  ["a lightweight Windows Child", { residualKind: "enrollment", residualInstall: "ephemeral", remotePlatform: "windows" }, [WINDOWS_DETACH, WINDOWS_FALLBACK_DETACH, "where.exe ocx-child"], "Command Prompt"],
+  ["a lightweight Child of unknown platform", { residualKind: "enrollment", residualInstall: "ephemeral" }, [POSIX_DETACH, WINDOWS_DETACH, WINDOWS_FALLBACK_DETACH, "command -v ocx-child"], "On macOS or Linux"],
   ["a full install", { residualKind: "enrollment", residualInstall: "full" }, ["ocx disconnect --expect-link " + RESIDUAL_ID, "ocx connect status --json"], "if it disconnected, ocx restart"],
-  ["an install not recorded", { residualKind: "enrollment" }, ["ocx disconnect --expect-link " + RESIDUAL_ID, "ocx-child detach --expect-link " + RESIDUAL_ID, "ocx connect status --json"], "On a full install"],
+  ["an install not recorded", { residualKind: "enrollment" }, ["ocx disconnect --expect-link " + RESIDUAL_ID, POSIX_DETACH, WINDOWS_DETACH, WINDOWS_FALLBACK_DETACH, "command -v ocx-child", "ocx connect status --json"], "On a full install"],
 ] as const)("a residual on %s names its Child step bound to the attempt's link", async (_name, fields, chips, prose) => {
   const host = await applyRefusal({ error: { code: "key_cleanup_failed", message: "fixture" }, residual: true, linkId: RESIDUAL_ID, recovery: "whatever the server wrote", ...fields });
   const step = host.querySelector(".remote-link-child-step");

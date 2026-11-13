@@ -4236,6 +4236,8 @@ export const tr: Record<TKey, string> = {
   "remoteLink.residual.full": "Child hâlâ bağlı olabilir. Yeniden denemeden önce Child üzerinde {cmd} komutunu ve bağlantı kesildiyse ocx restart komutunu çalıştırın.",
   "remoteLink.residual.unknown": "Child hâlâ bağlı olabilir. Tam kurulumda yeniden denemeden önce {cmd} komutunu ve bağlantı kesildiyse ocx restart komutunu çalıştırın.",
   "remoteLink.residual.unknownLightweight": "Hafif bir Child'da bunun yerine {cmd} komutunu çalıştırın.",
+  "remoteLink.residual.lightweightPlaced": "Elle konan bir kopya için aynı komutu {cmd} komutunun gösterdiği yol üzerinden çalıştırın (Windows'ta where.exe ocx-child).",
+  "remoteLink.residual.lightweightPlacedWindows": "Elle konan bir kopya için aynı komutu {cmd} komutunun gösterdiği yol üzerinden çalıştırın.",
   "remoteLink.residual.bound": "Her adım yalnızca Child'ın kayıtları bu denemenin bağlantısını ({linkId}) gösterdiği ya da hiçbir şey göstermediği sürece işlem yapar ve başka bir bağlantıya, hub'a veya başka bir Home'a ait Child'ı olduğu gibi bırakır.",
   "remoteLink.residual.olderFull": "Bu seçenekten eski bir OpenCodex, bağlantıya dokunmadan önce onu reddeder; o zaman ocx disconnect ve ocx restart komutlarını yalnızca {cmd} {linkId} gösterirse, bu kontrolün hemen ardından çalıştırın, aksi halde Child'ı olduğu gibi bırakın.",
   "remoteLink.residual.olderLightweight": "Bu seçenekten eski bir ocx-child, işlem yapmadan önce onu reddeder; o zaman Child'ı olduğu gibi bırakın: durumu başka bir bağlantının yarıda kalmış bağlanmasını gösteremez ve sıradan bir detach onu geri yükleyip sonra kaldırır.",

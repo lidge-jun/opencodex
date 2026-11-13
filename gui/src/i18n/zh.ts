@@ -4234,6 +4234,8 @@ export const zh: Record<TKey, string> = {
   "remoteLink.residual.full": "子设备可能仍处于连接状态。重试前，请在子设备上运行 {cmd}，如果它已断开连接，再运行 ocx restart。",
   "remoteLink.residual.unknown": "子设备可能仍处于连接状态。在完整安装上，重试前请运行 {cmd}，如果它已断开连接，再运行 ocx restart。",
   "remoteLink.residual.unknownLightweight": "在轻量子设备上，请改为运行 {cmd}。",
+  "remoteLink.residual.lightweightPlaced": "对于手动放置的副本，请通过 {cmd} 输出的路径运行同一命令（Windows 上为 where.exe ocx-child）。",
+  "remoteLink.residual.lightweightPlacedWindows": "对于手动放置的副本，请通过 {cmd} 输出的路径运行同一命令。",
   "remoteLink.residual.bound": "每个步骤仅在子设备的记录指向本次尝试的连接（{linkId}）或什么都不指向时才会执行，不会触及属于其他连接、Hub 或其他 Home 的子设备。",
   "remoteLink.residual.olderFull": "早于此选项的 OpenCodex 会在触及连接之前拒绝它；此时仅当 {cmd} 显示 {linkId} 时，紧接着该检查运行 ocx disconnect 和 ocx restart，否则请保持子设备原样。",
   "remoteLink.residual.olderLightweight": "早于此选项的 ocx-child 会在执行任何操作之前拒绝它；此时请保持子设备原样：它的状态无法显示另一个连接中断的接入，而普通的 detach 会先恢复再删除它。",
