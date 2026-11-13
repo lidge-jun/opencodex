@@ -174,6 +174,11 @@ export function boundLinkHint(value: unknown): string | null {
   return points.length > HINT_MAX_CHARS ? `${points.slice(0, HINT_MAX_CHARS - 1).join("")}\u2026` : clean;
 }
 
+/** A link-bound refusal (#8662): the Child answered and refused, so the force dialog says that instead of "could not reach". */
+export const BOUND_REFUSALS = ["child_link_mismatch", "child_residual", "child_disconnect_pending", "expect_link_unsupported"] as const;
+export type BoundRefusal = typeof BOUND_REFUSALS[number];
+export function boundRefusal(hint: string | null): BoundRefusal | null { return BOUND_REFUSALS.find(item => item === hint) ?? null; }
+
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
 // The store's own link-id form (src/link/store.ts). The dashboard copies an id into shell commands, so nothing else passes.
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;

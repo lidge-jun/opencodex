@@ -1,13 +1,20 @@
 import type { ReactElement, RefObject } from "react";
-import type { LinkRowWire } from "../remote-link-api";
+import type { BoundRefusal, LinkRowWire } from "../remote-link-api";
 import { Trans } from "../i18n/provider";
 import { type TKey, useT } from "../i18n/shared";
 import { Banner } from "../components/v2-startup/primitives";
 import { Button } from "@/components/ui-v2/button";
 
+const REFUSAL_KEY: Record<BoundRefusal, TKey> = {
+  child_link_mismatch: "remoteLink.forceRemove.refusal.child_link_mismatch",
+  child_residual: "remoteLink.forceRemove.refusal.child_residual",
+  child_disconnect_pending: "remoteLink.forceRemove.refusal.child_disconnect_pending",
+  expect_link_unsupported: "remoteLink.forceRemove.refusal.expect_link_unsupported",
+};
+
 export interface RemoteLinkDisconnectDialogProps {
   confirmRef: RefObject<HTMLDialogElement | null>;
-  confirming: { row: LinkRowWire; force: boolean } | null;
+  confirming: { row: LinkRowWire; force: boolean; refusal?: BoundRefusal | null } | null;
   purge: boolean;
   onPurgeChange: (checked: boolean) => void;
   forceError: TKey | null;
@@ -30,17 +37,21 @@ export function RemoteLinkForceRemovedNotice({ removed, onDismiss }: { removed: 
       {removed.kind === "ephemeral"
         ? <span className="block"><Trans k="remoteLink.forceRemoved.ephemeral" cmd={`ocx link recover --link-id ${removed.id}`} vars={vars} /></span>
         : removed.kind === "unknown"
-          // Every ocx-child prints its link from connect status --json; an early one ignored unknown detach flags, so a
-          // link-bound --expect-link is not offered for a Child this old.
+          // Both installs' link-bound commands first: every released ocx-child parses detach's arguments strictly (since v2.100.0),
+          // so --expect-link never detaches a link it does not name, and a build older than the flag refuses it. The check, and
+          // the plain commands after it, only for such a build.
           ? <>
-            <span className="block"><Trans k="remoteLink.forceRemoved.unknownCheck" cmd="ocx connect status --json" vars={vars} /></span>
+            <span className="block"><Trans k="remoteLink.forceRemoved.unknownCheck" cmd={`ocx disconnect --expect-link ${removed.id}`} vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLocate" cmd="command -v ocx-child" vars={vars} /></span>
-            <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLightweight" cmd={`${PLANTED_CHILD} connect status --json`} vars={vars} /></span>
+            <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLightweight" cmd={`${PLANTED_CHILD} detach --expect-link ${removed.id}`} vars={vars} /></span>
+            <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownFallback" cmd="ocx connect status --json" vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownDisconnect" cmd="ocx disconnect" vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLightweight" cmd={`${PLANTED_CHILD} detach`} vars={vars} /></span>
           </>
+          // The link-bound disconnect (#8662) first; the check-then-disconnect order only for an OpenCodex older than the flag.
           : <>
-          <span className="block"><Trans k="remoteLink.forceRemoved.fullCheck" cmd="ocx connect status" vars={vars} /></span>
+          <span className="block"><Trans k="remoteLink.forceRemoved.fullBound" cmd={`ocx disconnect --expect-link ${removed.id}`} vars={vars} /></span>
+          <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.fullCheck" cmd="ocx connect status" vars={vars} /></span>
           <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.fullDisconnect" cmd="ocx disconnect" vars={vars} /></span>
         </>}
     </Banner>
@@ -64,14 +75,16 @@ export function RemoteLinkDisconnectDialog({
   const unknownKind = confirming !== null && (confirming.row.childKind ?? null) === null;
   // Never a bare disconnect: a forced removal is also the way out when the Child now belongs to another link, a hub or another
   // Home. A lightweight Child is cleaned by the link-bound recover (run here), which checks that it still belongs to this link.
-  const forceCmd = isEphemeral ? `ocx link recover --link-id ${confirming?.row.id ?? ""}` : "ocx disconnect";
+  const forceCmd = isEphemeral ? `ocx link recover --link-id ${confirming?.row.id ?? ""}` : `ocx disconnect --expect-link ${confirming?.row.id ?? ""}`;
+  const refusal = confirming?.force ? confirming.refusal ?? null : null;
 
   return (
     <dialog ref={confirmRef} aria-labelledby="remote-link-confirm-title" onCancel={event => { event.preventDefault(); onClose(); }}
       className="remote-link-confirm-dialog m-auto w-[min(440px,calc(100vw-24px))] rounded-[14px] border-0 bg-surface p-1 text-fg shadow-lg ring-1 ring-line backdrop:bg-black/40">
       {confirming && <>
         <div className="flex flex-col gap-2 rounded-[10px] bg-bg px-5 py-4 ring-1 ring-line">
-          <h3 id="remote-link-confirm-title" className="m-0 text-[16px] leading-6 font-semibold tracking-[-0.015em]">{confirming.force ? t("remoteLink.forceRemove.title", { alias: confirming.row.alias }) : t("link.disconnect")}</h3>
+          <h3 id="remote-link-confirm-title" className="m-0 text-[16px] leading-6 font-semibold tracking-[-0.015em]">{confirming.force ? t(refusal ? "remoteLink.forceRemove.refusedTitle" : "remoteLink.forceRemove.title", { alias: confirming.row.alias }) : t("link.disconnect")}</h3>
+          {refusal && <p className="remote-link-refusal m-0 text-[13px] leading-5 text-fg">{t(REFUSAL_KEY[refusal])}</p>}
           <p className="m-0 text-[14px] leading-[21px] text-fg-muted">
             {confirming.force
               ? unknownKind

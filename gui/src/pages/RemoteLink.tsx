@@ -12,6 +12,7 @@ import { Button } from "@/components/ui-v2/button";
 import { Banner, PageHeader, StateBadge } from "../components/v2-startup/primitives";
 import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../components/v2-startup/remote-link-parts";
 import { type ForceRemovedLink, RemoteLinkDisconnectDialog, RemoteLinkForceRemovedNotice } from "./RemoteLinkDialogs";
+import { type BoundRefusal, boundRefusal } from "../remote-link-api";
 import { RemoteLinkDiagnostics } from "./RemoteLinkDiagnostics";
 import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView, type LinkChildStep } from "./RemoteLinkSheet";
 import { getChildJob, jobHoldsLink, type ChildJobView, type ChildOp } from "../remote-link-child-ops-api";
@@ -195,7 +196,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
   const childJobIds = useRef(new Set<string>());
   const [actionError, setActionError] = useState<LinkActionErrorView | null>(null);
   const [failedAction, setFailedAction] = useState<FailedAction | null>(null);
-  const [confirming, setConfirming] = useState<{ row: LinkRowWire; force: boolean } | null>(null);
+  const [confirming, setConfirming] = useState<{ row: LinkRowWire; force: boolean; refusal?: BoundRefusal | null } | null>(null);
   const [purgeOnDisconnect, setPurgeOnDisconnect] = useState(false);
   const [forceError, setForceError] = useState<TKey | null>(null);
   const [forceRemoved, setForceRemoved] = useState<ForceRemovedLink[]>([]);
@@ -473,7 +474,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
       closeConfirmation(); await refreshStatus();
     }
     catch (error) {
-      if (!pending.force && error instanceof LinkApiError && error.code === "remote_disconnect_failed") setConfirming({ row: pending.row, force: true });
+      if (!pending.force && error instanceof LinkApiError && error.code === "remote_disconnect_failed") setConfirming({ row: pending.row, force: true, refusal: boundRefusal(error.hint) });
       else setForceError(errorKey(error));
     }
     finally { setBusy(null); }
