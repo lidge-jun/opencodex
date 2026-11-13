@@ -59,7 +59,7 @@ export function verifyOrchestratedPnpmInstall({ owner, activeRoot, version, runP
       } catch { return { ok: false }; }
     };
     const resolved = resolvePnpmGlobalOwner({ packageName: PACKAGE_NAME, packagePath: activeRoot,
-      commandPaths: [owner.commandPath], runPnpm, verify, legacyFirst: !owner.globalStore });
+      commandPaths: [owner.commandPath], runPnpm, verify, requireStoreProof: owner.globalStore === true });
     if (!resolved.ok || key(resolved.owner.globalDir) !== key(owner.globalDir)
       || key(resolved.owner.globalRoot) !== key(owner.globalRoot)
       || key(resolved.owner.globalBinDir) !== key(owner.globalBinDir)

@@ -375,6 +375,11 @@ function spellingRefusal(path, label) {
   return null;
 }
 
+/** Appended to a store-proof refusal for an install whose path looks like a pnpm global store. */
+const STORE_PROOF_HINT = "; this install's path looks like a pnpm global store (a store links directory or pnpm store markers), "
+  + "so the updater accepts it only when pnpm 11 or 12 names that store. Update with pnpm itself: "
+  + "pnpm add -g @bitkyc08/opencodex@latest";
+
 /** Store-proof failures are configuration facts, not package-tree failures. */
 function isStoreProofFailure(reason) {
   return typeof reason === "string" && (reason.startsWith("pnpm configured store")
@@ -529,19 +534,9 @@ export function readPnpmGlobalPackage(
 
   let tree;
   // A legacy global group keeps the verification it had before global-store support: no store
-  // query, no store argument. Path spelling only says a store proof may be needed; it cannot tell a
-  // global-store link from a legacy group under a vN/links directory. During owner discovery the
-  // released legacy verdict is therefore tried first, and only a tree it refuses must earn the store
-  // proof. Every accepted tree is either one the released verifier accepted or one pnpm's own store
-  // answer vouches for. A pinned global-store owner (preflight, readback, rollback) is never demoted.
-  let globalStore = constraints.owner?.globalStore === true;
-  if (globalStore && constraints.legacyFirst === true) {
-    try {
-      const legacy = verify(packagePath, version);
-      if (legacy?.ok && (!constraints.expectedPackagePath || constraints.expectedPackagePath === packagePath
-        || verify(constraints.expectedPackagePath, version)?.ok)) globalStore = false;
-    } catch { /* the store proof below decides */ }
-  }
+  // query, no store argument. The verifier still refuses any package that uses store links
+  // without a selected store, so a global-store layout cannot pass on this branch.
+  const globalStore = constraints.owner?.globalStore === true;
   let storeResult = { ok: true };
   if (globalStore) {
     storeResult = readPnpmStore(runPnpm, constraints.owner, platform, constraints.env);
@@ -586,7 +581,6 @@ export function readPnpmGlobalPackage(
     globalDir: expectedGlobalDir,
     globalRoot: rootPath || expectedGlobalRoot,
     globalBinDir,
-    globalStore,
     ...(globalStore ? {
       store: storeResult.store,
       storePath: storeResult.storePath,
@@ -626,10 +620,9 @@ export function resolvePnpmGlobalOwner({
   verify = verifyPnpmInstallTree,
   platform = process.platform,
   env = process.env,
-  // Discovery from scratch tries the released legacy verdict first. A caller re-resolving an owner that
-  // is already pinned to a store passes false: an updated tree that also satisfies the released verifier
-  // must still be re-proven against that store, never demoted to a legacy owner.
-  legacyFirst = true,
+  // Re-resolving an owner already pinned to a store (orchestrated post-update verification) always runs
+  // the store proof, whatever the new tree's spelling, so a pinned store owner is never demoted.
+  requireStoreProof = false,
 }) {
   if (!isAbsolutePath(packagePath, platform)) return { ok: false, reason: "running pnpm package path is not absolute" };
   let lastReason = "no pnpm global installation owns the running package";
@@ -666,7 +659,8 @@ export function resolvePnpmGlobalOwner({
     // that passes through pnpm store links demands the store proof; nothing here accepts a package.
     let globalStore;
     try {
-      globalStore = pnpmPackageUsesGlobalStoreLinks(listedPath) || pnpmPackageUsesGlobalStoreLinks(packagePath);
+      globalStore = requireStoreProof === true
+        || pnpmPackageUsesGlobalStoreLinks(listedPath) || pnpmPackageUsesGlobalStoreLinks(packagePath);
     } catch { globalStore = true; }
     const owner = { commandPath, packagePath: listedPath, globalDir, globalRoot, globalBinDir, ...(globalStore ? { globalStore: true } : {}) };
     const active = readPnpmGlobalPackage(
@@ -675,7 +669,6 @@ export function resolvePnpmGlobalOwner({
       verify,
       {
         owner,
-        legacyFirst,
         expectedPackagePath: packagePath,
         expectedGlobalDir: globalDir,
         expectedGlobalRoot: globalRoot,
@@ -688,11 +681,13 @@ export function resolvePnpmGlobalOwner({
       },
     );
     if (active.ok) {
-      const { globalStore: _classified, ...base } = owner;
-      return { ok: true, owner: { ...base, packagePath: active.path, version: active.version,
-        ...(active.globalStore ? { globalStore: true, store: active.store, storePath: active.storePath, virtualStoreDirs: active.virtualStoreDirs, homeAnchor: active.homeAnchor } : {}) } };
+      return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version,
+        ...(globalStore ? { store: active.store, storePath: active.storePath, virtualStoreDirs: active.virtualStoreDirs, homeAnchor: active.homeAnchor } : {}) } };
     }
-    lastReason = active.reason;
+    // A path that looks like a pnpm global store is accepted only on pnpm's own store answer. Say so, so
+    // a user whose group merely sits under a store-like directory knows why and what to run instead.
+    const storeRefusal = isStoreProofFailure(active.reason) || /outside the selected store/.test(active.reason ?? "");
+    lastReason = globalStore && storeRefusal ? active.reason + STORE_PROOF_HINT : active.reason;
   }
   return { ok: false, reason: lastReason };
 }

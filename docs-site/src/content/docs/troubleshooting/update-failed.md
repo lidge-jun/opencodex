@@ -188,6 +188,32 @@ Then run `ocx update` again. If `ENOTDIR` persists after the check passes, open 
 full terminal output of `ocx update` and the output of `npm config get prefix` and
 `npm config get cache`.
 
+## If a pnpm update says the path looks like a pnpm global store
+
+pnpm 11 and 12 install global packages as a link into the pnpm store (for example
+`~/Library/pnpm/store/v11/links/...` on macOS or `~/.local/share/pnpm/store/v11/links/...`
+on Linux). The updater accepts such an install only when pnpm itself names the store it uses: it runs
+`pnpm store path` for your pnpm home and checks that the installed package lies inside that store.
+A store-like path, marker files or `.modules.yaml` are never enough on their own.
+
+If that check cannot be made, the update stops before it changes anything and the message ends with
+`this install's path looks like a pnpm global store`. Common causes:
+
+- pnpm is older or newer than the versions whose store behavior was checked (11 and 12). Run
+  `pnpm --version`.
+- `PNPM_HOME`, or a folder above it, is a symbolic link, or pnpm prints a store path that is
+  not a single absolute `v<N>` folder.
+- The global group sits under a folder whose name merely looks like a store (a `v<N>/links`
+  folder, or pnpm's `files` and `index` markers) without being the store pnpm reports.
+
+In each case, update with pnpm itself and then restart the proxy:
+
+```bash
+pnpm add -g @bitkyc08/opencodex@latest
+```
+
+A default pnpm 11 or 12 setup passes this check and updates normally with `ocx update`.
+
 ## Desktop app update stalls or fails on "Installing update…"
 
 In the OpenCodex desktop app, **Install update** downloads the installer from GitHub

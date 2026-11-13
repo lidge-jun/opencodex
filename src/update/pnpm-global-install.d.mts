@@ -122,8 +122,8 @@ export declare function resolvePnpmGlobalOwner(options: {
   verify?: (packageDir: string, expectedVersion?: string, store?: string, globalRoot?: string, lexicalStore?: string) => PnpmVerificationResult;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
-  /** Defaults to true; false keeps a store-pinned owner on the store proof during re-resolution. */
-  legacyFirst?: boolean;
+  /** Re-resolving a store-pinned owner: always run the store proof, whatever the tree's spelling. */
+  requireStoreProof?: boolean;
 }): PnpmGlobalOwnerResult;
 
 export type PnpmGlobalUpdateResult =

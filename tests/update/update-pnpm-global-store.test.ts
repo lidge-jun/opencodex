@@ -101,6 +101,14 @@ function resolveOwner(layout: Layout, packagePath = layout.exposed) {
   });
 }
 
+/** A refusal for a store-like install ends with guidance on why and what to run (owner decision B on #8331). */
+const STORE_HINT = "; this install's path looks like a pnpm global store (a store links directory or pnpm store markers), "
+  + "so the updater accepts it only when pnpm 11 or 12 names that store. Update with pnpm itself: "
+  + "pnpm add -g @bitkyc08/opencodex@latest";
+function storeRefusal(reason: string) {
+  return { ok: false, reason: reason + STORE_HINT };
+}
+
 function storeCalls(layout: Layout): Call[] {
   return layout.calls.filter(args => args[0] === "store");
 }
@@ -288,7 +296,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(direct.ok).toBe(false);
     expect(direct.failures[0]).toBe("pnpm global links are outside the selected store");
     layout.calls.length = 0;
-    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global links are outside the selected store" });
+    expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm global links are outside the selected store"));
   });
 
   test("a single package link whose text leaves both roots and returns through .. is refused", () => {
@@ -304,7 +312,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(inside(relay, layout.globalRoot) || inside(relay, layout.store)).toBe(false);
     expect(verifyPnpmInstallTree(layout.exposed, "1.0.0", layout.store, layout.globalRoot))
       .toEqual({ ok: false, failures: ["pnpm global links are outside the selected store"] });
-    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global links are outside the selected store" });
+    expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm global links are outside the selected store"));
   });
 
   test("a .. segment in pnpm home, the printed store path or a verifier root cannot hide a link", () => {
@@ -316,12 +324,12 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     link(join(root, "elsewhere", "deep"), join(root, "link"));
     const dotted = join(root, "link") + "/../pnpm-home";
     layout.env = { PNPM_HOME: dotted };
-    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm home is not a canonical path" });
+    expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm home is not a canonical path"));
     expect(storeCalls(layout)).toEqual([]);
 
     layout.env = { PNPM_HOME: layout.home };
     layout.storeOutput = () => layout.home + "/../pnpm-home/store/v11";
-    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm store path is not a canonical path" });
+    expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm store path is not a canonical path"));
 
     expect(verifyPnpmInstallTree(layout.exposed, "1.0.0", layout.store, layout.globalRoot, layout.home + "/../pnpm-home/store/v11"))
       .toEqual({ ok: false, failures: ["pnpm store or global group path is not canonical"] });
@@ -370,11 +378,13 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(layout.calls.some(args => args[0] === "--version" || args[0] === "store")).toBe(false);
   });
 
-  // <root>/v1/external/g/node_modules or <root>/v1/links/g/node_modules: a versioned name that is not a
-  // pnpm store. origin/dev accepts both; a spelling alone cannot ask for a store proof the legacy group
-  // never needed (rule 5), so the released verdict is tried first and wins.
+  // <root>/v1/external/g/node_modules is a versioned name that is not a pnpm store, and origin/dev accepts it:
+  // with no store links or pnpm store markers it is not classified, so it keeps the released verifier with no
+  // query (rule 5 covers unclassified legacy groups). <root>/v1/links/g/node_modules is spelled like store links,
+  // and a spelling is never proof (rule 1), so it must earn pnpm's store answer; without one it is refused
+  // with guidance (owner decision B on #8331).
   for (const [label, segments] of [["external", ["v1", "external", "g"]], ["links", ["v1", "links", "g"]]] as const) {
-    test(`a legacy group under an unrelated v<N>/${label} directory keeps the released verifier with no store query`, () => {
+    test(`a legacy group under a v<N>/${label} directory: ${label === "links" ? "store proof required, refused with guidance" : "released verifier, no store query"}`, () => {
       const globalDir = join(root, "global"), globalRoot = join(globalDir, "v11"), bin = join(root, "bin");
       const group = join(root, ...segments, "node_modules"), pkg = join(group, ...PKG.split("/"));
       const exposed = join(globalRoot, "node_modules", ...PKG.split("/"));
@@ -404,17 +414,54 @@ describe("pnpm global virtual-store owner (#8183)", () => {
           return { status: 1 };
         },
       });
-      expect(result).toMatchObject({ ok: true });
-      if (result.ok) expect(result.owner.globalStore).toBeUndefined();
-      expect(calls.some(args => args[0] === "store" || args[0] === "--version")).toBe(false);
-      expect(verifyPnpmInstallTree(exposed, "2.0.0")).toMatchObject({ ok: true });
+      if (label === "external") {
+        expect(result).toMatchObject({ ok: true });
+        if (result.ok) expect(result.owner.globalStore).toBeUndefined();
+        expect(calls.some(args => args[0] === "store" || args[0] === "--version")).toBe(false);
+        expect(verifyPnpmInstallTree(exposed, "2.0.0")).toMatchObject({ ok: true });
+        return;
+      }
+      // This fixture's pnpm answers no --version, so the store proof is unavailable.
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason.startsWith("pnpm global-store behavior is not verified")).toBe(true);
+        expect(result.reason).toContain("looks like a pnpm global store");
+        expect(result.reason).toContain("pnpm add -g @bitkyc08/opencodex@latest");
+      }
+      expect(calls.some(args => args[0] === "store")).toBe(false);
+      expect(verifyPnpmInstallTree(exposed, "2.0.0")).toMatchObject({ ok: false, failures: ["pnpm global links are outside the selected store"] });
     });
   }
+
+  test("re-resolving a store-pinned owner runs the store proof even for a tree its spelling would not classify", () => {
+    // store/v11/alternate/<hash>/node_modules: unmarked, so plain discovery keeps the released verifier. The
+    // orchestrated post-update check re-resolves a store-pinned owner with requireStoreProof and must re-prove it.
+    const layout = globalStoreLayout(root);
+    const group = join(layout.store, "alternate", "h1", "node_modules");
+    const pkg = join(group, "@bitkyc08", "opencodex");
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: PKG, version: "1.0.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(pkg, "bin", "ocx.mjs"), "x".repeat(2048));
+    for (const name of ["bun", "zod"]) {
+      mkdirSync(join(group, name), { recursive: true });
+      writeFileSync(join(group, name, "package.json"), JSON.stringify({ name }));
+    }
+    writeFileSync(join(group, "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
+    writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
+    unlinkSync(layout.exposed);
+    link(pkg, layout.exposed);
+    const pinned = resolvePnpmGlobalOwner({
+      packageName: PKG, packagePath: layout.exposed, commandPaths: [join(layout.root, "pnpm")],
+      runPnpm: (_command, args) => layout.run(args), env: layout.env, requireStoreProof: true,
+    });
+    expect(pinned).toMatchObject({ ok: true, owner: { globalStore: true, store: realpathSync(layout.store), storePath: layout.store } });
+    expect(storeCalls(layout)).toEqual([["store", "path", "--dir=" + layout.home]]);
+  });
 
   test("a pnpm home containing a control character refuses before pnpm runs a store query", () => {
     const layout = globalStoreLayout(root);
     layout.env = { PNPM_HOME: layout.home + "\nrm" };
-    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm home could not be determined" });
+    expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm home could not be determined"));
     expect(storeCalls(layout)).toEqual([]);
   });
 
@@ -423,14 +470,14 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     const alias = join(root, "alias-home");
     link(layout.home, alias);
     layout.env = { PNPM_HOME: alias };
-    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm home has a symbolic link component" });
+    expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm home has a symbolic link component"));
     expect(storeCalls(layout)).toEqual([]);
   });
 
   test("an unchecked pnpm version refuses before the store is queried", () => {
     for (const version of ["10.12.3", "13.0.0", "not-a-version"]) {
       const layout = globalStoreLayout(join(root, version), { pnpmVersion: version });
-      expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global-store behavior is not verified for this pnpm version" });
+      expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm global-store behavior is not verified for this pnpm version"));
       expect(storeCalls(layout)).toEqual([]);
     }
   });
@@ -439,7 +486,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     for (const output of ["undefined", "relative/store/v11", "STORE/v11\nSTORE/v11", "STORE", "STORE/v11-wasm"]) {
       const layout = globalStoreLayout(join(root, String(output.length) + output.replace(/[^a-z]/gi, "")));
       layout.storeOutput = () => output.replaceAll("STORE", dirname(layout.store));
-      expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm store path is not one absolute versioned path" });
+      expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm store path is not one absolute versioned path"));
     }
   });
 
@@ -448,7 +495,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     const other = join(root, "other-store", "v11");
     mkdirSync(other, { recursive: true });
     layout.storeOutput = () => other;
-    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global-store package is outside the selected store" });
+    expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm global-store package is outside the selected store"));
   });
 
   test("a store spelling that gains a symbolic link after discovery refuses before pnpm add", () => {
@@ -493,7 +540,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     link(moved, join(layout.home, "store"));
     unlinkSync(layout.exposed);
     link(join(moved, "v11", "links", "@bitkyc08", "opencodex", "1.0.0", "h100", "node_modules", "@bitkyc08", "opencodex"), layout.exposed);
-    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm store path has a symbolic link component" });
+    expect(resolveOwner(layout)).toEqual(storeRefusal("pnpm store path has a symbolic link component"));
 
     const other = globalStoreLayout(join(root, "group-case"));
     const realGroup = join(root, "group-case", "real-global-v11");

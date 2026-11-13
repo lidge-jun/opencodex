@@ -181,8 +181,7 @@ describe("pnpm global owner binding", () => {
         return { status: 1 };
       };
       const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath, commandPaths: ["/fixture/pnpm"], runPnpm: run,
-        verify: (_path: string, _version?: string, selected?: string) => ({ ok: Boolean(selected) }), env: { PNPM_HOME: home } });
-      // The stub refuses without a store, as the released verifier refuses a real global-store tree (#8183).
+        verify: () => ({ ok: true }), env: { PNPM_HOME: home } });
       expect(result).toMatchObject({ ok: true, owner: { globalStore: true, store: realpathSync(store), storePath: store, homeAnchor: home } });
       expect(calls.filter(args => args[0] === "store")).toEqual([["store", "path", `--dir=${home}`]]);
       expect(calls.some(args => args[0] === "config" && args[2] === "store-dir")).toBe(false);
