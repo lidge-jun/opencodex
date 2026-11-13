@@ -158,14 +158,16 @@ export function createSentValueMask(
     if (overflow) return replacement;
     const head = options.wholeText ? text : scanHead(text);
     if (wholeCredential.has(head)) return replacement;
-    const windows: string[] = [];
+    // Matching windows are marked in the same pass that finds them, so the work stays linear in the
+    // text length however many distinct windows match (a rescan per window would be quadratic).
+    let covered: Uint8Array | undefined;
     for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= head.length; at++) {
-      const window = head.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH);
-      if (credentialWindows.has(window)) windows.push(window);
+      if (!credentialWindows.has(head.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH))) continue;
+      covered ??= new Uint8Array(head.length);
+      covered.fill(1, at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH);
     }
-    return windows.length === 0 && !contained.some(part => head.includes(part))
-      ? head
-      : maskSecretSpans(head, replacement, [...new Set(windows), ...contained]);
+    covered = markSubstringSpans(head, contained, covered);
+    return covered === undefined ? head : renderCoveredSpans(head, covered, replacement);
   };
 }
 
@@ -178,7 +180,12 @@ export function createSentValueMask(
  */
 export function maskSecretSpans(text: string, replacement: string, substrings: Iterable<string>, wholeOnly: Iterable<string> = []): string {
   for (const value of wholeOnly) if (value && text === value) return replacement;
-  let covered: Uint8Array | undefined;
+  const covered = markSubstringSpans(text, substrings, undefined);
+  return covered === undefined ? text : renderCoveredSpans(text, covered, replacement);
+}
+
+function markSubstringSpans(text: string, substrings: Iterable<string>, initial: Uint8Array | undefined): Uint8Array | undefined {
+  let covered = initial;
   for (const secret of substrings) {
     if (!secret) continue;
     let markedTo = 0;
@@ -189,7 +196,10 @@ export function maskSecretSpans(text: string, replacement: string, substrings: I
       markedTo = end;
     }
   }
-  if (covered === undefined) return text;
+  return covered;
+}
+
+function renderCoveredSpans(text: string, covered: Uint8Array, replacement: string): string {
   let out = "";
   let at = 0;
   while (at < text.length) {

@@ -530,4 +530,24 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     const block = `event: response.failed\ndata: ${JSON.stringify(failed)}`;
     expect(rewrite(block).join("\n")).not.toContain("fixture-unpatterned-value-8415");
   });
+
+  test("excerpt masking of a large genuine terminal stays linear in the frame size", () => {
+    // Every distinct matching window used to rescan the whole text: about 64k windows over a ~4 MB
+    // frame stalled the event loop for seconds. One marking pass keeps it to tens of milliseconds.
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const credentials = [1, 2, 3, 4].map(seed => {
+      let state = seed;
+      let value = "";
+      for (let i = 0; i < 16_000; i++) { state = (state * 1103515245 + 12345) & 0x7fffffff; value += alphabet[state % 62]; }
+      return value;
+    });
+    const rewrite = createTerminalErrorRedactionBlockRewrite(Object.fromEntries(credentials.map((value, i) => [`x-api-key-${i}`, value])));
+    const echoed = credentials.map(value => value.slice(0, -1)).join(" ");
+    const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message: echoed + " " + "z".repeat(3_900_000 - echoed.length) } } };
+    const startedAt = performance.now();
+    const out = rewrite(`event: response.failed\ndata: ${JSON.stringify(failed)}`).join("\n");
+    const elapsed = performance.now() - startedAt;
+    expect(credentials.some(value => out.includes(value.slice(100, 140)))).toBe(false);
+    expect(elapsed).toBeLessThan(1_500);
+  });
 });
