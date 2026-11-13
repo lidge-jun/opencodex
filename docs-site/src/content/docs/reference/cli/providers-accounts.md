@@ -1313,7 +1313,7 @@ from custom-model `edit`.
 | `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | Delete a custom model locally or on the live target. Live removal and local JSON removal require `--yes`; local text mode retains interactive confirmation. |
 | `display-name <provider/raw-model-id>` | `--set <text>` or `--clear`, `--json` | Set or clear the discovered model's display override; preserve the raw upstream ID. |
 | `order status` | `--json` | Read saved order/mode, routed candidates and known pinned state. |
-| `order set` | `--models <CSV>` or `--mode <default\|alphabetical\|provider\|most-used>`, `--json` | Set a complete routed permutation or derive a preset order. |
+| `order set` | `--models <CSV>` or `--mode <default\|alphabetical\|provider\|family\|most-used>`, `--json` | Set a complete routed permutation or derive a preset order. |
 | `order reset` | `--json` | Clear saved order and mode, retaining pinned selection. |
 | `list-custom` | `--json` | Show all custom models with the `custom-id` the other subcommands take. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Make one model visible to Codex. |
@@ -1400,7 +1400,7 @@ settings and model identities immediately before the manual PUT; changed state
 returns conflict. This is an observational check, not CAS, so read back afterward.
 It never silently drops native identities or modifies pinned selection.
 
-Alternatively select `--mode alphabetical`, `--mode provider`, or `--mode most-used`.
+Alternatively select `--mode alphabetical`, `--mode provider`, `--mode family`, or `--mode most-used`.
 These presets do not prepend the manual pinned prefix. Most-used reads all-time,
 all-surface usage, retains unranked candidates, and refuses incomplete history.
 Both manual and non-default modes refuse saved orders containing bare native IDs.

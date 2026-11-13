@@ -1,0 +1,46 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
+/*
+ * Collapsible family header inside a provider's model list. Tokens only; see
+ * gui/design-system/components.md "Family groups".
+ */
+.model-family-head {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-control);
+  text-align: left;
+}
+
+.model-family-head:hover { background: var(--hover); }
+
+.model-family-head:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.model-family-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.12s;
+}
+
+.model-family-head[aria-expanded="true"] .model-family-chevron { transform: rotate(90deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .model-family-chevron { transition: none; }
+}
+}

@@ -76,9 +76,10 @@ export function Frame({ id, title, lede, meta, actions, below, children, classNa
 }
 
 /** The inset body: a raised sheet one pixel in from the panel, rows ruled by hairlines. */
-export function FrameBody({ children, className, as: Tag = "div" }: { children: ReactNode; className?: string; as?: "div" | "ol" | "ul" }) {
+export function FrameBody({ children, className, as: Tag = "div", role }: { children: ReactNode; className?: string; as?: "div" | "ol" | "ul"; role?: "list" }) {
   return (
     <Tag
+      role={role}
       className={cn(
         "m-1 mt-0 flex min-w-0 list-none flex-col divide-y divide-line overflow-hidden rounded-[8px] bg-raised p-0 shadow-sm ring-1 ring-line",
         "[&:has(+*)]:mb-0",

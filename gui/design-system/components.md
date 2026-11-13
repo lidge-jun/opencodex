@@ -101,3 +101,9 @@
 - 버튼의 시각적 라벨과 별개로 번역된 `aria-label`을 명시한다. 좁은 화면에서 브랜드 텍스트를 아이콘으로 접어도 접근 가능한 이름은 유지해야 한다.
 - 모바일 버튼은 최소 44px 터치 높이를 보장한다. 공간이 부족하면 선택지를 숨기지 말고 완전한 그룹 단위로 줄바꿈하거나 세로로 쌓는다.
 - 여러 segmented filter가 함께 있으면 데이터 차원 순서대로 배치한다. Usage에서는 소스 그룹을 기간 그룹보다 먼저 둔다.
+
+## Family groups
+
+- `FamilyGroupList`(`gui/src/components/FamilyGroupList.tsx`)는 모델 목록을 GPT, Gemini, Claude 같은 모델 계열별로 접을 수 있는 헤더 아래에 묶는다. 계열은 `src/lib/model-families.ts` 한 곳에서 정의한다.
+- 헤더는 `aria-expanded` 버튼이고 이름과 개수를 보여 준다. 접힘 상태는 `localStorage`에 기억하며 기본값은 펼침이다. 계열이 하나뿐인 목록은 헤더 없이 그대로 그린다.
+- 스타일은 `gui/src/styles/model-family-groups.css`에 두고 토큰만 쓴다.

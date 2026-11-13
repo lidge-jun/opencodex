@@ -500,7 +500,7 @@ behaviors.
 ### Saved picker presets
 
 The Models page saves routed snapshots in `modelPickerOrder` and records their origin in
-`modelPickerOrderMode` (`alphabetical`, `provider`, `most-used`). Mode is UI provenance, not a
+`modelPickerOrderMode` (`alphabetical`, `provider`, `family`, `most-used`). Mode `family` orders by the one family registry in `src/lib/model-families.ts` (GPT, Gemini, Claude, Grok, DeepSeek, then the rest, Other last; the GUI imports that file instead of keeping a copy), so each family is a contiguous run of catalog `priority`. Mode is UI provenance, not a
 catalog sorting policy: catalog writers consume the saved array. Routed-only featured/native
 bands and complete-picker natural-rank preservation remain as described above. Public
 `buildCatalogEntries` accepts the order before optional native-source inputs and applies the complete-order
