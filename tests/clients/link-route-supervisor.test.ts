@@ -1561,8 +1561,9 @@ test("a reload whose drained child survives SIGKILL warns once while it holds th
   await h.advance(1_999);
   expect(h.warns.filter(line => line.includes("exit unconfirmed"))).toEqual([]);
   await h.advance(1);
-  await h.advance(1_000);
   expect(h.warns.filter(line => line.includes("exit unconfirmed"))).toEqual([`[link] tunnel exit unconfirmed link=${LINK}`]);
+  await h.advance(1_000);
+  expect(h.warns.filter(line => line.includes("exit unconfirmed"))).toHaveLength(1);
   opts.stubborn = false;
   h.tunnels[0]!.exit(137);
   await reload;
