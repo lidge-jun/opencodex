@@ -6,7 +6,7 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 // adapter strips the id before the wire. The ambiguous-reset judgment has to look at that body,
 // not at the inbound one that still names the id, or an operator's retryOnReset opt-in never
 // applies to a chained turn.
-const { handleResponses } = await import("../../src/server/responses");
+const { handleOwnedResponses: handleResponses } = await import("../helpers/response-replay-owner");
 
 const releaseSpendHome = acquireOwnedSpendHome();
 afterAll(() => releaseSpendHome());

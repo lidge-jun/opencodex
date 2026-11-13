@@ -88,9 +88,9 @@ const ANTIGRAVITY_IDE_PLATFORM = "windows/amd64";
  * Must be the IDE client family (`antigravity/ide/...`): Cloud Code Assist backend gates
  * newer agent models (e.g. `gemini-3.7-flash`) by User-Agent and answers 404 NOT_FOUND to
  * CLI-shaped UAs even with a valid OAuth token. Only `antigravity/ide/<ver>` unlocks them.
- * The exception is the Gemini 4 generation (Argon, Carbon), which CCA serves ONLY to the CLI
- * family; see
- * `antigravityCliUserAgent`.
+ * The exception is Gemini 4 Argon and Carbon, which CCA was observed to serve ONLY to the CLI
+ * family. The CLI rule matches the whole Gemini 4 generation in anticipation: Hydrogen has not been
+ * seen on CCA, so its client requirement is unverified. See `antigravityCliUserAgent`.
  * A `GOOGLE_ANTIGRAVITY_USER_AGENT` override (set by the caller) takes precedence upstream.
  */
 export function antigravityUserAgent(version = ANTIGRAVITY_IDE_VERSION, authMethod = "oauth"): string {

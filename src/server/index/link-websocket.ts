@@ -535,6 +535,8 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
                   resent = marksResent(holds, linkId, state.threadHash ?? null, body);
                 },
                 expansionFailed() { own("unknown"); },
+                // The link WebSocket exists only while the feature is on: its turns read the upstream as the socket drains (#8601).
+                pacedReads: true,
                 logFields: body => ({ transport: "websocket", first: ordinal === 1,
                   ...linkLogRefs(holds, linkId, ws.data.headers?.get("thread-id")?.trim() ?? "", body) }),
                 terminal(status, source) {

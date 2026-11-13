@@ -15,7 +15,7 @@ import { describe, expect, test } from "bun:test";
 
 const CONFIG_REFERENCE = "docs-site/src/content/docs/reference/configuration/providers.md";
 const CLI_REFERENCE = "docs-site/src/content/docs/reference/cli/providers-accounts.md";
-const TRANSLATED = ["ko", "ja", "zh-cn", "zh-tw", "fr", "ru", "tr"] as const;
+const TRANSLATED = ["es", "ko", "ja", "zh-cn", "zh-tw", "fr", "ru", "tr"] as const;
 
 describe("429 failover docs", () => {
   test("the config reference states the failover is not gated and not disableable", async () => {
@@ -69,6 +69,7 @@ describe("429 failover docs", () => {
     // stale sentence would satisfy both. So each locale bans the phrase pattern that actually
     // attributed failover to the pool, which is the thing that has to stay gone.
     const bannedByLocale: Record<string, RegExp> = {
+      "es/": /a[ñn]ade[\s\S]{0,80}(?:respaldo|conmutaci[oó]n)[\s\S]{0,40}429/i,
       "": /adds sticky[\s\S]{0,80}429/i,
       "zh-tw/": /加入[\s\S]{0,40}429\s*冷卻(故障轉移|容錯移轉)/,
       "tr/": /bağlılığı ve 429[\s\S]{0,60}yük devretmesi ekler/i,

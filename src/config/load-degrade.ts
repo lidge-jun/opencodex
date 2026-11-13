@@ -245,6 +245,10 @@ export function sanitizeRetryOn429ForLoad(parsed: unknown, warn: (message: strin
     const safeProviderName = JSON.stringify(redactSecretString(name));
     if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
     const p = provider as Record<string, unknown>;
+    if (p.cacheAffinity !== undefined && !["auto", "session", "turn", "off"].includes(p.cacheAffinity as string)) {
+      delete p.cacheAffinity;
+      warn(`⚠️  config.json providers.${safeProviderName}.cacheAffinity is invalid — ignoring the field`);
+    }
     const policy = p.retryOn429;
     if (policy === undefined) continue;
     if (!policy || typeof policy !== "object" || Array.isArray(policy)) {

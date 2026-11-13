@@ -90,7 +90,7 @@ describe("clear (D8)", () => {
     expect(fresh.count(B)).toBe(1);
   });
 
-  test("a clear whose directory sync fails after the rename keeps the link held across a restart (T5d3a-R1-01)", () => {
+  const clearWhoseDirectorySyncFails = () => {
     const first = store();
     first.arm();
     first.add(A, { threadHash: null, pendingKeys: ["k1"], runningMarks: 0, untracked: true });
@@ -109,6 +109,15 @@ describe("clear (D8)", () => {
     expect(holds.count(A)).toBe(1);
     // The process dies here: the next start must not see the link as idle.
     expect(store().count(A)).toBeGreaterThan(0);
+  };
+
+  test("a clear whose directory sync fails after the rename keeps the link held across a restart (T5d3a-R1-01)", clearWhoseDirectorySyncFails);
+
+  test("the same failure is injected where no directory is synced (Windows), so the seam runs on every platform", () => {
+    // durableWrite skips the real chmod and directory fsync on win32; the durability seam must still run there.
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    try { clearWhoseDirectorySyncFails(); } finally { Object.defineProperty(process, "platform", platform); }
   });
 
   test("the same failure while link sockets have run in this process keeps the link held too (fence already running)", () => {

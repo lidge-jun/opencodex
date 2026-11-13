@@ -7,6 +7,8 @@ Management API는 opencodex의 제어 평면입니다. `http://localhost:10100`�
 
 대화형 클라이언트가 필요하면 [Web Dashboard](/guides/web-dashboard/)를 사용하고, 자동화를 만들 때는 이 참고 문서를 사용하십시오. 영속 값은 결국 [Configuration](/reference/configuration/)을 따릅니다.
 
+<a id="authentication-model"></a>
+
 ## 인증 모델
 
 Management API에는 데이터 평면 API 키와는 독립된 자체 관리자 자격 증명이 있습니다. 시작 시 opencodex는 다음 순서로 이를 확인합니다.

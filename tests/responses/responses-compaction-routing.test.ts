@@ -1,3 +1,4 @@
+import { handleOwnedResponses } from "../helpers/response-replay-owner";
 import { getAccountQuotaHistory } from "../../src/codex/quota";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
@@ -41,7 +42,7 @@ import { acquireNativeMainProfileDrain, tryAdmitTurn } from "../../src/server/li
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
-import { baseCompactionBody, compactionRequest, completedPayload, drainCompactionResponseState, installCompactionRoutingAclFixture, jsonResponse, keyProviderConfig, nativePoolConfig, removeCompactionFixture, sseResponse, twoAccountPoolConfig } from "../helpers/compaction-routing-fixtures";
+import { baseCompactionBody, compactionRequest, completedPayload, drainCompactionResponseState, installCompactionRoutingAclFixture, installCompactionHttpMock, jsonResponse, keyProviderConfig, nativePoolConfig, removeCompactionFixture, sseResponse, twoAccountPoolConfig } from "../helpers/compaction-routing-fixtures";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
@@ -921,7 +922,7 @@ describe("compact alternate-account attempt (#913)", () => {
             ...options, accountId: options.accountId ?? liveConfig.activeCodexAccountId,
           }),
         );
-        globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        installCompactionHttpMock(config, (async (input: string | URL | Request, init?: RequestInit) => {
           const request = new Request(input, init);
           accounts.push(request.headers.get("chatgpt-account-id"));
           const body = await request.json() as { input?: Array<{ type?: string }> };
@@ -933,7 +934,7 @@ describe("compact alternate-account attempt (#913)", () => {
             ...completedPayload("native answer"), model: "gpt-5.5",
             ...(compact ? { output: [{ type: "compaction", encrypted_content: "native-recall-ciphertext" }] } : {}),
           } }]);
-        }) as typeof fetch;
+        }) as typeof fetch);
         const client = new AbortController();
         let completionTimer: ReturnType<typeof setTimeout> | undefined;
         try {
@@ -993,14 +994,14 @@ describe("compact alternate-account attempt (#913)", () => {
         config.codexAccountNamespaces = { side: "pool-b" };
         const item = { type: "compaction", id: "cmp_native_3769", encrypted_content: "native-opaque-3769" };
         const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
-        globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        installCompactionHttpMock(config, (async (input: string | URL | Request, init?: RequestInit) => {
           const request = new Request(input, init);
           calls.push({ url: request.url, headers: request.headers, body: await request.json() as Record<string, unknown> });
           if (request.url.endsWith("/responses/compact")) return Response.json({ detail: "Not Found" }, { status: 404 });
           return sseResponse([{ type: "response.completed", response: {
             id: "resp_compact_3769", status: "completed", output: [item],
           } }]);
-        }) as typeof fetch;
+        }) as typeof fetch);
         const headers = { "session-id": "compact-3769-session", "thread-id": `compact-3769-${account}`, "x-codex-parent-thread-id": "compact-3769-parent" };
         const response = await handleResponsesCompact(compactionRequest({
           model, input: [{ role: "user", content: "retain this history" }],
@@ -1072,13 +1073,13 @@ describe("compact alternate-account attempt (#913)", () => {
     test(`native 404 followed by ${status} SSE does not install replacement history`, async () => {
       await withPoolEnv("ocx-compact-404-terminal-", async config => {
         let calls = 0;
-        globalThis.fetch = (async () => {
+        installCompactionHttpMock(config, (async () => {
           calls++;
           if (calls === 1) return Response.json({ detail: "Not Found" }, { status: 404 });
           return sseResponse([{ type: `response.${status}`, response: {
             id: "resp_compact_rejected_3769", status, output: [],
           } }]);
-        }) as typeof fetch;
+        }) as typeof fetch);
         const response = await handleResponsesCompact(compactionRequest({ model: "gpt-5.5", input: [] }), config, { model: "", provider: "" });
         expect(response.status).toBe(502);
         const payload = await response.json() as { output?: unknown; error?: unknown };
@@ -2427,7 +2428,7 @@ describe("established-history external task input (#3807)", () => {
   test("stored-ID continuation replays the established tool pair and inter-task delivery in order", async () => {
     const captured = captureChat(acknowledged);
     const config = keyProviderConfig({ adapter: "openai-chat" });
-    const first = await handleResponses(compactionRequest({ ...requestBody(), store: true }),
+    const first = await handleOwnedResponses(compactionRequest({ ...requestBody(), store: true }),
       config, { model: "", provider: "" });
     expect(first.status).toBe(200);
     const saved = await first.json() as { id: string; status?: string };
@@ -2438,7 +2439,7 @@ describe("established-history external task input (#3807)", () => {
     expectHistory(captured[0]!);
 
     // Send only the new user turn: the handler must retrieve the previous raw history.
-    const res = await handleResponses(compactionRequest({
+    const res = await handleOwnedResponses(compactionRequest({
       ...requestBody(), previous_response_id: saved.id,
       input: [{ type: "message", role: "user", content: continuationText }],
     }), config, { model: "", provider: "" });

@@ -18,12 +18,13 @@ ajanınızın ne zaman devretmesi gerektiğine karar vermez.
 
 | Mod | Codex ne alır? | Kim seçmelidir? |
 | --- | --- | --- |
-| **v1** | Klasik ad alanlı `spawn_agent`, `send_input`, `resume_agent` ve `close_agent` araçları. Bir spawn doğrudan başka bir modeli seçebilir. | Farklı sağlayıcılar arasında, özellikle yerelden yönlendirilen çocuklara güvenilir delegasyona ihtiyaç duyan yeni başlayanlar. |
-| **base** (varsayılan) | Yukarı akış model sabitlemeleri: GPT-5.6 Sol/Terra v2 kullanır, Luna v1 kullanır ve sabitlenmemiş modeller Codex'in `multi_agent_v2` özellik bayrağını takip eder. | Çoğu kullanıcı. Küresel olarak birini zorlamadan her model için Codex'in hedeflenen arayüzünü takip eder. |
+| **v1** (varsayılan) | Klasik ad alanlı `spawn_agent`, `send_input`, `resume_agent` ve `close_agent` araçları. Bir spawn doğrudan başka bir modeli seçebilir. | Farklı sağlayıcılar arasında, özellikle yerelden yönlendirilen çocuklara güvenilir delegasyona ihtiyaç duyan yeni başlayanlar. |
+| **base** | Yukarı akış model sabitlemeleri: GPT-5.6 Sol/Terra v2 kullanır, Luna v1 kullanır ve sabitlenmemiş modeller Codex'in `multi_agent_v2` özellik bayrağını takip eder. | Çoğu kullanıcı. Küresel olarak birini zorlamadan her model için Codex'in hedeflenen arayüzünü takip eder. |
 | **v2** | Eşzamanlı oturumlarla düz `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent` ve ajan listesi araçları. | Daha yeni eşzamanlı iş akışını isteyen ve model kalıtımını ve aşağıdaki şifrelenmiş görev sınırlamasını anlayan kullanıcılar. |
+| **v2-plaintext** | V2 | Yeni oturumlar için V2 seçer ve genel zorlamayı kapalı tutarak uygun görevleri düz metin iletir. Giriş için `--acknowledge-plaintext-agent-messages` gerekir. |
 
 :::tip[Emin değil misiniz?]
-**base** ile başlayın. Sağlayıcılar arası yetkilendirmenin öngörülebilir şekilde
+**v1** varsayılanıyla başlayın. Sağlayıcılar arası yetkilendirmenin öngörülebilir şekilde
 çalışması gerektiğinde **v1**'i seçin. Yalnızca her katalog girdisi genelinde
 daha yeni oturum modelini özellikle istediğinizde **v2**'ye zorlayın.
 :::
@@ -359,3 +360,16 @@ sabitler.
 
 Model bağlam sınırı alt ajan modundan bağımsızdır. Modeller sayfasında
 yapılandırın; yerel OpenAI modelleri gerçek bağlam pencerelerini korur.
+
+Deneysel `plaintextV2AgentMessages` yeni yapılandırmada ayarlanmamıştır. Açık `true`
+veya ayrı seçilen `v2-plaintext` modu derleyiciyi etkinleştirir. Mod genel zorlamayı
+kapatırken yeni sohbetler için V2 seçer; moddan çıkmak bağımsız alanı değiştirmez.
+Derleme mevcut V2 oturumlarının sonraki uygun istekleri dahil geçerli ayarı izler.
+Mevcut şifreli metin çözülmez, saklanan geçmiş yeniden yazılmaz ve devre dışı bırakma
+saklanan kopyaları silmez. Çağıran Responses protokolünü kullanmalı ve son hedef
+`adapter: "openai-responses"`, `authMode: "forward"` ve tam
+`https://chatgpt.com/backend-api/codex` adresine sahip kurallı ChatGPT rotası olmalıdır;
+API anahtarlı OpenAI sağlayıcıları, özel ağ geçitleri, diğer sağlayıcılar ve Responses
+dışı çağıranlar hariçtir. Görev metni Codex geçmişinde, sağlayıcı isteklerinde ve
+yerel yanıt/hata ayıklama durumunda kalabilir; HTTPS şifrelemesi korunur.
+Ayrıntılar için [ajan yapılandırmasına](/tr/reference/configuration/agents/#düz-metin-v2-ajan-mesajları) bakın.

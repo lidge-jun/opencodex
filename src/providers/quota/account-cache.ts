@@ -17,7 +17,7 @@ import { replaceCachedProviderQuotas } from "../quota-routing-cache";
 import { getProviderRegistryEntry } from "../registry";
 import { getProviderQuotaReportCache, hasQuotaRows, routingEvidence, setProviderQuotaReportCache } from "./report-cache";
 import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./vendor-probes-key";
-import { isWeeklyAllowancePercent, type AccountQuotaMode, type ProviderQuota, type ProviderQuotaWindow, type QuotaFailureCode } from "../quota-types";
+import { isDisplayOnlyQuota, isWeeklyAllowancePercent, type AccountQuotaMode, type ProviderQuota, type ProviderQuotaWindow, type QuotaFailureCode } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
@@ -181,6 +181,7 @@ export function persistAccountQuotaCache(): void {
     const liveKiro = new Map<string, ProviderAccount>(getAccountSet("kiro")?.accounts.map(account =>
       [accountCacheKey("kiro", account.id), account]) ?? []);
     for (const [key, entry] of accountQuotaCache) {
+      if (entry.quota && isDisplayOnlyQuota(entry.quota)) continue;
       const quota = isAnthropicAccountCacheKey(key) ? normalizeAnthropicQuota(entry.quota, now) : entry.quota;
       if (quota && key.startsWith("kiro\0")) {
         const account = liveKiro.get(key);

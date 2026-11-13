@@ -4,6 +4,7 @@ import { readServiceApiTokenState, type ServiceApiTokenState } from "../lib/serv
 import { linkRouteAllowed } from "../link/routes";
 import { isAllowedRequestOrigin, type RequestPolicyView } from "../server/auth-cors";
 import { relayLinkDataRequest, type LinkRelayDeps } from "./link-relay";
+import type { LinkWebsocketRelay } from "./link-websocket";
 
 /** How often an unavailable link key is looked for again. A valid key is never re-read. */
 export const LINK_KEY_RETRY_MS = 1_000;
@@ -49,9 +50,20 @@ export interface LinkIngress {
   policy: RequestPolicyView;
   linkKey: () => string | null;
   relay?: LinkRelayDeps;
+  /**
+   * The Responses WebSocket over the link (link-websocket.ts). It is tried only when it wants the
+   * upgrade (the Child's release gate is open and the Home advertised the feature); otherwise the
+   * upgrade keeps the 426 below, with no network I/O.
+   */
+  websocket?: Pick<LinkWebsocketRelay, "wanted" | "upgrade">;
 }
 
 const RESPONSES_WEBSOCKET_DISABLED = "Responses WebSocket transport is disabled; use HTTP";
+
+/** The answer codex-rs turns into an HTTP fallback for the rest of its session (C1); every link WebSocket fallback uses it. */
+export function upgradeRequiredResponse(): Response {
+  return formatErrorResponse(426, "upgrade_required", RESPONSES_WEBSOCKET_DISABLED);
+}
 
 /**
  * Lift Bun's per-request idle timer for a relayed request, as the standalone does on its data
@@ -71,7 +83,8 @@ function liftRequestIdleTimer(req: Request, server: Pick<Server<unknown>, "timeo
  * owns and returns null for everything else, which the listener handles as before.
  *
  * - A `/v1/responses` WebSocket upgrade gets 426, the answer codex-rs turns into an HTTP
- *   fallback; the link never carries a WebSocket.
+ *   fallback, unless the link WebSocket wants it (link-websocket.ts): then it is carried over the link
+ *   or, on any failure, answered with the same 426 (or 503 while the tunnel reconnects).
  * - Every relayed route passes the standalone loopback Host/Origin gate before any upstream
  *   fetch, so a rebinding or cross-site browser page cannot reach the Home through this port.
  * - Without the committed link key nothing is fetched, and the caller gets
@@ -83,7 +96,7 @@ export function handleLinkIngress(
   req: Request,
   url: URL,
   ingress: LinkIngress,
-  server?: Pick<Server<unknown>, "timeout">,
+  server?: Pick<Server<unknown>, "timeout"> & Partial<Pick<Server<unknown>, "upgrade">>,
 ): Response | Promise<Response> | null {
   const upgrade = req.headers.get("upgrade");
   if (upgrade !== null) {
@@ -91,7 +104,11 @@ export function handleLinkIngress(
     if (!isAllowedRequestOrigin(req, ingress.policy)) {
       return formatErrorResponse(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin");
     }
-    return formatErrorResponse(426, "upgrade_required", RESPONSES_WEBSOCKET_DISABLED);
+    if (ingress.websocket && server?.upgrade && ingress.websocket.wanted(ingress.linkId)) {
+      liftRequestIdleTimer(req, server);
+      return ingress.websocket.upgrade(req, server as Server<unknown>, ingress) as Promise<Response>;
+    }
+    return upgradeRequiredResponse();
   }
   if (url.pathname === "/readyz" || !linkRouteAllowed(url, req)) return null;
   if (!isAllowedRequestOrigin(req, ingress.policy)) {
