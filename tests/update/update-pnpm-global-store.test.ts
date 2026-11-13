@@ -346,9 +346,10 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(resolveOwner(layout, dotted)).toEqual({ ok: false, reason: "pnpm package path is not canonical" });
   });
 
-  test("an unmarked alternate layout under a versioned store directory gets the store proof, not the legacy verifier", () => {
-    // store/v11/alternate/<hash>/node_modules with .modules.yaml and no files/index markers: on the legacy
-    // verifier this would pass without any pnpm version or store query.
+  test("an unmarked layout under a store directory keeps the released legacy verifier (rule 5)", () => {
+    // store/v11/alternate/<hash>/node_modules with .modules.yaml and no pnpm store markers or links.
+    // Without a store query this cannot be told apart from a legacy group, and origin/dev accepts it on
+    // the legacy verifier; markers only classify (rule 1) and legacy groups keep dev behavior (rule 5).
     const layout = globalStoreLayout(root);
     const group = join(layout.store, "alternate", "h1", "node_modules");
     const pkg = join(group, "@bitkyc08", "opencodex");
@@ -363,14 +364,10 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
     unlinkSync(layout.exposed);
     link(pkg, layout.exposed);
-
-    // With a store proof that does not contain it, the update is refused.
-    const elsewhere = join(root, "elsewhere-store", "v11");
-    mkdirSync(elsewhere, { recursive: true });
-    layout.storeOutput = () => elsewhere;
-    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global-store package is outside the selected store" });
-    expect(layout.calls.some(args => args[0] === "--version")).toBe(true);
-    expect(storeCalls(layout)).toHaveLength(1);
+    const result = resolveOwner(layout);
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) expect(result.owner.globalStore).toBeUndefined();
+    expect(layout.calls.some(args => args[0] === "--version" || args[0] === "store")).toBe(false);
   });
 
   test("a legacy external group under an unrelated v<N> directory keeps the released verifier with no store query", () => {
