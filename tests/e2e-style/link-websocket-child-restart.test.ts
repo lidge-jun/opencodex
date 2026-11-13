@@ -16,7 +16,7 @@ import { forgetLinkWebsocketAdvertisementsForTests, linkWebsocketAdvertised } fr
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { childConnection } from "../helpers/link-ws-child";
-import { completed, expectCompleted, gate, runGateCodex, toolCall } from "../helpers/link-gate-codex";
+import { completed, expectCompleted, gate, runGateCodex, toolCall, untilOrExit } from "../helpers/link-gate-codex";
 
 // Measurement for the link WebSocket release gate (design T4 11.2, a Child restart under a running turn; lane G item
 // 3 d-e): the pinned Codex through the real TypeScript Child relay in front of a real Home, while the Child restarts
@@ -136,7 +136,7 @@ async function measureRestart(variant: Variant, retries: number, restartMs: numb
   // Marked when the Codex process exits (before its output is collected), which can be during the restart: it bounds
   // the first session's counts.
   onExit: code => mark("codex exit " + code) });
-  await restarted;
+  await untilOrExit(restarted, run, "the tool result reached the Home");
   t0.at = Date.now();
   mark("restart: drain starts (onStopping)");
   old.stopTunnel();

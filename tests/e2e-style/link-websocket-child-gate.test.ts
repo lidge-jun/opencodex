@@ -15,7 +15,7 @@ import { forgetLinkWebsocketAdvertisementsForTests } from "../../src/client/link
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startChild } from "../helpers/link-ws-child";
-import { completed, expectCompleted, gate, runGateCodex, toolCall } from "../helpers/link-gate-codex";
+import { completed, expectCompleted, gate, runGateCodex, toolCall, untilOrExit } from "../helpers/link-gate-codex";
 
 // The release-gate scenarios of design T4 11.1 item 13 and 11.2-8 (a), driven by the pinned Codex binary through the
 // real TypeScript Child (lane T6: src/client/machine-listener.ts, src/client/link-websocket.ts) in front of a real Home,
@@ -222,7 +222,7 @@ describe("link WebSocket release gate through the real Child (design 11.1 item 1
       return sseResponse(completed("resp_" + index));
     });
     const result = pair.run();
-    await first;
+    await untilOrExit(first, result, "the first request reached the Home");
     const beforeRestart = [...pair.records];
     await pair.restartHome();
     // The restarted Home reuses its link listener port, so the running Child reaches it again.

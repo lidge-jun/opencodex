@@ -11,7 +11,9 @@ import { removeTreeWithRetry } from "./remove-tree";
 // skipped with that reason. A run is release evidence only when the binary's sha256 equals the digest recorded for
 // that revision in tests/fixtures/link-gate-codex.json, a file that changes only through review; any other executable
 // runs as a smoke check, and each Codex scenario's title says which. Codex is an external process with no clock to inject, so
-// each file carries a per-test bound instead of sleeps.
+// each file carries a per-test bound. The scenarios wait on events, not on time, except the Child restart measurement,
+// whose restart phases are wall-clock waits by design; every wait on an event also ends, with Codex's stderr, if Codex
+// exits first (untilOrExit).
 
 // OCX_LINK_GATE_CODEX is resolved once to an executable file and copied read-only into a scratch directory; that copy is
 // what is hashed and what every scenario spawns, by absolute path (tests/helpers/link-gate-binary.ts).
@@ -115,6 +117,23 @@ export function runGateCodex(options: {
     return text;
   })();
   return (async () => ({ code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await stderr }))();
+}
+
+/**
+ * Waits for `event`, unless the Codex run ends first: then it fails at once with Codex's exit code and the tail of its
+ * stderr, instead of holding the test until its bound.
+ */
+export function untilOrExit<T>(event: Promise<T>, run: Promise<CodexRun>, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let done = false;
+    event.then(value => { if (!done) { done = true; resolve(value); } }, error => { if (!done) { done = true; reject(error); } });
+    // A later, ordinary exit after the event changes nothing and leaves no rejection behind.
+    run.then(result => {
+      if (done) return;
+      done = true;
+      reject(new Error("codex exited " + result.code + " before " + what + ": " + result.stderr.slice(-1500)));
+    }, () => { /* the run's own failure surfaces where it is awaited */ });
+  });
 }
 
 /** Codex's own account of a failure is part of the evidence: a non-zero exit fails with the tail of its stderr. */
