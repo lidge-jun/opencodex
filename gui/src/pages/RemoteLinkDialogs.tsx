@@ -81,6 +81,8 @@ export function RemoteLinkDisconnectDialog({
                 ? t("remoteLink.disconnect.ephemeralBody", { alias: confirming.row.alias })
                 : t("link.disconnectConfirm", { alias: confirming.row.alias })}
           </p>
+          {/* A full Child's or an unknown-type Child's forced removal leaves no tombstone, and the notice afterwards is page state. */}
+          {confirming.force && !isEphemeral && <p className="remote-link-note-id m-0 text-[13px] leading-5 text-fg-muted">{t("remoteLink.forceRemove.noteId", { linkId: confirming.row.id })}</p>}
           {!confirming.force && isEphemeral && (
             <label className="remote-link-purge-option mt-1 flex cursor-pointer items-start gap-2 rounded-[8px] bg-surface px-3 py-2.5 text-[13px] leading-5 ring-1 ring-line">
               <input type="checkbox" className="mt-0.5 shrink-0" checked={purge} onChange={event => onPurgeChange(event.target.checked)} />

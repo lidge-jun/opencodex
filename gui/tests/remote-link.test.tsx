@@ -1269,6 +1269,8 @@ test("Ready-to-Plant, cached ephemeral, connected badges, conflict notices, and 
   expect(confirmDialog.textContent).toContain("ocx link recover --link-id lnk_00000000000000e1");
   expect(confirmDialog.textContent).toContain("only while it still belongs to this link");
   expect(confirmDialog.textContent).not.toContain("ocx-child detach");
+  // A lightweight Child's forced removal leaves a tombstone that records the id, so the dialog does not ask to note it.
+  expect(confirmDialog.textContent).not.toContain("Note the link id");
   const forceBtn = [...confirmDialog.querySelectorAll("button")].find(b => b.textContent?.includes("Remove here only")) as HTMLButtonElement;
   await act(async () => { forceBtn.click(); });
   await flush();
@@ -1297,6 +1299,8 @@ test("a forced removal of a full Child leaves a notice that checks the Child's l
   const dialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
   await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
+  // Nothing on the Home records a full Child's link id after the removal, so the dialog asks the operator to note it.
+  expect(dialog.textContent).toContain("Note the link id " + id);
   await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(host.querySelector(".remote-link-row")).toBeNull();
@@ -1351,6 +1355,9 @@ test("a forced removal of a Child of unknown type names no command up front and 
   await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(dialog.textContent).toContain("did not record whether devbox-old runs a full install or the lightweight agent");
+  // The notice is component state: it lasts until it is dismissed or the page is left, and the id is noted before removal.
+  expect(dialog.textContent).toContain("until you dismiss them or leave the page");
+  expect(dialog.textContent).toContain("Note the link id " + id);
   expect(dialog.querySelector("code.chip")).toBeNull();
   await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
