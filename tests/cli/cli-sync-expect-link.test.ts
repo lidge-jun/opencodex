@@ -388,6 +388,14 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(HOME_CATALOG);
   });
 
+  test("pinned sync forwards conflict permission only for the explicitly named client", async () => {
+    writeClient({ transport: "link" });
+    const run = await runSync(["sync", "--expect-link", LINK_ID, "--overwrite-conflict", "--overwrite-client", "aside"]);
+    expect(run.code).toBe(0);
+    expect(run.connectedCalls).toEqual([{ restartCodex: false, expect: { kind: "link", linkId: LINK_ID },
+      overwriteConflict: true, overwriteClient: "aside" }]);
+  });
+
   test("a real link connect paused at its readiness read makes a pinned sync a pending refusal", async () => {
     writeStandalone();
     const configBefore = readFileSync(join(root, "config.json"), "utf8");

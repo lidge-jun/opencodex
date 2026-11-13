@@ -60,7 +60,8 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
     if (expectation || clientState.kind === "connected") {
       try {
         const { syncConnectedClient } = await import("../client/connect");
-        const result = await syncConnectedClient(expectation ? { restartCodex, expect: expectation } : { restartCodex });
+        const result = await syncConnectedClient({ restartCodex, ...(expectation ? { expect: expectation } : {}),
+          ...(syncArgs.includes("--overwrite-conflict") ? { overwriteConflict: true, ...(flags.overwriteClient ? { overwriteClient: flags.overwriteClient } : {}) } : {}) });
         if (expectation) {
           // The root preflight skipped the shim repair for a pinned sync; the identity held, so
           // run it now, as an unpinned sync would have.
@@ -83,6 +84,13 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
               ? `Codex settings applied from Home ${terminalSafeText(settings.document.home.name)}:`
               : `Codex settings applied from the last recorded Home read (${terminalSafeText(settings.reason)}):`);
             for (const line of describeHomeCodexSettings(settings.document.settings)) console.log(`  ${terminalSafeText(line)}`);
+          }
+        }
+        if (result.routeIntent) {
+          for (const row of result.routeIntent.outcomes) {
+            if (row.outcome === "current") continue;
+            console.error(`Route to ${row.client}: ${row.outcome}.`);
+            if (row.outcome !== "not_installed") process.exitCode = 1;
           }
         }
         await handleConnectedSyncCatalogWrite(result, restartScope);
@@ -209,6 +217,18 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
         else if (result.reason) console.warn(`${label} integration was not refreshed: ${result.reason}${result.residual ? " Recovery did not finish." : ""}${result.snapshotPath ? ` Backup: ${result.snapshotPath}` : ""}`);
       }
     }
+    if (synced.status !== "refused") {
+      const { homeRouteIntentInUse, readRouteIntentState } = await import("../routing/route-intent-state");
+      if (homeRouteIntentInUse(readRouteIntentState())) {
+        const { syncHomeRouteTo } = await import("../routing/route-to-local");
+        const { packageVersion } = await import("../lib/package-version");
+        const outcomes = await syncHomeRouteTo({ ...deps.loadConfig(), ...(live ? { port: live.port } : {}) }, packageVersion("0.0.0"), syncArgs.includes("--overwrite-conflict"), flags.overwriteClient,
+          undefined, { onAsideUnresolved: message => console.warn(message) });
+        for (const row of outcomes) {
+          if (row.outcome !== "current" && row.outcome !== "not_installed") { console.error(`${row.client}: ${row.outcome}`); code = 1; }
+        }
+      }
+    }
     return code || (typeof process.exitCode === "number" ? process.exitCode : 0);
     };
     let code: number;
@@ -235,12 +255,16 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
           return { state: "failed", reason: "platform-probe-failed", exit: null };
         }
         type Run = { state: ChildResult["state"]; reason: string | null; exit: number | null; executable?: "ocx-child" };
+        // An ephemeral ocx-child gets the plain catalog sync: it never reads route intent, so it
+        // has nothing to overwrite and refuses the flags.
+        const overwrite = link.childKind !== "ephemeral" && deps.args.includes("--overwrite-conflict");
+        const overwriteOptions = overwrite ? { overwrite: true, ...(flags.overwriteClient ? { overwriteClient: flags.overwriteClient } : {}) } : {};
         const runPinned = async (restart: ChildRestart): Promise<PinnedRun<Run>> => {
           // Revision 6: with the shared deadline spent before the restarting sync, nothing is sent to the Child.
           if (restart !== "none" && deadline - Date.now() <= 0) return { sync: { state: "timed-out", reason: "deadline-exceeded", exit: null }, notRun: true };
           try {
             const result = await runFanoutProcess(buildExecArgv({ alias: link.alias, knownHostsFile: linkKnownHostsPath(), route: link.explicitRoute ?? null,
-              argv: remotePinnedSyncArgv(link.id, platform, restart === "none" ? {} : { restart }) }), { timeoutMs: Math.max(0, deadline - Date.now()) });
+              argv: remotePinnedSyncArgv(link.id, platform, { ...(restart === "none" ? {} : { restart }), ...overwriteOptions }) }), { timeoutMs: Math.max(0, deadline - Date.now()) });
             const verdict = classifySyncResult(result, { expectSelectedKind: restart !== "none" });
             return { sync: { ...verdict, exit: result.code }, notRun: pinnedSyncRanNothing(verdict, result) };
           } catch (error) {

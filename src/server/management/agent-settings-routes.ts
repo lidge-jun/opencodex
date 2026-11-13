@@ -9,6 +9,7 @@ import { ensureManagementClaudeIntercept, interceptStartRefusal, interceptStatus
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import { isPassiveRead } from "../../lib/passive-read";
+import { captureHomeRouteDefaultsBeforeHomeSwitch } from "../../routing/home-route-capture";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -1147,9 +1148,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         const { claudeInterceptProxyPort } = await import("../../claude/intercept/runtime");
         const configured = claudeInterceptProxyPort(config, config.port ?? 10100);
         if (started.state.proxyPort !== configured) return jsonResponse({ ok: false, code: "port_mismatch", bound: started.state.proxyPort, configured }, 409);
-        const { setIntegrationEnabled } = await import("../../codex/desired-state");
+        const { setHomeIntegrationEnabled } = await import("../../routing/home-route-capture");
         const desired = await withFirstPartySecretsSettled(configRoot(), () => {
-          const result = setIntegrationEnabled("claude-desktop", true);
+          const result = setHomeIntegrationEnabled("claude-desktop", true);
           if (result.ok) mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
           return result;
         });
@@ -1238,9 +1239,10 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
           }
         });
       }
-      const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
+      const { claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
+      const { setHomeIntegrationEnabled } = await import("../../routing/home-route-capture");
       const desired = await settleConfigRoot(configRoot(), () => {
-          const result = setIntegrationEnabled("claude-desktop", true);
+          const result = setHomeIntegrationEnabled("claude-desktop", true);
           if (result.ok) mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
           return result;
         });
@@ -1869,6 +1871,10 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       const prepared = prepareClaudeCodePatch(config, body);
       if (prepared instanceof Response) return prepared;
       const { next, nextFastMode } = prepared;
+      // The Claude toggle is this Home's alone: freeze what Children inherit before it moves, and
+      // refuse before anything changes when that cannot be saved.
+      const captureRefused = body.enabled !== undefined ? captureHomeRouteDefaultsBeforeHomeSwitch() : null;
+      if (captureRefused) return jsonResponse({ error: captureRefused.message, code: "route_intent_unavailable" }, captureRefused.retryable ? 409 : 500);
       // Stamps the auth-mode migration sentinel on EVERY persist of this block. Without it,
       // choosing Auto (which DELETES authMode) or merely toggling Claude on (App.tsx PUTs
       // `{enabled}` alone and creates the block) would be converted into a sticky manual

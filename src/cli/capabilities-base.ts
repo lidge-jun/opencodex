@@ -51,7 +51,7 @@ export const CAPABILITIES: readonly Capability[] = [
     command: ["link","issue"],
     summary: "Issue one link credential and record its tunnel metadata.",
     routes: [{"method":"POST","path":"/api/link/issue"}],
-    flags: [{"name":"--alias","value":"string","required":true,"summary":"SSH host alias for the linked machine."},{"name":"--tunnel-port","value":"number","required":true,"summary":"Remote loopback port for the reverse tunnel."},{"name":"--json","value":"boolean","summary":"Emit the issue result as JSON."}],
+    flags: [{"name":"--clients","value":"string","summary":"Initial device selection: listed clients start on for this device, and Codex and Claude Code start off unless listed; other clients inherit Home defaults. Omitted, the device inherits every Home default, including an off Codex or Claude Code."},{"name":"--alias","value":"string","required":true,"summary":"SSH host alias for the linked machine."},{"name":"--tunnel-port","value":"number","required":true,"summary":"Remote loopback port for the reverse tunnel."},{"name":"--json","value":"boolean","summary":"Emit the issue result as JSON."}],
     mutates: true,
     json: "payload",
     details: ["Human-only handoff: issues a credential and prints its plaintext once. Never capture it in an agent transcript. Requires loopback admin authority; tunnel port must be 1024-65535."],
@@ -772,7 +772,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the client rows or toggle result as JSON."}],
     mutates: true,
     json: "payload",
-    details: ["Each toggle writes the selected client configuration through its runtime owner. Refused disables remain failures. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor."],
+    details: ["Each on/off writes the Home's native switch, recording no route intent for the Home, and applies it through the client's runtime owner, including Claude Desktop's first-party transition; Children keep inheriting their saved default. Refused disables remain failures. On a Child it is refused with the exact Home command. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor."],
     usage: "ocx integration native [list] [--json]; ocx integration native <claude|claude-desktop|codex|grok> <on|off> [--json]",
   },
   {
@@ -782,7 +782,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--model-names","value":"string","summary":"Hermes/Command Code apply or overwrite only: alias or routed; omission preserves managed policy."},{"name":"--client","value":"string","summary":"File integration ID, including gentle-shell; aside selects profiles."},{"name":"--profile","value":"number","summary":"Aside nonnegative integer account ID; requires --client aside."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."},{"name":"--overwrite-conflict","value":"boolean","summary":"Explicitly permit replacing a conflicting block."},{"name":"--op","value":"string","summary":"Operation ID; --op-id is an alias."},{"name":"--confirm-drift","value":"boolean","summary":"Explicitly allow replacing edits made after the snapshot."}],
     mutates: true,
     json: "payload",
-    details: ["status/show/list reads all clients, one client or Aside profiles. history/journal reads rollback records; expired snapshots stay visible.","enable/disable requires --client; an omitted Aside --profile toggles all profiles. --overwrite-conflict applies only to enable.","restore requires --op (alias --op-id); --client requires --profile and only Aside supports that profile selector. --confirm-drift is an explicit user waiver, never auto-retried. Use client preview or restore --preview to inspect a change, history remove --op ID --yes to retire a journal row, and sync --client aside to refresh managed profiles."],
+    details: ["status/show/list reads all clients, one client or Aside profiles. history/journal reads rollback records; expired snapshots stay visible.","enable/disable requires --client; an omitted Aside --profile toggles all profiles. Each toggle is this Home's own decision, like the dashboard: once the Home uses route intent it is recorded so ocx sync keeps it, and linked Children keep their defaults (ocx route to <client> on|off changes those). --overwrite-conflict applies only to enable.","restore requires --op (alias --op-id); --client requires --profile and only Aside supports that profile selector. --confirm-drift is an explicit user waiver, never auto-retried. Use client preview or restore --preview to inspect a change, history remove --op ID --yes to retire a journal row, and sync --client aside to refresh managed profiles."],
     usage: "ocx integration client status [--client <id>] [--profile <id>] [--json]; ocx integration client history [--client <id>] [--profile <id>] [--json]; ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--model-names <alias|routed>] [--json]; ocx integration client disable --client <id> [--profile <id>] [--json]; ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--json]",
   },
   {
@@ -790,6 +790,8 @@ export const CAPABILITIES: readonly Capability[] = [
     summary: "Synchronize client catalogs, including Aside profiles and Pi through the running server's mutation owner.",
     routes: [{ method: "POST", path: "/api/client-integrations/aside/sync" }, { method: "POST", path: "/api/client-integrations/pi/sync" }],
     flags: [
+      { name: "--overwrite-conflict", value: "boolean", summary: "Allow conflicting route materialization only for this explicit sync." },
+      { name: "--overwrite-client", value: "string", summary: "Restrict takeover to one client; requires --overwrite-conflict." },
       { name: "--local-only", value: "boolean", summary: "Do not fan out the Home sync to linked Children." },
       { name: "--json", value: "boolean", summary: "Emit the sync fan-out result as JSON." },
       { name: "--restart-codex", value: "boolean", summary: "Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog, cache, or changed configuration write, on macOS, Linux and Windows." },
@@ -810,7 +812,7 @@ export const CAPABILITIES: readonly Capability[] = [
       "After a successful Home sync, a connected Child skipped during fan-out, a failed or timed-out Child, a synced Child whose requested restart did not certainly happen (restart-skipped:*, restart-unsupported:ocx-child, restart-not-run, restart-result-unknown), or an unreadable link store yields partial exit 6. Skipped connected Children and withheld restarts include an actionable hint; update an outdated ocx through its owning installer, with the Desktop tray as an option for Desktop installs. Intentional skips, including client-initiated links, --local-only, not-selected (outside --child) and child-busy (a Child operation holds the Child), keep their existing exit behavior.",
       "--expect-link/--expect-hub-key are checked under the lock that selects the sync path. A mismatch writes nothing, never falls back to local providers, exits 5, and ends stderr with {\"phase\":\"child_link_mismatch\"|\"hub_client_mismatch\",\"reason\":...}; reasons are disconnected, invalid_state, disconnect_pending, pending_operation, hub_client, link_client, other_link and other_key. Usage errors exit 2.",
     ],
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--overwrite-conflict [--overwrite-client <id>]] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
   },
   {
     command: ["agent","subagents","force"],
