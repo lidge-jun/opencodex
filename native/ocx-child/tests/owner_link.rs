@@ -267,6 +267,11 @@ fn detach_expect_link_answers_residual_for_a_version_one_owner_record() {
     homes.write_owner(&owner);
     let report = assert_refused_untouched(&homes, LINK_A, 6, "residual");
     assert_eq!(report["record"], "codex-home-owner");
+    // A current build also writes /1 when it adopts a pre-ownership attachment, so the reason names no build.
+    assert_eq!(
+        report["reason"],
+        "the ownership record names no link (schema /1)"
+    );
     assert!(
         report["path"]
             .as_str()

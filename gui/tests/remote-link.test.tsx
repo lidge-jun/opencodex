@@ -1433,6 +1433,9 @@ test("a forced removal of a Child of unknown type names no command up front and 
   // No unbound ocx-child detach: its status cannot show an interrupted attach of another link, which a plain detach would
   // restore and then remove, so an older lightweight Child is left as it is (#8691 review).
   expect(notice?.textContent).toContain("On a lightweight Child, leave it as it is");
+  // The Windows paths are Command Prompt paths, and the bound detach chip shows the POSIX planted path (#8691 final review).
+  expect(notice?.textContent).toContain("in Command Prompt on Windows %LOCALAPPDATA%");
+  expect(notice?.textContent).toContain("on Windows, the ocx-child.exe path above");
   expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(UNKNOWN_CHIPS(id));
   expect(notice?.textContent).not.toContain("ocx link recover");
 });

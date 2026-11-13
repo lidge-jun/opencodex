@@ -2017,7 +2017,7 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
             ExpectLinkRefusal::Residual,
             "codex-home-owner",
             &owner_path,
-            "the ownership record names no link (schema /1, written by an older ocx-child)",
+            "the ownership record names no link (schema /1)",
         ),
         Some(Some(_)) if state_names_link => Ok(()),
         Some(Some(_)) if own_interrupted => Ok(()),
