@@ -100,6 +100,9 @@ fn limits() -> Limits {
 }
 
 const SPAWNED_STACK: usize = 256 * KIB;
+/// A stop gives each socket's close at most this long: `stop_owned_daemon` (detach, restart, sync) waits 3 s
+/// for the port to close, so the link WebSocket's share of a stop must leave room for the rest of it.
+const STOP_CLOSE_BOUND: Duration = Duration::from_secs(1);
 const MAX_MESSAGE_HEADER: &str = "x-codex-websocket-max-message-bytes";
 const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const UPGRADE_REQUIRED_BODY: &[u8] =
@@ -1148,7 +1151,8 @@ pub fn stop_all() {
     for setup in &setups {
         setup.cancel();
     }
-    // Every close deadline starts before any close frame is attempted.
+    // Every close deadline starts before any close frame is attempted, and is at most STOP_CLOSE_BOUND: a
+    // peer that does not read cannot hold the stop past detach's wait.
     let mut claimed = Vec::new();
     for shared in &sockets {
         let mut st = lock(&shared.state);
@@ -1160,7 +1164,7 @@ pub fn stop_all() {
             st.terminal_started = true;
             shared.closing.store(true, Ordering::SeqCst);
             st.close_token = Some(register_deadline(
-                Instant::now() + shared.limits.close_bound,
+                Instant::now() + shared.limits.close_bound.min(STOP_CLOSE_BOUND),
                 shared,
             ));
             st.close_io += 1;
@@ -2424,6 +2428,45 @@ mod tests {
     fn stop_all_without_join() {
         let (m, _) = registry();
         lock(m).stopping = true;
+    }
+
+    /// `stop_owned_daemon` (detach, restart, sync) waits 3 s for the port to close; the link WebSocket's share
+    /// of a stop must leave room for the listener to close and the process to exit.
+    const DETACH_WAIT: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn a_stop_with_a_codex_that_does_not_read_ends_well_inside_detachs_wait() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        // The default limits: a 5 s close bound, 300 s stall, 600 s data operations.
+        let s = session(home_port, LIMITS, "", &[]);
+        assert_eq!(s.status, 101);
+        let _home = homes.recv().unwrap();
+        let shared = only_socket();
+        let (locked_tx, locked) = mpsc::channel();
+        *lock(&DATA_LOCKED) = Some(locked_tx);
+        // Codex never reads; a large message holds Codex's write lock, so the stop's 1001 cannot be written.
+        let writer = {
+            let shared = Arc::clone(&shared);
+            thread::spawn(move || {
+                write_frame(&shared, Leg::Codex, 1, vec![b's'; 64 * MIB], Kind::Data)
+            })
+        };
+        locked.recv().unwrap();
+        drop(shared);
+        let started = Instant::now();
+        stop_all();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < DETACH_WAIT - Duration::from_secs(1),
+            "stop took {elapsed:?}; detach gives up after {DETACH_WAIT:?}"
+        );
+        assert!(writer.join().unwrap().is_err());
+        assert!(s.worker.join().unwrap().is_ok());
+        drop(s.codex);
+        wait_all_released();
+        reset_registry();
     }
 
     #[test]
