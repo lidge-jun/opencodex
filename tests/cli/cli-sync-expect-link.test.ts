@@ -620,7 +620,8 @@ describe("ocx disconnect --expect-link (a Home's revoke)", () => {
     } finally { errorSpy.mockRestore(); logSpy.mockRestore(); }
     const teardownCalls = teardown.mock.calls.length;
     teardown.mockRestore();
-    expect([exit, errors.join(" | "), teardownCalls]).toEqual([0, "", 0]);
+    // No refusal line (a config repair notice from the shared config loader may still appear on stderr).
+    expect([exit, errors.filter(line => /refused|child_link_mismatch/.test(line)), teardownCalls]).toEqual([0, [], 0]);
     expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
   });
 
@@ -658,5 +659,38 @@ describe("ocx disconnect --expect-link (a Home's revoke)", () => {
     expect(exit).toBe(5);
     expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "other_link" });
     expect(readClientConnectionState()).toEqual(before);
+  });
+
+  async function refusedDisconnect(argv: string[]): Promise<{ exit: number; last: unknown }> {
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const lines: string[] = [];
+    const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+    let exit: number;
+    try {
+      exit = await handleDisconnectCommand(argv, {
+        linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+      });
+    } finally { errors.mockRestore(); }
+    let last: unknown = null;
+    try { last = JSON.parse(lines.at(-1) ?? "null"); } catch { last = lines.at(-1); }
+    return { exit, last };
+  }
+
+  test("--expect-link with --recover-config is a usage error that changes nothing", async () => {
+    writeClient({ transport: "link" });
+    const before = readClientConnectionState();
+    const run = await refusedDisconnect(["--expect-link", LINK_ID, "--recover-config", "--yes"]);
+    expect(run.exit).toBe(2);
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
+  test("a link-bound disconnect of a machine no longer connected leaves the lone native originals alone", async () => {
+    writeStandalone();
+    const { nativeIntentOriginalsPath } = await import("../../src/client/route-intent-native-originals");
+    mkdirSync(dirname(nativeIntentOriginalsPath()), { recursive: true, mode: 0o700 });
+    const record = JSON.stringify({ version: 1, fields: { codex: { original: true, published: false } } });
+    writeFileSync(nativeIntentOriginalsPath(), record, { mode: 0o600 });
+    await expect(connectApi.disconnectClient({ expectLink: LINK_ID })).rejects.toMatchObject({ phase: "child_link_mismatch", reason: "disconnected" });
+    expect(readFileSync(nativeIntentOriginalsPath(), "utf8")).toBe(record);
   });
 });

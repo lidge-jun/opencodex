@@ -608,6 +608,8 @@ export async function handleDisconnectCommand(
     const expectLink = takeExpectLink(args);
     rejectArgs(args, DISCONNECT_USAGE, { redactValues: true });
     if (recoverConfig && (!yes || orphanedToken)) throw new CliUsageError("--recover-config requires --yes and cannot be combined with --orphaned-token", DISCONNECT_USAGE);
+    // A Home's link-bound disconnect never asks for config recovery; that stays a person's own plain disconnect.
+    if (recoverConfig && expectLink !== undefined) throw new CliUsageError("--recover-config cannot be combined with --expect-link", DISCONNECT_USAGE);
     if (orphanedToken) {
       if (!yes || keepCatalog || expectLink !== undefined) throw new CliUsageError("--orphaned-token requires --yes and cannot be combined with --keep-catalog or --expect-link", DISCONNECT_USAGE);
       const backup = await recoverOrphanedTokens({ ...deps.orphanRecoveryDeps, lifecycleLockDeps: deps.lifecycleLockDeps });

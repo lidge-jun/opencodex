@@ -1322,7 +1322,8 @@ export async function disconnectClient(
   nativeIntentOnly?: true;
 }> {
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
-  if (!options.expectedOwner) {
+  // A link-bound disconnect changes nothing on a machine that is not connected to that link, so it never drains here.
+  if (!options.expectedOwner && options.expectLink === undefined) {
     // It restores config-root switches under the lifecycle lock, so it admits after overlapping
     // config-root ACL work like both phases below (#7815).
     const drained = await withConfigDirHardeningSettled(getConfigDir(), () => drainLoneNativeIntentOriginals(deps.lifecycleLockDeps));
