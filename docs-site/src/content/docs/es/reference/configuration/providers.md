@@ -234,6 +234,7 @@ Los proveedores pueden exponer una abreviatura incorporada, como `agy` para `goo
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic estilo de encabezado de clave. Predeterminados a `x-api-key` nativos; válido solo para proveedores de llave-auth `anthropic`. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Grupo de varias claves. `apiKey` refleja la entrada activa; cada elemento tiene `id`, `key`, `label` opcional y `addedAt` numérico opcional. |
 | `apiKeyPoolStrategy?` | `"round-robin" \| "fill-first" \| "quota"` | Cómo se elige una llave caliente **antes** el primer intento cuando la llave comprometida ya se está enfriando. Omitido mantiene la rotación reactiva solamente: el grupo se mueve después de un 429 o 401 y no antes. `round-robin` toma la siguiente clave en el grupo, `fill-first` mantiene la primera elegible, y `quota` prefiere la clave con el mayor margen restante, cayendo a `fill-first` para un proveedor cuya cuota por clave es desconocida. El orden por cuota usa evidencia de inferencia reciente, vinculada a la credencial y ya presente en la caché local; las ventanas solo informativas, como la búsqueda de Synthetic y los presupuestos de Mistral, no ordenan claves. La evidencia de inferencia ausente o no disponible es desconocida y la selección no realiza consultas. Una clave comprometida saludable nunca se anula, por lo que se mantiene una selección manual de la clave. |
+| `cacheAffinity?` | `"auto" \| "session" \| "turn" \| "off"` | Prefiere la clave que atendió el último turno exitoso; requiere al menos dos entradas y excluye OAuth/forward. El valor predeterminado es `auto`. Con `quota`, una clave vinculada cuya cuota está agotada cede ante una clave elegible con margen medido; la cuota desconocida o el margen restante conservan la afinidad. Los rechazos locales conservan la vinculación y los rechazos del proveedor solo liberan la entrada que atendió la solicitud. Consulta el [contrato completo en inglés](/reference/configuration/providers/#provider-entries-ocxproviderconfig). |
 | `defaultModel?` | `string` | Modelo utilizado cuando se selecciona este proveedor sin un modelo explícito. |
 | `models?` | `string[]` | Lista de modelos de semillas/retroceso. Con `liveModels: false`, una lista `models` no vacía es seguida por `retainModels`; una lista `models` vacía u omitida en su lugar siembra `defaultModel` (si está configurada), luego `retainModels`, eliminando los ID duplicados en el orden primero visto. |
 | `liveModels?` | `boolean` | Busca el catálogo en vivo en start/sync (por defecto `true` ). Los proveedores personalizados usan `${baseUrl}/models`; los complementos pueden usar una URL y un filtro de registro. |
@@ -1297,21 +1298,7 @@ Cuando `preserveReasoningContentModels` no está configurado, DeepSeek Flash / P
 
 ## Pausa automática de cuentas permanentemente rechazadas
 
-`providers.<provider>.accountAutoPause` es opcional y está desactivado de forma predeterminada. Se aplica a las cuentas OAuth de ese proveedor, a las cuentas de grupo de Codex (incluida la cuenta principal en modo de grupo) y a las entradas de grupo de claves API configuradas. Por ejemplo:
-
-```sh
-ocx config set providers.anthropic.accountAutoPause.enabled true
-ocx config set providers.anthropic.accountAutoPause.consecutiveFailures 2
-```
-
-`consecutiveFailures` es un entero de 1 a 100; omitirlo usa 2. Solo cuentan rechazos HTTP 401/403 exactos y propios de la cuenta: una organización que prohíbe OAuth, una suscripción inactiva o vencida, acceso denegado a API/Claude Code, una cuenta deshabilitada por Google por infringir sus condiciones de servicio, o el cambio a un plan gratuito sin créditos. Un error de permisos del modelo, un token de acceso vencido, una ventana de cuota, un 429, un 5xx, una respuesta mal formada o un fallo de red nunca pausan una cuenta.
-
-El contador es de proceso local, serializado por cuenta, y se restablece en una respuesta HTTP exitosa, reanudación explícita o un nuevo inicio de sesión. La actualización del token por sí sola no restablece la racha de una cuenta OAuth. Los errores transitorios dejan el contador sin cambios. Reiniciar el proxy borra los contadores; pausas completadas, sus códigos de razón fija y marcas de tiempo persisten. Los procesos proxy independientes mantienen contadores independientes. Cambiar, deshabilitar o volver a habilitar la política, deshabilitar el proveedor o cambiar su punto final descarta observaciones de rechazo en vuelo, por lo que un rechazo de una solicitud enviada bajo la política anterior nunca puede pausar una cuenta después. Un rechazo cuenta solo para la credencial que realmente llegó a la parte superior: cuando un plugin local reescribe la credencial o el destino de un envío, ese envío nunca cuenta para una pausa. Para Codex cuentas de pool esto incluye el espacio de trabajo (`chatgpt-account-id`) para el que se envió la solicitud.
-
-En el umbral, OpenCodex excluye la cuenta utilizando su mecanismo de pausa existente e intenta un hermano elegible para la solicitud actual dentro del presupuesto de reintento/envío existente. Corregidos los selectores de cuenta Codex y los archivos cargados vinculados a la cuenta conservan sus restricciones. Una pausa nunca cancela el trabajo ya enviado ni cambia las credenciales. Emite una línea de registro genérica sin identificadores de cuenta o texto de error ascendente.
-
-`ocx account list <provider>` muestra la razón de pausa. La insignia Paused del panel expone la razón y el tiempo. Utilice `ocx account resume <provider> <account-id-or-alias>` para aclarar la razón y permitir la selección de nuevo. En una fila de API teclas, al hacer clic en Reanudar también se activa la clave. Esta política nunca reanuda una cuenta automáticamente.
-
+Consulta [Pausa automática de cuentas](/es/reference/configuration/account-auto-pause/) para la configuración, los rechazos y la recuperación.
 
 <a id="mistral-images-per-request"></a>
 
