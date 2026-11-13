@@ -457,9 +457,10 @@ export async function handleManagementAPI(
     // touched and point at its tray, whose Stop it honours (#3008 refuses an undone stop the same way).
     const desktopRefusal = desktopSupervisedStopRefusal(principal);
     if (desktopRefusal) return jsonResponse(desktopRefusal, 409, req, config);
-    // Only a receipt for this proxy's own port defers its teardown (#8416).
-    const { readRuntimePort } = await import("../config/process-state");
-    const servedPort = readRuntimePort(process.pid)?.port ?? config.port ?? null;
+    // Only a receipt for the port this listener is actually bound to defers its teardown (#8416);
+    // before it serves there is no such port, and no receipt is honoured.
+    const { boundServerPort } = await import("./lifecycle");
+    const servedPort = boundServerPort();
     const ownsThisReceipt = (nonce: string | null) => deferralMatchesReceipt(nonce, servedPort);
     const holdsReceipt = deferralHonored(url, ownsThisReceipt);
     // A sibling never runs under a service manager, and the installed service is the live

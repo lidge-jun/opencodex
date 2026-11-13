@@ -239,6 +239,23 @@ describe("the restart's deferred-teardown receipt", () => {
     expect(await run(async () => true)).toEqual({ outcome: "true", events: ["prove:10100", "claim", "stop:32:true"], held: [{ nonce: "a".repeat(32), pid: 4242, endpoint }] });
   });
 
+  test("the proof and the stop share one destination, and a forced stop needs the same verified process", async () => {
+    const proved: string[] = [];
+    let gate: (() => boolean) | undefined;
+    let verified = 4242;
+    await stopProxyForServiceRestart(4242, () => {}, {
+      readRuntime: () => ({ port: 10100, hostname: "localhost" }),
+      prove: async (_pid, at) => { proved.push(at.hostname + ":" + at.port); return true; },
+      claim: () => "b".repeat(32),
+      verify: () => verified,
+      stop: async (_pid, io) => { proved.push("post:" + io?.runtimeEndpoint?.hostname); gate = io?.mayTerminate; return true; },
+    });
+    expect(proved).toEqual(["127.0.0.1:10100", "post:127.0.0.1"]);
+    expect(gate?.()).toBe(true);
+    verified = 5151;
+    expect(gate?.()).toBe(false);
+  });
+
   test("a refusal deferred nothing, so it releases the receipt and propagates", async () => {
     const result = await run(async () => { throw new ProxyOwnershipRefusedError("refused", "respawnable_service"); });
     expect(result.outcome.startsWith("throw:ProxyOwnershipRefusedError")).toBe(true);

@@ -109,7 +109,10 @@ const server = Bun.serve({
     if (refusal) return refusal;
     const principal = managementPrincipal(req, auth, config) ?? undefined;
     const body = url.pathname === "/api/stop" ? await req.clone().text() : "";
-    const response = await handleManagementAPI(req, url, config, {}, principal);
+    // OCX_FIXTURE_CONFIG_PORT_SKEW plays a proxy started on an explicit --port: its configured
+    // port is not the one it is bound to.
+    const handlerConfig = process.env.OCX_FIXTURE_CONFIG_PORT_SKEW === "1" ? { ...config, port: config.port + 1 } : config;
+    const response = await handleManagementAPI(req, url, handlerConfig, {}, principal);
     if (response && url.pathname === "/api/stop" && req.method === "POST") {
       writeFileSync(join(home, "stop-response.json"), JSON.stringify({ status: response.status, query: url.search, body, response: await response.clone().json() }));
     }

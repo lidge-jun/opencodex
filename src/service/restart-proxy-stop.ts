@@ -1,6 +1,6 @@
 import { claimPendingTeardown, clearPendingTeardown } from "../config/pending-teardown";
-import { readRuntimePort } from "../config/process-state";
-import { ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
+import { readRuntimePort, verifyPidIdentity } from "../config/process-state";
+import { gracefulStopHost, ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 import { proveLiveProxyOwnedByHome, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";
 
 export type RestartStopEndpoint = { hostname: string; port: number };
@@ -16,6 +16,8 @@ export interface RestartProxyStopDeps {
   claim?: (endpoint: RestartStopEndpoint) => string;
   clear?: (nonce: string) => boolean;
   stop?: typeof stopProxy;
+  /** Identity check rechecked before any forced stop (verifyPidIdentity). */
+  verify?: (pid: number) => number | null;
 }
 
 /**
@@ -50,15 +52,23 @@ export async function stopProxyForServiceRestart(
   if (!runtime?.port) {
     throw new Error(`No runtime record of this home names proxy ${pid}, so its endpoint could not be proven; it was not stopped.`);
   }
-  const endpoint = { hostname: runtime.hostname ?? "127.0.0.1", port: runtime.port };
+  // The host the stop request will use (gracefulStopHost), so the proof is made against the very
+  // destination the admin token is then sent to, not a name that could resolve elsewhere.
+  const endpoint = { hostname: gracefulStopHost(runtime.hostname), port: runtime.port };
   const proven = await (deps.prove ?? (async (target: number, at: RestartStopEndpoint) =>
-    await proveLiveProxyOwnedByHome({ pid: target, port: at.port, hostname: at.hostname, source: "runtime" }, SERVICE_STOP_LIVENESS) === "proven"))(pid, endpoint);
+    await proveLiveProxyOwnedByHome({ pid: target, port: at.port, hostname: at.hostname, probeHostname: at.hostname, source: "runtime" }, SERVICE_STOP_LIVENESS) === "proven"))(pid, endpoint);
   if (!proven) {
     throw new Error(`Proxy ${pid} could not prove it serves this home's endpoint ${endpoint.hostname}:${endpoint.port}; this home's admin token was not sent to it and it was not stopped.`);
   }
   const nonce = (deps.claim ?? (target => claimPendingTeardown(target, "exact").nonce))(endpoint);
   try {
-    const stopped = await (deps.stop ?? stopProxy)(pid, { deferSharedTeardownNonce: nonce, runtimeEndpoint: endpoint, runtimeEndpointOnly: true });
+    const verify = deps.verify ?? verifyPidIdentity;
+    const stopped = await (deps.stop ?? stopProxy)(pid, {
+      deferSharedTeardownNonce: nonce, runtimeEndpoint: endpoint, runtimeEndpointOnly: true,
+      // The kill fallback only after the graceful request went unanswered, and only while pid is
+      // still the ocx start process this restart verified.
+      mayTerminate: () => verify(pid) === pid,
+    });
     hold({ nonce, pid, endpoint });
     return stopped;
   } catch (error) {

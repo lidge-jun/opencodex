@@ -67,6 +67,12 @@ export interface GracefulStopIo {
    * this, so a record published in between cannot direct the request, and the receipt, elsewhere.
    */
   runtimeEndpointOnly?: boolean;
+  /**
+   * Asked again immediately before the forced-stop fallback signals `pid`; false refuses the
+   * signal (killProxy throws). A caller that proved which process it may stop rechecks that here,
+   * so a pid reused after the graceful attempt is never signalled.
+   */
+  mayTerminate?: () => boolean;
 }
 
 /**
@@ -347,7 +353,7 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<b
     await waitForStoppedPort(runtime, pid);
     return true;
   }
-  killProxy(pid);
+  killProxy(pid, io.mayTerminate);
   await waitForStoppedPort(runtime, pid);
   return false;
 }

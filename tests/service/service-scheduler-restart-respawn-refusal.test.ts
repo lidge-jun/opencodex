@@ -14,7 +14,7 @@
  * proxy means a stop the route ACCEPTS can only end the child.
  */
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, symlinkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { repairService } from "../../src/service/repair";
 import { claimPendingTeardown } from "../../src/config/pending-teardown";
@@ -321,6 +321,28 @@ test.each(["no replacement answers", "wrapper cleanup fails"] as const)("the res
     ? ["stop-scheduler", "kill-wrappers"]
     : ["stop-scheduler", "kill-wrappers", "write-assets", "start-scheduler", "write-state"]);
 }, RESTART_TIMEOUT_MS);
+
+test("a receipt for the port this listener is bound to is honoured without its runtime record, whatever port is configured", async () => {
+  home = createTempHome("ocx-scheduler-restart-8416-bound-port-");
+  const proxy = await startProxy(home, "ocx", { OCX_FIXTURE_CONFIG_PORT_SKEW: "1" });
+  try {
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home.configDir;
+    let nonce: string;
+    try { nonce = claimPendingTeardown({ hostname: "127.0.0.1", port: proxy.port }, "exact").nonce; }
+    finally { if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome; }
+    // The record is gone; the route decides from the port it is actually bound to, not from it.
+    unlinkSync(join(home.configDir, "runtime-port.json"));
+    const response = await fetch(`http://127.0.0.1:${proxy.port}/api/stop?deferSharedTeardown=1&teardownNonce=${nonce}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()).sharedTeardown).toBe("deferred");
+  } finally {
+    await proxy.stop();
+  }
+});
 
 test("a listener that cannot prove this home's attestation secret is sent no token and keeps its wrappers", async () => {
   home = createTempHome("ocx-scheduler-restart-8416-unattested-");

@@ -27,6 +27,22 @@ describe("gracefulStopHost", () => {
 });
 
 describe("stopProxyGracefully", () => {
+  test("a refused mayTerminate keeps the forced-stop fallback from signalling the process", async () => {
+    // A throwaway child as the target: a regression could only ever signal it.
+    const child = Bun.spawn(["/bin/sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      await expect(stopProxy(child.pid, {
+        runtimeEndpoint: { hostname: "127.0.0.1", port: 1 }, runtimeEndpointOnly: true,
+        fetchFn: (async () => { throw new Error("unanswered"); }) as unknown as typeof fetch,
+        mayTerminate: () => false,
+      })).rejects.toThrow("Process termination refused");
+      expect(child.exitCode).toBeNull();
+    } finally {
+      child.kill("SIGKILL");
+      await child.exited;
+    }
+  });
+
   test("runtimeEndpointOnly sends nothing without the resolved endpoint and never re-reads the record", async () => {
     let reads = 0, requests = 0;
     const result = await stopProxyGracefully(4242, {
