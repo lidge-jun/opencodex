@@ -17,6 +17,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { repairService } from "../../src/service/repair";
+import { claimPendingTeardown } from "../../src/config/pending-teardown";
 import { withWindowsServiceMutationLock } from "../../src/lib/windows-service-mutation-lock";
 import { buildWindowsTaskXml } from "../../src/service/windows-taskxml";
 import { fixturePath, repoRoot } from "../helpers/repo-root";
@@ -141,7 +142,7 @@ test("a scheduler restart stops the surviving tracked proxy instead of aborting 
       settleSchedulerRead: () => {},
       // No scheduler starts a replacement here; confirming one stands in for that, so the restart
       // releases the receipt it kept.
-      confirmSchedulerReplacement: async pids => { confirmed = pids; return true; },
+      confirmSchedulerReplacement: async (receipt, pids) => { confirmed = [receipt.endpoint.port, ...pids]; return true; },
       // stopTrackedProxy and schedulerProxyStillLive stay ABSENT on purpose: the real
       // stopTrackedProxyIfRunning and proxyStillLiveAfterStop run against the child.
     });
@@ -162,7 +163,8 @@ test("a scheduler restart stops the surviving tracked proxy instead of aborting 
   expect(stop.response.sharedTeardown).toBe("deferred");
   // The restart kept its receipt until a replacement other than the stopped proxy served, then
   // released it; nothing is left for a later `ocx stop` or the updater to trip over.
-  expect(confirmed).toEqual([proxy.pid]);
+  // Checked against the stopped proxy's own endpoint, excluding the stopped pid.
+  expect(confirmed).toEqual([proxy.port, proxy.pid]);
   expect(readdirSync(home.configDir).filter(name => name.startsWith("pending-teardown"))).toEqual([]);
   // The child accepted the stop and exited on its own; nothing was killed past a refusal.
   expect(existsSync(home.path("accepted-stop.json"))).toBe(true);
@@ -317,6 +319,75 @@ test.each(["no replacement answers", "wrapper cleanup fails"] as const)("the res
   expect(effects).toEqual(mode === "wrapper cleanup fails"
     ? ["stop-scheduler", "kill-wrappers"]
     : ["stop-scheduler", "kill-wrappers", "write-assets", "start-scheduler", "write-state"]);
+}, RESTART_TIMEOUT_MS);
+
+test("a receipt for another endpoint does not defer this proxy's stop", async () => {
+  home = createTempHome("ocx-scheduler-restart-8416-foreign-receipt-");
+  const proxy = await startProxy(home);
+  try {
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home.configDir;
+    let nonce: string;
+    try { nonce = claimPendingTeardown({ hostname: "127.0.0.1", port: proxy.port + 1 }, "exact").nonce; }
+    finally { if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome; }
+    const response = await fetch(`http://127.0.0.1:${proxy.port}/api/stop?deferSharedTeardown=1&teardownNonce=${nonce}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    // The valid receipt names a different port, so the respawn gate still applies to this proxy.
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe("respawnable_service");
+    expect(existsSync(home.path("accepted-stop.json"))).toBe(false);
+    expect((await fetch(`http://127.0.0.1:${proxy.port}/healthz`)).status).toBe(200);
+  } finally {
+    await proxy.stop();
+  }
+});
+
+test.each([true, false])("a failed asset rewrite after the accepted stop settles the receipt by the recovered proxy (serving %p)", async serving => {
+  home = createTempHome("ocx-scheduler-restart-8416-recovery-");
+  const proxy = await startProxy(home);
+  const effects: string[] = [];
+  let failure: unknown = null;
+  try {
+    failure = await repairService({
+      platform: "win32",
+      verb: "restart",
+      configDir: () => home!.configDir,
+      inspectSupervision: () => ({ kind: "none" }),
+      diagnose: () => ({
+        supported: true, installed: true, enabled: true, running: true, viable: true,
+        startable: true, stale: false, conflict: false, backend: "scheduler", summary: "fixture",
+      }),
+      readOwnership: () => ({ kind: "none", revision: 0 }),
+      assertEnv: () => {},
+      assertAuth: () => {},
+      selectRuntime: () => ({ path: process.execPath, source: "override", overrideEnv: "OPENCODEX_BUN_PATH" }),
+      assertRuntimeWritable: () => {},
+      launcherPathDiagnostic: () => null,
+      readSchedulerXml: () => healthy,
+      resolveExpectedUserId: () => sid,
+      schedulerLauncher: launcher,
+      prepareDisconnectedClientRestart: async () => {},
+      stopScheduler: () => { effects.push("stop-scheduler"); },
+      killServiceWrappers: () => { effects.push("kill-wrappers"); },
+      snapshotSchedulerAssets: () => () => { effects.push("restore-assets"); },
+      writeSchedulerAssets: () => { effects.push("write-assets"); throw new Error("fixture read-only asset"); },
+      startScheduler: () => { effects.push("start-scheduler"); },
+      writeSchedulerState: () => { effects.push("write-state"); },
+      reregisterScheduler: async () => { throw new Error("no re-register expected"); },
+      settleSchedulerRead: () => {},
+      confirmSchedulerReplacement: async () => serving,
+    }).then(() => null, (error: unknown) => error);
+  } finally {
+    await proxy.stop();
+  }
+  expect(effects).toEqual(["stop-scheduler", "kill-wrappers", "write-assets", "restore-assets", "start-scheduler"]);
+  expect((failure as Error).message).toContain("fixture read-only asset");
+  const receipts = readdirSync(home.configDir).filter(name => name.startsWith("pending-teardown-"));
+  // A recovered proxy serving the stopped endpoint takes the receipt; otherwise it is kept and named.
+  expect(receipts).toHaveLength(serving ? 0 : 1);
+  expect((failure as Error).message.includes("kept its teardown receipt")).toBe(!serving);
 }, RESTART_TIMEOUT_MS);
 
 test("a direct stop still reaches the proxy while a service mutation owns the lock", async () => {

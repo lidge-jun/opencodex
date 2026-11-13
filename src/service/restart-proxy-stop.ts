@@ -4,8 +4,8 @@ import { ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 
 export type RestartStopEndpoint = { hostname: string; port: number };
 
-/** A deferred-teardown receipt a restart keeps until its replacement serves. */
-export type HeldRestartReceipt = { nonce: string; pid: number };
+/** A deferred-teardown receipt a restart keeps until a replacement serves its endpoint. */
+export type HeldRestartReceipt = { nonce: string; pid: number; endpoint: RestartStopEndpoint };
 
 export interface RestartProxyStopDeps {
   readRuntime?: (pid: number) => { port: number; hostname?: string } | null;
@@ -46,11 +46,11 @@ export async function stopProxyForServiceRestart(
   const nonce = (deps.claim ?? (target => claimPendingTeardown(target, "exact").nonce))(endpoint);
   try {
     const stopped = await stop(pid, { deferSharedTeardownNonce: nonce, runtimeEndpoint: endpoint });
-    hold({ nonce, pid });
+    hold({ nonce, pid, endpoint });
     return stopped;
   } catch (error) {
     if (error instanceof ProxyOwnershipRefusedError) (deps.clear ?? clearPendingTeardown)(nonce);
-    else hold({ nonce, pid });
+    else hold({ nonce, pid, endpoint });
     throw error;
   }
 }

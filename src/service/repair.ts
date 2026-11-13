@@ -31,31 +31,34 @@ function withContext(error: unknown, context: string): unknown {
 }
 
 /**
- * Release the deferred-teardown receipts a scheduler restart kept, once a replacement serves. A
- * replacement that does not answer in time keeps them: client routing still names the stopped
- * endpoint, and `ocx stop` finishes an abandoned receipt by restoring native client routing.
+ * Release the deferred-teardown receipts a scheduler restart kept, each once a replacement serves
+ * the endpoint it names. Returns the receipts kept: client routing still names those endpoints,
+ * and `ocx stop` finishes an abandoned receipt by restoring native client routing.
  */
 async function releaseRestartReceipts(
   held: readonly HeldRestartReceipt[],
-  confirm?: (stoppedPids: readonly number[]) => Promise<boolean>,
-): Promise<void> {
-  if (held.length === 0) return;
-  const serving = await (confirm ?? (async (pids: readonly number[]) => {
-    const { schedulerReplacementServing } = await import("./orchestration");
-    return schedulerReplacementServing(pids);
-  }))(held.map(receipt => receipt.pid));
-  if (!serving) {
-    console.warn("⚠️  The restarted proxy did not answer yet, so the restart kept its teardown receipt: client routing still points at the proxy's port.");
-    console.warn("   Once it serves, run 'ocx stop' and then 'ocx service start'; if it does not start, 'ocx stop' restores native client routing.");
-    return;
-  }
+  confirm?: (receipt: HeldRestartReceipt, stoppedPids: readonly number[]) => Promise<boolean>,
+): Promise<HeldRestartReceipt[]> {
+  const stoppedPids = held.map(receipt => receipt.pid);
+  const kept: HeldRestartReceipt[] = [];
   for (const receipt of held) {
+    const serving = await (confirm ?? (async (target: HeldRestartReceipt, pids: readonly number[]) => {
+      const { schedulerReplacementServing } = await import("./orchestration");
+      return schedulerReplacementServing(target.endpoint, pids);
+    }))(receipt, stoppedPids);
+    if (!serving) { kept.push(receipt); continue; }
     if (!clearPendingTeardown(receipt.nonce)) {
       console.warn(`⚠️  Could not remove the restart's teardown receipt ${pendingTeardownPathFor(receipt.nonce)}; the next 'ocx stop' finishes it.`);
     }
   }
+  return kept;
 }
 
+const RESTART_RECEIPT_KEPT = "The restart kept its teardown receipt, because client routing still points at the stopped proxy's port and no replacement was proven to serve it. "
+  + "Once a proxy serves there, run 'ocx stop' and then 'ocx service start'; if none does, 'ocx stop' restores native client routing.";
+
+/** What a scheduler restart's stops kept, shared with the wrapper that settles it on failure. */
+type RestartReceiptState = { held: HeldRestartReceipt[]; startIssued: boolean };
 /**
  * The two CLI verbs `repairService` serves. They differ on ONE platform and ONE case: a
  * macOS job that is already loaded from the current plist, which `repair` must not touch and
@@ -86,7 +89,9 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
    * After the scheduler start, whether a replacement other than the stopped pids serves; only then
    * does the restart release the deferred-teardown receipts its stops kept (schedulerReplacementServing).
    */
-  confirmSchedulerReplacement?: (stoppedPids: readonly number[]) => Promise<boolean>;
+  confirmSchedulerReplacement?: (receipt: HeldRestartReceipt, stoppedPids: readonly number[]) => Promise<boolean>;
+  /** Refuses a restart that must not stop this home's live proxy (assertSchedulerRestartTargetAllowed). */
+  assertSchedulerRestartTarget?: () => Promise<void>;
   startScheduler?: () => void;
   writeSchedulerState?: (runtime: DurableBunRuntime) => void;
   writeNativeState?: (runtime: DurableBunRuntime) => void;
@@ -208,6 +213,19 @@ export async function assertSchedulerRegistrationBeforeStart(
  * macOS/Linux: re-run the user-level install/reload path.
  */
 export async function repairService(deps: RepairServiceDeps = {}): Promise<void> {
+  const restart: RestartReceiptState = { held: [], startIssued: false };
+  try {
+    await repairServiceWith(deps, restart);
+  } catch (error) {
+    if (restart.held.length === 0) throw error;
+    // A recovery start may have brought a proxy back on the stopped endpoint; only then may the
+    // receipt go. Otherwise the error names what was kept and how to finish it.
+    const kept = restart.startIssued ? await releaseRestartReceipts(restart.held, deps.confirmSchedulerReplacement) : restart.held;
+    throw kept.length > 0 ? withContext(error, RESTART_RECEIPT_KEPT) : error;
+  }
+}
+
+async function repairServiceWith(deps: RepairServiceDeps, restart: RestartReceiptState): Promise<void> {
   const latch = deps.supervisionLatch ?? createSupervisionLatch();
   assertNoDesktopSupervision(deps.inspectSupervision, latch);
   const diagnose = deps.diagnose ?? diagnoseService;
@@ -257,8 +275,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
   let schedulerStopped = false;
   // Deferred-teardown receipts the scheduler restart's stops kept: client routing still names the
   // stopped endpoints, so they are released only once a replacement serves (end of the scheduler path).
-  const heldRestartReceipts: HeldRestartReceipt[] = [];
-  const holdRestartReceipt = (receipt: HeldRestartReceipt) => { heldRestartReceipts.push(receipt); };
+  const holdRestartReceipt = (receipt: HeldRestartReceipt) => { restart.held.push(receipt); };
   const stopSchedulerForRestart = (beforeStop: () => void) => {
     if (schedulerStopped) return;
     beforeStop();
@@ -369,6 +386,10 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     // after the stop, where the failed-rewrite recovery below could never start it again.
     const restoreAssets = (deps.snapshotSchedulerAssets ?? snapshotWindowsSchedulerAssets)();
     if (deps.verb === "restart") {
+      await (deps.assertSchedulerRestartTarget ?? (async () => {
+        const { assertSchedulerRestartTargetAllowed } = await import("./orchestration");
+        return assertSchedulerRestartTargetAllowed();
+      }))();
       await prepareDisconnectedRestart(verifyRegistrationBeforeStop);
       assertRestartOwnership();
       verifyRegistrationBeforeStop();
@@ -436,7 +457,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
             "Task Scheduler registration became unreadable after the failed asset write; it was preserved and not started.",
           );
           assertNoDesktopSupervision(deps.inspectSupervision, latch);
-          (deps.startScheduler ?? startWindows)();
+          (deps.startScheduler ?? startWindows)(); restart.startIssued = true;
         } catch (error) {
           recoveryErrors.push(error);
         }
@@ -537,7 +558,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
               "Task Scheduler state remained unreadable before restart; the registration was preserved and not started.",
             );
             assertNoDesktopSupervision(deps.inspectSupervision, latch);
-            (deps.startScheduler ?? startWindows)();
+            (deps.startScheduler ?? startWindows)(); restart.startIssued = true;
           } catch (error) {
             recoveryErrors.push(error);
           }
@@ -563,9 +584,11 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       "Task Scheduler registration became unreadable before restart; it was preserved and not started.",
     );
     assertNoDesktopSupervision(deps.inspectSupervision, latch);
-    (deps.startScheduler ?? startWindows)();
+    (deps.startScheduler ?? startWindows)(); restart.startIssued = true;
     (deps.writeSchedulerState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("scheduler", undefined, {}, selected)))(runtime);
-    await releaseRestartReceipts(heldRestartReceipts, deps.confirmSchedulerReplacement);
+    const kept = await releaseRestartReceipts(restart.held, deps.confirmSchedulerReplacement);
+    restart.held = [];
+    if (kept.length > 0) console.warn(`⚠️  ${RESTART_RECEIPT_KEPT}`);
     return;
   }
   if (deps.verb === "restart") await prepareDisconnectedRestart();

@@ -1,4 +1,4 @@
-import { findLiveProxy, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";
+import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";
 import { existsSync, unlinkSync } from "node:fs";
 import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
 import { assertSelectedRuntimeWritable, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
@@ -25,6 +25,7 @@ import { launchdGuiDomain } from "./launchd";
 import { LABEL } from "./state";
 import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
 import type { HeldRestartReceipt } from "./restart-proxy-stop";
+import { readClientConnectionState } from "../client/state";
 
 type ServiceOps = {
   install: (runtime: DurableBunRuntime) => void | Promise<void>; start: () => void; stop: () => void;
@@ -248,26 +249,32 @@ export async function stopTrackedProxyForServiceRestart(hold: (receipt: HeldRest
 }
 
 /**
- * Whether a replacement serves after a scheduler restart started it: a live proxy this home can
- * verify, other than the ones the restart stopped. Bounded; false is not proof of failure, only
- * that the restart cannot release its receipts on the replacement's behalf.
+ * Whether a replacement serves the endpoint a scheduler restart's receipt names: a healthy proxy
+ * (a package-tree-fenced one cannot serve requests and does not count) answering on exactly that
+ * port, whose pid this home verifies and is none of the stopped ones. Client routing still names
+ * that endpoint, so a proxy on any other port is no evidence. Bounded; false is not proof of
+ * failure, only that the restart cannot release the receipt on the replacement's behalf.
  */
-export async function schedulerReplacementServing(stoppedPids: readonly number[], deps: {
-  findProxy?: () => Promise<{ pid: number | null } | null>;
-  verify?: (pid: number | null | undefined) => number | null;
-  sleep?: (ms: number) => Promise<void>;
-  now?: () => number;
-  windowMs?: number;
-} = {}): Promise<boolean> {
+export async function schedulerReplacementServing(
+  endpoint: { hostname: string; port: number },
+  stoppedPids: readonly number[],
+  deps: {
+    identityAt?: (endpoint: { hostname: string; port: number }) => Promise<{ pid: number | null; packageTreeFenced?: true } | null>;
+    verify?: (pid: number | null | undefined) => number | null;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+    windowMs?: number;
+  } = {},
+): Promise<boolean> {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const deadline = now() + (deps.windowMs ?? 30_000);
-  const findProxy = deps.findProxy ?? (() => findLiveProxy({ ...SERVICE_STOP_LIVENESS, deadlineAt: deadline, acceptPackageTreeFenced: true }));
+  const identityAt = deps.identityAt ?? (target => proxyIdentityAt(target.port, { hostname: target.hostname }, { ...SERVICE_STOP_LIVENESS, deadlineAt: deadline }));
   const verify = deps.verify ?? verifiedKillTarget;
   for (;;) {
     try {
-      const live = await findProxy();
-      const pid = verify(live?.pid);
+      const identity = await identityAt(endpoint);
+      const pid = identity && !identity.packageTreeFenced ? verify(identity.pid) : null;
       if (pid !== null && !stoppedPids.includes(pid)) return true;
     } catch {
       // A probe failure is not proof either way; keep looking until the deadline.
@@ -275,6 +282,34 @@ export async function schedulerReplacementServing(stoppedPids: readonly number[]
     if (now() >= deadline) return false;
     await sleep(1000);
   }
+}
+
+/**
+ * Refuse a scheduler restart of a live Child connected over a Remote Link, before anything changes.
+ *
+ * Its proxy can only be stopped by a deferred stop that keeps Codex routed to the Child's loopback
+ * listener, which accepts unauthenticated local requests. If the restart then failed, nothing would
+ * bind that port again and another local process could take it. A Link Child whose proxy is not
+ * running has nothing to stop, and the restart proceeds.
+ */
+export async function assertSchedulerRestartTargetAllowed(deps: {
+  linkChild?: () => boolean;
+  findProxy?: () => Promise<unknown | null>;
+} = {}): Promise<void> {
+  let linkChild: boolean;
+  try {
+    linkChild = (deps.linkChild ?? (() => {
+      const state = readClientConnectionState();
+      return state.kind === "connected" && state.value.transport === "link";
+    }))();
+  } catch {
+    throw new Error("The client connection state could not be read, so the restart cannot tell whether this is a linked Child; nothing was changed.");
+  }
+  if (!linkChild) return;
+  const live = await (deps.findProxy ?? (() => findLiveProxy({ ...SERVICE_STOP_LIVENESS, acceptPackageTreeFenced: true })))();
+  if (!live) return;
+  throw new Error("Nothing was changed, and this Child keeps serving under its existing task. 'ocx service restart' does not restart a Child connected over a Remote Link under Task Scheduler: "
+    + "stopping its proxy keeps Codex routed to the Child's unauthenticated loopback port, which another local process could take if the restart then failed.");
 }
 
 export async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult> {

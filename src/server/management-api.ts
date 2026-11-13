@@ -457,7 +457,11 @@ export async function handleManagementAPI(
     // touched and point at its tray, whose Stop it honours (#3008 refuses an undone stop the same way).
     const desktopRefusal = desktopSupervisedStopRefusal(principal);
     if (desktopRefusal) return jsonResponse(desktopRefusal, 409, req, config);
-    const holdsReceipt = deferralHonored(url, deferralMatchesReceipt);
+    // Only a receipt for this proxy's own port defers its teardown (#8416).
+    const { readRuntimePort } = await import("../config/process-state");
+    const servedPort = readRuntimePort(process.pid)?.port ?? config.port ?? null;
+    const ownsThisReceipt = (nonce: string | null) => deferralMatchesReceipt(nonce, servedPort);
+    const holdsReceipt = deferralHonored(url, ownsThisReceipt);
     // A sibling never runs under a service manager, and the installed service is the live
     // owner's: asking the manager to stop from here would refuse, or boot the owner's job out.
     const sibling = siblingOfLivePort() !== null;
@@ -535,7 +539,7 @@ export async function handleManagementAPI(
       // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
       // which is exactly why an intentional stop has to do it here — unless the caller is
       // `ocx stop`, which does it itself once the proxy is proven down.
-      const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
+      const teardown = await performStopTeardown(url, { ownsReceipt: ownsThisReceipt });
       if (teardown.sharedTeardown === "refused") return jsonResponse(teardown, 409, req, config);
       noteExplicitShutdownRequested(); // Accepted stops and signals remain irreversible.
       setTimeout(async () => {
