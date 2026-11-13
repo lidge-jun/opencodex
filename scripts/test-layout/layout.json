@@ -270,6 +270,7 @@
     "aside-client.test.ts": "providers",
     "aside-profiles-routes.test.ts": "server",
     "assert-mergeable-review.test.ts": "ci-workflows",
+    "test-git-isolation.test.ts": "ci-workflows",
     "audio-client.test.ts": "server",
     "audio-dictation.test.ts": "server",
     "audio-transcriptions.test.ts": "server",
