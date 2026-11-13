@@ -81,6 +81,34 @@ describe("ocx link recover", () => {
       expect(output).not.toHaveBeenCalled();
     },
   );
+
+  // A refusal names its code (and a closed-form hint) so alias_linked is never mistaken for child_residual, whose remedy
+  // (ocx-child detach on the machine) would there detach the other link. The server's message is never printed.
+  const stderr = () => errors.mock.calls.flat().map(String).join("\n");
+
+  test("alias_linked says another Home-initiated link holds the alias and what to do, in text and --json", async () => {
+    for (const json of [false, true]) {
+      errors.mockClear();
+      const f = fixture({ error: { code: "alias_linked", message: "server text" } }, 409);
+      expect(await runLinkCommand(["recover", "--link-id", ID, ...(json ? ["--json"] : [])], f.deps)).toBe(5);
+      expect(stderr()).toContain("alias_linked");
+      expect(stderr()).toContain("another Home-initiated link");
+      expect(stderr()).toContain("ocx link revoke");
+      expect(stderr()).not.toContain("server text");
+    }
+  });
+
+  test.each([
+    [409, "child_residual", "codex-home-owner", "child_residual (codex-home-owner)"],
+    [502, "remote_recover_failed", "ssh_failed", "remote_recover_failed (ssh_failed)"],
+    [502, "remote_recover_failed", "/home/someone/.cache path", "remote_recover_failed"],
+  ])("HTTP %d %s names the code and only a closed-form hint", async (status, code, hint, shown) => {
+    const f = fixture({ error: { code, hint, message: "server text" } }, status);
+    await runLinkCommand(["recover", "--link-id", ID], f.deps);
+    expect(stderr()).toContain(shown);
+    expect(stderr()).not.toContain("server text");
+    expect(stderr()).not.toContain("/home/someone");
+  });
 });
 
 describe("ocx link recover contract", () => {
