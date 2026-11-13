@@ -75,6 +75,8 @@ export function runGateCodex(options: {
   children: Array<ReturnType<typeof Bun.spawn>>; instructionsBytes?: number; streamMaxRetries?: number;
   /** Called with each line Codex writes to stderr, as it arrives (its retry and fallback notices). */
   onStderrLine?: (line: string) => void;
+  /** Called as soon as the Codex process exits, before its output is collected. */
+  onExit?: (code: number) => void;
 }): Promise<CodexRun> {
   const scratch = mkdtempSync(join(options.dir, "codex-"));
   const codexDir = join(scratch, "codex-home");
@@ -96,6 +98,7 @@ export function runGateCodex(options: {
     stdin: "stdin" in prompt ? new TextEncoder().encode(prompt.stdin) : "ignore", stdout: "pipe", stderr: "pipe",
   });
   options.children.push(child);
+  if (options.onExit) { const onExit = options.onExit; void child.exited.then(code => onExit(code)); }
   const stderr = (async () => {
     if (!options.onStderrLine) return await new Response(child.stderr).text();
     const decoder = new TextDecoder();
