@@ -23,8 +23,6 @@ function CandidateDetail({ candidate, localeTag }: { candidate: FlowCandidate; l
     parts.push(<FailedDetail key="why" status={candidate.httpStatus ?? 0} code={candidate.reasonCode} />);
   } else if (candidate.status === "skipped" && candidate.reasonCode) {
     parts.push(<ReasonText key="why" kind="skip" code={candidate.reasonCode} />);
-  } else if (candidate.status === "idle") {
-    parts.push(t(STATUS_TKEY.idle));
   }
   if (candidate.status !== "skipped" && candidate.status !== "idle") {
     if (candidate.ttftMs !== undefined) parts.push(`${t("routeLive.colTtft")} ${formatDuration(candidate.ttftMs, localeTag)}`);
