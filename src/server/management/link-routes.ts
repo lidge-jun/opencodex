@@ -311,14 +311,20 @@ async function removeReserved(
       });
       if (result === "changed") return fail("link_changed", "The link changed during removal.", 409);
       if (result === "revoke_failed") return fail("key_revoke_failed", "The link key could not be revoked.", 502);
-      // Same task as the commit, before any fallible cleanup: an open link WebSocket must not outlive its link (design T4 2.4).
+      // Same task as the commit: an open link WebSocket must not outlive its link (design T4 2.4).
       state.listener.closeLinkSockets?.(id);
       clearCompensationFailed(id, compensationPath());
       state.compensationFailures?.delete(id);
       await state.supervisor.reload();
       await reconcileLinkListener(ctx, state.listener);
       if (!clearLinkRetirement(owner, undefined, () => !readStoreFor(ctx).links.some(link => link.id === id))) return fail("link_remove_failed", "The link retirement changed during removal.", 503);
-    } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
+    } catch {
+      // The record can already be gone when a later step (route-intent reconciliation, the
+      // listener) fails. Its sockets close then too, in this task, rather than at the next sweep.
+      try { if (!readStoreFor(ctx).links.some(link => link.id === id)) state.listener.closeLinkSockets?.(id); }
+      catch { /* the store is unreadable; the per-message reauthorization still refuses its frames */ }
+      return fail("link_remove_failed", "The link record could not be removed.", 503);
+    }
     return Response.json({ linkId: id });
   } finally { release?.(); }
 }

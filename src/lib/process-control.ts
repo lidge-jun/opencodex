@@ -331,7 +331,7 @@ function drainDeadlineMs(): number {
 /** Graceful-first stop: management-API drain, then the platform kill ladder. */
 export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<boolean> {
   if (!isProcessAlive(pid)) return false;
-  const runtime = io.runtimeEndpoint ?? readRuntimePort(pid);
+  const runtime = io.runtimeEndpoint ?? (io.runtimeEndpointOnly ? null : readRuntimePort(pid));
   const { result: graceful, refusal } = await stopProxyGracefullyDetailed(pid, io);
   if (graceful === "refused") {
     // The proxy refused on purpose. Forcing would strip shared config while whatever owns

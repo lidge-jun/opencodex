@@ -411,12 +411,16 @@ describe("link management routes", () => {
     h.deps.writeLinkStore!({ ...h.store, links: [record, { ...record, id: survivor, apiKeyId: "key-2" }] });
     const path = join(temp, "route-intent.json");
     const intent = { version: 1, defaults: {}, devices: { home: { codex: { enabled: true } }, [id]: { codex: { enabled: true } }, [survivor]: { codex: { enabled: false } } }, revisions: { [id]: { codex: 1 }, [survivor]: { codex: 2 } } };
+    const closedSockets: string[] = [];
+    h.listener.closeLinkSockets = linkId => { closedSockets.push(linkId); };
     try {
       writeFileSync(path, "invalid");
       const first = await call(`/api/link/${id}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
       expect(first?.status).toBe(503);
       expect(h.config.apiKeys).toEqual([]);
       expect(h.store.links.map(link => link.id)).toEqual([survivor]);
+      // The record is gone although reconciliation failed: its sockets close in this request.
+      expect(closedSockets).toEqual([id]);
       writeFileSync(path, JSON.stringify(intent));
       const retry = await call(`/api/link/${id}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
       expect(retry?.status).toBe(200);

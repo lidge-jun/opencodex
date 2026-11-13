@@ -588,7 +588,7 @@ describe("POST /api/stop teardown", () => {
 
     const stopProxyFn = sliceFn(PROCESS_CONTROL_SOURCE, "export async function stopProxy(", "export function killProxy(");
     const refusedAt = stopProxyFn.indexOf('graceful === "refused"');
-    const killAt = stopProxyFn.indexOf("killProxy(pid)");
+    const killAt = stopProxyFn.indexOf("killProxy(pid");
     expect(refusedAt).toBeGreaterThan(-1);
     expect(refusedAt).toBeLessThan(killAt);
     expect(stopProxyFn).toContain("throw new ProxyOwnershipRefusedError(");
