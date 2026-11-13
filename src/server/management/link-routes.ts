@@ -506,7 +506,8 @@ async function removeReserved(
     };
     try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); written = tombstone; } catch (error) {
       if (error instanceof LinkTombstoneLimitError) {
-        return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
+        // No state claim: an earlier, interrupted attempt of a resumed revoke may already have revoked the key and stopped the tunnel.
+        return fail("tombstone_limit", "Too many forced revokes are waiting for cleanup, so this attempt was refused before its own effects. Recover them (ocx link recover --link-id <id>; ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
       }
       return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
     }
