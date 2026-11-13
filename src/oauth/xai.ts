@@ -537,7 +537,7 @@ export async function loginXaiDevice(
           // RFC 8628 §3.5: lengthen the interval by 5s and never poll faster than before. Kept
           // under the same ceiling so the sleep cannot overflow into an immediate retry.
           waitMs = Math.min(ttlMs, waitMs + 5_000);
-          nextWaitMs = waitMs;
+          nextWaitMs = Math.min(ttlMs, Math.max(waitMs, error.retryAfterMs ?? 0));
           continue;
         }
         // Still waiting for approval, or a network or server failure the grant can outlast.

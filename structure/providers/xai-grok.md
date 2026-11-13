@@ -131,7 +131,7 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   through `authorization_pending`, timeouts, network failures, 429 and 5xx, and ends on denial,
   expiry or cancellation. A retryable response's `Retry-After` (delta-seconds or HTTP-date, parsed
   by the same helper the refresh path uses) raises that one wait above the interval, floored at the
-  interval and bounded by the grant deadline, so the client honours the server's throttle without
+  interval (including a simultaneous `slow_down` increase) and bounded by the grant deadline, so the client honours the server's throttle without
   polling past expiry or handing an oversized delay to a timer. It never imports the local Grok CLI
   token. `ocx login xai --headless`,
   `ocx account login xai --device` and `POST /api/oauth/login` with `device: true` select it

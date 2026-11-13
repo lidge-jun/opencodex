@@ -250,6 +250,36 @@ describe("login terminal and code boundaries", () => {
     expect(await handleAccountAuthCommand("login", ["anthropic", `--unknown=${SECRET}`, "--code", "-"], f.deps)).toBe(2);
     expect(f.calls).toHaveLength(0); expect(f.reads()).toBe(0);
   });
+  test("xAI actual device handoff escapes injected lines while JSON remains exact", async () => {
+    const account = pathToFileURL(repoPath("src", "cli", "account-auth.ts")).href;
+    const xai = pathToFileURL(repoPath("src", "oauth", "xai.ts")).href;
+    const script = `import {handleAccountAuthCommand} from ${JSON.stringify(account)};
+      import {loginXaiDevice} from ${JSON.stringify(xai)};
+      const code = "한글\\nINJECTED\\u001b[31mفارسی\\u200c";
+      globalThis.fetch = async (url) => String(url).includes('well-known')
+        ? Response.json({authorization_endpoint:'https://auth.x.ai/a',token_endpoint:'https://auth.x.ai/t',device_authorization_endpoint:'https://auth.x.ai/d'})
+        : String(url).endsWith('/d') ? Response.json({device_code:'private-grant',user_code:code,verification_uri:'https://accounts.x.ai/verify'})
+        : Response.json({access_token:'private-token',refresh_token:'private-refresh',expires_in:3600});
+      let handoff; await loginXaiDevice({onAuth: x => handoff = x}, {sleep: async () => {}});
+      await handleAccountAuthCommand('login', ['xai','--device','--no-wait', ...(process.argv.includes('json-mode') ? ['--json'] : [])], {
+        baseUrl:'http://127.0.0.1:32100', fetchImpl: async () => Response.json(handoff)
+      });`;
+    for (const json of [false, true]) {
+      const child = Bun.spawn([process.execPath, "--eval", script, ...(json ? ["json-mode"] : [])], { cwd: home.root, env: { ...process.env, HOME: home.root, OPENCODEX_HOME: home.codexHome }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(stderr).toBe(""); expect(exit).toBe(0);
+      expect(stdout).not.toContain("private-grant"); expect(stdout).not.toContain("private-token");
+      if (json) {
+        const raw = JSON.parse(stdout);
+        expect(raw.deviceCode).toBe("한글\nINJECTED\u001b[31mفارسی\u200c");
+        expect(raw.instructions).toContain(raw.deviceCode);
+      } else {
+        expect(stdout).not.toContain("\nINJECTED"); expect(stdout).not.toContain("\u001b");
+        expect(stdout).toContain("한글\\x0aINJECTED\\x1b[31mفارسی\u200c");
+      }
+    }
+  });
+
   test("human instructions preserve intended lines but escape terminal controls", async () => {
     mkdirSync(home.codexHome, { recursive: true });
     // A file URL imports on every platform; a URL pathname is "/D:/..." on Windows.

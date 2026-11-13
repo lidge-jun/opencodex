@@ -427,6 +427,54 @@ describe("xAI device login", () => {
   // re-polling on the client interval; it is still bounded by the grant deadline.
   const throttled = (retryAfter: string) => new Response("", { status: 429, headers: { "retry-after": retryAfter } });
 
+  test("slow_down with 429 respects Retry-After and retains the increased interval", async () => {
+    const f = clockFixture();
+    try {
+      mockXai(boundedDevice({ expires_in: 900, interval: 1 }), [
+        Response.json({ error: "slow_down" }, { status: 429, headers: { "retry-after": "60" } }),
+        pending(), granted(),
+      ]);
+      await loginXaiDevice({}, { sleep: f.sleep });
+      expect(f.waits).toEqual([1_000, 60_000, 6_000]);
+    } finally { f.clock.mockRestore(); }
+  });
+
+  test("slow_down with malformed throttle uses its persistent interval", async () => {
+    const f = clockFixture();
+    try {
+      mockXai(boundedDevice({ expires_in: 900, interval: 1 }), [
+        Response.json({ error: "slow_down" }, { status: 429, headers: { "retry-after": "soon" } }), granted(),
+      ]);
+      await loginXaiDevice({}, { sleep: f.sleep });
+      expect(f.waits).toEqual([1_000, 6_000]);
+    } finally { f.clock.mockRestore(); }
+  });
+
+  test("slow_down throttle cannot poll after the grant deadline", async () => {
+    const f = clockFixture();
+    try {
+      const calls = mockXai(boundedDevice({ expires_in: 10, interval: 1 }), [
+        Response.json({ error: "slow_down" }, { status: 429, headers: { "retry-after": "60" } }),
+      ]);
+      await expect(loginXaiDevice({}, { sleep: f.sleep })).rejects.toMatchObject({ oauthError: "expired_token" });
+      expect(f.waits).toEqual([1_000, 9_000]);
+      expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
+    } finally { f.clock.mockRestore(); }
+  });
+
+  test("cancellation during a slow_down throttle does not issue another poll", async () => {
+    const cancel = new AbortController();
+    const calls = mockXai(boundedDevice({ expires_in: 900, interval: 1 }), [
+      Response.json({ error: "slow_down" }, { status: 429, headers: { "retry-after": "60" } }),
+    ]);
+    const waits: number[] = [];
+    await expect(loginXaiDevice({ signal: cancel.signal }, { sleep: async ms => {
+      waits.push(ms); if (waits.length === 2) { cancel.abort(); throw cancel.signal.reason; }
+    } })).rejects.toBeDefined();
+    expect(waits).toEqual([1_000, 60_000]);
+    expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
+  });
+
   test("a 429 Retry-After delay beyond the poll interval is honored", async () => {
     const f = clockFixture();
     try {

@@ -292,11 +292,11 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
       // One atomic pre-poll block, flushed synchronously so a piped parent
       // reads the URL before the polling window starts (#1007).
       writeLoginInstructions([
-        start.url ? `Open this URL to sign in:\n${start.url}` : "",
-        start.deviceCode ? `Device code: ${start.deviceCode}` : "",
+        start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
+        start.deviceCode ? `Device code: ${terminalSafeText(start.deviceCode)}` : "",
         start.instructions ?? "",
         start.browserLaunch === "failed" ? BROWSER_LAUNCH_FAILED_HINT : "",
-        start.flowId ? `Flow: ${start.flowId}` : "",
+        start.flowId ? `Flow: ${terminalSafeText(start.flowId)}` : "",
       ]);
     }
     if (code && !start.flowId) throw new Error("Code submission requires a returned flow id");
@@ -349,9 +349,9 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   }, pinned));
   if (!wantsJson) {
     writeLoginInstructions([
-      start.url ? `Open this URL to sign in:\n${start.url}` : "",
-      start.instructions ?? "",
-      start.deviceCode ? `Device code: ${start.deviceCode}` : "",
+      start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
+      provider === "xai" && device ? terminalSafeText(start.instructions ?? "") : start.instructions ?? "",
+      start.deviceCode ? `Device code: ${terminalSafeText(start.deviceCode)}` : "",
     ]);
   }
   if (code) {
