@@ -1138,6 +1138,26 @@ script wrappers; uninstall restores the saved launcher. See the
 trial while retaining the native Codex login. This is an experimental relay, not a guarantee
 that every Codex build or exhausted-account state can recover its composer.
 
+On a standalone local dashboard, first run the command shown in the panel, for example
+`ocx gui pair --desktop --origin http://127.0.0.1:10100`, on the proxy computer and paste
+its secret one-use code. Install the CLI first if `ocx` is unavailable. A private-home
+permission refusal must be resolved before a code can be issued. An ordinary pairing code or
+an already paired dashboard alone does not authorize Desktop actions. The panel exchanges the
+Desktop code for scope on the existing session, then reads `/authorization` to verify it;
+it does not create or replace the browser session. This authorizes Desktop actions for at most
+five minutes in that session; it does not change Remote Link or key-disclosure permissions.
+See [Desktop authorization](/reference/management-api/#desktop-authorization) for the API contract.
+Hub and connected-client Desktop writes are unsupported.
+If authorization is unavailable, use the standalone dashboard directly over HTTP on the proxy
+computer at the configured loopback address and port. If the configured `hostname` is
+`localhost` or a non-loopback address such as `0.0.0.0`, set it to `127.0.0.1` or `::1` in [config.json](/reference/configuration/), restart the proxy, and reopen the corresponding
+address and port. Other conditions, including forwarding and mismatched ports or sessions, can
+also make authorization unavailable; changing the hostname alone does not resolve those cases.
+A remembered dashboard session cannot redeem a Desktop grant. On the proxy computer, open the same local address and port in a private browser window, return to this panel, and request a new code there. After expiry or logout, reload the local dashboard and authorize again. The panel refreshes
+status, fingerprint and settings revision; select the desired action and consent again.
+It never replays an earlier POST. Certificate expiry or unknown trust does not prevent this
+local HTTP authorization; cleanup, renewal, stopping and turning off startup still require it.
+
 1. Inspect status, prepare the encrypted certificate and review its fingerprint before
    registering trust. Windows may ask for confirmation. Trust applies to the current Windows
    user and allows the local relay to handle `chatgpt.com` traffic.

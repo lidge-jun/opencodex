@@ -5,7 +5,7 @@ import { validatedCodexExecInvocationAsync } from "../codex/exec-boundary";
 import { MessageBudget } from "./budget";
 import { isRecord } from "./types";
 
-export interface QueueMcpOptions { codex: string; codexHome: string; allowReplyRead?: boolean }
+export interface QueueMcpOptions { codex: string; codexHome: string; allowReplyRead?: boolean; allowResume?: boolean; resumeSocket?: string; resumePermissions?: string }
 export type QueueRpcResult = { status: "response"; result: Record<string, unknown> }
   | { status: "not_sent" | "unknown"; error: { code: string } };
 

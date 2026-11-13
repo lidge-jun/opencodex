@@ -58,7 +58,8 @@ export type AnthropicSpendOutcome =
 
 export interface AnthropicResetGrantController {
   entries: Record<string, AnthropicGrantEntry>;
-  refresh: (accountId: string) => Promise<void>;
+  /** `keepSnapshot` re-reads without blanking a ready entry (and the row badge) while the read runs. */
+  refresh: (accountId: string, options?: { keepSnapshot?: boolean }) => Promise<void>;
   spend: (accountId: string, request: { grantId: string; operationId: string }) => Promise<AnthropicSpendOutcome>;
 }
 
@@ -131,11 +132,42 @@ export function unspentResets(snapshot: AnthropicResetGrantSnapshot): number {
   return snapshot.grants.reduce((total, grant) => total + grant.resetsLeft, 0);
 }
 
-/** The grant a spend would use: the first one the server's gate would accept now. */
+/** Why one grant cannot be spent now; mirrors the server gate's per-grant order. */
+export type AnthropicGrantBlocker = "paused" | "not_usable" | "exhausted" | "not_limited";
+
+export function grantBlocker(snapshot: AnthropicResetGrantSnapshot, grant: AnthropicResetGrant): AnthropicGrantBlocker | null {
+  if (grant.paused) return "paused";
+  if (!grant.usableNow) return "not_usable";
+  if (grant.resetsLeft <= 0) return "exhausted";
+  if (grant.useRequiresLimit && !snapshot.atLimit) return "not_limited";
+  return null;
+}
+
+/** Whether the dialog may offer this grant: the snapshot allows spending and the grant has no blocker. */
+export function grantSelectable(snapshot: AnthropicResetGrantSnapshot, grant: AnthropicResetGrant): boolean {
+  return snapshot.eligible && snapshot.journalAvailable && grantBlocker(snapshot, grant) === null;
+}
+
+function expiryRank(grant: AnthropicResetGrant): number {
+  if (!grant.endsAt) return Number.POSITIVE_INFINITY;
+  const parsed = Date.parse(grant.endsAt);
+  // An unparsable end date sorts last so it can never pose as the nearest expiry.
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
+/**
+ * The grant a spend uses unless the user picks another: of the grants the server's
+ * gate would accept now, the one that expires first (ties and undated grants keep
+ * upstream order). Every grant spends one reset and an unused grant is lost at its
+ * end date, so spending the soonest-expiring one first wastes the fewest.
+ */
 export function spendableGrant(snapshot: AnthropicResetGrantSnapshot): AnthropicResetGrant | undefined {
-  if (!snapshot.eligible || !snapshot.journalAvailable) return undefined;
-  return snapshot.grants.find(grant => !grant.paused && grant.usableNow && grant.resetsLeft > 0
-    && (!grant.useRequiresLimit || snapshot.atLimit));
+  let best: AnthropicResetGrant | undefined;
+  for (const grant of snapshot.grants) {
+    if (!grantSelectable(snapshot, grant)) continue;
+    if (!best || expiryRank(grant) < expiryRank(best)) best = grant;
+  }
+  return best;
 }
 
 function errorCode(value: unknown): string {
@@ -223,8 +255,8 @@ export function useAnthropicResetGrants({ apiBase, provider = "anthropic", accou
     return () => { epoch.current += 1; };
   }, [enabled, identity, read]);
 
-  const refresh = useCallback(async (accountId: string) => {
-    setEntry(accountId, { status: "loading" });
+  const refresh = useCallback(async (accountId: string, options: { keepSnapshot?: boolean } = {}) => {
+    if (!options.keepSnapshot) setEntry(accountId, { status: "loading" });
     await read(accountId, epoch.current);
   }, [read, setEntry]);
 

@@ -215,6 +215,9 @@ describe("decodeRequestBody", () => {
     // 100MB is over the old limit and under the current one, so it must now decode.
     const OLD_CAP = 64 * 1024 * 1024;
     const between = new Uint8Array(OLD_CAP + 36 * 1024 * 1024); // ~100MB, < MAX_DECOMPRESSED_BODY_BYTES
+    // Screenshot payloads barely compress, so the body is random bytes, not zeros: an all-zero body
+    // compresses 32,000:1, which the compression-ratio bound (#3023) rightly refuses as a bomb.
+    for (let offset = 0; offset < between.byteLength; offset += 65_536) crypto.getRandomValues(between.subarray(offset, offset + 65_536));
     expect(between.byteLength).toBeGreaterThan(OLD_CAP);
     expect(between.byteLength).toBeLessThan(MAX_DECOMPRESSED_BODY_BYTES);
     const compressed = Bun.zstdCompressSync(between);

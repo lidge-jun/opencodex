@@ -20,6 +20,7 @@ import { packageVersion } from "../../src/lib/package-version";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { buildPeerFeatures } from "../../src/remote/features";
 import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
+import { LINK_REQUEST_ZSTD_FEATURE } from "../../src/link/request-compression";
 
 const key = `ocx_data_${"a".repeat(40)}`;
 const keyId = "test-link-key", linkId = "lnk_0123456789abcdef";
@@ -106,6 +107,13 @@ describe("compatibility verdicts", () => {
     expect(newer.reasons[0]).toContain("Upgrade the Home");
   });
 
+  test("an optional feature a Child uses only when its Home offers it never makes the Home degraded", () => {
+    const child = linkPeerStatus(home, entry(peers => peers.observe(linkId, "2",
+      { reported: true, version: "2.101.0", features: ["relay-auth/2", LINK_PEER_REPORT_FEATURE, LINK_REQUEST_ZSTD_FEATURE] })));
+    expect(child.compatibility).toBe("compatible");
+    expect(child.reasons.join(" ")).not.toContain("Upgrade");
+  });
+
   test("a partial report is unknown: a valid version with a rejected feature list proves nothing about features", () => {
     const noFeatures = linkPeerStatus(home, entry(peers => peers.observe(linkId, "2", { reported: true, version: "2.95.0", features: null })));
     expect(noFeatures).toMatchObject({ compatibility: "unknown", version: "2.95.0", versionRange: null });
@@ -151,7 +159,9 @@ describe("the report on the wire", () => {
         { tunnelPort: port, admissionKey: key, apiKeyId: keyId, linkId }, { tunnel: HOME_INITIATED_LINK_TUNNEL });
       expect(response.status).toBe(200);
       await response.arrayBuffer();
-      expect(observed().observed).toMatchObject({ relayAuth: LINK_RELAY_AUTH_VERSION, version: packageVersion(), features: buildPeerFeatures() });
+      // Per-body zstd is not reported: a Home older than it counts every feature it does not serve as used.
+      expect(observed().observed).toMatchObject({ relayAuth: LINK_RELAY_AUTH_VERSION, version: packageVersion(),
+        features: buildPeerFeatures().filter(id => id !== LINK_REQUEST_ZSTD_FEATURE) });
       const local = localLinkPeer(packageVersion(), buildPeerFeatures());
       expect(linkPeerStatus(local, observed())).toMatchObject({ compatibility: "compatible", version: packageVersion() });
     });
