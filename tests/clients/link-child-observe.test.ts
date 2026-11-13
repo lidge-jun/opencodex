@@ -33,8 +33,9 @@ function deps(answer: SshResult | (() => SshResult | Promise<SshResult>), overri
     runner: { run: async argv => { calls.push([...argv]); return typeof answer === "function" ? answer() : answer; } },
     knownHostsFile: "/tmp/known_hosts", homeVersion: "2.100.0", peer: () => peer("2.97.0"),
     platformOf: async () => "posix",
-    inspect: async (_runner, _alias, _known, platform) => {
-      inspections.push(platform);
+    inspect: async (_runner, _alias, route, _known, platform) => {
+      // The link's explicit route travels with the inspection; these records have none.
+      inspections.push(route === null ? platform : "routed:" + platform);
       return { runtimeKind: "full", targetTriple: null, rawArch: "x86_64", ocxVersionLine: "opencodex 2.96.0" } satisfies ParsedRemoteRuntimeInspection;
     },
     now: () => NOW,
