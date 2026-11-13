@@ -1230,7 +1230,7 @@
     "management-workflow-budget-routes.test.ts": "server",
     "managing-cli.test.ts": "service",
     "memory-watchdog.test.ts": "server",
-    "meta-model-api-provider.test.ts": "providers", "meta-muse-wonder.test.ts": "providers",
+    "meta-model-api-provider.test.ts": "providers", "meta-muse-wonder.test.ts": "providers", "morph-ultra-provider.test.ts": "providers",
     "meta-muse-oauth.test.ts": "providers",
     "meta-muse-keychain.test.ts": "providers",
     "oauth-meta-muse-login-diagnostics.test.ts": "oauth",
