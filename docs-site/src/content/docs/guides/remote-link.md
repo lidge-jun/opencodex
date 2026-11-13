@@ -129,7 +129,7 @@ Select **Disconnect** for the Child and confirm the alias. The Home stops the tu
 
 A revoke never clears a tombstone an earlier forced revoke left for that link. After a confirmed cleanup, `ocx link recover --link-id <id>` clears it once the link is gone. After an unbound cleanup of an older Child, recover cannot prove the machine was cleaned: check the machine, then have a person on the Home run `ocx link recover --forget --link-id <id> --yes`. Until then the tombstone counts toward the 256 limit.
 
-If the Home cannot reach the Child to run its disconnect command, choose **Remove here only**. This removes the local tunnel, key, and record. Then log in to the Child and run:
+If the Home cannot reach the Child to run its disconnect command, choose **Remove here only**. This removes the local tunnel, key, and record. Then log in to the Child and, only if it is still connected to this link (`ocx connect status --json` shows its link id; a link, hub or Home that owns it now must be left alone), run:
 
 ```bash
 ocx disconnect   # or ~/.cache/opencodex/bin/ocx-child detach on a lightweight Child

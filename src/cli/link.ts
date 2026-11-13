@@ -61,7 +61,7 @@ ${LINK_OPERATIONS_USAGE.join("\n")}
 ${LINK_CHILD_OPS_USAGE.join("\n")}
 ${LINK_CAPTURE_USAGE.join("\n")}
 
-Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
+Forced revoke skips remote cleanup. Run ocx disconnect on the remote client only after checking there that it is still connected to this link.
 An explicit route (--proxy-command, --ssh-user and --ssh-port, with --exclusive) reaches ssh on the command line for every command and tunnel of the link, so ssh_config cannot change it; an exclusive link refuses route edits.
 Recover cleans an ephemeral Child a forced revoke or an interrupted enrollment left behind, over the link's pinned SSH trust.
 Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
@@ -432,8 +432,10 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
   }
   if (force) {
     const recovery = wasEphemeral
-      ? `Run ocx link recover --link-id ${linkId} once the machine answers, or ~/.cache/opencodex/bin/ocx-child detach on it.`
-      : "Run ocx disconnect on the remote client.";
+      // Never a bare local disconnect: a forced revoke is also the remedy when the Child now belongs to another link, a hub or
+      // another Home, and a disconnect run there would remove that link. The link-bound recover checks ownership itself.
+      ? `Run ocx link recover --link-id ${linkId} once the machine answers: it cleans the machine only while it still belongs to this link. Run ~/.cache/opencodex/bin/ocx-child detach on it by hand only after checking that no other link owns it.`
+      : "Before running ocx disconnect on the remote client, check there that it is still connected to this link (ocx connect status --json shows its link id); if another link, a hub or another Home owns it now, leave it as it is.";
     printData({ linkId, remoteCleanup, recovery, ...(operationId !== undefined && recordedOutcome !== undefined ? { operationId, outcome: recordedOutcome } : {}) }, wantsJson, [
       remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,
       recovery,

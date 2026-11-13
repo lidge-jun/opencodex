@@ -135,7 +135,7 @@ Seleccione **Desconectar** para el Child y confirme el alias. El Home detiene el
 
 Una revocación nunca borra la lápida que dejó para ese enlace una revocación forzada anterior. Tras una limpieza confirmada, `ocx link recover --link-id <id>` la borra cuando el enlace ya no existe. Tras una limpieza sin comprobación de un Child más antiguo, la recuperación no puede probar que el equipo quedó limpio: revise el equipo y luego pida a una persona en el Home que ejecute `ocx link recover --forget --link-id <id> --yes`. Hasta entonces, la lápida cuenta para el límite de 256.
 
-Si el Home no puede alcanzar el Child para ejecutar su comando de desconexión, elija **Eliminar aquí solamente**. Esto elimina el túnel local, la clave y el registro. A continuación, inicie sesión en el Child y ejecute:
+Si el Home no puede alcanzar el Child para ejecutar su comando de desconexión, elija **Eliminar aquí solamente**. Esto elimina el túnel local, la clave y el registro. A continuación, inicie sesión en el Child y, solo si sigue conectado a este enlace (`ocx connect status --json` muestra su identificador de enlace; un enlace, hub o Home que ahora lo posea debe dejarse como está), ejecute:
 
 ```bash
 ocx disconnect   # or ~/.cache/opencodex/bin/ocx-child detach on a lightweight Child
