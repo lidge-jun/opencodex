@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fixturePath, repoPath } from "../helpers/repo-root";
-import { rustToolchainEnv } from "../helpers/rust-toolchain-env";
+import { OCX_CHILD_CARGO_RUN_MS, ocxChildCargoTest, ocxChildToolchain } from "../helpers/ocx-child-cargo";
 import { linkWebsocketStateProof } from "../../src/link/relay-auth";
 
 // Lane T6-4: ocx-child's link WebSocket gate opens only in a build with the link-ws-test-gate Cargo
@@ -38,30 +38,10 @@ describe("ocx-child link WebSocket test gate", () => {
     ]);
   });
 
-  // CI reaches ocx-child only through tests like these, so both Cargo runs happen here too. The file runs
-  // alone (SERIAL_FULL_SUITE_FILES in scripts/test.ts) inside the batch runner's 120 s process deadline, so
-  // each run is bounded well inside it.
-  const toolchain = rustToolchainEnv("cargo");
-  const manifest = repoPath("native", "ocx-child", "Cargo.toml");
-  const runCargo = (args: string[]) => {
-    const run = Bun.spawnSync([toolchain.bin!, "test", "--locked", "--manifest-path", manifest, ...args], {
-      env: toolchain.env,
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 100_000,
-    });
-    if (run.signalCode) throw new Error(`cargo test ${args.join(" ")} ended by ${run.signalCode}:\n${run.stderr.toString()}`);
-    expect(run.exitCode, `${run.stderr.toString()}\ntoolchain: ${toolchain.describe()}`).toBe(0);
-    return run.stdout.toString();
-  };
-
-  test.skipIf(toolchain.bin === null)("without the feature the link WebSocket unit tests pass and the gate stays closed", () => {
-    const out = runCargo(["--lib", "link_ws"]);
+  // CI reaches ocx-child only through tests like these. This file makes the run without the feature;
+  // link-ocx-child-ws-feature.test.ts makes the one with it, so each Cargo run has a process to itself.
+  test.skipIf(ocxChildToolchain.bin === null)("without the feature the link WebSocket unit tests pass and the gate stays closed", () => {
+    const out = ocxChildCargoTest(["--lib", "link_ws"]);
     expect(out).toContain("link_ws_advert::tests::gate_stays_closed_without_the_test_feature ... ok");
-  }, 100_000);
-
-  test.skipIf(toolchain.bin === null)("with the feature the real-binary link WebSocket tests pass", () => {
-    const out = runCargo(["--features", "link-ws-test-gate", "--test", "link_websocket"]);
-    expect(out).toContain("with_the_gate_an_advertising_home_carries_frames_both_ways ... ok");
-  }, 100_000);
+  }, OCX_CHILD_CARGO_RUN_MS);
 });

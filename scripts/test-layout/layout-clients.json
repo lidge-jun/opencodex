@@ -245,5 +245,6 @@
   "cli-link-operation.test.ts": "cli",
   "link-operations-journal.test.ts": "clients",
   "link-revoke-suspend.test.ts": "clients",
-  "link-ocx-child-ws-gate.test.ts": "clients"
+  "link-ocx-child-ws-gate.test.ts": "clients",
+  "link-ocx-child-ws-feature.test.ts": "clients"
 }
