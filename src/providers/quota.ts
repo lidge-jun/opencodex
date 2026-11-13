@@ -209,7 +209,7 @@ function notifyProviderQuotaSnapshot(
   // Resolved here, synchronously, while the identity is still the one that produced these
   // reports.
   // Claude CLI rows are display-only: one reset key would span every account that signs in.
-  const current = captureObservationAuthority(config), observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
+  const current = captureObservationAuthority(config, reports), observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
     report,
     scope: report.provider,
     accountKey: providerObservationAccountKey(report.provider, config, report),

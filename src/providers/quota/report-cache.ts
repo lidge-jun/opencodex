@@ -7,6 +7,7 @@ import { CODEX_EXHAUSTED_USAGE_PERCENT, withoutRetiredCodexQuota, type StoredAcc
 import { isMainAccountIdentityGenerationLive } from "../../codex/main-account-cache";
 import { codexPlanKey } from "../../codex/plan";
 import { isKeychainReference, resolveProviderApiKey } from "../key-store";
+import { passiveKeychainGeneration, peekResolvedProviderKey } from "../api-key-resolve";
 import { resolveEnvValue } from "../../config/proxy-env";
 import { apiKeyPoolEntryId } from "../api-keys";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../registry";
@@ -178,14 +179,34 @@ export function providerReportEpochChanged(captured: ReadonlyMap<string, number>
 }
 
 /** Capture publication authority before queued reset observations can yield. */
-export function captureObservationAuthority(config: OcxConfig): (report: ProviderQuotaReport) => boolean {
+export function captureObservationAuthority(config: OcxConfig, reports: readonly ProviderQuotaReport[]): (report: ProviderQuotaReport) => boolean {
   const epoch = invalidationEpoch;
   const providerEpochs = captureProviderReportEpochs();
+  const keychainProofs = new Map<ProviderQuotaReport, { reference: string; generation: number } | undefined>();
+  for (const report of reports) {
+    const reference = config.providers[report.provider]?.apiKey;
+    if (!keyReportCredentialIds.has(report) || !isKeychainReference(reference)) continue;
+    keychainProofs.set(report, undefined);
+    const key = peekResolvedProviderKey(reference);
+    const generation = key === undefined ? undefined : passiveKeychainGeneration(reference, key);
+    if (key?.trim() && generation !== undefined && createHash("sha256").update(key.trim()).digest("hex") === keyReportCredentialIds.get(report)) {
+      keychainProofs.set(report, { reference, generation });
+    }
+  }
   return report => {
     const provider = config.providers[report.provider];
+    const proof = keychainProofs.get(report);
+    const key = proof && provider?.apiKey === proof.reference ? peekResolvedProviderKey(proof.reference) : undefined;
+    const destination = keyReportDestinations.get(report);
+    const keyCurrent = keychainProofs.has(report)
+      ? !!proof && !!provider && !provider.disabled && (provider.authMode ?? "key") === "key"
+        && destination?.adapter === provider.adapter && destination.baseUrl === provider.baseUrl
+        && !!key?.trim() && passiveKeychainGeneration(proof.reference, key) === proof.generation
+        && createHash("sha256").update(key.trim()).digest("hex") === keyReportCredentialIds.get(report)
+      : keyReportCredentialCurrent(report, provider, true);
     return epoch === invalidationEpoch && !providerReportEpochChanged(providerEpochs, report.provider)
       && reportOwnerCurrent(report, provider) && isProviderQuotaReportCurrent(report)
-      && keyReportCredentialCurrent(report, provider, true);
+      && keyCurrent;
   };
 }
 

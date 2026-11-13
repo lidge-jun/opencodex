@@ -17,6 +17,7 @@ import { classifyUpstreamCondition } from "../../src/lib/upstream-condition";
 import { MistralBudgetPacer, resolveMistralTransport } from "../../src/providers/mistral-transport";
 import { runPassiveRead } from "../../src/lib/passive-read";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
+import { invalidateResolvedProviderKeyCache, resolveProviderApiKey } from "../../src/providers/api-key-resolve";
 import type { OcxConfig } from "../../src/types";
 import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns, selectProactiveApiKey } from "../../src/providers/key-failover";
@@ -60,6 +61,66 @@ afterEach(() => {
 });
 
 describe("Mistral budget probe", () => {
+  test("unchanged cached keychain credential records baseline and rollover without observation reads", async () => {
+    const cfg = { defaultProvider: "mistral", providers: { mistral: { ...provider, apiKey: "keychain:fixture" } } } as OcxConfig;
+    let reads = 0, after = false;
+    setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => { reads++; return ` ${provider.apiKey} `; }, setPassword: () => {}, deletePassword: () => true }));
+    const now = Date.now();
+    globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? subscription : {
+      ...budget, api_budget: { ...budget.api_budget, usage_percentage: after ? 2 : 90, reset_at: new Date(now + (after ? 3600000 : -60000)).toISOString() },
+      vibe_budget: { ...budget.vibe_budget, usage_percentage: after ? 2 : 90, reset_at: new Date(now + (after ? 3600000 : -60000)).toISOString() },
+    })) as typeof fetch;
+    const events: unknown[] = []; resetObserver.setQuotaResetSink(event => events.push(event));
+    const observed = spyOn(resetObserver, "observeQuotaSnapshot");
+    try {
+      expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(1);
+      const baselineReads = reads; await flushProviderQuotaObservationsForTests();
+      expect(reads).toBe(baselineReads); expect(observed).toHaveBeenCalledTimes(1);
+      after = true;
+      expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(1);
+      const rolloverReads = reads; await flushProviderQuotaObservationsForTests();
+      expect(reads).toBe(rolloverReads); expect(observed).toHaveBeenCalledTimes(2);
+      expect(events).toHaveLength(2);
+    } finally {
+      await flushProviderQuotaObservationsForTests(); observed.mockRestore();
+      resetObserver.setQuotaResetSink(null); resetQuotaResetStoreForTests(); setProviderKeychainEntryFactoryForTests(null);
+    }
+  });
+  test.each(["replacement", "invalidation", "ABA", "reference"] as const)("cached keychain %s rejects a queued rollover and permits current-key recovery", async change => {
+    const reference = "keychain:fixture";
+    const cfg = { defaultProvider: "mistral", providers: { mistral: { ...provider, apiKey: reference } } } as OcxConfig;
+    let reads = 0, secret = provider.apiKey, after = false;
+    setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => { reads++; return secret; }, setPassword: () => {}, deletePassword: () => true }));
+    const now = Date.now();
+    globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? subscription : {
+      ...budget, api_budget: { ...budget.api_budget, usage_percentage: after ? 2 : 90, reset_at: new Date(now + (after ? 3600000 : -60000)).toISOString() },
+      vibe_budget: { ...budget.vibe_budget, usage_percentage: after ? 2 : 90, reset_at: new Date(now + (after ? 3600000 : -60000)).toISOString() },
+    })) as typeof fetch;
+    const events: unknown[] = []; resetObserver.setQuotaResetSink(event => events.push(event));
+    const observed = spyOn(resetObserver, "observeQuotaSnapshot");
+    const entered = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+    try {
+      await fetchProviderQuotaReports(cfg, true); await flushProviderQuotaObservationsForTests();
+      expect(observed).toHaveBeenCalledTimes(1);
+      after = true;
+      setProviderQuotaBeforeObservationForTests(async () => { entered.resolve(); await release.promise; });
+      await fetchProviderQuotaReports(cfg, true); await entered.promise;
+      if (change === "reference") cfg.providers.mistral!.apiKey = provider.apiKey;
+      else invalidateResolvedProviderKeyCache();
+      if (change === "replacement" || change === "ABA") { secret = "replacement-key"; resolveProviderApiKey(reference); }
+      if (change === "ABA") { invalidateResolvedProviderKeyCache(); secret = provider.apiKey; resolveProviderApiKey(reference); }
+      const before = reads;
+      setProviderQuotaBeforeObservationForTests(null); release.resolve(); await flushProviderQuotaObservationsForTests();
+      expect(reads).toBe(before); expect(observed).toHaveBeenCalledTimes(1); expect(events).toEqual([]);
+      cfg.providers.mistral!.apiKey = reference;
+      await fetchProviderQuotaReports(cfg, true); const recoveryReads = reads; await flushProviderQuotaObservationsForTests();
+      expect(reads).toBe(recoveryReads); expect(observed).toHaveBeenCalledTimes(2);
+      expect(events).toHaveLength(change === "replacement" ? 0 : 2);
+    } finally {
+      setProviderQuotaBeforeObservationForTests(null); release.resolve(); await flushProviderQuotaObservationsForTests();
+      observed.mockRestore(); resetObserver.setQuotaResetSink(null); resetQuotaResetStoreForTests(); setProviderKeychainEntryFactoryForTests(null);
+    }
+  });
   test("an unchanged unbound keychain provider still observes without another keychain read", async () => {
     const cfg = { defaultProvider: "deepseek", providers: { deepseek: { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.deepseek.com/v1", apiKey: "keychain:fixture" } } } as OcxConfig;
     let reads = 0;
