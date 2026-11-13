@@ -585,7 +585,19 @@ function journalledRevokeError(error: unknown, operationId: string): unknown {
   if (!(error instanceof RuntimeApiError) || !isRecord(error.body) || !isRecord(error.body.error) || typeof error.body.error.code !== "string") return error;
   const code = error.body.error.code;
   if (code === "operation_journal_full") return new RuntimeApiError(journalFullGuidance(error.body), error.status, error.body);
+  if (Object.hasOwn(REVOKE_REFUSALS, code)) return new RuntimeApiError(REVOKE_REFUSALS[code] + " (code " + code + ")", error.status, error.body);
   const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" ? error.body.outcome : undefined;
   const resolve = outcome === "unknown" ? "; check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
   return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve, error.status, error.body);
 }
+
+/**
+ * Refusals of a journalled revoke that come before it changes anything (a closed list; any other code, including ones
+ * a newer Home adds, keeps the generic text and makes no such claim).
+ */
+const REVOKE_REFUSALS: Record<string, string> = {
+  operation_mismatch: "This operation id was already used with other parameters. Nothing was changed; repeat it with the flags of its first attempt, or use a new operation id.",
+  link_operation_open: "An unfinished revoke holds this link; repeat it with its own operation id to settle it first. Nothing was changed.",
+  link_operation_in_progress: "Another link operation for this alias or link is running. Nothing was changed; retry when it ends.",
+  operation_journal_unreadable: "The link operation journal (<configDir>/link/operations.json) is damaged. Nothing was changed; keep a copy, move it aside and retry. ocx link revoke --force without --operation-id still runs.",
+};
