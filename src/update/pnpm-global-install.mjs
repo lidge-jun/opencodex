@@ -529,9 +529,19 @@ export function readPnpmGlobalPackage(
 
   let tree;
   // A legacy global group keeps the verification it had before global-store support: no store
-  // query, no store argument. The verifier still refuses any package that uses store links
-  // without a selected store, so a global-store layout cannot pass on this branch.
-  const globalStore = constraints.owner?.globalStore === true;
+  // query, no store argument. Path spelling only says a store proof may be needed; it cannot tell a
+  // global-store link from a legacy group under a vN/links directory. During owner discovery the
+  // released legacy verdict is therefore tried first, and only a tree it refuses must earn the store
+  // proof. Every accepted tree is either one the released verifier accepted or one pnpm's own store
+  // answer vouches for. A pinned global-store owner (preflight, readback, rollback) is never demoted.
+  let globalStore = constraints.owner?.globalStore === true;
+  if (globalStore && constraints.legacyFirst === true) {
+    try {
+      const legacy = verify(packagePath, version);
+      if (legacy?.ok && (!constraints.expectedPackagePath || constraints.expectedPackagePath === packagePath
+        || verify(constraints.expectedPackagePath, version)?.ok)) globalStore = false;
+    } catch { /* the store proof below decides */ }
+  }
   let storeResult = { ok: true };
   if (globalStore) {
     storeResult = readPnpmStore(runPnpm, constraints.owner, platform, constraints.env);
@@ -576,6 +586,7 @@ export function readPnpmGlobalPackage(
     globalDir: expectedGlobalDir,
     globalRoot: rootPath || expectedGlobalRoot,
     globalBinDir,
+    globalStore,
     ...(globalStore ? {
       store: storeResult.store,
       storePath: storeResult.storePath,
@@ -660,6 +671,7 @@ export function resolvePnpmGlobalOwner({
       verify,
       {
         owner,
+        legacyFirst: true,
         expectedPackagePath: packagePath,
         expectedGlobalDir: globalDir,
         expectedGlobalRoot: globalRoot,
@@ -672,8 +684,9 @@ export function resolvePnpmGlobalOwner({
       },
     );
     if (active.ok) {
-      return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version,
-        ...(globalStore ? { store: active.store, storePath: active.storePath, virtualStoreDirs: active.virtualStoreDirs, homeAnchor: active.homeAnchor } : {}) } };
+      const { globalStore: _classified, ...base } = owner;
+      return { ok: true, owner: { ...base, packagePath: active.path, version: active.version,
+        ...(active.globalStore ? { globalStore: true, store: active.store, storePath: active.storePath, virtualStoreDirs: active.virtualStoreDirs, homeAnchor: active.homeAnchor } : {}) } };
     }
     lastReason = active.reason;
   }

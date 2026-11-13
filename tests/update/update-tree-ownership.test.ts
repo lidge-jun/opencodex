@@ -350,7 +350,10 @@ describe("#4202 install-tree dependency ownership", () => {
     if (!result.ok) expect(result.reason).toContain("outside the selected store");
   });
 
-  test("refuses a directly listed foreign custom-store package registered as the running package", () => {
+  // A tree the released (origin/dev) verifier accepts keeps that verdict: a path spelling cannot demand a
+  // store proof the legacy group never needed, so discovery binds it as a legacy owner with no store. The
+  // store-bound verifier, which every pinned global-store owner uses, still refuses it.
+  test("a directly listed foreign custom-store package keeps the released verdict and is never bound to the selected store", () => {
     const store = join(root, "selected", "v11"), globalRoot = join(root, "global", "v11");
     const foreign = join(root, "custom", "v11", "links", ...PKG.split("/"), "2.0.0", "hash", "node_modules", ...PKG.split("/"));
     const exposed = join(globalRoot, "node_modules", ...PKG.split("/"));
@@ -372,8 +375,10 @@ describe("#4202 install-tree dependency ownership", () => {
         return { status: 1 };
       },
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain("outside the selected store");
+    expect(verifyPnpmInstallTree(foreign, "2.0.0")).toMatchObject({ ok: true });
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) { expect(result.owner.globalStore).toBeUndefined(); expect(result.owner.store).toBeUndefined(); }
+    expect(verifyPnpmInstallTree(foreign, "2.0.0", store, globalRoot).failures.join(" ")).toContain("outside the selected store");
   });
 
   test("a pinned global-store owner refuses readback of a package moved outside its store", () => {
@@ -395,7 +400,7 @@ describe("#4202 install-tree dependency ownership", () => {
     if (!result.ok) expect(result.reason).toContain("outside the selected store");
   });
 
-  test("refuses a registered lookalike hidden in an intermediate package symlink", () => {
+  test("a lookalike links spelling in an intermediate symlink keeps the released verdict and is never bound to the selected store", () => {
     const store = join(root, "actual-store", "v11"), globalRoot = join(root, "global", "v11");
     const exposed = join(globalRoot, "node_modules", ...PKG.split("/"));
     const intermediate = join(root, "lookalike", "store", "v2", "links", "pkg", "node_modules", ...PKG.split("/"));
@@ -422,8 +427,10 @@ describe("#4202 install-tree dependency ownership", () => {
           return { status: 1 };
         },
       });
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.reason).toContain("outside the selected store");
+      expect(verifyPnpmInstallTree(listed, "2.0.0")).toMatchObject({ ok: true });
+      expect(result).toMatchObject({ ok: true });
+      if (result.ok) { expect(result.owner.globalStore).toBeUndefined(); expect(result.owner.store).toBeUndefined(); }
+      expect(verifyPnpmInstallTree(listed, "2.0.0", store, globalRoot).failures.join(" ")).toContain("outside the selected store");
     }
   });
 
@@ -981,8 +988,13 @@ describe("#4202 install-tree dependency ownership", () => {
     mkdirSync(join(lexicalGroup, "@bitkyc08"), { recursive: true });
     const exposed = join(lexicalGroup, ...PKG.split("/"));
     symlinkSync(target, exposed, "dir");
-    const result = verifyPnpmInstallTree(exposed, "2.0.0");
-    expect(result.ok).toBe(false);
-    expect(result.failures).toContain("pnpm global links are outside the selected store");
+    // Without a store this is the released verifier: the lexical group has no pnpm metadata, so it lends nothing.
+    const legacy = verifyPnpmInstallTree(exposed, "2.0.0");
+    expect(legacy.ok).toBe(false);
+    expect(legacy.failures).toEqual(["sentinel dependency missing: bun", "sentinel dependency missing: zod"]);
+    // With the store pnpm named, the package itself lies outside it.
+    const bound = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(bound.ok).toBe(false);
+    expect(bound.failures).toContain("pnpm global links are outside the selected store");
   });
 });

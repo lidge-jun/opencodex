@@ -598,12 +598,17 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store, global
       if (!inside(real, canonicalGlobalRoot)) return { ok: false, failures: ["pnpm package is outside the selected store and global group"] };
     } catch { return { ok: false, failures: ["pnpm global group could not be resolved"] }; }
   }
-  let globalLinks;
-  try {
-    globalLinks = packagePathUsesGlobalLinks(packageDir, store, lexicalStore) || (store && inside(real, store));
-  } catch (error) { return { ok: false, failures: [error?.message === "link is outside the selected store"
-    ? "pnpm global links are outside the selected store" : "pnpm package symlink chain could not be resolved"] }; }
-  if (globalLinks && (!store || !inside(real, store))) {
+  // Without a selected store this is the released legacy verifier, unchanged: a path spelling cannot
+  // tell a global-store link from a legacy group that happens to sit under a vN/links directory, so
+  // the legacy verdict stays exactly what it was. The store proof is only an additional way to accept.
+  let globalLinks = false;
+  if (store) {
+    try {
+      globalLinks = packagePathUsesGlobalLinks(packageDir, store, lexicalStore) || inside(real, store);
+    } catch (error) { return { ok: false, failures: [error?.message === "link is outside the selected store"
+      ? "pnpm global links are outside the selected store" : "pnpm package symlink chain could not be resolved"] }; }
+  }
+  if (globalLinks && !inside(real, store)) {
     return { ok: false, failures: ["pnpm global links are outside the selected store"] };
   }
   if (globalLinks) {
