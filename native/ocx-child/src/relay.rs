@@ -70,7 +70,7 @@ pub struct DeadlineStream {
 }
 
 impl DeadlineStream {
-    fn new(stream: TcpStream, deadline: Option<Instant>, per_read: Duration) -> Self {
+    pub(crate) fn new(stream: TcpStream, deadline: Option<Instant>, per_read: Duration) -> Self {
         Self {
             stream,
             deadline,
@@ -173,11 +173,52 @@ impl RequestLimits<'_> {
     }
 }
 
+/// A writer whose next write call can be given its own timeout.
+pub(crate) trait TimedWrite: Write {
+    fn set_write_timeout_left(&mut self, left: Duration) -> std::io::Result<()>;
+}
+
+impl TimedWrite for TcpStream {
+    fn set_write_timeout_left(&mut self, left: Duration) -> std::io::Result<()> {
+        self.set_write_timeout(Some(left))
+    }
+}
+
+/// Write all of `buf` before `deadline`: every write call gets only the time left (at most `cap`), so
+/// a peer draining a little at a time cannot stretch the whole write past the deadline.
+pub(crate) fn write_all_before<W: TimedWrite>(
+    w: &mut W,
+    mut buf: &[u8],
+    deadline: Instant,
+    cap: Duration,
+    now: &dyn Fn() -> Instant,
+) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        let left = deadline.saturating_duration_since(now()).min(cap);
+        if left.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "write deadline exceeded",
+            ));
+        }
+        w.set_write_timeout_left(left)?;
+        match w.write(buf) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(n) => buf = &buf[n..],
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    w.flush()
+}
+
 pub struct AuthenticatedUpstream {
     pub reader: BufReader<DeadlineStream>,
     pub writer: TcpStream,
     pub nonce: String,
     pub connection_generation: Option<String>,
+    /// Whether this very answer named the link WebSocket as on (verified; link_ws_advert).
+    pub link_ws_on: bool,
 }
 
 fn url_encode_component(s: &str) -> String {
@@ -210,6 +251,16 @@ pub fn open_authenticated_upstream(
     )
 }
 
+/// The Home leg of a link WebSocket (link_ws.rs): a data preflight on one connection, bounded by one
+/// setup deadline and cancellable by stop.
+pub(crate) fn open_link_ws_upstream(
+    tunnel_port: u16,
+    creds: &RelayCredentials,
+    limits: RequestLimits<'_>,
+) -> Result<AuthenticatedUpstream, UpstreamError> {
+    open_authenticated_upstream_with(tunnel_port, creds, false, limits)
+}
+
 fn open_authenticated_upstream_with(
     tunnel_port: u16,
     creds: &RelayCredentials,
@@ -238,6 +289,8 @@ fn open_authenticated_upstream_with(
     let challenge =
         create_relay_challenge(&creds.token_fingerprint, &creds.api_key_id, &creds.link_id)
             .map_err(UpstreamError::RelayAuthFailed)?;
+    // Taken before the preflight is written: it orders this answer's link WebSocket state.
+    let preflight_seq = crate::link_ws_advert::next_preflight();
 
     let target = format!(
         "{LINK_RELAY_AUTH_PATH}?version={LINK_RELAY_AUTH_VERSION}&key={}&link={}&nonce={}&proof={}",
@@ -254,10 +307,20 @@ fn open_authenticated_upstream_with(
         preflight.push_str(&format!("{LINK_RELAY_PROBE_HEADER}: 1\r\n"));
     }
     preflight.push_str("\r\n");
-    writer
-        .write_all(preflight.as_bytes())
-        .and_then(|()| writer.flush())
-        .map_err(|e| UpstreamError::HomeUnreachable(format!("preflight write failed: {e}")))?;
+    // With a whole-request deadline every write call gets only the time left; without one, as before.
+    match limits.deadline {
+        Some(deadline) => write_all_before(
+            &mut writer,
+            preflight.as_bytes(),
+            deadline,
+            AUTH_TIMEOUT,
+            &Instant::now,
+        ),
+        None => writer
+            .write_all(preflight.as_bytes())
+            .and_then(|()| writer.flush()),
+    }
+    .map_err(|e| UpstreamError::HomeUnreachable(format!("preflight write failed: {e}")))?;
 
     let resp = read_response_head(&mut reader).map_err(|e| match e {
         FramingError::Eof => {
@@ -310,18 +373,27 @@ fn open_authenticated_upstream_with(
             verified_gen = Some(gen_val.to_owned());
         }
     }
+    let link_ws_on = crate::link_ws_advert::answer_is_on(
+        &resp.headers,
+        &creds.token_fingerprint,
+        &creds.api_key_id,
+        &creds.link_id,
+        &challenge.nonce,
+    );
+    crate::link_ws_advert::apply(&creds.link_id, preflight_seq, link_ws_on);
 
     Ok(AuthenticatedUpstream {
         reader,
         writer,
         nonce: challenge.nonce,
         connection_generation: verified_gen,
+        link_ws_on,
     })
 }
 
 /// Request head carrying the link token, built in one allocation of its final size so no
 /// partial copy is left behind, and wiped on drop.
-fn token_request_head(
+pub(crate) fn token_request_head(
     before: &str,
     auth_kind: RelayAuthKind,
     token: &[u8],
@@ -658,30 +730,53 @@ fn serve_foreground_inner(
                 continue;
             }
             let control_shared = Arc::clone(&shared);
-            let control_count = Arc::clone(&control_active);
+            let control_slot = ControlSlot(Arc::clone(&control_active));
             thread::spawn(move || {
+                // Returned however the thread ends, a panic included.
+                let _slot = control_slot;
                 let _ = handle_client_connection(
                     client_stream,
                     &control_shared,
                     ConnectionMode::ControlOnly,
                 );
-                control_count.fetch_sub(1, Ordering::SeqCst);
             });
             continue;
         }
         let worker_shared = Arc::clone(&shared);
+        let permit = WorkerPermit(sem_clone);
         thread::spawn(move || {
+            // Returned however the worker ends, a panic included, so a panic never shrinks the pool.
+            let _permit = permit;
             let _ = handle_client_connection(client_stream, &worker_shared, ConnectionMode::Full);
-            let (lock, cv) = &*sem_clone;
-            let mut active = lock.lock().unwrap_or_else(|e| e.into_inner());
-            *active = active.saturating_sub(1);
-            cv.notify_one();
         });
     }
 
     shared.signal_shutdown();
+    // Link WebSocket sockets close (1001, best effort) and are shut down within the close bound.
+    crate::link_ws::stop_all();
     let _ = parity_handle.join();
     Ok(())
+}
+
+/// One of the `MAX_CONCURRENT_WORKERS` admissions, returned when the worker thread ends.
+struct WorkerPermit(Arc<(Mutex<usize>, Condvar)>);
+
+impl Drop for WorkerPermit {
+    fn drop(&mut self) {
+        let (lock, cv) = &*self.0;
+        let mut active = lock.lock().unwrap_or_else(|e| e.into_inner());
+        *active = active.saturating_sub(1);
+        cv.notify_one();
+    }
+}
+
+/// One of the `MAX_CONTROL_CONNECTIONS` control slots, returned when the control thread ends.
+struct ControlSlot(Arc<AtomicUsize>);
+
+impl Drop for ControlSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn run_parity_loop(shared: Arc<SharedServerState>) {
@@ -909,13 +1004,18 @@ fn handle_client_connection(
             &[],
             br#"{"error":{"message":"cross-origin data-plane request blocked","type":"invalid_request_error","code":"origin_rejected"}}"#,
         ),
-        RouteDecision::Reject426Websocket => write_json_response(
-            &mut writer,
-            426,
-            "Upgrade Required",
-            &[],
-            br#"{"error":{"message":"Responses WebSocket transport is disabled; use HTTP","type":"invalid_request_error","code":"upgrade_required"}}"#,
-        ),
+        RouteDecision::Reject426Websocket => {
+            // The link WebSocket is tried only with ocx-child's gate open and the Home's "on" applied for
+            // the current link; otherwise today's 426, with no network I/O.
+            if crate::link_ws_advert::gate_open()
+                && let StateReadOutcome::Valid(st) = read_child_state(&shared.paths.state_file)
+                && let Ok(creds) = shared.load_live_creds()
+                && crate::link_ws_advert::advertised(&creds.link_id)
+            {
+                return crate::link_ws::serve(&mut reader, &mut writer, &req, st.tunnel_port, creds);
+            }
+            crate::link_ws::write_upgrade_required(&mut writer)
+        }
         RouteDecision::Reject404 => {
             write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#)
         }
@@ -1285,4 +1385,35 @@ fn relay_request(
     };
     let _ = stream_upstream_to_chunked_client(&mut upstream.reader, client_writer, up_framing, cap);
     Ok(())
+}
+
+#[cfg(test)]
+mod worker_permit_tests {
+    use super::*;
+
+    #[test]
+    fn a_worker_that_panics_still_returns_its_admission_permit() {
+        let sem = Arc::new((Mutex::new(1usize), Condvar::new()));
+        let permit = WorkerPermit(Arc::clone(&sem));
+        let joined = thread::spawn(move || {
+            let _permit = permit;
+            panic!("panic injected by a test");
+        })
+        .join();
+        assert!(joined.is_err());
+        assert_eq!(*sem.0.lock().unwrap_or_else(|e| e.into_inner()), 0);
+    }
+
+    #[test]
+    fn a_control_thread_that_panics_still_returns_its_slot() {
+        let count = Arc::new(AtomicUsize::new(1));
+        let slot = ControlSlot(Arc::clone(&count));
+        let joined = thread::spawn(move || {
+            let _slot = slot;
+            panic!("panic injected by a test");
+        })
+        .join();
+        assert!(joined.is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
 }

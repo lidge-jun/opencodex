@@ -424,6 +424,10 @@ export const SERIAL_FULL_SUITE_FILES = [
   "cli/cli-update-restart-home.test.ts",
   "codex-integration/native-codex-toggle.test.ts",
   "codex-integration/native-grok-toggle.test.ts",
+  // Each compiles native/ocx-child (without, then with the link-ws-test-gate feature) and runs one Cargo
+  // test set; a cold build can take a minute, so each runs alone rather than inside a 12-file batch.
+  "clients/link-ocx-child-ws-gate.test.ts",
+  "clients/link-ocx-child-ws-feature.test.ts",
 ] as const;
 
 type SerialLaneBasename = (typeof SERIAL_FULL_SUITE_FILES)[number] extends infer P
