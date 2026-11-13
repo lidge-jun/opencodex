@@ -153,9 +153,11 @@ function outcomeBody(op: LinkOperation): Record<string, unknown> {
 /** A new operation's entry could not be written: 409 when the journal is full, 500 otherwise. Nothing ran either way. */
 export function journalOpenFailure(error: unknown): Response {
   if (!(error instanceof OperationsJournalFullError)) return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
-  return error.bound === "unsettled"
-    ? fail("operation_journal_full", "The link operation journal holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " unsettled operations. Check the Child of each residual or unknown one and run ocx link operations resolve --operation-id <id> --yes; repeat an open one with its operation id first (ocx link operations lists them). Nothing was changed.", 409)
-    : fail("operation_journal_full", "The link operation journal holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " operations that settled within the last day and three minutes; retry once the oldest of them is older than that. Nothing was changed.", 409);
+  const message = error.bound === "unsettled"
+    ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " unsettled operations. Check the Child of each residual or unknown one and run ocx link operations resolve --operation-id <id> --yes; repeat an open one with its operation id first (ocx link operations lists them). Nothing was changed."
+    : "The link operation journal holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " operations that settled within the last 2 hours and three minutes; retry once the oldest of them is older than that. Nothing was changed.";
+  // bound is a closed field a CLI picks its own guidance by; it is additive, and an older CLI drops it and still refuses.
+  return Response.json({ error: { code: "operation_journal_full", message }, bound: error.bound }, { status: 409, headers: { "cache-control": "no-store" } });
 }
 
 export function replayResponse(op: LinkOperation): Response {

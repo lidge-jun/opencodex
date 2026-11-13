@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { gitRepositoryEnvNames, withoutGitRepositoryEnv } from "./git-repository-env";
 import { getTestRunnerBun } from "./lib/test-runner-bun";
 import {
   acquireTestRunLock,
@@ -71,6 +72,10 @@ export function createIsolatedTestEnvironment(
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
   const inherited = { ...baseEnv };
   for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete inherited[name];
+  // A GIT_DIR/GIT_WORK_TREE inherited from a hook or wrapper re-points every git command the suite
+  // spawns, and fixture helpers then init, configure and commit into that repository. Starting the
+  // children without them also covers Bun.spawn calls that pass no env (scripts/git-repository-env.ts).
+  for (const name of gitRepositoryEnvNames(inherited)) delete inherited[name];
 
   return {
     root,
@@ -276,6 +281,8 @@ export function inspectChangedRun(
 ): ChangedRunPreflight | null {
   const requestedComparisonRef = changedComparisonRef(requested);
   if (!requestedComparisonRef) return null;
+  // `cwd` names the checkout to compare; an inherited GIT_DIR must not substitute another one.
+  env = withoutGitRepositoryEnv(env);
   if (requestedComparisonRef.startsWith("-")) {
     throw new Error(
       `[test] --changed comparison ref ${JSON.stringify(requestedComparisonRef)} is invalid.`,
