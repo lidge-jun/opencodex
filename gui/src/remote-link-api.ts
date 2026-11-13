@@ -112,24 +112,22 @@ const LINK_STATES: readonly LinkWireState[] = ["connecting", "connected", "recon
 const LINK_ROLES = ["standalone", "home", "child"] as const;
 
 /**
- * The Child may still be connected after a refused apply (`residual: true`). The server's closed
- * words (`residualKind`, `remotePlatform`) pick the purge variant for the Child's platform; otherwise
- * the recovery line is matched against the fixed lines it writes
- * (src/server/management/link-enrollment.ts, liveResidual). Either way only one of these variants is
- * kept, so the server's text is never shown as such.
+ * The Child may still be connected after a refused apply (`residual: true`). The server's closed words pick the step:
+ * residualKind plant (a purge, by remotePlatform), else residualInstall (ephemeral, full), else an install not recorded
+ * (unknown). Each step is bound to the attempt's link id the answer names, used only in its exact shape; without one nothing
+ * can be bound (noLink). The server's recovery prose is never read or shown.
  */
 /** purgeAny: a plant whose Child platform is not known (a journalled reply), so every managed location is named. */
-export type LinkResidualStep = "purge" | "purgeWindows" | "purgeAny" | "ephemeral" | "full" | "unknown";
-const RESIDUAL_RECOVERY: Readonly<Record<string, LinkResidualStep>> = {
-  "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying.": "purge",
-  "Run \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge in Command Prompt on the Child, or \"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge where LOCALAPPDATA is not set, before retrying.": "purgeWindows",
-  "Run ocx-child detach (or ocx disconnect) on the Child before retrying.": "ephemeral",
-  "Run ocx disconnect and ocx restart on the Child before retrying.": "full",
-};
+export type LinkResidualStep = "purge" | "purgeWindows" | "purgeAny" | "ephemeral" | "full" | "unknown" | "noLink";
+/** platform: the Child's, when the answer names it; it picks the lightweight agent's managed path. */
+export interface LinkResidual { readonly step: LinkResidualStep; readonly linkId: string | null; readonly platform?: "posix" | "windows" }
 
-function residualStep(body: Record<string, unknown>): LinkResidualStep {
-  if (body.residualKind === "plant") return body.remotePlatform === "windows" ? "purgeWindows" : body.remotePlatform === "posix" ? "purge" : "purgeAny";
-  return typeof body.recovery === "string" && Object.hasOwn(RESIDUAL_RECOVERY, body.recovery) ? RESIDUAL_RECOVERY[body.recovery]! : "unknown";
+function residualStep(body: Record<string, unknown>): LinkResidual {
+  const linkId = typeof body.linkId === "string" && /^lnk_[0-9a-f]{16}$/.test(body.linkId) ? body.linkId : null;
+  if (linkId === null) return { step: "noLink", linkId: null };
+  if (body.residualKind === "plant") return { step: body.remotePlatform === "windows" ? "purgeWindows" : body.remotePlatform === "posix" ? "purge" : "purgeAny", linkId };
+  const platform = body.remotePlatform === "posix" || body.remotePlatform === "windows" ? body.remotePlatform : undefined;
+  return { step: body.residualInstall === "ephemeral" || body.residualInstall === "full" ? body.residualInstall : "unknown", linkId, ...(platform ? { platform } : {}) };
 }
 
 export class LinkApiError extends Error {
@@ -138,9 +136,9 @@ export class LinkApiError extends Error {
   /** The server's bounded hint line (ssh stderr, the ssh runner's own failure, or the parsed remote version), shown under the translated message. */
   readonly hint: string | null;
   /** Set when the server says the Child may still be connected; null otherwise. */
-  readonly residual: LinkResidualStep | null;
+  readonly residual: LinkResidual | null;
 
-  constructor(code: string, status: number, hint: string | null = null, residual: LinkResidualStep | null = null) {
+  constructor(code: string, status: number, hint: string | null = null, residual: LinkResidual | null = null) {
     super(code);
     this.name = "LinkApiError";
     this.code = code;
@@ -173,6 +171,11 @@ export function boundLinkHint(value: unknown): string | null {
   const points = Array.from(clean);
   return points.length > HINT_MAX_CHARS ? `${points.slice(0, HINT_MAX_CHARS - 1).join("")}\u2026` : clean;
 }
+
+/** A link-bound refusal (#8662): the Child answered and refused, so the force dialog says that instead of "could not reach". */
+export const BOUND_REFUSALS = ["child_link_mismatch", "child_residual", "child_disconnect_pending", "expect_link_unsupported"] as const;
+export type BoundRefusal = typeof BOUND_REFUSALS[number];
+export function boundRefusal(hint: string | null): BoundRefusal | null { return BOUND_REFUSALS.find(item => item === hint) ?? null; }
 
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
 // The store's own link-id form (src/link/store.ts). The dashboard copies an id into shell commands, so nothing else passes.
