@@ -1268,22 +1268,29 @@ function restoreConnectedCodex(connection: OcxClientConnectionConfig, receipt: D
 /**
  * `ocx disconnect --expect-link <id>`: refuse unless this machine is connected to that link (the same
  * check `ocx sync --expect-link` makes), read-only under the client lifecycle and config locks. A Home's
- * delayed revoke of an old link then cannot disconnect a newer one. Throws ClientSyncExpectationError.
+ * delayed revoke of an old link then cannot disconnect a newer one. "already_disconnected": no connection, no
+ * unfinished disconnect and no pending connect, so nothing of the link is left here to disconnect (a Home whose
+ * earlier answer was lost can finish; ocx-child answers NotAttached the same way). Throws ClientSyncExpectationError.
  */
-export function assertDisconnectExpectation(linkId: string, deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {}): void {
-  withClientLifecycleSync(() => withConfigMutationLockSync(() => assertHomeInitiatedDisconnect(linkId)), deps.lifecycleLockDeps);
+export function assertDisconnectExpectation(linkId: string, deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {}): "proceed" | "already_disconnected" {
+  return withClientLifecycleSync(() => withConfigMutationLockSync(() => assertHomeInitiatedDisconnect(linkId)), deps.lifecycleLockDeps);
 }
 
 /**
  * The link expectation, then the Home-initiated check: a Home sends --expect-link only for Home-initiated links, and
  * a client-initiated one needs the client-link teardown that path skips. Its sidecar, or the marker that survives a
- * lost sidecar, naming this link refuses it (client_initiated_link); an unreadable sidecar or marker refuses too.
- * When this link's own unfinished disconnect is on record (the expectation let it resume), the refusal says
- * disconnect_pending instead: an earlier attempt may have cleaned part of the Child, and the Home must count the
- * cleanup as attempted. Read-only; the caller holds the client lifecycle and config mutation locks.
+ * lost sidecar, naming this link refuses it (client_initiated_link); an unreadable sidecar or marker refuses as
+ * invalid_state. When this link's own unfinished disconnect is on record (the expectation let it resume), the refusal
+ * says disconnect_pending instead: an earlier attempt may have cleaned part of the Child, and the Home must count the
+ * cleanup as attempted. A machine with nothing attached or pending answers "already_disconnected" once the sidecar and
+ * marker checks pass. Read-only; the caller holds the client lifecycle and config mutation locks.
  */
-function assertHomeInitiatedDisconnect(linkId: string): void {
-  assertDisconnectLinkExpectation(linkId);
+function assertHomeInitiatedDisconnect(linkId: string): "proceed" | "already_disconnected" {
+  let disconnected = false;
+  try { assertDisconnectLinkExpectation(linkId); } catch (error) {
+    if (!(error instanceof ClientSyncExpectationError) || error.reason !== "disconnected") throw error;
+    disconnected = true;
+  }
   let reason: "client_initiated_link" | "invalid_state" | null;
   // An unreadable sidecar or marker refuses as invalid_state: it proves nothing about who joined.
   try {
@@ -1291,7 +1298,7 @@ function assertHomeInitiatedDisconnect(linkId: string): void {
     reason = marker.kind === "unreadable" ? "invalid_state"
       : readClientLinkState()?.linkId === linkId || (marker.kind === "link" && marker.linkId === linkId) ? "client_initiated_link" : null;
   } catch { reason = "invalid_state"; }
-  if (!reason) return;
+  if (!reason) return disconnected ? "already_disconnected" : "proceed";
   const receipt = readDesktopDisconnectReceipt();
   throw new ClientSyncExpectationError({ kind: "link", linkId }, receipt.kind === "valid" && receipt.value.phase !== "complete" ? "disconnect_pending" : reason);
 }
@@ -1357,7 +1364,10 @@ export async function disconnectClient(
   // before phase 1 writes nothing; one before phase 2 leaves the prepared receipt it resumes from.
   const prepared = await withConfigDirHardeningSettled(getConfigDir(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     // Checked first, under the same locks, before anything is read for writing or written.
-    if (options.expectLink !== undefined) assertHomeInitiatedDisconnect(options.expectLink);
+    // A machine that became disconnected since the caller's check refuses here (exit 5), conservatively.
+    if (options.expectLink !== undefined && assertHomeInitiatedDisconnect(options.expectLink) === "already_disconnected") {
+      throw new ClientSyncExpectationError({ kind: "link", linkId: options.expectLink }, "disconnected");
+    }
     const read = readDesktopDisconnectReceipt();
     if (read.kind === "unsafe") throw new Error("client_disconnect_receipt_unsafe");
     const state = readClientConnectionState();

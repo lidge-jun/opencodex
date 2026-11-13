@@ -626,9 +626,15 @@ export async function handleDisconnectCommand(
     // marker that survives a lost sidecar, names this link) needs the client-link teardown this path skips, so the
     // same check refuses it before anything changes.
     if (expectLink !== undefined) {
-      try { assertDisconnectExpectation(expectLink, deps); } catch (error) {
+      let verdict: "proceed" | "already_disconnected";
+      try { verdict = assertDisconnectExpectation(expectLink, deps); } catch (error) {
         if (error instanceof ClientSyncExpectationError) { mismatch = error; return; }
         throw error;
+      }
+      // Nothing attached and nothing pending: nothing of the link is left here, so this is done and nothing is written.
+      if (verdict === "already_disconnected") {
+        printData({ linkId: expectLink, alreadyDisconnected: true }, wantsJson, [`Not connected: nothing of link ${expectLink} is left on this machine to disconnect.`]);
+        return;
       }
     }
     // A Home's link-bound disconnect (--expect-link) comes from the Home that owns that link's tunnel and record,

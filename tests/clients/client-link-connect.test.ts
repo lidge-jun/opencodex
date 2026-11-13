@@ -350,19 +350,21 @@ describe("client link connection contracts", () => {
     });
   });
 
-  test("disconnect --expect-link on a disconnected machine exits 5 (reason disconnected) before any teardown", async () => {
+  // Nothing is attached and nothing is pending, so there is nothing left of the link to disconnect: answered as done
+  // (exit 0, nothing written), as ocx-child's NotAttached is. A Home whose earlier answer was lost can then finish.
+  test("disconnect --expect-link on a disconnected machine with nothing pending answers already disconnected", async () => {
     await withLinkHome(async home => {
-      const lines: string[] = [];
-      const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+      const out: string[] = [];
+      const logs = spyOn(console, "log").mockImplementation((...args: unknown[]) => { out.push(String(args[0])); });
       let exit: number;
       try {
-        exit = await handleDisconnectCommand(["--expect-link", linkId], {
+        exit = await handleDisconnectCommand(["--expect-link", linkId, "--json"], {
           lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
           linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
         });
-      } finally { errors.mockRestore(); }
-      expect(exit).toBe(5);
-      expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "disconnected" });
+      } finally { logs.mockRestore(); }
+      expect(exit).toBe(0);
+      expect(JSON.parse(out.join("\n"))).toEqual({ linkId, alreadyDisconnected: true });
       expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
     });
   });
