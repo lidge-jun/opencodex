@@ -399,7 +399,7 @@ Drives no management route.
 |---|---|---|
 | `--keep-catalog` | boolean | Keep the connected client's catalog during ordinary disconnect. |
 | `--recover-config` | boolean | With --yes, snapshot current Codex artifacts and recover only evidenced owned keys; unknown ownership still refuses. |
-| `--expect-link` | string | Disconnect only when this machine is the connected Child of that link; otherwise exit 5 with child_link_mismatch and change nothing. |
+| `--expect-link` | string | Disconnect only when this machine is the connected Child of that link, or finish its unfinished disconnect once the connection is cleared; with nothing attached or pending, write nothing and answer already disconnected (exit 0); otherwise exit 5 with child_link_mismatch and change nothing. |
 | `--orphaned-token` | boolean | Preserve unowned service-token files in a private backup when disconnected. |
 | `--yes` | boolean | Explicitly confirm --recover-config or --orphaned-token recovery. |
 | `--json` | boolean | Emit the local result and backup location as JSON. |
