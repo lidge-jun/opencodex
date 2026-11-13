@@ -219,6 +219,8 @@ describe("POST /api/link/recover", () => {
     ["a receipt for another link", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true, linkId: OTHER }), "receipt_unbound"],
     ["a receipt without a link id", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true }), "receipt_unbound"],
     ["a binary it did not remove", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: false, linkId: ID }), "purge_incomplete"],
+    // The in-use marker settles only a report bound to this link: the link check comes first.
+    ["a kept binary with the in-use marker, reported for another link", ok(JSON.stringify({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: false, linkId: OTHER }) + "\n", 0, "ocx-purge-kept:binary_in_use\n"), "receipt_unbound"],
   ])("%s is not proof of cleanup", async (_name, result, hint) => {
     const h = harness([link()]);
     await forceRevoke(h);
