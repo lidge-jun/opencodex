@@ -21,7 +21,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isPassiveRead, runPassiveReadSync } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent, observedQuotaFor, collectOwnedReport, providerQuotaBeforeObservationForTests, reportObservationIdentity,
+  accountReportCurrent, observedQuotaFor, captureReportOwner, collectOwnedReport, providerQuotaBeforeObservationForTests, reportObservationIdentity,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -288,7 +288,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     }
     // Reconcile both rows and empty results after all awaits against the last recorded sign-in.
     Object.entries(config.providers).forEach(([name, provider], index) => {
-      if (provider.adapter === "claude-cli" && provider.disabled !== true) probeResults[index] = heldClaudeCliObservedQuota(name);
+      if (provider.adapter === "claude-cli" && provider.disabled !== true) { const held = heldClaudeCliObservedQuota(name); if (held && typeof held !== "symbol") captureReportOwner(name, provider)(held); probeResults[index] = held; }
     });
     const fresh = probeResults.filter((item): item is ProviderQuotaReport => (
       item !== null && item !== TERMINAL_QUOTA_FAILURE && item !== AUTHORITATIVE_EMPTY_QUOTA
