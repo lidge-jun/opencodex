@@ -202,6 +202,22 @@
 .rb-suggest-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 0 16px 6px; }
 .rb-suggest-head strong { color: var(--ocx-fg); font-size: 14px; font-weight: 600; }
 .rb-suggest-head span { color: var(--ocx-fg-subtle); font-size: 12.5px; }
+.rb-suggest-exclude { display: contents; }
+.rb-suggest-head .rb-suggest-exclude-toggle { margin-left: auto; color: var(--ocx-fg-subtle); font-size: 12.5px; }
+.rb-suggest-exclude-panel {
+  flex-basis: 100%;
+  margin: 6px 0 4px;
+  padding: 8px 12px 10px;
+  border: 0;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.rb-suggest-exclude-panel legend { float: left; width: 100%; padding: 0; color: var(--ocx-fg); font-size: 13px; font-weight: 600; }
+.rb-suggest-exclude-panel ul { display: flex; flex-wrap: wrap; gap: 4px 14px; list-style: none; margin: 6px 0 0; padding: 0; }
+.rb-suggest-exclude-panel li { display: inline-flex; align-items: center; gap: 4px; }
+.rb-suggest-exclude-panel label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.rb-suggest-head .rb-suggest-exclude-panel span { color: var(--ocx-fg); font-size: 13px; }
+.rb-suggest-empty { padding: 0 16px 8px; }
 .rb-suggest-list { list-style: none; margin: 0; padding: 0; }
 .rb-suggest-card + .rb-suggest-card { border-top: 1px dashed var(--ocx-line); }
 .rb-suggest-actions { display: inline-flex; flex: none; gap: 6px; }

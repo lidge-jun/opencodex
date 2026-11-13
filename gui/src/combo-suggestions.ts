@@ -157,6 +157,8 @@ export interface SuggestionInput {
   providers: readonly SuggestionProvider[];
   remainingPercent?: (provider: string, model: string) => number | undefined;
   dismissed?: ReadonlySet<string>;
+  /** Providers the operator left out of suggestions: they join no suggested combo. */
+  excludedProviders?: ReadonlySet<string>;
 }
 
 export function suggestionKey(kind: ComboSuggestion["kind"], model: string, comboId?: string): string {
@@ -169,7 +171,7 @@ export function buildComboSuggestions(input: SuggestionInput): ComboSuggestion[]
   const byModel = new Map<string, Map<string, string>>();
   for (const row of input.models) {
     const provider = providers.get(row.provider);
-    if (!provider || provider.disabled || provider.hiddenFromPicker) continue;
+    if (!provider || provider.disabled || provider.hiddenFromPicker || input.excludedProviders?.has(row.provider)) continue;
     const name = normalizeModelName(row.id);
     if (!name) continue;
     const served = byModel.get(name) ?? new Map<string, string>();
