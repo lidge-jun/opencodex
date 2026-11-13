@@ -642,8 +642,15 @@ async function removeReserved(
         // A tombstone this attempt kept may have been dropped since by its owner, a forced revoke that failed in another
         // runtime. Under the lock that removes the record, before the key goes, one must be there: else this attempt
         // writes its own (and owns it), or stops with the link and key intact.
-        if (active && needed && !readTombstones(tombstonesPath()).tombstones.some(t => t.linkId === id)) {
-          try { if (recordTombstone(needed, tombstonesPath()) === "recorded") written = needed; } catch { return "tombstone_failed" as const; }
+        if (active && needed) {
+          const own = needed;
+          let present: boolean;
+          try { present = readTombstones(tombstonesPath()).tombstones.some(t => t.linkId === id); } catch { return "tombstone_failed" as const; }
+          if (!present) {
+            // A write that throws after the file landed (its chmod) still leaves this attempt's tombstone: own it, so the
+            // non-ok path drops it by its token.
+            try { if (recordTombstone(own, tombstonesPath()) === "recorded") written = own; } catch { written = own; return "tombstone_failed" as const; }
+          }
         }
         if (active && (ctx.config.apiKeys ?? []).some(key => key.id === record.apiKeyId) && !revokeKeyIdempotent(ctx, record.apiKeyId)) return "revoke_failed" as const;
         journal.done("key_revoked");

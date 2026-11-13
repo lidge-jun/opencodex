@@ -598,6 +598,24 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     expect(tombstones()[0]?.attempt).not.toBe(t0.attempt);
   });
 
+  test("a commit-time tombstone write that throws after writing leaves no tombstone beside the kept link", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    recordTombstone(t0);
+    const h = harness([link()], { duringStop: () => { removeTombstone(ID); } });
+    const real = tombstonesModule.recordTombstone;
+    let calls = 0;
+    const spy = spyOn(tombstonesModule, "recordTombstone").mockImplementation((tombstone, path) => {
+      const result = real(tombstone, path);
+      if (++calls === 2) throw new Error("chmod failed after the write");
+      return result;
+    });
+    let res: Response;
+    try { res = await h.request("DELETE", "/api/link/" + ID, { force: true }); } finally { spy.mockRestore(); }
+    expect([res.status, (await errorOf(res)).code]).toEqual([503, "tombstone_write_failed"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
   test("a forced revoke that commits beside an existing tombstone for its link keeps that one", async () => {
     const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
     recordTombstone(t0);
