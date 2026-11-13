@@ -281,6 +281,14 @@ export function resumedRevokeJournal(ctx: ManagementContext, operationId: string
     op.effects.push({ effect, phase, at: iso(ctx) });
     if (receipt) op.receipt = receipt;
     op.updatedAt = iso(ctx);
+    // A new Child cleanup attempt is uncertain until it settles: the owner is unknown and unresolved again, so an earlier
+    // resolution cannot cover it and the link stays suspended (revokeSuspendsLink) if the attempt does not finish.
+    if (effect === "remote_cleanup" && phase === "intent" && op.state !== "open") {
+      op.state = "unknown";
+      delete op.resolvedAt;
+      op.finishedAt = op.updatedAt;
+      op.error = op.error ?? { code: "operation_interrupted", status: 409 };
+    }
   });
   return {
     operationId,

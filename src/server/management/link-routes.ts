@@ -290,13 +290,16 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       if (!operation && force) {
         // A plain --force may finish any receipt (foreignRetirement). An owner a dead process left open is settled first,
         // then the receipt is disowned before anything changes, so the owner is never credited with this removal.
-        try {
-          const receipt = readLinkRetirement(id);
-          if (receipt) {
-            settleOpenRetirementOwner(ctx, receipt);
+        let receipt: ReturnType<typeof readLinkRetirement>;
+        try { receipt = readLinkRetirement(id); } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
+        if (receipt) {
+          // A damaged journal does not stop a plain force (as on dev): its owner cannot be settled, but the receipt is
+          // still disowned before anything changes.
+          try { settleOpenRetirementOwner(ctx, receipt); } catch { /* journal unreadable */ }
+          try {
             if (receipt.operationId !== undefined && !disownLinkRetirement(receipt)) return fail("link_changed", "The link changed during removal.", 409);
-          }
-        } catch { return journalUnreadable(); }
+          } catch { return fail("link_remove_failed", "The link retirement could not be updated.", 503); }
+        }
       }
       const open = openRevokeConflict(ctx, id, operation?.id, force && operation === null);
       if (open) return open;

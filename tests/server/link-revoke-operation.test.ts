@@ -748,3 +748,30 @@ describe("reconnect of a suspended link", () => {
     expect(await h.reconnect()).toEqual({ status: 200, body: { linkId: LINK } });
   });
 });
+
+test("a resolved owner whose resumed cleanup ends uncertain is unresolved again and keeps its link suspended", async () => {
+  const h = harness({ purgeReport: '{"restored":true,"outcome":"Restored","daemonRunning":false}\n' });
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, resolvedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 }, effects: [],
+  } as LinkOperation] });
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(false);
+  const retried = await h.revoke({ purge: true, operationId: OP });
+  expect(retried.status).toBeGreaterThanOrEqual(400);
+  expect(h.ssh.length).toBeGreaterThan(0);
+  const owner = h.journal().operations[0]!;
+  expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: undefined });
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+});
+
+test("a plain --force finishes an owned receipt even when the operation journal is damaged", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  writeFileSync(h.journalPath, "not json");
+  const forced = await h.revoke({ force: true });
+  expect(forced.status).toBe(200);
+  expect(h.store.links).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+});
