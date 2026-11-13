@@ -279,9 +279,13 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     try { phase.child.kill("SIGTERM"); } catch { /* already gone */ }
   };
 
-  /** Until the grant: READY_PROOF_MS from spawn. After it: READY_PROOF_MS from the grant. */
+  /**
+   * Until the grant: READY_PROOF_MS from spawn. After it: READY_PROOF_MS from the grant, and a grant
+   * seen after that first deadline (before the next tick stopped the candidate) counts from it, so a
+   * candidate never lives past 2 x READY_PROOF_MS.
+   */
   const readinessDeadline = (phase: Extract<Phase, { kind: "candidate" }>): number =>
-    (phase.grantedAt ?? phase.spawnedAt) + READY_PROOF_MS;
+    (phase.grantedAt === undefined ? phase.spawnedAt : Math.min(phase.grantedAt, phase.spawnedAt + READY_PROOF_MS)) + READY_PROOF_MS;
 
   const proven = (linkId: string, link: LinkRoutes, round: Round, phase: Extract<Phase, { kind: "candidate" }>): void => {
     // A child whose exit was already observed is never promoted, however late its proof settles.
