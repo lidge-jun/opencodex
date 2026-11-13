@@ -22,6 +22,7 @@ import { LinkWireClient } from "../helpers/link-ws-client";
 import { relayHarness } from "../helpers/link-relay-harness";
 import type { LinkActivity } from "../../src/link/child-activity";
 import type { LinkTrafficBook } from "../../src/link/traffic";
+import { linkTurnPacesReads, observeLinkTurnExpansion } from "../../src/server/link-turn";
 
 // Lane T5d1: link WebSocket closes that leave durable activity holds, and their release (design T4 5).
 
@@ -436,6 +437,33 @@ describe("a relayed POST whose traffic accounting throws (#8613 review)", () => 
     await expect(h.dispatch(req, async () => new Response("{}"))).rejects.toThrow("traffic book failed");
     expect(decisions).toEqual([false]);
     expect(ended).toBe(1);
+  });
+});
+
+describe("paced reads on the relay (#8601)", () => {
+  test.each([[true, true], [false, false]] as const)("with the feature on=%p, a relayed POST's turn paces its reads: %p", async (on, expected) => {
+    const store: LinkStore = { version: 1, listenerPort: null, links: [{ id: KEY.linkId, alias: "paced", direction: "client-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: KEY.id, createdAt: "2026-11-12T00:00:00.000Z" }] as LinkStore["links"] };
+    const seen: boolean[] = [];
+    const lifecycle = createLinkListenerLifecycle<WsData>({ storePath: join(dir, "link", "links.json"), readStore: () => store, writeStore: () => {}, warn: () => {} });
+    lifecycle.start({
+      maxRequestBodySize: 1 << 20,
+      // What preparation does with the relay's turn token: claim the observer for this request's log context.
+      dispatch: async req => { const logCtx = {}; observeLinkTurnExpansion(undefined, req, logCtx, {}); seen.push(linkTurnPacesReads(logCtx)); await req.text(); return new Response("{}"); },
+      keyFingerprints: () => [serviceApiTokenFingerprint(KEY.key)],
+      responsesWebsocket: { handler: turnHandler().handler, enabled: () => on, policy },
+    });
+    cleanups.push(() => lifecycle.stop());
+    const http = await LinkWireClient.open(lifecycle.status().port!);
+    const session = await http.challenge({ keyId: KEY.id, linkId: KEY.linkId, fingerprint: serviceApiTokenFingerprint(KEY.key) });
+    http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", authorization: "Bearer " + KEY.key, "x-opencodex-link-session": session.nonce }, JSON.stringify({ model: "m", input: "go" }));
+    expect((await http.readHead()).status).toBe(200);
+    http.destroy();
+    expect(seen).toEqual([expected]);
+  });
+
+  test("a link socket's turn observer paces its reads", () => {
+    const s = harness().open();
+    expect(s.ws!.data.linkTurnObserver?.(1).pacedReads).toBe(true);
   });
 });
 

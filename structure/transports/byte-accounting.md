@@ -374,6 +374,14 @@ The allowance can be exceeded by one source chunk plus native tee prefetch; it i
 not an RSS limit or a producer-side bound for push transports. Existing eager-path
 selection, WebSocket bounds and SSE frame/output-item limits are unchanged.
 Client departure releases pacing to the existing 15-second/32-MiB bounded drain.
+A stream marked paced (`src/lib/paced-stream.ts`) changes that for its own request: the
+inspection branch leads its client by one chunk instead of the allowance, the eager relay
+queues one chunk instead of 8 MiB, and each stage that reads a paced source (the block
+rewrite, the failed-tail relay, the translator-budget and account-lease wrappers) queues
+nothing ahead and marks its own output, so the chain reads as the client asks. Only a Remote
+Link turn while the link WebSocket feature is on is paced (#8601, `remote-link.md`); its
+upstream chunks are also cut into 256 KiB views (`sliceChunks`), so each stage holds a slice
+rather than a whole source chunk. Unmarked streams keep every queue described above.
 One tee branch's cancellation is never awaited by the wrapper, because that
 promise may depend on its sibling. A hard owner abort discards pending candidates
 rather than flushing them as successful terminals; genuine EOF/read-error tail
