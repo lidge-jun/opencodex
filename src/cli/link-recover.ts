@@ -44,7 +44,7 @@ const aliasLinked = (link: string): string => "another Home-initiated link still
  * child_recover_unsupported's step: the planted ocx-child cannot bind its detach to the link, and its status cannot show an
  * interrupted attach of another link that a plain detach would restore and then remove, so the machine is left.
  */
-const recoverUnsupported = (link: string): string => "the planted ocx-child predates detach --expect-link, so it cannot check which link it belongs to, and nothing was changed. Do not run its plain detach on the machine: its status cannot show an interrupted attach of another link, which a plain detach would restore and then remove. Leave the machine: recover cannot confirm its cleanup with this build. Once the machine is confirmed clean or gone, a person on this Home can run ocx link recover --forget --link-id " + link + " --yes.";
+const recoverUnsupported = (link: string): string => "the planted ocx-child predates detach --expect-link, so it cannot check which link it belongs to, and nothing was changed. Do not run its plain detach on the machine: its status cannot show an interrupted attach of another link, which a plain detach would restore and then remove. Leave the machine: recover cannot confirm its cleanup with this build. Once the machine is gone, or a person on that machine has checked and cleaned its ocx-child records by hand, a person on this Home can run ocx link recover --forget --link-id " + link + " --yes.";
 
 /** The CLI's own words for recover's refusals; any other code is shown as the code itself. */
 const RECOVER_REFUSALS: Record<string, string> = {
@@ -64,8 +64,9 @@ function recoverRefusal(error: RuntimeApiError, linkId: string | undefined): Run
   const code = typeof body?.code === "string" && /^[a-z_]{1,64}$/.test(body.code) ? body.code : null;
   if (!code) return error;
   const hint = typeof body?.hint === "string" && /^[a-z0-9_-]{1,64}$/.test(body.hint) ? body.hint : null;
-  // A command is printed so that it runs as printed: only a validated link id, the placeholder otherwise (--operation-id).
-  const shown = linkId !== undefined && LINK_ID.test(linkId) ? linkId : "<id>";
+  // A command is printed so that it runs as printed: only a validated link id. An --operation-id recover has none, so the
+  // placeholder names where the id comes from.
+  const shown = linkId !== undefined && LINK_ID.test(linkId) ? linkId : "<the link's id from ocx link recover --list>";
   const known = code === "alias_linked" ? aliasLinked(shown)
     : code === "child_recover_unsupported" ? recoverUnsupported(shown)
       : Object.hasOwn(RECOVER_REFUSALS, code) ? RECOVER_REFUSALS[code] : undefined;

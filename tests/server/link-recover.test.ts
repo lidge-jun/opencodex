@@ -251,6 +251,7 @@ describe("POST /api/link/recover", () => {
     expect(error.message).toContain("Leave the machine");
     expect(error.message).not.toContain("only if it shows this link's id");
     expect(error.message).toContain("ocx link recover --forget --link-id " + ID + " --yes");
+    expect(error.message).toContain("Once the machine is gone, or a person on that machine has checked and cleaned its ocx-child records by hand");
     expect(error.message).not.toContain("<id>");
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });

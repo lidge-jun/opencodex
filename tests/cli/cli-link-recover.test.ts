@@ -122,8 +122,19 @@ describe("ocx link recover", () => {
       expect(stderr()).toContain("child_recover_unsupported: the planted ocx-child predates detach --expect-link");
       expect(stderr()).toContain("Do not run its plain detach on the machine");
       expect(stderr()).toContain("ocx link recover --forget --link-id " + ID + " --yes");
+      // No path to "clean" exists through recover with this build: gone, or cleaned by hand on the machine (#8691 final review).
+      expect(stderr()).toContain("Once the machine is gone, or a person on that machine has checked and cleaned its ocx-child records by hand");
+      expect(stderr()).not.toContain("confirmed clean or gone");
       expect(stderr()).not.toContain("server text");
     }
+  });
+
+  test("a refusal for an --operation-id recover names where the link id comes from instead of a bare <id>", async () => {
+    errors.mockClear();
+    const f = fixture({ error: { code: "child_recover_unsupported", message: "server text" } }, 409);
+    expect(await runLinkCommand(["recover", "--operation-id", "enroll-7"], f.deps)).toBe(5);
+    expect(stderr()).toContain("ocx link recover --forget --link-id <the link's id from ocx link recover --list> --yes");
+    expect(stderr()).not.toContain("--link-id <id>");
   });
 
   // A full install refuses --purge (purge_unsupported), so link_present names --purge only for a lightweight Child.
