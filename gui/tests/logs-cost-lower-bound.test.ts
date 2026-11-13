@@ -6,6 +6,7 @@ import {
   estimateReasonsForBilling,
   formatEstimatedUsd,
   formatEstimatedUsdValue,
+  formatCredits,
   summarizeEstimatedCosts,
 } from "../src/pages/logs-cost-format";
 
@@ -19,6 +20,22 @@ test("ordinary dashboard costs render as a bare dollar amount; the ~ lives in th
 
 test("priority long-context lower bounds render with a greater-than-or-equal marker", () => {
   expect(formatEstimatedUsdValue(0.77, translator("en"), "en-US", true)).toBe("≥$0.7700");
+});
+
+test("small floors never round above their value", () => {
+  expect(formatEstimatedUsdValue(0.00006, translator("en"), "en-US", true)).toBe("≥$0.0000");
+  expect(formatEstimatedUsdValue(0.0001, translator("de"), "de-DE", true)).toBe("≥$0.0001");
+  expect(formatEstimatedUsdValue(0.00009999, translator("en"), "en-US", true)).toBe("≥$0.0000");
+  expect(formatEstimatedUsdValue(0.00019999, translator("en"), "en-US", true)).toBe("≥$0.0001");
+  expect(formatEstimatedUsdValue(0, translator("en"), "en-US", true)).toBe("≥$0.0000");
+  expect(formatEstimatedUsdValue(-1, translator("en"), "en-US", true)).toBe("—");
+});
+
+test("tiny credits stay nonzero", () => {
+  expect(formatCredits(1e-7, "en-US")).toBe("0.0000001");
+  expect(formatCredits(1e-7, "de-DE")).toBe("0,0000001");
+  expect(formatCredits(0, "en-US")).toBe("0");
+  expect(formatCredits(-1, "en-US")).toBe("—");
 });
 
 test("the dollar shape is fixed under a non-English locale; only the unavailable label is translated", () => {
@@ -37,14 +54,14 @@ describe("conversation cost lower-bound aggregation", () => {
     },
   });
 
-  test("marks a total only when every included priced estimate is a lower bound", () => {
+  test("marks a total when any included priced estimate is a lower bound", () => {
     expect(summarizeEstimatedCosts([priced(0.77, true), priced(1.23, true)])).toMatchObject({
       estimatedCostUsd: 2,
       priorityLowerBound: true,
     });
     expect(summarizeEstimatedCosts([priced(0.77, true), priced(1.23, false)])).toMatchObject({
       estimatedCostUsd: 2,
-      priorityLowerBound: false,
+      priorityLowerBound: true,
     });
   });
 

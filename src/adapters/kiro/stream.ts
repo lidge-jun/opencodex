@@ -5,6 +5,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import type { AdapterEvent, OcxUsage } from "../../types";
+import { sumCreditReadings } from "../../usage/credit-billing";
 import { recordKiroCalibration, rekeyKiroCalibration } from "../kiro-calibration";
 import {
   KIRO_COMPLETION_TOOL_NAME,
@@ -167,6 +168,11 @@ function mergeKiroUsage(
 ): OcxUsage | undefined {
   if (!first) return second;
   if (!second) return first;
+  const providerCredits = first.providerCredits === undefined && second.providerCredits === undefined
+    ? undefined
+    : first.providerCredits === undefined || second.providerCredits === undefined
+      ? -1
+      : sumCreditReadings([first.providerCredits, second.providerCredits]);
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
     const a = first[key];
     const b = second[key];
@@ -198,7 +204,7 @@ function mergeKiroUsage(
     ...(sumOptional("cachedInputTokens") !== undefined ? { cachedInputTokens: sumOptional("cachedInputTokens") } : {}),
     ...(sumOptional("cacheReadInputTokens") !== undefined ? { cacheReadInputTokens: sumOptional("cacheReadInputTokens") } : {}),
     ...(sumOptional("cacheCreationInputTokens") !== undefined ? { cacheCreationInputTokens: sumOptional("cacheCreationInputTokens") } : {}),
-    ...(sumOptional("providerCredits") !== undefined ? { providerCredits: sumOptional("providerCredits") } : {}),
+    ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(sumOptional("reasoningOutputTokens") !== undefined ? { reasoningOutputTokens: sumOptional("reasoningOutputTokens") } : {}),
     ...(first.estimated || second.estimated ? { estimated: true } : {}),
     ...(first.upstreamReported && second.upstreamReported ? { upstreamReported: true as const } : {}),

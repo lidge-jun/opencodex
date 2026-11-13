@@ -1,4 +1,5 @@
 import { usageTotalTokens, type PersistedUsageAttempt, type UsageStatus } from "../usage/log";
+import { sumCreditReadings } from "../usage/credit-billing";
 import type { OcxUsage } from "../types";
 
 interface FinalizedUsageResult {
@@ -47,7 +48,7 @@ export function aggregateAttemptUsage(
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
-  const providerCredits = sumOptional("providerCredits");
+  const providerCredits = sumCreditReadings(usages.map(usage => usage.providerCredits));
   const totalTokens = usages.reduce(
     (sum, usage) => sum + (usageTotalTokens(usage) ?? 0),
     0,

@@ -1,5 +1,6 @@
 import type { AdapterEvent, OcxConfig, OcxUsage } from "../../types";
 import { sanitizeLogMetadataString } from "../../lib/redact";
+import { sumCreditReadings } from "../../usage/credit-billing";
 
 /**
  * Empty-completion guard for Responses turns (port of codex-router's
@@ -174,7 +175,7 @@ export function mergeUsage(
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
-  const providerCredits = sumOptional("providerCredits");
+  const providerCredits = sumCreditReadings([first.providerCredits, second.providerCredits]);
   const contextTotalTokens = second.contextTotalTokens ?? first.contextTotalTokens;
   const inputTokens = first.inputTokens + second.inputTokens;
   const outputTokens = first.outputTokens + second.outputTokens;

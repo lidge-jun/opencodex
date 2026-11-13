@@ -45,7 +45,7 @@ describe("Logs table cost formatting", () => {
 });
 
 describe("Logs conversation cost aggregation", () => {
-  test("does not mark a mixed ordinary and lower-bound total as a lower bound", () => {
+  test("marks a mixed ordinary and lower-bound total as a lower bound", () => {
     const summary = summarizeEstimatedCosts([
       {
         usageStatus: "reported",
@@ -68,10 +68,10 @@ describe("Logs conversation cost aggregation", () => {
     ]);
 
     expect(summary.estimatedCostUsd).toBe(2);
-    expect(summary.priorityLowerBound).toBe(false);
+    expect(summary.priorityLowerBound).toBe(true);
   });
 
-  test("marks a total as a lower bound only when every priced estimate is one", () => {
+  test("marks a total as a lower bound when every priced estimate is one", () => {
     const summary = summarizeEstimatedCosts([
       {
         usageStatus: "reported",

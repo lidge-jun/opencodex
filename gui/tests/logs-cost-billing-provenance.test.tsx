@@ -247,3 +247,41 @@ test("mixed credit, lower-bound, and exact token legs retain the floor", async (
     expect(costSection().textContent).toContain("known lower bound");
   } finally { await act(async () => { root.unmount(); }); }
 });
+
+test("rendered small mixed floor does not overstate its bound", async () => {
+  const row = mixedComboRow("small-floor") as unknown as { displayMetrics: { cost: { estimate: { cost: { total: number }; billing: { providerCredits: number } } } } };
+  row.displayMetrics.cost.estimate.cost.total = 0.00006;
+  mockLogs([row]);
+  const { root } = await mountAndOpen("small-floor");
+  try { expect(costSection().textContent).toContain("≥$0.0000"); }
+  finally { await act(async () => root.unmount()); }
+});
+
+test("rendered tiny credit is nonzero", async () => {
+  const row = creditRow("tiny-credit") as unknown as { displayMetrics: { cost: { estimate: { cost: { total: number }; billing: { providerCredits: number } } } } };
+  row.displayMetrics.cost.estimate.billing.providerCredits = 1e-7;
+  mockLogs([row]);
+  const { root } = await mountAndOpen("tiny-credit");
+  try { expect(costSection().textContent).toContain("0.0000001"); }
+  finally { await act(async () => root.unmount()); }
+});
+
+
+test("rendered conversation keeps a floor alongside exact credits", async () => {
+  const exact = creditRow("summary-exact") as unknown as { conversationId: string; displayMetrics: { cost: { estimate: { cost: { total: number } } } } };
+  const lower = tokenPriorityRow("summary-lower") as unknown as { conversationId: string; displayMetrics: { cost: { estimate: { cost: { total: number } } } } };
+  exact.conversationId = lower.conversationId = "conversation-a";
+  exact.displayMetrics.cost.estimate.cost.total = 2;
+  lower.displayMetrics.cost.estimate.cost.total = 1;
+  mockLogs([exact, lower]);
+  const { root, container } = await mountAndOpen("summary-exact");
+  try {
+    const input = container.querySelector<HTMLInputElement>('.logs-filter-container input[type="search"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, "conversation-a");
+      input.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(container.querySelector(".logs-conversation-totals")?.textContent).toContain("≥$3.0000");
+  } finally { await act(async () => root.unmount()); }
+});
