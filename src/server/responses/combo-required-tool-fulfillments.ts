@@ -1,7 +1,7 @@
 import type { AdapterRequest } from "../../adapters/base";
 import { collectResponsesToolGroups } from "../../responses/tool-groups";
 import { requiredToolContractOf, type RequiredToolContract } from "./combo-required-tool-contract";
-import { parseOutboundRequestBody } from "./passthrough-completion";
+import { parseOutboundRequestBody } from "./outbound-request-body";
 
 type Item = Record<string, unknown>;
 const record = (value: unknown): Item | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Item : undefined;
