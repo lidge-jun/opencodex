@@ -84,24 +84,32 @@ export function inspectRemoteDesktopStore(owner: DesktopRemoteOwner): {
 export function applyRemoteDesktopStore(held: ClientLifecycleHeld, options: {
   owner: DesktopRemoteOwner; expectedTokenFingerprint: string;
   baseUrl: string; apiKey: string; mode: Desktop3pConfigMode; models: Desktop3pModelEntry[];
+  /** Link-only local materialization: exact Child listener and a non-secret placeholder. */
+  localListener?: boolean;
+  /** One operation's consent to replace edited fields of this already-owned profile. */
+  overwriteConflict?: boolean;
 }): DesktopStoreResult {
   return mutation(held, io => {
     const { config, client } = currentConnection(options.owner);
     noDisconnect(io);
     if (client.pendingOperation) throw new DesktopStoreError("conflict");
     const token = readServiceApiTokenState();
+    const local = options.localListener === true;
+    const validDestination = local
+      ? client.transport === "link" && !!client.link && options.baseUrl === `http://127.0.0.1:${config.port}` && options.apiKey === "opencodex-loopback"
+      : serviceApiTokenFingerprint(options.apiKey) === (token.kind === "present" ? token.fingerprint : "") && origin(options.baseUrl) === options.owner.serverUrl;
     if (token.kind !== "present" || token.fingerprint !== options.expectedTokenFingerprint || token.fingerprint !== client.tokenFingerprint
-      || serviceApiTokenFingerprint(options.apiKey) !== token.fingerprint || origin(options.baseUrl) !== options.owner.serverUrl) throw new DesktopStoreError("conflict");
+      || !validDestination) throw new DesktopStoreError("conflict");
     if (config.clientIntegrations?.["claude-desktop"] === false) throw new DesktopStoreError("desired_disabled");
     if (!options.models.length || !["static", "hybrid", "discovery"].includes(options.mode)) throw new DesktopStoreError("unsafe");
     assertDesktop3pModelsValid(options.models);
     const bundle = establish(io, options.owner, [token.fingerprint, ...serviceGenerations()], false)!;
     const value = {
-      inferenceProvider: "gateway", inferenceCredentialKind: "static", inferenceGatewayBaseUrl: options.owner.serverUrl,
+      inferenceProvider: "gateway", inferenceCredentialKind: "static", inferenceGatewayBaseUrl: local ? options.baseUrl : options.owner.serverUrl,
       inferenceGatewayApiKey: options.apiKey, modelDiscoveryEnabled: options.mode !== "static",
       ...(options.mode === "discovery" ? {} : { inferenceModels: options.models }),
     };
-    artifact(io, bundle, value, "apply", token.fingerprint, bundle.state!.targetId);
+    artifact(io, bundle, value, "apply", token.fingerprint, bundle.state!.targetId, options.overwriteConflict);
     cleanBackup(io, bundle, [token.fingerprint, ...serviceGenerations()]);
     return success(io, bundle, "applied");
   });
@@ -126,6 +134,15 @@ export function replaceRemoteDesktopCredential(held: ClientLifecycleHeld, option
     const file = io.read(profilePath(bundle.paths.library, bundle.state!.targetId));
     if (!file) throw new DesktopStoreError("unsafe");
     const credential = profileCredential(file.value);
+    const local = client.transport === "link" && !!client.link
+      && file.value.inferenceGatewayBaseUrl === `http://127.0.0.1:${config.port}` && file.value.inferenceGatewayApiKey === "opencodex-loopback";
+    if (local) {
+      // artifact still verifies the recorded projection and selection. Only the service-key
+      // generation changes; the local file never receives that secret during rotation.
+      artifact(io, bundle, projection(file.value), "rotate", replacement);
+      cleanBackup(io, bundle, [options.expectedTokenFingerprint, ...generations]);
+      return success(io, bundle, "updated");
+    }
     if (!credential || credential.origin !== options.owner.serverUrl
       || ![options.expectedTokenFingerprint, replacement].includes(credential.fingerprint)) throw new DesktopStoreError("conflict");
     artifact(io, bundle, { ...projection(file.value), inferenceGatewayApiKey: options.replacementKey }, "rotate", replacement);

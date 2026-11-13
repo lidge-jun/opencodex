@@ -260,9 +260,11 @@ export function writeOperationsJournal(path: string, journal: OperationsJournal)
  * unknown one only 30 days after it was resolved. An open entry, and an unresolved residual or unknown one, stays.
  * Past OPERATION_JOURNAL_MAX_SETTLED settled entries, the oldest settled ones older than OPERATION_PRUNE_FLOOR_MS go too.
  */
-export function pruneOperations(journal: OperationsJournal, nowMs: number): OperationsJournal {
+export function pruneOperations(journal: OperationsJournal, nowMs: number, keep?: (op: LinkOperation) => boolean): OperationsJournal {
   const expired = (at: string | undefined) => at !== undefined && nowMs - Date.parse(at) > OPERATION_RETENTION_MS;
   const retained = journal.operations.filter(op => {
+    // A caller-pinned entry stays past retention: a revoke that still owns a retirement receipt (#8416).
+    if (keep?.(op)) return true;
     if (op.state === "committed" || op.state === "failed_clean") return !expired(op.finishedAt);
     if (op.state === "residual" || op.state === "unknown") return !expired(op.resolvedAt);
     return true;
@@ -270,7 +272,7 @@ export function pruneOperations(journal: OperationsJournal, nowMs: number): Oper
   const settled = retained.filter(isSettled);
   if (settled.length <= OPERATION_JOURNAL_MAX_SETTLED) return { version: 1, operations: retained };
   // A stable sort: entries settled at the same moment go in journal order.
-  const candidates = settled.map((op, index) => ({ op, index })).filter(item => nowMs - settledAt(item.op) > OPERATION_PRUNE_FLOOR_MS)
+  const candidates = settled.map((op, index) => ({ op, index })).filter(item => !keep?.(item.op) && nowMs - settledAt(item.op) > OPERATION_PRUNE_FLOOR_MS)
     .sort((a, b) => settledAt(a.op) - settledAt(b.op) || a.index - b.index);
   const dropped = new Set(candidates.slice(0, settled.length - OPERATION_JOURNAL_MAX_SETTLED).map(item => item.op));
   return { version: 1, operations: retained.filter(op => !dropped.has(op)) };
@@ -289,14 +291,14 @@ function isSettled(op: LinkOperation): boolean {
  * Read, change and write the journal in one section of the config mutation lock, pruning on the way. Writes only
  * when the change or the prune altered the journal: a read that finds nothing to do (an unknown id, a state that
  * cannot be resolved) never rewrites the file, and never creates it, because its mere existence makes every plain
- * apply and revoke take the alias lock (journalInUse).
+ * apply and revoke take the alias lock (journalInUse). keep pins entries against pruning.
  */
-export function updateOperationsJournal<T>(path: string, nowMs: number, change: (journal: OperationsJournal) => T): T {
+export function updateOperationsJournal<T>(path: string, nowMs: number, change: (journal: OperationsJournal) => T, keep?: (op: LinkOperation) => boolean): T {
   return withConfigMutationLockSync(() => {
     const journal = readOperationsJournal(path);
     const before = JSON.stringify(journal);
     const result = change(journal);
-    const next = pruneOperations(journal, nowMs);
+    const next = pruneOperations(journal, nowMs, keep);
     if (JSON.stringify(next) !== before) writeOperationsJournal(path, next);
     return result;
   });
@@ -333,7 +335,7 @@ export function openEnrollmentFor(journal: OperationsJournal, alias: string, exc
  * Mark a residual or unknown entry resolved: O5 proved the Child clean, or a person accepted the loss. Its 30 days
  * of retention start now. An entry in any other state is not resolvable; a missing one is null.
  */
-export function resolveLinkOperation(path: string, operationId: string, nowMs: number): LinkOperation | "not_resolvable" | null {
+export function resolveLinkOperation(path: string, operationId: string, nowMs: number, keep?: (op: LinkOperation) => boolean): LinkOperation | "not_resolvable" | null {
   return updateOperationsJournal(path, nowMs, journal => {
     const op = findOperation(journal, operationId);
     if (!op) return null;
@@ -343,7 +345,7 @@ export function resolveLinkOperation(path: string, operationId: string, nowMs: n
       op.updatedAt = op.resolvedAt;
     }
     return structuredClone(op);
-  });
+  }, keep);
 }
 
 /**
