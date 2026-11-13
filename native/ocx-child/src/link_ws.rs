@@ -595,10 +595,6 @@ fn write_frame(
             Leg::Home => (&shared.home_write, &shared.home),
         };
         let _guard = lock(lock_m);
-        #[cfg(test)]
-        if kind == Kind::Data {
-            tests::data_locked();
-        }
         if leg == Leg::Codex && !shared.upgraded.load(Ordering::SeqCst) {
             // Before the local 101 Codex's connection is still HTTP; its owner answers it.
             return Err(std::io::Error::new(
@@ -611,6 +607,11 @@ fn write_frame(
                 std::io::ErrorKind::BrokenPipe,
                 "link websocket closing",
             ));
+        }
+        // Tests: the writer holds the lock and is past every early exit; its write starts now.
+        #[cfg(test)]
+        if kind == Kind::Data {
+            tests::data_locked();
         }
         let mask = if leg == Leg::Home {
             Some(random_mask())
@@ -1464,7 +1465,8 @@ mod tests {
     static BEFORE_101: Mutex<Option<fn()>> = Mutex::new(None);
     /// Armed by a test: the next claiming terminal caller reports here, then waits for the release.
     static CLAIM_GATE: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mutex::new(None);
-    /// Armed by a test: the next data write reports here once it holds its leg's write lock.
+    /// Armed by a test: the next data write reports here once it holds its leg's write lock and has passed its
+    /// upgraded and closing checks, just before its bytes are written.
     static DATA_LOCKED: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
 
     pub(super) fn before_start() {
