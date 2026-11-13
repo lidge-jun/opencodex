@@ -73,6 +73,8 @@ export interface CodexRun { code: number; stdout: string; stderr: string }
 export function runGateCodex(options: {
   dir: string; port: number; prompt: { argument: string } | { stdin: string };
   children: Array<ReturnType<typeof Bun.spawn>>; instructionsBytes?: number; streamMaxRetries?: number;
+  /** Called with each line Codex writes to stderr, as it arrives (its retry and fallback notices). */
+  onStderrLine?: (line: string) => void;
 }): Promise<CodexRun> {
   const scratch = mkdtempSync(join(options.dir, "codex-"));
   const codexDir = join(scratch, "codex-home");
@@ -94,7 +96,20 @@ export function runGateCodex(options: {
     stdin: "stdin" in prompt ? new TextEncoder().encode(prompt.stdin) : "ignore", stdout: "pipe", stderr: "pipe",
   });
   options.children.push(child);
-  return (async () => ({ code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() }))();
+  const stderr = (async () => {
+    if (!options.onStderrLine) return await new Response(child.stderr).text();
+    const decoder = new TextDecoder();
+    let text = ""; let partial = "";
+    for await (const chunk of child.stderr) {
+      const piece = decoder.decode(chunk, { stream: true });
+      text += piece; partial += piece;
+      const lines = partial.split("\n"); partial = lines.pop() ?? "";
+      for (const line of lines) options.onStderrLine(line);
+    }
+    if (partial) options.onStderrLine(partial);
+    return text;
+  })();
+  return (async () => ({ code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await stderr }))();
 }
 
 /** Codex's own account of a failure is part of the evidence: a non-zero exit fails with the tail of its stderr. */

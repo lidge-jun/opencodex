@@ -1720,6 +1720,7 @@
   "link-websocket-release-gate.test.ts": "e2e-style",
   "link-gate-codex-binary.test.ts": "e2e-style",
   "link-websocket-child-gate.test.ts": "e2e-style",
+  "link-websocket-child-restart.test.ts": "e2e-style",
   "link-websocket-drain.test.ts": "server",
   "link-websocket-pump.test.ts": "server",
   "link-websocket-rss.test.ts": "e2e-style",
