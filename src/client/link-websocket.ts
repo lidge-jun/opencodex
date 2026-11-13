@@ -86,8 +86,8 @@ function relayCloseCode(code: number | null): number {
 }
 
 const FAILURE_REASON: Record<LinkWebsocketSetupFailure, LinkWsFallbackReason> = {
-  credential: "credential", preflight: "preflight", not_advertised: "not_advertised", home_refused: "home_refused",
-  handshake: "handshake", aborted: "aborted",
+  disabled: "not_advertised", credential: "credential", preflight: "preflight", not_advertised: "not_advertised", home_refused: "home_refused",
+  handshake: "handshake", timeout: "timeout", aborted: "aborted",
 };
 
 /**
@@ -370,7 +370,7 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
         if (budget.signal.aborted) return failed("aborted");
         // Steps 6 to 9 on one authenticated connection.
         const setup = await open({ tunnelPort: target.tunnelPort, admissionKey, linkId: target.linkId, apiKeyId: target.apiKeyId }, headers,
-          { signal: budget.signal, preflightMs: limits.preflightMs });
+          { signal: budget.signal, preflightMs: limits.preflightMs, upgradeMs: limits.setupBudgetMs, timers, ready });
         if (!setup.ok) return failed(FAILURE_REASON[setup.reason]);
         stopBudget();
         if (req.signal.aborted || expired || stopping) { setup.socket.destroy(); release(); return fallback(expired ? "timeout" : "aborted"); }

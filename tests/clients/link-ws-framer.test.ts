@@ -63,6 +63,8 @@ describe("link WebSocket client framer: reading server frames", () => {
     expect(fault(serverFrame(1, "short", { lengthForm: 64 }))).toBe(1002);
     const topBit = Buffer.from([0x81, 127, 0x80, 0, 0, 0, 0, 0, 0, 1]);
     expect(fault(topBit)).toBe(1002);
+    // A 64-bit length with a non-zero high word is far over any limit: refused before a byte is held.
+    expect(fault(Buffer.from([0x81, 127, 0, 0, 0, 1, 0, 0, 0, 1]))).toBe(1009);
   });
 
   test("RSV bits, unknown opcodes and masked server frames are protocol errors", () => {

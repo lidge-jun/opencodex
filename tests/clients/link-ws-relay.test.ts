@@ -208,6 +208,16 @@ describe("link WebSocket on the Child: an advertising Home", () => {
     expect(await leg.until(frame => frame.type === "close")).toMatchObject({ code: 1002 });
   });
 
+  test("the same, fed to the relay in one piece: the bytes the Home sent with its 101", async () => {
+    const completed = Buffer.from('{"type":"response.completed"}');
+    const head = Buffer.concat([Buffer.from([0x81, completed.length]), completed, Buffer.from([0xc1, 1, 0x78])]);
+    const { port, home } = await setup({ home: { upgrade: () => ({ kind: "accept", head }) } });
+    const codex = await CodexSocket.open(port);
+    expect((await codex.closed()).code).toBe(1011);
+    expect(codex.messages).toEqual(['{"type":"response.completed"}']);
+    expect(await home.sockets.at(-1)!.until(frame => frame.type === "close")).toMatchObject({ code: 1002 });
+  });
+
   test("a second Codex message while the first is still unflushed toward the Home closes both legs (1013, 1001)", async () => {
     const { port, home } = await setup();
     const codex = await CodexSocket.open(port);
@@ -367,7 +377,8 @@ describe("link WebSocket on the Child: limits and setup", () => {
     const { port, home } = await setup({ websocket: { timers: clock.timers }, home: { upgrade: () => { arrived(); return { kind: "hang" }; } } });
     const { socket, answer } = rawUpgrade(port);
     await held;
-    expect(clock.fire(8_000)).toBe(1);
+    // The relay's setup budget and the transport's own upgrade bound are both 8 s.
+    expect(clock.fire(8_000)).toBeGreaterThanOrEqual(1);
     const result = await answer;
     socket.destroy();
     expect(result.status).toBe(426);
