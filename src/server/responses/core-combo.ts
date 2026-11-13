@@ -1084,7 +1084,8 @@ export async function executeComboResponses(
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
-      ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
+      ...(logCtx.conversationId ? { conversationId: logCtx.conversationId, conversationIdIsHermesFallback: logCtx.conversationIdIsHermesFallback } : {}),
+      ...(logCtx.affinityLane ? { affinityLane: logCtx.affinityLane } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };
     const targetReasoningEfforts = supportedLadderFor({
