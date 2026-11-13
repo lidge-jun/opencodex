@@ -483,10 +483,12 @@ async function removeReserved(
   // Only a forced revoke that will remove a still-listed record writes one: a resumed retirement whose record is already
   // gone relies on the tombstone the original force wrote (#8416), and must not recreate one recover may have settled.
   const tombstoned = force && listed && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
-  // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: a later
-  // ordinary revoke would otherwise leave one no recover can settle. Only that exact tombstone, and
-  // only while the link still exists: another process may have committed its own forced revoke.
+  // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: beside a live link it would
+  // only count toward the cap (recover refuses it as link_present). Only that exact tombstone, and only while the link
+  // still exists: another process may have committed its own forced revoke. The finally below drops it on every way
+  // out before the commit, a throw included.
   let written: LinkTombstone | null = null;
+  let committed = false;
   const dropOwnTombstone = (): void => {
     if (!written) return;
     const own = written;
@@ -512,10 +514,12 @@ async function removeReserved(
   // The first intent (cleanup, or the key for a force revoke) is written before stopLink: a failed write leaves the
   // tunnel as it was and nothing has been touched.
   if (!intend(cleanup ? "remote_cleanup" : "key_revoked")) { dropOwnTombstone(); return journalFailed(); }
-  const release = state.supervisor.holdLink?.(id);
+  // Taken inside the try, so a hold that throws is covered by the finally (the tombstone drop) like any later step.
+  let release: (() => void) | undefined;
   // Set when this revoke restarts the tunnel itself after a cleanup that never ran; every other way out leaves it down.
   let restarted = false;
   try {
+    release = state.supervisor.holdLink?.(id);
     if (listed) await state.supervisor.stopLink(id);
     const restartTunnel = async (): Promise<void> => {
       restarted = true;
@@ -604,6 +608,7 @@ async function removeReserved(
       if (result === "journal_failed") return journalFailed();
       if (result === "changed") return fail("link_changed", "The link changed during removal.", 409);
       if (result === "revoke_failed") return fail("key_revoke_failed", "The link key could not be revoked.", 502);
+      committed = true;
       // A revoke that cleaned the Child itself settles any tombstone an earlier forced revoke of this link left.
       if (!force) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
       // Same task as the commit: an open link WebSocket must not outlive its link (design T4 2.4).
@@ -626,6 +631,7 @@ async function removeReserved(
     }
     return Response.json({ linkId: id });
   } finally {
+    if (!committed) dropOwnTombstone();
     // The hold goes before finish writes the outcome. A revoke that leaves the tunnel down drops its live mark first, so a
     // reload in between already finds its open entry suspended (revokeSuspendsLink); this is synchronous, nothing interleaves.
     if (!restarted) journal.release();

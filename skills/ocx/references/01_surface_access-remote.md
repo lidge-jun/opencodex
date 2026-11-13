@@ -24,7 +24,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
 | `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
 | `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
 | `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
@@ -49,7 +49,7 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
-| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
 | `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
 | `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
 | `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
@@ -185,7 +185,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 - Runs the managed planted ocx-child's disconnect --purge --expect-link <id> over the link's alias with its pinned host key, never a sibling route. The Child restores only when its state and its CODEX_HOME ownership record both name that link.
 - Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; a residual one needs ocx-child detach on that machine.
-- A forced revoke of a Home-initiated ephemeral link writes the tombstone; a link that still exists answers link_present. Without a link operation journal, --operation-id answers operation_journal_unavailable.
+- A forced revoke of a Home-initiated ephemeral link writes the tombstone; a link that still exists answers link_present, and any other Home-initiated link naming the same alias (case-insensitive) answers alias_linked before the machine is contacted. Without a link operation journal, --operation-id answers operation_journal_unavailable.
 
 ### `ocx link reconnect`
 

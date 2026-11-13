@@ -47,7 +47,7 @@ function link(over: Partial<LinkRecord> = {}): LinkRecord {
   };
 }
 
-function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string } = {}) {
+function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string; holdThrows?: boolean } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: (opts.keyRevokeFails ? [{ id: "fixture-key" }] : []) as OcxConfig["apiKeys"] };
   const knownHosts = join(root, "known_hosts");
@@ -68,7 +68,7 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
       onAuthenticatedCatalog: () => () => {},
     },
     supervisor: {
-      start() {}, ensureStarted: async () => {}, reload: async () => {}, holdLink: () => () => {},
+      start() {}, ensureStarted: async () => {}, reload: async () => {}, holdLink: () => { if (opts.holdThrows) throw new Error("hold failed"); return () => {}; },
       stopLink: async () => { opts.duringStop?.(); }, reconnect: async () => true, status: () => [], stop: async () => {},
     },
   };
@@ -219,6 +219,8 @@ describe("POST /api/link/recover", () => {
     ["a receipt for another link", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true, linkId: OTHER }), "receipt_unbound"],
     ["a receipt without a link id", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true }), "receipt_unbound"],
     ["a binary it did not remove", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: false, linkId: ID }), "purge_incomplete"],
+    // The in-use marker settles only a report bound to this link: the link check comes first.
+    ["a kept binary with the in-use marker, reported for another link", ok(JSON.stringify({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: false, linkId: OTHER }) + "\n", 0, "ocx-purge-kept:binary_in_use\n"), "receipt_unbound"],
   ])("%s is not proof of cleanup", async (_name, result, hint) => {
     const h = harness([link()]);
     await forceRevoke(h);
@@ -605,12 +607,48 @@ describe("final review follow-ups", () => {
     expect(tombstones()).toEqual([]);
   });
 
+  test("a throw after the early tombstone write (stopLink rejecting) drops that tombstone and keeps the link", async () => {
+    const h = harness([link()], { duringStop: () => { throw new Error("tunnel kill failed"); } });
+    await expect(h.request("DELETE", "/api/link/" + ID, { force: true })).rejects.toThrow("tunnel kill failed");
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
+  test("a throw while taking the tunnel hold drops the tombstone and keeps the link", async () => {
+    const h = harness([link()], { holdThrows: true });
+    await expect(h.request("DELETE", "/api/link/" + ID, { force: true })).rejects.toThrow("hold failed");
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
   test("a journal write that fails before the link goes drops the tombstone the forced revoke wrote", async () => {
     const operationsPath = join(root, "operations.json");
     const h = harness([link()], { operationsPath, duringStop: () => { writeFileSync(operationsPath, "{ not json"); } });
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true, operationId: "revoke-1" });
     expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([500, "operation_journal_failed"]);
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+});
+
+describe("recover while another link names the alias", () => {
+  test("is refused with 409 before any SSH, whatever the alias's case, and the tombstone stays", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    // The machine was enrolled again under the same alias (spelled differently), and that link still exists.
+    h.store.links.push(link({ id: OTHER, alias: "DevBox" }));
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect([res.status, (await errorOf(res)).code]).toEqual([409, "alias_linked"]);
+    expect(h.commands.filter(c => c.includes("ocx-managed-purge"))).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
+
+  test("a client-initiated link with the same alias does not block it", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    h.store.links.push(link({ id: OTHER, direction: "client-initiated" }));
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(200);
     expect(tombstones()).toEqual([]);
   });
 });
