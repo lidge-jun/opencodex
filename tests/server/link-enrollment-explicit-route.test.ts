@@ -401,10 +401,11 @@ posixTest("each refusal says what to fix, the key's own directory apart from a d
   rmSync(join(root, "keys"), { recursive: true, force: true });
   const above = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: keyUnder(0o775) }, exclusive: true });
   const message = (answer: { body: Record<string, unknown> }) => (answer.body.error as { message: string }).message;
-  // A key put straight into /tmp gets the same text: it must not read as "remove write access on /tmp" (with sudo, that breaks
-  // the machine), so the chmod is for a directory that is the user's own, and moving the key is the other way out.
-  expect(message(own)).toBe("The directory that holds the identity file must be owned by this user or root and not writable by group or others (chmod go-w on it if it is yours, or move the key into a private directory such as ~/.ssh).");
-  expect(message(above)).toBe("Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp, and every symlink on its path must be owned by this user or root (chmod go-w on such a directory if it is yours, or move the key into a private directory such as ~/.ssh). A home or state folder created under umask 002 (per-user groups on Ubuntu or Fedora) is group-writable and is refused for that reason.");
+  // A key put straight into /tmp gets the same text: it must not read as "remove write access on /tmp" (with sudo, or for a Home
+  // running as root, which owns /tmp, that breaks the machine), so moving the key comes first and the chmod is only for a private
+  // directory of the user's, never a shared or system one.
+  expect(message(own)).toBe("The directory that holds the identity file must be owned by this user or root and not writable by group or others. Move the key into a private directory of this user's whose path passes these checks (such as ~/.ssh, if the home directory above it passes too); run chmod go-w only on a private directory of this user's, never on a shared or system directory such as /tmp, /var/tmp or /dev/shm, even when the Home runs as root.");
+  expect(message(above)).toBe("Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp, and every symlink on its path must be owned by this user or root. Move the key to a path where every directory and symlink passes these checks (such as ~/.ssh, if the home directory above it passes too), or run chmod go-w on a directory above it that is a private one of this user's, never on a shared or system directory, even when the Home runs as root; a symlink another user owns cannot be fixed by chmod: replace it or keep it off the path. A home or state folder created under umask 002 (per-user groups on Ubuntu or Fedora) is group-writable and is refused for that reason.");
   for (const answer of [own, above]) expect(JSON.stringify(answer.body)).not.toContain(root);
 });
 
