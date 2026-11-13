@@ -435,7 +435,7 @@ saved disabled/missing roster choices; it is not the eligible-picker set. Bare a
 from the routed preset surface because a bare id activates complete Codex-picker ordering.
 
 PUT accepts `models` and/or `pickerOrder`; `pickerOrderMode` requires `pickerOrder` and accepts
-`alphabetical`, `provider`, `most-used`, or null. Roster arrays keep their existing exact string
+`alphabetical`, `provider`, `family`, `most-used`, or null. Roster arrays keep their existing exact string
 values and five-slot cap. Picker arrays reject blank, duplicate or ineligible ids. Null/empty
 order clears order and mode; a nonempty order without a mode clears only the mode. Validation
 finishes before a synchronous live mutation/save. An unsupported future deletion-provenance format
