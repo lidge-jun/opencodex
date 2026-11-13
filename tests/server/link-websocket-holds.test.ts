@@ -483,4 +483,3 @@ describe("paced reads on the relay (#8601)", () => {
     expect(s.ws!.data.linkTurnObserver?.(1).pacedReads).toBe(true);
   });
 });
-

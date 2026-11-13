@@ -30,7 +30,7 @@ function expectSyncAdmission(pkg: string, cwd: string, env: Record<string, strin
   expect({ status: sync.status, stderr: sync.stderr }).toMatchObject({ status: admitted ? 5 : 7 });
 }
 
-test.skipIf(process.platform === "win32")("npm child fences identity, deadline and sync before mutation and installs the pinned version", async () => {
+test.skipIf(process.platform === "win32").each(["child admission", "parent apply", "parent uncertainty"])("npm orchestration: %s", async scenario => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-node-pin-")));
   const home = join(root, "home"), pkg = join(root, "lib/node_modules/@bitkyc08/opencodex"), path = join(root, "path");
   const result = join(root, "result.json"), log = join(root, "npm.log"), cache = join(root, "cache");
@@ -96,6 +96,11 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
       expect(existsSync(join(backup, "package.json"))).toBe(true);
       expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
     } finally { update.release(); }
+    if (scenario !== "child admission") {
+      rmSync(backup, { recursive: true });
+      // The fake npm logger reads this even during the parent’s pre-child plan.
+      writeFileSync(result, JSON.stringify({ phase: "preflight" }));
+    }
     const run = (planToken: string, deadline?: number, rollback = false) => {
       const encoded = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken });
       const args = [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result];
@@ -106,176 +111,122 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     };
     const encoded = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: token });
     const descendant = join(root, "installer-descendant");
-    const { capability } = issueOrchestratedResultCapability(result);
-    const timeout = spawnSync(node, [launcher, "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result], {
-      cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: capability, OCX_FIXTURE_TIMEOUT: "1", OCX_FIXTURE_DESCENDANT: descendant }, encoding: "utf8", timeout: 30000,
-    });
-    expect({ status: timeout.status, stderr: timeout.stderr }).toMatchObject({ status: 1 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "failed", terminationConfirmed: false });
-    expect(() => process.kill(Number(readFileSync(descendant, "utf8")), 0)).toThrow();
-    expect(isUpdateInFlight(home)).toBe(true);
-    expectSyncAdmission(pkg, root, env, false);
-    expireFixtureFence(home);
-    rmSync(result); rmSync(log);
-    const unauthorized = spawnSync(node, [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result], {
-      cwd: root, env: { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" }, encoding: "utf8", timeout: 30000,
-    });
-    expect(unauthorized.status).toBe(64); expect(existsSync(result)).toBe(false); expect(existsSync(log)).toBe(false);
-    const holder = tryAcquireUpdateSyncMutex(home, "sync");
-    expect(holder.kind).toBe("acquired");
-    try { expect(run(token).status).toBe(10); expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "refused", error: "sync-in-progress" }); }
-    finally { if (holder.kind === "acquired") holder.release(); }
-    const deadline = run(token, 1);
-    expect({ status: deadline.status, stderr: deadline.stderr }).toMatchObject({ status: 10 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "refused", error: "deadline-passed" });
-    const changed = run("a".repeat(43));
-    expect({ status: changed.status, stderr: changed.stderr }).toMatchObject({ status: 10 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "refused", error: "plan-changed" });
-    expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
-    expect(readFileSync(log, "utf8")).not.toContain('"install"');
-    const rolledBack = run(token, undefined, true);
-    expect({ status: rolledBack.status, stdout: rolledBack.stdout, stderr: rolledBack.stderr }).toMatchObject({ status: 1 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "failed", rollbackPerformed: true });
-    expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
-    expireFixtureFence(home);
-    const updated = run(token);
-    expect({ status: updated.status, stdout: updated.stdout, stderr: updated.stderr }).toMatchObject({ status: 0 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "installed", activeRoot: pkg });
-    expect(JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8")).fenceUntil).toBeUndefined();
-    expect(isUpdateInFlight(home)).toBe(false);
-    expectSyncAdmission(pkg, root, env, true);
-    expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
-    expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
-    const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
-    // The child takes the result capability out of its environment before any probe or installer runs.
-    expect(calls.length).toBeGreaterThan(0); expect(calls.filter(call => call.capability !== null)).toEqual([]);
-    expect(calls.find(call => call.args[0] === "view").outcome.phase).toBe("preflight");
-    expect(calls.some(call => call.args[0] === "view" && call.args.includes("dist.integrity") && call.args.includes("@bitkyc08/opencodex@2.1.0"))).toBe(true);
-    expect(calls.find(call => call.args[0] === "install").outcome.phase).toBe("mutating");
-    expect(calls.find(call => call.args[0] === "install").args).toContain("@bitkyc08/opencodex@2.1.0");
-    const installs = calls.filter(call => call.args[0] === "install").length;
-    expireFixtureFence(home);
-    const current = run(token);
-    expect({ status: current.status, stderr: current.stderr }).toMatchObject({ status: 0 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "preflight" });
-    expect(readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(call => call.args[0] === "install")).toHaveLength(installs);
-    const restored = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); restored.version = "2.0.0";
-    writeFileSync(join(pkg, "package.json"), JSON.stringify(restored));
     const parentArgs = [join(pkg, "bin/ocx.mjs"), "update", "--yes", "--json", "--tag", "preview"];
     const parentEnv = { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" };
     const parent = (extraEnv = {}) => spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, ...extraEnv }, encoding: "utf8", timeout: 30000 });
-    const parentTimeout = parent({ OCX_FIXTURE_TIMEOUT: "1", OCX_FIXTURE_DESCENDANT: descendant });
-    expect({ status: parentTimeout.status, stderr: parentTimeout.stderr }).toMatchObject({ status: 12 });
-    expect(JSON.parse(parentTimeout.stdout)).toMatchObject({ applied: false, error: "installer-termination-unconfirmed" });
-    expect(isUpdateInFlight(home)).toBe(true);
-    expireFixtureFence(home);
-    const sync = tryAcquireUpdateSyncMutex(home, "sync");
-    expect(sync.kind).toBe("acquired");
-    try { const blocked = parent(); expect(blocked.status).toBe(10); expect(JSON.parse(blocked.stdout).error).toBe("sync-in-progress"); }
-    finally { if (sync.kind === "acquired") sync.release(); }
-    const parentRollback = parent({ OCX_FIXTURE_ROLLBACK: "1" });
-    expect({ status: parentRollback.status, stderr: parentRollback.stderr }).toMatchObject({ status: 11 });
-    expect(JSON.parse(parentRollback.stdout)).toMatchObject({ rolledBack: true, applied: false });
-    expireFixtureFence(home);
-    const parentApplied = parent({ OCX_FIXTURE_MOVED: "1" });
-    expect({ status: parentApplied.status, stderr: parentApplied.stderr }).toMatchObject({ status: 0 });
-    expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
-    expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
-    expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@preview");
-    expect(readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(call => call.capability !== null)).toEqual([]);
-    expireFixtureFence(home);
-    const resetVersion = () => {
-      const m = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); m.version = "2.0.0";
-      writeFileSync(join(pkg, "package.json"), JSON.stringify(m));
-    };
-    resetVersion();
-    const overrun = spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, OCX_FIXTURE_OVERRUN: "1" },
-      encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "ignore"] });
-    expect(overrun.status).toBe(12);
-    expect(JSON.parse(overrun.stdout).error).toBe("overrun");
-    const marker = JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8"));
-    expect(marker.phase).toBe("mutating");
-    expect(() => process.kill(marker.pid, 0)).not.toThrow();
-    expect(isUpdateInFlight(home)).toBe(true);
-    await new Promise<void>((resolveDone, rejectDone) => {
-      const timer = setTimeout(() => { observer.close(); rejectDone(new Error("fixture child did not finish")); }, 30000);
-      const check = () => {
-        const current = JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8"));
-        if (["installed", "failed", "refused"].includes(current.phase) && inspectUpdateSyncMutex(home) === "free") {
-          clearTimeout(timer); observer.close(); resolveDone();
-        }
+    if (scenario === "child admission") {
+      const { capability } = issueOrchestratedResultCapability(result);
+      const timeout = spawnSync(node, [launcher, "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result], {
+        cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: capability, OCX_FIXTURE_TIMEOUT: "1", OCX_FIXTURE_DESCENDANT: descendant }, encoding: "utf8", timeout: 30000,
+      });
+      expect({ status: timeout.status, stderr: timeout.stderr }).toMatchObject({ status: 1 });
+      expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "failed", terminationConfirmed: false });
+      expect(() => process.kill(Number(readFileSync(descendant, "utf8")), 0)).toThrow();
+      expect(isUpdateInFlight(home)).toBe(true);
+      expectSyncAdmission(pkg, root, env, false);
+      expireFixtureFence(home);
+      rmSync(result); rmSync(log);
+      const unauthorized = spawnSync(node, [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result], {
+        cwd: root, env: { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" }, encoding: "utf8", timeout: 30000,
+      });
+      expect(unauthorized.status).toBe(64); expect(existsSync(result)).toBe(false); expect(existsSync(log)).toBe(false);
+      const holder = tryAcquireUpdateSyncMutex(home, "sync");
+      expect(holder.kind).toBe("acquired");
+      try { expect(run(token).status).toBe(10); expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "refused", error: "sync-in-progress" }); }
+      finally { if (holder.kind === "acquired") holder.release(); }
+      const deadline = run(token, 1);
+      expect({ status: deadline.status, stderr: deadline.stderr }).toMatchObject({ status: 10 });
+      expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "refused", error: "deadline-passed" });
+      const changed = run("a".repeat(43));
+      expect({ status: changed.status, stderr: changed.stderr }).toMatchObject({ status: 10 });
+      expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "refused", error: "plan-changed" });
+      expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
+      expect(readFileSync(log, "utf8")).not.toContain('"install"');
+      const rolledBack = run(token, undefined, true);
+      expect({ status: rolledBack.status, stdout: rolledBack.stdout, stderr: rolledBack.stderr }).toMatchObject({ status: 1 });
+      expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "failed", rollbackPerformed: true });
+      expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
+      expireFixtureFence(home);
+      const updated = run(token);
+      expect({ status: updated.status, stdout: updated.stdout, stderr: updated.stderr }).toMatchObject({ status: 0 });
+      expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "installed", activeRoot: pkg });
+      expect(JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8")).fenceUntil).toBeUndefined();
+      expect(isUpdateInFlight(home)).toBe(false);
+      expectSyncAdmission(pkg, root, env, true);
+      expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
+      expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      // The child takes the result capability out of its environment before any probe or installer runs.
+      expect(calls.length).toBeGreaterThan(0); expect(calls.filter(call => call.capability !== null)).toEqual([]);
+      expect(calls.find(call => call.args[0] === "view").outcome.phase).toBe("preflight");
+      expect(calls.some(call => call.args[0] === "view" && call.args.includes("dist.integrity") && call.args.includes("@bitkyc08/opencodex@2.1.0"))).toBe(true);
+      expect(calls.find(call => call.args[0] === "install").outcome.phase).toBe("mutating");
+      expect(calls.find(call => call.args[0] === "install").args).toContain("@bitkyc08/opencodex@2.1.0");
+      const installs = calls.filter(call => call.args[0] === "install").length;
+      expireFixtureFence(home);
+      const current = run(token);
+      expect({ status: current.status, stderr: current.stderr }).toMatchObject({ status: 0 });
+      expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "preflight" });
+      expect(readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(call => call.args[0] === "install")).toHaveLength(installs);
+    }
+    if (scenario === "parent apply") {
+      const parentTimeout = parent({ OCX_FIXTURE_TIMEOUT: "1", OCX_FIXTURE_DESCENDANT: descendant });
+      expect({ status: parentTimeout.status, stderr: parentTimeout.stderr }).toMatchObject({ status: 12 });
+      expect(JSON.parse(parentTimeout.stdout)).toMatchObject({ applied: false, error: "installer-termination-unconfirmed" });
+      expect(isUpdateInFlight(home)).toBe(true);
+      expireFixtureFence(home);
+      const sync = tryAcquireUpdateSyncMutex(home, "sync");
+      expect(sync.kind).toBe("acquired");
+      try { const blocked = parent(); expect(blocked.status).toBe(10); expect(JSON.parse(blocked.stdout).error).toBe("sync-in-progress"); }
+      finally { if (sync.kind === "acquired") sync.release(); }
+      const parentRollback = parent({ OCX_FIXTURE_ROLLBACK: "1" });
+      expect({ status: parentRollback.status, stderr: parentRollback.stderr }).toMatchObject({ status: 11 });
+      expect(JSON.parse(parentRollback.stdout)).toMatchObject({ rolledBack: true, applied: false });
+      expireFixtureFence(home);
+      const parentApplied = parent({ OCX_FIXTURE_MOVED: "1" });
+      expect({ status: parentApplied.status, stderr: parentApplied.stderr }).toMatchObject({ status: 0 });
+      expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
+      expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
+      expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@preview");
+      expect(readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(call => call.capability !== null)).toEqual([]);
+      expireFixtureFence(home);
+    }
+    if (scenario === "parent uncertainty") {
+      const resetVersion = () => {
+        const m = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); m.version = "2.0.0";
+        writeFileSync(join(pkg, "package.json"), JSON.stringify(m));
       };
-      const observer = watch(home, check);
-      check();
-    });
-    expireFixtureFence(home);
-    resetVersion();
-    const missing = parent({ OCX_FIXTURE_EXIT_EFFECT: "missing" });
-    expect({ status: missing.status, stderr: missing.stderr }).toMatchObject({ status: 12 });
-    expect(JSON.parse(missing.stdout).error).toBe("outcome-unverified");
-    expireFixtureFence(home);
-    resetVersion();
-    const damaged = parent({ OCX_FIXTURE_EXIT_EFFECT: "damage" });
-    expect({ status: damaged.status, stderr: damaged.stderr }).toMatchObject({ status: 12 });
-    expect(JSON.parse(damaged.stdout)).toMatchObject({ error: "install-unverified", applied: false });
-  } finally { rmSync(root, { recursive: true, force: true }); }
-}, 90000);
-
-test.skipIf(process.platform === "win32")("pnpm child reports unchanged active tree without rollback and installs the pinned version", () => {
-  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-pnpm-child-")));
-  const home = join(root, "home"), group = join(root, "global/v11"), bin = join(root, "bin");
-  const pkg = join(group, "node_modules/@bitkyc08/opencodex"), result = join(root, "result.json"), log = join(root, "pnpm.log");
-  mkdirSync(home); mkdirSync(bin); mkdirSync(pkg, { recursive: true });
-  try {
-    cpSync(repoPath("src"), join(pkg, "src"), { recursive: true }); cpSync(repoPath("bin"), join(pkg, "bin"), { recursive: true });
-    const manifest = JSON.parse(readFileSync(repoPath("package.json"), "utf8")); manifest.version = "2.0.0";
-    writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest)); symlinkSync(repoPath("node_modules"), join(pkg, "node_modules"));
-    writeFileSync(join(group, "node_modules/.modules.yaml"), "layoutVersion: 5\n");
-    writeFileSync(join(home, "config.json"), JSON.stringify({ port: 1 }));
-    const executable = Bun.which("node"); if (!executable) throw new Error("Node required");
-    const node = spawnSync(executable, ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
-    if (!node || !node.startsWith("/")) throw new Error("Node executable is not an absolute path");
-    for (const name of ["ocx", "opencodex"]) { writeFileSync(join(bin, name), `#!/bin/sh\nexec '${node}' '${pkg}/bin/ocx.mjs' "$@"\n`); chmodSync(join(bin, name), 0o755); }
-    writeFileSync(join(bin, "pnpm"), `#!${node}\nconst fs=require('node:fs'),p=require('node:path'),a=process.argv.slice(2),e=process.env;\nfs.appendFileSync(e.OCX_FIXTURE_LOG,JSON.stringify({args:a,outcome:JSON.parse(fs.readFileSync(e.OCX_FIXTURE_RESULT)),mutex:fs.existsSync(p.join(e.OPENCODEX_HOME,'sync-update.mutation.lock'))})+'\\n');\nconst m=JSON.parse(fs.readFileSync(p.join(e.OCX_FIXTURE_PKG,'package.json')));\nif(a[0]==='list') console.log(JSON.stringify([{path:e.OCX_FIXTURE_GROUP,dependencies:{'@bitkyc08/opencodex':{version:m.version,path:e.OCX_FIXTURE_PKG}}}]));\nelse if(a[0]==='root') console.log(e.OCX_FIXTURE_GROUP+'/node_modules');\nelse if(a[0]==='config') console.log(a[2]==='global-dir'?p.dirname(e.OCX_FIXTURE_GROUP):e.OCX_FIXTURE_BIN);\nelse if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':'2.1.0');\nelse if(a[0]==='add'){if(e.OCX_FIXTURE_FAIL==='1')process.exit(1);m.version='2.1.0';fs.writeFileSync(p.join(e.OCX_FIXTURE_PKG,'package.json'),JSON.stringify(m));}\nelse process.exit(90);\n`); chmodSync(join(bin, "pnpm"), 0o755);
-    const token = createUpdatePlanToken({ currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "pnpm", cliRoot: pkg, servingRoot: null, runtimeOwner: "none", runtime: null });
-    const encoded = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: token });
-    const args = [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result];
-    const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"),
-      OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "1", OPENCODEX_BUN_PATH: process.execPath,
-      PATH: bin, OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg, OCX_FIXTURE_GROUP: group, OCX_FIXTURE_BIN: bin, OCX_FIXTURE_RESULT: result };
-    const firstCapability = issueOrchestratedResultCapability(result).capability;
-    const failed = spawnSync(node, args, { cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: firstCapability, OCX_FIXTURE_FAIL: "1" }, encoding: "utf8", timeout: 30000 });
-    expect({ status: failed.status, stdout: failed.stdout, stderr: failed.stderr }).toMatchObject({ status: 1 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "failed", rollbackPerformed: false });
-    expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
-    expireFixtureFence(home);
-    rmSync(result, { force: true });
-    const nextCapability = issueOrchestratedResultCapability(result).capability;
-    const updated = spawnSync(node, args, { cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: nextCapability }, encoding: "utf8", timeout: 30000 });
-    expect({ status: updated.status, stdout: updated.stdout, stderr: updated.stderr }).toMatchObject({ status: 0 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "installed", activeRoot: pkg });
-    expect(JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8")).fenceUntil).toBeUndefined();
-    expect(isUpdateInFlight(home)).toBe(false);
-    expectSyncAdmission(pkg, root, env, true);
-    expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
-    const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(calls.find(call => call.args[0] === "list").outcome.phase).toBe("preflight");
-    expect(calls.find(call => call.args[0] === "add")).toMatchObject({ outcome: { phase: "mutating" }, mutex: true });
-    expect(calls.some(call => call.args[0] === "view" && call.args.includes("dist.integrity") && call.args.includes("@bitkyc08/opencodex@2.1.0"))).toBe(true);
-    expect(calls.find(call => call.args[0] === "add").args).toContain("@bitkyc08/opencodex@2.1.0");
-    expireFixtureFence(home);
-    const restored = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); restored.version = "2.0.0";
-    writeFileSync(join(pkg, "package.json"), JSON.stringify(restored));
-    const parentArgs = [join(pkg, "bin/ocx.mjs"), "update", "--yes", "--json"];
-    const parentEnv = { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" };
-    const parent = (extraEnv = {}) => spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, ...extraEnv }, encoding: "utf8", timeout: 30000 });
-    const unchanged = parent({ OCX_FIXTURE_FAIL: "1" });
-    expect({ status: unchanged.status, stderr: unchanged.stderr }).toMatchObject({ status: 11 });
-    expect(JSON.parse(unchanged.stdout)).toMatchObject({ rolledBack: false, applied: false });
-    expireFixtureFence(home);
-    const parentApplied = parent();
-    expect({ status: parentApplied.status, stderr: parentApplied.stderr }).toMatchObject({ status: 0 });
-    expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
+      resetVersion();
+      const overrun = spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, OCX_FIXTURE_OVERRUN: "1" },
+        encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "ignore"] });
+      expect(overrun.status).toBe(12);
+      expect(JSON.parse(overrun.stdout).error).toBe("overrun");
+      const marker = JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8"));
+      expect(marker.phase).toBe("mutating");
+      expect(() => process.kill(marker.pid, 0)).not.toThrow();
+      expect(isUpdateInFlight(home)).toBe(true);
+      await new Promise<void>((resolveDone, rejectDone) => {
+        const timer = setTimeout(() => { observer.close(); rejectDone(new Error("fixture child did not finish")); }, 30000);
+        const check = () => {
+          const current = JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8"));
+          if (["installed", "failed", "refused"].includes(current.phase) && inspectUpdateSyncMutex(home) === "free") {
+            clearTimeout(timer); observer.close(); resolveDone();
+          }
+        };
+        const observer = watch(home, check);
+        check();
+      });
+      expireFixtureFence(home);
+      resetVersion();
+      const missing = parent({ OCX_FIXTURE_EXIT_EFFECT: "missing" });
+      expect({ status: missing.status, stderr: missing.stderr }).toMatchObject({ status: 12 });
+      expect(JSON.parse(missing.stdout).error).toBe("outcome-unverified");
+      expireFixtureFence(home);
+      resetVersion();
+      const damaged = parent({ OCX_FIXTURE_EXIT_EFFECT: "damage" });
+      expect({ status: damaged.status, stderr: damaged.stderr }).toMatchObject({ status: 12 });
+      expect(JSON.parse(damaged.stdout)).toMatchObject({ error: "install-unverified", applied: false });
+    }
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 90000);
 

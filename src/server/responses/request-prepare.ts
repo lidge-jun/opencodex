@@ -17,7 +17,7 @@ import {
   restoreCachedEncryptedAgentTasks,
   recoverEncryptedAgentTaskWithResult,
 } from "./agent-task-recovery";
-import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
+import { admitParsedJsonRequestBody, readJsonRequestBody, resolveInboundBodyLimitBytes, takeParsedRequestBody } from "../request-decompress";
 import {
   clientCancelledResponse,
   decodeRequestErrorResponse,
@@ -248,7 +248,9 @@ export async function prepareResponsesRequest(
   const agentTaskRecovery = agentTaskRecoveryConfig(config);
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
+    const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
+    const attached = takeParsedRequestBody(req);
+    body = attached ? admitParsedJsonRequestBody(attached.body, limit, translatorBudget) : await readJsonRequestBody(req, translatorBudget, limit);
   } catch (err) {
     if (options.abortSignal?.aborted || req.signal.aborted) {
       return clientCancelledResponse();

@@ -6,6 +6,7 @@ import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
 import { signedSupplyReview } from "./update-review-signed-supply";
 
 const baseProcessAllowlist: readonly (readonly [string, string, number])[] = [
+  ["src/update/transactional-install.mjs:verifyPnpmInstallTree:process.execArgv","read-only: detect --preserve-symlinks so the lookup roots Node would then consult are confined to the store",1],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.on(signal, () => {})","pre-mutation: keep the update session owner alive during installer supervision",1],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.once(\"exit\", () => { try { if (enteredMutation) session.finish(childOutcome); else session.finishPreflight(); } catch (error) { console.error(`Orchestrated outcome write failed: ${error?.message ?? error}`); process.exitCode = 1; } })","pre-mutation: register session outcome cleanup at exit",1],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.once(\"exit\", () => { try { if (enteredMutation) session.finish(childOutcome); else session.finishPreflight(); } catch (error) { console.error(`Update outcome write failed: ${error?.message ?? error}`); process.exitCode = 1; } })","pre-mutation: register legacy session outcome cleanup at exit",1],
