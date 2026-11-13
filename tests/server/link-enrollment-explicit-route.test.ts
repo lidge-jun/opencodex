@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -9,6 +9,7 @@ import type { LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv, WINDOWS_OS_PROBE } from "../../src/link/ssh-argv";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
+import { operationsJournalPath } from "../../src/link/operations-journal";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -108,7 +109,7 @@ function harness() {
     now: () => 1_800_000_000_000, sshRunner: runner,
     readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
     linkKnownHostsPath: () => knownHosts, liveListenPort: () => 10100,
-    issueApiKey: (cfg, name) => { const key = { id: "fixture-key-1", name, key: "fixture-child-key", createdAt: "2026-11-13T00:00:00Z" }; cfg.apiKeys = [key]; return key; },
+    issueApiKey: (cfg, name, id) => { const key = { id: id ?? "fixture-key-1", name, key: "fixture-child-key", createdAt: "2026-11-13T00:00:00Z" }; cfg.apiKeys = [key]; return key; },
     revokeApiKey: cfg => { cfg.apiKeys = []; return true; },
   };
   async function call(method: "POST" | "DELETE", route: string, body: unknown) {
@@ -261,4 +262,38 @@ test("an identity file that is not an accepted path form is refused with the rou
   const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: "~/.ssh/id_ed25519" }, exclusive: true });
   expect({ status: refused.status, code: code(refused), hint: (refused.body.error as { hint?: string }).hint }).toEqual({ status: 400, code: "invalid_explicit_route", hint: "identity_file_form" });
   expect(h.ssh).toEqual([]);
+});
+
+test("a repeat of a journalled enrollment replays its outcome after its key file is gone, and another key answers operation_mismatch", async () => {
+  const h = harness();
+  const key = keyFile();
+  const keyed = { explicitRoute: { ...ROUTE, identityFile: key }, exclusive: true };
+  await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, ...keyed });
+  await h.call("POST", "confirm-host", { alias: ALIAS, fingerprint, ...keyed });
+  const applied = await h.call("POST", "apply", { alias: ALIAS, fingerprint, operationId: "op-keyed", ...keyed });
+  expect(applied.status).toBe(202);
+  // The answer was lost, and the caller's key went away (or its permissions changed) before the repeat.
+  rmSync(key);
+  const before = h.ssh.length;
+  const replay = await h.call("POST", "apply", { alias: ALIAS, fingerprint, operationId: "op-keyed", ...keyed });
+  expect({ status: replay.status, linkId: replay.body.linkId, outcome: replay.body.outcome }).toEqual({ status: 202, linkId: applied.body.linkId, outcome: "committed" });
+  const other = await h.call("POST", "apply", { alias: ALIAS, fingerprint, operationId: "op-keyed", explicitRoute: { ...ROUTE, identityFile: join(root, "gone_ed25519") }, exclusive: true });
+  expect({ status: other.status, code: code(other) }).toEqual({ status: 409, code: "operation_mismatch" });
+  expect(h.ssh.length).toBe(before);
+});
+
+test("a new journalled enrollment whose key file went away after confirm-host is refused before its journal entry and any SSH", async () => {
+  const h = harness();
+  const key = keyFile();
+  const keyed = { explicitRoute: { ...ROUTE, identityFile: key }, exclusive: true };
+  await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, ...keyed });
+  await h.call("POST", "confirm-host", { alias: ALIAS, fingerprint, ...keyed });
+  chmodSync(key, 0o644);
+  const before = h.ssh.length;
+  const refused = await h.call("POST", "apply", { alias: ALIAS, fingerprint, operationId: "op-new", ...keyed });
+  expect({ status: refused.status, code: code(refused), hint: (refused.body.error as { hint?: string }).hint })
+    .toEqual({ status: 400, code: "invalid_identity_file", hint: "identity_file_permissions" });
+  expect(h.ssh.length).toBe(before);
+  expect(existsSync(operationsJournalPath())).toBe(false);
+  expect(h.store.links).toEqual([]);
 });
