@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 import { formatErrorResponse } from "../../src/bridge";
 import { isProxyError } from "../../src/lib/client-error-body";
@@ -71,6 +75,10 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  let home: string;
+  let previousHome: string | undefined;
+  beforeEach(() => { previousHome = process.env.OPENCODEX_HOME; home = mkdtempSync(join(tmpdir(), "ocx-policy-fallback-")); process.env.OPENCODEX_HOME = home; });
+  afterEach(() => { if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome; removeTreeWithRetry(home); });
   test.each([401, 402, 429, "local"] as const)("synthetic failure attribution across candidates (%s)", async outcome => {
     clearProviderCacheAffinityForTests();
     const lane = "policy-terminal-source";
@@ -92,7 +100,8 @@ describe("policy candidate fallback", () => {
           context.affinityProviderName = "provider-a";
           context.affinityKeyEntryId = "a";
           context.cacheAffinityApplicable = true;
-          return Response.json({ error: { message: "local failure" } }, { status: 503 });
+          if (outcome === "local") stampApiKeyAccountLabel(context, "provider-a", routedProviderConfig("provider-a", config.providers["provider-a"]!));
+          return Response.json({ error: { message: "local failure" } }, { status: outcome === "local" ? 429 : 503 });
         }
         if (outcome === "local") return policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
         seedAttempt(context, "provider-b", "model-b");
@@ -105,7 +114,7 @@ describe("policy candidate fallback", () => {
       },
     });
     expect(calls).toBe(2);
-    expect(response.status).toBe(outcome === "local" ? 503 : outcome);
+    expect(response.status).toBe(outcome === "local" ? 429 : outcome);
     expect(log.terminalSource).toBe(outcome === "local" ? "synthetic" : undefined);
     finalizeProviderCacheAffinity(log, response.status, undefined);
     expect(boundEntryIdForLane(lane)).toBe(outcome === "local" ? "a" : undefined);

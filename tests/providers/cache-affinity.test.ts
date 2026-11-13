@@ -21,6 +21,36 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { isKeyInCooldown, setKeyCooldown } from "../../src/providers/api-key-cooldowns";
 import { routedProviderConfig } from "../../src/providers/routed-config";
 import { captureCacheAffinityIdentity, capturedCacheAffinityIdentity, currentCacheAffinityIdentity, reconcileCacheAffinityIdentities } from "../../src/providers/cache-affinity-identity";
+import { clearProviderApiKeyQuotaCache, setCachedProviderApiKeyQuotaForTests } from "../../src/providers/quota-key-accounts";
+
+describe("quota strategy and cache affinity", () => {
+  let home: string;
+  let previous: string | undefined;
+  beforeEach(() => {
+    previous = process.env.OPENCODEX_HOME;
+    home = mkdtempSync(join(tmpdir(), "ocx-affinity-quota-"));
+    process.env.OPENCODEX_HOME = home;
+    clearProviderCacheAffinityForTests(); clearKeyCooldowns(); clearProviderApiKeyQuotaCache();
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+    removeTreeWithRetry(home);
+    clearProviderCacheAffinityForTests(); clearKeyCooldowns(); clearProviderApiKeyQuotaCache();
+  });
+  test.each([100, 50, null] as const)("bound quota %s yields only when spent", percent => {
+    const p = provider({ apiKey: "key-c", apiKeyPoolStrategy: "quota", apiKeyPool: [
+      { id: "a", key: "key-a" }, { id: "b", key: "key-b" }, { id: "c", key: "key-c" },
+    ] });
+    const config = { ...loadConfig(), providers: { kimi: p } } as OcxConfig;
+    saveConfig(config);
+    setKeyCooldown("kimi", "c", Date.now() + 60_000);
+    if (percent !== null) setCachedProviderApiKeyQuotaForTests("kimi", p, "a", "key-a", { weeklyPercent: percent, updatedAt: Date.now() } as never);
+    setCachedProviderApiKeyQuotaForTests("kimi", p, "b", "key-b", { weeklyPercent: 10, updatedAt: Date.now() } as never);
+    recordAffinity({ lane: "quota-lane", providerName: "kimi", entryId: "a", identity: currentCacheAffinityIdentity("kimi", p, "a"), model: "m1", cacheWrite: 9000 });
+    const selected = selectProactiveApiKeyTransport(config, "kimi", routedProviderConfig("kimi", p), undefined, Date.now(), { lane: "quota-lane", model: "m1" });
+    expect(selected?.apiKey).toBe(percent === 100 ? "key-b" : "key-a");
+  });
+});
 
 const NOW = 1_700_000_000_000;
 function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {

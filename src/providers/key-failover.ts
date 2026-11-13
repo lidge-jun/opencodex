@@ -634,7 +634,12 @@ export function selectProactiveApiKeyTransport(
         releaseProviderCacheAffinity(affinity.lane, providerName, hit.entryId);
       } else if (
         !isKeyInCooldown(providerName, entry.id, now) &&
-        !affinityPacingSaturated(providerName, configured, entry.id, now)
+        !affinityPacingSaturated(providerName, configured, entry.id, now) &&
+        !(configured.apiKeyPoolStrategy === "quota" &&
+          (keyHeadroom(providerName, configured, entry) ?? 1) <= 0 &&
+          configured.apiKeyPool?.some(candidate => !candidate.disabled &&
+            !isKeyInCooldown(providerName, candidate.id, now) &&
+            (keyHeadroom(providerName, configured, candidate) ?? 0) > 0))
       ) {
         if (affinity.log) {
           affinity.log.cacheAffinity = "kept";

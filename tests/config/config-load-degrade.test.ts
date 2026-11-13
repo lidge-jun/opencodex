@@ -45,6 +45,19 @@ function candidate(modelDisplayNames: unknown) {
   };
 }
 
+test("invalid provider cache affinity degrades on load but is rejected on write", () => {
+  const raw = { ...candidate(undefined), providers: { xai: { ...candidate(undefined).providers.xai, apiKey: "fixture-key", cacheAffinity: "bogus" } } };
+  expect(validateConfigCandidate(raw).ok).toBe(false);
+  writeFileSync(getConfigPath(), JSON.stringify(raw));
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const loaded = loadConfig();
+    expect(loaded.providers.xai.apiKey).toBe("fixture-key");
+    expect(loaded.providers.xai.cacheAffinity).toBeUndefined();
+    expect(warning.mock.calls.flat().join(" ")).toContain('providers."xai".cacheAffinity');
+  } finally { warning.mockRestore(); }
+});
+
 function writeCandidate(modelDisplayNames: unknown, provider = "xai"): void {
   const config = candidate(modelDisplayNames);
   config.defaultProvider = provider;
