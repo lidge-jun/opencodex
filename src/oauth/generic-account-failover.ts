@@ -352,7 +352,8 @@ function rankAntigravityModelAccounts(config: OcxConfig, ids: string[], model: s
   const rows = new Map((getAccountSet(provider)?.accounts ?? []).map(row => [row.id, row]));
   const strategy = activeGenericStrategy(config, provider);
   if (strategy === "round-robin") {
-    const best = peekRoundRobinAccount(genericPoolKey(provider), ids, genericStickyLimit(config, provider));
+    const poolKey = genericPoolKey(provider, classifyModelFamilyForQuota(provider, model));
+    const best = peekRoundRobinAccount(poolKey, ids, genericStickyLimit(config, provider));
     return best ? [best, ...ids.filter(id => id !== best)] : ids;
   }
   if (strategy === "fill-first") return stableGenericRoster(provider).filter(id => ids.includes(id));
@@ -897,6 +898,13 @@ export function genericFailoverRetryAfterSeconds(providerName: string, now = Dat
 }
 
 /** Test seam and manual-recovery hook. */
+/** A manual selection must win in every ring a request can read, including the per-family ones. */
+export function seedGenericPoolSelection(providerName: string, accountId: string): void {
+  seedPoolRotationAccount(genericPoolKey(providerName), accountId);
+  if (providerName !== "google-antigravity") return;
+  for (const family of ["gem", "cla"] satisfies QuotaModelFamily[]) seedPoolRotationAccount(genericPoolKey(providerName, family), accountId);
+}
+
 export function forgetGenericFailoverRoster(providerName: string): void {
   presence.delete(providerName);
 }
