@@ -11,6 +11,8 @@ import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv, WINDOWS_OS_PROBE } from "../../src/link/ssh-argv";
+import { remoteInspectRuntimeArgv, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../src/link/remote-plant";
+import { createHash } from "node:crypto";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -42,7 +44,9 @@ afterEach(async () => {
 
 const ok = (stdout = ""): SshRunResult => ({ code: 0, stdout, stderr: "" });
 const http = (body: unknown) => ok(JSON.stringify(body) + "\n200");
-type Step = "census" | "probe" | "windows" | "uname" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog" | "disconnect";
+const fakeBinary = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3, 4]);
+const fakeSha = createHash("sha256").update(fakeBinary).digest("hex");
+type Step = "inspect" | "plant" | "purgePlant" | "census" | "probe" | "windows" | "uname" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog" | "disconnect";
 
 function harness(lock: Partial<AliasLockDeps> = {}) {
   const remoteOcx = (args: string[]) => quoteRemote(remoteOcxArgv(args, "posix"));
@@ -70,7 +74,10 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
     async run(argv, options) {
       const command = argv.at(-1) ?? "";
       if (argv[0] === "ssh-keygen") return ok("256 " + fingerprint + " child (ED25519)");
-      const step: Step = command.includes("ocx-census") ? "census" : command === "echo ocx-link-probe" ? "probe" : command === WINDOWS_OS_PROBE ? "windows"
+      const step: Step = command === quoteRemote(remoteInspectRuntimeArgv("posix")) ? "inspect"
+        : command === quoteRemote(remotePlantChildArgv("posix", fakeBinary.byteLength, fakeSha)) ? "plant"
+        : command === quoteRemote(remotePurgePlantedChildArgv("posix")) ? "purgePlant"
+        : command.includes("ocx-census") ? "census" : command === "echo ocx-link-probe" ? "probe" : command === WINDOWS_OS_PROBE ? "windows"
         : command.includes("ocx-platform") ? "uname" : command === remoteOcx(["--version"]) ? "version"
         : command === remoteOcx(["link", "port"]) ? "port" : command === remoteOcx(["config", "show", "--json"]) ? "config"
         : command.includes("ocx-curl-preflight") ? "curl" : command.includes("'connect' '--link' '--key-stdin'") ? "connect"
@@ -106,6 +113,9 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
     readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
     linkKnownHostsPath: () => knownHosts, liveListenPort: () => 10100,
     linkOperationsPath: () => journalPath,
+    resolveChildBinarySource: target => target === "linux-x64"
+      ? { ok: true, artifact: { targetTriple: "linux-x64", bytes: fakeBinary, sizeBytes: fakeBinary.byteLength, sha256: fakeSha, source: "cache" } }
+      : { ok: false, reason: "artifact_not_found" },
     linkAliasLock: { lockDir: join(root, "locks"), waitMs: 0, ...lock },
     issueApiKey: (cfg, name, id) => { if (!issueWorks) throw new Error("reconcile failed after the save"); const key = { id: id ?? "unreserved-key", name, key: "fixture-child-key", createdAt: "2026-11-13T00:00:00Z" }; cfg.apiKeys = [...(cfg.apiKeys ?? []), key]; return key; },
     revokeApiKey: (cfg, id) => { if (!revokeWorks) return false; const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
@@ -345,6 +355,21 @@ describe("review round 1", () => {
     const applied = await h.enroll();
     expect({ code: code(applied), outcome: applied.body.outcome }).toEqual({ code: "key_issue_uncertain", outcome: "unknown" });
     expect(h.journal().operations[0]!.state).toBe("unknown");
+  });
+
+  test("an uncertain key issue after a fresh plant still purges the plant, and the outcome stays unknown", async () => {
+    const h = harness();
+    h.overrides.inspect = () => ok("ocx-inspect:uname:Linux:x86_64\nocx-inspect:kind:missing\n");
+    h.overrides.config = () => ok('{"port":10100,"runtimeRole":"standalone","ephemeralChild":true}\n');
+    h.overrides.before = () => ({ code: 7, stdout: "", stderr: "" });
+    h.failIssue();
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true, allowMissing: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint, allowMissing: true })).status).toBe(200);
+    const applied = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
+    expect({ code: code(applied), outcome: applied.body.outcome }).toEqual({ code: "key_issue_uncertain", outcome: "unknown" });
+    const steps = h.ssh.map(call => call.step);
+    expect(steps.indexOf("purgePlant")).toBeGreaterThan(steps.indexOf("plant"));
+    expect(steps.filter(step => step === "purgePlant")).toHaveLength(1);
   });
 
   test.each([

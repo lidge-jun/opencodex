@@ -391,8 +391,9 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       else {
         // The config may be saved before issuing throws (a reconcile that fails afterwards), leaving the reserved key
         // durable while memory says it is absent: never settle that as clean.
+        // failed() still rolls back a binary this apply planted; the key's own outcome stays unknown.
         try { issued = issueKey(ctx, "link:" + alias, journal.reservedKeyId); } catch {
-          return fail("key_issue_uncertain", "Issuing the link key failed after it may have been saved; whether the reserved key exists is unknown.", 500);
+          return await failed(fail("key_issue_uncertain", "Issuing the link key failed after it may have been saved; whether the reserved key exists is unknown.", 500));
         }
       }
       unvalidatedKeyId = issued.id;

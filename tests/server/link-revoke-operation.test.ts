@@ -39,7 +39,7 @@ function record(): LinkRecord {
     createdAt: "2026-11-13T00:00:00.000Z", remotePlatform: "posix", childKind: "ephemeral", explicitRoute: ROUTE, exclusive: true };
 }
 
-function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void> } = {}) {
+function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: [{ id: "link-key", name: "link:" + ALIAS, key: "k", createdAt: "2026-11-13T00:00:00Z" }] };
   const journalPath = join(root, "operations.json");
@@ -53,6 +53,8 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   const runner: SshRunner = {
     async run(argv) {
       ssh.push([...argv]);
+      options.onRun?.();
+      if (options.gate) await options.gate;
       return { code: 0, stdout: options.purgeReport ?? '{"restored":true,"outcome":"Restored","daemonRunning":false,"purged":true}\n', stderr: "" } satisfies SshRunResult;
     },
     spawnTunnel() { throw new Error("no tunnel here"); },
@@ -161,6 +163,23 @@ test("an open revoke entry for a link refuses every other revoke of it", async (
     expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "link_operation_open" });
   }
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+});
+
+test("the first journalled purge on a Home cannot be overtaken by a plain force revoke that saw no journal", async () => {
+  // In one runtime the link's Child-operation reservation, taken before anything else, already excludes a second
+  // revoke of the same link; across processes only the runtime holding the spend-ledger owner lease serves removal.
+  let open!: () => void;
+  let running!: () => void;
+  const started = new Promise<void>(resolve => { running = resolve; });
+  const h = harness({ gate: new Promise<void>(resolve => { open = resolve; }), onRun: () => running() });
+  const purge = h.revoke({ purge: true, operationId: OP });
+  await started;
+  const forced = await h.revoke({ force: true });
+  expect({ status: forced.status, code: code(forced) }).toEqual({ status: 409, code: "link_operation_in_progress" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  open();
+  expect((await purge).body).toEqual({ linkId: LINK, operationId: OP, outcome: "committed", purged: true });
+  expect(h.store.links).toEqual([]);
 });
 
 test("before this Home ever journalled, a plain revoke takes no lock", async () => {
