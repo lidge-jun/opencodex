@@ -177,6 +177,18 @@ export function providerReportEpochChanged(captured: ReadonlyMap<string, number>
   return (providerReportEpochs.get(provider) ?? 0) !== (captured.get(provider) ?? 0);
 }
 
+/** Capture publication authority before queued reset observations can yield. */
+export function captureObservationAuthority(config: OcxConfig): (report: ProviderQuotaReport) => boolean {
+  const epoch = invalidationEpoch;
+  const providerEpochs = captureProviderReportEpochs();
+  return report => {
+    const provider = config.providers[report.provider];
+    return epoch === invalidationEpoch && !providerReportEpochChanged(providerEpochs, report.provider)
+      && reportOwnerCurrent(report, provider) && isProviderQuotaReportCurrent(report)
+      && keyReportCredentialCurrent(report, provider, true);
+  };
+}
+
 /**
  * Provider-scoped invalidation: drop one provider's report and routing row. The global epoch
  * is untouched, so another provider's cached row and in-flight commit authority survive; an

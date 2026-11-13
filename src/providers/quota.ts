@@ -21,7 +21,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isPassiveRead, runPassiveReadSync } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent, observedQuotaFor, captureReportOwner, collectOwnedReport, providerQuotaBeforeObservationForTests, reportObservationIdentity,
+  accountReportCurrent, observedQuotaFor, captureReportOwner, collectOwnedReport, providerQuotaBeforeObservationForTests, reportObservationIdentity, captureObservationAuthority,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -209,7 +209,7 @@ function notifyProviderQuotaSnapshot(
   // Resolved here, synchronously, while the identity is still the one that produced these
   // reports.
   // Claude CLI rows are display-only: one reset key would span every account that signs in.
-  const observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
+  const current = captureObservationAuthority(config), observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
     report,
     scope: report.provider,
     accountKey: providerObservationAccountKey(report.provider, config, report),
@@ -222,7 +222,7 @@ function notifyProviderQuotaSnapshot(
       await providerQuotaBeforeObservationForTests?.(); const observer = await import("../quota/reset-observer");
       if (!observer.hasQuotaResetSink()) return;
       const { providerWindowObservations } = await import("../quota/window-mapping");
-      for (const observation of observations) if (runPassiveReadSync(() => isProviderQuotaReportCurrent(observation.report))) observer.observeQuotaSnapshot({ scope: observation.scope, accountKey: observation.accountKey, windows: providerWindowObservations(observation.quota), ...(observation.retainUnknownWindows ? { retainUnknownWindows: observation.retainUnknownWindows } : {}) });
+      for (const observation of observations) if (runPassiveReadSync(() => current(observation.report))) observer.observeQuotaSnapshot({ scope: observation.scope, accountKey: observation.accountKey, windows: providerWindowObservations(observation.quota), ...(observation.retainUnknownWindows ? { retainUnknownWindows: observation.retainUnknownWindows } : {}) });
     })
     .catch(() => {
       // Detection is best-effort: a quota refresh must never fail because of it. Swallowing

@@ -545,7 +545,7 @@ enabling it takes effect without a restart.
   A probe-bound report may carry a private credential digest (`keyReportCredentialIds` in
   `src/providers/quota/report-cache.ts`); only opted-in producers (today Mistral) bind it, reset identity
   uses it instead of `apiKeyPoolEntryId`, and cached rows re-validate against the current credential and
-  destination; passive reads use literal or environment keys without publishing evidence and withhold keychain-backed rows. Others keep identity byte for byte.
+  destination; passive reads use literal or environment keys without publishing evidence and withhold keychain-backed rows. Queued reset observations recheck the report owner, credential, account and global and provider invalidation epochs in a passive read immediately before observation. Others keep identity byte for byte.
 - `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger; the observer claims a reset there
   before dispatch, so each reset is attempted at most once across restarts and racing observers, and a failed
   delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or local command, each best-effort and isolated.
