@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { AliasLockError, withAliasLock } from "../../link/alias-lock";
 import type { ExplicitRoute } from "../../link/explicit-route";
-import { findOperation, hasEffect, isOperationId, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
+import { assertRoomForNewOperation, findOperation, hasEffect, isOperationId, OperationsJournalFullError, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
   type EnrollEffect, type LinkOperation, type OperationState, type RevokeEffect } from "../../link/operations-journal";
 import { newLinkId } from "../../link/store";
 import type { ManagementContext } from "./context";
@@ -96,6 +96,13 @@ function outcomeBody(op: LinkOperation): Record<string, unknown> {
 }
 
 /** The recorded outcome as a response: committed answers like the apply that committed. */
+/** A new operation's entry could not be written: 409 when the journal is full, 500 otherwise. Nothing ran either way. */
+export function journalOpenFailure(error: unknown): Response {
+  return error instanceof OperationsJournalFullError
+    ? fail("operation_journal_full", "The link operation journal is full; resolve residual or unknown operations (ocx link operations) or wait for finished ones to expire. Nothing was changed.", 409)
+    : fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+}
+
 export function replayResponse(op: LinkOperation): Response {
   if (op.state === "committed") {
     return Response.json(op.kind === "enroll" ? { linkId: op.reserved!.linkId, ...outcomeBody(op) }
@@ -198,6 +205,7 @@ export const NO_ENROLL_JOURNAL: EnrollJournal = {
 export function openEnrollJournal(ctx: ManagementContext, request: OperationRequest, alias: string, route: { explicitRoute?: ExplicitRoute; exclusive?: true }): EnrollJournal {
   const path = journalPathFor(ctx), reservedLinkId = newLinkId(), reservedKeyId = randomUUID();
   updateOperationsJournal(path, nowOf(ctx), journal => {
+    assertRoomForNewOperation(journal, nowOf(ctx));
     journal.operations.push({
       operationId: request.id, kind: "enroll", alias, digest: request.digest, createdAt: iso(ctx), updatedAt: iso(ctx), state: "open",
       reserved: { linkId: reservedLinkId, apiKeyId: reservedKeyId, tunnelPort: null, ...route }, effects: [],
@@ -261,6 +269,7 @@ export const NO_REVOKE_JOURNAL: RevokeJournal = { intent() {}, done() {}, finish
 export function openRevokeJournal(ctx: ManagementContext, request: OperationRequest, alias: string, linkId: string): RevokeJournal {
   const path = journalPathFor(ctx);
   updateOperationsJournal(path, nowOf(ctx), journal => {
+    assertRoomForNewOperation(journal, nowOf(ctx));
     journal.operations.push({ operationId: request.id, kind: "revoke", alias, linkId, digest: request.digest, createdAt: iso(ctx), updatedAt: iso(ctx), state: "open", effects: [] });
   });
   const change = (edit: (op: LinkOperation) => void) => updateOperationsJournal(path, nowOf(ctx), journal => {

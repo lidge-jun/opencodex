@@ -24,7 +24,7 @@ import { readManagementJsonBodyOr } from "./body";
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { journalInUse, journalOpenFailure, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
 import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -260,8 +260,8 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       if (!fresh) return fail("link_not_found", "The link was not found.", 404);
       let journal: RevokeJournal = NO_REVOKE_JOURNAL;
       if (operation) {
-        try { journal = openRevokeJournal(ctx, operation, fresh.alias, id); } catch {
-          return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+        try { journal = openRevokeJournal(ctx, operation, fresh.alias, id); } catch (error) {
+          return journalOpenFailure(error);
         }
       }
       return journal.finish(await removeReserved(ctx, state, id, fresh, force, purge, journal));

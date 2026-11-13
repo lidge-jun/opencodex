@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
-import { readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { OPERATION_JOURNAL_MAX_ENTRIES, readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -236,6 +236,18 @@ test("a revoke whose client went away while waiting for the alias lock stops at 
     expect(polls).toBe(1);
     expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   } finally { held.release(); }
+});
+
+test("a new journalled revoke past the journal limit is refused and the link stays", async () => {
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: Array.from({ length: OPERATION_JOURNAL_MAX_ENTRIES }, (_, i) => ({
+    operationId: "old-" + i, kind: "revoke" as const, alias: "pen-old-" + i, linkId: "lnk_00000000000000aa", digest: "d".repeat(64), createdAt: at, updatedAt: at,
+    state: "committed" as const, finishedAt: at, effects: [] })) });
+  const refused = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_journal_full" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  expect(h.ssh).toEqual([]);
 });
 
 describe("journal write failures during a revoke", () => {

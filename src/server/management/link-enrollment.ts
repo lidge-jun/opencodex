@@ -16,7 +16,7 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
-import { enrollOperationDigest, journalInUse, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { enrollOperationDigest, journalInUse, journalOpenFailure, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
 import { isOperationId } from "../../link/operations-journal";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
@@ -265,8 +265,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     }
     let journal: EnrollJournal = NO_ENROLL_JOURNAL;
     if (operation) {
-      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch {
-        return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch (error) {
+        return journalOpenFailure(error);
       }
     }
     return journal.finish(await (async (): Promise<Response> => {

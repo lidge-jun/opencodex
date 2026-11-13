@@ -74,6 +74,14 @@ export class OperationsJournalError extends Error {
 
 /** Committed and failed_clean entries, and resolved residual or unknown ones, stay this long. */
 export const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * At most this many entries after pruning. A provisioning hub caps disposable machines at 10 by default and each machine's
+ * life is a handful of operations (attach, a reissue, detach) kept 30 days, so 256 leaves about ten times the room it
+ * needs while every whole-file rewrite under the config mutation lock stays small (an entry is about 1 KiB). Only a new
+ * operation is refused past it; marks on existing entries are always written, and residual or unknown entries are
+ * never pruned to make room.
+ */
+export const OPERATION_JOURNAL_MAX_ENTRIES = 256;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
@@ -245,6 +253,18 @@ export function updateOperationsJournal<T>(path: string, nowMs: number, change: 
     if (JSON.stringify(next) !== before) writeOperationsJournal(path, next);
     return result;
   });
+}
+
+export class OperationsJournalFullError extends Error {
+  constructor() {
+    super("operations.json holds " + OPERATION_JOURNAL_MAX_ENTRIES + " entries");
+    this.name = "OperationsJournalFullError";
+  }
+}
+
+/** Throws before a new entry is added once the journal, pruned, already holds OPERATION_JOURNAL_MAX_ENTRIES. */
+export function assertRoomForNewOperation(journal: OperationsJournal, nowMs: number): void {
+  if (pruneOperations(journal, nowMs).operations.length >= OPERATION_JOURNAL_MAX_ENTRIES) throw new OperationsJournalFullError();
 }
 
 export function findOperation(journal: OperationsJournal, operationId: string): LinkOperation | undefined {

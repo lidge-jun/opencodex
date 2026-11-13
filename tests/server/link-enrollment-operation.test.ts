@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { enrollOperationDigest, openEnrollJournal } from "../../src/server/management/link-operation";
 import { acquireAliasLock, type AliasLockDeps } from "../../src/link/alias-lock";
-import { readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { OPERATION_JOURNAL_MAX_ENTRIES, readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -488,6 +488,34 @@ describe("review round 3", () => {
     expect((await applying).status).toBe(202);
   });
 
+});
+
+describe("journal size limit", () => {
+  const filled = (count: number): LinkOperation[] => Array.from({ length: count }, (_, i) => entry({
+    operationId: "old-" + i, alias: "pen-old-" + i, state: "committed", finishedAt: new Date(NOW).toISOString(), digest: "d".repeat(64) }));
+
+  test("a new journalled apply past the limit is refused before any effect; a plain apply is not affected", async () => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_ENTRIES) });
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+    const before = h.ssh.length;
+    const refused = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
+    expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_journal_full" });
+    expect(h.ssh.length).toBe(before);
+    expect(h.config.apiKeys).toEqual([]);
+    expect((await h.call("apply", { alias: ALIAS, fingerprint })).status).toBe(202);
+  });
+
+  test("marks on an operation already in the journal are never refused at the limit", () => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_ENTRIES - 1) });
+    const ctx = { deps: { now: () => NOW, linkOperationsPath: () => h.journalPath } } as unknown as ManagementContext;
+    const journal = openEnrollJournal(ctx, { id: OP, digest: digest() }, ALIAS, {});
+    expect(h.journal().operations).toHaveLength(OPERATION_JOURNAL_MAX_ENTRIES);
+    journal.intent("key_issued");
+    expect(h.journal().operations.find(op => op.operationId === OP)!.effects.map(mark => mark.effect)).toEqual(["key_issued"]);
+  });
 });
 
 describe("retention", () => {
