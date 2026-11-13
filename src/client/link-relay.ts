@@ -389,7 +389,10 @@ function idleBoundedStream(
  * chunk handed over until the reader asks again, and when the body ends, errors or is cancelled. A high-water mark of 0
  * means it reads only when the reader does, so the wait it reports is the reader's. `ended` runs from the relay's own
  * cleanup, so a relay that ends underneath a reader holding a chunk (a caller abort, the SSE idle limit) stops being
- * reported as waiting at once and is never reported again. Used only while a test sets an observer.
+ * reported as waiting at once and is never reported again. The signal follows the relay's own lifetime: a Home
+ * failure the relay has not read yet (its read-ahead chunk is queued and nothing reads the Home) keeps it reported as
+ * waiting, as the Home's signal does, because the relay still holds its slot and that chunk until its next read or a
+ * caller abort ends it. Used only while a test sets an observer.
  */
 function waitObservation(observer: (waiting: boolean) => void) {
   let waiting = false;
