@@ -185,6 +185,7 @@ describe("client link connection contracts", () => {
           managementUrl: "http://127.0.0.1:34567",
         }, { status: 503 }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       })).rejects.toThrow("hub is not ready");
       expect(readServiceApiTokenState()).toEqual({ kind: "absent" });
       expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
@@ -211,6 +212,7 @@ describe("client link connection contracts", () => {
           return Response.json({ models: [] });
         },
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       })).rejects.toThrow("fixture enrollment cancelled");
       expect(cancelledFetch).toBe(true);
       expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(prior);
@@ -277,6 +279,7 @@ describe("client link connection contracts", () => {
           })
           : new Response("catalog failed", { status: 503 }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       })).rejects.toThrow("Hub catalog request failed");
       expect(readServiceApiTokenState()).toEqual({ kind: "absent" });
       expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
@@ -295,6 +298,7 @@ describe("client link connection contracts", () => {
           })
           : Response.json({ models: [] }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       });
       expect(connection.transport).toBe("link");
       const logs = spyOn(console, "log").mockImplementation(() => {});
@@ -710,6 +714,7 @@ describe("client link connection contracts", () => {
         const newKey = `ocx_data_${"b".repeat(40)}`;
         const connection = await connectClient({ ...linkOptions(), credential: { kind: "link", apiKeyId: "new-key", key: newKey } }, {
           lifecycleLockDeps: { lockPath },
+          catalogCompatibility: { supportedEfforts: () => new Set() },
           fetchImpl: async input => String(input).endsWith("/readyz")
             ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
             : Response.json({ models: [] }),
