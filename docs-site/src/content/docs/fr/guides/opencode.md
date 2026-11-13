@@ -102,9 +102,11 @@ Exemple de bouclage :
 
 Exemple sans bouclage :
 
+Cet exemple se configure manuellement sur le client distant. Configurez d’abord un frontal TLS, puis utilisez son URL HTTPS ; OpenCodex ne termine pas TLS et ne découvre pas cette URL pour `ocx opencode`. Le HTTP en clair sur le réseau local expose l’identifiant pendant le transport. Vous pouvez aussi garder le proxy sur l’interface de bouclage et utiliser un tunnel SSH local. Voir [TLS pour le listener de données](/fr/guides/remote-hub/#giving-the-data-listener-tls).
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

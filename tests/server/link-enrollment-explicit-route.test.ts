@@ -15,7 +15,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  * O6: an enrollment with an explicit route uses it for every SSH command (probe, confirm, apply,
  * revoke), stores it on the link, and refuses a confirm or apply that names another route.
  */
-const ROUTE = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a9c --noise AbC+/x9= 22", user: "ubuntu", port: 22 };
+const ROUTE = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a9c --noise noise-pub-7f3a9c 22", user: "ubuntu", port: 22 };
 const OTHER = { ...ROUTE, port: 2222 };
 const fingerprint = "SHA256:abcdefghijklmnop";
 const ALIAS = "pen-7f3a9c";

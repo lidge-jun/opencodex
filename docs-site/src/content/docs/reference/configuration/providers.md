@@ -523,13 +523,13 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 | New destination, field omitted | Not kept; registry defaults for the new destination may apply | Not kept |
 | Field sent in the request | The request's value | The request's value |
 
-The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the fourteen settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one. The provider-level `modelDiscovery` block follows the same destination rule: a same-destination save that omits it keeps it, and a move drops it.
+The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops these settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one. The provider-level `modelDiscovery` block follows the same destination rule: a same-destination save that omits it keeps it, and a move drops it.
 
 `hideRawReasoning` is an operator display policy, so a save of the same provider name keeps its stored value whenever the request omits it, including after a destination move. A value sent in the request wins, including `false`.
 
 The optional `inferContextWindow` setting also survives same-name saves that omit it, including destination moves. Its read, update, and clear behavior is described under [Context windows on custom providers](#context-windows-on-custom-providers).
 
-`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all fourteen settings; `null` clears one. It also accepts `modelDiscovery`, where `null` or `{}` clears it. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
+`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all these settings; `null` clears one. It also accepts `modelDiscovery`, where `null` or `{}` clears it. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
 
 With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that served the first request. Changing the selected key, its reference or resolved value, authentication
 mode, or base URL during search or provider pacing ends the turn with a bridge error before another

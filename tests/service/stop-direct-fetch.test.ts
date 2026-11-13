@@ -4,6 +4,28 @@ import { createServer, type Socket } from "node:net";
 import { stopProxyGracefully } from "../../src/lib/process-control";
 import { repoPath } from "../helpers/repo-root";
 
+/** Argument text of each `await <call>(...)`, balanced so nested calls stay separate. */
+function callArguments(body: string, call: string): string[] {
+  const marker = `await ${call}(`;
+  const found: string[] = [];
+  let from = 0;
+  for (;;) {
+    const at = body.indexOf(marker, from);
+    if (at < 0) return found;
+    let depth = 0;
+    let index = at + marker.length - 1;
+    for (; index < body.length; index += 1) {
+      if (body[index] === "(") depth += 1;
+      else if (body[index] === ")") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    found.push(body.slice(at + marker.length, index));
+    from = index;
+  }
+}
+
 const stopRunner = `
   const { stopProxyGracefully } = await import("./src/lib/process-control.ts");
   const port = Number(process.env.OCX_TEST_STOP_PORT);
@@ -108,10 +130,14 @@ describe("local stop transport", () => {
 
   // These paths mutate service/process state; exercise their shared real transport above
   // and verify each caller delegates without overriding it with the global fetch.
-  for (const [file, functionName, count] of [
-    ["src/cli/index.ts", "handleStopUnlocked", 1],
-    ["src/service/orchestration.ts", "stopTrackedProxyIfRunning", 2],
-    ["src/cli/index.ts", "handleUninstall", 2],
+  // `handleUninstall` delegates its two stops to `stopUninstallProxy` (#7771), which owns
+  // the receipt and the no-forced-fallback rule; the transport default is still not overridden.
+  for (const [file, functionName, count, call] of [
+    ["src/cli/index.ts", "handleStopUnlocked", 1, "stopProxy"],
+    ["src/service/orchestration.ts", "stopTrackedProxyIfRunning", 3, "stopProxy"],
+    // One site: the target is resolved before the receipt, so both the tracked and the
+    // discovered path reach the stop through the same call (#7771 round 8).
+    ["src/cli/uninstall-stop.ts", "stopUninstallProxy", 1, "io.stop"],
   ] as const) {
     test(`${functionName} retains the direct stop default`, () => {
       const source = readFileSync(repoPath(file), "utf8");
@@ -119,12 +145,12 @@ describe("local stop transport", () => {
       expect(start).toBeGreaterThanOrEqual(0);
       const end = source.indexOf("\n}", start);
       expect(end).toBeGreaterThan(start);
-      const calls = [...source.slice(start, end).matchAll(/await stopProxy\(([\s\S]*?)\);/g)];
+      const calls = callArguments(source.slice(start, end), call);
       expect(calls).toHaveLength(count);
-      for (const call of calls) {
+      for (const args of calls) {
         // Connected stops also retain the shared default's refusal-status handling.
-        expect(call[1]!).not.toMatch(/\bfetchFn\s*:/);
-        expect(call[1]!.replace(/as typeof fetch\b/g, "")).not.toMatch(/\bfetch\b/);
+        expect(args).not.toMatch(/\bfetchFn\s*:/);
+        expect(args.replace(/as typeof fetch\b/g, "")).not.toMatch(/\bfetch\b/);
       }
     });
   }
