@@ -100,7 +100,8 @@ test('selector authenticates policy and chooses the descendant, independent of r
     if (/^\/actions\/runs\/[12]\/attempts\/2\/jobs\?/.test(url)) return {total_count:jobs.length,jobs};
     throw new Error(`unexpected API request ${url}`);
   };
-  const approved = [{kind:'ci',version:1,files:{'.github/workflows/ci.yml':blob}}];
+  // The run reports the current job set, so the approved entry records its Windows leg count.
+  const approved = [{kind:'ci',version:1,windowsShards:14,files:{'.github/workflows/ci.yml':blob}}];
   assert.deepEqual(await createEvidence(api, approved).select('ci'), {sourceSha:newer,ciRunId:1});
   assert.deepEqual(await createEvidence(api, approved).select('ci', older), {sourceSha:older,ciRunId:2});
   const historical = {kind:'ci',version:1,files:{'.github/workflows/absent.yml':blob,'.github/workflows/ci.yml':blob}};
@@ -245,8 +246,9 @@ test('default production policy accepts its exact blobs and rejects a changed he
   await assert.rejects(createEvidence(api).select('ci', SHA), /no qualifying/);
 });
 
-function boundedFixture({ runs, order, race = false, raceState = false, devMoves = false, divergent = [], history = ['1','2','3'].map(x => x.repeat(40)) }) {
-  const { CI_JOBS } = require('./release-evidence.cjs');
+function boundedFixture({ runs, order, race = false, raceState = false, devMoves = false, divergent = [], history = ['1','2','3'].map(x => x.repeat(40)), windowsShards = 14, policyShards = windowsShards }) {
+  const { ciJobs } = require('./release-evidence.cjs');
+  const runJobs = ciJobs(windowsShards);
   const tree = 'd'.repeat(40), blob = 'e'.repeat(40), calls = [];
   let exactReads = 0;
   const readsByHead = new Map();
@@ -279,12 +281,36 @@ function boundedFixture({ runs, order, race = false, raceState = false, devMoves
     }
     if (url.startsWith('/git/commits/')) return {tree:{sha:tree}};
     if (url === `/git/trees/${tree}`) return {truncated:false,tree:[{path:'.github',type:'tree',sha:tree},{path:'workflows',type:'tree',sha:tree},{path:'ci.yml',type:'blob',mode:'100644',sha:blob}]};
-    if (/^\/actions\/runs\/\d+\/attempts\/1\/jobs\?/.test(url)) return {total_count:CI_JOBS.length,jobs:CI_JOBS.map(name => ({name,status:'completed',conclusion:'success'}))};
+    if (/^\/actions\/runs\/\d+\/attempts\/1\/jobs\?/.test(url)) return {total_count:runJobs.length,jobs:runJobs.map(name => ({name,status:'completed',conclusion:'success'}))};
     throw new Error(`unexpected API request ${url}`);
   };
   const makeRun = (id, source, conclusion='success') => ({id,workflow_id:42,repository:{id:1273824907},head_repository:{id:1273824907},event:'workflow_dispatch',head_branch:'dev',status:'completed',conclusion,run_attempt:1,head_sha:source,display_title:`ocx-ci-v1 lane=all sha=${source}`});
-  return {api,calls,history,makeRun,policies:[{kind:'ci',version:1,files:{'.github/workflows/ci.yml':blob}}]};
+  // policyShards 'legacy' models an entry written before windowsShards was recorded.
+  const policy = policyShards === 'legacy' ? {kind:'ci',version:1,files:{'.github/workflows/ci.yml':blob}} : {kind:'ci',version:1,windowsShards:policyShards,files:{'.github/workflows/ci.yml':blob}};
+  return {api,calls,history,makeRun,policies:[policy]};
 }
+
+test('a run is held to the Windows leg count of the policy entry its revision matched', async () => {
+  const {createEvidence, CI_JOBS, windowsShardsOf} = require('./release-evidence.cjs');
+  const seed = boundedFixture({runs:[]}), source = seed.history[0];
+  // A historical eleven-shard revision matches an entry with no windowsShards and stays usable.
+  const legacy = boundedFixture({runs:[seed.makeRun(5,source)], windowsShards:11, policyShards:'legacy'});
+  assert.deepEqual(await createEvidence(legacy.api,legacy.policies).select('ci',source), {sourceSha:source,ciRunId:5});
+  // A revision on the fourteen-shard policy cannot pass with the eleven legs of the old workflow.
+  const short = boundedFixture({runs:[seed.makeRun(6,source)], windowsShards:11, policyShards:14});
+  await assert.rejects(createEvidence(short.api,short.policies).select('ci',source), /no qualifying/);
+  // Nor does a legacy entry accept a fourteen-leg run missing nothing but the old names.
+  const mismatched = boundedFixture({runs:[seed.makeRun(7,source)], windowsShards:14, policyShards:'legacy'});
+  await assert.rejects(createEvidence(mismatched.api,mismatched.policies).select('ci',source), /no qualifying/);
+  // An unreadable count fails closed instead of skipping the run.
+  const invalid = boundedFixture({runs:[seed.makeRun(8,source)], policyShards:0});
+  await assert.rejects(createEvidence(invalid.api,invalid.policies).select('ci',source), /invalid ci policy windowsShards/);
+  // The current job set follows the newest approved entry.
+  const policies = require('./release-evidence-policy.json');
+  const current = windowsShardsOf(policies.filter(p => p.kind === 'ci').at(-1));
+  assert.equal(current, 14);
+  assert.equal(CI_JOBS.filter(name => /^windows \d+\/\d+$/.test(name)).length, current);
+});
 
 test('exact SHA filters 25000 unrelated runs on the server', async () => {
   const {createEvidence} = require('./release-evidence.cjs');

@@ -8,11 +8,11 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 48.
+Declared capabilities: 51.
 
 ### `ocx link probe`
 
-Usage: `ocx link probe <alias> [--json]`
+Usage: `ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
 
 Probe an SSH host fingerprint and OpenCodex version without trusting it.
 
@@ -24,13 +24,17 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit alias, fingerprint, key type and version as JSON. |
 
 - Requires loopback admin authority on the Home. Stores only a temporary pending offer; does not persist host trust or issue a link key.
 
 ### `ocx link add`
 
-Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]`
+Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]`
 
 Connect an SSH Child to this Home after confirming its fingerprint.
 
@@ -45,6 +49,12 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
+| `--operation-id` | string | Journal the enrollment under this id (1-128 letters, digits, . _ : -): reserved ids, a mark per Home effect and the outcome; a repeat with the same id and parameters replays it. Needs --expect-fingerprint. |
+| `--require-ephemeral` | boolean | Refuse (409 full_install_present) a Child where any runnable full ocx exists, before any plant, key or Child change. |
 | `--json` | boolean | Emit the verified link result as JSON. |
 
 - Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.
@@ -81,6 +91,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--clients` | string | Initial device selection: listed clients start on for this device, and Codex and Claude Code start off unless listed; other clients inherit Home defaults. Omitted, the device inherits every Home default, including an off Codex or Claude Code. |
 | `--alias` | string | SSH host alias for the linked machine. |
 | `--tunnel-port` | number | Remote loopback port for the reverse tunnel. |
 | `--json` | boolean | Emit the issue result as JSON. |
@@ -127,7 +138,7 @@ Drives no management route.
 
 ### `ocx link revoke`
 
-Usage: `ocx link revoke --link-id <id> [--force --yes] [--json]`
+Usage: `ocx link revoke --link-id <id> [--force --yes] [--operation-id <id>] [--json]`
 
 Revoke a link credential and remove its link record.
 
@@ -143,11 +154,38 @@ State-changing: yes. JSON mode: `envelope`.
 | `--json` | boolean | Emit the revoked link id as JSON. |
 | `--force` | boolean | Explicitly skip remote disconnect while retiring the local link; requires --yes. |
 | `--yes` | boolean | Confirms force only; refused without --force. |
+| `--operation-id` | string | Journal the revoke under this id; a purge records the Child's purged:true as its receipt, and a repeat replays the outcome even after the link is gone. |
 
 - Requires a valid link ID and loopback admin authority. Explicit force additionally requires --yes.
 - Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.
 - Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.
 - If forced cleanup was needed, run ocx disconnect on the remote client. No new enrollment, SSH trust or credential action is implied.
+
+### `ocx link recover`
+
+Usage: `ocx link recover (--link-id <id> | --operation-id <id>) [--json] | --list [--json] | --forget --link-id <id> --yes [--json]`
+
+Clean an ephemeral Child that a forced revoke or an interrupted enrollment left behind.
+
+State-changing: yes. JSON mode: `envelope`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/recover` |
+| GET | `/api/link/recover` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Force-revoked ephemeral link whose tombstone names the machine; exactly one of --link-id or --operation-id. |
+| `--operation-id` | string | Link operation whose journal entry names the machine; needs the link operation journal. |
+| `--list` | boolean | List the forced revokes still waiting for cleanup (link id, alias, revokedAt); takes no other option. |
+| `--forget` | boolean | Drop the tombstone for --link-id without contacting its machine, for a machine gone for good; runs on the Home, refused while the link exists and from an agent or CI runner. |
+| `--yes` | boolean | Confirms --forget. |
+| `--json` | boolean | Emit the {linkId, outcome, purged} receipt, the {tombstones} list or the {linkId, outcome} forget answer as JSON. |
+
+- Runs the managed planted ocx-child's disconnect --purge --expect-link <id> over the link's alias with its pinned host key, never a sibling route. The Child restores only when its state and its CODEX_HOME ownership record both name that link.
+- Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; a residual one needs ocx-child detach on that machine.
+- A forced revoke of a Home-initiated ephemeral link writes the tombstone; a link that still exists answers link_present, and any other Home-initiated link naming the same alias (case-insensitive) answers alias_linked before the machine is contacted. Without a link operation journal, --operation-id answers operation_journal_unavailable.
 
 ### `ocx link reconnect`
 
@@ -168,7 +206,8 @@ State-changing: yes. JSON mode: `envelope`.
 
 - Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.
 - A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.
-- Always emits {linkId} JSON.
+- A link that an unsettled journalled revoke keeps down (ocx link status: failed, reason revoke_unsettled) is refused with link_suspended (exit 5) and nothing is stopped; the message names the revoke's operation id and the next step (ocx link operations resolve, or first repeat a revoke the Home stopped during).
+- Emits {linkId} JSON when the tunnel was restarted.
 
 ### `ocx link cleanup`
 
@@ -348,7 +387,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx disconnect`
 
-Usage: `ocx disconnect [--keep-catalog] [--json] | ocx disconnect --orphaned-token --yes [--json]`
+Usage: `ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] | ocx disconnect --orphaned-token --yes [--json]`
 
 Disconnect a client or preserve orphaned token files for recovery.
 
@@ -359,8 +398,9 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--keep-catalog` | boolean | Keep the connected client's catalog during ordinary disconnect. |
+| `--recover-config` | boolean | With --yes, snapshot current Codex artifacts and recover only evidenced owned keys; unknown ownership still refuses. |
 | `--orphaned-token` | boolean | Preserve unowned service-token files in a private backup when disconnected. |
-| `--yes` | boolean | Explicitly confirm orphan-token recovery; requires --orphaned-token. |
+| `--yes` | boolean | Explicitly confirm --recover-config or --orphaned-token recovery. |
 | `--json` | boolean | Emit the local result and backup location as JSON. |
 
 - Orphan recovery requires a disconnected durable state, no pending connect or disconnect, no Hub or admission-secret use, no installed or unverified service, and verified absence of a client runtime. It preserves rather than deletes token files and does not establish their ownership.
@@ -954,6 +994,47 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
 
 - The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. A reorder does not move a running tunnel. Requires loopback admin authority on the Home.
+
+### `ocx link operations`
+
+Usage: `ocx link operations [--operation-id <id>] [--json]`
+
+List or read the enrollments and revokes journalled under an operation id.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/link/operations` |
+| GET | `/api/link/operations/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--operation-id` | string | Read one operation. |
+| `--json` | boolean | Emit {operations} or the one entry as JSON. |
+
+- Each entry names its reserved link and key ids, the intent and completion of every effect and its outcome: open, committed, failed_clean, residual (the Child may still hold an enrollment or a plant) or unknown. Committed and failed_clean entries stay 30 days; residual and unknown entries stay until resolved, then 30 days. Past 256 settled entries the oldest go early, never before a day plus the alias-lock wait, so a retry within a day replays its operation id; at 256 open or unresolved residual or unknown entries a new journalled operation is refused (operation_journal_full) until some are resolved, and so is one after 1024 operations settled within a day and three minutes. Requires loopback admin authority on the Home.
+
+### `ocx link operations resolve`
+
+Usage: `ocx link operations resolve --operation-id <id> --yes [--json]`
+
+Mark a residual or unknown link operation resolved.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/operations/{id}/resolve` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--operation-id` | string | The residual or unknown operation. |
+| `--yes` | boolean | Confirms that the Child is clean or the loss is accepted. |
+| `--json` | boolean | Emit the resolved entry as JSON. |
+
+- Changes nothing on the Child or in links.json: it records the resolution, and the entry's 30 days of retention start then. operation_not_resolvable (exit 5) for any other state, operation_not_found (exit 4). Requires loopback admin authority on the Home.
+- A journalled revoke that reached the Child and ended unknown, or that the Home stopped during (open), keeps that link's tunnel down across restarts (ocx link status: reason revoke_unsettled; ocx link reconnect: link_suspended). Resolving the revoke reloads the tunnels, so the link reconnects. An open revoke cannot be resolved: repeat it with the same --operation-id and the same --purge flag, then resolve it if it ends unknown.
 
 ### `ocx link activity clear`
 

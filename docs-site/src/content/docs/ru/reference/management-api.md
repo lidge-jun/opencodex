@@ -11,6 +11,8 @@ Management API — это control plane opencodex. Дашборд на `http://l
 нужен, когда вы строите automation. В конечном счёте постоянные значения следуют
 [Конфигурации](/reference/configuration/).
 
+<a id="authentication-model"></a>
+
 ## Модель аутентификации
 
 У Management API свой admin credential, независимый от data-plane API-key'ов. При старте

@@ -23,6 +23,13 @@ because it records its own database through `recordOwnedConfigPath`.
   path the manifest already lists is still accepted while the lock is busy: the manifest is replaced
   atomically, so an unlocked read is a consistent version, and the path is refused only when that
   version carries an uninstall tombstone. Only a new path needs the lock.
+- `configPathOwnership` is the read-only check: it reports whether the manifest lists a path or one
+  of its ancestors, lists neither, or the home has no ownership metadata, writes nothing, and throws
+  `ConfigUninstallInProgressError` under a tombstone like a registration. A writer that must not adopt
+  existing data (the ocx-child cache fill, `src/link/child-binary-cache-start.ts`) creates its directory
+  first and registers it only then (removing it again, only if it created it, when the registration
+  fails, and stopping when the home's metadata vanished meanwhile), adopts an unlisted
+  one only when it is empty, owned by this user and writable by nobody else, and leaves any other alone.
 - A registration that would push the manifest past 1,024 paths, or past the 64 KiB metadata limit
   less room for the tombstone, records nothing and warns once, so the manifest always stays one
   uninstall accepts. Writers keep working, and uninstall reports such files as residual paths. A

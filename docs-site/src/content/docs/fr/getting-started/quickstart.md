@@ -34,10 +34,19 @@ annoncent une fenêtre de contexte utilisable de 372 000 jetons ; Cursor con
 
 ## 2. Démarrez le proxy
 
+Exécutez une seule de ces alternatives ; le proxy reste au premier plan :
+
 ```bash
 ocx start            # utilise le port 10100 par défaut
+```
+
+Autre possibilité : choisissez un autre port :
+
+```bash
 ocx start --port 8080
 ```
+
+Gardez ce terminal ouvert. Exécutez les commandes suivantes de statut et de tableau de bord dans un second terminal avec le même `OPENCODEX_HOME`.
 
 Au démarrage, opencodex :
 
@@ -46,10 +55,7 @@ Au démarrage, opencodex :
   le catalogue de modèles de Codex**,
 - écoute sur `http://localhost:<port>/v1`.
 
-Si le port demandé est occupé, `ocx start` s’arrête et indique ce qui l’occupe : exécutez d’abord
-`ocx stop` si un processus opencodex y répond, ou démarrez sur un port libre avec
-`ocx start --port <port>`. La commande ne change jamais de port d’elle-même : auparavant, ce
-comportement laissait deux proxys en cours d’exécution et redirigeait Codex vers le plus récent.
+Une instance opencodex active avec le même `OPENCODEX_HOME` empêche un second démarrage, même sur un port libre. Arrêtez cette instance avec `ocx stop` ou choisissez un autre `OPENCODEX_HOME`. Une instance sœur sert les requêtes directes sur son port, mais ne modifie pas le routage partagé de Codex, Grok ou Claude. Si un processus sans rapport occupe le port, `ocx start` le signale ; choisissez un port libre avec `ocx start --port <port>`. La commande ne change jamais de port automatiquement.
 
 Vérifiez-le :
 

@@ -1,3 +1,5 @@
+import type { RouteClientId } from "./route-intent";
+export const ROUTE_OVERWRITE_MIN_CHILD_VERSION = "2.100.0";
 import { Buffer } from "node:buffer";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
@@ -201,26 +203,41 @@ export function windowsPurgePlantedChildArgv(): string[] {
   return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
 $r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$cd="$h\child";$cx=if($env:CODEX_HOME){$env:CODEX_HOME}else{"$r\.codex"}
 $rec=@(@("$cd\state.json","$cd\codex-journal.json","$cd\attach-rollback.json","$cx\.ocx-child-owner.json")|?{[IO.File]::Exists($_)-or[IO.Directory]::Exists($_)});$pend=$rec.Count -gt 0;if($pend){$m='ocx-child recovery record remains at '+$rec[0]+'; keeping the planted binary for detach.'}
-try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};try{[IO.File]::Delete($dst)}catch{$null=$_}}elseif($pend){[Console]::Error.WriteLine($m);exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif($pend){[Console]::Error.WriteLine($m);exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
+try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};if([IO.File]::Exists($dst)){[Console]::Error.WriteLine('ocx-child kept the planted binary: another ocx-child relay runs from it.')}}elseif($pend){[Console]::Error.WriteLine($m);exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif($pend){[Console]::Error.WriteLine($m);exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
 `);
 }
 
 /** Printed on stderr when the managed plant directory holds no runnable ocx-child to purge. */
 export const MANAGED_PURGE_CHILD_MISSING_MARKER = "ocx-purge-error:managed_child_missing";
 
+/** Read-only: print the link-bound detach receipt; exit 4 when it is missing, a reparse point or unreadable. */
+export function windowsRecoverReceiptArgv(linkId: string): string[] {
+  if (!/^lnk_[0-9a-f]{16}$/.test(linkId)) throw new Error("invalid link id");
+  // The id travels as data ($d.args[0]), never spliced into the script source.
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: [linkId] }) + String.raw`
+$r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$f="$h\link-receipts\"+[string]$d.args[0]+".json"
+$b=if($env:LOCALAPPDATA){"$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"}else{"$env:USERPROFILE\.cache\opencodex\bin\ocx-child.exe"}
+$found=$true;try{$null=Get-Item -LiteralPath $b -Force -ErrorAction Stop}catch [System.Management.Automation.ItemNotFoundException]{$found=$false}catch{exit 4};if($found){exit 4}
+try{if(-not[IO.File]::Exists($f)){exit 4};if(((Get-Item -LiteralPath $f -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){exit 4};[Console]::Out.Write([IO.File]::ReadAllText($f))}catch{exit 4};exit 0
+`);
+}
+
 /** Runs `disconnect --purge --json` through the planted %LOCALAPPDATA% binary, never a PATH candidate. */
-export function windowsManagedPurgeDisconnectArgv(): string[] {
-  return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
+/** expectLink (lnk_ and 16 hex digits) travels as data ($d.args[0]), never spliced into the script source. */
+export function windowsManagedPurgeDisconnectArgv(expectLink?: string): string[] {
+  if (expectLink !== undefined && !/^lnk_[0-9a-f]{16}$/.test(expectLink)) throw new Error("invalid link id");
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: expectLink === undefined ? [] : [expectLink] }) + WINDOWS_MANAGED_BIN + String.raw`
 try{$dir=Resolve-PlantDir}catch{[Console]::Error.WriteLine('Refusing a reparse point in the managed ocx-child directory.');exit 1}
 $dst="$dir\ocx-child.exe";if(-not([IO.File]::Exists($dst)-and[OcxJob]::Ok($dst))){[Console]::Error.WriteLine('${MANAGED_PURGE_CHILD_MISSING_MARKER}');exit 1}
-try{$rc=[OcxJob]::Run($dst,('"'+$dst+'" disconnect --purge --json'))}catch{exit 1}
+$x=@($d.args);$e=if($x.Count -gt 0){' --expect-link '+(Quote-Native ([string]$x[0]))}else{''}
+try{$rc=[OcxJob]::Run($dst,('"'+$dst+'" disconnect --purge --json'+$e))}catch{exit 1}
 Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}};exit $rc
 `);
 }
 
 export interface WindowsGatedCommand {
   versionParts: readonly [string, string, string];
-  lacksMarker: "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update";
+  lacksMarker: "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update" | "child-ocx-lacks-overwrite";
   acceptEphemeral: boolean;
   /** Prints ocx-fanout:child-now:<epoch-ms> from [DateTimeOffset]::Now (Unix milliseconds do not depend on the offset). */
   reportClock: boolean;
@@ -236,14 +253,15 @@ export interface WindowsGatedCommand {
  */
 export function windowsGatedOcxArgv(cmd: WindowsGatedCommand): string[] {
   if (!cmd.versionParts.every(part => /^(0|[1-9][0-9]{0,3})$/.test(part))) throw new Error("invalid gate version");
-  if (!/^child-ocx-lacks-(expect-link|orchestrated-update)$/.test(cmd.lacksMarker)) throw new Error("invalid gate marker");
+  if (!/^child-ocx-lacks-(expect-link|orchestrated-update|overwrite)$/.test(cmd.lacksMarker)) throw new Error("invalid gate marker");
   const b = cmd.versionParts.map(part => "'" + part + "'").join(",");
   // -match is case-insensitive; the pattern reads the file name the way [IO.Path]::GetFileName does (either separator).
-  const ephemeral = cmd.acceptEphemeral ? "" : String.raw`if($x -match '(^|[\\/])ocx-child[^\\/]*$'){[Console]::Error.WriteLine('ocx-fanout:child-ocx-ephemeral');exit 121};`;
+  const overwriteEphemeral = cmd.lacksMarker === "child-ocx-lacks-overwrite" ? String.raw`if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){[Console]::Error.WriteLine('ocx-fanout:child-ephemeral-no-overwrite');exit 121};` : "";
+  const ephemeral = cmd.acceptEphemeral || overwriteEphemeral ? "" : String.raw`if($x -match '(^|[\\/])ocx-child[^\\/]*$'){[Console]::Error.WriteLine('ocx-fanout:child-ocx-ephemeral');exit 121};`;
   const clock = cmd.reportClock ? String.raw`[Console]::Error.WriteLine('ocx-fanout:child-now:'+[DateTimeOffset]::Now.ToUnixTimeMilliseconds());` : "";
   return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: cmd.args }) + OCX_CANDIDATES + String.raw`$env:OCX_NO_DESKTOP_HANDOFF='1'
 foreach($x in ($c|select -Unique)){
- if(![IO.File]::Exists($x)){continue};$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
+ if(![IO.File]::Exists($x)){continue};` + overwriteEphemeral + String.raw`$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
  $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')
  $bad=(!$m.Success -or $v.Length -gt 128);if(!$bad -and $m.Groups[4].Success){foreach($p in $m.Groups[4].Value.Split('.')){if(!$p -or ($p -match '^\d+$' -and $p.Length -gt 1 -and $p[0] -eq '0')){$bad=$true}}}
  if($bad){[Console]::Error.WriteLine('ocx-fanout:child-ocx-version-unknown');exit 121}
@@ -259,6 +277,25 @@ foreach($x in ($c|select -Unique)){
 export function windowsPinnedSyncArgv(linkId: string): string[] {
   return windowsGatedOcxArgv({ versionParts: ["2", "93", "0"], lacksMarker: "child-ocx-lacks-expect-link", acceptEphemeral: true,
     reportClock: false, args: ["sync", "--expect-link", linkId, "--json"] });
+}
+
+export function windowsOverwriteSyncArgv(linkId: string, overwriteConflict = false, overwriteClient?: RouteClientId): string[] {
+  // Overwrite needs a Child that honours it: refuse ocx-child and older ocx before syncing.
+  const minimum = overwriteConflict ? ROUTE_OVERWRITE_MIN_CHILD_VERSION.split(".").map(part => `'${part}'`).join(",") : "'2','93','0'";
+  const lacks = overwriteConflict ? "ocx-fanout:child-ocx-lacks-overwrite" : "ocx-fanout:child-ocx-lacks-expect-link";
+  const ephemeral = overwriteConflict ? String.raw`if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){[Console]::Error.WriteLine('ocx-fanout:child-ephemeral-no-overwrite');exit 121};` : "";
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json", ...(overwriteConflict ? ["--overwrite-conflict"] : []), ...(overwriteClient ? ["--overwrite-client", overwriteClient] : [])] }) + OCX_CANDIDATES + String.raw`$env:OCX_NO_DESKTOP_HANDOFF=1
+foreach($x in $c){
+ if(![IO.File]::Exists($x)){continue};` + ephemeral + String.raw`$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
+ $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')
+ $bad=(!$m.Success -or $v.Length -gt 128);if(!$bad -and $m.Groups[4].Success){foreach($p in $m.Groups[4].Value.Split('.')){if(!$p -or ($p -match '^\d+$' -and $p.Length -gt 1 -and $p[0] -eq '0')){$bad=$true}}}
+ if($bad){[Console]::Error.WriteLine('ocx-fanout:child-ocx-version-unknown');exit 121}
+ $a=@($m.Groups[1].Value,$m.Groups[2].Value,$m.Groups[3].Value);$b=@(` + minimum + String.raw`);$cmp=0
+ for($i=0;$i -lt 3;$i++){if($a[$i].Length -ne $b[$i].Length){$cmp=$a[$i].Length-$b[$i].Length;break};$cmp=[string]::CompareOrdinal($a[$i],$b[$i]);if($cmp -ne 0){break}}
+ if($cmp -lt 0 -or ($cmp -eq 0 -and $m.Groups[4].Success)){[Console]::Error.WriteLine('` + lacks + String.raw`');exit 121}
+ [Console]::Error.WriteLine('ocx-fanout:selected:'+$v);[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x @($d.args)
+};exit 127
+`);
 }
 
 /** Credential-free loopback probe of the Child; no proxy, no redirect, bounded body and deadline. */

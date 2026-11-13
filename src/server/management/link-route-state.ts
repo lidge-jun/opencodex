@@ -7,6 +7,7 @@ import { readLinkStore, writeLinkStore, type LinkStore } from "../../link/store"
 import { withoutAliasLines } from "../../link/route-trust";
 import { boundHint, createSshRunner, type SshRunner } from "../../link/ssh-runner";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
+import { reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import type { ManagementContext } from "./context";
 import { issueApiKeyInProcess, revokeApiKeyInProcess, type IssuedApiKey } from "./oauth-account-routes";
 
@@ -20,6 +21,9 @@ export interface PendingLinkHost {
   remotePlatform?: "posix" | "windows";
   runtimeKind?: "full" | "ephemeral" | "missing";
   targetTriple?: import("../../link/child-binary-source").ChildTargetTriple | null;
+  /** The explicit route every SSH command of this enrollment uses; the record keeps it (link-route-request.ts). */
+  explicitRoute?: import("../../link/explicit-route").ExplicitRoute;
+  exclusive?: true;
 }
 
 export interface ConfirmedLinkHost extends PendingLinkHost {
@@ -164,8 +168,9 @@ export function putConfirmedKnownHost(ctx: ManagementContext, alias: string, lin
   });
 }
 
-export function issueKey(ctx: ManagementContext, name: string): IssuedApiKey {
-  return (ctx.deps.issueApiKey ?? issueApiKeyInProcess)(ctx.config, name);
+export function issueKey(ctx: ManagementContext, name: string, reservedId?: string): IssuedApiKey {
+  const issue = ctx.deps.issueApiKey ?? issueApiKeyInProcess;
+  return reservedId === undefined ? issue(ctx.config, name) : issue(ctx.config, name, reservedId);
 }
 
 export function revokeKey(ctx: ManagementContext, id: string): boolean {
@@ -192,6 +197,24 @@ export function compensationFailure(ctx: ManagementContext, state: LinkRouteStat
   }
   console.warn(`[link] compensation_failed linkId=${record.id} phase=${phase}`);
   return fail("compensation_failed", "The link compensation could not be completed.", 500);
+}
+
+// All last-link closures share the listener, including failed-enrollment compensation.
+const listenerReconciliations = new WeakMap<LinkRouteListener, Promise<void>>();
+export async function reconcileLinkListener(ctx: ManagementContext, listener: LinkRouteListener): Promise<void> {
+  const previous = listenerReconciliations.get(listener);
+  const flight = (async () => {
+    if (previous) await previous.catch(() => {});
+    if (readStoreFor(ctx).links.length === 0) await listener.close();
+    if (readStoreFor(ctx).links.length > 0) {
+      await listener.ensureStarted();
+      if (readStoreFor(ctx).links.length > 0 && listener.status().state !== "listening") {
+        throw new Error("link listener unavailable");
+      }
+    }
+  })();
+  listenerReconciliations.set(listener, flight);
+  try { await flight; } finally { if (listenerReconciliations.get(listener) === flight) listenerReconciliations.delete(listener); }
 }
 
 /** A link that was never stored, or not restored, whose issued key could not be revoked. */
@@ -243,11 +266,12 @@ export async function compensateNewLink(ctx: ManagementContext, state: LinkRoute
       if (filtered.links.length !== current.links.length) {
         writeStoreFor(ctx, filtered);
       }
+      reconcileHomeRouteDevices(filtered.links.map(link => link.id));
       return filtered;
     });
     clearCompensationFailed(record.id, compensationPath());
     state.compensationFailures?.delete(record.id);
-    if (next.links.length === 0) await state.listener.close();
+    if (next.links.length === 0) await reconcileLinkListener(ctx, state.listener);
     return null;
   } catch {
     return compensationFailure(ctx, state, record, "store");

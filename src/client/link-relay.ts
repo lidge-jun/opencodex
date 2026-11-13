@@ -60,6 +60,13 @@ export interface LinkTunnelGate {
    * when the tunnel stops being re-established (failed or stopped), or when too many requests wait.
    */
   waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Optional: `listener` runs once, synchronously, when the gate's owner starts stopping, before the
+   * tunnel goes away: the supervisor's stop(), or the link ending (its sidecar gone, naming another link,
+   * or the connected link id unreadable for several checks in a row) before the runtime recycles. The link
+   * WebSocket drains its sockets here.
+   */
+  onStopping?(listener: () => void): void;
 }
 
 /**
@@ -194,6 +201,24 @@ export function forwardLinkRequestHeaders(source: Headers, admissionKey: string,
   const validation = validateHubRelayRequestHeaders(linkFramingHeaders(source));
   if (!validation.ok) return new Headers();
   return linkRequestHeaders(source, admissionKey, pathname, validation.connectionNamed);
+}
+
+/** The handshake headers of Codex's own upgrade, which the Home leg replaces with its own (link-ws-transport.ts). */
+const UPGRADE_HANDSHAKE_HEADERS = ["connection", "upgrade", "origin", "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-protocol"];
+
+/**
+ * The headers a link WebSocket's upgrade sends to the Home: Codex's headers without its handshake, then
+ * the same filter an HTTP request gets (hop-by-hop, Connection-nominated and caller credentials dropped)
+ * and the link key as a Bearer. Null when the rest would be refused as malformed or too large.
+ */
+export function forwardLinkUpgradeHeaders(source: Headers, admissionKey: string): Headers | null {
+  const connectionNamed = new Set((source.get("connection") ?? "").split(",").map(token => token.trim().toLowerCase()).filter(Boolean));
+  const rest = new Headers(source);
+  for (const name of UPGRADE_HANDSHAKE_HEADERS) rest.delete(name);
+  const validation = validateHubRelayRequestHeaders(linkFramingHeaders(rest));
+  if (!validation.ok) return null;
+  const headers = linkRequestHeaders(rest, admissionKey, "/v1/responses", new Set([...validation.connectionNamed, ...connectionNamed]));
+  return headersWithinLimit(headers) ? headers : null;
 }
 
 function linkRequestHeaders(

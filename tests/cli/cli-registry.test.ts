@@ -109,7 +109,7 @@ describe("CLI command registry parity", () => {
 
   test("GUI registry usage documents explicit-origin single-use pairing", () => {
     const gui = findCommand("gui");
-    expect(gui?.usage).toBe("ocx gui [pair --origin <browser-origin> [--json]]");
+    expect(gui?.usage).toBe("ocx gui [pair [--desktop] --origin <browser-origin> [--json]]");
     expect(gui?.details?.join(" ")).toContain("single-use");
     expect(gui?.details?.join(" ")).toContain("no localhost or config-derived default");
   });
@@ -121,7 +121,7 @@ describe("CLI command registry parity", () => {
     expect(connect?.usage).not.toContain("--token <");
     expect(connect?.usage).not.toContain("--admin-token <");
     expect(connect?.details?.join(" ")).toContain("not supported");
-    expect(findCommand("disconnect")?.usage).toBe("ocx disconnect [--keep-catalog] [--json]");
+    expect(findCommand("disconnect")?.usage).toBe("ocx disconnect [--keep-catalog] [--recover-config --yes] [--json]");
   });
 });
 

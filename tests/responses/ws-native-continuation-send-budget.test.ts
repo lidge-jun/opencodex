@@ -29,7 +29,7 @@ async function begin(root: string, limit?: number, enforced = false, mode: "inje
   configureSharedSpendLedger(spendPolicyFromConfig(enforced ? { root: { maxTokens: 1_000_000 } } : undefined));
   const fields = mode === "steering" ? { multi_agent: undefined } : {};
   return beginInjection(fields, { ...injectionConfig(), codexNativeSteering: mode === "steering" }, "test",
-    { "x-codex-parent-thread-id": root, "thread-id": root });
+    { requestHeaders: { "x-codex-parent-thread-id": root, "thread-id": root } });
 }
 
 for (const mode of ["injection", "steering"] as const) for (const enforced of [false, true]) for (const limit of [1, 2]) {
@@ -143,7 +143,7 @@ test("native token-ceiling refusal preserves its workflow identity after earlier
   prepareInjectionSpendHome(); bindWorkflowBudgetConfig(null);
   configureSharedSpendLedger(spendPolicyFromConfig({ root: { maxTokens: 4096 } }));
   const x = await beginInjection({ max_output_tokens: 1024 }, injectionConfig(), "test",
-    { "x-codex-parent-thread-id": root, "thread-id": root });
+    { requestHeaders: { "x-codex-parent-thread-id": root, "thread-id": root } });
   let id = x.id, refused = false;
   for (let i = 1; i <= 8; i++) {
     const call = `token-call-${i}`, item = advertiseInjection(x.socket, call);
@@ -326,7 +326,7 @@ test("a continuation is priced on the reconstructed frame, not the opening estim
   prepareInjectionSpendHome(); bindWorkflowBudgetConfig(null);
   configureSharedSpendLedger(spendPolicyFromConfig({ root: { maxTokens: 2000 } }));
   const x = await beginInjection({}, injectionConfig(), "test",
-    { "x-codex-parent-thread-id": root, "thread-id": root });
+    { requestHeaders: { "x-codex-parent-thread-id": root, "thread-id": root } });
   // A small saved result still fits: exact pricing is not an across-the-board refusal.
   const small = advertiseInjection(x.socket, "small");
   completeInjection(x.socket, { output: [small] });
@@ -371,7 +371,7 @@ test("a recovered native socket still routes continuations through admission", a
   const x = injectionClient(
     { multi_agent: undefined, input: [{ type: "reasoning", encrypted_content: "opaque-blob" }] },
     { ...injectionConfig(), codexNativeSteering: true }, "test",
-    { "x-codex-parent-thread-id": root, "thread-id": root });
+    { requestHeaders: { "x-codex-parent-thread-id": root, "thread-id": root } });
   const first = await (async () => {
     await waitForInjection(() => InjectionSocket.all.length === 1 && InjectionSocket.all[0]!.frames.length === 1);
     return InjectionSocket.all[0]!;

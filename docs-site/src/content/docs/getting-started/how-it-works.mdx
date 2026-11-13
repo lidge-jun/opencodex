@@ -80,11 +80,12 @@ fields and can disable the entire activation settings block.
 
 ## Sub-agent model selection
 
-On a fresh install, `subagentModels` features `gpt-6-astra`, the GPT-5.6 Sol/Terra/Luna trio, and
-`gpt-5.5` in Codex's sub-agent picker. The dashboard can reorder or replace up to five entries
-with native or routed models. For v1 collaboration requests, optional `injectionModel` and
-`injectionEffort` settings add developer guidance that tells `spawn_agent` which model and reasoning
-effort to use; v2 requests keep Codex's native multi-agent guidance.
+On a fresh install, `subagentModels` features `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6-luna`
+in Codex's sub-agent picker. The dashboard can reorder or replace up to five entries with
+native or routed models. Optional `injectionModel` and `injectionEffort` settings describe
+preferred subagent choices in proxy-authored guidance; they are advisory unless native-default
+sync is enabled. See [Agent configuration](/reference/configuration/agents/) for the v1/v2
+guidance rules and native-default sync.
 
 ## The lifecycle
 
@@ -98,9 +99,10 @@ effort to use; v2 requests keep Codex's native multi-agent guidance.
    base64 text.
 
 2. **Route** — `router.ts` maps the requested model id to a configured provider using a fixed
-   precedence: explicit `provider/model` → a provider's `defaultModel` → built-in prefix patterns
-   (`claude-`, `gpt-`, `o1-`/`o3-`/`o4-`, `llama-`/`mixtral-`/`gemma-`) → a provider's `models[]` →
-   the `defaultProvider` fallback. See [Model Routing](/guides/model-routing/).
+   precedence: configured routing policy → exact Codex account selector → configured combo id or alias → explicit
+   `provider/model` → bare native OpenAI-family id (`gpt-`, `o1-`/`o3-`/`o4-`) → a provider's
+   `defaultModel` → built-in prefixes (`claude-`, `llama-`/`mixtral-`/`gemma-`) → a provider's
+   `models[]` → the `defaultProvider` fallback. See [Model Routing](/guides/model-routing/).
 
 3. **Authenticate** — for an `oauth` provider, opencodex swaps in a fresh, auto-refreshed access
    token as the bearer key, so the existing adapters authenticate unchanged. For ChatGPT/Codex pool

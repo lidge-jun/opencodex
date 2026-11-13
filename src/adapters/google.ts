@@ -1072,7 +1072,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
-        provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
+        provider.googleMode === "vertex" && (
+          parsed.modelId === "gemini-4-argon"
+          || parsed.modelId === "gemini-4-carbon"
+          || parsed.modelId === "gemini-4-hydrogen"
+        ),
         isCloudCodeAssist && /^claude-/i.test(routedModelId),
       );
       lastInjectedCallIds = [...replayedCallIds];
@@ -1100,9 +1104,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // current behavior; Vertex participates only through an explicitly configured ladder (the
       // seed google-vertex entry ships none). Image models are excluded — thinkingConfig would
       // suppress the responseModalities fallback below. CCA maps effort on its envelope path.
-      const thinkingLevel = thinkingEligible
+      const rawThinkingLevel = thinkingEligible
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
+      const thinkingLevel = rawThinkingLevel === "xhigh" && configuredEfforts === undefined
+        ? "high"
+        : rawThinkingLevel;
       const includeThoughts = thinkingEligible
         && provider.showThinkingSummary === true
         && parsed.options.hideThinkingSummary !== true

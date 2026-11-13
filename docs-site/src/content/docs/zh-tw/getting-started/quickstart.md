@@ -34,10 +34,19 @@ OpenRouter 預設會宣告 922,000 token 的可用 context window；Cursor 則�
 
 ## 2. 啟動代理
 
+執行下列兩種方式之一；代理會持續在前景執行：
+
 ```bash
 ocx start            # 預設埠 10100
+```
+
+也可以改用其他連接埠：
+
+```bash
 ocx start --port 8080
 ```
+
+保持此終端開啟。後續狀態檢查與儀表板命令需在另一個設定相同 `OPENCODEX_HOME` 的終端中執行。
 
 啟動時,opencodex 會:
 
@@ -45,9 +54,7 @@ ocx start --port 8080
 - 在 provider 支援時發現即時模型，並**把原生與已路由條目同步進 Codex 的模型目錄**，以及
 - 在 `http://localhost:<port>/v1` 上監聽。
 
-如果請求的埠已被佔用，`ocx start` 會停止並告訴你是什麼佔用了該埠：如果回應的是
-opencodex，請先執行 `ocx stop`；也可以使用 `ocx start --port <port>` 在空閒埠上啟動。
-它不會自行切換到其他埠；舊行為會讓兩個代理同時執行，並將 Codex 重新指向後啟動的代理。
+使用同一 `OPENCODEX_HOME` 的 opencodex 正在執行時，即使有空閒埠，也無法再次啟動。請先用 `ocx stop` 停止擁有者執行個體，或選擇另一個 `OPENCODEX_HOME`。同層執行個體在自己的埠處理直接請求，不會改變 Codex、Grok 或 Claude 的共用路由。若無關程序佔用該埠，`ocx start` 會說明情況；請用 `ocx start --port <port>` 選擇空閒埠。它不會自動切換埠。
 
 檢查它:
 
