@@ -572,9 +572,11 @@ test("disconnect failure opens force confirmation and sends force body", async (
   await act(async () => { (confirm.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(confirm.textContent).toContain("Remove here only");
-  // The disconnect on the Child is conditional: the machine may belong to another link, a hub or another Home by now.
-  expect(confirm.textContent).toContain("still connected to this link");
-  expect(confirm.textContent).toContain("leave it as it is");
+  // No hint names a Child refusal, so the Home could not reach it.
+  expect(confirm.textContent).toContain("This machine could not reach child");
+  // The disconnect on the Child is link-bound: it acts only while the machine is connected to this link.
+  expect(confirm.textContent).toContain("disconnects only while child is connected to this link");
+  expect(confirm.querySelector("code.chip")?.textContent).toBe("ocx disconnect --expect-link lnk_0000000000000001");
   await act(async () => { (confirm.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(calls.some(call => call.method === "DELETE" && call.body === JSON.stringify({ force: true }))).toBe(true);
@@ -1267,7 +1269,7 @@ test("Ready-to-Plant, cached ephemeral, connected badges, conflict notices, and 
   // Force remove modal now points at the link-bound recover, which cleans the machine only while it still belongs to this link,
   // never at a bare ocx-child detach; the body stays the exclusive { force: true }.
   expect(confirmDialog.textContent).toContain("ocx link recover --link-id lnk_00000000000000e1");
-  expect(confirmDialog.textContent).toContain("only while it still belongs to this link");
+  expect(confirmDialog.textContent).toContain("it acts only when devbox-eph's records name this link or nothing at all");
   expect(confirmDialog.textContent).not.toContain("ocx-child detach");
   // A lightweight Child's forced removal leaves a tombstone that records the id, so the dialog does not ask to note it.
   expect(confirmDialog.textContent).not.toContain("Note the link id");
@@ -1306,30 +1308,65 @@ test("a forced removal of a full Child leaves a notice that checks the Child's l
   expect(host.querySelector(".remote-link-row")).toBeNull();
   // The row is gone, so the notice carries the id the Child must still show before anyone disconnects it there.
   const notice = host.querySelector(".remote-link-force-removed");
+  // The link-bound disconnect first; the check-then-disconnect order only for an OpenCodex older than the flag.
+  expect(notice?.textContent).toContain("disconnects only while devbox-full is connected to this link");
+  expect(notice?.textContent).toContain("An OpenCodex older than that flag refuses it before it acts on the link");
   expect(notice?.textContent).toContain("Link: " + id);
-  expect(notice?.textContent).toContain("leave it as it is");
+  expect(notice?.textContent).toContain("or its state cannot be read, leave it as it is");
   // The check and the disconnect are two commands: the notice names the window and keeps the machine of another link untouched.
   expect(notice?.textContent).toContain("an enrollment that lands between them would be removed");
   expect(notice?.textContent).toContain("do not disconnect a machine that shows another link");
-  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(["ocx connect status", "ocx disconnect"]);
+  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(["ocx disconnect --expect-link " + id, "ocx connect status", "ocx disconnect"]);
   await act(async () => { ([...notice!.querySelectorAll("button")].find(item => item.textContent === "Dismiss") as HTMLButtonElement).click(); });
   expect(host.querySelector(".remote-link-force-removed")).toBeNull();
+});
+
+test("a Child that refuses the bound disconnect opens the force dialog with its own title and reason", async () => {
+  // A link-bound refusal (#8662) comes from a Child that answered; the dialog says so instead of "could not reach", and names
+  // the reason from a closed set. A hint outside that set keeps the unreachable title.
+  for (const [hint, title, reason] of [
+    ["child_link_mismatch", "child refused to disconnect from this link", "It belongs to another link, a hub or another Home"],
+    ["child_residual", "child refused to disconnect from this link", "It keeps records it cannot restore"],
+    ["child_disconnect_pending", "child refused to disconnect from this link", "It has an unfinished disconnect it could not tie to this link"],
+    ["expect_link_unsupported", "child refused to disconnect from this link", "It runs a version older than the link check"],
+    ["ssh_failed", "This machine could not reach child", null],
+  ] as const) {
+    if (root) await act(async () => { root?.unmount(); });
+    globalThis.fetch = (async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/link/status") return response({ ...baseStatus, links: [{ id: "lnk_0000000000000001", alias: "child", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 43110, childKind: "full" }] });
+      if (init?.method === "DELETE") return response({ error: { code: "remote_disconnect_failed", hint } }, 502);
+      return response(baseStatus);
+    }) as typeof fetch;
+    const host = await mount();
+    await act(async () => { ([...host.querySelectorAll(".remote-link-row button")].find(item => item.textContent === "Disconnect") as HTMLButtonElement).click(); });
+    await flush();
+    const dialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
+    await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+    await flush();
+    expect(dialog.querySelector("#remote-link-confirm-title")?.textContent, hint).toBe(title);
+    if (reason) expect(dialog.querySelector(".remote-link-refusal")?.textContent, hint).toContain(reason);
+    else expect(dialog.querySelector(".remote-link-refusal"), hint).toBeNull();
+    expect(dialog.textContent, hint).not.toContain(hint === "ssh_failed" ? "refused to disconnect" : "could not reach");
+  }
 });
 
 test("every locale translates the forced-removal notice and keeps its command and link id slots", async () => {
   const { DICTS } = await import("../src/i18n/catalogs");
   for (const [locale, dict] of Object.entries(DICTS)) {
-    for (const key of ["remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.fullDisconnect", "remoteLink.forceRemoved.unknownCheck", "remoteLink.forceRemoved.unknownDisconnect"]) {
+    for (const key of ["remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullBound", "remoteLink.forceRemoved.fullDisconnect", "remoteLink.forceRemoved.unknownCheck", "remoteLink.forceRemoved.unknownDisconnect"]) {
       const text = (dict as Record<string, string>)[key];
       expect(typeof text, locale + " " + key).toBe("string");
       if (locale !== "en") expect(text, locale + " " + key).not.toBe((DICTS.en as Record<string, string>)[key]);
       expect(text.includes("{cmd}") && text.includes("{linkId}"), locale + " " + key).toBe(true);
     }
-    for (const key of ["remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemove.unknownBody"]) {
+    for (const key of ["remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.unknownFallback", "remoteLink.forceRemove.unknownBody",
+      "remoteLink.forceRemove.refusedTitle", "remoteLink.forceRemove.refusal.child_link_mismatch", "remoteLink.forceRemove.refusal.child_residual",
+      "remoteLink.forceRemove.refusal.child_disconnect_pending", "remoteLink.forceRemove.refusal.expect_link_unsupported"]) {
       const text = (dict as Record<string, string>)[key];
       expect(typeof text, locale + " " + key).toBe("string");
       if (locale !== "en") expect(text, locale + " " + key).not.toBe((DICTS.en as Record<string, string>)[key]);
-      expect(text.includes("{cmd}"), locale + " " + key).toBe(!key.endsWith("unknownBody"));
+      expect(text.includes("{cmd}"), locale + " " + key).toBe(!key.endsWith("unknownBody") && !key.includes("refus"));
     }
   }
 });
@@ -1339,7 +1376,8 @@ test("every locale keeps the force-remove and ownership texts' paths, commands a
   const { DICTS } = await import("../src/i18n/catalogs");
   const keys = ["remoteLink.forceRemove.body", "remoteLink.forceRemove.ephemeralBody", "remoteLink.forceRemove.unknownBody", "remoteLink.forceRemove.noteId",
     "remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.fullDisconnect", "remoteLink.forceRemoved.unknownCheck",
-    "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownDisconnect", "remoteLink.residual.ownership"];
+    "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownDisconnect",
+    "remoteLink.forceRemoved.fullBound", "remoteLink.forceRemoved.unknownFallback", "remoteLink.forceRemove.refusedTitle"];
   const literals = ["{cmd}", "{alias}", "{linkId}", "Link: {linkId}", "~/.cache/opencodex/bin/ocx-child", "~/.local/bin", "PATH", "LOCALAPPDATA",
     "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where.exe ocx-child", "ocx-child connect status --json"];
   const en = DICTS.en as Record<string, string>;
@@ -1383,17 +1421,58 @@ test("a forced removal of a Child of unknown type names no command up front and 
   const notice = host.querySelector(".remote-link-force-removed");
   expect(notice?.textContent).toContain("keeps nothing to recover it from");
   expect(notice?.textContent).toContain("names link " + id);
-  expect(notice?.textContent).toContain("leave it as it is");
+  expect(notice?.textContent).toContain("or its state cannot be read, leave it as it is");
+  // Both installs' link-bound commands first (every released ocx-child parses them strictly); the check only for older builds.
+  expect(notice?.textContent).toContain("Each acts only while the machine still belongs to this link");
   expect(notice?.textContent).toContain("an enrollment that lands between them would be removed");
   expect(notice?.textContent).toContain("do not disconnect a machine that shows another link");
   // Every location the product plants or finds an ocx-child, with the planted copy kept as the example path.
   for (const where of ["~/.local/bin", "PATH", "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where.exe ocx-child"]) {
     expect(notice?.textContent, where).toContain(where);
   }
-  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([
-    "ocx connect status --json", "command -v ocx-child", "~/.cache/opencodex/bin/ocx-child connect status --json", "ocx disconnect", "~/.cache/opencodex/bin/ocx-child detach",
-  ]);
+  // No unbound ocx-child detach: its status cannot show an interrupted attach of another link, which a plain detach would
+  // restore and then remove, so an older lightweight Child is left as it is (#8691 review).
+  expect(notice?.textContent).toContain("On a lightweight Child, leave it as it is");
+  // The Windows paths are Command Prompt paths, and the bound detach chip shows the POSIX planted path (#8691 final review).
+  expect(notice?.textContent).toContain("in Command Prompt on Windows %LOCALAPPDATA%");
+  expect(notice?.textContent).toContain("on Windows, the ocx-child.exe path above");
+  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(UNKNOWN_CHIPS(id));
   expect(notice?.textContent).not.toContain("ocx link recover");
+});
+
+const UNKNOWN_CHIPS = (id: string) => [
+  "ocx disconnect --expect-link " + id, "command -v ocx-child", "~/.cache/opencodex/bin/ocx-child detach --expect-link " + id,
+  "ocx connect status --json", "ocx disconnect",
+];
+
+test("in every locale the unknown-type notice offers no unbound ocx-child detach", async () => {
+  const id = "lnk_00000000000000d4";
+  for (const { code } of LOCALES) {
+    if (root) await act(async () => { root?.unmount(); });
+    root = null;
+    win.document.body.innerHTML = "";
+    win.localStorage.setItem("ocx-lang", code);
+    let listed = true;
+    globalThis.fetch = (async (_input, init) => {
+      if (init?.method === "DELETE") {
+        const body = init.body ? JSON.parse(String(init.body)) as { force?: boolean } : undefined;
+        if (body?.force !== true) return response({ error: { code: "remote_disconnect_failed" } }, 502);
+        listed = false;
+        return response({ linkId: id });
+      }
+      return response({ ...baseStatus, links: listed ? [{ id, alias: "devbox-old", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 24504 }] : [] });
+    }) as typeof fetch;
+    const host = await mount();
+    await act(async () => { (host.querySelector(".remote-link-row button:last-of-type") as HTMLButtonElement).click(); });
+    await flush();
+    const dialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
+    await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+    await flush();
+    await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+    await flush();
+    const notice = host.querySelector(".remote-link-force-removed");
+    expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent), code).toEqual(UNKNOWN_CHIPS(id));
+  }
 });
 
 test("a refused --purge on a full install explains why instead of a generic failure", async () => {
@@ -1485,7 +1564,9 @@ test.each(ENROLLMENT_CLEANUP_ERRORS.filter(([code]) => code !== "link_pin_confli
   expect(host.textContent).not.toContain("Remote link request could not be completed.");
 });
 
-const RESIDUAL_STEPS = ["purge", "purgeWindows", "purgeWindowsFallback", "purgeAny", "purgeAnyWindows", "ephemeral", "full", "unknown", "ownership"] as const;
+const RESIDUAL_STEPS = ["purge", "purgeWindows", "purgeWindowsFallback", "purgeAny", "purgeAnyWindows", "ephemeral", "full", "unknown", "unknownLightweight", "lightweightPlaced", "lightweightPlacedWindows", "bound", "olderFull", "olderLightweight", "noLink"] as const;
+// Lines that carry no command chip; bound and olderFull name the attempt's link id.
+const RESIDUAL_PROSE: readonly string[] = ["bound", "olderLightweight", "noLink"];
 
 test("every locale translates the enrollment refusals and the Child steps instead of reusing English", async () => {
   const { DICTS } = await import("../src/i18n/catalogs");
@@ -1501,65 +1582,65 @@ test("every locale translates the enrollment refusals and the Child steps instea
       expect(typeof text, locale + " " + step).toBe("string");
       if (locale !== "en") expect(text, locale + " " + step).not.toBe((DICTS.en as Record<string, string>)["remoteLink.residual." + step]);
       // A single command is a chip in the {cmd} slot, never written into the translated prose.
-      const chip = step !== "full" && step !== "unknown";
-      expect(text.includes("{cmd}"), locale + " " + step).toBe(chip);
+      expect(text.includes("{cmd}"), locale + " " + step).toBe(!RESIDUAL_PROSE.includes(step));
+      if (step === "bound" || step === "olderFull") expect(text.includes("{linkId}"), locale + " " + step).toBe(true);
     }
+    // The ownership check without the attempt's id is gone: every step is bound to that id (#8691 final review).
+    expect((dict as Record<string, string>)["remoteLink.residual.ownership"], locale).toBeUndefined();
   }
 });
 
+const RESIDUAL_ID = "lnk_00000000000000c1";
+const WINDOWS_PURGE_BOUND = '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + RESIDUAL_ID;
+const WINDOWS_FALLBACK_BOUND = '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + RESIDUAL_ID;
+// The lightweight agent by its managed paths (not necessarily on PATH), then the copy placed by hand (#8694 review).
+const POSIX_DETACH = "~/.cache/opencodex/bin/ocx-child detach --expect-link " + RESIDUAL_ID;
+const WINDOWS_DETACH = '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + RESIDUAL_ID;
+const WINDOWS_FALLBACK_DETACH = '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + RESIDUAL_ID;
 test.each([
-  ["key_cleanup_failed", { recovery: "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying." }, "~/.cache/opencodex/bin/ocx-child detach --purge", "Run ~/.cache"],
-  ["key_cleanup_failed", { residualKind: "plant", remotePlatform: "posix", recovery: "whatever the server wrote" }, "~/.cache/opencodex/bin/ocx-child detach --purge", "Run ~/.cache"],
-  ["key_cleanup_failed", { residualKind: "plant", remotePlatform: "windows", recovery: "whatever the server wrote" }, '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge', "Command Prompt"],
-  ["key_cleanup_failed", { residualKind: "enrollment", recovery: "Run ocx-child detach (or ocx disconnect) on the Child before retrying." }, "ocx-child detach", "Run ocx-child"],
-] as const)("a residual %s names its Child command as a chip", async (code, fields, cmd, prose) => {
-  const host = await applyRefusal({ error: { code, message: "fixture" }, residual: true, ...fields });
+  ["a posix plant", { residualKind: "plant", remotePlatform: "posix" }, ["~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + RESIDUAL_ID], "Run ~/.cache"],
+  ["a windows plant", { residualKind: "plant", remotePlatform: "windows" }, [WINDOWS_PURGE_BOUND, WINDOWS_FALLBACK_BOUND], "Command Prompt"],
+  ["a lightweight Child", { residualKind: "enrollment", residualInstall: "ephemeral", remotePlatform: "posix" }, [POSIX_DETACH, "command -v ocx-child"], "An ocx-child older than that flag refuses it before it acts; then leave the Child as it is"],
+  ["a lightweight Windows Child", { residualKind: "enrollment", residualInstall: "ephemeral", remotePlatform: "windows" }, [WINDOWS_DETACH, WINDOWS_FALLBACK_DETACH, "where.exe ocx-child"], "Command Prompt"],
+  ["a lightweight Child of unknown platform", { residualKind: "enrollment", residualInstall: "ephemeral" }, [POSIX_DETACH, WINDOWS_DETACH, WINDOWS_FALLBACK_DETACH, "command -v ocx-child"], "On macOS or Linux"],
+  ["a full install", { residualKind: "enrollment", residualInstall: "full" }, ["ocx disconnect --expect-link " + RESIDUAL_ID, "ocx connect status --json"], "if it disconnected, ocx restart"],
+  ["an install not recorded", { residualKind: "enrollment" }, ["ocx disconnect --expect-link " + RESIDUAL_ID, POSIX_DETACH, WINDOWS_DETACH, WINDOWS_FALLBACK_DETACH, "command -v ocx-child", "ocx connect status --json"], "On a full install"],
+] as const)("a residual on %s names its Child step bound to the attempt's link", async (_name, fields, chips, prose) => {
+  const host = await applyRefusal({ error: { code: "key_cleanup_failed", message: "fixture" }, residual: true, linkId: RESIDUAL_ID, recovery: "whatever the server wrote", ...fields });
   const step = host.querySelector(".remote-link-child-step");
   expect(step?.textContent).toContain("The Child may still be connected.");
-  // The step can be acted on long after the attempt, when the Child may belong to another link it would remove: the check
-  // comes before the step, names its command, and says the attempt's link id is not shown.
-  const ownership = host.querySelector(".remote-link-child-ownership");
-  expect(ownership?.textContent).toContain("Before the step below, check the Child with");
-  expect(ownership?.textContent).toContain("ocx-child connect status --json on a lightweight Child");
-  expect(ownership?.textContent).toContain("This attempt's link id is not shown here, so treat any link you do not recognise as another's");
-  expect(ownership?.querySelector("code.chip")?.textContent).toBe("ocx connect status");
-  expect(ownership!.compareDocumentPosition(step!) & win.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(step?.querySelector("code.chip")?.textContent).toBe(cmd);
-  if ("remotePlatform" in fields && fields.remotePlatform === "windows") {
-    // The plant's location on a Windows Child without LOCALAPPDATA is named too.
-    expect([...step!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([cmd, '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge']);
-    expect(step?.textContent).toContain("Where LOCALAPPDATA is not set");
-  }
+  // Every step is bound to the attempt's link id, so it leaves a Child that another link joined since: no check that cannot
+  // tell this attempt's link from another's, and no plain disconnect or detach chip.
+  expect([...step!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([...chips]);
+  expect(step?.textContent).toContain("this attempt's link (" + RESIDUAL_ID + ")");
   expect(step?.textContent).toContain(prose);
+  expect(host.querySelector(".remote-link-child-ownership")).toBeNull();
   expect(host.textContent).not.toContain("whatever the server wrote");
 });
 
-test("a journalled plant residual, which names no platform, lists every managed location as a chip", async () => {
+test("a journalled plant residual, which names no platform, lists every managed location bound to the link", async () => {
   // The shape a replay of a residual ocx link add --operation-id answers (src/server/management/link-operation.ts).
   const host = await applyRefusal({ error: { code: "link_cleanup_uncertain", message: "fixture" }, operationId: "attach-1", outcome: "residual", residual: true, residualKind: "plant",
-    recovery: "The Child may still hold the planted ocx-child; run its managed copy with detach --purge before retrying: server text the page must not echo" });
+    linkId: RESIDUAL_ID, recovery: "The Child may still hold the planted ocx-child; server text the page must not echo" });
   const step = host.querySelector(".remote-link-child-step");
   expect([...step!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([
-    "~/.cache/opencodex/bin/ocx-child detach --purge",
-    '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge',
-    '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge',
+    "~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + RESIDUAL_ID, WINDOWS_PURGE_BOUND, WINDOWS_FALLBACK_BOUND,
   ]);
   expect(step?.textContent).toContain("On macOS or Linux");
   expect(host.textContent).not.toContain("server text the page must not echo");
 });
 
-test.each([
-  ["link_cleanup_uncertain", "Run ocx disconnect and ocx restart on the Child before retrying.", "ocx disconnect and ocx restart"],
-  ["link_cleanup_uncertain", "server text the page must not echo", "Check the Child"],
-])("a residual %s also says the Child may still be connected and how to clean it", async (code, recovery, expected) => {
-  const host = await applyRefusal({ error: { code, message: "fixture" }, residual: true, recovery });
+test("a residual without the attempt's link id leaves the Child as it is", async () => {
+  const host = await applyRefusal({ error: { code: "link_cleanup_uncertain", message: "server text the page must not echo" }, residual: true, recovery: "Run ocx disconnect and ocx restart on the Child before retrying." });
   const text = host.textContent ?? "";
   expect(text).toContain("revoke the leftover link key");
   expect(text).toContain("The Child may still be connected.");
-  expect(text).toContain(expected);
+  expect(text).toContain("so no step on the Child can be bound to it: leave the Child as it is");
   expect(host.querySelector(".remote-link-child-step code.chip")).toBeNull();
-  expect(text).not.toContain("server text the page must not echo");
   expect(text).not.toContain("was not connected");
+  // Neither the server's message nor its recovery prose is shown.
+  expect(text).not.toContain("server text the page must not echo");
+  expect(text).not.toContain("Run ocx disconnect and ocx restart");
 });
 
 test("a cleanup refusal without residual names no Child step", async () => {
@@ -1568,16 +1649,19 @@ test("a cleanup refusal without residual names no Child step", async () => {
   expect(host.textContent).not.toContain("The Child may still be connected.");
 });
 
-test("readLinkJson keeps whether the Child may still be connected, as a fixed variant", async () => {
+test("readLinkJson keeps whether the Child may still be connected, as a fixed variant and a checked link id", async () => {
   const read = async (body: unknown) => {
     try { await readLinkJson(new Response(JSON.stringify(body), { status: 500 })); } catch (error) { return error as LinkApiError; }
     throw new Error("no error");
   };
   expect((await read({ error: { code: "x" } })).residual).toBeNull();
-  expect((await read({ error: { code: "x" }, residual: true, recovery: "Run ocx disconnect and ocx restart on the Child before retrying." })).residual).toBe("full");
-  expect((await read({ error: { code: "x" }, residual: true, recovery: 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child, or "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge where LOCALAPPDATA is not set, before retrying.' })).residual).toBe("purgeWindows");
-  expect((await read({ error: { code: "x" }, residual: true, residualKind: "plant", remotePlatform: "windows" })).residual).toBe("purgeWindows");
-  expect((await read({ error: { code: "x" }, residual: true, residualKind: "plant" })).residual).toBe("purgeAny");
-  expect((await read({ error: { code: "x" }, residual: true })).residual).toBe("unknown");
+  expect((await read({ error: { code: "x" }, residual: true, residualKind: "enrollment", residualInstall: "full", linkId: RESIDUAL_ID })).residual).toEqual({ step: "full", linkId: RESIDUAL_ID });
+  expect((await read({ error: { code: "x" }, residual: true, residualKind: "enrollment", residualInstall: "ephemeral", linkId: RESIDUAL_ID })).residual).toEqual({ step: "ephemeral", linkId: RESIDUAL_ID });
+  expect((await read({ error: { code: "x" }, residual: true, residualKind: "plant", remotePlatform: "windows", linkId: RESIDUAL_ID })).residual).toEqual({ step: "purgeWindows", linkId: RESIDUAL_ID });
+  expect((await read({ error: { code: "x" }, residual: true, residualKind: "plant", linkId: RESIDUAL_ID })).residual).toEqual({ step: "purgeAny", linkId: RESIDUAL_ID });
+  expect((await read({ error: { code: "x" }, residual: true, residualKind: "enrollment", linkId: RESIDUAL_ID })).residual).toEqual({ step: "unknown", linkId: RESIDUAL_ID });
+  // The server's recovery prose never picks a variant, and a link id is used only in its exact shape.
+  expect((await read({ error: { code: "x" }, residual: true, recovery: "Run ocx disconnect and ocx restart on the Child before retrying." })).residual).toEqual({ step: "noLink", linkId: null });
+  expect((await read({ error: { code: "x" }, residual: true, residualKind: "plant", linkId: "lnk_0; rm -rf ~" })).residual).toEqual({ step: "noLink", linkId: null });
   expect((await read({ error: { code: "x" }, residual: "yes" })).residual).toBeNull();
 });

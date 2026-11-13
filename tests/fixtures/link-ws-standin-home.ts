@@ -134,6 +134,12 @@ export interface StandinHomeOptions {
   challengeStatus?: () => number;
   /** Plain (non-upgrade) data requests: status and body. */
   data?: (request: StandinRequest) => { status: number; body?: string };
+  /**
+   * Plain data requests the test answers itself on the raw socket (a streamed or held response). Returning true takes the
+   * connection over: `rest` is what had arrived after the request head, and everything after it goes only to the socket's
+   * own listeners, never parsed as requests.
+   */
+  stream?: (request: StandinRequest, socket: Socket, rest: Buffer) => boolean;
 }
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -162,6 +168,7 @@ export function startStandinHome(options: StandinHomeOptions): Promise<StandinHo
     const nonces = new Set<string>();
     let buffer = Buffer.alloc(0);
     let upgraded: StandinSocket | null = null;
+    let streamed = false;
     let busy = false;
     const answer = (status: number, headers: Record<string, string>, body = ""): void => {
       const lines = ["HTTP/1.1 " + status + " X", ...Object.entries(headers).map(([n, v]) => n + ": " + v), "content-length: " + Buffer.byteLength(body)];
@@ -212,6 +219,7 @@ export function startStandinHome(options: StandinHomeOptions): Promise<StandinHo
         if (buffer.length) { const rest = buffer; buffer = Buffer.alloc(0); upgraded.feed(rest); }
         return;
       }
+      if (options.stream?.(request, socket, buffer)) { streamed = true; buffer = Buffer.alloc(0); return; }
       const reply = options.data?.(request) ?? { status: 404, body: '{"error":"not_found"}' };
       answer(reply.status, { "content-type": "application/json" }, reply.body ?? "");
     };
@@ -219,7 +227,7 @@ export function startStandinHome(options: StandinHomeOptions): Promise<StandinHo
       if (busy) return;
       busy = true;
       try {
-        while (!upgraded) {
+        while (!upgraded && !streamed) {
           const end = buffer.indexOf("\r\n\r\n");
           if (end < 0) break;
           const lines = buffer.subarray(0, end).toString("latin1").split("\r\n");
@@ -238,6 +246,7 @@ export function startStandinHome(options: StandinHomeOptions): Promise<StandinHo
     };
     socket.on("data", chunk => {
       if (upgraded) { upgraded.feed(chunk); return; }
+      if (streamed) return;
       buffer = Buffer.concat([buffer, chunk]);
       void pump();
     });

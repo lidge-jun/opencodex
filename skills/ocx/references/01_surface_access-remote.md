@@ -58,7 +58,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the verified link result as JSON. |
 
 - Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.
-- Preflights bound Child restart support and curl, connects, restarts once and verifies a fresh authenticated catalog relay before success. Post-connect failures can leave Child config; run ocx disconnect and ocx restart there before retrying.
+- Preflights bound Child restart support and curl, connects, restarts once and verifies a fresh authenticated catalog relay before success. Post-connect failures can leave Child config; the failure names the attempt's link id, so run ocx disconnect --expect-link <id> there (the planted ocx-child's detach --expect-link <id> on a lightweight Child, ~/.cache/opencodex/bin/ocx-child or %LOCALAPPDATA%\opencodex\bin\ocx-child.exe, which need not be on PATH) and, if it disconnected, ocx restart, before retrying: it acts only while the Child belongs to that link.
 
 ### `ocx link port`
 
@@ -159,7 +159,7 @@ State-changing: yes. JSON mode: `envelope`.
 - Requires a valid link ID and loopback admin authority. Explicit force additionally requires --yes.
 - Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.
 - Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.
-- If forced cleanup was needed, run ocx disconnect on the remote client. No new enrollment, SSH trust or credential action is implied.
+- After a forced revoke of a full install, run ocx disconnect --expect-link <id> on the machine, which acts only while it is connected to this link; an OpenCodex older than that flag refuses it as a usage error before it acts on the link, and then run ocx disconnect only if ocx connect status --json there shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed); if it shows another link, a hub or another Home, or its state cannot be read, leave it. For a lightweight (ocx-child) Child, use ocx link recover --link-id <id>, which acts only when the machine's records name this link or nothing at all, and refuses a machine another link owns. No new enrollment, SSH trust or credential action is implied.
 
 ### `ocx link recover`
 
@@ -184,7 +184,7 @@ State-changing: yes. JSON mode: `envelope`.
 | `--json` | boolean | Emit the {linkId, outcome, purged} receipt, the {tombstones} list or the {linkId, outcome} forget answer as JSON. |
 
 - Runs the managed planted ocx-child's disconnect --purge --expect-link <id> over the link's alias with its pinned host key, never a sibling route. The Child restores only when its state and its CODEX_HOME ownership record both name that link.
-- Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; a residual one needs ocx-child detach on that machine.
+- Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; do not answer a residual one with a plain ocx-child detach on the machine, which would also restore and remove a link an interrupted attach left; a person on the Home can forget the tombstone of a machine that is gone or whose cleanup cannot be proven.
 - A forced revoke of a Home-initiated ephemeral link writes the tombstone; a link that still exists answers link_present, and any other Home-initiated link naming the same alias (case-insensitive) answers alias_linked before the machine is contacted. Without a link operation journal, --operation-id answers operation_journal_unavailable.
 
 ### `ocx link reconnect`
@@ -387,7 +387,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx disconnect`
 
-Usage: `ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] | ocx disconnect --orphaned-token --yes [--json]`
+Usage: `ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] [--expect-link <linkId>] | ocx disconnect --orphaned-token --yes [--json]`
 
 Disconnect a client or preserve orphaned token files for recovery.
 
@@ -399,6 +399,7 @@ Drives no management route.
 |---|---|---|
 | `--keep-catalog` | boolean | Keep the connected client's catalog during ordinary disconnect. |
 | `--recover-config` | boolean | With --yes, snapshot current Codex artifacts and recover only evidenced owned keys; unknown ownership still refuses. |
+| `--expect-link` | string | Disconnect only when this machine is the connected Child of that link, or finish its unfinished disconnect once the connection is cleared; otherwise exit 5 with child_link_mismatch and change nothing. |
 | `--orphaned-token` | boolean | Preserve unowned service-token files in a private backup when disconnected. |
 | `--yes` | boolean | Explicitly confirm --recover-config or --orphaned-token recovery. |
 | `--json` | boolean | Emit the local result and backup location as JSON. |

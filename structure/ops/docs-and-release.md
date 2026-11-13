@@ -86,7 +86,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior. Use slugs for local pages, including Platform Support and OS Keychain, so navigation preserves the selected locale. `tests/ci-workflows/docs-spanish-localization.test.ts` guards canonical Spanish coverage, literal provider-key references, protected remote examples, foreground quickstart alternatives, separate-terminal and Bash/stdin pairing recipes, Pi reasoning metadata, and the data/management credential and admission-header distinctions across shipped locale copies, including empty-header bearer fallback. `tests/ci-workflows/docs-remote-hub-claims.test.ts` validates Docker initialization against the image seed and configuration schema; `tests/ci-workflows/docs-bun-source-requirement.test.ts` checks current bundle claims against the package pin.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 107 total: 86 key-based, 17 OAuth, three local, and one default
+documented split is 108 total: 87 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, every translated copy, and every locale's
 quickstart carry the same counts.
 
