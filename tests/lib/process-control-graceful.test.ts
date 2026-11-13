@@ -5,6 +5,24 @@ function okResponse(): Response {
   return new Response(JSON.stringify({ success: true, sharedTeardown: "performed" }), { status: 200 });
 }
 
+/**
+ * A live process this test owns, for the pid-taking stop paths.
+ *
+ * `spawn("sleep", ...)` depends on a POSIX `sleep` on PATH and, worse, waits forever when
+ * the spawn itself fails: the `spawn` event never fires and the `error` event is unhandled.
+ * The runtime's own binary is always present, and a failed start now rejects instead of
+ * hanging the suite.
+ */
+async function spawnIdleChild(): Promise<import("node:child_process").ChildProcess> {
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], { stdio: "ignore" });
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", () => resolve());
+    child.once("error", reject);
+  });
+  return child;
+}
+
 describe("gracefulStopHost", () => {
   test("loopback aliases and wildcard binds answer on IPv4 loopback", () => {
     for (const host of [undefined, "", "  ", "localhost", "LOCALHOST", "127.0.0.1", "0.0.0.0", "::", "[::]"]) {
@@ -360,9 +378,7 @@ describe("409 refusal reporting", () => {
     //
     // The pid is a real live process this test owns, and the ladder is injected: the rule
     // is "was the ladder entered", which a mock of the whole stop could not show.
-    const { spawn } = await import("node:child_process");
-    const child = spawn("sleep", ["60"], { stdio: "ignore" });
-    await new Promise<void>(resolve => child.once("spawn", () => resolve()));
+    const child = await spawnIdleChild();
     const failing = (async () => new Response("nope", { status: 500 })) as typeof fetch;
     try {
       const forbidden: number[] = [];
@@ -407,9 +423,7 @@ describe("409 refusal reporting", () => {
     // stop the caller had just refused. The wait is observational in that mode: it runs,
     // it just may not terminate anything.
     const { reclaimListenPort } = await import("../../src/server/port-reclaim");
-    const { spawn } = await import("node:child_process");
-    const child = spawn("sleep", ["60"], { stdio: "ignore" });
-    await new Promise<void>(resolve => child.once("spawn", () => resolve()));
+    const child = await spawnIdleChild();
     const kills: number[] = [];
     const pid = child.pid!;
     const reclaimed: unknown[] = [];
