@@ -34,43 +34,35 @@ export function isCredentialName(name: string): boolean {
 
 /**
  * Replace every span of text a secret covers: the whole text when it equals a whole-only value, and
- * every occurrence of each substring value. Spans are found on the original text and merged before
- * anything is replaced, so overlapping values are replaced as one union and no part of either
- * survives between them.
+ * every occurrence of each substring value. Coverage is marked on the original text before anything
+ * is replaced, so overlapping values are replaced as one union and no part of either survives
+ * between them. Each secret marks only characters past its previous occurrence, so the work and the
+ * one coverage array stay linear in the text length however often a secret repeats.
  */
 export function maskSecretSpans(text: string, replacement: string, substrings: Iterable<string>, wholeOnly: Iterable<string> = []): string {
   for (const value of wholeOnly) if (value && text === value) return replacement;
-  const spans: Array<[number, number]> = [];
+  let covered: Uint8Array | undefined;
   for (const secret of substrings) {
     if (!secret) continue;
-    for (let at = text.indexOf(secret); at >= 0; at = text.indexOf(secret, at + 1)) spans.push([at, at + secret.length]);
-  }
-  if (spans.length === 0) return text;
-  spans.sort((a, b) => a[0] - b[0]);
-  let out = "";
-  let cursor = 0;
-  let [start, end] = spans[0]!;
-  for (const [spanStart, spanEnd] of spans.slice(1)) {
-    if (spanStart <= end) {
-      end = Math.max(end, spanEnd);
-      continue;
+    let markedTo = 0;
+    for (let at = text.indexOf(secret); at >= 0; at = text.indexOf(secret, at + 1)) {
+      covered ??= new Uint8Array(text.length);
+      const end = at + secret.length;
+      covered.fill(1, Math.max(at, markedTo), end);
+      markedTo = end;
     }
-    out += text.slice(cursor, start) + replacement;
-    cursor = end;
-    start = spanStart;
-    end = spanEnd;
   }
-  return out + text.slice(cursor, start) + replacement + text.slice(end);
-}
-
-/** Slices recorded for a value too large to keep whole: any window of 320+ characters holds one. */
-const OVERSIZED_SLICE_CHARS = 64;
-const OVERSIZED_SLICE_STRIDE = 256;
-function oversizedSlices(value: string): string[] {
-  const slices: string[] = [];
-  for (let at = 0; at + OVERSIZED_SLICE_CHARS <= value.length; at += OVERSIZED_SLICE_STRIDE) slices.push(value.slice(at, at + OVERSIZED_SLICE_CHARS));
-  slices.push(value.slice(-OVERSIZED_SLICE_CHARS));
-  return slices;
+  if (covered === undefined) return text;
+  let out = "";
+  let at = 0;
+  while (at < text.length) {
+    const run = covered[at];
+    let next = at + 1;
+    while (next < text.length && covered[next] === run) next++;
+    out += run ? replacement : text.slice(at, next);
+    at = next;
+  }
+  return out;
 }
 
 /**
@@ -218,8 +210,8 @@ export class OutboundCredentialRegistry {
 
   /**
    * Record the components of every value in headers that are about to be sent. A component too
-   * large to keep whole is also recorded as overlapping slices, so a bounded diagnostic that repeats
-   * any part of it is still recognized; a credential-named one still marks the registry incomplete.
+   * large to keep, credential-named or not, marks the registry incomplete: no bounded record can
+   * recognize every excerpt of it, so every caller fails closed instead.
    */
   remember(headers: HeadersInit | Headers | undefined): void {
     if (!headers) return;
@@ -229,7 +221,7 @@ export class OutboundCredentialRegistry {
       const tier = strict ? this.strict : this.observed;
       for (const part of credentialComponents(value)) {
         tier.add(part);
-        if (Buffer.byteLength(part, "utf8") > this.maxValueBytes) for (const slice of oversizedSlices(part)) this.observed.add(slice);
+        if (Buffer.byteLength(part, "utf8") > this.maxValueBytes) this.strict.complete = false;
       }
     });
   }

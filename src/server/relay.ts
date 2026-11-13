@@ -297,6 +297,12 @@ export type SseTerminalOutputBoundaryOptions = CodexSafetyBufferingFilterOptions
   maxFrames?: number;
   /** Per-request outbound mask, applied to upstream copy before the boundary bounds it. */
   maskCredential?: (text: string) => string;
+  /**
+   * The original envelope for a payload an earlier client rewrite masked. The verdict and policy
+   * detection read it, so the client tail classifies the same evidence as the inspector, while
+   * everything delivered still comes from the masked copy.
+   */
+  rawEvidence?: (payload: string) => unknown;
 };
 
 /**
@@ -362,9 +368,10 @@ export function createSseTerminalOutputBoundary(
       const payload = sseDataPayload(decoder.decode(frame.block));
       const isDone = payload === "[DONE]";
       const parsed = payload === null ? undefined : parseSsePayload(payload);
+      const evidenceSource = (payload === null ? undefined : options?.rawEvidence?.(payload)) ?? parsed;
       // Observe on the client reader itself: a tee inspection branch may lag
       // behind EOF, so its log context cannot determine the outgoing terminal.
-      const evidence = reduceBareUpstreamEvidence(bareEvidence, parsed, options?.maskCredential);
+      const evidence = reduceBareUpstreamEvidence(bareEvidence, evidenceSource, options?.maskCredential);
       if (evidence !== undefined && evidence !== bareEvidence) {
         bareEvidence = evidence;
         upstreamError = evidence.verdict.message;
@@ -377,8 +384,8 @@ export function createSseTerminalOutputBoundary(
       if (safetyBuffering === "drop") continue;
       // An untyped policy envelope that loses to earlier typed evidence is not the turn's verdict.
       const typedBareSeen = bareEvidence?.typed === true;
-      const policyError = parsed !== undefined && isPolicyRewriteType(parsed, typedBareSeen)
-        ? cyberPolicyTerminalError(parsed)
+      const policyError = evidenceSource !== undefined && isPolicyRewriteType(evidenceSource, typedBareSeen)
+        ? cyberPolicyTerminalError(evidenceSource)
         : undefined;
       const policyPayload = policyError ? policyFailurePayload(policyError, parsed, options?.maskCredential) : undefined;
       // An untyped envelope is evidence, not a Responses event: the client receives the terminal it
@@ -490,12 +497,14 @@ export function relaySseWithFailedTail(
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
   opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string;
+    /** See {@link SseTerminalOutputBoundaryOptions.rawEvidence}. */
+    rawEvidence?: (payload: string) => unknown;
     /** Receives the exact payload of every synthesized bare-verdict tail, so a client-stream log can tell it from upstream. */
     onSyntheticTail?: (payload: string, verdict?: BareUpstreamError) => void },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
-  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential });
+  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential, rawEvidence: opts?.rawEvidence });
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -707,14 +716,17 @@ function rewritePolicyTerminalBlock(block: string, payload: string): string {
 }
 
 function policyFailurePayload(policyError: { message: string; type?: string }, parsed: unknown, mask?: (text: string) => string): string {
+  // An untyped envelope has no protocol fields of its own: everything in it is upstream copy, so its
+  // policy terminal keeps only the guarded message, the default policy type and the event sequence.
+  const untyped = isUntypedBareUpstreamError(parsed);
   const error = {
-    type: cyberPolicyErrorType(policyError.type),
+    type: untyped ? cyberPolicyErrorType(undefined) : cyberPolicyErrorType(policyError.type),
     code: CYBER_POLICY_ERROR_CODE,
     // Mask before bounding: a slice first can keep a credential prefix the later rewrite misses.
     message: redactSecretString(guardBareCopy(policyError.message, mask)).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   const root = asJsonRecord(parsed);
-  const originalResponse = asJsonRecord(root?.response);
+  const originalResponse = untyped ? undefined : asJsonRecord(root?.response);
   const preservedResponse = Object.fromEntries(
     Object.entries(originalResponse ?? {}).filter(([key]) => key !== "incomplete_details"),
   );
@@ -728,7 +740,9 @@ function policyFailurePayload(policyError: { message: string; type?: string }, p
   // Responses event metadata such as sequence_number is normally top-level.
   // Keep it (and any other non-error, non-response fields) while replacing only
   // the protocol type and error envelope.
-  const preservedRoot = root
+  const preservedRoot = untyped
+    ? (typeof root?.sequence_number === "number" ? { sequence_number: root.sequence_number } : {})
+    : root
     ? Object.fromEntries(Object.entries(root).filter(([key]) => (
       key !== "type"
       && key !== "response"

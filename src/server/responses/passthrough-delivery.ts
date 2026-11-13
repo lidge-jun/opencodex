@@ -12,7 +12,7 @@ import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
 import { attachResponseToolOwnership } from "./response-tool-ownership";
-import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
+import { createOutboundCredentialMask, createRawEvidenceChannel, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -870,6 +870,8 @@ export async function deliverPassthroughResponse(
         }, { dispose: () => plaintextInspector.dispose() })
         : undefined;
       const maskCredential = createOutboundCredentialMask(nativeExchange.request.headers);
+      // The tee relay's boundary sits behind the client rewrite; it classifies the original envelope.
+      const untypedRawEvidence = createRawEvidenceChannel();
       const requiredStreamEvidence = { replayUnsafe: !!webSearchBridgePlan };
       const normalizeRequiredToolItem = (item: unknown) => {
         item = restoreImageGenCalls(item, imageGenCallAliases).value;
@@ -966,7 +968,7 @@ export async function deliverPassthroughResponse(
           )
           : undefined,
         requiredStreamGuard?.blockRewrite,
-        createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential),
+        createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential, untypedRawEvidence.remember),
         rememberPlaintextBlock,
         // Display-only projection must follow every continuation-cache observer.
         (!canonicalBufferedJson || !options.comboAttempt) && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
@@ -1377,6 +1379,7 @@ export async function deliverPassthroughResponse(
           clientGone.abort(reason);
         },
         { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential,
+          rawEvidence: untypedRawEvidence.take,
           onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict) },
       );
       return markNativePassthroughSseResponse(new Response(clientBody, {

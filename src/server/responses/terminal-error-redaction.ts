@@ -49,6 +49,26 @@ export function createOutboundCredentialMask(outboundHeaders: Record<string, str
 }
 
 /**
+ * Per-request handoff from the client rewrite to the terminal boundary behind it (the tee relay):
+ * the rewrite remembers the original of each untyped envelope it masks, and the boundary takes it
+ * back by the masked payload text, so the verdict is decided from the provider's own frame.
+ */
+export function createRawEvidenceChannel(limit = 8): { remember: (payload: string, raw: unknown) => void; take: (payload: string) => unknown } {
+  const entries = new Map<string, unknown>();
+  return {
+    remember(payload, raw) {
+      entries.set(payload, raw);
+      if (entries.size > limit) entries.delete(entries.keys().next().value as string);
+    },
+    take(payload) {
+      const raw = entries.get(payload);
+      entries.delete(payload);
+      return raw;
+    },
+  };
+}
+
+/**
  * Mask upstream diagnostics before either SSE delivery or buffered JSON reconstruction. Protocol
  * structure is never masked: the `event:` line, the root `type` and Responses field names stay as
  * they are, so the client always recognizes the frame the inspector saw. An untyped envelope is not
@@ -58,6 +78,7 @@ export function createOutboundCredentialMask(outboundHeaders: Record<string, str
 export function createTerminalErrorRedactionBlockRewrite(
   outboundHeaders: Record<string, string>,
   maskCredential = createOutboundCredentialMask(outboundHeaders),
+  onUntypedRewrite?: (payload: string, raw: unknown) => void,
 ): SseBlockRewrite {
   const redactDiagnostic = (value: unknown): unknown => {
     const maskKnown = (entry: unknown, root = false): unknown => {
@@ -99,6 +120,7 @@ export function createTerminalErrorRedactionBlockRewrite(
     }
     const safeEvent = redactDiagnostic(event);
     const rewritten = JSON.stringify(safeEvent);
+    if (rewritten !== payload && isUntypedBareUpstreamError(event)) onUntypedRewrite?.(rewritten, event);
     return [maskExtensionLines(rewritten === payload ? block : replaceSseDataPayload(block, rewritten))];
   };
 }
