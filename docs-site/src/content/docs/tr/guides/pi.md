@@ -58,6 +58,12 @@ suffix — `(anthropic)`, `(native)`, `(routed)` — is what makes two same-name
 models from
 different upstreams distinguishable in Pi's picker.
 
+İç içe geçmiş bir sağlayıcı model kimliği için Pi dışa aktarımı, çalışan proxy aynı modele
+ulaştığını kanıtladığında eğik çizgili ham seçiciyi kullanır: örneğin `openrouter/openrouter/free`,
+OpenRouter'ın `openrouter/free` modelini seçer ve Fast satırı `openrouter/openrouter/free--fast` olur.
+Proxy'nin bu şekilde kanıtlayamadığı bir model (örneğin envanteri henüz yüklenmemiş ya da ham
+yazımı başka bir modele ait olan) kodlanmış seçicisini korur. Özel takma adlar adlarını korur.
+
 ## Where it goes
 
 Pi's global model config is:

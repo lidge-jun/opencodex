@@ -52,6 +52,8 @@ JSON 之后会显示目标路径、合并警告、回环使用提示，以及具
 
 模型 id 是代理的规范选择器，因此已路由模型会显示为 `provider/model`（`anthropic/claude-opus-5`），而原生 OpenAI slug 会保持不带前缀（`gpt-5.6-sol`）。`name` 后缀 - `(anthropic)`、`(native)`、`(routed)` - 负责让两个同名但来自不同上游的模型在 Pi 的选择器中可区分。
 
+对于嵌套的上游模型 ID，只要运行中的代理证明原始选择器指向同一个模型，Pi 导出就会使用带斜杠的原始选择器：例如，`openrouter/openrouter/free` 选择 OpenRouter 的 `openrouter/free` 模型，其 Fast 行为 `openrouter/openrouter/free--fast`。代理无法这样证明的模型（例如其清单尚未加载，或原始写法已被另一个模型占用）保留编码后的选择器。自定义别名保持原有名称。
+
 ## 放置位置
 
 Pi 的全局模型配置位于：
