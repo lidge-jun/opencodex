@@ -170,6 +170,36 @@ describe("Kiro completion through public server endpoints", () => {
       upstream.server.stop(true);
     }
   });
+  test("a dispatched retry network failure leaves credit cost unavailable", async () => {
+    const upstream = scriptedKiroUpstream([[textFrame("Checking."), eventFrame("meteringEvent", { unit: "credit", usage: 2 })]]);
+    const config = kiroConfig(upstream.server.url.toString());
+    config.providers!["kiro-test"]!.creditPriceUsd = 1;
+    saveConfig(config);
+    let sends = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith(upstream.server.url.toString()) && ++sends > 1) throw new Error("synthetic network failure");
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const proxy = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", proxy.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "kiro-test/gpt-5.6-sol", input: "Inspect", stream: true,
+          tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }),
+      });
+      await response.text();
+      expect(sends).toBe(2);
+      const log = getRequestLogEntries().find(entry => entry.provider === "kiro-test");
+      resetUsageReadCacheForTests();
+      expect(readUsageEntries().find(entry => entry.requestId === log?.requestId)?.usage?.providerCredits).toBe(-1);
+      const api = await managementFetch(new URL("/api/logs?tail=20", proxy.url));
+      const body = await api.json() as { logs: Array<{ requestId: string; displayMetrics: { cost: { kind: string } } }> };
+      expect(body.logs.find(row => row.requestId === log?.requestId)?.displayMetrics.cost.kind).toBe("unavailable");
+    } finally {
+      await proxy.stop(true);
+      upstream.server.stop(true);
+    }
+  });
   test("HTTP failure on the retry keeps credit metering incomplete through persistence and API", async () => {
     const upstream = scriptedKiroUpstream([
       [textFrame("Checking."), eventFrame("meteringEvent", { unit: "credit", usage: 2 })],

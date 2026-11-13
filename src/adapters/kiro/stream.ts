@@ -159,6 +159,7 @@ export type KiroFallbackFactory = (
   assistantText: string,
   sawReasoning: boolean,
   budget: TranslatorBudget,
+  onDispatch?: () => void,
 ) => Promise<KiroFallbackAttempt>;
 
 function mergeKiroUsage(
@@ -1310,12 +1311,14 @@ export async function* parseKiroStream(
     let firstAssistantText = firstResult.assistantText;
     const firstHadAssistantText = firstAssistantText.length > 0;
     let fallback: KiroFallbackAttempt;
+    let fallbackDispatched = false;
     try {
       fallback = await fallbackFactory(
         firstResult.providerState?.kiro.conversationId ?? conversationId,
         firstAssistantText,
         firstResult.sawReasoning,
         budget,
+        () => { fallbackDispatched = true; },
       );
     } catch (err) {
       yield* firstResult.drainDeferred(dropHeldProse);
@@ -1329,7 +1332,7 @@ export async function* parseKiroStream(
           status: 502,
           errorType: "upstream_error",
           code: "translation_buffer_limit",
-          usage: firstResult.usage,
+          usage: fallbackDispatched ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
         };
         return;
       }
@@ -1339,7 +1342,7 @@ export async function* parseKiroStream(
         status: err instanceof Error && err.name === "TimeoutError" ? 504 : 502,
         errorType: "upstream_error",
         retryable: !priorEmittedOutput,
-        usage: firstResult.usage,
+        usage: fallbackDispatched ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
       };
       return;
     }
