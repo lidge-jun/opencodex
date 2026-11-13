@@ -92,7 +92,7 @@ function kiroConfig(baseUrl: string): OcxConfig {
   } as OcxConfig;
 }
 
-function scriptedKiroUpstream(attempts: Uint8Array[][]) {
+function scriptedKiroUpstream(attempts: Array<Uint8Array[] | Response>) {
   const requests: Array<Record<string, any>> = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -101,6 +101,7 @@ function scriptedKiroUpstream(attempts: Uint8Array[][]) {
       requests.push(await req.json() as Record<string, any>);
       const frames = attempts.shift();
       if (!frames) return new Response("unexpected extra Kiro attempt", { status: 500 });
+      if (frames instanceof Response) return frames;
       return new Response(streamOf(frames), {
         headers: { "content-type": "application/vnd.amazon.eventstream" },
       });
@@ -164,6 +165,34 @@ describe("Kiro completion through public server endpoints", () => {
       resetUsageReadCacheForTests();
       const persisted = readUsageEntries().find(entry => entry.requestId === log?.requestId);
       expect(persisted?.usage?.providerCredits).toBe(-1);
+    } finally {
+      await proxy.stop(true);
+      upstream.server.stop(true);
+    }
+  });
+  test("HTTP failure on the retry keeps credit metering incomplete through persistence and API", async () => {
+    const upstream = scriptedKiroUpstream([
+      [textFrame("Checking."), eventFrame("meteringEvent", { unit: "credit", usage: 2 })],
+      new Response("synthetic upstream failure", { status: 500 }),
+    ]);
+    const config = kiroConfig(upstream.server.url.toString());
+    config.providers!["kiro-test"]!.creditPriceUsd = 1;
+    saveConfig(config);
+    const proxy = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", proxy.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "kiro-test/gpt-5.6-sol", input: "Inspect", stream: true,
+          tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }),
+      });
+      await response.text();
+      expect(upstream.requests).toHaveLength(2);
+      const log = getRequestLogEntries().find(entry => entry.provider === "kiro-test");
+      resetUsageReadCacheForTests();
+      expect(readUsageEntries().find(entry => entry.requestId === log?.requestId)?.usage?.providerCredits).toBe(-1);
+      const api = await managementFetch(new URL("/api/logs?tail=20", proxy.url));
+      const body = await api.json() as { logs: Array<{ requestId: string; displayMetrics: { cost: { kind: string } } }> };
+      expect(body.logs.find(row => row.requestId === log?.requestId)?.displayMetrics.cost.kind).toBe("unavailable");
     } finally {
       await proxy.stop(true);
       upstream.server.stop(true);

@@ -7,6 +7,8 @@ import { mergeUsage as mergeTerminalUsage } from "../../src/server/responses/ter
 test("combined credit evidence retains invalid readings through later additions", () => {
   expect(sumCreditReadings([undefined, undefined])).toBeUndefined();
   expect(sumCreditReadings([0, 2])).toBe(2);
+  expect(sumCreditReadings([undefined, 2])).toBe(-1);
+  expect(sumCreditReadings([2, undefined])).toBe(-1);
   expect(sumCreditReadings([-1, 10])).toBe(-1);
   expect(sumCreditReadings([10, -1])).toBe(-1);
   expect(sumCreditReadings([Number.NaN, 10])).toBe(-1);
