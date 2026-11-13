@@ -17,6 +17,7 @@ import {
 } from "../../route-board-model";
 import type { ModelOption, ProviderOption } from "../combo-workspace-types";
 import { ChannelEditor, type EditableChannel } from "./ChannelEditor";
+import type { SaveMemberModel } from "./MemberTable";
 import { ModelRouteRow } from "./ModelRouteRow";
 
 type SaveResult = { ok: boolean; error?: string };
@@ -44,6 +45,8 @@ export interface RouteBoardProps {
   onOpenAdvanced: (id?: string, reason?: "jev") => void;
   /** Combo with an unsaved draft in the advanced editor: read-only here until it is saved there. */
   lockedId?: string | null;
+  /** Writes one member model's per-provider settings from the editor's member table. */
+  onSaveModel?: SaveMemberModel;
 }
 
 /** Combos overview: one row per combo, inline strategy and on/off, click a row to edit its channels. */
@@ -148,6 +151,7 @@ export function RouteBoard(props: RouteBoardProps) {
             capability={props.capability?.[row.combo.id] ?? DEFAULT_CAPABILITY_SETTINGS}
             saving={busy === row.combo.id || props.lockedId === row.combo.id}
             onSave={(channels, settings) => void saveChannels(row.combo, channels, settings)}
+            onSaveModel={props.onSaveModel}
             onCancel={() => setExpanded(null)}
           />
         </ModelRouteRow>

@@ -7,7 +7,7 @@ import {
   channelKey,
   combineLists,
   comboContextWindow,
-  formatContextWindow,
+  dragSlot,
   memberFacts,
   moveChannel,
   type CapabilityPolicy,
@@ -21,6 +21,7 @@ import {
 import { Select, Switch } from "../../ui";
 import { ProviderIcon } from "../provider-workspace/ProviderRail";
 import type { ModelOption, ProviderOption } from "../combo-workspace-types";
+import { MemberTable, type SaveMemberModel } from "./MemberTable";
 import { QuotaLine } from "./QuotaLine";
 
 export type EditableChannel = Pick<RouteChannel, "key" | "provider" | "model" | "lastResort">;
@@ -50,9 +51,19 @@ function useSlideOnReorder(order: readonly string[]) {
     }
     previous.current = next;
   }, [order]);
-  return (key: string) => (node: HTMLElement | null) => {
+  const ref = (key: string) => (node: HTMLElement | null) => {
     if (node) nodes.current.set(key, node); else nodes.current.delete(key);
   };
+  return { ref, nodes };
+}
+
+/** A drag in progress: the order and the row midpoints (relative to the list) frozen at drag start. */
+interface DragState {
+  key: string;
+  from: number;
+  start: EditableChannel[];
+  mids: number[];
+  slot: number;
 }
 
 /**
@@ -74,6 +85,7 @@ export function ChannelEditor({
   moreOpen: moreOpenInitially = false,
   saving,
   onSave,
+  onSaveModel,
   onCancel,
 }: {
   comboModel: string;
@@ -93,14 +105,20 @@ export function ChannelEditor({
   moreOpen?: boolean;
   saving: boolean;
   onSave: (channels: EditableChannel[], settings: ComboSettingsPatch) => void;
+  /** Writes one member model's per-provider settings (shared by every combo using it). */
+  onSaveModel?: SaveMemberModel;
   onCancel: () => void;
 }) {
   const t = useT();
   const [channels, setChannels] = useState<EditableChannel[]>(() => [...initial]);
-  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const dropped = useRef(false);
+  const listRef = useRef<HTMLOListElement>(null);
   const [moreOpen, setMoreOpen] = useState(moreOpenInitially);
   const moreRef = useRef<HTMLDivElement>(null);
-  const slideRef = useSlideOnReorder(channels.map((channel) => channel.key));
+  /** While dragging, the list shows the would-be order; `channels` changes only on drop. */
+  const view = drag ? moveChannel(drag.start, drag.from, drag.slot) : channels;
+  const slide = useSlideOnReorder(view.map((channel) => channel.key));
   const pickable = providers.filter((provider) => !provider.hiddenFromPicker);
   const [addProvider, setAddProvider] = useState(() => pickable[0]?.name ?? "");
   const used = new Set(channels.map((channel) => channel.key));
@@ -127,11 +145,33 @@ export function ChannelEditor({
   }, [moreOpenInitially]);
 
   const move = (from: number, to: number) => setChannels((list) => moveChannel(list, from, to));
-  /** Live reorder: the dragged row takes the hovered row's place as soon as the pointer gets there. */
-  const onDragOver = (event: DragEvent, overKey: string) => {
+  const listTop = () => listRef.current?.getBoundingClientRect().top ?? 0;
+  const startDrag = (event: DragEvent, key: string, from: number) => {
+    event.dataTransfer?.setData("text/plain", key);
+    // A slide still running from the last drop would skew the measurement: settle it first.
+    for (const node of slide.nodes.current.values()) node.getAnimations?.().forEach((animation) => animation.finish());
+    const top = listTop();
+    const mids = channels.map((channel) => {
+      const rect = slide.nodes.current.get(channel.key)?.getBoundingClientRect();
+      return rect ? rect.top - top + rect.height / 2 : 0;
+    });
+    dropped.current = false;
+    setDrag({ key, from, start: [...channels], mids, slot: from });
+  };
+  /*
+   * The slot comes from where the pointer is against the rows' midpoints as they stood when the
+   * drag began, never against rows that are mid-slide, with a few pixels of hysteresis at each
+   * boundary. Reading the moving rows made the order flip back and forth under a still pointer.
+   */
+  const onListDragOver = (event: DragEvent) => {
+    if (!drag) return;
     event.preventDefault();
-    if (!dragKey || dragKey === overKey) return;
-    setChannels((list) => moveChannel(list, list.findIndex((c) => c.key === dragKey), list.findIndex((c) => c.key === overKey)));
+    const slot = dragSlot(drag.mids, drag.from, event.clientY - listTop(), drag.slot);
+    if (slot !== drag.slot) setDrag({ ...drag, slot });
+  };
+  const finishDrag = (commit: boolean) => {
+    if (drag && commit) setChannels(moveChannel(drag.start, drag.from, drag.slot));
+    setDrag(null);
   };
   const add = () => {
     if (!addProvider || !chosenModel) return;
@@ -143,26 +183,26 @@ export function ChannelEditor({
   const context = comboContextWindow(facts, policy, catalogContext);
   const modalities = combineLists(facts.map((fact) => fact.inputModalities), policy, MODALITY_ORDER);
   const efforts = combineLists(facts.map((fact) => fact.reasoningEfforts), policy, COMBO_EFFORTS);
-  const listText = (list: readonly string[] | undefined, word?: (value: string) => string) =>
-    list === undefined ? t("routeBoard.members.unknown") : list.length === 0 ? t("routeBoard.members.none") : list.map((v) => word ? word(v) : v).join(" · ");
-  const modalityWord = (value: string) => value === "text" ? t("routeBoard.members.text") : value === "image" ? t("routeBoard.members.image") : value;
 
   return (
     <div className="rb-editor" role="group" aria-label={t("routeBoard.edit.aria", { model: comboModel })}>
-      <ol className="rb-channels">
-        {channels.map((channel, index) => {
+      <ol
+        className="rb-channels"
+        ref={listRef}
+        onDragOver={onListDragOver}
+        onDrop={(event) => { event.preventDefault(); dropped.current = true; finishDrag(true); }}
+      >
+        {view.map((channel, index) => {
           const providerName = labels?.get(channel.provider) ?? formatProviderDisplayName(channel.provider, t);
           const name = `${providerName} ${channel.model}`;
           return (
             <li
               key={channel.key}
-              ref={slideRef(channel.key)}
-              className={`rb-channel${dragKey === channel.key ? " rb-channel--dragging" : ""}`}
+              ref={slide.ref(channel.key)}
+              className={`rb-channel${drag?.key === channel.key ? " rb-channel--dragging" : ""}`}
               draggable
-              onDragStart={(event) => { event.dataTransfer?.setData("text/plain", channel.key); setDragKey(channel.key); }}
-              onDragEnd={() => setDragKey(null)}
-              onDragOver={(event) => onDragOver(event, channel.key)}
-              onDrop={(event) => { event.preventDefault(); setDragKey(null); }}
+              onDragStart={(event) => startDrag(event, channel.key, index)}
+              onDragEnd={() => { if (!dropped.current) finishDrag(false); }}
             >
               <span className="rb-channel-grip" aria-hidden="true" title={t("routeBoard.edit.drag")}>⋮⋮</span>
               <span className="rb-channel-index">{index + 1}</span>
@@ -272,38 +312,13 @@ export function ChannelEditor({
               <Switch on={fallbackOnly} label={t("routeBoard.more.fallbackOnly")} onClick={() => setFallbackOnly((on) => !on)} />
             </div>
 
-            <table className="rb-members">
-              <caption>{t("routeBoard.members.title")}</caption>
-              <thead>
-                <tr>
-                  <th scope="col">{t("routeBoard.members.channel")}</th>
-                  <th scope="col">{t("routeBoard.members.context")}</th>
-                  <th scope="col">{t("routeBoard.members.input")}</th>
-                  <th scope="col">{t("routeBoard.members.efforts")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {channels.map((channel, index) => (
-                  <tr key={channel.key}>
-                    <th scope="row">{labels?.get(channel.provider) ?? formatProviderDisplayName(channel.provider, t)}</th>
-                    <td>{facts[index]!.contextWindow ? formatContextWindow(facts[index]!.contextWindow!) : t("routeBoard.members.unknown")}</td>
-                    <td>{listText(facts[index]!.inputModalities, modalityWord)}</td>
-                    <td>{listText(facts[index]!.reasoningEfforts)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <th scope="row">{t("routeBoard.members.combo")}</th>
-                  <td>
-                    {context.tokens ? formatContextWindow(context.tokens) : t("routeBoard.members.unknown")}
-                    {context.basis !== "catalog" && <span className="rb-members-basis"> {t(context.basis === "max" ? "routeBoard.contextBasis.max" : "routeBoard.contextBasis.min")}</span>}
-                  </td>
-                  <td>{listText(modalities, modalityWord)}</td>
-                  <td>{listText(efforts)}</td>
-                </tr>
-              </tfoot>
-            </table>
+            <MemberTable
+              channels={channels}
+              facts={facts}
+              labels={labels}
+              combo={{ context: context.tokens, basis: context.basis, modalities, efforts }}
+              onSaveModel={onSaveModel}
+            />
           </div>
         )}
       </div>

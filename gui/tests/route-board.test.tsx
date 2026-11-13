@@ -12,7 +12,13 @@ import {
   accountCountFromList,
   buildRouteRows,
   capabilityPatch,
+  capabilitySource,
   combineLists,
+  configuredMemberModels,
+  dragSlot,
+  memberRestorePatch,
+  memberSettingsPatch,
+  parseContextInput,
   comboContextWindow,
   parseCapabilitySettings,
   quotaFamilyWindow,
@@ -235,6 +241,10 @@ function installFetch() {
       const method = init?.method ?? "GET";
       if (method !== "GET") {
         calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.endsWith("/api/model-settings")) {
+          const sent = JSON.parse(String(init!.body)) as { provider: string; modelId: string };
+          return Response.json({ ok: true, provider: sent.provider, modelId: sent.modelId, changed: true, hasOverrides: true, saved: true, catalogRefresh: { status: "skipped" } });
+        }
         return Response.json(url.endsWith("/api/combos") ? { success: true } : { ok: true });
       }
       if (url.endsWith("/api/combos")) return Response.json(combosPayload);
@@ -249,7 +259,7 @@ function installFetch() {
       }
       if (url.endsWith("/api/models")) {
         return Response.json([
-          { provider: "openai", id: "gpt-5" },
+          { provider: "openai", id: "gpt-5", contextWindow: 400000, reasoningEfforts: ["low", "high"], reasoningOverridden: true },
           { provider: "anthropic", id: "claude" },
           { provider: "dead", id: "m" },
           { provider: "combo", id: "alpha", displayName: "Alpha", displayNameSource: "provider", contextWindow: 200000, disabled: false },
@@ -395,16 +405,75 @@ describe("Combos overview page", () => {
     ]);
   });
 
-  test("dragging reorders live, before the drop", async () => {
+  test("dragging moves the other rows aside from frozen midpoints and commits on drop", async () => {
     await renderPage();
     await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
     const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
     const names = () => [...editor.querySelectorAll(".rb-channel code")].map(node => node.textContent);
     const items = () => editor.querySelectorAll<HTMLElement>(".rb-channel");
+    // Rows 40px tall at 0 and 40; the list starts at 0. Layout is frozen at drag start.
+    items().forEach((item, index) => {
+      item.getBoundingClientRect = () => ({ top: index * 40, height: 40, bottom: index * 40 + 40, left: 0, right: 0, width: 0, x: 0, y: index * 40, toJSON: () => ({}) }) as DOMRect;
+    });
+    const over = (clientY: number) => {
+      const event = new testWindow.Event("dragover", { bubbles: true, cancelable: true }) as unknown as Event;
+      Object.defineProperty(event, "clientY", { value: clientY });
+      editor.querySelector(".rb-channels")!.dispatchEvent(event);
+    };
     await act(async () => { items()[0]!.dispatchEvent(new testWindow.Event("dragstart", { bubbles: true }) as unknown as Event); });
-    await act(async () => { items()[1]!.dispatchEvent(new testWindow.Event("dragover", { bubbles: true, cancelable: true }) as unknown as Event); });
+    await act(async () => { over(55); }); // short of the other row's midpoint (60): no move
+    expect(names()).toEqual(["gpt-5", "claude"]);
+    await act(async () => { over(70); });
+    expect(names()).toEqual(["claude", "gpt-5"]);
+    await act(async () => { over(56); }); // back inside the hysteresis band: stays put
+    expect(names()).toEqual(["claude", "gpt-5"]);
+    expect(editor.textContent).not.toContain("Unsaved");
+    await act(async () => { editor.querySelector(".rb-channels")!.dispatchEvent(new testWindow.Event("drop", { bubbles: true, cancelable: true }) as unknown as Event); });
     expect(names()).toEqual(["claude", "gpt-5"]);
     expect(editor.textContent).toContain("Unsaved");
+  });
+
+  test("member table: source tags per cell, and an in-place edit writes the provider's model settings", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-tag--button")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    const gpt = [...editor.querySelectorAll<HTMLElement>(".rb-members tbody tr")].find(tr => tr.textContent?.includes("gpt-5"))!;
+    expect([...gpt.querySelectorAll(".rb-src")].map(tag => tag.textContent)).toEqual(["provider report", "unknown", "manual"]);
+    expect(gpt.textContent).not.toContain("unknown unknown");
+    await act(async () => { button(gpt, "Edit what OpenAI (Codex login) gpt-5 can take").click(); });
+    const form = editor.querySelector<HTMLElement>(".rb-member-edit")!;
+    expect(form.textContent).toContain("every combo that uses this model changes too");
+    expect(form.textContent).toContain("pay-per-use provider bills it");
+    expect(button(form, "Test it").disabled).toBe(true);
+    const input = form.querySelector<HTMLInputElement>("input")!;
+    const setValue = Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setValue.call(input, "nonsense");
+      input.dispatchEvent(new testWindow.Event("input", { bubbles: true }) as unknown as Event);
+    });
+    await act(async () => { button(form, "Save").click(); });
+    expect(form.querySelector("[role=alert]")?.textContent).toContain("200K");
+    expect(calls).toEqual([]);
+    await act(async () => {
+      setValue.call(input, "1M");
+      input.dispatchEvent(new testWindow.Event("input", { bubbles: true }) as unknown as Event);
+    });
+    await act(async () => { button(form, "images").click(); });
+    await act(async () => { button(form, "Save").click(); });
+    await flush();
+    expect(calls).toEqual([{ url: "/api/model-settings", method: "PUT", body: { provider: "openai", modelId: "gpt-5", contextWindow: 1000000, inputModalities: ["image"] } }]);
+    expect(editor.querySelector(".rb-member-edit")).toBeNull();
+  });
+
+  test("restoring a member sends null only for the fields set by hand", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-tag--button")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    const gpt = [...editor.querySelectorAll<HTMLElement>(".rb-members tbody tr")].find(tr => tr.textContent?.includes("gpt-5"))!;
+    await act(async () => { button(gpt, "Edit what OpenAI (Codex login) gpt-5 can take").click(); });
+    await act(async () => { button(editor.querySelector(".rb-member-edit")!, "Use the provider's values").click(); });
+    await flush();
+    expect(calls[0]!.body).toEqual({ provider: "openai", modelId: "gpt-5", reasoningEfforts: null });
   });
 
   test("the context tag opens More settings in place, with the members' numbers", async () => {
@@ -467,5 +536,89 @@ describe("Combos overview page", () => {
     await act(async () => { button(host, "Advanced").click(); });
     await flush();
     expect(host.querySelector<HTMLInputElement>("#cwi-edit-alias")?.value).toBe("draft-alias");
+  });
+});
+
+describe("drag slot", () => {
+  const mids = (count: number) => Array.from({ length: count }, (_, index) => index * 40 + 20);
+  /** Runs a pointer path and returns every slot change, like dragover events would. */
+  const sweep = (count: number, from: number, path: number[]) => {
+    const start = mids(count);
+    let slot = from;
+    const changes: number[] = [];
+    for (const y of path) {
+      const next = dragSlot(start, from, y, slot);
+      if (next !== slot) { changes.push(next); slot = next; }
+    }
+    return { slot, changes };
+  };
+  const range = (from: number, to: number, step: number) => {
+    const out: number[] = [];
+    for (let y = from; step > 0 ? y <= to : y >= to; y += step) out.push(y);
+    return out;
+  };
+
+  for (const count of [4, 6]) {
+    test(`${count} rows: a slow drag to the last place passes each slot once`, () => {
+      const result = sweep(count, 0, range(20, count * 40, 1));
+      expect(result.slot).toBe(count - 1);
+      expect(result.changes).toEqual(Array.from({ length: count - 1 }, (_, index) => index + 1));
+    });
+    test(`${count} rows: a slow drag back to the first place passes each slot once`, () => {
+      const result = sweep(count, count - 1, range(count * 40 - 20, 0, -1));
+      expect(result.slot).toBe(0);
+      expect(result.changes).toEqual(Array.from({ length: count - 1 }, (_, index) => count - 2 - index));
+    });
+    test(`${count} rows: a fast drag lands on the first and the last place`, () => {
+      expect(sweep(count, count - 1, [count * 40 - 20, -10]).slot).toBe(0);
+      expect(sweep(count, 0, [20, count * 40 + 30]).slot).toBe(count - 1);
+    });
+    test(`${count} rows: a pointer jittering on a boundary changes the slot at most once`, () => {
+      const boundary = mids(count)[2]!;
+      const jitter = Array.from({ length: 40 }, (_, index) => boundary + (index % 2 === 0 ? 3 : -3));
+      expect(sweep(count, 0, [20, boundary - 10, ...jitter]).changes.length).toBeLessThanOrEqual(2);
+    });
+  }
+
+  test("moving back past the start returns the row to its own place", () => {
+    expect(sweep(4, 1, [60, 140, 60]).slot).toBe(1);
+  });
+});
+
+describe("member capability edits", () => {
+  test("context input accepts plain numbers and K/M suffixes", () => {
+    expect(parseContextInput("200000")).toBe(200000);
+    expect(parseContextInput("200K")).toBe(200000);
+    expect(parseContextInput("1m")).toBe(1000000);
+    expect(parseContextInput("1.5M")).toBe(1500000);
+    expect(parseContextInput("1,000,000")).toBe(1000000);
+    expect(parseContextInput("big")).toBeUndefined();
+    expect(parseContextInput("0")).toBeUndefined();
+  });
+
+  test("only changed fields are patched; unknown lists left empty stay unknown", () => {
+    const order = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+    expect(memberSettingsPatch({ contextWindow: 200000 }, { context: "200K", input: [], efforts: [] }, order)).toEqual({ patch: {} });
+    expect(memberSettingsPatch({ reasoningEfforts: ["high"] }, { context: "", input: ["text"], efforts: ["high", "low"] }, order))
+      .toEqual({ patch: { inputModalities: ["text"], reasoningEfforts: ["low", "high"] } });
+    expect(memberSettingsPatch({}, { context: "lots", input: [], efforts: [] }, order).invalid).toBe("context");
+  });
+
+  test("a member with no catalog row still shows its per-model config, tagged manual", () => {
+    expect(configuredMemberModels({
+      zed: { modelContextWindows: { m: 400000 }, modelCapabilities: { m: { inputModalities: ["text"] } } },
+      other: { modelReasoningEfforts: { n: ["low"] } },
+    })).toEqual([
+      { provider: "zed", id: "m", contextWindow: 400000, inputModalities: ["text"], sources: { context: "manual", input: "manual", efforts: "unknown" } },
+      { provider: "other", id: "n", reasoningEfforts: ["low"], sources: { context: "unknown", input: "unknown", efforts: "manual" } },
+    ]);
+  });
+
+  test("sources: manual wins, an explicit inferred source next, else the provider's report", () => {
+    expect(capabilitySource(true, true, "inferred")).toBe("manual");
+    expect(capabilitySource(true, false, "inferred")).toBe("inferred");
+    expect(capabilitySource(true, false)).toBe("reported");
+    expect(capabilitySource(false, false)).toBe("unknown");
+    expect(memberRestorePatch({ context: "manual", input: "reported", efforts: "manual" })).toEqual({ contextWindow: null, reasoningEfforts: null });
   });
 });

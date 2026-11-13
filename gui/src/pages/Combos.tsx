@@ -29,10 +29,13 @@ import {
   accountCountFromList,
   channelKey,
   channelTargetsForPut,
+  capabilitySource,
+  configuredMemberModels,
   parseCapabilitySettings,
   type AccountCount,
   type ComboCapabilitySettings,
   type ComboCatalogMeta,
+  type MemberSources,
   type ComboSettingsPatch,
 } from "../route-board-model";
 import { readCombosView, type CombosView } from "./combos-view";
@@ -56,6 +59,7 @@ type ModelOption = {
   inputModalitiesDeclared?: string[];
   visionSidecarConsumer?: boolean;
   contextWindow?: number;
+  sources?: MemberSources;
 };
 type ProviderDto = {
   adapter: string;
@@ -77,6 +81,8 @@ type CachedCombosPage = {
   lastResort?: Record<string, string[]>;
   lastResortActive?: string[];
   capability?: Record<string, ComboCapabilitySettings>;
+  /** Catalog models plus configured-only members, for the route board's member table. */
+  memberModels?: ModelOption[];
 };
 type ProviderQuotasDto = { reports?: unknown };
 
@@ -252,6 +258,8 @@ export default function Combos({
     }));
 
     const models: ModelOption[] = [];
+    /** Where each catalog member's capability values come from; only the route board reads it. */
+    const sourcesByKey = new Map<string, MemberSources>();
     const capabilityModels: ModelOption[] = [];
     const catalogued = new Set<string>();
     const comboCatalog: Record<string, ComboCatalogMeta> = {};
@@ -276,6 +284,11 @@ export default function Combos({
         inputModalities?: unknown;
         inputModalitiesDeclared?: unknown;
         visionSidecarConsumer?: unknown;
+        contextWindowDeclared?: unknown;
+        reasoningOverridden?: unknown;
+        contextWindowSource?: unknown;
+        inputModalitiesSource?: unknown;
+        reasoningEffortsSource?: unknown;
       };
       if (typeof model.provider !== "string" || typeof model.id !== "string") continue;
       const provider = model.provider.trim();
@@ -309,6 +322,11 @@ export default function Combos({
         visionSidecarConsumer: model.visionSidecarConsumer === true,
         ...(typeof model.contextWindow === "number" && model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
       };
+      sourcesByKey.set(channelKey(provider, id), {
+        context: capabilitySource(typeof model.contextWindow === "number", typeof model.contextWindowDeclared === "number", model.contextWindowSource),
+        input: capabilitySource(Boolean(inputModalities?.length), Boolean(inputModalitiesDeclared?.length), model.inputModalitiesSource),
+        efforts: capabilitySource(reasoningEfforts !== undefined, model.reasoningOverridden === true, model.reasoningEffortsSource),
+      });
       capabilityModels.push(option);
       models.push(option); // Catalog visibility does not restrict internal Combo selection.
     }
@@ -322,7 +340,25 @@ export default function Combos({
       }
     }
 
-    const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued], comboCatalog, lastResort, lastResortActive, capability } satisfies CachedCombosPage;
+    const catalogKeys = new Set(models.map((model) => channelKey(model.provider, model.id)));
+    const memberModels = [
+      ...models.map((model) => {
+        const sources = sourcesByKey.get(channelKey(model.provider, model.id));
+        return sources ? { ...model, sources } : model;
+      }),
+      ...configuredMemberModels(allProviders)
+        .filter((member) => !catalogKeys.has(channelKey(member.provider, member.id)))
+        .map((member): ModelOption => ({
+          provider: member.provider,
+          id: member.id,
+          namespaced: `${member.provider}/${member.id}`,
+          ...(member.contextWindow ? { contextWindow: member.contextWindow } : {}),
+          ...(member.inputModalities ? { inputModalities: [...member.inputModalities] } : {}),
+          ...(member.reasoningEfforts ? { reasoningEfforts: [...member.reasoningEfforts] } : {}),
+          ...(member.sources ? { sources: member.sources } : {}),
+        })),
+    ];
+    const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued], comboCatalog, lastResort, lastResortActive, capability, memberModels } satisfies CachedCombosPage;
     writeSessionListCacheEntry(cacheKey, next);
     // Retain the coherent payload here — one place, on the success path, never during
     // render. See the `retainedData` note below.
@@ -502,6 +538,29 @@ export default function Combos({
     }
   };
 
+  /**
+   * One member model's per-provider settings (context, input, effort levels), the same write the
+   * Models page's settings dialog makes. Every combo using that model sees the change.
+   */
+  const saveModelSettings = async (provider: string, modelId: string, patch: Record<string, unknown>) => {
+    try {
+      const res = await fetch(`${apiBase}/api/model-settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider, modelId, ...patch }),
+      });
+      const body = await res.json().catch(() => null) as unknown;
+      const receipt = body && typeof body === "object" ? body as { ok?: unknown; provider?: unknown; modelId?: unknown } : {};
+      if (!res.ok || receipt.ok !== true || receipt.provider !== provider || receipt.modelId !== modelId) {
+        return responseError(body) || t("cws.saveFailed");
+      }
+      resource.refresh();
+      return null;
+    } catch {
+      return t("cws.saveFailed");
+    }
+  };
+
   const setComboEnabled = async (id: string, enabled: boolean) => {
     try {
       const res = await putModelVisibility(apiBase, "models", "combo", [{ id }], enabled);
@@ -613,7 +672,7 @@ export default function Combos({
             lastResort={data?.lastResort ?? {}}
             lastResortActive={new Set(data?.lastResortActive ?? [])}
             providers={providers}
-            models={models}
+            models={data?.memberModels ?? models}
             quotaReports={quotaReports}
             validate={validateOverviewEdit}
             errorText={(code, item) => comboDraftErrorText(t, code, item, providerRows)}
@@ -623,6 +682,7 @@ export default function Combos({
             onSetEnabled={setComboEnabled}
             onOpenAdvanced={openAdvanced}
             lockedId={draftComboId}
+            onSaveModel={saveModelSettings}
           />
         )}
         {workspaceMounted && (

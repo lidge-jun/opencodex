@@ -991,7 +991,12 @@ to clients. Click a row to reorder, add, remove, or mark channels fallback only 
 **More settings** opens under the channels: the capability policy, a switch that makes fallback
 channels wait until nothing else works (`cooldownWaitPolicy: "before-last-resort"`), and each
 member's context window, input types and effort levels next to the combo's combined values.
-Click the context tag on a row to open it directly.
+Each value is tagged with where it comes from: the provider's report, a same-name model, a manual
+setting, or unknown. **Edit** on a member changes that provider's per-model settings (the same
+`PUT /api/model-settings` write as the Models page), so every combo using that model changes with
+it; context accepts `200000`, `200K` or `1M`. **Use the provider's values** clears what was set by
+hand. **Test it** is reserved for a backend probe that sends one small request, which a pay-per-use
+provider bills. Click the context tag on a row to open it directly.
 
 **Advanced** opens the full workspace (`#models/combos/advanced`), which creates, edits, renames, and
 removes combos. Its model selectors include hidden models: catalog visibility only controls external model

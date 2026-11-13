@@ -67,10 +67,117 @@ export interface ProviderQuotaLine {
 }
 
 /** What the catalog says one member can take. */
+/**
+ * Where a member capability value comes from: the provider's own report, a same-name model
+ * elsewhere in the catalog (T4c), the operator's per-model setting, or nowhere.
+ */
+export type CapabilitySource = "reported" | "inferred" | "manual" | "unknown";
+
+export interface MemberSources {
+  context: CapabilitySource;
+  input: CapabilitySource;
+  efforts: CapabilitySource;
+}
+
 export interface MemberFacts {
   contextWindow?: number;
   inputModalities?: readonly string[];
   reasoningEfforts?: readonly string[];
+  sources?: MemberSources;
+}
+
+/**
+ * Source of one capability field on a `/api/models` row. A manual flag wins; an explicit
+ * `inferred` source (the T4c backend names it) comes next; any other present value is the
+ * provider's report.
+ */
+export function capabilitySource(hasValue: boolean, manual: boolean, declaredSource?: unknown): CapabilitySource {
+  if (manual) return "manual";
+  if (declaredSource === "inferred") return "inferred";
+  return hasValue ? "reported" : "unknown";
+}
+
+/**
+ * Members the catalog has no row for (a provider whose model list was never fetched) still have
+ * whatever the operator set per model in config. Those values are manual by definition.
+ */
+export function configuredMemberModels(providers: Readonly<Record<string, unknown>>): MemberModel[] {
+  const out = new Map<string, MemberModel>();
+  const strings = (value: unknown) => Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : undefined;
+  const entry = (provider: string, id: string) => {
+    const key = channelKey(provider, id);
+    const found = out.get(key) ?? { provider, id, sources: { context: "unknown", input: "unknown", efforts: "unknown" } };
+    out.set(key, found);
+    return found as MemberModel & { sources: MemberSources };
+  };
+  for (const [provider, raw] of Object.entries(providers)) {
+    if (!raw || typeof raw !== "object") continue;
+    const config = raw as { modelContextWindows?: unknown; modelReasoningEfforts?: unknown; modelCapabilities?: unknown };
+    for (const [id, tokens] of Object.entries((config.modelContextWindows ?? {}) as Record<string, unknown>)) {
+      if (typeof tokens !== "number" || tokens <= 0) continue;
+      const member = entry(provider, id);
+      member.contextWindow = tokens;
+      member.sources.context = "manual";
+    }
+    for (const [id, ladder] of Object.entries((config.modelReasoningEfforts ?? {}) as Record<string, unknown>)) {
+      const list = strings(ladder);
+      if (!list) continue;
+      const member = entry(provider, id);
+      member.reasoningEfforts = list;
+      member.sources.efforts = "manual";
+    }
+    for (const [id, capabilities] of Object.entries((config.modelCapabilities ?? {}) as Record<string, unknown>)) {
+      const list = strings((capabilities as { inputModalities?: unknown } | null)?.inputModalities);
+      if (!list) continue;
+      const member = entry(provider, id);
+      member.inputModalities = list;
+      member.sources.input = "manual";
+    }
+  }
+  return [...out.values()];
+}
+
+/** Context typed by an operator: "200000", "200K", "1M", "1.5m". Undefined when it is not a positive whole token count. */
+export function parseContextInput(text: string): number | undefined {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*([km]?)\s*$/i.exec(text.replace(/[,_]/g, ""));
+  if (!match) return undefined;
+  const unit = match[2]!.toLowerCase();
+  const tokens = Math.round(Number(match[1]) * (unit === "m" ? 1_000_000 : unit === "k" ? 1_000 : 1));
+  return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
+}
+
+export interface MemberDraft {
+  context: string;
+  input: readonly string[];
+  efforts: readonly string[];
+}
+
+/** Only the fields the operator changed, in the shape `PUT /api/model-settings` takes. */
+export function memberSettingsPatch(current: MemberFacts, draft: MemberDraft, order: readonly string[]):
+  { patch: Record<string, unknown>; invalid?: "context" } {
+  const patch: Record<string, unknown> = {};
+  const contextText = draft.context.trim();
+  if (contextText) {
+    const tokens = parseContextInput(contextText);
+    if (tokens === undefined) return { patch, invalid: "context" };
+    if (tokens !== current.contextWindow) patch.contextWindow = tokens;
+  }
+  const same = (a: readonly string[] | undefined, b: readonly string[]) =>
+    (a ?? []).length === b.length && b.every((value) => (a ?? []).includes(value));
+  if (!same(current.inputModalities, draft.input)) patch.inputModalities = [...draft.input];
+  if (!same(current.reasoningEfforts, draft.efforts)) {
+    patch.reasoningEfforts = order.filter((level) => draft.efforts.includes(level));
+  }
+  return { patch };
+}
+
+/** Clears every per-model setting the operator made, so the provider's own values apply again. */
+export function memberRestorePatch(sources: MemberSources | undefined): Record<string, null> {
+  return {
+    ...(sources?.context === "manual" ? { contextWindow: null } : {}),
+    ...(sources?.input === "manual" ? { inputModalities: null } : {}),
+    ...(sources?.efforts === "manual" ? { reasoningEfforts: null } : {}),
+  };
 }
 
 export interface MemberModel extends MemberFacts {
@@ -389,6 +496,26 @@ export function moveChannel<T>(list: readonly T[], from: number, to: number): T[
   const [moved] = next.splice(from, 1);
   next.splice(to, 0, moved!);
   return next;
+}
+
+/** Pointer must pass a row's midpoint by this much before the drop slot changes. */
+export const DRAG_HYSTERESIS_PX = 8;
+
+/**
+ * Drop slot for a dragged row, from the pointer's Y against the rows' midpoints as they were when
+ * the drag started. The rows that make room move on screen, but these midpoints do not, so the
+ * slot cannot flip back and forth as rows slide under a still pointer. `current` adds hysteresis:
+ * the slot changes only once the pointer is clearly past the midpoint that separates the two.
+ */
+export function dragSlot(startMids: readonly number[], from: number, y: number, current: number): number {
+  const others = startMids.filter((_, index) => index !== from);
+  const slotAt = (pointer: number) => others.filter((mid) => mid < pointer).length;
+  const next = slotAt(y);
+  if (next === current) return current;
+  // Moving down past others[current], or up past others[current - 1]: require the margin.
+  const boundary = next > current ? others[current] : others[current - 1];
+  if (boundary === undefined) return next;
+  return Math.abs(y - boundary) >= DRAG_HYSTERESIS_PX ? next : current;
 }
 
 /** `PUT /api/combos` target list for an edited channel list: `lastResort` sent explicitly. */

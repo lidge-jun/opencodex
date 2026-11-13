@@ -4587,6 +4587,20 @@ export const en = {
   "routeBoard.members.combo": "This combo",
   "routeBoard.contextBasis.min": "(smallest member)",
   "routeBoard.contextBasis.max": "(largest member)",
+  "routeBoard.source.reported": "provider report",
+  "routeBoard.source.inferred": "inferred from same-name model",
+  "routeBoard.source.manual": "manual",
+  "routeBoard.source.unknown": "unknown",
+  "routeBoard.members.actions": "Actions",
+  "routeBoard.members.edit": "Edit",
+  "routeBoard.members.editAria": "Edit what {name} can take",
+  "routeBoard.members.contextPlaceholder": "e.g. 200K or 1M; empty keeps the provider's value",
+  "routeBoard.members.contextInvalid": "Enter a token count such as 200000, 200K or 1M.",
+  "routeBoard.members.scopeNote": "Saved to {name} itself: every combo that uses this model changes too.",
+  "routeBoard.members.restore": "Use the provider's values",
+  "routeBoard.probe.run": "Test it",
+  "routeBoard.probe.note": "Testing sends this provider one small request; a pay-per-use provider bills it.",
+  "routeBoard.probe.pending": "Available once the backend probe is added.",
 } as const;
 
 export type TKey = keyof typeof en;
