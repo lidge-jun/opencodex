@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { Readable } from "node:stream";
 import { runLinkCommand, type LinkCliDeps } from "../../src/cli/link";
 
@@ -166,4 +166,53 @@ test("a link_suspended answer with a malformed operation id prints no command bu
     expect(printed).not.toContain("-rm -rf");
     expect(printed).toContain("ocx link operations");
   } finally { h.restore(); }
+});
+
+describe("guidance for journal refusals and unfinished revokes (O1c)", () => {
+  const full = (bound?: string) => ({ status: 409, body: { error: { code: "operation_journal_full", message: "server-chosen text" }, ...(bound ? { bound } : {}) } });
+  test.each([
+    ["unsettled", "ocx link operations resolve --operation-id <id> --yes", "(bound unsettled)"],
+    ["recent", "retry once the oldest of them is older", "(bound recent)"],
+    [undefined, "ocx link operations", ""],
+  ])("add --operation-id refused by a full journal (bound %p) prints local guidance with the code, exit 5", async (bound, guidance, boundNote) => {
+    const h = harness([notFound, { body: probe }, { body: confirm }, full(bound)]); try {
+      expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain(guidance);
+      expect(printed).toContain("(code operation_journal_full)");
+      if (boundNote) expect(printed).toContain(boundNote);
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  test("a repeated revoke that recovery settled unknown names its outcome, its code and the resolve step, exit 5", async () => {
+    const h = harness([{ status: 409, body: { error: { code: "operation_interrupted", message: "server-chosen text" }, operationId: "detach-3", outcome: "unknown" } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-3"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("(operation detach-3: unknown)");
+      expect(printed).toContain("(code operation_interrupted)");
+      expect(printed).toContain("ocx link operations resolve --operation-id detach-3 --yes");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  test("a revoke answer that names another operation gets no operation note", async () => {
+    const h = harness([{ status: 409, body: { error: { code: "operation_interrupted", message: "x" }, operationId: "someone-else", outcome: "unknown" } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-3"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).not.toContain("someone-else");
+      expect(printed).not.toContain("(operation detach-3");
+      expect(printed).toContain("(code operation_interrupted)");
+    } finally { h.restore(); }
+  });
+
+  test("revoke --operation-id refused by a full journal prints the same local guidance", async () => {
+    const h = harness([full("unsettled")]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-4"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("ocx link operations resolve --operation-id <id> --yes");
+      expect(printed).toContain("(code operation_journal_full)");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
 });

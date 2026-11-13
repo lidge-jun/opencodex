@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
-import { linkSuspendedByRevoke, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { linkSuspendedByRevoke, OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -289,6 +289,7 @@ test("a new journalled revoke past the bound of unsettled entries is refused and
     state: "unknown" as const, finishedAt: at, effects: [] })) });
   const refused = await h.revoke({ purge: true, operationId: OP });
   expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_journal_full" });
+  expect(refused.body.bound).toBe("unsettled");
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   expect(h.ssh).toEqual([]);
 });
@@ -392,4 +393,15 @@ describe("reconnect of a suspended link", () => {
     const h = harness();
     expect(await h.reconnect()).toEqual({ status: 200, body: { linkId: LINK } });
   });
+});
+
+test("a new journalled revoke after a burst of recently settled operations is refused naming the recent bound", async () => {
+  const h = harness();
+  const at = new Date(NOW - 60_000).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: Array.from({ length: OPERATION_JOURNAL_MAX_RECENT_SETTLED }, (_, i) => ({
+    operationId: "done-" + i, kind: "revoke" as const, alias: "pen-done-" + i, linkId: "lnk_00000000000000aa", digest: "d".repeat(64), createdAt: at, updatedAt: at,
+    state: "committed" as const, finishedAt: at, effects: [] })) });
+  const refused = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: refused.status, code: code(refused), bound: refused.body.bound }).toEqual({ status: 409, code: "operation_journal_full", bound: "recent" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
 });

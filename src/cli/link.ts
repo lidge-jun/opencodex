@@ -8,7 +8,7 @@ import { TUNNEL_CAUSES } from "../link/tunnel-history";
 import { isEpochMs, type LinkChildParity } from "../link/child-parity";
 import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
 import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
-import { runLinkEnrollment } from "./link-enrollment";
+import { journalFullGuidance, runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
 import { LINK_CHILD_OPS_USAGE, runLinkActivity, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
@@ -295,7 +295,7 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
 
 const OPERATION_OUTCOMES = new Set(["committed", "failed_clean", "residual", "unknown"]);
 
-function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string; operationState?: "open" | "unknown" } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string; operationState?: "open" | "unknown"; bound?: "unsettled" | "recent" } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
   if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
@@ -311,8 +311,10 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string; c
   const residualKind = body.residualKind === "plant" || body.residualKind === "enrollment" ? body.residualKind : undefined;
   // link_suspended names whether the revoke that keeps the link down is open (the Home stopped during it) or unknown.
   const operationState = body.operationState === "open" || body.operationState === "unknown" ? body.operationState : undefined;
+  // operation_journal_full names which bound it hit.
+  const bound = body.bound === "unsettled" || body.bound === "recent" ? body.bound : undefined;
   return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}),
-    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}), ...(operationState ? { operationState } : {}) };
+    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}), ...(operationState ? { operationState } : {}), ...(bound ? { bound } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -413,7 +415,7 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     const code = error instanceof RuntimeApiError && error.status === 404 ? errorCodeBody(error.body)?.error.code : undefined;
     if (code !== "link_not_found") {
       if (force && !(error instanceof RuntimeApiError)) throw new Error("Forced link revoke failed; inspect link status before retrying.");
-      throw error;
+      throw operationId !== undefined ? journalledRevokeError(error, operationId) : error;
     }
     // A journalled revoke must not read as done when nothing was journalled: the caller settles a vanished link itself.
     if (operationId !== undefined) throw new RuntimeApiError("Link " + linkId + " is not on this Home; no revoke was journalled (code link_not_found).", 404, error instanceof RuntimeApiError ? error.body : null);
@@ -573,4 +575,17 @@ function validateParity(candidate: Record<string, unknown>, index: number): Link
     appliedCodexSettingsDigest: typeof digest === "string" ? digest : null,
     reportedAt: time("reportedAt"),
   };
+}
+
+/**
+ * A journalled revoke that did not complete: the CLI's own text from the filtered body only, the caller's validated
+ * operation id, the closed outcome and the filtered code, never the server's message. The status (and exit) stay.
+ */
+function journalledRevokeError(error: unknown, operationId: string): unknown {
+  if (!(error instanceof RuntimeApiError) || !isRecord(error.body) || !isRecord(error.body.error) || typeof error.body.error.code !== "string") return error;
+  const code = error.body.error.code;
+  if (code === "operation_journal_full") return new RuntimeApiError(journalFullGuidance(error.body), error.status, error.body);
+  const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" ? error.body.outcome : undefined;
+  const resolve = outcome === "unknown" ? "; check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
+  return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve, error.status, error.body);
 }

@@ -516,6 +516,8 @@ describe("journal size limit", () => {
     const refused = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
     expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_journal_full" });
     expect((refused.body.error as { message: string }).message).toContain("ocx link operations resolve");
+    // A closed field naming the bound; an older CLI drops it and still refuses.
+    expect(refused.body.bound).toBe("unsettled");
     expect(h.ssh.length).toBe(before);
     expect(h.config.apiKeys).toEqual([]);
     expect((await h.call("apply", { alias: ALIAS, fingerprint })).status).toBe(202);

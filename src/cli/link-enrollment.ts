@@ -2,6 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { plantUnavailableGuidance } from "../link/child-binary-source";
 import { assertSshAlias } from "../link/ssh-argv";
 import { checkExplicitRoute, type ExplicitRoute } from "../link/explicit-route";
+import { OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED } from "../link/operations-journal";
 import { CliUsageError, RuntimeApiError, runtimeBaseUrl, rejectArgs, takeFlag, takeJsonFlag, takeOption, printData } from "./runtime-api";
 import type { LinkCliDeps } from "./link";
 
@@ -52,6 +53,20 @@ const OPERATION_REFUSALS: Record<string, string> = {
 function operationNote(error: unknown, operationId: string | undefined): string {
   if (operationId === undefined || !(error instanceof RuntimeApiError) || !record(error.body)) return "";
   return error.body.operationId === operationId && typeof error.body.outcome === "string" ? " (operation " + operationId + ": " + error.body.outcome + ")" : "";
+}
+
+/**
+ * The CLI's own text for 409 operation_journal_full, picked by the closed bound field (an older Home sends none). Never
+ * the server's message; the code and the bound ride along for scripts.
+ */
+export function journalFullGuidance(body: unknown): string {
+  const bound = record(body) && (body.bound === "unsettled" || body.bound === "recent") ? body.bound : undefined;
+  const text = bound === "unsettled"
+    ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " open or unresolved operations. Check the Child of each residual or unknown one, then run ocx link operations resolve --operation-id <id> --yes; repeat an open one with its operation id first. ocx link operations lists them."
+    : bound === "recent"
+      ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " operations that settled within the last day and three minutes; retry once the oldest of them is older than that."
+      : "The link operation journal is full; ocx link operations lists its entries.";
+  return text + " Nothing was changed. (code operation_journal_full)" + (bound ? " (bound " + bound + ")" : "");
 }
 type LinkRequest = <T>(path: string, init: RequestInit, deps: LinkCliDeps) => Promise<T>;
 
@@ -319,6 +334,8 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       // The machine-readable code rides along so a script can branch without parsing prose.
       const codeSuffix = (phase || note) && typeof code === "string" ? " (code " + code + ")" : "";
       if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : "") + codeSuffix);
+      // Keeps the 409 (exit 5) a full journal always gave.
+      if (code === "operation_journal_full") throw new RuntimeApiError(journalFullGuidance(error.body), error.status, error.body);
       if (typeof code === "string" && Object.hasOwn(OPERATION_REFUSALS, code)) throw new Error(OPERATION_REFUSALS[code] + " (code " + code + ")");
       if (note && typeof code === "string") throw new Error(error.message + " (code " + code + ")");
     }
