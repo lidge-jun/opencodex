@@ -31,6 +31,22 @@ async function wiredSchemas(tools: OcxTool[]): Promise<Record<string, Record<str
   return Object.fromEntries(body.params.tools.map(tool => [tool.name, tool.input_schema]));
 }
 
+/** A diamond of local refs: each level references the previous definition twice. */
+function sharedRefGraph(depth: number): Record<string, unknown> {
+  const defs: Record<string, unknown> = {
+    A0: { type: "object", properties: { p: { type: "string" } }, required: ["p"] },
+  };
+  for (let index = 1; index <= depth; index += 1) {
+    defs[`A${index}`] = {
+      allOf: [
+        { $ref: `#/$defs/A${index - 1}` },
+        { $ref: `#/$defs/A${index - 1}` },
+      ],
+    };
+  }
+  return { $defs: defs, allOf: [{ $ref: `#/$defs/A${depth}` }] };
+}
+
 describe("Command Code wireTools input_schema", () => {
   test("normalizes root oneOf, anyOf, and allOf in the outbound request", async () => {
     const schemas = await wiredSchemas([
@@ -139,6 +155,16 @@ describe("Command Code wireTools input_schema", () => {
     } as OcxTool]));
 
     expect((schema!.properties as Record<string, unknown>).value).toEqual(nested);
+  });
+
+  test("rejects a shared $ref graph past the expansion limit instead of sending a partial schema", async () => {
+    await expect(wiredSchemas([{
+      name: "deep",
+      description: "deep",
+      parameters: sharedRefGraph(30),
+    } as OcxTool])).rejects.toThrow(
+      "tool input schema reference expansion exceeded the supported limit",
+    );
   });
 
   test("does not mutate the caller's tool schema", async () => {
@@ -258,6 +284,18 @@ describe("normalizeAnthropicInputSchema", () => {
     });
     expect(Object.keys(normalized.properties as Record<string, unknown>)).toEqual(["leaf"]);
     expect(normalized.required).toEqual(["leaf"]);
+  });
+
+  test("resolves a bounded shared $ref graph without losing its property", () => {
+    const normalized = normalizeAnthropicInputSchema(sharedRefGraph(10));
+    expect(normalized.properties).toEqual({ p: { type: "string" } });
+    expect(normalized.required).toEqual(["p"]);
+  });
+
+  test("fails explicitly when a shared $ref graph exceeds the expansion limit", () => {
+    expect(() => normalizeAnthropicInputSchema(sharedRefGraph(30))).toThrow(
+      "tool input schema reference expansion exceeded the supported limit",
+    );
   });
 
   test("later branches win for same-named properties, as documented", () => {

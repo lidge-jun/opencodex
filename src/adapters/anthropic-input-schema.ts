@@ -18,6 +18,10 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 
 const LOCAL_REF_PREFIX = "#/";
 const COMPOSITION_KEYS = ["oneOf", "anyOf", "allOf"] as const;
+/** Branch visits allowed while expanding root composition; shared ref graphs multiply. */
+const ROOT_COMPOSITION_EXPANSION_LIMIT = 4096;
+const ROOT_COMPOSITION_LIMIT_MESSAGE =
+  "tool input schema reference expansion exceeded the supported limit";
 
 function decodePointerSegment(segment: string): string {
   return segment.replace(/~1/g, "/").replace(/~0/g, "~");
@@ -101,6 +105,8 @@ function dereferenceLocal(
  * carries. Only a node standing where the root composition stands contributes; `properties`
  * and nested property schemas are never traversed. `chain` holds the refs already inlined on
  * this path, so a self- or mutually-recursive definition stops instead of recursing forever.
+ * `visits` bounds the total expansion so a shared acyclic graph cannot multiply work; exceeding
+ * it throws, and the adapter build then fails as an explicit invalid request.
  */
 function collectRootComposition(
   node: Record<string, unknown>,
@@ -109,6 +115,7 @@ function collectRootComposition(
   mergeRequired: boolean,
   properties: Record<string, unknown>,
   required: Set<string>,
+  visits: { count: number },
 ): void {
   for (const key of COMPOSITION_KEYS) {
     const variants = node[key];
@@ -119,6 +126,8 @@ function collectRootComposition(
       if (!record) continue;
       const ref = typeof record.$ref === "string" ? record.$ref : undefined;
       if (ref && chain.has(ref)) continue;
+      visits.count += 1;
+      if (visits.count > ROOT_COMPOSITION_EXPANSION_LIMIT) throw new Error(ROOT_COMPOSITION_LIMIT_MESSAGE);
       const resolved = dereferenceLocal(variant, root, chain);
       if (!resolved) continue;
       const nextChain = ref ? new Set(chain).add(ref) : chain;
@@ -127,7 +136,7 @@ function collectRootComposition(
       if (branchMergesRequired && Array.isArray(resolved.required)) {
         for (const item of resolved.required) if (typeof item === "string") required.add(item);
       }
-      collectRootComposition(resolved, root, nextChain, branchMergesRequired, properties, required);
+      collectRootComposition(resolved, root, nextChain, branchMergesRequired, properties, required, visits);
     }
   }
 }
@@ -163,7 +172,7 @@ export function normalizeAnthropicInputSchema(schema: unknown): Record<string, u
     for (const item of root.required) if (typeof item === "string") required.add(item);
   }
 
-  collectRootComposition(root, root, new Set(), true, properties, required);
+  collectRootComposition(root, root, new Set(), true, properties, required, { count: 0 });
 
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(root)) {

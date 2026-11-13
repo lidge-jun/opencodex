@@ -23,6 +23,22 @@ async function toolSchema(parameters: unknown): Promise<Record<string, unknown>>
   return tool.input_schema;
 }
 
+/** A diamond of local refs: each level references the previous definition twice. */
+function sharedRefGraph(depth: number): Record<string, unknown> {
+  const defs: Record<string, unknown> = {
+    A0: { type: "object", properties: { p: { type: "string" } }, required: ["p"] },
+  };
+  for (let index = 1; index <= depth; index += 1) {
+    defs[`A${index}`] = {
+      allOf: [
+        { $ref: `#/$defs/A${index - 1}` },
+        { $ref: `#/$defs/A${index - 1}` },
+      ],
+    };
+  }
+  return { $defs: defs, allOf: [{ $ref: `#/$defs/A${depth}` }] };
+}
+
 describe("anthropic tool input_schema normalization", () => {
   test("parameterless and type-less tools become valid object schemas", async () => {
     expect(await toolSchema({})).toEqual({ type: "object", properties: {} });
@@ -137,6 +153,12 @@ describe("anthropic tool input_schema normalization", () => {
     });
     expect(schema.properties).toEqual({ path: { type: "string" } });
     expect(schema.required).toEqual(["path"]);
+  });
+
+  test("fails explicitly when a shared $ref graph exceeds the expansion limit", async () => {
+    await expect(toolSchema(sharedRefGraph(30))).rejects.toThrow(
+      "tool input schema reference expansion exceeded the supported limit",
+    );
   });
 
   test("merges $ref siblings conjunctively and unions required members", async () => {
