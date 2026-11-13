@@ -1456,7 +1456,8 @@ mod tests {
     use std::net::{SocketAddr, TcpListener};
     use std::sync::mpsc;
 
-    static SERIAL: Mutex<()> = Mutex::new(());
+    // One lock with the advertisement tests: both update the process-wide advertisement table.
+    use crate::link_ws_advert::TEST_LOCK as SERIAL;
     pub(super) static FAIL_SPAWN: AtomicBool = AtomicBool::new(false);
     pub(super) static FAIL_101: AtomicBool = AtomicBool::new(false);
     static BEFORE_START: Mutex<Option<fn()>> = Mutex::new(None);

@@ -170,6 +170,8 @@ mod tests {
     const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const NONCE: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const LINK: &str = "lnk_0123456789abcdef";
+    /// The ordering and eviction tests' own link: the relay tests in link_ws.rs apply answers for LINK.
+    const ORDER_LINK: &str = "lnk_a1a1a1a1a1a1a1a1";
 
     fn hdrs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
@@ -269,15 +271,15 @@ mod tests {
         reset_for_tests();
         let a = next_preflight();
         let b = next_preflight();
-        assert!(apply(LINK, b, false));
-        assert!(!apply(LINK, a, true));
-        assert!(!advertised(LINK));
+        assert!(apply(ORDER_LINK, b, false));
+        assert!(!apply(ORDER_LINK, a, true));
+        assert!(!advertised(ORDER_LINK));
         // An old link's late answer, numbered after the new link's, touches only its own entry.
         let new_link = "lnk_fedcba9876543210";
         let n = next_preflight();
         let old = next_preflight();
         assert!(apply(new_link, n, true));
-        assert!(apply(LINK, old, true));
+        assert!(apply(ORDER_LINK, old, true));
         assert!(advertised(new_link));
         // More than four toggles in scrambled order end on the last one sent.
         let nums: Vec<u64> = (0..7).map(|_| next_preflight()).collect();
@@ -294,16 +296,16 @@ mod tests {
         let _serial = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         reset_for_tests();
         let stale = next_preflight();
-        assert!(apply(LINK, next_preflight(), true));
+        assert!(apply(ORDER_LINK, next_preflight(), true));
         for i in 0..8 {
             apply(&format!("lnk_{i:016x}"), next_preflight(), false);
         }
         // Evicted: reads off (conservative), and its late answer cannot land as the newest.
-        assert!(!advertised(LINK));
-        assert!(!apply(LINK, stale, true));
+        assert!(!advertised(ORDER_LINK));
+        assert!(!apply(ORDER_LINK, stale, true));
         // The current link's next preflight restores it.
-        assert!(apply(LINK, next_preflight(), true));
-        assert!(advertised(LINK));
+        assert!(apply(ORDER_LINK, next_preflight(), true));
+        assert!(advertised(ORDER_LINK));
         // Other links' traffic never voids an answer for a link it did not evict.
         let first = next_preflight();
         for i in 100..400 {
