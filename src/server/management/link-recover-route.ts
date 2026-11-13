@@ -80,6 +80,13 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
     if (pending) {
       return fail("link_retirement_pending", "This link's removal is unfinished; repeat ocx link revoke for it to finish, then recover.", 409);
     }
+    // A Home-initiated link that still names this alias may own the Child now: a re-enrollment, or one whose
+    // revoke ran its disconnect but did not commit (journalled or not). Recover would then settle the old
+    // link and purge the binary under it, so it waits until no such link exists. Read under the lock.
+    const wanted = target.alias.toLowerCase();
+    if (readStoreFor(ctx).links.some(link => link.direction === "hub-initiated" && link.alias.toLowerCase() === wanted)) {
+      return fail("alias_linked", "A link to this machine's alias still exists, so its Child may belong to that link; settle any open operation on that link (ocx link operations), revoke the link, then recover.", 409);
+    }
     const outcome = await recoverRemoteChild(runnerFor(ctx), target, knownHostsFile(ctx));
     if (!outcome.ok) return fail(outcome.code, outcome.message, outcome.status, outcome.hint);
     try {

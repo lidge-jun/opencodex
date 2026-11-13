@@ -12,8 +12,9 @@ import type { SshRunner } from "./ssh-runner";
  * "disconnect --purge --json --expect-link <id>" over the target's alias, with the link known_hosts
  * pinned to the recorded host key. Only the alias is used, never a sibling route, so the command
  * reaches the machine whose key the link confirmed. Cleanup is proven only by the Child's exit 0
- * report that names this link and says the planted binary was removed, or, when that report was
- * lost after the purge, by the durable receipt the Child wrote for this link
+ * report that names this link with restored: true and says the planted binary was removed, or was
+ * kept with the in-use marker because another home's relay runs from it (the link's own state is
+ * clean either way), or, when that report was lost after the purge, by the durable receipt the Child wrote for this link
  * ($OPENCODEX_HOME/link-receipts/<id>.json). Absence of files alone proves nothing. Hints are fixed
  * words: the machine's own text never reaches the caller.
  */

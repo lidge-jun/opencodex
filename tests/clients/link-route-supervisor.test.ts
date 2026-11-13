@@ -1588,3 +1588,13 @@ test("a drained child the tick already warned about is not warned again by the d
   h.tunnels[0]!.exit(137);
   await reload;
 });
+
+test("a hold whose cancellation throws is released, so the link can be reconnected", async () => {
+  const h = await started();
+  const forget = h.proofs.forget.bind(h.proofs);
+  h.proofs.forget = () => { throw new Error("forget failed"); };
+  expect(() => h.supervisor.holdLink!(LINK)).toThrow("forget failed");
+  h.proofs.forget = forget;
+  // A leaked hold makes reconnect decline (it returns false while the link is held).
+  expect(await h.supervisor.reconnect(LINK)).toBe(true);
+});
