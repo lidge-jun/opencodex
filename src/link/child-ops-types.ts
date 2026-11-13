@@ -11,6 +11,8 @@ import type { ObserveOutcome } from "./child-observe";
 export type { ChildOp } from "./child-observations";
 export const CHILD_JOB_SCHEMA = "ocx.link.child-job/1" as const;
 export const CHILD_OPS = ["observe", "sync", "restart-codex", "update"] as const satisfies readonly ChildOp[];
+/** The most link ids one operations request may name; the dashboard splits a larger bulk list into groups of this size. */
+export const CHILD_OPS_MAX_LINK_IDS = 64;
 export type ChildRestart = "none" | "app-server" | "codex";
 export type ChildTrigger = "manual" | "auto";
 export const CHILD_ITEM_STATES = ["queued", "running", "succeeded", "up-to-date", "busy", "offline",
@@ -47,6 +49,8 @@ export interface ChildJob {
   op: ChildOp;
   trigger: ChildTrigger;
   restart: ChildRestart;
+  /** D8: present only on a manual restart the operator sent past activity (--ignore-activity); never on an automatic job. */
+  ignoreActivity?: true;
   state: "queued" | "running" | "done";
   createdAt: string;
   finishedAt: string | null;
@@ -81,5 +85,5 @@ export interface ChildOpsEnv {
   autoSyncAllowed?(linkId: string): boolean;
 }
 
-export type ItemRunner = (record: LinkRecord, job: Readonly<Pick<ChildJob, "op" | "trigger" | "restart">>,
+export type ItemRunner = (record: LinkRecord, job: Readonly<Pick<ChildJob, "op" | "trigger" | "restart" | "ignoreActivity">>,
   env: ChildOpsEnv) => Promise<ItemOutcome>;

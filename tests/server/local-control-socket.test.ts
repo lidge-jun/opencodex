@@ -52,7 +52,7 @@ const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
 const previousHome = process.env.OPENCODEX_HOME;
 const ADMIN = "admin-secret";
-const STATUS = "/api/link/status?compatibility=1&diagnostics=1&children=1";
+const STATUS = "/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1&traffic=1&routes=1";
 const unixSupported = process.platform !== "win32";
 /**
  * sun_path is 103 bytes, and os.tmpdir() on macOS is /var/folders/..., which pushes

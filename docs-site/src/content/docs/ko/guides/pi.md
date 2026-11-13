@@ -54,6 +54,12 @@ ocx export --client pi
 (`gpt-5.6-sol`) 유지됩니다. `name` 접미사인 `(anthropic)`, `(native)`, `(routed)`는
 Pi 선택기에서 같은 이름의 서로 다른 upstream 모델을 구분하게 해줍니다.
 
+중첩된 upstream 모델 ID는 실행 중인 프록시가 같은 모델에 도달함을 증명하면 Pi 내보내기에서
+슬래시가 있는 원래 선택자를 사용합니다. 예를 들어 `openrouter/openrouter/free`는 OpenRouter의
+`openrouter/free` 모델을 선택하고, 그 Fast 행은 `openrouter/openrouter/free--fast`입니다.
+프록시가 이렇게 증명할 수 없는 모델(인벤토리가 아직 로드되지 않았거나 원래 표기를 다른 모델이 이미
+쓰는 경우 등)은 인코딩된 선택자를 유지합니다. 사용자 지정 별칭은 이름을 유지합니다.
+
 ## 저장 위치
 
 Pi의 전역 모델 config는 다음과 같습니다.

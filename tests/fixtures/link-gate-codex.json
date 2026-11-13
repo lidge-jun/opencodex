@@ -1,0 +1,5 @@
+{
+  "revision": "88c58562580aa4abe2da6ce4d7676bf171682230",
+  "sha256": null,
+  "note": "The sha256 of codex-rs built at this openai/codex revision, recorded by whoever builds and attests it, in a reviewed change to this file. While it is null, no run of tests/e2e-style/link-websocket-release-gate.test.ts is release evidence."
+}

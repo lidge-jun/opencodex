@@ -11,9 +11,10 @@ import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
-import { LINK_CHILD_OPS_USAGE, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
+import { LINK_CHILD_OPS_USAGE, runLinkActivity, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
+import { LINK_ROUTES_USAGE, runLinkRoutes } from "./link-routes";
 import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
-import { validateChildOps, type LinkChildOpsView } from "./link-status-child";
+import { validateChildOps, validateLinkWs, type LinkChildOpsView, type LinkWsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
 import { boundHint } from "../link/ssh-runner";
 import { linkStorePath } from "../link/paths";
@@ -22,6 +23,7 @@ import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store
 import type { LinkChildKind } from "../link/store";
 import { findAvailablePort } from "../server/ports";
 import { viaLocalControlSocket, type LocalControlDeps } from "./link-local-control";
+import { validateLinkTraffic } from "./link-status-traffic";
 import {
   CliUsageError,
   RuntimeApiError,
@@ -46,6 +48,7 @@ export const LINK_USAGE = `Usage:
   ${LINK_DIAGNOSTICS_USAGE}
   ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
   ocx link reconnect --link-id <id> [--json]
+${LINK_ROUTES_USAGE.join("\n")}
   ocx link cleanup [--link-id <id>] [--json]
   ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ${LINK_CHILD_OPS_USAGE.join("\n")}
@@ -65,7 +68,7 @@ Policy reads or changes how this Home keeps its Children current; without flags 
  * read tolerantly, so its type is this CLI's view of it.
  */
 export type LinkStatusPayload = Omit<LinkStatusDto, "links"> & {
-  links: Array<Omit<LinkStatusDto["links"][number], "child"> & { child?: LinkChildOpsView }>;
+  links: Array<Omit<LinkStatusDto["links"][number], "child" | "ws"> & { child?: LinkChildOpsView; ws?: LinkWsView }>;
 };
 
 export interface LinkIssuePayload {
@@ -174,7 +177,7 @@ export function validateStatus(value: unknown): LinkStatusPayload {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
-    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "child"], `link ${index}`);
+    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "child", "ws", "traffic", "routes", "route", "routeBlocked"], `link ${index}`);
     const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
@@ -196,6 +199,9 @@ export function validateStatus(value: unknown): LinkStatusPayload {
       ...(candidate.peer !== undefined ? { peer: validatePeer(candidate.peer, index) } : {}),
       ...(candidate.tunnel !== undefined ? { tunnel: validateTunnel(candidate.tunnel, index) } : {}),
       ...(candidate.child !== undefined ? { child: validateChildOps(candidate.child, index) } : {}),
+      ...(candidate.ws !== undefined ? { ws: validateLinkWs(candidate.ws, index) } : {}),
+      ...(candidate.traffic !== undefined ? { traffic: validateLinkTraffic(candidate.traffic, index) } : {}),
+      ...validateRoutes(candidate, index),
     };
   });
   let child: LinkStatusPayload["child"] = null;
@@ -273,7 +279,7 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string; hint?: string }; residual?: true } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
   if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
@@ -281,7 +287,9 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string };
   // line, already bounded and redacted, and it is bounded and redacted again here. The rest of
   // the body is still never echoed.
   const hint = typeof body.error.hint === "string" ? boundHint(body.error.hint) : undefined;
-  return { error: { code, ...(hint ? { hint } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
+  // A cause is a class word (an unproven route's `hostkey`, `auth`, ...): kept only in that shape.
+  const cause = typeof body.error.cause === "string" && /^[a-z_]{1,32}$/.test(body.error.cause) ? body.error.cause : undefined;
+  return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -324,10 +332,10 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
     }
     throw error;
   }
-  // A proxy older than the compatibility report, the tunnel diagnostics or the Child block ignores
-  // the query and answers without those fields.
+  // A proxy older than the compatibility report, the tunnel diagnostics, the Child block, the link WebSocket counters or
+  // the traffic counters ignores the query and answers without those fields.
   const result = validateStatus(await viaLocalControlSocket(baseUrl, deps,
-    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1&children=1", {}, statusDeps)));
+    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1&traffic=1&routes=1", {}, statusDeps)));
   console.log(JSON.stringify(result));
 }
 
@@ -420,12 +428,48 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "update" || command === "sync" || command === "restart-codex") verdictExit = await runLinkChildOp(command, args, deps, linkRequest, LINK_USAGE);
     else if (command === "capture") await runLinkCapture(args, deps, LINK_USAGE);
     else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, cleanup, check, update, sync, restart-codex, capture, policy", LINK_USAGE);
+    else if (command === "routes") await runLinkRoutes(args, deps, linkRequest, LINK_USAGE);
+    else if (command === "activity") await runLinkActivity(args, deps, linkRequest, LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, routes, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
   });
   return code === 0 ? verdictExit : code;
 }
 
 const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt"] as const;
+const ROUTE_OUTCOMES = new Set(["transient", "readiness", "grant_unobserved", "forward", "auth", "hostkey"]);
+const ROUTE_BLOCKS = new Set(["ssh_client_unsupported", "stop_unconfirmed"]);
+
+/** The `?routes=1` fields of a multi-route row, all three or none. */
+function validateRoutes(candidate: Record<string, unknown>, index: number): Pick<LinkStatusPayload["links"][number], "routes" | "route" | "routeBlocked"> {
+  const fail = (): never => { throw new Error(`invalid link API response: link ${index} routes`); };
+  const { routes, route, routeBlocked } = candidate;
+  if (routes === undefined && route === undefined && routeBlocked === undefined) return {};
+  if (!Array.isArray(routes) || routes.length < 2 || route === undefined || routeBlocked === undefined) return fail();
+  const parsed = routes.map(entry => {
+    if (!isRecord(entry)) return fail();
+    assertExactKeys(entry, ["name", "eligibleAt", "lastOutcome"], `link ${index} route entry`);
+    if (!validString(entry.name) || (entry.eligibleAt !== null && !validIso(entry.eligibleAt))) fail();
+    const outcome = entry.lastOutcome;
+    if (outcome !== null) {
+      if (!isRecord(outcome)) return fail();
+      assertExactKeys(outcome, ["class", "at"], `link ${index} route outcome`);
+      if (!ROUTE_OUTCOMES.has(outcome.class as string) || !validIso(outcome.at)) fail();
+    }
+    return entry as unknown as NonNullable<LinkStatusPayload["links"][number]["routes"]>[number];
+  });
+  if (route !== null) {
+    if (!isRecord(route)) return fail();
+    assertExactKeys(route, ["name", "index", "since"], `link ${index} route`);
+    if (!validString(route.name) || typeof route.index !== "number" || !Number.isSafeInteger(route.index) || route.index < 0
+      || route.index >= routes.length || !validIso(route.since)) fail();
+  }
+  if (routeBlocked !== null && !ROUTE_BLOCKS.has(routeBlocked as string)) fail();
+  return {
+    routes: parsed,
+    route: route as LinkStatusPayload["links"][number]["route"],
+    routeBlocked: routeBlocked as LinkStatusPayload["links"][number]["routeBlocked"],
+  };
+}
 const WIRE_STATES = new Set(["connecting", "connected", "reconnecting", "failed", "idle"]);
 const CAUSES = new Set<string>(TUNNEL_CAUSES);
 

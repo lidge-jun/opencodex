@@ -24,6 +24,11 @@ const PHASES: Record<string, string> = {
 };
 const RECOVERY_FULL = "Run ocx disconnect and ocx restart on the Child before retrying.";
 const RECOVERY_EPHEMERAL = "Run ~/.cache/opencodex/bin/ocx-child detach on the Child before retrying.";
+const HOME_CLEANUP: Record<string, string> = {
+  key_cleanup_failed: "Enrollment did not complete, and the Home could not revoke the link key it issued; revoke the leftover link key under API keys before retrying.",
+  link_cleanup_uncertain: "Enrollment did not complete, and the Home could not undo the attempt: whether the link is stored is unknown and its issued key could not be revoked. Run ocx link status, remove the link if it is listed (ocx link revoke), and revoke the leftover link key under API keys if it remains.",
+};
+const CHILD_MAY_BE_CONNECTED = "The Child may still be connected.";
 type LinkRequest = <T>(path: string, init: RequestInit, deps: LinkCliDeps) => Promise<T>;
 
 interface ParsedProbeOffer {
@@ -206,6 +211,13 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       if (code === "child_port_busy") throw new Error("The target port on the Child is already in use by another process; no Child files were modified.");
       if (code === "child_preflight_output_limit") throw new Error("The Child's ocx config show --json output exceeded the Remote Link preflight limit; trim the Child's saved configuration and retry.");
       if (code === "child_external_provider_conflict") throw new Error("The Child's ~/.codex/config.toml is already managed by another model provider or custom base URL; no Child files were modified.");
+      // Home-side cleanup that left a link key behind: fixed, locally written guidance (the server's
+      // prose is never echoed), plus the Child's own recovery step when it may still be connected.
+      const homeCleanup = typeof code === "string" && Object.hasOwn(HOME_CLEANUP, code) ? HOME_CLEANUP[code] : undefined;
+      if (homeCleanup) {
+        const childStep = error.body.residual === true ? " " + CHILD_MAY_BE_CONNECTED + " " + (ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL) : "";
+        throw new Error(homeCleanup + childStep + " (code " + code + ")");
+      }
       const phase = typeof code === "string" && Object.hasOwn(PHASES, code) ? PHASES[code] : undefined;
       // The server's hint is the Child's own bounded, redacted reason (#8357); a phase name
       // alone left every failure to SSH reproduction and source reading.

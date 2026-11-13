@@ -5,6 +5,15 @@ export function websocketsEnabled(config: Pick<OcxConfig, "websockets">): boolea
 }
 
 /**
+ * The Responses WebSocket over a Remote Link, Home side. It needs the Home's own WebSocket switch
+ * as well as its own: websockets is the owner's consent to the WebSocket pipeline, and this one adds
+ * linked Children to it. Both are read with === true, so an absent or malformed key means off.
+ */
+export function linkResponsesWebsocketEnabled(config: Pick<OcxConfig, "websockets" | "linkResponsesWebsocket">): boolean {
+  return config.websockets === true && config.linkResponsesWebsocket === true;
+}
+
+/**
  * Opt-in Ultra Fast, read with the house `=== true` idiom so an absent key and a
  * malformed one both mean off.
  */
