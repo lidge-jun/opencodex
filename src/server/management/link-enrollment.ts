@@ -18,6 +18,7 @@ import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
 import { enrollOperationDigest, journalInUse, journalOpenFailure, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { tombstoneNamesAlias } from "../../link/tombstones";
 import { isOperationId } from "../../link/operations-journal";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
@@ -265,7 +266,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
   // ocx link add --operation-id (structure/remote-link.md, "Operation journal"): replay, recovery and the reserved ids.
   const operation = typeof body.operationId === "string" ? { id: body.operationId, digest: enrollOperationDigest({ alias,
     ...(typeof body.fingerprint === "string" ? { fingerprint: body.fingerprint } : {}), route: wanted, requireEphemeral: body.requireEphemeral === true }) } : null;
-  return underAliasLock(ctx, alias, operation !== null || journalInUse(ctx), async () => {
+  // A tombstone for this alias means recover can run against the machine; it holds the alias lock, so this does too.
+  return underAliasLock(ctx, alias, operation !== null || journalInUse(ctx) || tombstoneNamesAlias(alias), async () => {
   if (operation) {
     const replay = await replayOperation(ctx, state, operation, "enroll");
     if (replay) return replay;

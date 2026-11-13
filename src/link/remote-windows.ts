@@ -203,19 +203,34 @@ export function windowsPurgePlantedChildArgv(): string[] {
   return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
 $r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$cd="$h\child";$cx=if($env:CODEX_HOME){$env:CODEX_HOME}else{"$r\.codex"}
 $rec=@(@("$cd\state.json","$cd\codex-journal.json","$cd\attach-rollback.json","$cx\.ocx-child-owner.json")|?{[IO.File]::Exists($_)-or[IO.Directory]::Exists($_)});$pend=$rec.Count -gt 0;if($pend){$m='ocx-child recovery record remains at '+$rec[0]+'; keeping the planted binary for detach.'}
-try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};try{[IO.File]::Delete($dst)}catch{$null=$_}}elseif($pend){[Console]::Error.WriteLine($m);exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif($pend){[Console]::Error.WriteLine($m);exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
+try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};if([IO.File]::Exists($dst)){[Console]::Error.WriteLine('ocx-child kept the planted binary: another ocx-child relay runs from it.')}}elseif($pend){[Console]::Error.WriteLine($m);exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif($pend){[Console]::Error.WriteLine($m);exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
 `);
 }
 
 /** Printed on stderr when the managed plant directory holds no runnable ocx-child to purge. */
 export const MANAGED_PURGE_CHILD_MISSING_MARKER = "ocx-purge-error:managed_child_missing";
 
+/** Read-only: print the link-bound detach receipt; exit 4 when it is missing, a reparse point or unreadable. */
+export function windowsRecoverReceiptArgv(linkId: string): string[] {
+  if (!/^lnk_[0-9a-f]{16}$/.test(linkId)) throw new Error("invalid link id");
+  // The id travels as data ($d.args[0]), never spliced into the script source.
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: [linkId] }) + String.raw`
+$r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$f="$h\link-receipts\"+[string]$d.args[0]+".json"
+$b=if($env:LOCALAPPDATA){"$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"}else{"$env:USERPROFILE\.cache\opencodex\bin\ocx-child.exe"}
+$found=$true;try{$null=Get-Item -LiteralPath $b -Force -ErrorAction Stop}catch [System.Management.Automation.ItemNotFoundException]{$found=$false}catch{exit 4};if($found){exit 4}
+try{if(-not[IO.File]::Exists($f)){exit 4};if(((Get-Item -LiteralPath $f -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){exit 4};[Console]::Out.Write([IO.File]::ReadAllText($f))}catch{exit 4};exit 0
+`);
+}
+
 /** Runs `disconnect --purge --json` through the planted %LOCALAPPDATA% binary, never a PATH candidate. */
-export function windowsManagedPurgeDisconnectArgv(): string[] {
-  return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
+/** expectLink (lnk_ and 16 hex digits) travels as data ($d.args[0]), never spliced into the script source. */
+export function windowsManagedPurgeDisconnectArgv(expectLink?: string): string[] {
+  if (expectLink !== undefined && !/^lnk_[0-9a-f]{16}$/.test(expectLink)) throw new Error("invalid link id");
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: expectLink === undefined ? [] : [expectLink] }) + WINDOWS_MANAGED_BIN + String.raw`
 try{$dir=Resolve-PlantDir}catch{[Console]::Error.WriteLine('Refusing a reparse point in the managed ocx-child directory.');exit 1}
 $dst="$dir\ocx-child.exe";if(-not([IO.File]::Exists($dst)-and[OcxJob]::Ok($dst))){[Console]::Error.WriteLine('${MANAGED_PURGE_CHILD_MISSING_MARKER}');exit 1}
-try{$rc=[OcxJob]::Run($dst,('"'+$dst+'" disconnect --purge --json'))}catch{exit 1}
+$x=@($d.args);$e=if($x.Count -gt 0){' --expect-link '+(Quote-Native ([string]$x[0]))}else{''}
+try{$rc=[OcxJob]::Run($dst,('"'+$dst+'" disconnect --purge --json'+$e))}catch{exit 1}
 Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}};exit $rc
 `);
 }

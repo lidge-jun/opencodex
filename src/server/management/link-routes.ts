@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { isRouteClientId, ROUTE_CLIENT_IDS } from "../../link/route-intent";
 import { seedRouteDeviceClients, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { probe, confirmHost, apply, serialized } from "./link-enrollment";
@@ -7,6 +8,7 @@ import { requireRemotePlatform } from "../../link/remote-platform";
 import { purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
+import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, removeTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, reownLinkRetirement, type LinkRetirement, type LinkRetirementMode } from "../../link/retirement";
@@ -276,7 +278,8 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   if (!valid) { releaseLink(); return fail("invalid_body", "force and purge must be booleans and cannot both be true.", 400); }
   try {
     // Enrollment and revoke of one alias are serialized: a force revoke cannot run between a purge and its receipt.
-    const admitted = operation !== null || journalInUse(ctx);
+    // Also whenever a tombstone names this alias: recover may run against that machine under the alias lock.
+    const admitted = operation !== null || journalInUse(ctx) || tombstoneNamesAlias(target.record.alias);
     // A journalled revoke, and every revoke once this Home journals, also takes the per-alias operation set that apply
     // holds for its whole run, so an apply and a revoke of one alias never overlap in this runtime.
     const exclusive = (action: () => Promise<Response>) => admitted ? serialized(state, target.record.alias, action) : action();
@@ -474,9 +477,39 @@ async function removeReserved(
     try { journal.intent(effect); return true; } catch { return false; }
   };
   const cleanup = !cleanupDone && !force && record.direction === "hub-initiated";
-  // The first intent (cleanup, or the key) is written before stopLink: a failed write leaves the tunnel as it was and
-  // nothing has been touched.
-  if (!intend(cleanup ? "remote_cleanup" : "key_revoked")) return journalFailed();
+  // A forced revoke leaves an ephemeral Child uncleaned. Its tombstone is durable before the first intent (key_revoked
+  // for a force revoke) and before the tunnel stops, so ocx link recover can still reach and clean that machine;
+  // without it, refuse with nothing touched.
+  const tombstoned = force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
+  // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: a later
+  // ordinary revoke would otherwise leave one no recover can settle. Only that exact tombstone, and
+  // only while the link still exists: another process may have committed its own forced revoke.
+  let written: LinkTombstone | null = null;
+  const dropOwnTombstone = (): void => {
+    if (!written) return;
+    const own = written;
+    try { withConfigMutationLockSync(() => { removeOwnTombstone(own, readStoreFor(ctx).links.some(link => link.id === id), tombstonesPath()); }); } catch { /* the link remains; recover refuses link_present */ }
+  };
+  if (tombstoned && record.hostKeyFingerprint) {
+    const tombstone: LinkTombstone = {
+      linkId: id, alias: record.alias, hostKeyFingerprint: record.hostKeyFingerprint,
+      ...(record.remotePlatform ? { remotePlatform: record.remotePlatform } : {}),
+      ...(record.routes ? { routes: [...record.routes] } : {}),
+      ...(record.explicitRoute ? { explicitRoute: { ...record.explicitRoute } } : {}),
+      ...(record.exclusive ? { exclusive: true as const } : {}),
+      revokedAt: new Date((ctx.deps.now ?? Date.now)()).toISOString(),
+      attempt: randomBytes(8).toString("hex"),
+    };
+    try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); written = tombstone; } catch (error) {
+      if (error instanceof LinkTombstoneLimitError) {
+        return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
+      }
+      return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
+    }
+  }
+  // The first intent (cleanup, or the key for a force revoke) is written before stopLink: a failed write leaves the
+  // tunnel as it was and nothing has been touched.
+  if (!intend(cleanup ? "remote_cleanup" : "key_revoked")) { dropOwnTombstone(); return journalFailed(); }
   const release = state.supervisor.holdLink?.(id);
   // Set when this revoke restarts the tunnel itself after a cleanup that never ran; every other way out leaves it down.
   let restarted = false;
@@ -540,8 +573,10 @@ async function removeReserved(
             // disconnected or purged, and the revoke settles unknown, which keeps the link suspended. A plain revoke, or one
             // that ran no cleanup, restarts it as before.
             if (!((cleanup || journal.keepsTunnelDown) && journal.operationId !== undefined)) await restartTunnel();
+            dropOwnTombstone();
             return fail("link_changed", "The link changed during removal.", 409);
           }
+          dropOwnTombstone();
           return fail("link_remove_failed", "The link retirement could not be claimed.", 503);
         }
       }
@@ -562,9 +597,13 @@ async function removeReserved(
         reconcileHomeRouteDevices(readStoreFor(ctx).links.map(link => link.id));
         return "ok" as const;
       });
+      // A revoke that does not commit keeps the link, so the tombstone it wrote goes too (only while the link still exists).
+      if (result !== "ok") dropOwnTombstone();
       if (result === "journal_failed") return journalFailed();
       if (result === "changed") return fail("link_changed", "The link changed during removal.", 409);
       if (result === "revoke_failed") return fail("key_revoke_failed", "The link key could not be revoked.", 502);
+      // A revoke that cleaned the Child itself settles any tombstone an earlier forced revoke of this link left.
+      if (!force) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
       // Same task as the commit: an open link WebSocket must not outlive its link (design T4 2.4).
       state.listener.closeLinkSockets?.(id);
       clearCompensationFailed(id, compensationPath());
@@ -576,6 +615,7 @@ async function removeReserved(
       }
       if (!clearLinkRetirement(owner, undefined, () => !readStoreFor(ctx).links.some(link => link.id === id))) return fail("link_remove_failed", "The link retirement changed during removal.", 503);
     } catch {
+      dropOwnTombstone();
       // The record can already be gone when a later step (route-intent reconciliation, the
       // listener) fails. Its sockets close then too, in this task, rather than at the next sweep.
       try { if (!readStoreFor(ctx).links.some(link => link.id === id)) state.listener.closeLinkSockets?.(id); }
@@ -702,6 +742,18 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     if (denied) return denied;
     const { handleLinkOperationRoutes } = await import("./link-operation");
     return handleLinkOperationRoutes(ctx);
+  }
+  if (url.pathname === "/api/link/recover" && req.method === "POST") {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    const { handleLinkRecover } = await import("./link-recover-route");
+    return handleLinkRecover(ctx, state);
+  }
+  if (url.pathname === "/api/link/recover" && req.method === "GET") {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    const { handleLinkRecoverList } = await import("./link-recover-route");
+    return handleLinkRecoverList();
   }
   // Before the reconnect and DELETE matchers, which would read "children" as a link id.
   if (path.startsWith("/api/link/children/")) {
