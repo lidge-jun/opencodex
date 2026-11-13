@@ -1,4 +1,4 @@
-//! RFC 6455 framing for the Responses WebSocket over a Remote Link (design T4 3.3, T6-4 addendum).
+//! RFC 6455 framing for the Responses WebSocket over a Remote Link (design T4 3.3).
 //!
 //! ocx-child is both ends of the relay: a server toward Codex (frames Codex sends are masked, frames it
 //! receives must not be) and a client toward the Home (the reverse). One reader handles both roles and

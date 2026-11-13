@@ -31,7 +31,7 @@ import { openLinkWebsocket, type LinkWebsocketSetupFailure } from "./link-ws-tra
  * runtime stop closes every socket with 1001 on both legs. When the tunnel supervisor starts stopping (a Child
  * restart, or a link that ended and is about to be recycled), the relay drains first:
  * open sockets close with 1001 and every upgrade from then on, new or still in setup, gets the transient 503,
- * so Codex keeps its WebSocket session for the replacement instead of falling back to HTTP.
+ * so Codex keeps its WebSocket session for the replacement, within its retry budget, instead of falling back to HTTP.
  */
 
 export type LinkWsFallbackReason =
