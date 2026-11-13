@@ -25,7 +25,7 @@ import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
 import { journalInUse, journalOpenFailure, journalPathFor, journalUnreadable, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
-import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
+import { findOperation, isOperationId, readOperationsJournal, revokeSuspendingLink } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const isLinkPath = (path: string): boolean => path === "/api/link" || path.startsWith("/api/link/");
@@ -194,11 +194,28 @@ async function reconnect(ctx: ManagementContext, state: LinkRouteState, id: stri
     await state.listener.ensureStarted();
     if (state.listener.status().state !== "listening") return fail("listener_unavailable", "The link listener is unavailable.", 503);
     await state.supervisor.ensureStarted();
-    if (!await state.supervisor.reconnect(id)) return fail("link_unavailable", "The link tunnel could not be restarted.", 503);
+    const restarted = await state.supervisor.reconnect(id);
+    if (restarted === "suspended") return suspendedRefusal(ctx, id);
+    if (!restarted) return fail("link_unavailable", "The link tunnel could not be restarted.", 503);
   } catch {
     return fail("link_unavailable", "The link tunnel could not be restarted.", 503);
   }
   return Response.json({ linkId: id });
+}
+
+/** 409 link_suspended: an unsettled revoke keeps the tunnel down (revokeSuspendsLink); the answer names it and the way out. */
+function suspendedRefusal(ctx: ManagementContext, id: string): Response {
+  const suspension = revokeSuspendingLink(journalPathFor(ctx), id);
+  const headers = { "cache-control": "no-store" };
+  if (!suspension) {
+    return Response.json({ error: { code: "link_suspended", message: "An unsettled revoke keeps this link's tunnel down; see ocx link operations." } }, { status: 409, headers });
+  }
+  const op = suspension.operationId;
+  const resolve = "ocx link operations resolve --operation-id " + op + " --yes";
+  const message = suspension.state === "unknown"
+    ? "Revoke operation " + op + " ended unknown and may have disconnected or purged the Child, so this link's tunnel stays down. Check the Child, then run: " + resolve
+    : "Revoke operation " + op + " did not finish (the Home stopped during it), so this link's tunnel stays down. Repeat it with the same flags: ocx link revoke --link-id " + id + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve;
+  return Response.json({ error: { code: "link_suspended", message }, operationId: op, operationState: suspension.state }, { status: 409, headers });
 }
 
 function validRemoveBody(payload: unknown): payload is Record<string, unknown> {

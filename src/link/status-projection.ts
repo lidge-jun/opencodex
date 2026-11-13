@@ -264,6 +264,8 @@ function stateDetails(
   if (status.orphan === "orphan-unverified") {
     return { state: "failed", since: record.createdAt, reason: "stale tunnel may hold the port" };
   }
+  // An unsettled revoke keeps the tunnel down until it is resolved (src/link/operations-journal.ts, revokeSuspendsLink).
+  if (status.suspended) return { state: "failed", since: status.suspended.since, reason: "revoke_unsettled" };
   const tunnel = status.state;
   if (status.routes?.blocked === "ssh_client_unsupported" && !status.routes.route) {
     return { state: "failed", since: new Date(tunnel.kind === "idle" ? Date.parse(record.createdAt) : tunnel.since).toISOString(), reason: "ssh_client_unsupported" };

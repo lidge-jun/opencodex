@@ -20,7 +20,7 @@ import {
 } from "./tunnel-state";
 import { effectiveLinkRoutes, emptyLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
 import { createRouteRounds, type LinkRouteStatus } from "./route-rounds";
-import { linkSuspendedByRevoke, operationsJournalPath } from "./operations-journal";
+import { linkSuspendedByRevoke, operationsJournalPath, revokeSuspendingLink } from "./operations-journal";
 import type { RouteProofRegistry } from "./route-proof";
 
 export type LinkTunnelStatus =
@@ -34,6 +34,8 @@ export type LinkTunnelStatus =
     history?: TunnelHistory;
     /** Links with several routes only (src/link/route-rounds.ts). */
     routes?: LinkRouteStatus;
+    /** An unsettled revoke keeps this link down (revokeSuspendsLink); absent otherwise. */
+    suspended?: { operationId: string; since: string };
   }
   | {
     linkId: string;
@@ -52,8 +54,9 @@ export interface LinkSupervisor {
   /**
    * Restart one Home-initiated tunnel now: stop its child, forget the backoff or failed state,
    * and spawn a fresh attempt. False when the link is not a Home-initiated link of this store.
+   * "suspended" when an unsettled revoke keeps the link down: nothing was stopped or spawned.
    */
-  reconnect(linkId: string): Promise<boolean>;
+  reconnect(linkId: string): Promise<boolean | "suspended">;
   status(): readonly LinkTunnelStatus[];
   /** `<runtime instance>:<generation>` of a Home-initiated link's current tunnel; every spawn changes it. */
   connectionGeneration?(linkId: string): string | undefined;
@@ -258,7 +261,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const connectionNames = new Map<string, string>();
   const linkRevisions = new Map<string, number>();
   /** Reconnects in flight, so overlapping requests for one link restart it once. */
-  const reconnects = new Map<string, Promise<boolean>>();
+  const reconnects = new Map<string, Promise<boolean | "suspended">>();
   const holds = new Map<string, number>();
   const orphanUnverified = new Set<string>();
   /** The generation of the child whose exit is still being classified, per link. */
@@ -877,11 +880,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       const inFlight = reconnects.get(linkId);
       if (inFlight) return inFlight;
       const linkRevision = linkRevisions.get(linkId);
-      let restarted = false;
+      let restarted: boolean | "suspended" = false;
       const flight = runLifecycle(async () => {
         if (stopping || !started || holds.has(linkId) || linkRevisions.get(linkId) !== linkRevision) return;
         const record = store.links.find(link => link.id === linkId && link.direction === "hub-initiated");
         if (!record) return;
+        // spawnFor would decline it after the stop; answer that instead of stopping a child and claiming a restart.
+        if (linkSuspendedByRevoke(journalPath, linkId)) {
+          restarted = "suspended";
+          return;
+        }
         // An earlier tunnel of a multi-route link that may still live is never bypassed by a reconnect.
         if (rounds.isMultiRoute(record) && orphanUnverified.has(linkId)) return;
         // A preceding reload may have spawned a new generation; it is the current one we drain.
@@ -893,6 +901,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const fresh = latest.links.find(link => link.id === linkId && link.direction === "hub-initiated");
         if (stopping || holds.has(linkId) || generations.get(linkId) !== generation
           || lifecycleRevision !== revision || !fresh || recordInstance(fresh, latest.listenerPort) !== instance) return;
+        if (linkSuspendedByRevoke(journalPath, linkId)) {
+          restarted = "suspended";
+          return;
+        }
         spawnFor(fresh);
         restarted = true;
       }).then(() => restarted).finally(() => { reconnects.delete(linkId); });
@@ -919,6 +931,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const child = children.get(record.id);
         const recorded = history.get(record.id);
         const routes = rounds.isMultiRoute(record) ? rounds.status(record.id) : undefined;
+        const suspension = revokeSuspendingLink(journalPath, record.id);
         return {
           linkId: record.id,
           direction: record.direction,
@@ -927,6 +940,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           ...(orphanUnverified.has(record.id) ? { orphan: "orphan-unverified" as const } : {}),
           ...(recorded ? { history: recorded } : {}),
           ...(routes ? { routes } : {}),
+          ...(suspension ? { suspended: { operationId: suspension.operationId, since: suspension.since } } : {}),
         };
       });
     },

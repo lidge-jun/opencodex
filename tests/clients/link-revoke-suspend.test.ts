@@ -3,6 +3,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLinkSupervisor } from "../../src/link/supervisor";
+import { projectLinkStatus } from "../../src/link/status-projection";
+import type { CompensationStore } from "../../src/link/compensation";
+import { validateStatus } from "../../src/cli/link";
 import { revokeSuspendsLink, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshChild, SshRunner } from "../../src/link/ssh-runner";
@@ -70,4 +73,59 @@ test("the supervisor starts no tunnel for a suspended link, on start or reload, 
   writeOperationsJournal(journalPath, { version: 1, operations: [revoke({ resolvedAt: AT })] });
   await supervisor.reload();
   expect(spawned).toHaveLength(1);
+});
+
+function supervisorFor(journalPath: string) {
+  const spawned: string[][] = [];
+  const kills: string[] = [];
+  const runner: SshRunner = {
+    async run() { return { code: 0, stdout: "", stderr: "" }; },
+    spawnTunnel(argv) { spawned.push([...argv]); return { pid: 4500 + spawned.length, argv: [...argv], exited: new Promise<number>(() => {}), stderr: Promise.resolve(""), kill: (signal?: string) => { kills.push(signal ?? "SIGTERM"); } } as unknown as SshChild; },
+  };
+  const value: LinkStore = { version: 1, listenerPort: 19001, links: [record()] };
+  const supervisor = createLinkSupervisor({
+    readStore: () => structuredClone(value), runner, now: () => 0, random: () => 0.5, operationsJournalPath: journalPath,
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: () => 1 as unknown as ReturnType<typeof setInterval>, clearTimer: () => {},
+  });
+  return { supervisor, spawned, kills };
+}
+
+test("a reconnect of a suspended link answers suspended, stops nothing and spawns nothing; status names the revoke", async () => {
+  const journalPath = join(dir, "operations.json");
+  writeOperationsJournal(journalPath, { version: 1, operations: [revoke()] });
+  const h = supervisorFor(journalPath);
+  h.supervisor.start();
+  expect(await h.supervisor.reconnect(LINK)).toBe("suspended");
+  expect(h.spawned).toHaveLength(0);
+  expect(h.supervisor.status()[0]).toMatchObject({ linkId: LINK, suspended: { operationId: "detach-1", since: AT } });
+});
+
+test("a link that became suspended while its tunnel runs is not stopped by a reconnect either", async () => {
+  const journalPath = join(dir, "operations.json");
+  const h = supervisorFor(journalPath);
+  h.supervisor.start();
+  expect(h.spawned).toHaveLength(1);
+  writeOperationsJournal(journalPath, { version: 1, operations: [revoke({ state: "open", finishedAt: undefined, error: undefined })] });
+  expect(await h.supervisor.reconnect(LINK)).toBe("suspended");
+  expect({ spawned: h.spawned.length, kills: h.kills }).toEqual({ spawned: 1, kills: [] });
+});
+
+test("a link that is not suspended has no suspended field and reconnects as before", async () => {
+  const h = supervisorFor(join(dir, "operations.json"));
+  h.supervisor.start();
+  expect(h.supervisor.status()[0]).not.toHaveProperty("suspended");
+});
+
+test("a suspended link reads failed with the fixed reason revoke_unsettled, which the CLI's strict status check accepts", () => {
+  const store: LinkStore = { version: 1, listenerPort: 19001, links: [record()] };
+  const listener = { state: "listening" as const, port: 19001 };
+  const none: CompensationStore = { version: 1, entries: {} };
+  const suspended = projectLinkStatus(store, [{ linkId: LINK, direction: "hub-initiated", state: { kind: "idle" }, pid: null, suspended: { operationId: "detach-1", since: AT } }], listener, { runtimeRole: "hub" }, none);
+  expect(suspended.links[0]).toMatchObject({ state: "failed", since: AT, reason: "revoke_unsettled" });
+  expect(validateStatus(JSON.parse(JSON.stringify(suspended))).links[0]).toMatchObject({ state: "failed", reason: "revoke_unsettled" });
+  // The row keeps its keys: an older CLI's strict check accepts it too.
+  const plain = projectLinkStatus(store, [{ linkId: LINK, direction: "hub-initiated", state: { kind: "idle" }, pid: null }], listener, { runtimeRole: "hub" }, none);
+  expect(Object.keys(suspended.links[0]!)).toEqual(Object.keys(plain.links[0]!));
+  expect(plain.links[0]).toMatchObject({ state: "idle", reason: null });
 });

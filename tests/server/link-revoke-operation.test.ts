@@ -21,6 +21,7 @@ const LINK = "lnk_0123456789abcdef";
 const ALIAS = "pen-7f3a9c";
 const OP = "detach-0001";
 const NOW = 1_800_000_000_000;
+const AT_ISO = new Date(NOW - 1000).toISOString();
 const ROUTE = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a9c 22", user: "ubuntu", port: 22 };
 
 let root = "";
@@ -81,8 +82,15 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   };
   async function revoke(body: Record<string, unknown>, signal?: AbortSignal) {
     const url = new URL("http://127.0.0.1:10100/api/link/" + LINK);
+    return call(url, new Request(url, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(body), ...(signal ? { signal } : {}) }));
+  }
+  async function reconnect() {
+    const url = new URL("http://127.0.0.1:10100/api/link/" + LINK + "/reconnect");
+    return call(url, new Request(url, { method: "POST" }));
+  }
+  async function call(url: URL, req: Request) {
     const context: ManagementContext = {
-      req: new Request(url, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(body), ...(signal ? { signal } : {}) }),
+      req,
       url, config, deps, version: "2.99.0", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
       sessionControl: { isCurrent: () => true, isPaired: () => false, revokeCurrent: () => true },
       convergeCodexCatalog: async () => { throw new Error("no catalog convergence"); }, syncClaudeAgentDefsBestEffort: async () => {},
@@ -90,7 +98,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     const response = await handleLinkRoutes(context, state);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   }
-  return { revoke, state, ssh, config, journalPath, stops, closedSockets, suspendedAtRestart, suspendedAtHoldRelease, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
+  return { revoke, reconnect, state, ssh, config, journalPath, stops, closedSockets, suspendedAtRestart, suspendedAtHoldRelease, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
@@ -363,4 +371,25 @@ test.each([
   const repeat = await h.revoke({ purge: true, operationId: OP });
   expect(repeat.body.outcome).toBe(outcome);
   expect(h.ssh).toEqual([]);
+});
+
+describe("reconnect of a suspended link", () => {
+  test.each([
+    ["unknown", { state: "unknown" as const, finishedAt: AT_ISO }, "ocx link operations resolve --operation-id " + OP + " --yes"],
+    ["open (the Home stopped during it)", { state: "open" as const }, "ocx link revoke --link-id " + LINK + " --operation-id " + OP],
+  ])("an %s revoke answers 409 link_suspended naming the operation and its next step", async (_label, shape, step) => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [{ operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: "a".repeat(64), createdAt: AT_ISO, updatedAt: AT_ISO,
+      effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }], ...shape }] });
+    h.state.supervisor.reconnect = async () => "suspended";
+    const answer = await h.reconnect();
+    expect({ status: answer.status, code: code(answer), operationId: answer.body.operationId, operationState: answer.body.operationState })
+      .toEqual({ status: 409, code: "link_suspended", operationId: OP, operationState: shape.state });
+    expect((answer.body.error as { message: string }).message).toContain(step);
+  });
+
+  test("a reconnect that restarts answers 200 as before", async () => {
+    const h = harness();
+    expect(await h.reconnect()).toEqual({ status: 200, body: { linkId: LINK } });
+  });
 });

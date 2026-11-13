@@ -313,9 +313,24 @@ export function markRevokeLive(path: string, operationId: string, live: boolean)
  * removes the link, lifts it.
  */
 export function revokeSuspendsLink(journal: OperationsJournal, linkId: string, isLive: (operationId: string) => boolean): boolean {
-  return journal.operations.some(op => op.kind === "revoke" && op.linkId === linkId && op.resolvedAt === undefined
+  return suspendingRevoke(journal, linkId, isLive) !== undefined;
+}
+
+function suspendingRevoke(journal: OperationsJournal, linkId: string, isLive: (operationId: string) => boolean): LinkOperation | undefined {
+  return journal.operations.find(op => op.kind === "revoke" && op.linkId === linkId && op.resolvedAt === undefined
     && hasEffect(op, "remote_cleanup", "intent")
     && (op.state === "open" ? !isLive(op.operationId) : op.state === "unknown"));
+}
+
+/** The revoke that keeps a link down: its id, whether it is open (the process died) or unknown, and since when. */
+export interface LinkSuspension { operationId: string; state: "open" | "unknown"; since: string }
+
+/** Like linkSuspendedByRevoke, naming the revoke; null when the link is not suspended or the journal is unreadable. */
+export function revokeSuspendingLink(path: string, linkId: string): LinkSuspension | null {
+  if (!existsSync(path)) return null;
+  let op: LinkOperation | undefined;
+  try { op = suspendingRevoke(readOperationsJournal(path), linkId, id => liveRevokes.has(path + "\0" + id)); } catch { return null; }
+  return op ? { operationId: op.operationId, state: op.state === "open" ? "open" : "unknown", since: op.finishedAt ?? op.updatedAt } : null;
 }
 
 /**
@@ -323,6 +338,5 @@ export function revokeSuspendsLink(journal: OperationsJournal, linkId: string, i
  * a purged Child serves nothing without its key, and stopping every tunnel would be worse); its readers report it.
  */
 export function linkSuspendedByRevoke(path: string, linkId: string): boolean {
-  if (!existsSync(path)) return false;
-  try { return revokeSuspendsLink(readOperationsJournal(path), linkId, id => liveRevokes.has(path + "\0" + id)); } catch { return false; }
+  return revokeSuspendingLink(path, linkId) !== null;
 }

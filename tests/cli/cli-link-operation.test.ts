@@ -146,3 +146,24 @@ test("operations lists, reads and resolves; resolve needs --yes", async () => {
     expect(JSON.parse(h.out[2]!)).toMatchObject({ resolvedAt: "2026-11-13T00:00:00.000Z" });
   } finally { h.restore(); }
 });
+
+test.each([
+  ["unknown", "ocx link operations resolve --operation-id " + OP + " --yes"],
+  ["open", "ocx link revoke --link-id " + LINK + " --operation-id " + OP],
+])("a reconnect refused because an %s revoke keeps the link down prints the local next step and exits 5", async (operationState, step) => {
+  const h = harness([{ status: 409, body: { error: { code: "link_suspended", message: "server-chosen text" }, operationId: OP, operationState } }]); try {
+    expect(await runLinkCommand(["reconnect", "--link-id", LINK], h.deps)).toBe(5);
+    const printed = [...h.out, ...h.err].join("\n");
+    expect(printed).toContain(step);
+    expect(printed).not.toContain("server-chosen text");
+  } finally { h.restore(); }
+});
+
+test("a link_suspended answer with a malformed operation id prints no command built from it", async () => {
+  const h = harness([{ status: 409, body: { error: { code: "link_suspended", message: "x" }, operationId: "-rm -rf", operationState: "unknown" } }]); try {
+    expect(await runLinkCommand(["reconnect", "--link-id", LINK], h.deps)).toBe(5);
+    const printed = [...h.out, ...h.err].join("\n");
+    expect(printed).not.toContain("-rm -rf");
+    expect(printed).toContain("ocx link operations");
+  } finally { h.restore(); }
+});
