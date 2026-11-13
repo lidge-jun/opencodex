@@ -81,9 +81,12 @@ export class LinkWsFrameReader {
     return (this.assembly?.length ?? 0) + own + this.headerLength;
   }
 
-  /** Feed bytes off the socket; returns every event they complete, in order. */
-  push(chunk: Uint8Array): LinkWsFrameEvent[] {
-    const events: LinkWsFrameEvent[] = [];
+  /**
+   * Feed bytes off the socket; returns every event they complete, in order. Events are appended to
+   * `events` as they complete, so a caller that passes its own array still has the events completed
+   * before a protocol error when push throws.
+   */
+  push(chunk: Uint8Array, events: LinkWsFrameEvent[] = []): LinkWsFrameEvent[] {
     let offset = 0;
     try {
       while (offset < chunk.length && !this.done) {

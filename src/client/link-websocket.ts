@@ -140,14 +140,13 @@ export class HomeLeg {
 
   private fromHome(chunk: Buffer): void {
     if (this.ended || this.homeClosed) return;
-    let events: LinkWsFrameEvent[];
+    // Events completed before a framing error in the same chunk are delivered first, in wire order.
+    const events: LinkWsFrameEvent[] = [];
+    let refused: unknown = null;
     try {
-      events = this.reader.push(chunk);
+      this.reader.push(chunk, events);
     } catch (error) {
-      // A Home message over the limit, or a frame no server may send: both legs close (1011 to Codex).
-      const code = error instanceof LinkWsProtocolError ? error.closeCode : 1002;
-      this.closeBoth(1011, "home message refused", code, "protocol");
-      return;
+      refused = error;
     }
     for (const event of events) {
       if (this.ended) return;
@@ -175,6 +174,11 @@ export class HomeLeg {
         this.finish("home");
         return;
       }
+    }
+    if (refused !== null && !this.ended) {
+      // A Home message over the limit, or a frame no server may send: both legs close (1011 to Codex).
+      const code = refused instanceof LinkWsProtocolError ? refused.closeCode : 1002;
+      this.closeBoth(1011, "home message refused", code, "protocol");
     }
   }
 

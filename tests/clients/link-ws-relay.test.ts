@@ -196,6 +196,18 @@ describe("link WebSocket on the Child: an advertising Home", () => {
     expect(codex.messages).toEqual([]);
   });
 
+  test("a message completed in the same chunk before a refused frame is delivered first", async () => {
+    const { port, home } = await setup();
+    const codex = await CodexSocket.open(port);
+    const leg = home.sockets.at(-1)!;
+    const completed = Buffer.from('{"type":"response.completed"}');
+    // One write: a whole text frame, then a frame with an RSV bit set, which no server may send.
+    leg.raw(Buffer.concat([Buffer.from([0x81, completed.length]), completed, Buffer.from([0xc1, 1, 0x78])]));
+    expect((await codex.closed()).code).toBe(1011);
+    expect(codex.messages).toEqual(['{"type":"response.completed"}']);
+    expect(await leg.until(frame => frame.type === "close")).toMatchObject({ code: 1002 });
+  });
+
   test("a second Codex message while the first is still unflushed toward the Home closes both legs (1013, 1001)", async () => {
     const { port, home } = await setup();
     const codex = await CodexSocket.open(port);
