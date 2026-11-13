@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,9 @@ import { createLinkActivity } from "../../src/link/child-activity";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { LinkStore } from "../../src/link/store";
 import type { WsData } from "../../src/server/ws-bridge";
+import * as requestDecompress from "../../src/server/request-decompress";
+import { createInboundBodyBudget } from "../../src/server/inbound-body-budget";
+import { withRaisedInboundBodyAdmission } from "../../src/server/inbound-body-admission";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient } from "../helpers/link-ws-client";
 
@@ -309,4 +312,75 @@ describe("release over HTTP through the real listener", () => {
     expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(0);
   });
 
+  // #8608: the copy is decoded only after the handler accepted the request, under the listener's resolved inbound limit.
+  async function heldLink(thread: string, callId: string, maxRequestBodySize: number, dispatch: (req: Request) => Promise<Response>) {
+    const store: LinkStore = { version: 1, listenerPort: null, links: [{ id: KEY.linkId, alias: "holds", direction: "client-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: KEY.id, createdAt: "2026-11-12T00:00:00.000Z" }] as LinkStore["links"] };
+    const current = { value: store };
+    let finish: (() => void) | undefined;
+    const seen: { message?: () => void; closed?: () => void } = {};
+    const base: WebSocketHandler<WsData> = {
+      open(ws) { ws.data.admissionLease?.bind(ws); },
+      message(ws) { finish = ws.data.responsesActivity!.beginTurn("go"); ws.data.responsesActivity!.observePayload(toolCall(callId)); seen.message?.(); },
+      close(ws) { ws.data.admissionLease?.release(); seen.closed?.(); },
+    };
+    const lifecycle = createLinkListenerLifecycle<WsData>({ storePath: join(dir, "link", "links.json"), readStore: () => current.value, writeStore: (_p, next) => { current.value = next; }, warn: () => {} });
+    lifecycle.start({ maxRequestBodySize, dispatch, keyFingerprints: () => [serviceApiTokenFingerprint(KEY.key)], responsesWebsocket: { handler: base, enabled: () => true, policy } });
+    cleanups.push(() => lifecycle.stop());
+    const port = lifecycle.status().port!;
+    const identity = { keyId: KEY.id, linkId: KEY.linkId, fingerprint: serviceApiTokenFingerprint(KEY.key) };
+    const ws = await LinkWireClient.open(port);
+    const { nonce } = await ws.challenge(identity);
+    expect((await ws.upgrade({ nonce, bearer: KEY.key, headers: { "thread-id": thread } })).status).toBe(101);
+    const delivered = new Promise<void>(resolve => { seen.message = resolve; });
+    ws.sendText("{}");
+    await delivered;
+    finish!();
+    const closed = new Promise<void>(resolve => { seen.closed = resolve; });
+    ws.destroy();
+    await closed;
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(1);
+    const postZstd = async (body: Uint8Array) => {
+      const http = await LinkWireClient.open(port);
+      const session = await http.challenge(identity);
+      http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", "content-encoding": "zstd", authorization: "Bearer " + KEY.key, "x-opencodex-link-session": session.nonce, "thread-id": thread }, body);
+      const head = await http.readHead();
+      await lifecycle.activityHoldsSettled();
+      http.destroy();
+      return head.status;
+    };
+    return { lifecycle, postZstd };
+  }
+
+  test("a relayed POST that the inbound body budget refuses never decodes the copy (#8608)", async () => {
+    // The handler admits through the real inbound body budget, which another request already fills: an encoded body
+    // reserves 8 MiB, the budget has none left, and the refusal cancels the handler's half unread with a 503. The upload
+    // has fully arrived by then, as it does while a request waits in the budget's queue (read here through a clone first).
+    const budget = createInboundBodyBudget(8 << 20);
+    const occupied = await budget.acquire(8 << 20, new AbortController().signal);
+    let worked = false;
+    const { lifecycle, postZstd } = await heldLink("thread-b", "call_b", 1 << 20, async req => {
+      await req.clone().arrayBuffer();
+      return withRaisedInboundBodyAdmission(req, "/v1/responses", undefined,
+        async () => { worked = true; await req.arrayBuffer(); return new Response("{}", { status: 200 }); }, undefined, { budget, maxWaitMs: 0 });
+    });
+    const decode = spyOn(requestDecompress, "decodeRequestBody");
+    try {
+      expect(await postZstd(Bun.zstdCompressSync(new TextEncoder().encode(JSON.stringify({ model: "m", input: result("call_b") }))))).toBe(503);
+      expect(decode).not.toHaveBeenCalled();
+    } finally { decode.mockRestore(); }
+    expect(worked).toBe(false);
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(1);
+    occupied!.release();
+  });
+
+  test("an accepted relayed POST whose copy decodes past the resolved inbound limit releases nothing (#8608)", async () => {
+    // The listener's resolved limit is 1 MiB; the body decodes to about 2 MiB, under the 8 MiB ratio floor, so only the limit refuses it.
+    const { lifecycle, postZstd } = await heldLink("thread-l", "call_l", 1 << 20, async req => { await req.arrayBuffer(); return new Response("{}", { status: 200 }); });
+    const large = JSON.stringify({ model: "m", input: result("call_l"), padding: "x".repeat(2 << 20) });
+    expect(await postZstd(Bun.zstdCompressSync(new TextEncoder().encode(large)))).toBe(200);
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(1);
+    // Under the limit, the same accepted request releases the hold.
+    expect(await postZstd(Bun.zstdCompressSync(new TextEncoder().encode(JSON.stringify({ model: "m", input: result("call_l") }))))).toBe(200);
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(0);
+  });
 });
