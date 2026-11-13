@@ -51,4 +51,6 @@ export interface ComboWorkspaceProps {
   onCreated: (id: string) => void;
   /** Select this combo when `seq` changes (the overview's "open in Advanced"); dirty drafts still prompt. */
   selectRequest?: { id: string; seq: number };
+  /** The existing combo with an unsaved draft in the detail editor, or null. */
+  onDraftComboChange?: (id: string | null) => void;
 }

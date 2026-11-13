@@ -14,6 +14,7 @@ export function ModelRouteRow({
   row,
   expanded,
   busy,
+  locked = false,
   message,
   onToggleExpanded,
   onStrategy,
@@ -23,6 +24,7 @@ export function ModelRouteRow({
   row: RouteRow;
   expanded: boolean;
   busy: boolean;
+  locked?: boolean;
   message: string | null;
   onToggleExpanded: () => void;
   onStrategy: (next: ComboStrategy) => void;
@@ -68,6 +70,7 @@ export function ModelRouteRow({
           </span>
         </button>
         <div className="rb-row-controls">
+          {locked && <span className="rb-tag rb-tag--warn" title={t("routeBoard.lockedHint")}>{t("routeBoard.locked")}</span>}
           {offChannels > 0 && <span className="rb-tag rb-tag--warn">{t("routeBoard.tag.channelsOff", { count: offChannels })}</span>}
           {row.combo.strategy === "round-robin" && row.combo.stickyLimit > 1 && (
             <span className="rb-tag">{t("routeBoard.tag.sticky", { count: row.combo.stickyLimit })}</span>
@@ -81,7 +84,7 @@ export function ModelRouteRow({
           <StrategyMenu
             value={row.combo.strategy}
             label={t("routeBoard.strategyLabel", { model: row.publicId })}
-            disabled={busy}
+            disabled={busy || locked}
             onChange={onStrategy}
           />
           <Switch

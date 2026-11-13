@@ -20,7 +20,7 @@ const row = { id: "pin", model: "combo/pin", strategy: "jev", targets: [{ provid
 beforeEach(() => {
   previous = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)]));
   originalFetch = globalThis.fetch;
-  testWindow = new Window({ url: "http://localhost/#models/combos" });
+  testWindow = new Window({ url: "http://localhost/#models/combos/advanced" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   for (const [key, value] of Object.entries({ document: testWindow.document, window: testWindow,
     navigator: testWindow.navigator, localStorage: testWindow.localStorage, IS_REACT_ACT_ENVIRONMENT: true })) {

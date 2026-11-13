@@ -30,6 +30,8 @@ export interface RouteBoardProps {
   onSetEnabled: (id: string, enabled: boolean) => Promise<SaveResult>;
   /** Open the full workspace, optionally on one combo. */
   onOpenAdvanced: (id?: string, reason?: "jev") => void;
+  /** Combo with an unsaved draft in the advanced editor: read-only here until it is saved there. */
+  lockedId?: string | null;
 }
 
 /** Combos overview: one row per combo, inline strategy and on/off, click a row to edit its channels. */
@@ -102,6 +104,7 @@ export function RouteBoard(props: RouteBoardProps) {
           row={row}
           expanded={expanded === row.combo.id}
           busy={busy === row.combo.id}
+          locked={props.lockedId === row.combo.id}
           message={messages[row.combo.id] ?? null}
           onToggleExpanded={() => setExpanded((current) => current === row.combo.id ? null : row.combo.id)}
           onStrategy={(next) => changeStrategy(row.combo, next)}
@@ -119,7 +122,7 @@ export function RouteBoard(props: RouteBoardProps) {
             providers={props.providers}
             models={props.models}
             lastResortActive={props.lastResortActive.has(row.combo.id)}
-            saving={busy === row.combo.id}
+            saving={busy === row.combo.id || props.lockedId === row.combo.id}
             onSave={(channels) => void saveChannels(row.combo, channels)}
             onCancel={() => setExpanded(null)}
             onOpenAdvanced={() => props.onOpenAdvanced(row.combo.id)}

@@ -4511,4 +4511,6 @@ export const vi: Record<TKey, string> = {
   "routeBoard.edit.add": "Thêm kênh",
   "routeBoard.edit.more": "Cài đặt khác (bí danh, suy luận, JEV…)",
   "routeBoard.edit.unsaved": "Chưa lưu",
+  "routeBoard.locked": "chưa lưu trong Nâng cao",
+  "routeBoard.lockedHint": "Combo này có thay đổi chưa lưu trong trình sửa Nâng cao. Hãy lưu hoặc bỏ chúng ở đó trước khi sửa ở đây.",
 };

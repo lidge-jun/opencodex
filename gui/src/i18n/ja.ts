@@ -4541,4 +4541,6 @@ export const ja: Record<TKey, string> = {
   "routeBoard.edit.add": "チャネルを追加",
   "routeBoard.edit.more": "その他の設定（エイリアス、推論強度、JEV…）",
   "routeBoard.edit.unsaved": "未保存",
+  "routeBoard.locked": "詳細に未保存の変更",
+  "routeBoard.lockedHint": "このコンボには詳細エディターで未保存の変更があります。そこで保存または破棄してから、ここで変更してください。",
 };

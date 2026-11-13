@@ -4508,4 +4508,6 @@ export const fr: Record<TKey, string> = {
   "routeBoard.edit.add": "Ajouter un canal",
   "routeBoard.edit.more": "Plus de réglages (alias, raisonnement, JEV…)",
   "routeBoard.edit.unsaved": "Non enregistré",
+  "routeBoard.locked": "non enregistré dans Avancé",
+  "routeBoard.lockedHint": "Cette combo a des modifications non enregistrées dans l’éditeur avancé. Enregistrez-les ou abandonnez-les là-bas avant de la modifier ici.",
 };

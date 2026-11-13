@@ -45,7 +45,7 @@ const combo = (targets: Target[], extra: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
-  testWindow = new Window({ url: `${API_BASE}/#models/combos` });
+  testWindow = new Window({ url: `${API_BASE}/#models/combos/advanced` });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },

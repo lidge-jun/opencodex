@@ -4542,4 +4542,6 @@ export const tr: Record<TKey, string> = {
   "routeBoard.edit.add": "Kanal ekle",
   "routeBoard.edit.more": "Diğer ayarlar (takma ad, akıl yürütme, JEV…)",
   "routeBoard.edit.unsaved": "Kaydedilmedi",
+  "routeBoard.locked": "Gelişmiş'te kaydedilmemiş",
+  "routeBoard.lockedHint": "Bu komboda Gelişmiş düzenleyicide kaydedilmemiş değişiklikler var. Burada değiştirmeden önce orada kaydedin veya vazgeçin.",
 };

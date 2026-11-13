@@ -137,6 +137,8 @@ export default function Combos({
   const [view, setView] = useState<CombosView>(() => readCombosView());
   const [workspaceMounted, setWorkspaceMounted] = useState(() => readCombosView() === "advanced");
   const [selectRequest, setSelectRequest] = useState<{ id: string; seq: number } | undefined>();
+  // An overview save on this combo would replace the workspace's baseline and drop its draft.
+  const [draftComboId, setDraftComboId] = useState<string | null>(null);
   useEffect(() => {
     const sync = () => {
       const next = readCombosView();
@@ -576,6 +578,7 @@ export default function Combos({
             onSave={(item, channels) => saveCombo(item, false, undefined, { channels })}
             onSetEnabled={setComboEnabled}
             onOpenAdvanced={openAdvanced}
+            lockedId={draftComboId}
           />
         )}
         {workspaceMounted && (
@@ -600,6 +603,7 @@ export default function Combos({
           onCloseAdd={closeAdd}
           onCreated={() => resource.refresh()}
           selectRequest={selectRequest}
+          onDraftComboChange={setDraftComboId}
         />
         </div>
         )}

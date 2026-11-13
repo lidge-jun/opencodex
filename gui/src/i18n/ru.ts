@@ -4542,4 +4542,6 @@ export const ru: Record<TKey, string> = {
   "routeBoard.edit.add": "Добавить канал",
   "routeBoard.edit.more": "Другие настройки (псевдоним, рассуждения, JEV…)",
   "routeBoard.edit.unsaved": "Не сохранено",
+  "routeBoard.locked": "не сохранено в расширенном",
+  "routeBoard.lockedHint": "В расширенном редакторе есть несохранённые изменения этого комбо. Сохраните или отмените их там, прежде чем менять здесь.",
 };

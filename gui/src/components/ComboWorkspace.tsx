@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type ComboItem,
   comboModelId,
@@ -38,6 +38,7 @@ export default function ComboWorkspace({
   onCloseAdd,
   onCreated,
   selectRequest,
+  onDraftComboChange,
 }: ComboWorkspaceProps) {
   const t = useT();
   const providerMap = useMemo(
@@ -110,7 +111,11 @@ export default function ComboWorkspace({
     setPendingSelect(id);
   }, [activeId, detailDirty]);
 
-  const [seenSelectSeq, setSeenSelectSeq] = useState(selectRequest?.seq);
+  const draftComboId = detailDirty ? activeId : null;
+  useEffect(() => { onDraftComboChange?.(draftComboId); }, [draftComboId, onDraftComboChange]);
+
+  // Starts unseen so a request that mounts the workspace is honoured too.
+  const [seenSelectSeq, setSeenSelectSeq] = useState<number | undefined>(undefined);
   if (selectRequest && selectRequest.seq !== seenSelectSeq) {
     setSeenSelectSeq(selectRequest.seq);
     trySelect(selectRequest.id);

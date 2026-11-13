@@ -4505,4 +4505,6 @@ export const zhTW: Record<TKey, string> = {
   "routeBoard.edit.add": "新增通道",
   "routeBoard.edit.more": "更多設定（別名、推理強度、JEV…）",
   "routeBoard.edit.unsaved": "未儲存",
+  "routeBoard.locked": "進階中有未儲存的修改",
+  "routeBoard.lockedHint": "此組合在「進階」編輯器中有未儲存的修改。請先在那裡儲存或捨棄，再在這裡修改。",
 };

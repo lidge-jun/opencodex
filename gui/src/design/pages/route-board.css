@@ -41,9 +41,9 @@
 .rb-row-toggle:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 4px; border-radius: 6px; }
 .rb-row--off .rb-row-body, .rb-row--off .rb-icons { opacity: 0.5; }
 
-.rb-icons { display: inline-flex; flex: 0 0 64px; padding-top: 2px; }
+.rb-icons { display: inline-flex; flex: 0 0 72px; padding-top: 2px; }
 .rb-icons .rb-icon { border-radius: 6px; box-shadow: 0 0 0 2px var(--ocx-surface); }
-.rb-icons .rb-icon + .rb-icon { margin-left: -6px; }
+.rb-icons .rb-icon + .rb-icon { margin-left: -8px; }
 
 .rb-row-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .rb-row-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }

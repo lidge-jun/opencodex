@@ -4541,4 +4541,6 @@ export const ko: Record<TKey, string> = {
   "routeBoard.edit.add": "채널 추가",
   "routeBoard.edit.more": "추가 설정(별칭, 추론 강도, JEV…)",
   "routeBoard.edit.unsaved": "저장 안 됨",
+  "routeBoard.locked": "고급에 저장 안 된 변경",
+  "routeBoard.lockedHint": "이 콤보는 고급 편집기에 저장되지 않은 변경이 있습니다. 거기서 저장하거나 버린 뒤 여기서 바꾸세요.",
 };

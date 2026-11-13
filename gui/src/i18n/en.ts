@@ -4553,6 +4553,8 @@ export const en = {
   "routeBoard.edit.add": "Add channel",
   "routeBoard.edit.more": "More settings (alias, effort, JEV…)",
   "routeBoard.edit.unsaved": "Unsaved",
+  "routeBoard.locked": "unsaved in Advanced",
+  "routeBoard.lockedHint": "This combo has unsaved changes in the Advanced editor. Save or discard them there before changing it here.",
 } as const;
 
 export type TKey = keyof typeof en;

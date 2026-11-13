@@ -4519,4 +4519,6 @@ export const de: Record<TKey, string> = {
   "routeBoard.edit.add": "Kanal hinzufügen",
   "routeBoard.edit.more": "Weitere Einstellungen (Alias, Reasoning, JEV…)",
   "routeBoard.edit.unsaved": "Nicht gespeichert",
+  "routeBoard.locked": "ungespeichert in Erweitert",
+  "routeBoard.lockedHint": "Diese Combo hat ungespeicherte Änderungen im erweiterten Editor. Speichern oder verwerfen Sie sie dort, bevor Sie sie hier ändern.",
 };

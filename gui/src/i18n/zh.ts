@@ -4540,4 +4540,6 @@ export const zh: Record<TKey, string> = {
   "routeBoard.edit.add": "加通道",
   "routeBoard.edit.more": "更多设置（别名、推理强度、JEV…）",
   "routeBoard.edit.unsaved": "未保存",
+  "routeBoard.locked": "高级里有未保存的修改",
+  "routeBoard.lockedHint": "这个组合在「高级」编辑器里有未保存的修改。先在那里保存或放弃，再在这里改。",
 };
