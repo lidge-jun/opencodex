@@ -618,9 +618,10 @@ export function journalledRevokeError(error: unknown, operationId: string, linkI
   // That answer names an unfinished removal of the link, which may belong to another operation or to a plain revoke, so the text
   // points at the owner (ocx link operations) or a plain --force instead of claiming this id owns it.
   // It never says the link or key stay active either: an earlier attempt of a resumed revoke may have revoked the key and stopped
-  // the tunnel before it failed and dropped its own tombstone, and this repeat then meets the limit while re-recording one.
+  // the tunnel before it failed and dropped its own tombstone, and this repeat then meets the limit while re-recording one. Nor that
+  // this attempt left the link alone: the commit-time check (#8662) meets the limit after this attempt stopped the tunnel.
   if (code === "tombstone_limit") {
-    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover --link-id <id> (ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget --link-id <id> --yes for machines that are gone. Then repeat this revoke with the same operation id (ocx link revoke --link-id " + shownLink + " --operation-id " + operationId + " --force --yes): an interrupted removal resumes under it. If it answers this refusal again although capacity is free, try a new operation id; if that answers link_retirement_owned, an unfinished removal holds this link: repeat the revoke of this link that owns it, whatever its recorded state (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --link-id " + shownLink + " --force --yes without --operation-id. (code tombstone_limit)", error.status, error.body);
+    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup; this attempt revoked no key, removed no record and did not contact the Child. Recover them with ocx link recover --link-id <id> (ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget --link-id <id> --yes for machines that are gone. Then repeat this revoke with the same operation id (ocx link revoke --link-id " + shownLink + " --operation-id " + operationId + " --force --yes): an interrupted removal resumes under it. If it answers this refusal again although capacity is free, try a new operation id; if that answers link_retirement_owned, an unfinished removal holds this link: repeat the revoke of this link that owns it, whatever its recorded state (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --link-id " + shownLink + " --force --yes without --operation-id. (code tombstone_limit)", error.status, error.body);
   }
   const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
   // Repeating first resumes a removal if this id still owns one (#8416); resolving first would leave its receipt and record behind. An
@@ -629,8 +630,23 @@ export function journalledRevokeError(error: unknown, operationId: string, linkI
   // (operation_not_resolvable), so the next step follows the state the repeat left: resolve only unknown or residual.
   const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first (if this id still owns an unfinished removal, the repeat resumes it). If it does not finish, ocx link operations --operation-id " + operationId + " shows its state: if it reads unknown or residual, check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes; if it reads open, fix what stopped the revoke (for example the journal's disk) and repeat it with the same operation id" : "";
   const next = Object.hasOwn(NEXT_STEP, code) ? ". " + NEXT_STEP[code] : "";
-  return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve + next, error.status, error.body);
+  // A link-bound refusal's hint (#8662), only from the closed set and only in its plain-word form; never the server's text.
+  const rawHint = code === "remote_disconnect_failed" ? error.body.error.hint : undefined;
+  const hint = typeof rawHint === "string" && /^[a-z0-9_-]{1,64}$/.test(rawHint) && Object.hasOwn(BOUND_REFUSAL_HINTS, rawHint) ? rawHint : undefined;
+  const hinted = hint !== undefined ? ". " + BOUND_REFUSAL_HINTS[hint] : "";
+  return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + (hint !== undefined ? ", hint " + hint : "") + ")" + resolve + next + hinted, error.status, error.body);
 }
+
+/**
+ * What a link-bound refusal of a journalled revoke means (the hints of remote_disconnect_failed). A text claims only what this
+ * attempt's Child command did, which holds whether the revoke was fresh or resumed; an earlier attempt may have done more.
+ */
+const BOUND_REFUSAL_HINTS: Record<string, string> = {
+  child_link_mismatch: "The Child is not connected to this link, and this attempt left its link state as it was. If it now belongs to another link, a hub or another Home, do not disconnect it there: revoke this link with --force instead. If it has a connect or key rotation in progress, or its state cannot be read, repair that on the Child first",
+  child_residual: "The lightweight Child keeps records it cannot restore, and this attempt left them as they were; run ~/.cache/opencodex/bin/ocx-child detach on it, then repeat the revoke with the same operation id",
+  child_disconnect_pending: "The Child has an unfinished disconnect it could not tie to this link and may be partly cleaned; check it and finish it there with ocx disconnect before repeating",
+  expect_link_unsupported: "The Child runs an OpenCodex older than --expect-link and another Home-initiated link of this Home may reach the same machine, so it was not disconnected without the link check. Update OpenCodex on the Child, revoke the other link first, or revoke this link with --force",
+};
 
 /**
  * A next step for codes that keep the generic text because what an earlier step changed differs by path. Where a repeat can

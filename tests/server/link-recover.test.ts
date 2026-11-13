@@ -636,6 +636,19 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     expect(tombstones().some(t => t.linkId === ID)).toBe(false);
   });
 
+  // A fresh journalled revoke refused at the commit-time check has written its key_revoked intent, so it settles unknown.
+  test("a journalled forced revoke refused by the cap at the commit settles unknown, with no key revoked", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    for (let i = 0; i < MAX_TOMBSTONES - 1; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
+    recordTombstone(t0);
+    const operationsPath = join(root, "operations.json");
+    const h = harness([link()], { operationsPath, duringStop: () => { removeTombstone(ID); recordTombstone(tombstone("lnk_" + "f".repeat(16))); } });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true, operationId: "revoke-9" });
+    const body = await res.json() as { error?: { code?: string }; outcome?: string };
+    expect([res.status, body.error?.code, body.outcome]).toEqual([409, "tombstone_limit", "unknown"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+  });
+
   test("a forced revoke that commits beside an existing tombstone for its link keeps that one", async () => {
     const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
     recordTombstone(t0);

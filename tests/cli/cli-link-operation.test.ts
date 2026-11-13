@@ -271,7 +271,8 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--force", "--yes", "--operation-id", "detach-8"], h.deps)).toBe(5);
       const printed = [...h.out, ...h.err].join("\n");
       expect(printed).toContain("waiting for cleanup");
-      expect(printed).toContain("did not touch the link, its key or the Child");
+      // The commit-time check (#8662) meets the limit after this attempt stopped the tunnel: only key, record and Child are claimed.
+      expect(printed).toContain("revoked no key, removed no record and did not contact the Child");
       // An earlier attempt of a resumed revoke may already have revoked the key and stopped the tunnel (#8416).
       expect(printed).not.toContain("stay active");
       expect(printed).toContain("repeat this revoke with the same operation id");
@@ -346,6 +347,33 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
     } finally { h.restore(); }
   });
 
+  // #8662's link-bound refusals reach the CLI only as a hint: each validated hint in the closed set gets the CLI's own text, with
+  // its outcome; child_disconnect_pending ends unknown, so its repeat guidance stays conditional.
+  test.each([
+    ["child_link_mismatch", "failed_clean", ["not connected to this link", "do not disconnect it there", "--force"]],
+    ["child_residual", "failed_clean", ["keeps records it cannot restore", "~/.cache/opencodex/bin/ocx-child detach"]],
+    ["child_disconnect_pending", "unknown", ["unfinished disconnect", "may be partly cleaned", "ocx disconnect", "if this id still owns an unfinished removal, the repeat resumes it"]],
+    ["expect_link_unsupported", "failed_clean", ["older than --expect-link", "another Home-initiated link", "Update OpenCodex on the Child"]],
+  ] as const)("a journalled revoke refused with hint %s prints the CLI's own text for it", async (hint, outcome, parts) => {
+    const h = harness([{ status: 502, body: { error: { code: "remote_disconnect_failed", hint, message: "server-chosen text" }, operationId: "detach-20", outcome } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--operation-id", "detach-20"], h.deps)).toBe(1);
+      const printed = [...h.out, ...h.err].join("\n");
+      for (const part of parts) expect(printed).toContain(part);
+      expect(printed).toContain("(code remote_disconnect_failed, hint " + hint + ")");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  test.each(["ssh_failed", "constructor", "/home/someone/path"])("a hint outside the closed set (%s) adds no text", async hint => {
+    const h = harness([{ status: 502, body: { error: { code: "remote_disconnect_failed", hint, message: "server-chosen text" }, operationId: "detach-21", outcome: "unknown" } }]); try {
+      await runLinkCommand(["revoke", "--link-id", LINK, "--operation-id", "detach-21"], h.deps);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("(code remote_disconnect_failed)");
+      expect(printed).not.toContain("hint ");
+      expect(printed).not.toContain("/home/someone");
+    } finally { h.restore(); }
+  });
+
   // #8416's refusals for an interrupted removal: the owner and the way out live only in the server's message, which is dropped.
   test.each([
     ["link_retirement_owned", ["unfinished removal holds this link", "the revoke of this link that owns it, whatever its recorded state", "ocx link operations --json", "ocx link revoke --link-id " + LINK + " --force --yes without --operation-id", "If no journalled operation owns it", "ocx link revoke --link-id " + LINK + " without --operation-id and without --force"]],
@@ -363,7 +391,8 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
     } finally { h.restore(); }
   });
 
-  // tombstone_write_failed can come after the tombstone file was written (its permissions step failed), so it stays generic.
+  // tombstone_write_failed can come after the tombstone file was written (its permissions step failed), before the first intent or
+  // at the commit step after stopLink (#8662), where the drop of that file is best effort; so it stays generic.
   test("a code that cannot promise nothing changed makes no such claim", async () => {
     const h = harness([{ status: 503, body: { error: { code: "tombstone_write_failed", message: "server-chosen text" } } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-6"], h.deps)).toBe(1);
