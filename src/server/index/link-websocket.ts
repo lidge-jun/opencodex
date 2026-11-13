@@ -690,4 +690,3 @@ export function createLinkWebsocketGate(deps: LinkWebsocketGateDeps) {
 }
 
 export type LinkWebsocketGate = ReturnType<typeof createLinkWebsocketGate>;
-
