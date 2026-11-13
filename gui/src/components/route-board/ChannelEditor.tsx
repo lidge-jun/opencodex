@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { flushSync } from "react-dom";
 import { COMBO_EFFORTS, COMBO_TARGETS_HINT_KEYS, type ComboStrategy } from "../../combo-workspace-data";
 import { useT } from "../../i18n/shared";
 import { formatProviderDisplayName } from "../../provider-icons";
@@ -7,7 +8,6 @@ import {
   channelKey,
   combineLists,
   comboContextWindow,
-  dragSlot,
   withInferredGaps,
   memberFacts,
   moveChannel,
@@ -25,6 +25,7 @@ import type { ModelOption, ProviderOption } from "../combo-workspace-types";
 import type { ProbeMemberModel } from "./MemberProbe";
 import { MemberTable, type SaveMemberModel } from "./MemberTable";
 import { QuotaLine } from "./QuotaLine";
+import { dragRows } from "./drag-rows";
 
 export type EditableChannel = Pick<RouteChannel, "key" | "provider" | "model" | "lastResort">;
 
@@ -39,13 +40,17 @@ const MODALITY_ORDER = ["text", "image"];
 function useSlideOnReorder(order: readonly string[]) {
   const nodes = useRef(new Map<string, HTMLElement>());
   const previous = useRef(new Map<string, number>());
+  /** Set by a drag commit: the rows are already drawn where they land, so nothing slides. */
+  const still = useRef(false);
   useLayoutEffect(() => {
     const next = new Map<string, number>();
+    const skip = still.current;
+    still.current = false;
     for (const [key, node] of nodes.current) {
       const top = node.getBoundingClientRect().top;
       next.set(key, top);
       const before = previous.current.get(key);
-      if (before === undefined || before === top || typeof node.animate !== "function") continue;
+      if (skip || before === undefined || before === top || typeof node.animate !== "function") continue;
       node.animate([{ transform: `translateY(${before - top}px)` }, { transform: "translateY(0)" }], {
         duration: SLIDE_MS,
         easing: "ease-out",
@@ -56,17 +61,9 @@ function useSlideOnReorder(order: readonly string[]) {
   const ref = (key: string) => (node: HTMLElement | null) => {
     if (node) nodes.current.set(key, node); else nodes.current.delete(key);
   };
-  return { ref, nodes };
+  return { ref, still };
 }
 
-/** A drag in progress: the order and the row midpoints (relative to the list) frozen at drag start. */
-interface DragState {
-  key: string;
-  from: number;
-  start: EditableChannel[];
-  mids: number[];
-  slot: number;
-}
 
 /**
  * Inline channel editor under an expanded row: reorder (drag, with the other rows making room
@@ -116,14 +113,10 @@ export function ChannelEditor({
 }) {
   const t = useT();
   const [channels, setChannels] = useState<EditableChannel[]>(() => [...initial]);
-  const [drag, setDrag] = useState<DragState | null>(null);
-  const dropped = useRef(false);
   const listRef = useRef<HTMLOListElement>(null);
   const [moreOpen, setMoreOpen] = useState(moreOpenInitially);
   const moreRef = useRef<HTMLDivElement>(null);
-  /** While dragging, the list shows the would-be order; `channels` changes only on drop. */
-  const view = drag ? moveChannel(drag.start, drag.from, drag.slot) : channels;
-  const slide = useSlideOnReorder(view.map((channel) => channel.key));
+  const slide = useSlideOnReorder(channels.map((channel) => channel.key));
   const pickable = providers.filter((provider) => !provider.hiddenFromPicker);
   const [addProvider, setAddProvider] = useState(() => pickable[0]?.name ?? "");
   const used = new Set(channels.map((channel) => channel.key));
@@ -150,33 +143,21 @@ export function ChannelEditor({
   }, [moreOpenInitially]);
 
   const move = (from: number, to: number) => setChannels((list) => moveChannel(list, from, to));
-  const listTop = () => listRef.current?.getBoundingClientRect().top ?? 0;
-  const startDrag = (event: DragEvent, key: string, from: number) => {
-    event.dataTransfer?.setData("text/plain", key);
-    // A slide still running from the last drop would skew the measurement: settle it first.
-    for (const node of slide.nodes.current.values()) node.getAnimations?.().forEach((animation) => animation.finish());
-    const top = listTop();
-    const mids = channels.map((channel) => {
-      const rect = slide.nodes.current.get(channel.key)?.getBoundingClientRect();
-      return rect ? rect.top - top + rect.height / 2 : 0;
-    });
-    dropped.current = false;
-    setDrag({ key, from, start: [...channels], mids, slot: from });
-  };
-  /*
-   * The slot comes from where the pointer is against the rows' midpoints as they stood when the
-   * drag began, never against rows that are mid-slide, with a few pixels of hysteresis at each
-   * boundary. Reading the moving rows made the order flip back and forth under a still pointer.
+  /**
+   * The row itself follows the pointer and the others slide aside (Magpie's sorter, `drag-rows.ts`);
+   * the order changes once, on release. Presses on the row's own controls stay clicks.
    */
-  const onListDragOver = (event: DragEvent) => {
-    if (!drag) return;
-    event.preventDefault();
-    const slot = dragSlot(drag.mids, drag.from, event.clientY - listTop(), drag.slot);
-    if (slot !== drag.slot) setDrag({ ...drag, slot });
-  };
-  const finishDrag = (commit: boolean) => {
-    if (drag && commit) setChannels(moveChannel(drag.start, drag.from, drag.slot));
-    setDrag(null);
+  const startDrag = (event: ReactPointerEvent<HTMLLIElement>, from: number) => {
+    const list = listRef.current;
+    const target = event.target as Element;
+    if (!list || target.closest("button, input, a, [role=combobox]")) return;
+    // On touch only the grip drags, so the rest of the row still scrolls the page.
+    if (event.pointerType === "touch" && !target.closest(".rb-channel-grip")) return;
+    const rows = Array.from(list.children) as HTMLElement[];
+    dragRows(event.nativeEvent, event.currentTarget, event.currentTarget, list, rows, (to) => {
+      slide.still.current = true;
+      flushSync(() => setChannels((current) => moveChannel(current, from, to)));
+    });
   };
   const add = () => {
     if (!addProvider || !chosenModel) return;
@@ -196,20 +177,16 @@ export function ChannelEditor({
       <ol
         className="rb-channels"
         ref={listRef}
-        onDragOver={onListDragOver}
-        onDrop={(event) => { event.preventDefault(); dropped.current = true; finishDrag(true); }}
       >
-        {view.map((channel, index) => {
+        {channels.map((channel, index) => {
           const providerName = labels?.get(channel.provider) ?? formatProviderDisplayName(channel.provider, t);
           const name = `${providerName} ${channel.model}`;
           return (
             <li
               key={channel.key}
               ref={slide.ref(channel.key)}
-              className={`rb-channel${drag?.key === channel.key ? " rb-channel--dragging" : ""}`}
-              draggable
-              onDragStart={(event) => startDrag(event, channel.key, index)}
-              onDragEnd={() => { if (!dropped.current) finishDrag(false); }}
+              className="rb-channel"
+              onPointerDown={(event) => startDrag(event, index)}
             >
               <span className="rb-channel-grip" aria-hidden="true" title={t("routeBoard.edit.drag")}>⋮⋮</span>
               <span className="rb-channel-index">{index + 1}</span>

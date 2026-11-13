@@ -430,32 +430,61 @@ describe("Combos overview page", () => {
     ]);
   });
 
-  test("dragging moves the other rows aside from frozen midpoints and commits on drop", async () => {
+  test("pointer drag: the row itself follows, the others slide aside, one commit on release", async () => {
     await renderPage();
     await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
     const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    const list = editor.querySelector<HTMLElement>(".rb-channels")!;
     const names = () => [...editor.querySelectorAll(".rb-channel code")].map(node => node.textContent);
-    const items = () => editor.querySelectorAll<HTMLElement>(".rb-channel");
-    // Rows 40px tall at 0 and 40; the list starts at 0. Layout is frozen at drag start.
+    const items = () => [...editor.querySelectorAll<HTMLElement>(".rb-channel")];
+    // Rows 40px tall at 0 and 40 in a list at 0 (happy-dom has no layout).
     items().forEach((item, index) => {
+      Object.defineProperty(item, "offsetTop", { configurable: true, value: index * 40 });
+      Object.defineProperty(item, "offsetHeight", { configurable: true, value: 40 });
       item.getBoundingClientRect = () => ({ top: index * 40, height: 40, bottom: index * 40 + 40, left: 0, right: 0, width: 0, x: 0, y: index * 40, toJSON: () => ({}) }) as DOMRect;
     });
-    const over = (clientY: number) => {
-      const event = new testWindow.Event("dragover", { bubbles: true, cancelable: true }) as unknown as Event;
-      Object.defineProperty(event, "clientY", { value: clientY });
-      editor.querySelector(".rb-channels")!.dispatchEvent(event);
+    const pointer = (target: EventTarget, type: string, clientY: number) => {
+      const event = new testWindow.Event(type, { bubbles: true, cancelable: true }) as unknown as Event;
+      Object.defineProperties(event, { clientY: { value: clientY }, clientX: { value: 0 }, pointerId: { value: 1 }, button: { value: 0 }, isPrimary: { value: true }, pointerType: { value: "mouse" } });
+      target.dispatchEvent(event);
     };
-    await act(async () => { items()[0]!.dispatchEvent(new testWindow.Event("dragstart", { bubbles: true }) as unknown as Event); });
-    await act(async () => { over(55); }); // short of the other row's midpoint (60): no move
-    expect(names()).toEqual(["gpt-5", "claude"]);
-    await act(async () => { over(70); });
+    const first = items()[0]!;
+    await act(async () => { pointer(first, "pointerdown", 20); });
+    await act(async () => { pointer(document, "pointermove", 30); });
+    expect(list.classList.contains("sorting")).toBe(true);
+    expect(first.classList.contains("dragging")).toBe(true);
+    expect(editor.querySelectorAll(".rb-channel").length).toBe(2); // no copy of the dragged row
+    expect(names()).toEqual(["gpt-5", "claude"]); // nothing reorders before the release
+    await new Promise(resolve => setTimeout(resolve, 400)); // past the tap window
+    await act(async () => { pointer(document, "pointerup", 75); });
     expect(names()).toEqual(["claude", "gpt-5"]);
-    await act(async () => { over(56); }); // back inside the hysteresis band: stays put
-    expect(names()).toEqual(["claude", "gpt-5"]);
-    expect(editor.textContent).not.toContain("Unsaved");
-    await act(async () => { editor.querySelector(".rb-channels")!.dispatchEvent(new testWindow.Event("drop", { bubbles: true, cancelable: true }) as unknown as Event); });
-    expect(names()).toEqual(["claude", "gpt-5"]);
+    expect(list.classList.contains("sorting")).toBe(false);
+    expect(items().every(item => item.style.transform === "")).toBe(true);
     expect(editor.textContent).toContain("Unsaved");
+  });
+
+  test("pointer drag: a press on a row's button stays a click, and Escape cancels a drag", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    const list = editor.querySelector<HTMLElement>(".rb-channels")!;
+    const names = () => [...editor.querySelectorAll(".rb-channel code")].map(node => node.textContent);
+    const pointer = (target: EventTarget, type: string, clientY: number) => {
+      const event = new testWindow.Event(type, { bubbles: true, cancelable: true }) as unknown as Event;
+      Object.defineProperties(event, { clientY: { value: clientY }, clientX: { value: 0 }, pointerId: { value: 1 }, button: { value: 0 }, isPrimary: { value: true }, pointerType: { value: "mouse" } });
+      target.dispatchEvent(event);
+    };
+    await act(async () => { pointer(editor.querySelector(".rb-remove")!, "pointerdown", 20); });
+    await act(async () => { pointer(document, "pointermove", 60); });
+    expect(list.classList.contains("sorting")).toBe(false);
+    await act(async () => { pointer(document, "pointerup", 60); });
+    await act(async () => { pointer(editor.querySelector(".rb-channel")!, "pointerdown", 20); });
+    await act(async () => { pointer(document, "pointermove", 60); });
+    expect(list.classList.contains("sorting")).toBe(true);
+    await act(async () => { document.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event); });
+    expect(list.classList.contains("sorting")).toBe(false);
+    await act(async () => { pointer(document, "pointerup", 75); });
+    expect(names()).toEqual(["gpt-5", "claude"]);
   });
 
   test("member table: source tags per cell, and an in-place edit writes the provider's model settings", async () => {

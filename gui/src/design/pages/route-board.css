@@ -107,7 +107,6 @@
   background: var(--ocx-bg);
   box-shadow: inset 0 0 0 1px var(--ocx-line);
 }
-.rb-channel--dragging { opacity: 0.5; }
 .rb-channel-grip { color: var(--ocx-fg-subtle); cursor: grab; letter-spacing: -2px; }
 .rb-channel-index { color: var(--ocx-fg-subtle); font-variant-numeric: tabular-nums; text-align: right; }
 .rb-channel-name { display: flex; flex-direction: column; min-width: 0; }
@@ -139,9 +138,7 @@
 .rb-tag--button:hover { color: var(--ocx-fg); box-shadow: inset 0 0 0 1px var(--ocx-line-strong); }
 .rb-tag--button:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
 .rb-tag-basis { color: var(--ocx-fg-subtle); }
-.rb-channel { cursor: grab; }
 .rb-channel:active { cursor: grabbing; }
-.rb-channel--dragging { opacity: 0.45; box-shadow: inset 0 0 0 1px var(--ocx-highlight); }
 
 .rb-more { margin-top: 10px; border-top: 1px solid var(--ocx-line); padding-top: 8px; }
 .rb-more-toggle {
@@ -184,3 +181,12 @@
 .rb-probe { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border: 1px dashed var(--ocx-line); border-radius: 8px; }
 .rb-probe-confirm { display: flex; flex-direction: column; gap: 6px; }
 .rb-probe-results { margin: 0; padding-left: 18px; font-size: 12.5px; }
+/* Pointer sorting, after Magpie's routing page: the row itself is lifted, the others slide aside. */
+.rb-channels.sorting { user-select: none; -webkit-user-select: none; }
+.rb-channels.sorting > .rb-channel { transition: transform .22s cubic-bezier(.22, 1, .36, 1); }
+.rb-channels > .rb-channel.dragging { position: relative; z-index: 2; background: var(--ocx-surface-2); cursor: grabbing; transition: none; will-change: transform;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .28), 0 0 0 1px var(--ocx-line); }
+.rb-channel-grip { touch-action: none; }
+.rb-channel :is(button, input, [role=combobox]) { cursor: pointer; }
+/* A press on the provider icon must start the row drag, not the browser's own image drag. */
+.rb-channel img, .rb-channel svg { pointer-events: none; -webkit-user-drag: none; user-select: none; }
