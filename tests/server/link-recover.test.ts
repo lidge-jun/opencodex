@@ -509,11 +509,17 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     expect(tombstones()).toEqual([]);
   });
 
-  test("a purge revoke that cleans the Child settles a tombstone an earlier forced revoke left", async () => {
+  // A tombstone beside a listed link belongs to a forced revoke still in flight elsewhere (or one that died); a revoke
+  // never removes it, and recover settles it once the link is gone.
+  test("a purge revoke leaves a tombstone an earlier forced revoke left, and recover then settles it", async () => {
     const h = harness([link()]);
     recordTombstone(tombstone(ID, "devbox"));
     const res = await h.request("DELETE", "/api/link/" + ID, { purge: true });
     expect(res.status).toBe(200);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+    h.allowPlatformProbe();
+    const recovered = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(recovered.status).toBe(200);
     expect(tombstones()).toEqual([]);
   });
 
@@ -617,12 +623,19 @@ describe("final review follow-ups", () => {
 describe("ordinary and --purge revokes are bound to their link (--expect-link)", () => {
   const leftTombstone = () => recordTombstone({ linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-01T00:00:00.000Z" });
 
-  test("an ordinary revoke whose Child confirms the link settles a tombstone left for it", async () => {
+  // A force revoke in another process may have written this tombstone just before, and still be removing the record
+  // while an enrollment attaches the Child: even a bound answer leaves it, and recover settles it once the link is gone.
+  test("an ordinary revoke whose Child confirms the link leaves a tombstone for recover", async () => {
     const h = harness([link()], { ordinary: command => (command.includes("--expect-link") ? ok() : undefined) });
     leftTombstone();
     const res = await h.request("DELETE", "/api/link/" + ID, {});
     expect(res.status).toBe(200);
     expect(h.commands.filter(c => c.includes("disconnect")).map(c => c.includes("--expect-link"))).toEqual([true]);
+    expect(h.store.links).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+    h.allowPlatformProbe();
+    const recovered = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(recovered.status).toBe(200);
     expect(tombstones()).toEqual([]);
   });
 
@@ -636,23 +649,8 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });
 
-  // The settle follows the Child's bound answer itself, so a commit that fails afterwards (and the retirement a retry
-  // resumes without running the cleanup again) leaves no tombstone that only the lost answer could have settled.
-  test.each([
-    ["an ordinary revoke", {}],
-    ["a --purge revoke", { purge: true }],
-  ] as const)("%s whose Child confirmed the link settles the tombstone even when the commit then fails", async (_name, body) => {
-    const h = harness([link()], { keyRevokeFails: true, ordinary: command => (command.includes("--expect-link") ? ok() : undefined) });
-    leftTombstone();
-    const res = await h.request("DELETE", "/api/link/" + ID, body);
-    expect([res.status, (await errorOf(res)).code]).toEqual([502, "key_revoke_failed"]);
-    expect(h.store.links.map(l => l.id)).toEqual([ID]);
-    expect(tombstones()).toEqual([]);
-  });
-
   // A force revoke in another process can write its own tombstone for this link while the bound command is in flight
-  // (for example against a Child an enrollment has not attached yet). The bound answer settles only the tombstone that
-  // was there before the command ran, so that newer evidence stays.
+  // (for example against a Child an enrollment has not attached yet); that evidence stays.
   test.each([
     ["no tombstone before", false],
     ["an older tombstone before", true],

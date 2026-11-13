@@ -8,7 +8,7 @@ import { requireRemotePlatform } from "../../link/remote-platform";
 import { CHILD_EXPECT_CONFLICT_EXIT, CHILD_EXPECT_RESIDUAL_EXIT, CHILD_USAGE_EXIT, purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
-import { LinkTombstoneLimitError, readTombstones, recordTombstone, removeOwnTombstone, removeTombstoneIfUnchanged, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
+import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, reownLinkRetirement, type LinkRetirement, type LinkRetirementMode } from "../../link/retirement";
@@ -549,24 +549,11 @@ async function removeReserved(
       return failure;
     };
     const disconnectFailed = (hint: string | undefined) => fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, hint);
-    // True once the Child confirmed this link before cleaning (--expect-link); only then may the commit settle a
-    // tombstone an earlier forced revoke of this link left. An older Child runs the command unbound.
+    // True once the Child confirmed this link before cleaning (--expect-link). A revoke never settles a tombstone, bound or
+    // not: beside a listed link one belongs to a forced revoke still in flight in another process (or one that died), and
+    // removing it here could lose the only recovery evidence for a Child that revoke leaves attached. ocx link recover
+    // settles it once the link is gone, under the alias lock and bound to the link.
     let linkBound = false;
-    // A Child that confirmed this link (--expect-link) and cleaned itself settles the tombstone an earlier forced revoke
-    // of this link left, as soon as it answers: the commit may still fail, and a retry resumes the retirement without
-    // running the cleanup again, so only this answer can settle it. Only the version read before the command ran, and
-    // only while the link still exists: a force revoke in another process may write a newer one meanwhile (even against
-    // a Child an enrollment has not attached yet), and that one stays. An unbound answer (an older Child) leaves it for
-    // ocx link recover. A removal that fails leaves it listed (recover --list).
-    let seenTombstone: LinkTombstone | undefined;
-    try { seenTombstone = readTombstones(tombstonesPath()).tombstones.find(t => t.linkId === id); } catch { seenTombstone = undefined; }
-    const settleBoundTombstone = (): void => {
-      const seen = seenTombstone;
-      if (!seen) return;
-      try {
-        withConfigMutationLockSync(() => { removeTombstoneIfUnchanged(id, seen, readStoreFor(ctx).links.some(link => link.id === id), tombstonesPath()); });
-      } catch { /* recover --list still shows it */ }
-    };
     const unboundStillSafe = (): boolean => {
       const links = readStoreFor(ctx).links;
       const wanted = record.alias.toLowerCase();
@@ -590,7 +577,6 @@ async function removeReserved(
         // tunnel down, since the Child it would reach is purged.
         linkBound = purged.bound;
         try { journal.done("remote_cleanup", { purged: true, linkId: id }); } catch { return journalFailed(); }
-        if (linkBound) settleBoundTombstone();
       } else {
         const disconnectArgv = (bound: boolean) => buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(bound ? ["disconnect", "--expect-link", id] : ["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null });
         let result: Awaited<ReturnType<typeof runner.run>>;
@@ -620,7 +606,6 @@ async function removeReserved(
         }
         if (result.code !== 0) return cleanupFailed(disconnectFailed(sshFailureHint(result.stderr)), true);
         journal.done("remote_cleanup");
-        if (linkBound) settleBoundTombstone();
       }
     }
     if (cleanup && !intend("key_revoked")) return journalFailed();
