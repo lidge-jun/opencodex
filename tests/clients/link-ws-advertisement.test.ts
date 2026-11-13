@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  applyLinkWebsocketAnswer, forgetLinkWebsocketAdvertisementsForTests, linkWebsocketAdvertised, linkWebsocketAnswer, nextLinkPreflightSequence,
+  applyLinkWebsocketAnswer, forgetLinkWebsocketAdvertisementsForTests, linkWebsocketAdvertised, linkWebsocketAdvertisement, linkWebsocketAnswer,
+  nextLinkPreflightSequence,
 } from "../../src/client/link-ws-advertisement";
 import { fetchBoundLinkRelay, probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -54,13 +55,32 @@ describe("ordering by preflight start", () => {
     expect(linkWebsocketAdvertised(LINK)).toBe(true);
   });
 
-  test("a relink is a new link id with its own state; a restart starts from off", () => {
+  test("a relink is a new link id with its own state; a restart starts with no entry (unknown)", () => {
     applyLinkWebsocketAnswer(LINK, nextLinkPreflightSequence(), "on");
     expect(linkWebsocketAdvertised("lnk_fedcba9876543210")).toBe(false);
     expect(linkWebsocketAdvertised(LINK)).toBe(true);
     forgetLinkWebsocketAdvertisementsForTests();
+    expect(linkWebsocketAdvertisement(LINK)).toBe("unknown");
     expect(linkWebsocketAdvertised(LINK)).toBe(false);
     expect(linkWebsocketAdvertised(undefined)).toBe(false);
+  });
+
+  test("the state is unknown until an answer is applied for that link, and again after its entry is evicted", () => {
+    expect(linkWebsocketAdvertisement(LINK)).toBe("unknown");
+    expect(linkWebsocketAdvertisement(undefined)).toBe("off");
+    const stale = nextLinkPreflightSequence();
+    applyLinkWebsocketAnswer(LINK, nextLinkPreflightSequence(), "off");
+    expect(linkWebsocketAdvertisement(LINK)).toBe("off");
+    applyLinkWebsocketAnswer(LINK, nextLinkPreflightSequence(), "on");
+    expect(linkWebsocketAdvertisement(LINK)).toBe("on");
+    expect(linkWebsocketAdvertisement("lnk_fedcba9876543210")).toBe("unknown");
+    // 256 other links evict this one: its state is unknown again, while its watermark still refuses an older answer.
+    for (let index = 0; index < 256; index += 1) applyLinkWebsocketAnswer("lnk_evict" + index, nextLinkPreflightSequence(), "on");
+    expect(linkWebsocketAdvertisement(LINK)).toBe("unknown");
+    expect(applyLinkWebsocketAnswer(LINK, stale, "on")).toBe(false);
+    expect(linkWebsocketAdvertisement(LINK)).toBe("unknown");
+    forgetLinkWebsocketAdvertisementsForTests();
+    expect(linkWebsocketAdvertisement("lnk_evict0")).toBe("unknown");
   });
 
   test("without Child traffic a Home's toggle is not seen: nothing converges on its own", () => {

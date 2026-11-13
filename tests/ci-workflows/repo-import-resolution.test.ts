@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { repositoryGitEnv } from "../helpers/git-fixture";
 
 /**
  * Every relative import specifier under src/ must resolve to a file that exists.
@@ -83,7 +84,7 @@ function resolvesFrom(spec: string, absoluteFile: string): boolean {
 const SCANNED_ROOTS = ["src", "gui/src"] as const;
 
 function trackedSourceFiles(): string[] {
-  const listed = Bun.spawnSync(["git", "ls-files", ...SCANNED_ROOTS], { cwd: repoRoot });
+  const listed = Bun.spawnSync(["git", "ls-files", ...SCANNED_ROOTS], { cwd: repoRoot, env: repositoryGitEnv() });
   if (listed.exitCode !== 0) {
     throw new Error("git ls-files failed: " + new TextDecoder().decode(listed.stderr));
   }

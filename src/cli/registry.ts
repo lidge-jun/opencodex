@@ -190,8 +190,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "disconnect",
-    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json]",
+    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] [--expect-link <linkId>]",
     summary: "Restore local client state offline and clear the remote-hub connection.",
+    details: [
+      "--expect-link <linkId> disconnects only when this machine is a connected Remote Link Child of that link, or, once its connection is already cleared, finishes the unfinished disconnect. A Home's revoke sends it so a delayed revoke of an old link cannot disconnect a newer one. Any other state (disconnected with no unfinished disconnect, another link or key, a hub client, a pending key rotation or connect, another connection's unfinished disconnect while connected, unreadable state) changes nothing, exits 5, and prints {\"phase\":\"child_link_mismatch\",\"reason\":...} as the last stderr line. A client-initiated link (this machine joined its Home itself, shown by its sidecar or by the marker that outlives a lost sidecar) is refused the same way (reason client_initiated_link); disconnect it without --expect-link. A malformed or repeated flag, or one combined with --orphaned-token or --recover-config, exits 2.",
+    ],
   },
   {
     name: "sync",

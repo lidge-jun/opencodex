@@ -60,11 +60,11 @@ function eventsText(count: number): string {
 /**
  * How a run knew its load had stalled, always from the Home itself. "home-pumps-waiting": every link pump waits for a
  * drain. "home-relays-waiting": every relayed HTTP response waits for its reader (Bun stops reading a body whose socket
- * does not drain). Either announcement marks the first moment every load reader waits at once, which can come before
- * the load's sustained stall: a paused reader's kernel buffer still takes bytes in flight, so a pump's wait can end
- * without its reader resuming, and a relay also waits in the gap between two chunks. Bun exposes no sustained
- * backpressure signal and this test uses no quiet period, so a run compares the two loads at their first all-waiting
- * moment, and repeated runs vary (structure/remote-link.md).
+ * does not drain). Every reader waiting at once can come before the load's sustained stall (a paused reader's kernel
+ * buffer still takes bytes in flight; a relay also waits between two chunks), and an early cut lowers that run's peak,
+ * which on the WebSocket run makes passing easier. So the Home announces the stall only after a quiet window of wall
+ * time in which every reader stayed waiting and its high-water mark did not rise, and a load that does not settle by
+ * the fixture's deadline fails the run (tests/fixtures/link-ws-rss-home.ts, structure/remote-link.md).
  */
 type StallSync = "home-pumps-waiting" | "home-relays-waiting";
 interface LoadResult { method: string; idle: number; peak: number; delta: number; sync: StallSync }
@@ -88,7 +88,8 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
     // what the Home's fetch has read; they are reported, never asserted.
     const delivered: number[] = [];
     const upstream = Bun.serve({
-      hostname: "127.0.0.1", port: 0,
+      // A held stream stays quiet through the settle window and beyond; Bun's 10 s idle limit would cancel it.
+      hostname: "127.0.0.1", port: 0, idleTimeout: 0,
       async fetch(req) {
         await req.arrayBuffer();
         const signal = signals[requests++]!;
@@ -170,7 +171,15 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
       // The Home itself announces when every link pump, or every relayed HTTP response, waits for its reader at once.
       // A link turn reads its upstream only as its reader drains (#8601), so a stalled load stops pulling before the
       // upstream's hold point: the Home's own stall is the synchronization, and the upstream is never waited for here.
-      const announced = (async () => { for (;;) if ((await nextLine()).stalled === true) return "stalled" as const; })();
+      let settled: Record<string, number | boolean> = {};
+      const announced = (async () => {
+        for (;;) {
+          const line = await nextLine();
+          if (line.stalled === true) { settled = line; return "stalled" as const; }
+          // The deadline never passes a run: a load that did not settle is a failed measurement.
+          if (line.settleFailed === true) throw new Error("the load did not settle: " + JSON.stringify(line));
+        }
+      })();
       const finished = Promise.all(signals.slice(1).map(signal => signal.cancelled)).then(() => "finished" as const);
       // A load that completes before every reader stalls never reached the condition being measured.
       expect(await Promise.race([announced, finished])).toBe("stalled");
@@ -190,7 +199,7 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
       const after = await ask("gc-rss");
       const delta = peak - idle;
       const budget = SOCKETS * LINK_WS_LIMITS.socketReservationBytes;
-      console.log(JSON.stringify({ method, transport: options.transport, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
+      console.log(JSON.stringify({ method, transport: options.transport, sockets: SOCKETS, idleMiB: idle / MiB, peakMiB: peak / MiB, deltaMiB: delta / MiB, perSocketMiB: delta / SOCKETS / MiB, budgetMiB: budget / MiB, quietWindowMs: settled.quietWindowMs, settleMs: settled.settleMs, afterCutMiB: after / MiB, largestUpstreamChunkMiB: largestChunk / MiB, upstreamBodyMiB: Math.round(body.byteLength / MiB), enqueuedAtStallMiB }));
       return { method, idle, peak, delta, sync: options.transport === "websocket" ? "home-pumps-waiting" : "home-relays-waiting" };
     } finally {
       for (const client of clients) client.destroy();

@@ -4,11 +4,12 @@ import type { Capability } from "./capability-types";
 export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
   {
     command: ["disconnect"], summary: "Disconnect a client or preserve orphaned token files for recovery.",
-    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] | ocx disconnect --orphaned-token --yes [--json]",
+    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] [--expect-link <linkId>] | ocx disconnect --orphaned-token --yes [--json]",
     routes: [],
     flags: [
       { name: "--keep-catalog", value: "boolean", summary: "Keep the connected client's catalog during ordinary disconnect." },
       { name: "--recover-config", value: "boolean", summary: "With --yes, snapshot current Codex artifacts and recover only evidenced owned keys; unknown ownership still refuses." },
+      { name: "--expect-link", value: "string", summary: "Disconnect only when this machine is the connected Child of that link, or finish its unfinished disconnect once the connection is cleared; otherwise exit 5 with child_link_mismatch and change nothing." },
       { name: "--orphaned-token", value: "boolean", summary: "Preserve unowned service-token files in a private backup when disconnected." },
       { name: "--yes", value: "boolean", summary: "Explicitly confirm --recover-config or --orphaned-token recovery." },
       { name: "--json", value: "boolean", summary: "Emit the local result and backup location as JSON." },
@@ -280,7 +281,7 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
     routes: [{ method: "GET", path: "/api/link/operations" }, { method: "GET", path: "/api/link/operations/{id}" }],
     flags: [{ name: "--operation-id", value: "string", summary: "Read one operation." }, { name: "--json", value: "boolean", summary: "Emit {operations} or the one entry as JSON." }],
     mutates: false, json: "payload",
-    details: ["Each entry names its reserved link and key ids, the intent and completion of every effect and its outcome: open, committed, failed_clean, residual (the Child may still hold an enrollment or a plant) or unknown. Committed and failed_clean entries stay 30 days; residual and unknown entries stay until resolved, then 30 days. Past 256 settled entries the oldest go early, never before a day plus the alias-lock wait, so a retry within a day replays its operation id; at 256 open or unresolved residual or unknown entries a new journalled operation is refused (operation_journal_full) until some are resolved, and so is one after 1024 operations settled within a day and three minutes. Requires loopback admin authority on the Home."],
+    details: ["Each entry names its reserved link and key ids, the intent and completion of every effect and its outcome: open, committed, failed_clean, residual (the Child may still hold an enrollment or a plant) or unknown. Committed and failed_clean entries stay 30 days; residual and unknown entries stay until resolved, then 30 days. Past 256 settled entries the oldest go early, never before 2 hours plus the alias-lock wait: a repeat with the same operation id and parameters (another set answers operation_mismatch) that reaches the journal within 2 hours of the answer gets the recorded outcome, except that a revoke whose own removal was interrupted resumes it first and answers that attempt (retry a transient refusal such as link_operation_in_progress), and later the id may be treated as a new operation, which enrolls a machine again if its link was removed meanwhile; at 256 open or unresolved residual or unknown entries a new journalled operation is refused (operation_journal_full) until some are resolved, and so is one after 1024 operations settled within 2 hours and three minutes, a limit of about 500 journalled operations per hour sustained. Requires loopback admin authority on the Home."],
   },
   {
     command: ["link", "operations", "resolve"], summary: "Mark a residual or unknown link operation resolved.",
@@ -288,7 +289,7 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
     routes: [{ method: "POST", path: "/api/link/operations/{id}/resolve" }],
     flags: [{ name: "--operation-id", value: "string", required: true, summary: "The residual or unknown operation." }, { name: "--yes", value: "boolean", required: true, summary: "Confirms that the Child is clean or the loss is accepted." }, { name: "--json", value: "boolean", summary: "Emit the resolved entry as JSON." }],
     mutates: true, json: "payload",
-    details: ["Changes nothing on the Child or in links.json: it records the resolution, and the entry's 30 days of retention start then. operation_not_resolvable (exit 5) for any other state, operation_not_found (exit 4). Requires loopback admin authority on the Home.", "A journalled revoke that reached the Child and ended unknown, or that the Home stopped during (open), keeps that link's tunnel down across restarts (ocx link status: reason revoke_unsettled; ocx link reconnect: link_suspended). Resolving the revoke reloads the tunnels, so the link reconnects. An open revoke cannot be resolved: repeat it with the same --operation-id and the same --purge flag, then resolve it if it ends unknown."],
+    details: ["Changes nothing on the Child or in links.json: it records the resolution, and the entry's 30 days of retention start then. operation_not_resolvable (exit 5) for any other state, operation_not_found (exit 4). Requires loopback admin authority on the Home.", "A journalled revoke past its remote_cleanup intent (the Child's cleanup may have started) that then ended unknown, or that stayed open with no revoke running it (the Home stopped or the revoke failed before writing its outcome), keeps that link's tunnel down across restarts (ocx link status: reason revoke_unsettled; ocx link reconnect: link_suspended). Resolving the revoke reloads the tunnels, so the link reconnects. An open revoke cannot be resolved: repeat it with the same --operation-id and the flags of its first attempt (the journal keeps only a digest of them, so a different --purge answers operation_mismatch), then resolve it if it ends unknown."],
   },
   {
     command: ["link", "activity", "clear"], summary: "Clear one link's held activity so automatic and activity-gated Child restarts may run again.",
