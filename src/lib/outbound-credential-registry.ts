@@ -32,6 +32,11 @@ export function isCredentialName(name: string): boolean {
   return SENSITIVE_KEY_PATTERN.test(name) || CREDENTIAL_HEADER_NAME.test(name);
 }
 
+/** True for a request-correlation header: an identifier, not a credential, and never recorded. */
+export function isCorrelationHeaderName(name: string): boolean {
+  return CORRELATION_HEADER_NAME.test(name);
+}
+
 /**
  * Replace every span of text a secret covers: the whole text when it equals a whole-only value, and
  * every occurrence of each substring value. Coverage is marked on the original text before anything

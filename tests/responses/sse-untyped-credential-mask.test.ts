@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
-import { createOutboundCredentialMask, createRawEvidenceChannel, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
+import { createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
 import { OutboundCredentialRegistry, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
 
 const encoder = new TextEncoder();
@@ -41,15 +41,20 @@ const hooks: EagerRelayHooks = {
  * Client output as production composes it: the tee path rewrites each block before the terminal
  * boundary, the eager path feeds the boundary raw frames; both receive the outbound mask.
  */
-async function deliver(mode: "tee" | "eager", headers: Record<string, string>, payloads: readonly unknown[]): Promise<string> {
-  const maskCredential = createOutboundCredentialMask(headers);
-  const raw = payloads.map(payload => `data: ${JSON.stringify(payload)}`);
-  if (mode === "eager") return drain(relaySseEagerBounded(sourceStream(raw.map(block => `${block}\n\n`)), new AbortController(), hooks, { maskCredential }));
-  const channel = createRawEvidenceChannel();
-  const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential, channel.remember);
-  const rewritten = raw.map(block => `${rewrite(block).join("\n")}\n\n`);
-  return drain(relaySseWithFailedTail(sourceStream(rewritten), new AbortController(), undefined, { maskCredential, rawEvidence: channel.take }));
+async function deliver(mode: "tee" | "eager", headers: Record<string, string>, payloads: readonly unknown[], oneChunk = false): Promise<string> {
+  const maskCredential = createSynthesizedCopyMask(headers);
+  const raw = payloads.map(payload => {
+    if (typeof payload === "string") return payload;
+    const type = (payload as { type?: unknown }).type;
+    return `${typeof type === "string" ? `event: ${type}\n` : ""}data: ${JSON.stringify(payload)}`;
+  });
+  const chunks = (blocks: string[]): string[] => oneChunk ? [blocks.map(block => `${block}\n\n`).join("")] : blocks.map(block => `${block}\n\n`);
+  if (mode === "eager") return drain(relaySseEagerBounded(sourceStream(chunks(raw)), new AbortController(), hooks, { maskCredential }));
+  const rewrite = createTerminalErrorRedactionBlockRewrite(headers, createOutboundCredentialMask(headers));
+  return drain(relaySseWithFailedTail(sourceStream(chunks(raw.map(block => rewrite(block).join("\n")))), new AbortController(), undefined, { maskCredential }));
 }
+
+const terminalTypes = (out: string): string[] => [...out.matchAll(/^event: (response\.[a-z_]+)$/gm)].map(match => match[1]!);
 
 function withRegistry<T>(headers: Record<string, string>, run: () => T): T {
   const registry = new OutboundCredentialRegistry();
@@ -67,11 +72,13 @@ function withRegistry<T>(headers: Record<string, string>, run: () => T): T {
 }
 
 describe("untyped error envelopes never carry a value this request sent", () => {
-  test("a selected credential in a custom credential header is masked in an untyped error", () => {
+  test.each(["tee", "eager"] as const)("%s never delivers a selected credential from a custom credential header in an untyped error", async mode => {
     // Custom credential headers are recognized by the outbound registry's rule, not only the fixed list.
-    const custom = createTerminalErrorRedactionBlockRewrite({ "x-auth-token": "custom-credential-ALPHA12345", "x-proxy-secret": "Token custom-part-BRAVO67890" });
-    const echoed = custom(`data: ${JSON.stringify({ error: { message: "echo custom-credential-ALPHA12345 and custom-part-BRAVO67890" } })}`).join("\n");
-    expect([echoed.includes("ALPHA12345"), echoed.includes("BRAVO67890")]).toEqual([false, false]);
+    const headers = { "x-auth-token": "custom-credential-ALPHA12345", "x-proxy-secret": "Token custom-part-BRAVO67890" };
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, [{ error: { message: "echo custom-credential-ALPHA12345 and custom-part-BRAVO67890" } }]);
+      expect([out.includes("ALPHA12345"), out.includes("BRAVO67890")]).toEqual([false, false]);
+    });
   });
 
   test.each([
@@ -147,7 +154,8 @@ describe("untyped error envelopes never carry a value this request sent", () => 
       const out = await deliver(mode, headers, [frame]);
       const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
       inspectResponseLogSsePayload(log, JSON.stringify(frame));
-      expect([out.includes('"code":"rate_limit_exceeded"'), log.terminalHttpStatus]).toEqual([true, 429]);
+      // The class is read from the provider's own frame; the code word equals a sent value, so it stays masked.
+      expect([out.includes("upstream_server_error"), out.includes('"type":"rate_limit_error"'), log.terminalHttpStatus]).toEqual([false, true, 429]);
     });
   });
 
@@ -190,9 +198,80 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     });
   });
 
+  test.each(["tee", "eager"] as const)("%s keeps frames that mask alike apart: the verdict follows the provider's own frames", async mode => {
+    const headers = { "x-auth-token": "cyber_policy" };
+    await withRegistry(headers, async () => {
+      const frames = [
+        { error: { code: "[REDACTED]", message: "fixture" } },
+        { type: "error", code: "rate_limit_exceeded", message: "typed quota" },
+        { error: { code: "cyber_policy", message: "fixture" } },
+      ];
+      const out = await deliver(mode, headers, frames, true);
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      for (const frame of frames) inspectResponseLogSsePayload(log, JSON.stringify(frame));
+      expect([out.includes('"code":"cyber_policy"'), log.terminalHttpStatus]).toEqual([false, 429]);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s keeps a policy verdict ahead of many later untyped frames in one chunk", async mode => {
+    const headers = { "x-auth-token": "cyber_policy" };
+    await withRegistry(headers, async () => {
+      const frames = [{ error: { code: "cyber_policy", message: "blocked" } },
+        ...Array.from({ length: 9 }, (_, i) => ({ error: { code: "mystery_code", message: `later cyber_policy ${i}` } }))];
+      const out = await deliver(mode, headers, frames, true);
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      for (const frame of frames) inspectResponseLogSsePayload(log, JSON.stringify(frame));
+      expect([terminalTypes(out), out.includes("upstream_server_error"), log.terminalHttpStatus]).toEqual([["response.failed"], false, 400]);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s ends the stream on an untyped policy terminal", async mode => {
+    const headers = { "x-auth-token": "cyber_policy" };
+    await withRegistry(headers, async () => {
+      const completed = { type: "response.completed", response: { status: "completed" } };
+      for (const tail of [[completed], []]) {
+        const out = await deliver(mode, headers, [{ error: { code: "cyber_policy", message: "blocked" } }, ...tail]);
+        expect(terminalTypes(out)).toEqual(["response.failed"]);
+      }
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s untyped policy terminal withholds its copy while the registry is incomplete", async mode => {
+    const registry = new OutboundCredentialRegistry({ maxValueBytes: 16 });
+    const headers = { "x-custom": "a-value-longer-than-sixteen-bytes" };
+    registry.remember(headers);
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      expect(registry.complete()).toBe(false);
+      const out = await deliver(mode, headers, [{ error: { code: "cyber_policy", message: "blocked fixture-copy" }, extra: "fixture-extra" }]);
+      expect([out.includes("fixture-copy"), out.includes("fixture-extra"), out.includes('"code":"cyber_policy"')]).toEqual([false, false, true]);
+    } finally { restore(); }
+  });
+
+  test.each(["tee", "eager"] as const)("%s untyped policy terminal is a fresh block without upstream lines", async mode => {
+    const sent = "custom-value-987654321";
+    const headers = { "x-tenant": sent };
+    await withRegistry(headers, async () => {
+      const block = `: comment ${sent}\nevent: ${sent}\ndata: ${JSON.stringify({ error: { code: "cyber_policy", message: "blocked" } })}`;
+      const out = await deliver(mode, headers, [block]);
+      expect(out).not.toContain(sent);
+      expect(terminalTypes(out)).toEqual(["response.failed"]);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s refuses a sent value the global registry no longer holds", async mode => {
+    const sent = "tenant-secret-example-12345";
+    const restore = setOutboundCredentialRegistryForTests(new OutboundCredentialRegistry());
+    try {
+      const out = await deliver(mode, { "x-tenant": sent }, [{ error: { code: "mystery_code", message: `echo ${sent}` } }]);
+      expect([out.includes(sent), out.includes("event: response.failed")]).toEqual([false, true]);
+    } finally { restore(); }
+  });
+
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: "Bearer auth" });
-    const block = `data: ${JSON.stringify({ error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } })}`;
+    const failed = { type: "response.failed", response: { status: "failed", error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } } };
+    const block = `event: response.failed\ndata: ${JSON.stringify(failed)}`;
     expect(rewrite(block).join("\n")).not.toContain("fixture-unpatterned-value-8415");
   });
 });

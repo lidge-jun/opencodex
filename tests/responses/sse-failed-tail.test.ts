@@ -1105,13 +1105,15 @@ describe("untyped upstream error envelopes", () => {
     expect(log.terminalHttpStatus).toBeUndefined();
   });
 
-  test("redacts the selected credential in an untyped error before client delivery", () => {
+  test("redacts the selected credential in an untyped error before client delivery", async () => {
     const secret = 'fixture"chosen\\credential';
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: `Bearer ${secret}` });
     const block = `data: ${JSON.stringify({ error: { code: "cyber_policy", message: `blocked ${secret}` } })}`;
-    const result = rewrite(block).join("\n");
-    expect(result).not.toContain(secret);
-    expect(JSON.parse(result.slice("data: ".length)).error.message).toContain("[REDACTED]");
+    // The untyped envelope never reaches the client; the policy terminal built from it carries masked copy.
+    const maskCredential = createOutboundCredentialMask({ authorization: `Bearer ${secret}` });
+    const result = await drain(relaySseWithFailedTail(sourceStream([`${rewrite(block).join("\n")}\n\n`]), new AbortController(), undefined, { maskCredential }));
+    expect(result).not.toContain(JSON.stringify(secret).slice(1, -1));
+    expect(result).toContain("[REDACTED]");
   });
 
   test("does not retain an echoed outbound credential in untyped error diagnostics", () => {

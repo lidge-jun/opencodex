@@ -297,12 +297,6 @@ export type SseTerminalOutputBoundaryOptions = CodexSafetyBufferingFilterOptions
   maxFrames?: number;
   /** Per-request outbound mask, applied to upstream copy before the boundary bounds it. */
   maskCredential?: (text: string) => string;
-  /**
-   * The original envelope for a payload an earlier client rewrite masked. The verdict and policy
-   * detection read it, so the client tail classifies the same evidence as the inspector, while
-   * everything delivered still comes from the masked copy.
-   */
-  rawEvidence?: (payload: string) => unknown;
 };
 
 /**
@@ -368,10 +362,9 @@ export function createSseTerminalOutputBoundary(
       const payload = sseDataPayload(decoder.decode(frame.block));
       const isDone = payload === "[DONE]";
       const parsed = payload === null ? undefined : parseSsePayload(payload);
-      const evidenceSource = (payload === null ? undefined : options?.rawEvidence?.(payload)) ?? parsed;
       // Observe on the client reader itself: a tee inspection branch may lag
       // behind EOF, so its log context cannot determine the outgoing terminal.
-      const evidence = reduceBareUpstreamEvidence(bareEvidence, evidenceSource, options?.maskCredential);
+      const evidence = reduceBareUpstreamEvidence(bareEvidence, parsed, options?.maskCredential);
       if (evidence !== undefined && evidence !== bareEvidence) {
         bareEvidence = evidence;
         upstreamError = evidence.verdict.message;
@@ -384,8 +377,8 @@ export function createSseTerminalOutputBoundary(
       if (safetyBuffering === "drop") continue;
       // An untyped policy envelope that loses to earlier typed evidence is not the turn's verdict.
       const typedBareSeen = bareEvidence?.typed === true;
-      const policyError = evidenceSource !== undefined && isPolicyRewriteType(evidenceSource, typedBareSeen)
-        ? cyberPolicyTerminalError(evidenceSource)
+      const policyError = parsed !== undefined && isPolicyRewriteType(parsed, typedBareSeen)
+        ? cyberPolicyTerminalError(parsed)
         : undefined;
       const policyPayload = policyError ? policyFailurePayload(policyError, parsed, options?.maskCredential) : undefined;
       // An untyped envelope is evidence, not a Responses event: the client receives the terminal it
@@ -393,7 +386,11 @@ export function createSseTerminalOutputBoundary(
       // Its verdict was reduced above; an explicit policy envelope continues as the policy terminal.
       if (policyPayload === undefined && parsed !== undefined && isUntypedBareUpstreamError(parsed)) continue;
       let outboundBlock = policyPayload !== undefined
-        ? encoder.encode(rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload))
+        // An untyped envelope's block is upstream text throughout (comments, extension and event
+        // lines), so its policy terminal is a fresh block; a typed terminal keeps its own lines.
+        ? encoder.encode(parsed !== undefined && isUntypedBareUpstreamError(parsed)
+          ? `event: response.failed\ndata: ${policyPayload}`
+          : rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload))
         : frame.block;
       if (safetyBuffering === "strip") {
         outboundBlock = encoder.encode(stripCodexSafetyBufferingField(
@@ -416,7 +413,8 @@ export function createSseTerminalOutputBoundary(
       // Preserve every frame through the first Responses terminal. Every
       // later non-DONE frame is dropped.
       if (!responsesTerminal) appendOutput(outboundBlock, frame.delimiter);
-      if (!responsesTerminal && payload && terminalStatusFromParsed(parsed, typedBareSeen)) {
+      // The policy payload this boundary emitted is itself the turn's terminal.
+      if (!responsesTerminal && payload && (policyPayload !== undefined || terminalStatusFromParsed(parsed, typedBareSeen))) {
         responsesTerminal = true;
         if (pendingDone) {
           appendOutput(pendingDone.block, pendingDone.delimiter);
@@ -497,14 +495,12 @@ export function relaySseWithFailedTail(
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
   opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string;
-    /** See {@link SseTerminalOutputBoundaryOptions.rawEvidence}. */
-    rawEvidence?: (payload: string) => unknown;
     /** Receives the exact payload of every synthesized bare-verdict tail, so a client-stream log can tell it from upstream. */
     onSyntheticTail?: (payload: string, verdict?: BareUpstreamError) => void },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
-  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential, rawEvidence: opts?.rawEvidence });
+  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential });
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,

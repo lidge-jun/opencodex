@@ -1,5 +1,11 @@
 import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib/redact";
-import { CREDENTIAL_SUBSTRING_MIN_LENGTH, credentialComponents, maskSecretSpans } from "../../lib/outbound-credential-registry";
+import {
+  CREDENTIAL_SUBSTRING_MIN_LENGTH,
+  credentialComponents,
+  isCorrelationHeaderName,
+  isCredentialName,
+  maskSecretSpans,
+} from "../../lib/outbound-credential-registry";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 import { isUntypedBareUpstreamError } from "../bare-upstream-error";
 
@@ -49,36 +55,39 @@ export function createOutboundCredentialMask(outboundHeaders: Record<string, str
 }
 
 /**
- * Per-request handoff from the client rewrite to the terminal boundary behind it (the tee relay):
- * the rewrite remembers the original of each untyped envelope it masks, and the boundary takes it
- * back by the masked payload text, so the verdict is decided from the provider's own frame.
+ * The mask for copy a terminal boundary synthesizes from upstream evidence (verdict tails, policy
+ * terminals, buffered error presentations). Beyond the exact credential mask, copy that repeats any
+ * value this request sent is refused whole, decided from this request's own headers so no global
+ * eviction can open it: a credential-named component at any length when it is the whole text, and
+ * any component of 8+ characters contained in it. Request-correlation identifiers are not
+ * credentials and are left to diagnostics, as the outbound registry leaves them.
  */
-export function createRawEvidenceChannel(limit = 8): { remember: (payload: string, raw: unknown) => void; take: (payload: string) => unknown } {
-  const entries = new Map<string, unknown>();
-  return {
-    remember(payload, raw) {
-      entries.set(payload, raw);
-      if (entries.size > limit) entries.delete(entries.keys().next().value as string);
-    },
-    take(payload) {
-      const raw = entries.get(payload);
-      entries.delete(payload);
-      return raw;
-    },
-  };
+export function createSynthesizedCopyMask(outboundHeaders: Record<string, string>): (text: string) => string {
+  const exact = createOutboundCredentialMask(outboundHeaders);
+  const wholeOnly = new Set<string>();
+  const contained: string[] = [];
+  for (const [name, value] of Object.entries(outboundHeaders)) {
+    const credentialNamed = isCredentialName(name);
+    if (!credentialNamed && isCorrelationHeaderName(name)) continue;
+    for (const part of credentialComponents(value)) {
+      if (credentialNamed) wholeOnly.add(part);
+      if (part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) contained.push(...withEscapedSpelling(part));
+    }
+  }
+  return (text) => wholeOnly.has(text) || contained.some(part => text.includes(part)) ? REDACTED_SECRET : exact(text);
 }
 
 /**
  * Mask upstream diagnostics before either SSE delivery or buffered JSON reconstruction. Protocol
  * structure is never masked: the `event:` line, the root `type` and Responses field names stay as
- * they are, so the client always recognizes the frame the inspector saw. An untyped envelope is not
- * delivered to a client at all (the terminal boundary withholds it and delivers the terminal it
- * decides); it is masked here only as a fallback for a path that forwards it.
+ * they are, so the client always recognizes the frame the inspector saw. An untyped envelope passes
+ * through unchanged: no client receives it (every delivery path ends in a terminal boundary or the
+ * buffered collector, which withhold it and build the terminal from guarded copy), and the boundary
+ * behind the tee rewrite must classify the provider's own frame, exactly as the inspector does.
  */
 export function createTerminalErrorRedactionBlockRewrite(
   outboundHeaders: Record<string, string>,
   maskCredential = createOutboundCredentialMask(outboundHeaders),
-  onUntypedRewrite?: (payload: string, raw: unknown) => void,
 ): SseBlockRewrite {
   const redactDiagnostic = (value: unknown): unknown => {
     const maskKnown = (entry: unknown, root = false): unknown => {
@@ -115,12 +124,12 @@ export function createTerminalErrorRedactionBlockRewrite(
     } catch {
       return [terminalFrame ? maskExtensionLines(block) : block];
     }
-    if (event?.type !== "response.failed" && event?.type !== "response.incomplete" && !isUntypedBareUpstreamError(event)) {
+    if (isUntypedBareUpstreamError(event)) return [block];
+    if (event?.type !== "response.failed" && event?.type !== "response.incomplete") {
       return [terminalFrame ? maskExtensionLines(block) : block];
     }
     const safeEvent = redactDiagnostic(event);
     const rewritten = JSON.stringify(safeEvent);
-    if (rewritten !== payload && isUntypedBareUpstreamError(event)) onUntypedRewrite?.(rewritten, event);
     return [maskExtensionLines(rewritten === payload ? block : replaceSseDataPayload(block, rewritten))];
   };
 }

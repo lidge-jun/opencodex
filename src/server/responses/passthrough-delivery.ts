@@ -12,7 +12,7 @@ import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
 import { attachResponseToolOwnership } from "./response-tool-ownership";
-import { createOutboundCredentialMask, createRawEvidenceChannel, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
+import { createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -870,8 +870,8 @@ export async function deliverPassthroughResponse(
         }, { dispose: () => plaintextInspector.dispose() })
         : undefined;
       const maskCredential = createOutboundCredentialMask(nativeExchange.request.headers);
-      // The tee relay's boundary sits behind the client rewrite; it classifies the original envelope.
-      const untypedRawEvidence = createRawEvidenceChannel();
+      // Copy a boundary synthesizes from upstream evidence also refuses any value this request sent.
+      const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers);
       const requiredStreamEvidence = { replayUnsafe: !!webSearchBridgePlan };
       const normalizeRequiredToolItem = (item: unknown) => {
         item = restoreImageGenCalls(item, imageGenCallAliases).value;
@@ -968,7 +968,7 @@ export async function deliverPassthroughResponse(
           )
           : undefined,
         requiredStreamGuard?.blockRewrite,
-        createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential, untypedRawEvidence.remember),
+        createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential),
         rememberPlaintextBlock,
         // Display-only projection must follow every continuation-cache observer.
         (!canonicalBufferedJson || !options.comboAttempt) && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
@@ -1000,9 +1000,9 @@ export async function deliverPassthroughResponse(
           const presentation = rawPresentation === undefined ? undefined : {
             status: rawPresentation.status,
             error: {
-              type: maskCredential(rawPresentation.error.type),
-              code: maskCredential(rawPresentation.error.code),
-              message: maskCredential(rawPresentation.error.message),
+              type: synthesizedCopyMask(rawPresentation.error.type),
+              code: synthesizedCopyMask(rawPresentation.error.code),
+              message: synthesizedCopyMask(rawPresentation.error.message),
             },
           };
           if (upstreamError !== undefined) {
@@ -1054,7 +1054,7 @@ export async function deliverPassthroughResponse(
         let raw: BufferedResponsesSseResult | undefined = await collectBufferedResponsesSse(
           passthroughSseBody,
           upstream,
-          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true, maskCredential },
+          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true, maskCredential: synthesizedCopyMask },
         );
         if (!raw.ok) {
           if (raw.kind === "aborted" || signal.aborted) {
@@ -1086,7 +1086,7 @@ export async function deliverPassthroughResponse(
           )
           : replayBufferedSse(rawBytes);
         const client = await collectBufferedResponsesSse(bufferedClientBody, upstream, {
-          signal, maskCredential,
+          signal, maskCredential: synthesizedCopyMask,
           read: bufferedRead,
           retainTranscript: false,
         });
@@ -1282,7 +1282,7 @@ export async function deliverPassthroughResponse(
         }, {
           clientGoneSignal: options.abortSignal,
           terminalBoundary: codexSafetyBufferingOptions,
-          maskCredential,
+          maskCredential: synthesizedCopyMask,
           onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict),
           ...(inlineEagerRewrite ? { rewriteBudget: translatorBudget } : {}),
           ...(logCtx.upstreamError === undefined ? {} : { upstreamError: logCtx.upstreamError }),
@@ -1378,8 +1378,7 @@ export async function deliverPassthroughResponse(
           responseEffects.responseCompletionCancelled = true;
           clientGone.abort(reason);
         },
-        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential,
-          rawEvidence: untypedRawEvidence.take,
+        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential: synthesizedCopyMask,
           onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict) },
       );
       return markNativePassthroughSseResponse(new Response(clientBody, {
