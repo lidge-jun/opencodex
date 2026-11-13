@@ -1718,6 +1718,7 @@
   "link-request-log-fields.test.ts": "server",
   "link-websocket-transport-status.test.ts": "server",
   "link-websocket-release-gate.test.ts": "e2e-style",
+  "link-websocket-rss-child.test.ts": "e2e-style",
   "link-gate-codex-binary.test.ts": "e2e-style",
   "link-websocket-drain.test.ts": "server",
   "link-websocket-pump.test.ts": "server",
