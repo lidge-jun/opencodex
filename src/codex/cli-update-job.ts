@@ -112,6 +112,12 @@ function parseStoreBody(body: string | null): Store {
  * attempt is refused like any other unsafe store.
  */
 const REPLACED_STORE_READ_ATTEMPTS = 5;
+type StoreReadStage = "opened" | "descriptor-checked";
+let storeReadHookForTests: ((stage: StoreReadStage) => void) | null = null;
+/** Test seam: runs inside each read attempt, after the open and after the descriptor checks. */
+export function setCodexCliJobStoreReadHookForTests(hook: ((stage: StoreReadStage) => void) | null): void {
+  storeReadHookForTests = hook;
+}
 function readStore(configDir?: string): Store {
   let p: ReturnType<typeof paths>;
   try { p = prepare(configDir); }
@@ -120,9 +126,11 @@ function readStore(configDir?: string): Store {
     let fd: number | undefined;
     try {
       fd = openSync(p.file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      storeReadHookForTests?.("opened");
       const stat = fstatSync(fd);
       if (!stat.isFile() || stat.size > CODEX_CLI_JOB_STORE_MAX_BYTES || (stat.mode & 0o077) !== 0
         || stat.uid !== process.geteuid?.() || stat.nlink > 1) throw new Error("unsafe_store");
+      storeReadHookForTests?.("descriptor-checked");
       const lexical = lstatSync(p.file);
       if (lexical.isSymbolicLink()) throw new Error("unsafe_store");
       if (stat.nlink === 0 || lexical.dev !== stat.dev || lexical.ino !== stat.ino) {
