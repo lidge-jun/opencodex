@@ -3,8 +3,7 @@ title: Adapters
 description: The provider adapters — what each targets, how it builds requests, and its quirks.
 ---
 
-An **adapter** translates between opencodex's internal request/response model and one provider wire
-format. Every adapter implements the `ProviderAdapter` interface (`src/adapters/base.ts`):
+An **adapter** translates between opencodex's internal request/response model and one provider wire format. Every adapter implements `ProviderAdapter`. The following excerpt is abbreviated; the complete, authoritative interface is in `src/adapters/base.ts`:
 
 ```ts
 interface ProviderAdapter {

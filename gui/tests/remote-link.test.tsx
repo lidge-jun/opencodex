@@ -1298,3 +1298,109 @@ test("a bare host Home cannot plant names the verified build Home needs and wher
   await act(async () => { root?.render(sheet("unsupported_target")); });
   expect(host.textContent ?? "").not.toContain("OPENCODEX_CHILD_BIN_DIR");
 });
+
+const ENROLLMENT_CLEANUP_ERRORS = [
+  ["link_pin_conflict", "already pins another host key"],
+  ["host_key_changed", "no longer the one trusted"],
+  ["trust_file_unexpected", "known_hosts file"],
+  ["key_cleanup_failed", "revoke the leftover link key"],
+  ["link_cleanup_uncertain", "revoke the leftover link key"],
+] as const;
+
+test.each(ENROLLMENT_CLEANUP_ERRORS)("apply refusal %s names what to do instead of a generic failure", async (code, expected) => {
+  globalThis.fetch = (async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh config" }] });
+    if (path === "/api/link/probe") return response({ alias: "child-one", fingerprint: "SHA256:test", keyType: "ed25519" });
+    if (path === "/api/link/confirm-host") return response({ alias: "child-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
+    if (path === "/api/link/apply") return response({ error: { code, message: "server text" } }, code === "key_cleanup_failed" || code === "link_cleanup_uncertain" ? 500 : 409);
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('[data-action="continue"]') as HTMLButtonElement).click(); });
+  await flush();
+  await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Confirm host"))?.click(); });
+  await flush();
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Connect child"))?.click(); });
+  await flush();
+  expect(host.textContent).toContain(expected);
+  expect(host.textContent).not.toContain("Remote link request could not be completed.");
+});
+
+test("every locale translates the enrollment refusals instead of reusing its generic failure", async () => {
+  const { DICTS } = await import("../src/i18n/catalogs");
+  for (const [locale, dict] of Object.entries(DICTS)) {
+    for (const [code] of ENROLLMENT_CLEANUP_ERRORS) {
+      const text = (dict as Record<string, string>)["remoteLink.error." + code];
+      expect(typeof text, locale + " " + code).toBe("string");
+      expect(text, locale + " " + code).not.toBe((dict as Record<string, string>)["remoteLink.error.generic"]);
+      if (locale !== "en") expect(text, locale + " " + code).not.toBe((DICTS.en as Record<string, string>)["remoteLink.error." + code]);
+    }
+    for (const step of ["purge", "ephemeral", "full", "unknown"]) {
+      const text = (dict as Record<string, string>)["remoteLink.residual." + step];
+      expect(typeof text, locale + " " + step).toBe("string");
+      if (locale !== "en") expect(text, locale + " " + step).not.toBe((DICTS.en as Record<string, string>)["remoteLink.residual." + step]);
+    }
+  }
+});
+
+async function applyRefusal(body: Record<string, unknown>): Promise<HTMLDivElement> {
+  globalThis.fetch = (async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh config" }] });
+    if (path === "/api/link/probe") return response({ alias: "child-one", fingerprint: "SHA256:test", keyType: "ed25519" });
+    if (path === "/api/link/confirm-host") return response({ alias: "child-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
+    if (path === "/api/link/apply") return response(body, 500);
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('[data-action="continue"]') as HTMLButtonElement).click(); });
+  await flush();
+  await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Confirm host"))?.click(); });
+  await flush();
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Connect child"))?.click(); });
+  await flush();
+  return host;
+}
+
+test.each([
+  ["key_cleanup_failed", "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying.", "ocx-child detach --purge"],
+  ["key_cleanup_failed", "Run ocx-child detach (or ocx disconnect) on the Child before retrying.", "ocx-child detach (or ocx disconnect)"],
+  ["link_cleanup_uncertain", "Run ocx disconnect and ocx restart on the Child before retrying.", "ocx disconnect and ocx restart"],
+  ["link_cleanup_uncertain", "server text the page must not echo", "Check the Child"],
+])("a residual %s also says the Child may still be connected and how to clean it", async (code, recovery, expected) => {
+  const host = await applyRefusal({ error: { code, message: "fixture" }, residual: true, recovery });
+  const text = host.textContent ?? "";
+  expect(text).toContain("revoke the leftover link key");
+  expect(text).toContain("The Child may still be connected.");
+  expect(text).toContain(expected);
+  expect(text).not.toContain("server text the page must not echo");
+  expect(text).not.toContain("was not connected");
+});
+
+test("a cleanup refusal without residual names no Child step", async () => {
+  const host = await applyRefusal({ error: { code: "key_cleanup_failed", message: "fixture" } });
+  expect(host.textContent).toContain("revoke the leftover link key");
+  expect(host.textContent).not.toContain("The Child may still be connected.");
+});
+
+test("readLinkJson keeps whether the Child may still be connected, as a fixed variant", async () => {
+  const read = async (body: unknown) => {
+    try { await readLinkJson(new Response(JSON.stringify(body), { status: 500 })); } catch (error) { return error as LinkApiError; }
+    throw new Error("no error");
+  };
+  expect((await read({ error: { code: "x" } })).residual).toBeNull();
+  expect((await read({ error: { code: "x" }, residual: true, recovery: "Run ocx disconnect and ocx restart on the Child before retrying." })).residual).toBe("full");
+  expect((await read({ error: { code: "x" }, residual: true })).residual).toBe("unknown");
+  expect((await read({ error: { code: "x" }, residual: "yes" })).residual).toBeNull();
+});

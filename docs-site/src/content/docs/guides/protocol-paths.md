@@ -9,8 +9,7 @@ wire, decided by its adapter. When the client API and the upstream wire differ, 
 converted on the way in and the answer is converted on the way back. This page explains how that
 path is named, how to see it before and after a request, and which settings change it.
 
-Every setting on this page is off by default. With the defaults, requests travel exactly as they
-did before these settings existed.
+The settings on this page are off by default except `antigravityDirect`, which is on, and the two managed-Messages switches on a recognized Anthropic instance whose account pool is enabled. `antigravityDirect` enables the direct Antigravity path when applicable, and a pooled instance derives `managedMessagesNative` and `managedMessagesNativeOAuth` unless its `anthropicAccountPool.nativeMessages` is `false`. Every other switch requires explicit activation, and an explicit rollout `false` disables either pooled default.
 
 ## Delivery modes
 
@@ -94,7 +93,7 @@ each candidate and skips one that cannot carry the request.
 
 ## Rollout switches
 
-These switches stage the new paths. Each defaults to off except `antigravityDirect`, and a switch that is off changes nothing.
+These switches stage the new paths. Each defaults to off except `antigravityDirect` and, on a recognized Anthropic instance with its account pool enabled, the two managed-Messages switches. A pooled instance enables `managedMessagesNative` and `managedMessagesNativeOAuth` unless `anthropicAccountPool.nativeMessages` is `false`; an explicit rollout `false` still turns either off. A switch that is off changes nothing.
 
 | Switch | When on |
 | --- | --- |
@@ -155,6 +154,10 @@ These paths still use the internal Responses bridge or are not covered:
 - Managed native Messages to first-party Anthropic preserve a coherent observed Claude Code CLI
   user agent, session UUID and allowlisted SDK headers across token refresh and account selection,
   for foreground (`X-App: cli`) and background (`claude --bg`, `X-App: cli-bg`) sessions alike.
+  The required bundle includes a recognized `User-Agent`, `X-App: cli` or `X-App: cli-bg`, a UUID
+  `X-Claude-Code-Session-Id`, `X-Stainless-Lang: js`, and `X-Stainless-Runtime: node`.
+  Optional SDK fields are preserved only from the identity allowlist; operator-configured headers
+  retain precedence.
   Credential placement remains proxy-owned and beta allowlisting still applies. Missing or invalid
   identity uses the existing compatibility headers; compatible hosts and generated Responses retain
   their current behavior. Headers alone do not authorize requests or establish official support.

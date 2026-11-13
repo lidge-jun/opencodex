@@ -275,6 +275,22 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
     details: ["The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. A reorder does not move a running tunnel. Requires loopback admin authority on the Home."],
   },
   {
+    command: ["link", "operations"], summary: "List or read the enrollments and revokes journalled under an operation id.",
+    usage: "ocx link operations [--operation-id <id>] [--json]",
+    routes: [{ method: "GET", path: "/api/link/operations" }, { method: "GET", path: "/api/link/operations/{id}" }],
+    flags: [{ name: "--operation-id", value: "string", summary: "Read one operation." }, { name: "--json", value: "boolean", summary: "Emit {operations} or the one entry as JSON." }],
+    mutates: false, json: "payload",
+    details: ["Each entry names its reserved link and key ids, the intent and completion of every effect and its outcome: open, committed, failed_clean, residual (the Child may still hold an enrollment or a plant) or unknown. Committed and failed_clean entries stay 30 days; residual and unknown entries stay until resolved, then 30 days. Requires loopback admin authority on the Home."],
+  },
+  {
+    command: ["link", "operations", "resolve"], summary: "Mark a residual or unknown link operation resolved.",
+    usage: "ocx link operations resolve --operation-id <id> --yes [--json]",
+    routes: [{ method: "POST", path: "/api/link/operations/{id}/resolve" }],
+    flags: [{ name: "--operation-id", value: "string", required: true, summary: "The residual or unknown operation." }, { name: "--yes", value: "boolean", required: true, summary: "Confirms that the Child is clean or the loss is accepted." }, { name: "--json", value: "boolean", summary: "Emit the resolved entry as JSON." }],
+    mutates: true, json: "payload",
+    details: ["Changes nothing on the Child or in links.json: it records the resolution, and the entry's 30 days of retention start then. operation_not_resolvable (exit 5) for any other state, operation_not_found (exit 4). Requires loopback admin authority on the Home."],
+  },
+  {
     command: ["link", "activity", "clear"], summary: "Clear one link's held activity so automatic and activity-gated Child restarts may run again.",
     usage: "ocx link activity clear --link-id <id> [--json]",
     routes: [{ method: "POST", path: "/api/link/children/activity/clear" }],

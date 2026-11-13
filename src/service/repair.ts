@@ -10,10 +10,10 @@ import { assertServiceAuthEnvironment } from "./auth-preflight";
 import { assertServiceEnvironmentMatchesInstall } from "./guards";
 import { installLaunchd, restartLaunchdJob } from "./launchd";
 import type { LaunchdInstallOutcome } from "./launchd";
-import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership, serviceLauncherPathDiagnostic } from "./state";
+import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership, serviceLauncherPathDiagnostic, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
 import type { ServiceOwnership, ServiceOwnershipResolution } from "./state";
 import { installSystemd } from "./systemd";
-import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml, killWindowsServiceWrapperProcesses, snapshotWindowsSchedulerAssets } from "./windows-ops";
+import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml, snapshotWindowsSchedulerAssets } from "./windows-ops";
 import { probeWindowsSchedulerTask, SCHEDULER_SETTLE_DELAYS_MS, settleDelay } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { taskXmlSection, taskXmlWithoutCommentsAndCdata, taskXmlElementCount, taskXmlOptionalValueEquals, windowsTaskRegistrationOwnedByAttempt, windowsTaskHasSessionRecoveryTriggers, windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
@@ -22,6 +22,7 @@ import { win32 } from "node:path";
 import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
 import { prepareDisconnectedClientServiceRestart } from "./disconnected-client-restart";
 import type { HeldRestartReceipt } from "./restart-proxy-stop";
+import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
 import { clearPendingTeardown, pendingTeardownPathFor } from "../config/pending-teardown";
 
 /** Append what the caller's state means to an error, keeping the error itself (its class and code). */
@@ -415,7 +416,10 @@ async function repairServiceWith(deps: RepairServiceDeps, restart: RestartReceip
       }
       assertRestartOwnership();
       verifyRegistrationBeforeStop();
-      (deps.killServiceWrappers ?? killWindowsServiceWrapperProcesses)();
+      (deps.killServiceWrappers ?? (() => killWindowsSchedulerWrappers({
+        scriptPath: windowsServiceScriptPath(),
+        launcherPath: windowsLauncherVbsPath(),
+      })))();
       let live = await stillLive();
       if (live) {
         // A wrapper can respawn its child between the proxy's exit and the cleanup above. Nothing

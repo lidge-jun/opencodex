@@ -51,11 +51,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "stop",
-    usage: "ocx stop [--json]",
+    usage: "ocx stop [--json] [--deadline-ms <ms>]",
     summary: "Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.",
     details: [
       "--json keeps the stop path unchanged and prints one structured summary document on stdout; human output moves to stderr.",
       "Exit codes are identical with and without --json: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).",
+      "--deadline-ms <ms>  Windows: finish the service stop within <ms> of this command's start, or refuse up front with nothing changed (default 60000; OCX_STOP_DEADLINE_MS is read when the flag is absent).",
     ],
   },
   {
@@ -255,6 +256,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "OAuth or API-key login for a provider.",
     details: [
       "--headless (anthropic, anthropic2): no browser and no local port; approve in any browser and paste the displayed code.",
+      "--headless (xai): device authorization instead of the loopback callback; no local port, confirm the printed short code in any browser, nothing to paste.",
       "Codex/ChatGPT: ocx login codex runs the Codex account-pool login (same flow as ocx account login codex).",
       "That one needs a running proxy; the OAuth and API-key providers log in locally.",
       "'chatgpt' and 'openai' are the same route; an OpenAI platform API key is 'ocx login openai-apikey'.",

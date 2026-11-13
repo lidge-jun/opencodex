@@ -63,6 +63,20 @@ export type PendingTeardownReceipt = {
    * replacement ever comes up, the next `ocx stop` finishes it like any abandoned receipt.
    */
   handover?: "update-restart";
+  /**
+   * Windows checked stop (#7771): what the owner's Part A did before it sent the stop.
+   * /api/stop skips its own Part A only for a receipt carrying this record whose manager
+   * is still the registered one; a receipt without it (an older CLI, or one written
+   * before Part A) gets the route's own capped Part A. Readers that predate it ignore it.
+   */
+  partA?: PendingTeardownPartA;
+};
+
+/** The Part A record of a teardown receipt: the outcome, the manager, the ended wrappers. */
+export type PendingTeardownPartA = {
+  partA: "stopped" | "absent";
+  manager: { scheduler: boolean; winsw: boolean };
+  wrappers: { pid: number; startTime: number }[];
 };
 
 /**
@@ -130,6 +144,7 @@ export function claimPendingTeardown(
   endpointSource: "exact" | "guessed",
   ownerPid: number = process.pid,
   handover?: "update-restart",
+  partA?: PendingTeardownPartA | null,
 ): PendingTeardownReceipt {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
@@ -137,9 +152,42 @@ export function claimPendingTeardown(
   const receipt: PendingTeardownReceipt = {
     ownerPid, nonce, createdAt: new Date().toISOString(), endpoint, endpointSource,
     ...(handover ? { handover } : {}),
+    ...(partA ? { partA } : {}),
   };
   atomicWriteFile(pendingTeardownPathFor(nonce), JSON.stringify(receipt, null, 2) + "\n");
   return receipt;
+}
+
+/**
+ * Add the Part A record to a receipt this process claimed before Part A ran (the guarded
+ * stop and an update handover claim first). Only the owner's own valid receipt is
+ * rewritten; anything else is left alone and reported as false.
+ */
+export function recordPendingTeardownPartA(nonce: string, partA: PendingTeardownPartA, ownerPid: number = process.pid): boolean {
+  const read = readPendingTeardown(nonce);
+  if (read.state !== "valid" || read.receipt.ownerPid !== ownerPid) return false;
+  assertNotRealHomeUnderTest(getConfigDir());
+  atomicWriteFile(pendingTeardownPathFor(nonce), JSON.stringify({ ...read.receipt, partA }, null, 2) + "\n");
+  return true;
+}
+
+/** The Part A record of the receipt a request names, when it is present and well formed. */
+export function pendingTeardownPartA(nonce: string | null): PendingTeardownPartA | null {
+  if (!nonce || !NONCE_RE.test(nonce)) return null;
+  const read = readPendingTeardown(nonce);
+  if (read.state !== "valid") return null;
+  const record = read.receipt.partA as unknown;
+  if (!record || typeof record !== "object") return null;
+  const value = record as Record<string, unknown>;
+  const manager = value.manager as Record<string, unknown> | undefined;
+  const ok = (value.partA === "stopped" || value.partA === "absent")
+    && !!manager && typeof manager === "object"
+    && typeof manager.scheduler === "boolean" && typeof manager.winsw === "boolean"
+    && Array.isArray(value.wrappers)
+    && value.wrappers.every(entry => !!entry && typeof entry === "object"
+      && Number.isSafeInteger((entry as { pid?: unknown }).pid)
+      && Number.isFinite((entry as { startTime?: unknown }).startTime));
+  return ok ? read.receipt.partA! : null;
 }
 
 export function readPendingTeardown(nonce: string): PendingTeardownRead {
