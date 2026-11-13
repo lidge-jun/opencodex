@@ -396,6 +396,7 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
             if (!tunnel.pending()) return failed("tunnel_failed");
             stopBudget();
             release();
+            counted.fallbacks.tunnel_connecting_timeout = (counted.fallbacks.tunnel_connecting_timeout ?? 0) + 1;
             diagnostic("link_ws_fallback", "tunnel_connecting_timeout");
             return tunnelReconnecting();
           }

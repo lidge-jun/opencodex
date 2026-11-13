@@ -6,6 +6,7 @@ import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
 import { probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
 import { forgetLinkWebsocketAdvertisementsForTests } from "../../src/client/link-ws-advertisement";
+import type { LinkTunnelGate } from "../../src/client/link-relay";
 import type { ManagementAuthState } from "../../src/server/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startStandinHome, standinIdentity, type StandinHome } from "../fixtures/link-ws-standin-home";
@@ -44,7 +45,7 @@ function meta(html: string, name: string): string {
   return match[1];
 }
 
-async function setup(config: Record<string, unknown> = {}) {
+async function setup(config: Record<string, unknown> = {}, tunnel: LinkTunnelGate = connectedTunnel) {
   const identity = standinIdentity();
   const home = await startStandinHome({ identity });
   homes.push(home);
@@ -55,7 +56,7 @@ async function setup(config: Record<string, unknown> = {}) {
   const before = home.connections();
   const child = startMachineListener(0, {
     state: childConnection(home.port, identity), managementAuthState: authState(), readSidecar: () => null,
-    linkKeySource: () => identity.secret, linkTunnel: connectedTunnel, linkWebsocket: { ready: () => true },
+    linkKeySource: () => identity.secret, linkTunnel: tunnel, linkWebsocket: { ready: () => true },
   });
   children.push(child);
   const html = await (await fetch(new URL("/opencodex-session", child.url))).text();
@@ -107,5 +108,17 @@ describe("the Child-local opt-out (D4)", () => {
     const { port, homeConnections } = await setup({ linkResponsesWebsocketOptOut: "yes" });
     await CodexSocket.open(port);
     expect(homeConnections()).toBe(1);
+  });
+});
+
+describe("the counters and the 503 sequence", () => {
+  test("each 503 while the tunnel reconnects counts as tunnel_connecting_timeout", async () => {
+    const { port, status } = await setup({}, { connected: () => ({ kind: "unavailable" }), pending: () => true, waitForConnected: async () => false });
+    for (let i = 0; i < 2; i += 1) {
+      const { socket, answer } = rawUpgrade(port);
+      expect((await answer).status).toBe(503);
+      socket.destroy();
+    }
+    expect((await status("?transport=1")).websocket).toMatchObject({ upgrades: 0, fallbacks: { tunnel_connecting_timeout: 2 } });
   });
 });
