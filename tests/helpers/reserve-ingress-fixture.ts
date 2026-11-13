@@ -15,7 +15,7 @@ import { clearMainAccountInfoCache, observeMainQuotaCredential } from "../../src
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
 import { isNativeMainTrafficBlocked, waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
-import { startServer } from "../../src/server";
+import { startServer, waitForFailedStartRollback } from "../../src/server";
 import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse } from "../../src/server/ports";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
@@ -202,6 +202,10 @@ export async function reserveIngressFixture(options: {
         server = startServer(publicPort, { inspectNativeCodexOwnership: ownedServiceHomeInspection("Reserve dual-listener fixture") });
         break;
       } catch (error) {
+        // Like the CLI's start: a failed start owns an asynchronous rollback (listeners, ledger
+        // lease) that must settle before another attempt or before teardown removes the home.
+        try { await waitForFailedStartRollback(error); }
+        catch (rollback) { throw new AggregateError([error, rollback], "Reserve ingress fixture start failed and its rollback did not settle"); }
         const collided = isAddrInUse(error) || (error instanceof AuxiliaryListenerBindError && isAddrInUse(error.cause));
         if (!collided || attempt >= 3) throw error;
       }

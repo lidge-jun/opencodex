@@ -1509,6 +1509,7 @@
     "reserve-dispatch.test.ts": "codex-integration",
     "reserve-helper-boundary.test.ts": "codex-integration",
     "reserve-ingress.test.ts": "server",
+    "reserve-ingress-fixture-port-race.test.ts": "server",
     "reserve-passive-revocation.test.ts": "codex-integration",
     "reserve-quota-scope.test.ts": "codex-integration",
     "resolved-model-policy-consumers.test.ts": "routing",
