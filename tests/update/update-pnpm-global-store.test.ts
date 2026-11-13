@@ -684,6 +684,34 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(layout.calls.filter(args => args[0] === "add")).toHaveLength(1);
   });
 
+  test("a store replaced by another directory at the same path before rollback is never rolled back into", () => {
+    const layout = globalStoreLayout(root);
+    const resolved = resolveOwner(layout);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    const run = layout.run;
+    let lists = 0;
+    layout.run = args => {
+      // Post-install listing fails, so the updater would roll back; the add swapped the store for a copy.
+      if (args[0] === "list" && ++lists === 2) return { status: 1 };
+      const result = run(args);
+      if (args[0] === "add" && lists === 1) {
+        const { renameSync, cpSync } = require("node:fs") as typeof import("node:fs");
+        const old = join(root, "old-store-v11");
+        renameSync(layout.store, old);
+        cpSync(old, layout.store, { recursive: true, verbatimSymlinks: true });
+      }
+      return result;
+    };
+    layout.calls.length = 0;
+    const result = runPnpmGlobalUpdate({
+      packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest",
+      owner: resolved.owner, runPnpm: args => layout.run(args), verifyShims: okShims,
+    });
+    expect(result).toMatchObject({ ok: false, phase: "rollback", rolledBack: false,
+      error: "pnpm configured store was replaced or could not be read" + STORE_HINT });
+    expect(layout.calls.filter(args => args[0] === "add")).toHaveLength(1);
+  });
+
   test("a store spelling that gains a symbolic link after discovery refuses before pnpm add", () => {
     const layout = globalStoreLayout(root);
     const resolved = resolveOwner(layout);
