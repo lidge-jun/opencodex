@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { LinkRecoveryTarget } from "./operation-recovery-slot";
 import { requireRemotePlatform } from "./remote-platform";
-import { remoteManagedPurgeDisconnectArgv, remoteRecoverReceiptArgv } from "./remote-plant";
+import { PURGE_KEPT_IN_USE_MARKER, remoteManagedPurgeDisconnectArgv, remoteRecoverReceiptArgv } from "./remote-plant";
 import { MANAGED_PURGE_CHILD_MISSING_MARKER } from "./remote-windows";
 import { checkRouteTrust } from "./route-trust";
 import { buildExecArgv } from "./ssh-argv";
@@ -103,6 +103,9 @@ export async function recoverRemoteChild(
     return failed(result.code === SSH_TRANSPORT_FAILURE ? "The Child could not be reached." : "The Child could not be recovered.", result.code === SSH_TRANSPORT_FAILURE ? "ssh_failed" : "child_failed");
   }
   if (report?.restored !== true || report.linkId !== target.linkId) return failed("The Child did not report a cleanup bound to this link.", "receipt_unbound");
+  if (report.purged !== true && result.stderr.includes(PURGE_KEPT_IN_USE_MARKER)) {
+    return failed("The Child was cleaned, but kept the planted ocx-child because another ocx-child relay runs from it.", "binary_in_use");
+  }
   if (report.purged !== true) return failed("The Child was cleaned but did not report removing the planted ocx-child binary.", "purge_incomplete");
   return { ok: true };
 }

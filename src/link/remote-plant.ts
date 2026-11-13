@@ -297,6 +297,9 @@ export function parsePurgeDisconnectReport(stdout: string): boolean | null {
   return null;
 }
 
+/** Printed by ocx-child on stderr when --purge kept the binary because another relay runs from it. */
+export const PURGE_KEPT_IN_USE_MARKER = "ocx-purge-kept:binary_in_use";
+
 export type PurgeDisconnectOutcome =
   | { readonly ok: true }
   | { readonly ok: false; readonly status: number; readonly code: string; readonly message: string; readonly hint?: string };
@@ -330,7 +333,10 @@ export async function purgeDisconnectRemote(
     if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) return failed("No planted ocx-child was found in the managed directory, so nothing was purged.", "managed_child_missing");
     return failed("The remote client could not be disconnected.", sshFailureHint(result.stderr));
   }
-  if (parsePurgeDisconnectReport(result.stdout) !== true) return failed("The Child disconnected but did not report removing the planted ocx-child binary.", "purge_incomplete");
+  if (parsePurgeDisconnectReport(result.stdout) !== true) {
+    if (result.stderr.includes(PURGE_KEPT_IN_USE_MARKER)) return failed("The Child disconnected, but kept the planted ocx-child because another ocx-child relay runs from it; the link was kept.", "binary_in_use");
+    return failed("The Child disconnected but did not report removing the planted ocx-child binary.", "purge_incomplete");
+  }
   return { ok: true };
 }
 

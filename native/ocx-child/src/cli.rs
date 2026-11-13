@@ -1862,6 +1862,19 @@ fn rollback_prior_link(paths: &ChildPaths) -> Result<Option<Option<String>>, Str
     {
         return Err("rollback snapshot belongs to a different home".to_owned());
     }
+    // Attach reads an unreadable state.json as no prior state but still snapshots its bytes: such a
+    // snapshot would put back an earlier attachment whose link nobody can name, so it is refused.
+    if record.prior_state.is_none()
+        && (record.state_bytes.is_some()
+            || record.journal.is_some()
+            || record.key.is_some()
+            || record.catalog_backup.is_some())
+    {
+        return Err(
+            "rollback snapshot holds an earlier attachment's files but no readable prior state"
+                .to_owned(),
+        );
+    }
     Ok(Some(
         record
             .prior_state
@@ -1996,7 +2009,7 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
             ExpectLinkRefusal::Residual,
             "codex-home-owner",
             &owner_path,
-            "the Child state is missing while the ownership record remains (an interrupted detach); run ocx-child detach on this machine",
+            "the Child state is missing while the ownership record names this link (an attach interrupted before it wrote the state, or an interrupted detach); run ocx-child detach on this machine",
         ),
         None if state_names_link => refuse(
             ExpectLinkRefusal::Residual,
@@ -2042,6 +2055,8 @@ fn purge_after_detach(purge: bool, current_exe_override: Option<&Path>) -> Resul
         Ok(PurgeExecutableOutcome::Removed) => Ok(true),
         Ok(PurgeExecutableOutcome::SkippedUnmanagedPath) => Ok(false),
         Ok(PurgeExecutableOutcome::InUse) => {
+            // A fixed line the Home matches (remote-plant.ts PURGE_KEPT_IN_USE_MARKER).
+            eprintln!("ocx-purge-kept:binary_in_use");
             eprintln!(
                 "detach --purge kept the planted ocx-child: another ocx-child relay is running from it"
             );

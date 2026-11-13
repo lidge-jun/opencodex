@@ -9,7 +9,8 @@ import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { keyFingerprint } from "../../src/link/route-trust";
-import { tombstonesPath } from "../../src/link/tombstones";
+import { MAX_TOMBSTONES, recordTombstone, tombstonesPath } from "../../src/link/tombstones";
+import { serialized } from "../../src/server/management/link-enrollment";
 import { registerOperationRecoveryResolver } from "../../src/link/operation-recovery-slot";
 import { POSIX_RECOVER_RECEIPT_SCRIPT, remoteManagedPurgeDisconnectArgv, remotePurgePlantedChildArgv, remoteRecoverReceiptArgv } from "../../src/link/remote-plant";
 import { windowsScriptData } from "../../src/link/remote-windows";
@@ -46,8 +47,9 @@ function link(over: Partial<LinkRecord> = {}): LinkRecord {
   };
 }
 
-function harness(links: LinkRecord[]) {
-  const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {}, apiKeys: [] };
+function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean } = {}) {
+  const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
+    apiKeys: (opts.keyRevokeFails ? [{ id: "fixture-key" }] : []) as OcxConfig["apiKeys"] };
   const knownHosts = join(root, "known_hosts");
   writeFileSync(knownHosts, "devbox ssh-ed25519 " + HOST_KEY + "\n");
   let store: LinkStore = { version: 1, listenerPort: 18181, links };
@@ -88,9 +90,9 @@ function harness(links: LinkRecord[]) {
     now: () => 1_800_000_000_000,
     sshRunner: runner,
     readLinkStore: () => store,
-    writeLinkStore: next => { store = next; },
+    writeLinkStore: next => { if (opts.storeWriteFails) throw new Error("disk full"); store = next; },
     linkKnownHostsPath: () => knownHosts,
-    revokeApiKey: (cfg, id) => { cfg.apiKeys = (cfg.apiKeys ?? []).filter(k => k.id !== id); return true; },
+    revokeApiKey: (cfg, id) => { if (opts.keyRevokeFails) return false; cfg.apiKeys = (cfg.apiKeys ?? []).filter(k => k.id !== id); return true; },
   };
   async function request(method: string, path: string, body?: unknown) {
     const url = new URL("http://127.0.0.1:10100" + path);
@@ -213,6 +215,7 @@ describe("POST /api/link/recover", () => {
     ["a receipt for another link", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true, linkId: OTHER }), "receipt_unbound"],
     ["a receipt without a link id", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true }), "receipt_unbound"],
     ["a binary it did not remove", report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: false, linkId: ID }), "purge_incomplete"],
+    ["a binary kept because another relay runs from it", ok(JSON.stringify({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: false, linkId: ID }) + "\n", 0, "ocx-purge-kept:binary_in_use\n"), "binary_in_use"],
   ])("%s is not proof of cleanup", async (_name, result, hint) => {
     const h = harness([link()]);
     await forceRevoke(h);
@@ -484,4 +487,72 @@ test("an explicit route also carries the platform probe and the receipt read", a
   expect(probes.length).toBe(2);
   for (const command of [...probes, ...h.commands]) expect(command).toContain("ProxyCommand=" + route.proxyCommand);
   expect(h.commands.some(command => command.includes("ocx-recover-receipt"))).toBe(true);
+});
+
+describe("tombstone bound, cleanup and the operator's way out", () => {
+  const OTHER_ID = "lnk_00000000000000ff";
+  const tombstone = (linkId: string, alias = "gone-vm") => ({ linkId, alias, hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-01T00:00:00.000Z" });
+
+  test.each([
+    ["the key revoke fails", { keyRevokeFails: true }, 502, "key_revoke_failed"],
+    ["the link record cannot be removed", { storeWriteFails: true }, 503, "link_remove_failed"],
+  ])("a forced revoke that does not commit because %s keeps the link and drops its tombstone", async (_name, opts, status, code) => {
+    const h = harness([link()], opts);
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect([res.status, (await errorOf(res)).code]).toEqual([status, code]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
+  test("a purge revoke that cleans the Child settles a tombstone an earlier forced revoke left", async () => {
+    const h = harness([link()]);
+    recordTombstone(tombstone(ID, "devbox"));
+    const res = await h.request("DELETE", "/api/link/" + ID, { purge: true });
+    expect(res.status).toBe(200);
+    expect(tombstones()).toEqual([]);
+  });
+
+  test("forced revokes beyond the bound are refused, never dropped, and the link stays", async () => {
+    for (let i = 0; i < MAX_TOMBSTONES; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
+    const h = harness([link()]);
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect([res.status, (await errorOf(res)).code]).toEqual([409, "tombstone_limit"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toHaveLength(MAX_TOMBSTONES);
+  });
+
+  test("a newer Home's field under ext is kept verbatim and does not refuse forced revokes", async () => {
+    mkdirSync(join(root, "link"), { recursive: true, mode: 0o700 });
+    writeFileSync(tombstonesPath(), JSON.stringify({ version: 1, tombstones: [{ ...tombstone(OTHER_ID), ext: { attachId: "op-7", journal: { state: "residual" } } }] }), { mode: 0o600 });
+    const h = harness([link()]);
+    await forceRevoke(h);
+    expect(tombstones().map(t => [t.linkId, t.ext])).toEqual([[OTHER_ID, { attachId: "op-7", journal: { state: "residual" } }], [ID, undefined]]);
+  });
+
+  test("GET lists what waits without fingerprints; forget drops one without contacting the machine", async () => {
+    const h = harness([]);
+    recordTombstone({ ...tombstone(OTHER_ID), remotePlatform: "windows" });
+    const listed = await h.request("GET", "/api/link/recover");
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual({ tombstones: [{ linkId: OTHER_ID, alias: "gone-vm", revokedAt: "2026-11-01T00:00:00.000Z", remotePlatform: "windows" }] });
+    const forgot = await h.request("POST", "/api/link/recover", { linkId: OTHER_ID, forget: true });
+    expect([forgot.status, await forgot.json()]).toEqual([200, { linkId: OTHER_ID, outcome: "forgotten" }]);
+    expect(tombstones()).toEqual([]);
+    expect(h.commands).toEqual([]);
+    const again = await h.request("POST", "/api/link/recover", { linkId: OTHER_ID, forget: true });
+    expect([again.status, (await errorOf(again)).code]).toEqual([404, "tombstone_not_found"]);
+    const notTrue = await h.request("POST", "/api/link/recover", { linkId: OTHER_ID, forget: "yes" });
+    expect(notTrue.status).toBe(400);
+  });
+
+  test("operations on one alias are serialized whatever its case", async () => {
+    const state = { operations: new Set<string>() } as unknown as LinkRouteState;
+    let release!: () => void;
+    const held = serialized(state, "Devbox", () => new Promise<Response>(resolve => { release = () => resolve(new Response("first")); }));
+    const second = await serialized(state, "devbox", async () => new Response("second"));
+    expect([second.status, (await errorOf(second)).code]).toEqual([409, "link_operation_in_progress"]);
+    release();
+    expect(await (await held).text()).toBe("first");
+    expect(await (await serialized(state, "DEVBOX", async () => new Response("third"))).text()).toBe("third");
+  });
 });

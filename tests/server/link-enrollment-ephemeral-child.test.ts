@@ -228,6 +228,13 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     expect(h.store.links).toHaveLength(1);
     expect(h.events).not.toContain("disconnectPurge");
 
+    // A binary kept because another Home's relay runs from it says so.
+    h.overrides.managedPurge = () => ok('{"restored":true,"outcome":"ExactRestore","daemonRunning":false,"purged":false}\n', 0, "ocx-purge-kept:binary_in_use\n");
+    const inUse = await h.request("DELETE", "/api/link/" + linkId, { purge: true });
+    expect(inUse.status).toBe(502);
+    expect((await inUse.json() as { error: { code: string; hint?: string } }).error).toMatchObject({ code: "remote_disconnect_failed", hint: "binary_in_use" });
+    expect(h.store.links).toHaveLength(1);
+
     h.overrides.managedPurge = () => ok("", 1, "ocx-purge-error:managed_child_missing\n");
     const missing = await h.request("DELETE", "/api/link/" + linkId, { purge: true });
     expect(missing.status).toBe(502);
@@ -413,4 +420,3 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     expect(body.recovery).not.toContain("ocx restart");
   });
 });
-

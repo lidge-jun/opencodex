@@ -92,4 +92,27 @@ describe("ocx link recover contract", () => {
     const recover = document.capabilities.find(entry => entry.command.join(" ") === "link recover");
     expect(recover?.routes).toEqual([{ method: "POST", path: "/api/link/recover" }]);
   });
+
+  test("--list prints what waits, and validates the answer", async () => {
+    const waiting = { tombstones: [{ linkId: ID, alias: "devbox", revokedAt: "2026-11-01T00:00:00.000Z" }] };
+    const f = fixture(waiting);
+    expect(await runLinkCommand(["recover", "--list", "--json"], f.deps)).toBe(0);
+    expect(f.calls[0]?.init?.method).toBe("GET");
+    expect(JSON.parse(output.mock.calls.flat().join("\n"))).toEqual(waiting);
+    expect(await runLinkCommand(["recover", "--list"], fixture({ tombstones: [{ linkId: "nope" }] }).deps)).not.toBe(0);
+    expect(await runLinkCommand(["recover", "--list", "--link-id", ID], fixture(waiting).deps)).toBe(2);
+  });
+
+  test("--forget is for a person: it needs --yes and refuses an agent or a runner before any request", async () => {
+    const answer = { linkId: ID, outcome: "forgotten" };
+    const noYes = fixture(answer);
+    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID], { ...noYes.deps, agentDriven: () => false })).toBe(2);
+    const agent = fixture(answer);
+    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID, "--yes"], { ...agent.deps, agentDriven: () => true })).toBe(2);
+    expect([noYes.calls, agent.calls]).toEqual([[], []]);
+    const person = fixture(answer);
+    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID, "--yes", "--json"], { ...person.deps, agentDriven: () => false })).toBe(0);
+    expect(JSON.parse(String(person.calls[0]?.init?.body))).toEqual({ linkId: ID, forget: true });
+    expect(await runLinkCommand(["recover", "--link-id", ID, "--yes"], fixture().deps)).toBe(2);
+  });
 });

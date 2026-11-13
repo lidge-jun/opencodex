@@ -27,6 +27,12 @@ export interface LinkTombstone {
   /** The link was exclusive: no other route may reach it. Required by explicitRoute. */
   exclusive?: true;
   revokedAt: string;
+  /**
+   * Fields a later Home adds go here, never at the top level: this Home keeps them verbatim when it
+   * rewrites the file and reads none of them, so a newer Home's tombstone never makes an older one
+   * refuse forced revokes. A change older Homes must not ignore bumps the store version instead.
+   */
+  ext?: Record<string, unknown>;
 }
 
 export interface LinkTombstoneStore {
@@ -41,9 +47,20 @@ export class LinkTombstoneStoreError extends Error {
   }
 }
 
+/** At most this many forced revokes wait for cleanup; a forced revoke beyond it is refused, never dropped. */
+export const MAX_TOMBSTONES = 256;
+const MAX_EXT_BYTES = 4096;
+
+export class LinkTombstoneLimitError extends Error {
+  constructor() {
+    super(`at most ${MAX_TOMBSTONES} link tombstones can wait for cleanup`);
+    this.name = "LinkTombstoneLimitError";
+  }
+}
+
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const FINGERPRINT = /^[A-Z0-9]+:[A-Za-z0-9+/=]{16,128}$/;
-const KEYS = new Set(["linkId", "alias", "hostKeyFingerprint", "remotePlatform", "routes", "explicitRoute", "exclusive", "revokedAt"]);
+const KEYS = new Set(["linkId", "alias", "hostKeyFingerprint", "remotePlatform", "routes", "explicitRoute", "exclusive", "revokedAt", "ext"]);
 
 export function tombstonesPath(configDir?: string): string {
   return join(linkDir(configDir), "tombstones.json");
@@ -72,6 +89,8 @@ function parseTombstone(value: unknown, index: number): LinkTombstone {
   if (raw.exclusive !== undefined && (raw.exclusive !== true || raw.routes !== undefined)) fail();
   const explicitRoute = raw.explicitRoute === undefined ? undefined : parseExplicitRoute(raw.explicitRoute);
   if (explicitRoute === null || (explicitRoute && raw.exclusive !== true)) fail();
+  const ext = raw.ext;
+  if (ext !== undefined && (!ext || typeof ext !== "object" || Array.isArray(ext) || Buffer.byteLength(JSON.stringify(ext), "utf8") > MAX_EXT_BYTES)) fail();
   return {
     linkId: raw.linkId as string,
     alias: raw.alias as string,
@@ -81,6 +100,7 @@ function parseTombstone(value: unknown, index: number): LinkTombstone {
     ...(explicitRoute ? { explicitRoute } : {}),
     ...(raw.exclusive === true ? { exclusive: true as const } : {}),
     revokedAt: raw.revokedAt as string,
+    ...(ext === undefined ? {} : { ext: JSON.parse(JSON.stringify(ext)) as Record<string, unknown> }),
   };
 }
 
@@ -92,6 +112,7 @@ export function parseTombstones(text: string): LinkTombstoneStore {
   if (Object.keys(body).some(key => key !== "version" && key !== "tombstones") || body.version !== 1 || !Array.isArray(body.tombstones)) {
     throw new LinkTombstoneStoreError("tombstones.json has an invalid shape");
   }
+  if (body.tombstones.length > MAX_TOMBSTONES) throw new LinkTombstoneStoreError("tombstones.json has too many entries");
   const tombstones = body.tombstones.map(parseTombstone);
   if (new Set(tombstones.map(t => t.linkId)).size !== tombstones.length) throw new LinkTombstoneStoreError("tombstones.json has duplicate link ids");
   return { version: 1, tombstones };
@@ -124,7 +145,9 @@ function writeTombstones(path: string, store: LinkTombstoneStore): void {
 /** Add or replace the tombstone for tombstone.linkId. Callers hold the config mutation lock. */
 export function recordTombstone(tombstone: LinkTombstone, path: string = tombstonesPath()): void {
   const current = readTombstones(path);
-  writeTombstones(path, { version: 1, tombstones: [...current.tombstones.filter(t => t.linkId !== tombstone.linkId), tombstone] });
+  const others = current.tombstones.filter(t => t.linkId !== tombstone.linkId);
+  if (others.length >= MAX_TOMBSTONES) throw new LinkTombstoneLimitError();
+  writeTombstones(path, { version: 1, tombstones: [...others, tombstone] });
 }
 
 /** Remove the tombstone for linkId; true when one was removed. Callers hold the config mutation lock. */

@@ -93,6 +93,8 @@ export interface LinkCliDeps extends RuntimeApiDeps, LocalControlDeps, LinkCaptu
   confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string; ocxVersion?: string | null; runtimeKind?: "full" | "ephemeral" | "missing"; binarySizeBytes?: number }) => Promise<boolean>;
   readStore?: () => LinkStore;
   readAdminToken?: () => string | null;
+  /** Test seam for ocx link recover --forget, which a person must run (src/cli/agent-driven.ts). */
+  agentDriven?: () => boolean;
   /** Test seam: the config directory whose link diagnostics `ocx link diagnostics` reads. */
   linkConfigDir?: string;
 }

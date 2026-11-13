@@ -5,7 +5,7 @@ import { requireRemotePlatform } from "../../link/remote-platform";
 import { purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
-import { recordTombstone, tombstonesPath } from "../../link/tombstones";
+import { LinkTombstoneLimitError, recordTombstone, removeTombstone, tombstonesPath } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
@@ -262,7 +262,11 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     }
     // A forced revoke leaves an ephemeral Child uncleaned. Its tombstone is durable before the key and
     // record go, so ocx link recover can still reach and clean that machine; without it, refuse.
-    if (force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && record.hostKeyFingerprint) {
+    const tombstoned = force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
+    // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: a later
+    // ordinary revoke would otherwise leave one no recover can settle.
+    const dropTombstone = (): void => { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* the link remains; recover refuses link_present */ } };
+    if (tombstoned && record.hostKeyFingerprint) {
       const tombstone = {
         linkId: id, alias: record.alias, hostKeyFingerprint: record.hostKeyFingerprint,
         ...(record.remotePlatform ? { remotePlatform: record.remotePlatform } : {}),
@@ -271,12 +275,18 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         ...(record.exclusive ? { exclusive: true as const } : {}),
         revokedAt: new Date((ctx.deps.now ?? Date.now)()).toISOString(),
       };
-      try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); } catch {
+      try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); } catch (error) {
         await restartTunnel();
+        if (error instanceof LinkTombstoneLimitError) {
+          return fail("tombstone_limit", "The link was kept: too many forced revokes are waiting for cleanup. Recover them, or forget ones whose machine is gone with ocx link recover --forget.", 409);
+        }
         return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
       }
     }
-    if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
+    if (!revokeKeyIdempotent(ctx, record.apiKeyId)) {
+      if (tombstoned) dropTombstone();
+      return fail("key_revoke_failed", "The link key could not be revoked.", 502);
+    }
     let next: LinkStore;
     try {
       next = withConfigMutationLockSync(() => {
@@ -285,7 +295,12 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
         return filtered;
       });
-    } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
+    } catch {
+      if (tombstoned) dropTombstone();
+      return fail("link_remove_failed", "The link record could not be removed.", 503);
+    }
+    // A revoke that cleaned the Child itself settles any tombstone an earlier uncommitted forced revoke left.
+    if (!force) dropTombstone();
     // Same task as the commit, before any fallible cleanup: an open link WebSocket must not outlive its link (design T4 2.4).
     state.listener.closeLinkSockets?.(id);
     try { clearCompensationFailed(id, compensationPath()); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
@@ -406,6 +421,12 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     if (denied) return denied;
     const { handleLinkRecover } = await import("./link-recover-route");
     return handleLinkRecover(ctx, state);
+  }
+  if (url.pathname === "/api/link/recover" && req.method === "GET") {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    const { handleLinkRecoverList } = await import("./link-recover-route");
+    return handleLinkRecoverList();
   }
   // Before the reconnect and DELETE matchers, which would read "children" as a link id.
   if (path.startsWith("/api/link/children/")) {

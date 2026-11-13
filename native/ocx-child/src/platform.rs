@@ -1343,25 +1343,40 @@ pub enum PurgeExecutableOutcome {
 pub const PLANT_IN_USE_LOCK: &str = ".ocx-child-in-use.lock";
 
 /// Hold the planted binary's in-use lock shared when `exe_path` is the managed planted binary.
-/// Refuses while a purge holds it, so a relay never starts from a binary being removed.
+/// Refuses while a purge holds it, so a relay never starts from a binary being removed. "Managed"
+/// is decided by the path (the managed directory and name), never by the file still existing: a
+/// relay whose binary a purge removed just before it took the lock finds it gone and refuses.
 pub fn hold_managed_plant_in_use(
     exe_path: &Path,
     user_home: &Path,
     local_appdata: Option<&Path>,
 ) -> Result<Option<FileLock>, String> {
-    if !is_managed_plant_executable(exe_path, user_home, local_appdata)? {
+    // Linux names an unlinked executable "<path> (deleted)" in /proc/self/exe.
+    let unlinked = exe_path
+        .to_str()
+        .and_then(|p| p.strip_suffix(" (deleted)"))
+        .map(PathBuf::from);
+    let exe_path = unlinked.as_deref().unwrap_or(exe_path);
+    if !is_managed_plant_location(exe_path, user_home, local_appdata)? {
         return Ok(None);
     }
     let parent = exe_path
         .parent()
         .ok_or_else(|| "missing parent".to_owned())?;
-    match FileLock::try_acquire_shared_in_existing_dir(&parent.join(PLANT_IN_USE_LOCK)) {
-        Ok(lock) => Ok(Some(lock)),
-        Err(LockAcquireError::Busy) => Err("the planted ocx-child is being purged".to_owned()),
-        Err(LockAcquireError::Io) => {
-            Err("cannot open the planted ocx-child in-use lock".to_owned())
+    let lock = match FileLock::try_acquire_shared_in_existing_dir(&parent.join(PLANT_IN_USE_LOCK)) {
+        Ok(lock) => lock,
+        Err(LockAcquireError::Busy) => {
+            return Err("the planted ocx-child is being purged".to_owned());
         }
+        Err(LockAcquireError::Io) => {
+            return Err("cannot open the planted ocx-child in-use lock".to_owned());
+        }
+    };
+    if unlinked.is_some() || !fs::symlink_metadata(exe_path).is_ok_and(|m| m.file_type().is_file())
+    {
+        return Err("the planted ocx-child was purged".to_owned());
     }
+    Ok(Some(lock))
 }
 
 fn reject_managed_subpath_symlinks(root: &Path, components: &[&str]) -> Result<PathBuf, String> {
@@ -1382,6 +1397,17 @@ pub fn is_managed_plant_executable(
     if !fs::symlink_metadata(exe_path).is_ok_and(|m| m.file_type().is_file()) {
         return Ok(false);
     }
+    is_managed_plant_location(exe_path, user_home, local_appdata)
+}
+
+/// `exe_path` names the managed planted binary (its directory and file name), whether or not the
+/// file is there.
+fn is_managed_plant_location(
+    exe_path: &Path,
+    user_home: &Path,
+    local_appdata: Option<&Path>,
+) -> Result<bool, String> {
+    reject_symlink(exe_path)?;
     let Some(parent) = exe_path.parent() else {
         return Ok(false);
     };
@@ -1536,5 +1562,72 @@ mod lock_parent_tests {
             assert_eq!(mode(&shared), 0o755);
             assert_eq!(mode(&shared.join("child.lock")), 0o600);
         }
+    }
+}
+#[cfg(test)]
+mod managed_plant_in_use_tests {
+    use super::*;
+
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn managed_home() -> (Scratch, PathBuf) {
+        let home = std::env::temp_dir().join(format!(
+            "ocx-child-plant-in-use-{}-{}",
+            std::process::id(),
+            random_hex(6).unwrap()
+        ));
+        let bin = home.join(".cache").join("opencodex").join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let exe = bin.join(if cfg!(windows) {
+            "ocx-child.exe"
+        } else {
+            "ocx-child"
+        });
+        (Scratch(home), exe)
+    }
+
+    #[test]
+    fn a_relay_whose_managed_binary_is_gone_refuses_instead_of_serving_unlocked() {
+        let (home, exe) = managed_home();
+        assert_eq!(
+            hold_managed_plant_in_use(&exe, &home.0, None)
+                .err()
+                .as_deref(),
+            Some("the planted ocx-child was purged")
+        );
+        fs::write(&exe, b"binary").unwrap();
+        assert!(
+            hold_managed_plant_in_use(&exe, &home.0, None)
+                .unwrap()
+                .is_some()
+        );
+        #[cfg(target_os = "linux")]
+        {
+            // /proc/self/exe after the binary was unlinked.
+            let deleted = PathBuf::from(format!("{} (deleted)", exe.display()));
+            assert_eq!(
+                hold_managed_plant_in_use(&deleted, &home.0, None)
+                    .err()
+                    .as_deref(),
+                Some("the planted ocx-child was purged")
+            );
+        }
+    }
+
+    #[test]
+    fn a_binary_outside_the_managed_directory_holds_nothing() {
+        let (home, _) = managed_home();
+        let elsewhere = home.0.join("ocx-child");
+        fs::write(&elsewhere, b"binary").unwrap();
+        assert!(
+            hold_managed_plant_in_use(&elsewhere, &home.0, None)
+                .unwrap()
+                .is_none()
+        );
     }
 }

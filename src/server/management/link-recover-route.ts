@@ -10,6 +10,32 @@ import { fail, isRecord, knownHostsFile, readStoreFor, runnerFor, type LinkRoute
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
+const noStore = { headers: { "cache-control": "no-store" } };
+
+/** GET /api/link/recover: the forced revokes still waiting for cleanup (no fingerprints, no routes). */
+export function handleLinkRecoverList(): Response {
+  let store;
+  try { store = readTombstones(tombstonesPath()); } catch {
+    return fail("tombstone_store_unreadable", "The link tombstone file cannot be read; it was left as it is.", 503);
+  }
+  return Response.json({
+    tombstones: store.tombstones.map(t => ({ linkId: t.linkId, alias: t.alias, revokedAt: t.revokedAt, ...(t.remotePlatform ? { remotePlatform: t.remotePlatform } : {}) })),
+  }, noStore);
+}
+
+/**
+ * {linkId, forget: true}: drop a tombstone without contacting the machine, for one that is gone for
+ * good (a destroyed disposable VM). The CLI offers it to a person only (ocx link recover --forget --yes).
+ */
+function forgetTombstone(linkId: string): Response {
+  let removed: boolean;
+  try { removed = withConfigMutationLockSync(() => removeTombstone(linkId, tombstonesPath())); } catch {
+    return fail("tombstone_store_unreadable", "The link tombstone file cannot be read or written; it was left as it is.", 503);
+  }
+  if (!removed) return fail("tombstone_not_found", "No forced revoke of this link is waiting for cleanup.", 404);
+  return Response.json({ linkId, outcome: "forgotten" }, noStore);
+}
+
 /**
  * POST /api/link/recover {linkId} | {operationId}: clean an ephemeral Child a forced revoke (a
  * tombstone) or an interrupted enrollment (the O1 journal) left behind. The tombstone or journal
@@ -25,6 +51,9 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
   };
   const linkId = only("linkId", LINK_ID);
   const operationId = only("operationId", OPERATION_ID);
+  if (keys.length === 2 && fields.forget === true && typeof fields.linkId === "string" && LINK_ID.test(fields.linkId)) {
+    return forgetTombstone(fields.linkId);
+  }
   if (!linkId && !operationId) return fail("invalid_body", "Send exactly one of linkId (lnk_ and 16 hex digits) or operationId.", 400);
 
   let target: LinkRecoveryTarget;
@@ -60,6 +89,6 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
     } catch {
       return fail("tombstone_remove_failed", "The Child was cleaned, but its tombstone could not be removed; run recover again.", 503);
     }
-    return Response.json({ linkId: target.linkId, outcome: "clean", purged: true }, { headers: { "cache-control": "no-store" } });
+    return Response.json({ linkId: target.linkId, outcome: "clean", purged: true }, noStore);
   });
 }

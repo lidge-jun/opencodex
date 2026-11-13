@@ -450,6 +450,18 @@ fn a_reattach_interrupted_after_its_state_write_never_restores_the_previous_link
     assert_refused_untouched(&homes, "lnk_00000000000000aa", 5, "conflict");
 }
 
+#[test]
+fn an_attach_over_an_unreadable_state_never_restores_the_files_it_snapshotted() {
+    let homes = Homes::new("owner-link-unreadable-prior");
+    let _home = homes.attach(LINK_B);
+    // Attach reads this as no prior state, yet its rollback snapshot keeps B's files.
+    fs::write(homes.state_path(), b"{not json").unwrap();
+    attach_until_barrier(&homes, LINK_A, "attach-before-daemon-start", true);
+    assert_eq!(homes.owner()["linkId"], LINK_A);
+    let report = assert_refused_untouched(&homes, LINK_A, 5, "conflict");
+    assert_eq!(report["record"], "attach-rollback");
+}
+
 #[cfg(unix)]
 #[test]
 fn purge_removes_the_planted_binary_while_the_lifecycle_lock_is_held() {
