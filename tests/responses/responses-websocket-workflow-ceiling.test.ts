@@ -145,7 +145,7 @@ for (const enforced of [false, true]) {
 
 test("an upstream error header cannot claim a local WebSocket workflow refusal", async () => {
   const frames: Array<{ status: number; headers: Record<string, string> }> = [];
-  const client = { readyState: 1, send(payload: string) { frames.push(JSON.parse(payload)); return 1; } } as unknown as ServerWebSocket<WsData>;
+  const client = { data: {} as WsData, readyState: 1, send(payload: string) { frames.push(JSON.parse(payload)); return 1; } } as unknown as ServerWebSocket<WsData>;
   const response = Response.json({ error: { type: "rate_limit_error", message: "synthetic upstream quota" } }, {
     status: 429, headers: { "x-opencodex-local-refusal": "workflow_sends_exhausted" },
   });

@@ -30,8 +30,11 @@
  * it is written, even when the Home reads only part of it. A Home's hub-link listener (`src/server/index/link-relay-sessions.ts`) counts the
  * response-body bytes it streams back and, for requests, each declared Content-Length (it cannot
  * wrap Bun's native request without losing its identity); a request body without one is counted in
- * `toHomeUncounted` instead. Neither counts HTTP headers, the relay-auth challenge, SSH or TCP
- * framing, or what any relay between the machines adds.
+ * `toHomeUncounted` instead. A link WebSocket is one request in either book, in the same units: message payload bytes
+ * each way (the Child once its socket write completed and per complete message from the Home; the Home per message
+ * received and per message Bun took for the socket). The Home counts it complete when any close frame ended it; the Child
+ * also counts its own overload, binary and protocol closes as incomplete. Neither counts HTTP headers, WebSocket framing or control
+ * frames, the relay-auth challenge, SSH or TCP framing, or what any relay between the machines adds.
  */
 export const MAX_LINKS = 256;
 
@@ -42,21 +45,23 @@ export interface LinkTrafficCounters {
   epoch: string;
   /** Changes every time this link's counters start from zero within one epoch; compare two reads only when epoch and generation match. */
   generation: number;
-  /** Relayed requests on this link. */
+  /** Relayed requests on this link, a link socket counting as one. */
   requests: number;
   /**
    * Of those, requests that ended before their response body did (abort, cancel, error, refusal),
-   * and on a Child also requests whose request-body upload did not finish.
+   * and on a Child also requests whose request-body upload did not finish; a link socket counts when
+   * it ended without a close frame (and on a Child also after its own overload, binary or protocol close).
    */
   incomplete: number;
   /**
-   * Request-body bytes toward the Home. Child: bytes whose socket write completed, a lower bound
-   * while `incomplete` > 0. Home: the declared Content-Length of each request.
+   * Request-body bytes toward the Home, or a link socket's message payloads toward it. Child: bytes
+   * whose socket write completed, a lower bound while `incomplete` > 0. Home: the declared
+   * Content-Length of each relayed request, or the payload of each message a link socket received.
    */
   toHomeBytes: number;
-  /** Response-body bytes from the Home. */
+  /** Response-body bytes from the Home, or a link socket's message payloads from it. */
   fromHomeBytes: number;
-  /** How toHomeBytes was measured: socket writes completed (Child) or declared Content-Length (Home). */
+  /** How toHomeBytes was measured for relayed HTTP: socket writes completed (Child) or declared Content-Length (Home); a link socket's message payloads count the same on both. */
   toHomeSource: "relayed" | "content-length";
   /** Requests whose body bytes toHomeBytes could not include (a Home request without Content-Length). */
   toHomeUncounted: number;
