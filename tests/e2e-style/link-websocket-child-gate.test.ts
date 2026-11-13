@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, setDefaultTimeout } from "bun:te
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connect, createServer, type Server as NetServer } from "node:net";
 import type { Server } from "bun";
 import type { OcxConfig } from "../../src/types";
 import { setLinkWebsocketLimitsForTests, setLinkWebsocketTransportReadyForTests } from "../../src/server/index/link-websocket-limits";
@@ -38,6 +39,7 @@ let server: { stop(force?: boolean): Promise<void> } | null = null;
 let upstream: ReturnType<typeof Bun.serve> | null = null;
 let childListener: Server<unknown> | null = null;
 let stopObserving: (() => void) | null = null;
+let tap: NetServer | null = null;
 const children: Array<ReturnType<typeof Bun.spawn>> = [];
 
 afterAll(removePinnedCodexCopy);
@@ -46,6 +48,8 @@ afterEach(async () => {
   setLinkWebsocketTransportReadyForTests(false);
   setLinkWebsocketLimitsForTests(null);
   for (const child of children.splice(0)) if (child.exitCode === null) child.kill();
+  if (tap) await new Promise<void>(resolve => tap!.close(() => resolve()));
+  tap = null;
   if (childListener) await childListener.stop(true);
   childListener = null;
   forgetLinkWebsocketAdvertisementsForTests();
@@ -89,8 +93,46 @@ async function linkPair(answer: (body: string, index: number) => Response | Prom
   const records: string[] = [];
   childListener = startChild(linkPort, { keyId: KEY_ID, linkId: LINK, secret: SECRET },
     { websocket: { ready: () => true, diagnostic: (record: LinkDiagnosticRecord) => records.push(record.event + ":" + record.outcome) } });
-  const run = (options: { instructionsBytes?: number } = {}) => runGateCodex({ dir, port: childListener!.port!, prompt: { argument: "say gate-ok" }, children, ...options });
+  const run = (options: { instructionsBytes?: number; port?: number } = {}) =>
+    runGateCodex({ dir, port: options.port ?? childListener!.port!, prompt: { argument: "say gate-ok" }, children, instructionsBytes: options.instructionsBytes });
   return { rows, records, run, start, linkPort, restartHome: async () => { await server!.stop(true); await start(); } };
+}
+
+interface TappedConnection { request: string; answer: string; sentAfterHead: number }
+
+/**
+ * A TCP tap in front of the Child's listener: for every connection Codex opens, the head of its request, the head of
+ * the Child's answer, and how many bytes Codex sent after its request head (on an upgraded connection: every WebSocket
+ * frame it wrote, whatever the Child then did with them).
+ */
+async function tapChild(childPort: number): Promise<{ port: number; connections: TappedConnection[] }> {
+  const connections: TappedConnection[] = [];
+  tap = createServer(client => {
+    const entry: TappedConnection = { request: "", answer: "", sentAfterHead: 0 };
+    connections.push(entry);
+    const upstream = connect({ host: "127.0.0.1", port: childPort });
+    let requestHead = Buffer.alloc(0); let answerHead = Buffer.alloc(0);
+    client.on("data", chunk => {
+      if (!entry.request) {
+        requestHead = Buffer.concat([requestHead, chunk]);
+        const end = requestHead.indexOf("\r\n\r\n");
+        if (end >= 0) { entry.request = requestHead.subarray(0, end).toString("latin1"); entry.sentAfterHead += requestHead.length - end - 4; }
+      } else entry.sentAfterHead += chunk.length;
+      upstream.write(chunk);
+    });
+    upstream.on("data", chunk => {
+      if (!entry.answer) {
+        answerHead = Buffer.concat([answerHead, chunk]);
+        const end = answerHead.indexOf("\r\n\r\n");
+        if (end >= 0) entry.answer = answerHead.subarray(0, end).toString("latin1");
+      }
+      client.write(chunk);
+    });
+    client.on("close", () => upstream.destroy()); upstream.on("close", () => client.destroy());
+    client.on("error", () => upstream.destroy()); upstream.on("error", () => client.destroy());
+  });
+  await new Promise<void>(resolve => tap!.listen(0, "127.0.0.1", () => resolve()));
+  return { port: (tap.address() as { port: number }).port, connections };
 }
 
 const sseResponse = (body: string) => new Response(body, { headers: { "content-type": "text/event-stream" } });
@@ -144,9 +186,20 @@ describe("link WebSocket release gate through the real Child (design 11.1 item 1
   gate("real Child, 11.2-8 (a): with the Child's 8 MiB header on its 101, a larger request goes over HTTP and never on the socket", async () => {
     const sizes: number[] = [];
     const pair = await linkPair((body, index) => { sizes.push(body.length); return sseResponse(completed("resp_" + index)); });
-    expectCompleted(await pair.run({ instructionsBytes: LINK_CHILD_WS_LIMITS.localMessageBytes + 1024 }));
+    const tapped = await tapChild(childListener!.port!);
+    expectCompleted(await pair.run({ instructionsBytes: LINK_CHILD_WS_LIMITS.localMessageBytes + 1024, port: tapped.port }));
     expect(Math.max(...sizes)).toBeGreaterThan(LINK_CHILD_WS_LIMITS.localMessageBytes);
-    // The Child opened the socket, and Codex sent the request over HTTP instead: no 1009 from the Child, no WebSocket row.
+    // The Child answered Codex's upgrade with its own 101 carrying the 8 MiB limit (C7).
+    const upgraded = tapped.connections.filter(connection => connection.answer.startsWith("HTTP/1.1 101"));
+    expect(upgraded.length).toBeGreaterThanOrEqual(1);
+    for (const connection of upgraded) {
+      expect(connection.answer.toLowerCase()).toContain("x-codex-websocket-max-message-bytes: " + LINK_CHILD_WS_LIMITS.localMessageBytes);
+      // Everything Codex wrote on the upgraded connection is smaller than the limit: the request never went on the socket.
+      expect(connection.sentAfterHead).toBeLessThan(LINK_CHILD_WS_LIMITS.localMessageBytes);
+    }
+    // It went over HTTP on a connection of its own, which carried the whole body.
+    const posts = tapped.connections.filter(connection => connection.request.startsWith("POST /v1/responses"));
+    expect(posts.map(connection => connection.sentAfterHead > LINK_CHILD_WS_LIMITS.localMessageBytes)).toEqual([true]);
     expect(pair.records[0]).toBe("link_ws_open:connected");
     expect(pair.records.some(record => record.startsWith("link_ws_fallback:"))).toBe(false);
     expect(pair.rows).toEqual(["http:200"]);
