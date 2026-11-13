@@ -7,7 +7,7 @@ const fingerprint = "SHA256:abcdefghijklmnop";
 const probe = { alias: "pen-7f3a9c", fingerprint, keyType: "ED25519", ocxVersion: "2.99.0" };
 const confirm = { alias: probe.alias, fingerprint, ocxVersion: probe.ocxVersion };
 const linkId = "lnk_0123456789abcdef";
-const COMMAND = "/usr/local/bin/pen pipe --node 7f3a9c --noise AbC+/x9= 22";
+const COMMAND = "/usr/local/bin/pen pipe --node 7f3a9c --noise noise-pub-7f3a9c 22";
 const ROUTE_FLAGS = ["--proxy-command", COMMAND, "--ssh-user", "ubuntu", "--ssh-port", "22", "--exclusive"];
 const ROUTE_BODY = { explicitRoute: { proxyCommand: COMMAND, user: "ubuntu", port: 22 }, exclusive: true };
 

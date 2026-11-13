@@ -297,6 +297,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     record.apiKeyId,
     record.createdAt,
     listenerPort,
+    // How ssh reaches the alias: an edit of either restarts the tunnel on the new route instead of keeping the old one.
+    record.explicitRoute ?? null,
+    record.exclusive ?? false,
   ]);
 
   const conditionalRemovePidfile = (linkId: string, pid: number): void => {
@@ -539,7 +542,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         knownHostsFile: linkKnownHostsPath(),
         // OpenSSH confirms the granted remote listener at DEBUG1; the tap keeps today's classifier lines only.
         logLevel: "DEBUG1",
-        // A record with a route list cannot carry an explicit route (store.ts), so this is null here.
+        // A record with a route list cannot carry an explicit route (store.ts rejects it). If one ever arrives here,
+        // buildTunnelArgv refuses an explicit route for any destination but the alias instead of ignoring it.
         route: record.explicitRoute ?? null,
       });
       const child = runner.spawnTunnel(argv, { stderrLine });
