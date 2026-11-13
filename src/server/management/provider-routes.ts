@@ -71,7 +71,16 @@ import {
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
-import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
+import {
+  buildVertexProviderModelsRequest,
+  collectVertexPublisherModelPages,
+  countDiscoveryResponseBytes,
+  extractGoogleNativeModelItems,
+  resolveVertexDiscoveryAuth,
+  vertexDiscoveryAuthIsCurrent,
+  vertexDiscoveryDeadline,
+  type VertexDiscoveryAuth,
+} from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearPassiveKeyLimits, listPassiveKeyLimits, passiveProviderOwnership } from "../../providers/passive-key-observation";
@@ -1652,8 +1661,14 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const snapshot = prov.authMode === "oauth" && mayResolveModelsOAuth(name, config.providers[name])
       ? await getModelsOAuthAccessSnapshot(name, prov).catch(() => undefined)
       : undefined;
-    const apiKey = prov.authMode === "oauth" ? snapshot?.accessToken : await resolveModelsAuthToken(name, prov);
-    if (prov.authMode === "oauth" && !apiKey) {
+    const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline(req.signal) : undefined;
+    let vertexAuth: VertexDiscoveryAuth | undefined;
+    const apiKey = prov.authMode === "oauth"
+      ? snapshot?.accessToken
+      : vertexDeadline
+        ? (vertexAuth = await resolveVertexDiscoveryAuth(prov, vertexDeadline))?.token
+        : await resolveModelsAuthToken(name, prov);
+    if ((prov.authMode === "oauth" || effectiveGoogleMode(name, prov) === "vertex") && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
     if (prov.adapter === "zed") return (await import("./zed-provider-probe")).probeZedProvider(prov, apiKey, snapshot?.providerUserId);
@@ -1709,9 +1724,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (antigravity && !project) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
-    const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name, {
-      oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy,
-    });
+    const { method, url: modelsUrl, headers } = buildVertexProviderModelsRequest(name, prov, apiKey)
+      ?? buildModelsRequest(prov, apiKey, name, { oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy });
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
@@ -1719,9 +1733,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // own fixed discovery URL survives purely-benchmark (Clash/Surge/Mihomo
       // fake-IP) DNS without proxy env.
       const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
-        beforeSend: () => prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
+        beforeSend: () => (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers))
+          && (prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
           && modelsOAuthTargetMatches(name, config.providers[name], authorizedTarget)
-          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget)) };
+          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget))) };
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,
@@ -1730,7 +1745,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         }, outboundDependencies)
         : await providerOutboundGet(name, prov, modelsUrl, {
           headers,
-          signal: AbortSignal.timeout(8000),
+          signal: vertexDeadline ?? AbortSignal.timeout(8000),
         }, outboundDependencies);
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);
@@ -1749,7 +1764,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         }
         return jsonResponse({ ok: false, latencyMs, error: `upstream model discovery returned ${res.status}` });
       }
-      const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+      const vertexFirstPage = vertexDeadline ? countDiscoveryResponseBytes(res) : undefined;
+      const bounded = await readBoundedDiscoveryJson(vertexFirstPage?.response ?? res, discovery.maxResponseBytes);
       if (!bounded.ok) {
         return jsonResponse({
           ok: false,
@@ -1763,23 +1779,27 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (antigravity && !ccaModels) {
         return jsonResponse({ ok: false, latencyMs, error: "upstream CCA model discovery returned an unexpected shape" });
       }
+      const listing = !ccaModels && vertexDeadline
+        ? await collectVertexPublisherModelPages(modelsUrl, bounded.value,
+          { ...discovery, firstPageBytes: vertexFirstPage?.bytes(), signal: vertexDeadline },
+          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies))
+        : { ok: true as const, value: bounded.value };
+      if (!listing.ok) return jsonResponse({ ok: false, latencyMs, error: `upstream Vertex model listing is incomplete: ${listing.diagnostic}` });
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
       // as catalog discovery. Google AI Studio parses the native `models[]` envelope and filters to
       // `generateContent`, while other providers fall back to generic envelope rows if they return `models[]`.
-      const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
-        ? bounded.value as Record<string, unknown>
+      const record = listing.value !== null && typeof listing.value === "object" && !Array.isArray(listing.value)
+        ? listing.value as Record<string, unknown>
         : undefined;
-      const isAiStudio = effectiveGoogleMode(name, prov) === "ai-studio";
-      const googleAiStudio = !ccaModels && isAiStudio
-        ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
+      const googleNative = !ccaModels
+        ? extractGoogleNativeModelItems(name, prov, listing.value, discovery.maxModels)
         : undefined;
       const extracted = ccaModels
         ? undefined
-        : googleAiStudio?.ok
-        ? googleAiStudio
-        : Array.isArray(bounded.value) || Array.isArray(record?.data)
-        ? extractProviderModelItems(bounded.value, discovery)
-        : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);
+        : googleNative
+        ?? (Array.isArray(listing.value) || Array.isArray(record?.data)
+          ? extractProviderModelItems(listing.value, discovery)
+          : extractModelEnvelopeRows(listing.value, discovery.maxModels, ["models"]));
       if (extracted && !extracted.ok) {
         return jsonResponse({
           ok: false,

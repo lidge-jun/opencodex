@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
+import { liveResidual } from "../../src/server/management/link-enrollment";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import type { LinkStore } from "../../src/link/store";
@@ -345,6 +346,14 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     expect(body2.error.code).toBe("child_port_busy");
     expect(body2.residual).toBe(true);
     expect(body2.recovery).toContain("detach --purge");
+    expect(body2).toMatchObject({ residualKind: "plant", remotePlatform: "posix", recovery: "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying." });
+  });
+
+  test("the live residual answer names the managed binary where the Child's platform keeps it", () => {
+    expect(liveResidual("plant", "windows")).toEqual({ residualKind: "plant", remotePlatform: "windows",
+      recovery: 'Run "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge in Command Prompt on the Child, or "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge where LOCALAPPDATA is not set, before retrying.' });
+    expect(liveResidual("ephemeral", "windows")).toEqual({ residualKind: "enrollment", remotePlatform: "windows", recovery: "Run ocx-child detach (or ocx disconnect) on the Child before retrying." });
+    expect(liveResidual("full", undefined)).toEqual({ residualKind: "enrollment", recovery: "Run ocx disconnect and ocx restart on the Child before retrying." });
   });
 
   test("reports hash_tool_unavailable when the Child cannot verify the planted binary's SHA-256", async () => {

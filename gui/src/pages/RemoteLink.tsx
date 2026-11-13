@@ -13,7 +13,7 @@ import { Banner, PageHeader, StateBadge } from "../components/v2-startup/primiti
 import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../components/v2-startup/remote-link-parts";
 import { RemoteLinkDisconnectDialog } from "./RemoteLinkDialogs";
 import { RemoteLinkDiagnostics } from "./RemoteLinkDiagnostics";
-import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView } from "./RemoteLinkSheet";
+import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView, type LinkChildStep } from "./RemoteLinkSheet";
 import { getChildJob, jobHoldsLink, type ChildJobView, type ChildOp } from "../remote-link-child-ops-api";
 import { ChildBulkBar, ChildJobProgress, ChildPolicyPanel, ChildRowActions, ChildRowBadges } from "./RemoteLinkChildActions";
 import "../styles-remote-link.css";
@@ -149,16 +149,26 @@ function paritySynced(homeDigest: string | null, childDigest: string | null): bo
   return homeDigest !== null && childDigest !== null ? homeDigest === childDigest : null;
 }
 
-const RESIDUAL_TKEY = {
-  purge: "remoteLink.residual.purge",
-  ephemeral: "remoteLink.residual.ephemeral",
-  full: "remoteLink.residual.full",
-  unknown: "remoteLink.residual.unknown",
-} as const satisfies Record<LinkResidualStep, TKey>;
+/**
+ * The Child's recovery step for each residual variant. A single command is a chip ({cmd}); the full
+ * install's step names two commands, which one Trans chip cannot hold, so it stays prose.
+ */
+const POSIX_PURGE = "~/.cache/opencodex/bin/ocx-child detach --purge";
+const WINDOWS_PURGE = '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge';
+// Where the plant puts the binary on a Windows Child without LOCALAPPDATA.
+const WINDOWS_FALLBACK = { key: "remoteLink.residual.purgeWindowsFallback", cmd: '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge' } as const;
+const RESIDUAL_STEP: Record<LinkResidualStep, LinkChildStep> = {
+  purge: { key: "remoteLink.residual.purge", cmd: POSIX_PURGE },
+  purgeWindows: { key: "remoteLink.residual.purgeWindows", cmd: WINDOWS_PURGE, more: [WINDOWS_FALLBACK] },
+  purgeAny: { key: "remoteLink.residual.purgeAny", cmd: POSIX_PURGE, more: [{ key: "remoteLink.residual.purgeAnyWindows", cmd: WINDOWS_PURGE }, WINDOWS_FALLBACK] },
+  ephemeral: { key: "remoteLink.residual.ephemeral", cmd: "ocx-child detach" },
+  full: { key: "remoteLink.residual.full" },
+  unknown: { key: "remoteLink.residual.unknown" },
+};
 
 function linkActionError(error: unknown): LinkActionErrorView {
   if (!(error instanceof LinkApiError)) return { key: errorKey(error), hint: null };
-  return { key: errorKey(error), hint: error.hint, childStep: error.residual ? RESIDUAL_TKEY[error.residual] : null };
+  return { key: errorKey(error), hint: error.hint, childStep: error.residual ? RESIDUAL_STEP[error.residual] : null };
 }
 
 export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
