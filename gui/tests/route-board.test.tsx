@@ -12,6 +12,8 @@ import {
   accountCountFromList,
   buildRouteRows,
   capabilityPatch,
+  combineLists,
+  comboContextWindow,
   parseCapabilitySettings,
   quotaFamilyWindow,
   channelKey,
@@ -142,6 +144,16 @@ describe("route board model", () => {
     const before = parseCapabilitySettings({ capabilityPolicy: "union" });
     expect(capabilityPatch(before, before)).toEqual({});
     expect(capabilityPatch(before, { ...before, onUnservable: "reject" })).toEqual({ onUnservable: "reject" });
+  });
+
+  test("context follows the policy: smallest member under intersection, largest under union", () => {
+    const members = [{ contextWindow: 200_000 }, { contextWindow: 1_000_000 }, {}];
+    expect(comboContextWindow(members, "intersection", 64_000)).toEqual({ tokens: 200_000, basis: "min" });
+    expect(comboContextWindow(members, "union", 64_000)).toEqual({ tokens: 1_000_000, basis: "max" });
+    expect(comboContextWindow([{}], "union", 64_000)).toEqual({ tokens: 64_000, basis: "catalog" });
+    expect(combineLists([["text", "image"], ["text"], undefined], "intersection", ["text", "image"])).toEqual(["text"]);
+    expect(combineLists([["high", "low"], ["medium"]], "union", ["low", "medium", "high"])).toEqual(["low", "medium", "high"]);
+    expect(combineLists([undefined], "union")).toBeUndefined();
   });
 
   test("providers sharing a display name stay distinguishable in one row", () => {
@@ -314,7 +326,9 @@ describe("Combos overview page", () => {
     const alphaRow = row("alpha");
     expect(alphaRow.querySelector("strong")?.textContent).toBe("Alpha");
     expect(alphaRow.querySelector(".rb-order")?.textContent).toContain("→");
-    expect(alphaRow.querySelector(".rb-mark")?.textContent).toBe("last resort");
+    expect(alphaRow.querySelector(".rb-mark")?.textContent).toBe("fallback only");
+    // The page's combos set no cooldownWaitPolicy, so the mark is shown as not in effect.
+    expect(alphaRow.querySelector(".rb-mark")?.classList.contains("rb-mark--inert")).toBe(true);
     expect(alphaRow.querySelector(".rb-quota")?.textContent).toContain("pay per use");
     expect(alphaRow.textContent).toContain("ctx 200K");
   });
@@ -372,16 +386,50 @@ describe("Combos overview page", () => {
     expect(body.combo.displayName).toBe("Alpha");
     expect(Object.hasOwn(body.combo, "capabilityPolicy")).toBe(false);
     expect(Object.hasOwn(body.combo, "onUnservable")).toBe(false);
+    expect(Object.hasOwn(body.combo, "cooldownWaitPolicy")).toBe(false);
     expect(body.combo.targets).toEqual([
       { provider: "anthropic", model: "claude", lastResort: false },
       { provider: "openai", model: "gpt-5", modelProfile: "subscription first", lastResort: false },
     ]);
   });
 
+  test("dragging reorders live, before the drop", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    const names = () => [...editor.querySelectorAll(".rb-channel code")].map(node => node.textContent);
+    const items = () => editor.querySelectorAll<HTMLElement>(".rb-channel");
+    await act(async () => { items()[0]!.dispatchEvent(new testWindow.Event("dragstart", { bubbles: true }) as unknown as Event); });
+    await act(async () => { items()[1]!.dispatchEvent(new testWindow.Event("dragover", { bubbles: true, cancelable: true }) as unknown as Event); });
+    expect(names()).toEqual(["claude", "gpt-5"]);
+    expect(editor.textContent).toContain("Unsaved");
+  });
+
+  test("the context tag opens More settings in place, with the members' numbers", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-tag--button")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    expect(editor.querySelector(".rb-more-toggle")?.getAttribute("aria-expanded")).toBe("true");
+    expect(editor.querySelector(".rb-members")).not.toBeNull();
+    expect(window.location.hash).toBe("#models/combos");
+  });
+
+  test("the fallback-only switch writes cooldownWaitPolicy", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    await act(async () => { editor.querySelector<HTMLButtonElement>(".rb-more-toggle")!.click(); });
+    await act(async () => { editor.querySelector<HTMLButtonElement>('[role=switch][aria-label="Fallback channels wait their turn"]')!.click(); });
+    await act(async () => { button(editor, "Save").click(); });
+    await flush();
+    expect((calls[0]!.body as { combo: Record<string, unknown> }).combo.cooldownWaitPolicy).toBe("before-last-resort");
+  });
+
   test("capability policy: union reveals the unservable choice and only changed fields are sent", async () => {
     await renderPage();
     await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
     const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    await act(async () => { editor.querySelector<HTMLButtonElement>(".rb-more-toggle")!.click(); });
     expect(editor.querySelector('[role=combobox][aria-label="When no channel can serve it"]')).toBeNull();
     await chooseOption(editor.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Capabilities"]')!, "union");
     await chooseOption(editor.querySelector<HTMLButtonElement>('[role=combobox][aria-label="When no channel can serve it"]')!, "reject");

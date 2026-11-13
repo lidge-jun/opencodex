@@ -987,7 +987,11 @@ combo: its channels in routing order (last-resort members marked), how much quot
 provider has left (API-key providers read as pay per use), the context window, a strategy menu, and an
 on/off switch. Picking a strategy saves it at once, except JEV, which opens the full editor so the
 decision service is chosen explicitly. Switching a combo off keeps its settings and only stops listing it
-to clients. Click a row to reorder, add, remove, or mark last-resort channels.
+to clients. Click a row to reorder, add, remove, or mark channels fallback only (`lastResort`).
+**More settings** opens under the channels: the capability policy, a switch that makes fallback
+channels wait until nothing else works (`cooldownWaitPolicy: "before-last-resort"`), and each
+member's context window, input types and effort levels next to the combo's combined values.
+Click the context tag on a row to open it directly.
 
 **Advanced** opens the full workspace (`#models/combos/advanced`), which creates, edits, renames, and
 removes combos. Its model selectors include hidden models: catalog visibility only controls external model

@@ -21,6 +21,8 @@ export type ModelOption = {
   inputModalitiesDeclared?: string[];
   /** Authoritative runtime verdict from /api/models: the Vision Sidecar describes this model's images. */
   visionSidecarConsumer?: boolean;
+  /** Catalog context window in tokens, when the model row reports one. */
+  contextWindow?: number;
 };
 
 export type ComboAddIntent = "blank" | "jev-auto";

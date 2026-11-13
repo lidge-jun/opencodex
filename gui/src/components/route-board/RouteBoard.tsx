@@ -12,6 +12,7 @@ import {
   type AccountCount,
   type ComboCapabilitySettings,
   type ComboCatalogMeta,
+  type ComboSettingsPatch,
   type RouteBoardProvider,
 } from "../../route-board-model";
 import type { ModelOption, ProviderOption } from "../combo-workspace-types";
@@ -36,7 +37,7 @@ export interface RouteBoardProps {
   onSave: (
     item: ComboItem,
     channels?: readonly EditableChannel[],
-    capability?: Partial<ComboCapabilitySettings>,
+    settings?: ComboSettingsPatch,
   ) => Promise<SaveResult>;
   onSetEnabled: (id: string, enabled: boolean) => Promise<SaveResult>;
   /** Open the full workspace, optionally on one combo. */
@@ -49,6 +50,8 @@ export interface RouteBoardProps {
 export function RouteBoard(props: RouteBoardProps) {
   const t = useT();
   const [expanded, setExpanded] = useState<string | null>(null);
+  /** Row whose editor opened from its context tag, with "More settings" already open. */
+  const [moreFor, setMoreFor] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [messages, setMessages] = useState<Record<string, string>>({});
   const rows = buildRouteRows({
@@ -58,6 +61,8 @@ export function RouteBoard(props: RouteBoardProps) {
     providers: props.providers,
     quotaReports: props.quotaReports,
     accountCounts: props.accountCounts,
+    models: props.models,
+    capability: props.capability,
   });
   const reported = quotaWindowsByProvider(props.quotaReports);
   const providerByName = new Map(props.providers.map((provider) => [provider.name, provider]));
@@ -88,7 +93,7 @@ export function RouteBoard(props: RouteBoardProps) {
     void run(combo.id, () => props.onSave(plan.item));
   };
 
-  const saveChannels = async (combo: ComboItem, channels: EditableChannel[], capability: Partial<ComboCapabilitySettings>) => {
+  const saveChannels = async (combo: ComboItem, channels: EditableChannel[], settings: ComboSettingsPatch) => {
     const targets = channels.map((channel) => {
       const existing = combo.targets.find((target) => target.provider === channel.provider && target.model === channel.model);
       return existing ?? { provider: channel.provider, model: channel.model };
@@ -96,7 +101,7 @@ export function RouteBoard(props: RouteBoardProps) {
     const item = { ...combo, targets };
     const error = props.validate(item);
     if (error) return setMessage(combo.id, t("routeBoard.notSaved", { reason: props.errorText(error, item) }));
-    if (await run(combo.id, () => props.onSave(item, channels, capability))) setExpanded(null);
+    if (await run(combo.id, () => props.onSave(item, channels, settings))) setExpanded(null);
   };
 
   if (rows.length === 0) {
@@ -115,14 +120,18 @@ export function RouteBoard(props: RouteBoardProps) {
           key={row.combo.id}
           row={row}
           expanded={expanded === row.combo.id}
+          lastResortActive={props.lastResortActive.has(row.combo.id)}
+          onOpenContext={() => { setMoreFor(row.combo.id); setExpanded(row.combo.id); }}
           busy={busy === row.combo.id}
           locked={props.lockedId === row.combo.id}
           message={messages[row.combo.id] ?? null}
-          onToggleExpanded={() => setExpanded((current) => current === row.combo.id ? null : row.combo.id)}
+          onToggleExpanded={() => { setMoreFor(null); setExpanded((current) => current === row.combo.id ? null : row.combo.id); }}
           onStrategy={(next) => changeStrategy(row.combo, next)}
           onEnabled={(next) => void run(row.combo.id, () => props.onSetEnabled(row.combo.id, next))}
         >
           <ChannelEditor
+            key={`${row.combo.id}:${moreFor === row.combo.id ? "more" : "plain"}`}
+            moreOpen={moreFor === row.combo.id}
             comboModel={row.publicId}
             strategy={row.combo.strategy}
             channels={row.channels}
@@ -137,9 +146,8 @@ export function RouteBoard(props: RouteBoardProps) {
             labels={distinctProviderLabels(row.channels.map((channel) => channel.provider), (provider) => formatProviderDisplayName(provider, t))}
             capability={props.capability?.[row.combo.id] ?? DEFAULT_CAPABILITY_SETTINGS}
             saving={busy === row.combo.id || props.lockedId === row.combo.id}
-            onSave={(channels, capability) => void saveChannels(row.combo, channels, capability)}
+            onSave={(channels, settings) => void saveChannels(row.combo, channels, settings)}
             onCancel={() => setExpanded(null)}
-            onOpenAdvanced={() => props.onOpenAdvanced(row.combo.id)}
           />
         </ModelRouteRow>
       ))}

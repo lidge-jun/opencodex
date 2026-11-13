@@ -15,6 +15,8 @@ export function ModelRouteRow({
   expanded,
   busy,
   locked = false,
+  lastResortActive = false,
+  onOpenContext,
   message,
   onToggleExpanded,
   onStrategy,
@@ -25,6 +27,9 @@ export function ModelRouteRow({
   expanded: boolean;
   busy: boolean;
   locked?: boolean;
+  /** The combo sets `cooldownWaitPolicy`; otherwise fallback-only marks are inert. */
+  lastResortActive?: boolean;
+  onOpenContext?: () => void;
   message: string | null;
   onToggleExpanded: () => void;
   onStrategy: (next: ComboStrategy) => void;
@@ -62,7 +67,12 @@ export function ModelRouteRow({
                 <span key={channel.key} className={`rb-order-item${channel.providerDisabled ? " rb-order-item--off" : ""}`}>
                   {index > 0 && <span className="rb-order-sep" aria-hidden="true">{separator}</span>}
                   {labels.get(channel.provider)}
-                  {channel.lastResort && <span className="rb-mark">{t("routeBoard.lastResort")}</span>}
+                  {channel.lastResort && (
+                    <span
+                      className={`rb-mark${lastResortActive ? "" : " rb-mark--inert"}`}
+                      title={lastResortActive ? t("routeBoard.edit.lastResortHint") : t("routeBoard.edit.lastResortInert")}
+                    >{t("routeBoard.lastResort")}</span>
+                  )}
                 </span>
               ))}
             </span>
@@ -77,9 +87,12 @@ export function ModelRouteRow({
           )}
           {row.combo.imageInput === "disabled" && <span className="rb-tag">{t("routeBoard.tag.noImages")}</span>}
           {row.contextWindow !== undefined && (
-            <span className="rb-tag" title={t("routeBoard.contextHint")}>
+            <button type="button" className="rb-tag rb-tag--button" title={t("routeBoard.contextHint")} onClick={onOpenContext}>
               {t("routeBoard.context", { size: formatContextWindow(row.contextWindow) })}
-            </span>
+              {row.contextBasis !== "catalog" && (
+                <span className="rb-tag-basis"> {t(row.contextBasis === "max" ? "routeBoard.contextBasis.max" : "routeBoard.contextBasis.min")}</span>
+              )}
+            </button>
           )}
           <StrategyMenu
             value={row.combo.strategy}

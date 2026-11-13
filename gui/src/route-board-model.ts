@@ -66,6 +66,50 @@ export interface ProviderQuotaLine {
   accounts?: AccountCount;
 }
 
+/** What the catalog says one member can take. */
+export interface MemberFacts {
+  contextWindow?: number;
+  inputModalities?: readonly string[];
+  reasoningEfforts?: readonly string[];
+}
+
+export interface MemberModel extends MemberFacts {
+  provider: string;
+  id: string;
+}
+
+export type ContextBasis = "min" | "max" | "catalog";
+
+/**
+ * The combo's context window as the policy advertises it: intersection takes the smallest
+ * member, union the largest (union over context lands with the T4c backend). Falls back to the
+ * catalog's own number when no member reports one.
+ */
+export function comboContextWindow(
+  members: readonly MemberFacts[],
+  policy: CapabilityPolicy,
+  catalog: number | undefined,
+): { tokens?: number; basis: ContextBasis } {
+  const known = members.flatMap((member) => typeof member.contextWindow === "number" && member.contextWindow > 0 ? [member.contextWindow] : []);
+  if (known.length === 0) return catalog !== undefined ? { tokens: catalog, basis: "catalog" } : { basis: "catalog" };
+  return policy === "union" ? { tokens: Math.max(...known), basis: "max" } : { tokens: Math.min(...known), basis: "min" };
+}
+
+/** Combined list under the policy: every member's (intersection) or any member's (union); undefined when no member reports one. */
+export function combineLists(lists: ReadonlyArray<readonly string[] | undefined>, policy: CapabilityPolicy, order: readonly string[] = []): string[] | undefined {
+  const known = lists.filter((list): list is readonly string[] => list !== undefined);
+  if (known.length === 0) return undefined;
+  const merged = policy === "union"
+    ? [...new Set(known.flat())]
+    : known.reduce<string[]>((common, list) => common.filter((value) => list.includes(value)), [...known[0]!]);
+  const rank = (value: string) => { const index = order.indexOf(value); return index < 0 ? order.length : index; };
+  return merged.sort((a, b) => rank(a) - rank(b));
+}
+
+export function memberFacts(models: readonly MemberModel[], provider: string, model: string): MemberFacts {
+  return models.find((candidate) => candidate.provider === provider && candidate.id === model) ?? {};
+}
+
 export interface RouteRow {
   combo: ComboItem;
   publicId: string;
@@ -74,6 +118,7 @@ export interface RouteRow {
   /** One entry per distinct provider, in first-use order. */
   quotas: ProviderQuotaLine[];
   contextWindow?: number;
+  contextBasis: ContextBasis;
   enabled: boolean;
   lastResortCount: number;
 }
@@ -93,6 +138,9 @@ export function parseCapabilitySettings(raw: { capabilityPolicy?: unknown; onUns
     onUnservable: raw.onUnservable === "reject" ? "reject" : "degrade",
   };
 }
+
+/** Fields the inline editor writes besides the targets; each is sent only when changed. */
+export type ComboSettingsPatch = Partial<ComboCapabilitySettings> & { cooldownWaitPolicy?: "before-last-resort" | null };
 
 /** Only the fields that changed, so a server without them never sees them unless the operator asked. */
 export function capabilityPatch(before: ComboCapabilitySettings, after: ComboCapabilitySettings): Partial<ComboCapabilitySettings> {
@@ -226,6 +274,8 @@ export function buildRouteRows(input: {
   quotaReports: unknown;
   /** Per-provider account counts read from the account list, for providers whose quota has no aggregate. */
   accountCounts?: Readonly<Record<string, AccountCount>>;
+  models?: readonly MemberModel[];
+  capability?: Readonly<Record<string, ComboCapabilitySettings>>;
   now?: number;
 }): RouteRow[] {
   const providers = new Map(input.providers.map((provider) => [provider.name, provider]));
@@ -254,6 +304,12 @@ export function buildRouteRows(input: {
       });
     }
     const meta = input.catalog[combo.id];
+    const policy = input.capability?.[combo.id]?.capabilityPolicy ?? "intersection";
+    const context = comboContextWindow(
+      channels.map((channel) => memberFacts(input.models ?? [], channel.provider, channel.model)),
+      policy,
+      meta?.contextWindow,
+    );
     const publicId = comboPublicModelId(combo.id, combo.alias);
     return {
       combo,
@@ -261,7 +317,8 @@ export function buildRouteRows(input: {
       displayName: combo.displayName?.trim() || meta?.displayName?.trim() || combo.id,
       channels,
       quotas,
-      ...(meta?.contextWindow !== undefined ? { contextWindow: meta.contextWindow } : {}),
+      ...(context.tokens !== undefined ? { contextWindow: context.tokens } : {}),
+      contextBasis: context.basis,
       enabled: meta ? !meta.disabled : true,
       lastResortCount: channels.filter((channel) => channel.lastResort).length,
     };

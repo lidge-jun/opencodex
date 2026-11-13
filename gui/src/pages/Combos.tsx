@@ -33,6 +33,7 @@ import {
   type AccountCount,
   type ComboCapabilitySettings,
   type ComboCatalogMeta,
+  type ComboSettingsPatch,
 } from "../route-board-model";
 import { readCombosView, type CombosView } from "./combos-view";
 
@@ -54,6 +55,7 @@ type ModelOption = {
   inputModalities?: string[];
   inputModalitiesDeclared?: string[];
   visionSidecarConsumer?: boolean;
+  contextWindow?: number;
 };
 type ProviderDto = {
   adapter: string;
@@ -305,6 +307,7 @@ export default function Combos({
         ...(inputModalities && inputModalities.length > 0 ? { inputModalities } : {}),
         ...(inputModalitiesDeclared && inputModalitiesDeclared.length > 0 ? { inputModalitiesDeclared } : {}),
         visionSidecarConsumer: model.visionSidecarConsumer === true,
+        ...(typeof model.contextWindow === "number" && model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
       };
       capabilityModels.push(option);
       models.push(option); // Catalog visibility does not restrict internal Combo selection.
@@ -453,7 +456,7 @@ export default function Combos({
     item: ComboItem,
     isCreate: boolean,
     renameFrom?: string,
-    overview?: { channels?: readonly EditableChannel[]; capability?: Partial<ComboCapabilitySettings> },
+    overview?: { channels?: readonly EditableChannel[]; capability?: ComboSettingsPatch },
   ) => {
     const channels = overview?.channels;
     try {
