@@ -11,8 +11,8 @@ const originalWrite = Socket.prototype._write;
  * Bun fails a write still waiting on its native socket.
  *
  * Size alone cannot give a test that state. Bun completes a plain TCP write once the operating system
- * accepts it, and Windows accepts a whole nonblocking send into its socket buffer at once, so on a
- * Windows runner a 48 MiB write to a Home that never reads it completes immediately. Smaller writes
+ * accepts it, and Windows can take a whole large nonblocking send into its socket buffer (on the
+ * Windows runners a 48 MiB write to a Home that never reads it completed immediately). Smaller writes
  * (the relay-auth challenge, headers) complete as usual. Undo with {@link restoreSocketWrites}.
  */
 export function holdLargeSocketWrites(minBytes: number): void {
