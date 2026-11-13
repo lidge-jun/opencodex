@@ -115,7 +115,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { decidePostStopUpdate } from \"./stop-decision.mjs\";",
     "import { existsSync, readFileSync, readdirSync } from \"node:fs\";",
     "import { fileURLToPath } from \"node:url\";",
-    "import { dirname, join, resolve } from \"node:path\";",
+    "import { dirname, isAbsolute, join, resolve } from \"node:path\";",
     "import { getConfigDir, getConfigPath, loadConfig } from \"../config\";",
     'import { runConfigPreflight } from "./config-preflight";',
     "import { readPid, readRuntimePort, getRuntimePortPath } from \"../config/process-state\";",
@@ -375,10 +375,9 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { guardedRenameSync, ownedArtifactRm } from \"./mutation-guard.mjs\";",
     "import { probeSpawnSync } from \"./mutation-guard.mjs\";",
     "import { randomBytes } from \"node:crypto\";",
-    "import { globalPaths } from \"node:module\";",
     "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
     "import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from \"node:path\";",
-    "import { isInMarkedPnpmCustomStore, isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
+    "import { isInMarkedPnpmCustomStore } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/tray-update-plan.mjs": [],
   "src/update/update-failure-guidance.mjs": [

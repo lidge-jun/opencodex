@@ -24,7 +24,6 @@ import { guardedRenameSync, ownedArtifactRm } from "./mutation-guard.mjs";
  */
 import { probeSpawnSync } from "./mutation-guard.mjs";
 import { randomBytes } from "node:crypto";
-import { globalPaths } from "node:module";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { isInMarkedPnpmCustomStore } from "./pnpm-store-layout.mjs";
@@ -418,14 +417,25 @@ function inspectPnpmMetadata(path, store, escaped, kind, storeAlias = store, see
 }
 
 /**
+ * Node's built-in global lookup paths, computed the way Node's module loader builds Module.globalPaths
+ * (before NODE_PATH): $HOME/.node_modules and $HOME/.node_libraries (USERPROFILE on Windows), then
+ * <prefix>/lib/node, where prefix is the executable's directory on Windows and its parent elsewhere.
+ */
+function nodeGlobalLookupPaths() {
+  const home = process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME;
+  const prefix = process.platform === "win32" ? resolve(process.execPath, "..") : resolve(process.execPath, "..", "..");
+  return [...(home ? [resolve(home, ".node_modules"), resolve(home, ".node_libraries")] : []), resolve(prefix, "lib", "node")];
+}
+
+/**
  * Node's global search paths (Module.globalPaths, NODE_PATH) that lie inside the store must keep their
  * links there. Paths outside the store are the user's environment, not the package: they are not
  * evidence that the package left its store, and a missing declared dependency they could supply is
  * refused by inspectAncestorDependency's missing-dependency rule.
  */
 function inspectGlobalLookupRoots(store, escaped, storeAlias = store) {
-  const roots = new Set([...globalPaths, ...String(process.env.NODE_PATH ?? "").split(delimiter).filter(Boolean)]);
-  for (const raw of roots) {
+  const lookupRoots = new Set([...nodeGlobalLookupPaths(), ...String(process.env.NODE_PATH ?? "").split(delimiter).filter(Boolean)]);
+  for (const raw of lookupRoots) {
     const root = resolve(raw);
     try { lstatSync(root); } catch (error) {
       if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm global dependency lookup root could not be resolved");

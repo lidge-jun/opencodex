@@ -37,6 +37,8 @@ const baseHelperControlContracts: readonly Contract[] = [
   ["src/update/npm-install.mjs","runNpmInstall","process.stderr.write(chunk)",1,"forward own staging installer's diagnostic stream"],
   ["src/update/pnpm-read-policy.mjs","withPnpmCommandCwd","mkdtempSync(join(tmpdir(), \"ocx-pnpm-command-\"))",1,"exclusive disposable pnpm read-policy cwd"],
   ["src/update/pnpm-read-policy.mjs","withPnpmCommandCwd","rmdirSync(cwd)",1,"remove only identity-checked empty private command cwd"],
+  ["src/update/transactional-install.mjs","verifyPnpmInstallTree","/(?:^|[\\s\"'])--preserve-symlinks",1,"read-only: detect --preserve-symlinks in the running process flags"],
+  ["src/update/transactional-install.mjs","verifyPnpmInstallTree","[...process.execArgv, process.env.NODE_OPTIONS",1,"read-only: join the running process flags for the --preserve-symlinks check"],
   ["src/update/transactional-install.mjs","createOwnedStage","mkdir(stageRoot)",1,"exclusive randomly named private stage, never reuse an existing directory"],
   ["src/update/transactional-install.mjs","createOwnedStage","mkdir(join(stageRoot, \"lib\"))",1,"npm layout inside the exclusively owned stage"],
   ["src/update/transactional-install.mjs","npmUpdateTransaction","mkdirSync(backupRoot, { recursive: true })",1,"empty backup container; live swap separately guarded"],

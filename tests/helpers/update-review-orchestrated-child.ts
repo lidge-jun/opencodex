@@ -29,7 +29,7 @@ export const orchestratedChildReview: UpdateReviewTable = {
     ],
     "src/update/orchestrated-pnpm.mjs": [
       // Read-only installed tree and pnpm owner verification.
-      'import { join } from "node:path";',
+      'import { join, resolve } from "node:path";',
       'import { readPnpmGlobalPackage, resolvePnpmGlobalOwner } from "./pnpm-global-install.mjs";',
       'import { verifyPnpmInstallTree } from "./transactional-install.mjs";',
     ],
