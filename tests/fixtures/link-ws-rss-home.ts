@@ -4,7 +4,8 @@
  * stdin as one JSON line; commands follow, one per line: "gc-rss" (collect, then reset the high-water
  * mark to the current RSS), "peak" (the high-water mark since then), "heap" (a diagnostic breakdown of what
  * the process holds now: memoryUsage and the largest JSC heap classes by retained size), "stop". When "stalls" link pumps
- * are waiting for a drain at the same time, the fixture prints {"stalled":true} once.
+ * are waiting for a drain, or relayed HTTP responses for their reader, at the same time, the fixture prints
+ * {"stalled":true} once per idle reading.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,7 +26,7 @@ writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({ models
 const { writeLinkStore } = await import("../../src/link/store");
 const { linkStorePath } = await import("../../src/link/paths");
 const { saveConfig } = await import("../../src/config");
-const { setLinkWebsocketTransportReadyForTests, setLinkPumpWaitObserverForTests } = await import("../../src/server/index/link-websocket-limits");
+const { setLinkWebsocketTransportReadyForTests, setLinkPumpWaitObserverForTests, setLinkRelayWaitObserverForTests } = await import("../../src/server/index/link-websocket-limits");
 
 // Peak RSS. On Linux the kernel keeps the process high-water mark (VmHWM in /proc/self/status), so
 // a peak that rises and falls inside one synchronous operation is still counted; writing "5" to
@@ -53,12 +54,15 @@ const peakAnswer = (): { rss: number | null; method: string } => {
   return { rss: value, method: resetFailed ? "kernel-reset-failed" : "kernel-vmhwm" };
 };
 let waiting = 0;
-let announced = false;
-setLinkPumpWaitObserverForTests(isWaiting => {
+// Armed by the idle reading ("gc-rss"), so a warm-up turn whose pump waited for a drain cannot announce the load's stall.
+let announced = true;
+const observeWait = (isWaiting: boolean): void => {
   waiting += isWaiting ? 1 : -1;
   sample();
   if (!announced && waiting >= setup.stalls) { announced = true; console.log(JSON.stringify({ stalled: true })); }
-});
+};
+setLinkPumpWaitObserverForTests(observeWait);
+setLinkRelayWaitObserverForTests(observeWait);
 
 writeLinkStore(linkStorePath(), {
   version: 1,
@@ -93,6 +97,7 @@ for (;;) {
     Bun.gc(true);
     if (kernel && !resetKernelPeak()) resetFailed = true;
     highWater = process.memoryUsage().rss;
+    announced = false;
     console.log(JSON.stringify({ rss: highWater }));
   }
   else if (command === "heap") {

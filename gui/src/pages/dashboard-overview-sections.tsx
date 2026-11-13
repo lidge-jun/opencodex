@@ -50,7 +50,7 @@ export function DashboardSubagentSection({ d }: { d: Dash }) {
         label={t("dash.multiAgent")}
         hint={t("proxyV2.maModeHint")}
         help={<DashboardMultiAgentHelp {...d} />}
-        control={<DashboardMultiAgentControl maMode={maMode} maBusy={d.maBusy} switchMaMode={d.switchMaMode} />}
+        control={<DashboardMultiAgentControl maMode={maMode} maSupportsPlaintextV2={d.maSupportsPlaintextV2} maBusy={d.maBusy} switchMaMode={d.switchMaMode} />}
       >
         {maError && <div role="alert" className="text-[13px] break-words text-danger">{maError}</div>}
       </SettingsRow>

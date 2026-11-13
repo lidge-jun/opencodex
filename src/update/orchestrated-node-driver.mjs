@@ -5,7 +5,7 @@ import { createUpdatePlanToken } from "./orchestrated-token.mjs";
 import { waitForOrchestratedChild } from "./orchestrated-child.mjs";
 import { classifyOrchestratedOutcome } from "./orchestrated-outcome.mjs";
 import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
-import { verifyOrchestratedPnpmInstall } from "./orchestrated-pnpm.mjs";
+import { canonicalOrchestratedPnpmOwner, verifyOrchestratedPnpmInstall } from "./orchestrated-pnpm.mjs";
 import { resolvePnpmGlobalOwner } from "./pnpm-global-install.mjs";
 import { parseOrchestratedUpdateArgs } from "./orchestrated-arguments.mjs";
 
@@ -58,7 +58,8 @@ export async function applyNodeOrchestratedUpdate(request, deps) {
     const start = Date.now();
     channel = createOrchestratedResultChannel();
     const expect = encodeOrchestratedExpect({ home: deps.home, cliRoot: plan.cliPath, servingRoot: live?.servingRoot ?? null,
-      runtimePid: live?.runtime.pid ?? null, planToken: plan.planToken });
+      runtimePid: live?.runtime.pid ?? null, planToken: plan.planToken,
+      ...(owner ? { pnpmOwner: canonicalOrchestratedPnpmOwner(owner) } : {}) });
     const args = [deps.launcher, "update", "--version", plan.targetVersion, "--orchestrated-expect", expect,
       "--orchestrated-result", channel.resultPath, ...(request.notAfter === undefined ? [] : ["--not-after", String(request.notAfter)])];
     const child = deps.spawn(process.execPath, args, { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: "1", OCX_UPDATE_RESULT_CAPABILITY: channel.capability }, stdio: ["ignore", 2, 2] });

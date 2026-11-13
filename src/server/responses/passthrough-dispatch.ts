@@ -1,4 +1,5 @@
 import { clientFacingModelText } from "../../lib/error-destination";
+import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { passthroughBuildErrorResponse } from "./passthrough-build-error";
@@ -62,7 +63,8 @@ import {
   collectFunctionCallRepairSchemas,
   repairFunctionCallsInJson,
 } from "../../responses/function-call-compat";
-import type { RoutedNamespaceToolAliases } from "../../responses/namespace-tool-compat";
+import { authorizedBareNamespaceToolAliases as authorizedBareNamespaceAliases } from "./bare-namespace-aliases";
+import { outboundToolScope } from "./outbound-request-body";
 import { hasResponsesSnapshotRepair, repairResponsesSnapshotJson } from "../responses-snapshot-repair";
 import { backfillResponsesFieldsJson } from "./responses-field-backfill";
 import type { AdapterRequest } from "../../adapters/base";
@@ -430,7 +432,8 @@ export async function preparePassthroughExchange(
     // `{model, input, stream}` with no tools and Copilot answers with a `custom_tool_call` for
     // `apply_patch`. Policing an absent catalog truncates that turn. An unreadable body lands there
     // too because the proxy cannot establish the caller's declared authorization boundary.
-    let outboundRequestBody: Record<string, unknown> | undefined;
+    // #8601: only the outbound body's tool scope (outbound-request-body.ts) stays with the turn, never a parsed copy of it.
+    let outboundRequestScope: Record<string, unknown> | undefined;
     const declaredWireToolNames = new Set<string>();
     const declaredBareWireToolNames = new Set<string>();
     const declaredNamelessClientCallTypes = new Set<string>();
@@ -441,22 +444,12 @@ export async function preparePassthroughExchange(
     // checks. `exec` uses separate handling: its bridge alias is copied into the declared set only
     // when the client itself declared bare `exec`, because otherwise code-mode normalization could
     // authorize the unrelated code-mode helper names.
-    const authorizedBareNamespaceToolAliases: RoutedNamespaceToolAliases = new Map(
-      [...toolBridgeMaps.toolNsMap].flatMap(([alias, identity]) =>
-        alias === identity.name
-          ? [[alias, {
-              namespace: identity.namespace,
-              name: identity.name,
-              kind: identity.freeform ? "custom" as const : "function" as const,
-            }] as const]
-          : []
-      ),
-    );
+    const authorizedBareNamespaceToolAliases = authorizedBareNamespaceAliases(toolBridgeMaps.toolNsMap);
     const restoreAuthorizedBareNamespaceToolCalls = (value: unknown): unknown =>
       restoreRoutedNamespaceCalls(value, authorizedBareNamespaceToolAliases).value;
     const normalizeFunctionCompletionJson = (text: string): string => {
       const snapshot = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
-        ? repairResponsesSnapshotJson(text, outboundRequestBody)
+        ? repairResponsesSnapshotJson(text, outboundRequestScope)
         : text;
       // Sparse gateways need completion status inferred before schema repair can
       // distinguish completed arguments from in-progress placeholders.
@@ -464,7 +457,8 @@ export async function preparePassthroughExchange(
     };
     let undeclaredToolGuardActive = false;
     const refreshUndeclaredToolGuard = (builtRequest: AdapterRequest): void => {
-      outboundRequestBody = parseOutboundRequestBody(builtRequest.body);
+      const outboundRequestBody = parseOutboundRequestBody(builtRequest.body);
+      outboundRequestScope = outboundToolScope(outboundRequestBody);
       providerExecutedCallTypes.clear();
       if (isXaiResponsesDestination(route.provider)) {
         // Preserve the caller-declared authorization recognized by the original classifier, then
@@ -915,10 +909,9 @@ export async function preparePassthroughExchange(
         return clientCancelledResponse();
       }
       if (lastDistributedResponse) recordDistributedResponseFailure(lastDistributedResponse, config, route.providerName, options.abortSignal);
-      // A budget refusal is a proxy decision, not an upstream fault. Reporting it as
-      // 502 upstream_error would blame the provider for a limit this process applied, and
-      // would record a fake reachability failure against the account's health.
+      // A budget refusal is local; a 502 would falsely record an account reachability failure.
       if (err instanceof SendBudgetExhaustedError) {
+        logCtx.terminalSource = "synthetic";
         releaseUpstreamHostAdmission(nativeHostState.lease);
         nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
@@ -930,12 +923,13 @@ export async function preparePassthroughExchange(
         bindRefreshedAdapter(refusal.adapter);
         return handoffToChat(refusal.adapter);
       }
-      const dispatchRefusal = requestPacingOverloadResponse(refusal) ?? copilotRefusalResponse(refusal);
-      if (dispatchRefusal) {
-        releaseUpstreamHostAdmission(nativeHostState.lease);
-        nativeHostState.lease = null;
+      const pacingRefusal = requestPacingOverloadResponse(refusal);
+      if (pacingRefusal) logCtx.terminalSource = "synthetic";
+      const localDispatchRefusal = pacingRefusal ?? copilotRefusalResponse(refusal);
+      if (localDispatchRefusal) {
+        releaseUpstreamHostAdmission(nativeHostState.lease); nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return dispatchRefusal;
+        return localDispatchRefusal;
       }
       // Pacing may outlive the selected account's admission. No fetch occurred, so do
       // not turn an operator pause into a 502 or charge it to host/account health.
@@ -1210,7 +1204,6 @@ export async function preparePassthroughExchange(
         if ("failed" in recovered) return recovered.failed;
         upstreamResponse = recovered; continue passthroughRecovery;
       }
-
 
     if (
       upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
@@ -1548,7 +1541,7 @@ export async function preparePassthroughExchange(
    while (
      upstreamResponse.status === 429
       && !isNonReplayableResponse(upstreamResponse)
-     && rateLimitPolicy !== null
+     && rateLimitPolicy !== null && providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)
       && rateLimitRetries < rateLimitPolicy.attempts
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429
       // body, so a refusal discovered after the wait can no longer return the real rate-limit
@@ -1969,10 +1962,10 @@ export async function preparePassthroughExchange(
     },
     functionRepairSchemas,
     get outboundRequestBody(): Record<string, unknown> | undefined {
-      return outboundRequestBody;
+      return outboundRequestScope;
     },
     set outboundRequestBody(value: Record<string, unknown> | undefined) {
-      outboundRequestBody = value;
+      outboundRequestScope = outboundToolScope(value);
     },
     declaredWireToolNames,
     declaredBareWireToolNames,

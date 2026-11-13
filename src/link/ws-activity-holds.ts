@@ -109,6 +109,7 @@ export interface HoldWriteHooks {
   afterOpen?: (temp: string) => void;
   beforeRename?: (temp: string, target: string) => void;
   afterRename?: (target: string) => void;
+  /** Test seam: runs after the rename, where the directory fsync follows on Linux and macOS (every platform). */
   syncDir?: (dir: string) => void;
 }
 
@@ -166,9 +167,11 @@ export function createActivityHolds(deps: ActivityHoldsDeps) {
       throw error;
     }
     hooks.afterRename?.(target);
+    if (process.platform !== "win32") chmodSync(target, 0o600);
+    // The seam sits at the post-rename durability point on every platform, so the callers' handling
+    // of a rename that landed but is reported as not durable runs under test on Windows too.
+    hooks.syncDir?.(dir);
     if (process.platform !== "win32") {
-      chmodSync(target, 0o600);
-      hooks.syncDir?.(dir);
       const directory = openSync(dir, "r");
       try { fsyncSync(directory); } finally { closeSync(directory); }
     }

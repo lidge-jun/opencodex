@@ -1,9 +1,30 @@
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, win32 } from "node:path";
 import { pnpmInvocationForPath } from "./pnpm-invocation.mjs";
-import { verifyPnpmInstallTree } from "./transactional-install.mjs";
+import { pnpmPackageUsesGlobalStoreLinks, verifyPnpmInstallTree } from "./transactional-install.mjs";
 
 export const PNPM_BUILD_APPROVAL = "--allow-build=bun";
+
+/**
+ * pnpm majors whose global virtual-store install and `store path --dir=<pnpm home>` were checked to
+ * select the same store (11.20.0, 12.16.1). Another major refuses rather than assumes the same rules.
+ */
+const VERIFIED_GLOBAL_STORE_MAJORS = new Set([11, 12]);
+
+/** Characters cmd.exe re-parses after quoting (same set as the npm cache preflight). */
+const WINDOWS_CMD_METACHARACTERS = /["%!^&|<>]/;
+
+/**
+ * On Windows pnpm.cmd re-parses its arguments in cmd.exe after quoting, so a global-store owner whose
+ * pnpm home, global directory or global bin directory carries one of these characters is refused
+ * before any owner-pinned pnpm command receives them (the npm cache preflight refuses the same set).
+ */
+function windowsCmdPathRefusal(owner, env, platform) {
+  if (platform !== "win32") return null;
+  const paths = [owner?.homeAnchor ?? pnpmHomeAnchor(env, platform), owner?.globalDir, owner?.globalBinDir];
+  return paths.some(path => WINDOWS_CMD_METACHARACTERS.test(String(path ?? "")))
+    ? { ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" } : null;
+}
 
 function outputText(value) {
   if (typeof value === "string") return value;
@@ -157,12 +178,18 @@ function ownerGlobalArgs(args, owner) {
       if (arg === "--config.global-bin-dir") index += 1;
       continue;
     }
+    if (owner.storePath && (arg === "--store-dir" || arg.startsWith("--store-dir=")
+      || arg === "--config.store-dir" || arg.startsWith("--config.store-dir="))) {
+      if (arg === "--store-dir" || arg === "--config.store-dir") index += 1;
+      continue;
+    }
     rest.push(arg);
   }
   return [
     command,
     `--global-dir=${owner.globalDir}`,
     `--config.global-bin-dir=${owner.globalBinDir}`,
+    ...(["add", "install", "update", "remove", "uninstall"].includes(command) && owner.storePath ? [`--store-dir=${owner.storePath}`] : []),
     ...rest,
   ];
 }
@@ -295,6 +322,191 @@ export function verifyPnpmGlobalShims(
     : { ok: false, reason: `pnpm generated shim verification failed (${missing.join(", ")})` };
 }
 
+function commandLines(result) {
+  return outputText(result?.stdout).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+}
+
+/**
+ * The directory pnpm loads its global configuration from (pnpm home): PNPM_HOME, then
+ * XDG_DATA_HOME/pnpm, then the platform default. It is read from the environment the pnpm
+ * commands receive, so the anchor and the commands agree.
+ */
+export function pnpmHomeAnchor(env = process.env, platform = process.platform) {
+  const value = key => typeof env?.[key] === "string" && env[key].trim() ? env[key] : null;
+  const joinPath = platform === "win32" ? win32.join : join;
+  let anchor = null;
+  if (value("PNPM_HOME")) anchor = value("PNPM_HOME");
+  else if (value("XDG_DATA_HOME")) anchor = joinPath(value("XDG_DATA_HOME"), "pnpm");
+  else if (platform === "win32") anchor = value("LOCALAPPDATA") ? win32.join(value("LOCALAPPDATA"), "pnpm") : null;
+  else if (value("HOME")) {
+    anchor = platform === "darwin" ? join(value("HOME"), "Library", "pnpm") : join(value("HOME"), ".local", "share", "pnpm");
+  }
+  // A control character could split a cmd.exe command line on Windows; such a home is never trusted.
+  return anchor && isAbsolutePath(anchor, platform) && !/[\u0000-\u001f\u007f]/.test(anchor) ? anchor : null;
+}
+
+/**
+ * Classify a spelling used as a confinement root (pnpm home, store path, global group). It is trusted
+ * only when it is already canonical: no "." or ".." segment (path.resolve would delete them without
+ * visiting the links they cross), no link or junction component, and realpath returns the same path.
+ * Case is folded for the last comparison only; a case-only symlink is caught by the component walk.
+ * Returns "link", "noncanonical" or "ok"; throws when the path is missing or not a directory.
+ */
+function spellingTrust(path) {
+  const raw = String(path);
+  const { root } = parse(raw);
+  const parts = raw.slice(root.length).split(/[\\/]+/).filter(Boolean);
+  if (!root || parts.some(part => part === "." || part === "..")) return "noncanonical";
+  let current = root;
+  for (const part of parts) {
+    current = join(current, part);
+    if (lstatSync(current).isSymbolicLink()) return "link";
+  }
+  if (!statSync(raw).isDirectory()) throw new Error("not a directory");
+  const fold = value => resolve(value).replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  return fold(realpathSync.native(raw)) === fold(raw) ? "ok" : "noncanonical";
+}
+
+/** Map a spelling's trust to the refusal reason for the named root, or null when trusted. */
+function spellingRefusal(path, label) {
+  const trust = spellingTrust(path);
+  if (trust === "link") return label + " has a symbolic link component";
+  if (trust === "noncanonical") return label + " is not a canonical path";
+  return null;
+}
+
+/** Appended to a store-proof refusal for an install whose path looks like a pnpm global store. */
+const STORE_PROOF_HINT = "; this install's path looks like a pnpm global store (a store links directory or pnpm store markers), "
+  + "so the updater accepts it only when pnpm 11 or 12 names that store. Update with pnpm itself: "
+  + "pnpm add -g @bitkyc08/opencodex@latest";
+
+/** Filesystem identity of a directory (device and inode), or null when it is not a readable directory. */
+function directoryIdentity(path) {
+  try {
+    const stat = statSync(path);
+    return stat.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
+  } catch { return null; }
+}
+
+/**
+ * A store owner's store and global group are pinned by filesystem identity for one update transaction, so a
+ * directory replaced at the same canonical path between the proof and a pnpm mutation (install or rollback)
+ * stops the transaction instead of receiving the mutation.
+ */
+function pinStoreOwnerIdentity(owner) {
+  const group = directoryIdentity(owner.globalRoot), store = directoryIdentity(owner.store);
+  return {
+    refusal() {
+      if (!group || directoryIdentity(owner.globalRoot) !== group) return "pnpm global group was replaced or could not be read";
+      if (!store || directoryIdentity(owner.store) !== store) return "pnpm configured store was replaced or could not be read";
+      return null;
+    },
+  };
+}
+
+/** Store-proof failures are configuration facts, not package-tree failures. */
+function isStoreProofFailure(reason) {
+  return typeof reason === "string" && (reason.startsWith("pnpm configured store")
+    || reason.startsWith("pnpm virtual-store") || reason.startsWith("pnpm store path")
+    || reason.startsWith("pnpm home") || reason.startsWith("pnpm global-store behavior")
+    // A global group that lost its canonical spelling is a configuration fact too: no rollback through it.
+    || reason.startsWith("pnpm global group"));
+}
+
+/**
+ * Ask the selected pnpm which store it uses for its global configuration. The answer counts only
+ * when the pnpm version is one whose global-store behavior was checked, the anchor is a real
+ * directory with no symbolic link component, and pnpm prints exactly one absolute versioned path.
+ * The lexical path and its canonical target are pinned separately and both must stay unchanged.
+ */
+function readPnpmStore(runPnpm, owner, platform, env = process.env) {
+  const unsafe = windowsCmdPathRefusal(owner, env, platform);
+  if (unsafe) return unsafe;
+  let pnpmVersion;
+  try {
+    const result = runPnpm(["--version"], true);
+    const lines = commandLines(result);
+    if (result?.status === 0 && lines.length === 1) pnpmVersion = lines[0];
+  } catch { /* refused below */ }
+  const major = /^(\d+)\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/.exec(pnpmVersion ?? "")?.[1];
+  if (!major || !VERIFIED_GLOBAL_STORE_MAJORS.has(Number(major))) {
+    return { ok: false, reason: "pnpm global-store behavior is not verified for this pnpm version" };
+  }
+
+  const homeAnchor = owner?.homeAnchor ?? pnpmHomeAnchor(env, platform);
+  if (!homeAnchor) return { ok: false, reason: "pnpm home could not be determined" };
+  try {
+    const refusal = spellingRefusal(homeAnchor, "pnpm home");
+    if (refusal) return { ok: false, reason: refusal };
+  } catch {
+    return { ok: false, reason: "pnpm home could not be resolved" };
+  }
+
+  let storePath;
+  try {
+    const probe = runPnpm(["store", "path", `--dir=${homeAnchor}`], true);
+    const lines = commandLines(probe);
+    if (probe?.status === 0 && lines.length === 1 && isAbsolutePath(lines[0], platform)
+      && /^v\d+$/.test(pathBasename(lines[0], platform))) storePath = lines[0];
+  } catch { /* refused below */ }
+  if (!storePath) return { ok: false, reason: "pnpm store path is not one absolute versioned path" };
+  if (platform === "win32" && WINDOWS_CMD_METACHARACTERS.test(storePath)) {
+    return { ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" };
+  }
+  // A link inside the store spelling would widen the root every later hop is confined to.
+  try {
+    const refusal = spellingRefusal(storePath, "pnpm store path");
+    if (refusal) return { ok: false, reason: refusal };
+  } catch {
+    return { ok: false, reason: "pnpm store path could not be resolved" };
+  }
+  let store;
+  try {
+    store = realpathSync.native(storePath);
+    if (!statSync(store).isDirectory()) throw new Error();
+  } catch {
+    return { ok: false, reason: "pnpm store path could not be resolved" };
+  }
+  if (owner?.storePath && lexicalPathKey(storePath, platform) !== lexicalPathKey(owner.storePath, platform)) {
+    return { ok: false, reason: "pnpm configured store changed" };
+  }
+  if (owner?.store && lexicalPathKey(store, platform) !== lexicalPathKey(owner.store, platform)) {
+    return { ok: false, reason: "pnpm configured store changed" };
+  }
+  const virtualStoreDirs = [];
+  for (const key of ["virtual-store-dir", "global-virtual-store-dir"]) {
+    let value;
+    try {
+      const args = ["config", "get", key, "-g", `--config.global-dir=${owner.globalDir}`, `--config.global-bin-dir=${owner.globalBinDir}`];
+      const result = runPnpm(args, true);
+      const lines = outputText(result?.stdout).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      if (result?.status !== 0 || lines.length !== 1) throw new Error();
+      value = lines[0];
+    } catch { return { ok: false, reason: "pnpm virtual-store configuration could not be resolved" }; }
+    if (/^(?:undefined|null)$/i.test(value)) continue;
+    if (!isAbsolutePath(value, platform)) return { ok: false, reason: "pnpm virtual-store directory is not absolute" };
+    let path;
+    try { path = realpathSync.native(value); if (!statSync(path).isDirectory()) throw new Error(); }
+    catch { return { ok: false, reason: "pnpm virtual-store directory could not be resolved" }; }
+    const rel = relative(store, path);
+    if (rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || isAbsolute(rel)) {
+      return { ok: false, reason: "pnpm virtual-store directory is outside the selected store" };
+    }
+    virtualStoreDirs.push(path);
+  }
+  if (owner?.virtualStoreDirs && (owner.virtualStoreDirs.length !== virtualStoreDirs.length
+    || virtualStoreDirs.some((path, index) => lexicalPathKey(path, platform) !== lexicalPathKey(owner.virtualStoreDirs[index], platform)))) {
+    return { ok: false, reason: "pnpm virtual-store configuration changed" };
+  }
+  return { ok: true, store, storePath, virtualStoreDirs, homeAnchor };
+}
+
+function isPackageInGlobalStore(packagePath, store) {
+  const path = realpathSync.native(packagePath);
+  const rel = relative(store, path);
+  return rel !== ".." && !rel.startsWith("../") && !rel.startsWith("..\\") && !isAbsolute(rel);
+}
+
 /**
  * Read and verify the package manager's active global link. `owner` constraints
  * make the listing a proof of the group selected during preflight, not merely a
@@ -310,6 +522,10 @@ export function readPnpmGlobalPackage(
   const expectedGlobalDir = constraints.expectedGlobalDir ?? constraints.owner?.globalDir;
   const expectedGlobalRoot = constraints.expectedGlobalRoot ?? constraints.owner?.globalRoot;
   const globalBinDir = constraints.globalBinDir ?? constraints.owner?.globalBinDir;
+  if (constraints.owner?.globalStore === true) {
+    const unsafe = windowsCmdPathRefusal(constraints.owner, constraints.env, platform);
+    if (unsafe) return unsafe;
+  }
   let result;
   try {
     result = runPnpm(ownerGlobalArgs(["list", "-g", "--depth=0", "--json", packageName], constraints.owner), true);
@@ -343,12 +559,35 @@ export function readPnpmGlobalPackage(
   }
 
   let tree;
+  // A legacy global group keeps the verification it had before global-store support: no store
+  // query, no store argument. The verifier still refuses any package that uses store links
+  // without a selected store, so a global-store layout cannot pass on this branch.
+  const globalStore = constraints.owner?.globalStore === true;
+  let storeResult = { ok: true };
+  if (globalStore) {
+    storeResult = readPnpmStore(runPnpm, constraints.owner, platform, constraints.env);
+    if (!storeResult.ok) return storeResult;
+    // The global group is the other hop root; a link in its spelling would widen it the same way.
+    try {
+      const refusal = rootPath ? spellingRefusal(rootPath, "pnpm global group") : "pnpm global group has a symbolic link component";
+      if (refusal) return { ok: false, reason: refusal };
+    } catch { return { ok: false, reason: "pnpm global group could not be resolved" }; }
+    try {
+      if (!isPackageInGlobalStore(packagePath, storeResult.store)) return { ok: false, reason: "pnpm global-store package is outside the selected store" };
+    } catch { return { ok: false, reason: "pnpm active package path could not be resolved" }; }
+  }
+  const verifyPath = path => globalStore
+    ? verify(path, version, storeResult.store, rootPath, storeResult.storePath)
+    : verify(path, version);
   try {
-    tree = verify(packagePath, version);
+    tree = verifyPath(packagePath);
+    if (tree?.ok && constraints.expectedPackagePath && constraints.expectedPackagePath !== packagePath) {
+      tree = verifyPath(constraints.expectedPackagePath);
+    }
   } catch {
     return { ok: false, reason: "the active pnpm package could not be verified" };
   }
-  if (!tree?.ok) return { ok: false, reason: "the active pnpm package failed verification" };
+  if (!tree?.ok) return { ok: false, reason: tree?.failures?.[0] ?? "the active pnpm package failed verification" };
 
   // A valid package tree/group is enough to bind the owner before an update. The
   // existing shim may be stale from an older pnpm run; post-update and rollback
@@ -368,6 +607,12 @@ export function readPnpmGlobalPackage(
     globalDir: expectedGlobalDir,
     globalRoot: rootPath || expectedGlobalRoot,
     globalBinDir,
+    ...(globalStore ? {
+      store: storeResult.store,
+      storePath: storeResult.storePath,
+      virtualStoreDirs: storeResult.virtualStoreDirs,
+      homeAnchor: storeResult.homeAnchor,
+    } : {}),
   };
 }
 
@@ -400,9 +645,20 @@ export function resolvePnpmGlobalOwner({
   runPnpm,
   verify = verifyPnpmInstallTree,
   platform = process.platform,
+  env = process.env,
+  // Re-resolving an owner already pinned to a store (orchestrated post-update verification) always runs
+  // the store proof, whatever the new tree's spelling, so a pinned store owner is never demoted.
+  requireStoreProof = false,
 }) {
   if (!isAbsolutePath(packagePath, platform)) return { ok: false, reason: "running pnpm package path is not absolute" };
   let lastReason = "no pnpm global installation owns the running package";
+  // A running package that looks like a pnpm global store gets the remedy even when no pnpm candidate lists
+  // it (a failed listing, or another path), so every refusal of a store-like install says what to run.
+  let runningClassified;
+  try { runningClassified = requireStoreProof === true || pnpmPackageUsesGlobalStoreLinks(packagePath); }
+  catch { runningClassified = true; }
+  const withRunningHint = reason => runningClassified && typeof reason === "string" && !reason.endsWith(STORE_PROOF_HINT)
+    ? reason + STORE_PROOF_HINT : reason;
 
   for (const commandPath of commandPaths ?? []) {
     const list = listGlobalPackage(commandPath, packageName, runPnpm);
@@ -411,9 +667,22 @@ export function resolvePnpmGlobalOwner({
     const listedPath = typeof inspected?.entry?.path === "string" ? inspected.entry.path : "";
     if (!listedPath || !isAbsolutePath(listedPath, platform) || !samePath(listedPath, packagePath, platform)) continue;
 
+    // Classification only decides which proof is required. Either spelling of the running package
+    // that passes through pnpm store links demands the store proof; nothing here accepts a package.
+    // It runs before any refusal below so every refusal of a store-like install carries the remedy.
+    let globalStore;
+    try {
+      globalStore = requireStoreProof === true
+        || pnpmPackageUsesGlobalStoreLinks(listedPath) || pnpmPackageUsesGlobalStoreLinks(packagePath);
+    } catch { globalStore = true; }
+    // A path that looks like a pnpm global store is accepted only on pnpm's own store answer. Every refusal of
+    // such an install says so, so a user whose group merely sits under a store-like directory, or whose pnpm
+    // home cannot be passed safely, knows why and what to run instead. The original reason stays the prefix.
+    const refusal = reason => globalStore && typeof reason === "string" ? reason + STORE_PROOF_HINT : reason;
+
     const paths = resolveGlobalPaths(commandPath, runPnpm, inspected?.root?.path, platform);
     if (!paths) {
-      lastReason = "pnpm owns the running package but did not report its global group and bin directory";
+      lastReason = refusal("pnpm owns the running package but did not report its global group and bin directory");
       continue;
     }
     const { globalDir, globalRoot, globalBinDir } = paths;
@@ -427,15 +696,15 @@ export function resolvePnpmGlobalOwner({
       const shimName = String(runningShimPath).replaceAll("\\", "/").split("/").at(-1)?.toLowerCase();
       const isCommandShim = ["ocx", "opencodex", "ocx.cmd", "opencodex.cmd", "ocx.ps1", "opencodex.ps1"].includes(shimName ?? "");
       if (isCommandShim && !samePath(dirname(runningShimPath), globalBinDir, platform)) {
-        lastReason = "pnpm package owner did not match the running global shim";
+        lastReason = refusal("pnpm package owner did not match the running global shim");
         continue;
       }
     }
 
-    const owner = { commandPath, packagePath: listedPath, globalDir, globalRoot, globalBinDir };
+    const owner = { commandPath, packagePath: listedPath, globalDir, globalRoot, globalBinDir, ...(globalStore ? { globalStore: true } : {}) };
     const active = readPnpmGlobalPackage(
       packageName,
-      (args, capture = false) => runPnpm(commandPath, args, capture),
+      (args, capture = false) => runPnpm(commandPath, args, capture, owner),
       verify,
       {
         owner,
@@ -447,12 +716,16 @@ export function resolvePnpmGlobalOwner({
         // the top-level shim stale; the transaction verifies it after mutation.
         checkShims: false,
         platform,
+        env,
       },
     );
-    if (active.ok) return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version } };
-    lastReason = active.reason;
+    if (active.ok) {
+      return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version,
+        ...(globalStore ? { store: active.store, storePath: active.storePath, virtualStoreDirs: active.virtualStoreDirs, homeAnchor: active.homeAnchor } : {}) } };
+    }
+    lastReason = refusal(active.reason);
   }
-  return { ok: false, reason: lastReason };
+  return { ok: false, reason: withRunningHint(lastReason) };
 }
 
 /**
@@ -474,6 +747,8 @@ export function runPnpmGlobalUpdate({
   platform = process.platform,
   log = () => {},
 }) {
+  // A store owner's refusals during the update carry the same cause and remedy as discovery's.
+  const storeOwnerRefusal = reason => owner?.globalStore === true && typeof reason === "string" ? reason + STORE_PROOF_HINT : reason;
   if (
     !owner?.commandPath
     || !owner?.globalDir
@@ -482,8 +757,14 @@ export function runPnpmGlobalUpdate({
     || !isAbsolutePath(owner.commandPath, platform)
     || !isAbsolutePath(owner.globalDir, platform)
     || !isAbsolutePath(owner.globalBinDir, platform)
+    || (owner.globalStore && (
+      !isAbsolutePath(owner.store, platform)
+      || !isAbsolutePath(owner.storePath, platform)
+      || !isAbsolutePath(owner.homeAnchor, platform)
+      || !Array.isArray(owner.virtualStoreDirs)))
+    || (!owner.globalStore && (owner.store !== undefined || owner.storePath !== undefined))
   ) {
-    return { ok: false, phase: "preflight", error: "pnpm global owner was not pinned" };
+    return { ok: false, phase: "preflight", error: storeOwnerRefusal("pnpm global owner was not pinned") };
   }
   const constraints = {
     owner,
@@ -500,10 +781,13 @@ export function runPnpmGlobalUpdate({
     verify,
     { ...constraints, checkShims: false },
   );
-  if (!before.ok) return { ok: false, phase: "preflight", error: before.reason };
+  if (!before.ok) return { ok: false, phase: "preflight", error: storeOwnerRefusal(before.reason) };
   if (currentVersion && before.version !== currentVersion) {
-    return { ok: false, phase: "preflight", error: "pnpm's active package does not match the running package" };
+    return { ok: false, phase: "preflight", error: storeOwnerRefusal("pnpm's active package does not match the running package") };
   }
+  const identity = owner.globalStore ? pinStoreOwnerIdentity(owner) : null;
+  const identityRefusal = identity?.refusal();
+  if (identityRefusal) return { ok: false, phase: "preflight", error: storeOwnerRefusal(identityRefusal) };
 
   const requested = targetVersion || tag;
   const spec = packageSpec(packageName, requested);
@@ -525,6 +809,9 @@ export function runPnpmGlobalUpdate({
     verify,
     { ...constraints, expectedPackagePath: undefined },
   );
+  if (!after.ok && isStoreProofFailure(after.reason)) {
+    return { ok: false, phase: "install", rolledBack: false, error: storeOwnerRefusal(after.reason) };
+  }
   const targetMatches = after.ok && (!targetVersion || after.version === targetVersion);
   if (install?.status === 0 && targetMatches) {
     return {
@@ -541,7 +828,7 @@ export function runPnpmGlobalUpdate({
     ? `pnpm update failed (${statusText(install?.status)})`
     : after.ok
       ? "pnpm update produced an unexpected active package version"
-      : "pnpm update completed but the active package failed verification";
+      : `pnpm update completed but the active package failed verification: ${after.reason}`;
 
   // A failed command may have left the original active group intact. Do not create a
   // second update transaction in that case; the verified previous package is already safe.
@@ -554,10 +841,24 @@ export function runPnpmGlobalUpdate({
       activePath: after.path,
       globalDir: owner.globalDir,
       globalBinDir: owner.globalBinDir,
-      error: `${installReason}; previous version remains active`,
+      error: storeOwnerRefusal(`${installReason}; previous version remains active`),
     };
   }
 
+  // A failed listing says nothing about the effective store: bind it again before
+  // issuing a rollback mutation, independently of whether readback succeeded.
+  if (owner.globalStore) {
+    const rollbackStore = readPnpmStore(runPnpm, owner, platform);
+    if (!rollbackStore.ok) return { ok: false, phase: "rollback", rolledBack: false, error: storeOwnerRefusal(rollbackStore.reason) };
+    // The global group is the other root every link hop is confined to: a rollback must not write through a
+    // group that has gained a link component or lost its canonical spelling since discovery.
+    let groupRefusal;
+    try { groupRefusal = spellingRefusal(owner.globalRoot, "pnpm global group"); }
+    catch { groupRefusal = "pnpm global group could not be resolved"; }
+    if (groupRefusal) return { ok: false, phase: "rollback", rolledBack: false, error: storeOwnerRefusal(groupRefusal) };
+    const replaced = identity?.refusal();
+    if (replaced) return { ok: false, phase: "rollback", rolledBack: false, error: storeOwnerRefusal(replaced) };
+  }
   log(`Restoring ${packageName}@${before.version} with pnpm…`);
   let rollback;
   try {
@@ -582,9 +883,11 @@ export function runPnpmGlobalUpdate({
       activePath: restored.path,
       globalDir: owner.globalDir,
       globalBinDir: owner.globalBinDir,
-      error: `${installReason}; previous version restored`,
+      error: storeOwnerRefusal(`${installReason}; previous version restored`),
     };
   }
+  // The readback's own reason (a store-proof failure included) leads, so the user sees why first.
+  const unverifiedPrefix = restored.ok || typeof restored.reason !== "string" ? "" : `${restored.reason}; `;
   return {
     ok: false,
     phase: "rollback",
@@ -593,6 +896,6 @@ export function runPnpmGlobalUpdate({
     ...(restored.ok ? { activePath: restored.path } : {}),
     globalDir: owner.globalDir,
     globalBinDir: owner.globalBinDir,
-    error: `${installReason}; previous version could not be verified after rollback`,
+    error: storeOwnerRefusal(`${unverifiedPrefix}${installReason}; previous version could not be verified after rollback`),
   };
 }

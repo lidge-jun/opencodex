@@ -688,6 +688,16 @@ jobs:
           cd gui
           bun run build
 
+      # The Rust-backed tests (the compiled ocx-child end-to-end and conformance runs, the
+      # desktop-recovery rustc fixture) need cargo. ubuntu-latest ships it; the lidge
+      # self-hosted pool does not, so run 43343080374 failed link-ocx-child-e2e there
+      # ("neither cargo nor prebuilt ocx-child binary is available") while the conformance
+      # run skipped. Installing it here makes the prerequisite explicit on both runner kinds.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+
       - name: Test in fresh-process batches
         env:
           TEST_SHARD: ${{ matrix.shard }}/5
@@ -711,6 +721,11 @@ jobs:
           role: test-runner # See the Bun roles contract above test.
       - name: Install dependencies and build the GUI the tests serve
         run: bash scripts/ci/bun-install-frozen.sh . gui && cd gui && bun run build
+      # Same cargo prerequisite as the test shards above (link-ocx-child-e2e and the conformance run).
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
       - name: Test the files this pull request reaches
         run: bash scripts/ci/run-changed-tests.sh
 

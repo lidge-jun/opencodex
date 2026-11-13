@@ -121,3 +121,16 @@ export function setLinkPumpWaitObserverForTests(observer: ((waiting: boolean) =>
   pumpWaitObserver = observer;
 }
 
+/**
+ * Test-only: told when a relayed HTTP link response has handed its reader a chunk and waits for the next read (true),
+ * and when that wait ends (false). Bun stops reading a body whose socket does not drain, so a stalled Child reader
+ * leaves its relay waiting: the HTTP counterpart of the pump wait above (#8600).
+ */
+let relayWaitObserver: ((waiting: boolean) => void) | null = null;
+
+export function linkRelayWaitObserver(): ((waiting: boolean) => void) | null { return relayWaitObserver; }
+
+export function setLinkRelayWaitObserverForTests(observer: ((waiting: boolean) => void) | null): void {
+  relayWaitObserver = observer;
+}
+

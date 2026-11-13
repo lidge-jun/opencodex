@@ -343,6 +343,8 @@ export const providerConfigSchema = z.object({
   // load silently and then be ignored at selection time, which reads as a broken feature
   // rather than a rejected setting.
   apiKeyPoolStrategy: z.enum(["round-robin", "fill-first", "quota"]).optional(),
+  // Strict writes reject invalid modes; load degradation removes invalid hand edits.
+  cacheAffinity: z.enum(["auto", "session", "turn", "off"]).optional(),
   autoReviewModel: autoReviewModelSchema.optional(),
   autoReviewModelOverrides: autoReviewModelOverridesSchema.optional(),
   adapter: z.string().min(1),

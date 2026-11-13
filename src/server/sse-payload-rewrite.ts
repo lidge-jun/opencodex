@@ -1,6 +1,7 @@
 import type { MessagesSseErrorFilter } from "./messages-sse-error-filter";
 import type { MessagesSseFrameHooks } from "../lib/messages-sse-error-presentation";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { Buffer } from "node:buffer";
 
 /**
@@ -384,7 +385,7 @@ export function relaySseWithBlockRewrite(
     return 0;
   };
 
-  return new ReadableStream<Uint8Array>({
+  return carryPacedStream(body, new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         // A network chunk is not an SSE-event boundary. Bun may not issue a
@@ -427,5 +428,5 @@ export function relaySseWithBlockRewrite(
       disposeRewrite();
       reader.cancel(reason).catch(() => {});
     },
-  });
+  }, pacedQueuingStrategy(body)));
 }
