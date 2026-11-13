@@ -59,6 +59,7 @@ const PICKER_MODE_KEYS: Record<string, TKey> = {
   default: "models.pickerOrder.default",
   alphabetical: "models.pickerOrder.alphabetical",
   provider: "models.pickerOrder.provider",
+  family: "models.pickerOrder.family",
   "most-used": "models.pickerOrder.mostUsed",
   custom: "models.pickerOrder.custom",
 };

@@ -25,6 +25,7 @@ import {
   isModelPickerUsage, isPickerOrderSaved, isPickerOrderSettings, modelPickerOrder, modelPickerOrderMode,
   type ModelPickerOrderMode, type PickerOrderSettings, type PickerOrderSaved, type ModelPickerUsage,
 } from "../model-picker-order";
+import { FamilyGroupList } from "../components/FamilyGroupList";
 import { startVisibilityPoll } from "../visibility-poll";
 import { useModelVisibility } from "../use-model-visibility";
 import { useDataSurface } from "../data-surface";
@@ -1693,7 +1694,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             {freeOnlyActive && scoped.length === 0 && rows.length > 0 && (
               <p className="muted text-label" role="status">{t("models.noFreeMatch")}</p>
             )}
-             {visible.map(m => {
+             <FamilyGroupList items={visible} slugOf={m => m.namespaced} scope={provider} renderItem={m => {
                // The row reflects the same final-visibility answer as the count and the picker.
                const off = !isVisible(m);
                return (
@@ -1858,7 +1859,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                    })()}
                  </div>
                );
-             })}
+             }} />
              {remaining > 0 && (
                <button
                  type="button"
@@ -2115,6 +2116,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             { value: "default", label: t("models.pickerOrder.default") },
             { value: "alphabetical", label: t("models.pickerOrder.alphabetical") },
             { value: "provider", label: t("models.pickerOrder.provider") },
+            { value: "family", label: t("models.pickerOrder.family") },
             { value: "most-used", label: t("models.pickerOrder.mostUsed") },
             { value: "custom", label: t("models.pickerOrder.custom") },
           ]}
