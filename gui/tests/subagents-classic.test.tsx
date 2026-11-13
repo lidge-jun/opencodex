@@ -2,12 +2,12 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import Subagents from "../src/pages/Subagents";
+import PickerPinnedRoster from "../src/components/PickerPinnedRoster";
 import { LanguageProvider } from "../src/i18n/provider";
 
 /**
- * Behavioural contract for the denser Subagents workspace: five-slot cap,
- * add/remove via the rail, and the exact autosave request.
+ * Behavioural contract for the pinned roster (it lives in the Models page client picker
+ * section): five-slot cap, add/remove from the model list, and the exact autosave request.
  */
 
 const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -68,15 +68,15 @@ async function mount(apiBase = "") {
     root = createRoot(container);
     root.render(
       <LanguageProvider>
-        <Subagents apiBase={apiBase} />
+        <PickerPinnedRoster apiBase={apiBase} onSaved={() => {}} />
       </LanguageProvider>,
     );
   });
-  // Subagents defers its initial load through setTimeout(0), so a macrotask flush is required.
+  // The roster defers its initial load through setTimeout(0), so a macrotask flush is required.
   await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
 }
 
-/** Rail add/remove toggles are labelled from sub.workspace.addToFeatured / removeFromFeatured. */
+/** Model-list add/remove toggles are labelled from sub.workspace.addToFeatured / removeFromFeatured. */
 function addToggle(id: string): HTMLButtonElement {
   const row = Array.from(container.querySelectorAll("button"))
     .find((b) => (b.getAttribute("aria-label") ?? "").includes(`Pin ${id} to the top of the model picker`));
@@ -84,19 +84,17 @@ function addToggle(id: string): HTMLButtonElement {
   return row as unknown as HTMLButtonElement;
 }
 
-/** Featured-list remove only (rail also has "Remove … from featured"). */
+/** Pinned-list remove only (the model list also has "Remove … from the top of the model picker"). */
 function removeButtons(): HTMLButtonElement[] {
   return Array.from(container.querySelectorAll(".swi-featured-actions button")).filter((b) =>
     /^Remove /.test(b.getAttribute("aria-label") ?? "")) as unknown as HTMLButtonElement[];
 }
 
-test("renders one featured list and one picker, never the same list twice", async () => {
+test("renders one pinned list and one model list, never the same list twice", async () => {
   await mount();
-  expect(container.querySelector(".subagents-workspace-shell")).toBeTruthy();
-  // Three stacked sections: the featured roster, the model picker, then delegation settings.
-  expect(container.querySelectorAll(".subagents-workspace-section").length).toBe(3);
-  // The rail listed the featured models a second time, which read as a rendering bug.
-  expect(container.querySelector(".subagents-workspace-rail")).toBeNull();
+  expect(container.querySelector(".picker-pinned-roster")).toBeTruthy();
+  // Two stacked frames: the pinned roster, then the model list that feeds it.
+  expect(container.querySelectorAll(".picker-pinned-section").length).toBe(2);
   const featuredHeadings = Array.from(container.querySelectorAll(".swi-featured-title"))
     .map(node => node.textContent?.trim());
   expect(featuredHeadings.filter(text => text === "Pinned in picker").length).toBe(1);
@@ -131,26 +129,21 @@ test("caps featured selections at five", async () => {
   expect(JSON.parse(String(puts.at(-1)!.init!.body)).models).toEqual(available.slice(0, 5));
 });
 
-test("leads with what is in effect: first featured pick, slots used, pin state; free slots show as empty rows", async () => {
+test("shows pinned rows in order, with the free slots as empty rows", async () => {
   chosen = ["a-2", "a-1"];
   // A base of its own, so the shared resource cache from earlier tests cannot answer first.
   await mount("http://summary.test");
-  const summary = container.querySelector('section[aria-label="In effect now"]');
-  expect(summary).toBeTruthy();
-  // The summary comes before the roster and names only the first choice, never the list again.
-  expect(summary!.compareDocumentPosition(container.querySelector(".subagents-workspace-shell")!) & 4).toBe(4);
-  expect(summary!.textContent).toContain("a-2");
-  expect(summary!.textContent).not.toContain("a-1");
-  expect(summary!.textContent).toContain("2 of 5 picked");
-  expect(summary!.textContent).toContain("Off");
-  // Two featured rows plus three empty slots that are not rows of the roster.
+  const names = Array.from(container.querySelectorAll(".swi-featured-name")).map(node => node.textContent?.trim());
+  expect(names).toEqual(["a-2", "a-1"]);
+  // Two pinned rows plus three empty slots that are not rows of the roster.
   expect(container.querySelectorAll(".swi-featured-row")).toHaveLength(2);
   expect(container.textContent?.match(/Empty slot/g)).toHaveLength(3);
+  expect(container.textContent).toContain("2/5");
 });
 
 test("adding a model saves the featured order without a Save button", async () => {
   await mount();
-  const featuredSection = container.querySelector(".subagents-workspace-section")!;
+  const featuredSection = container.querySelector(".picker-pinned-section")!;
   expect(Array.from(featuredSection.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Save")).toBe(false);
 
   await act(async () => { addToggle("a-1").click(); });
@@ -162,4 +155,21 @@ test("adding a model saves the featured order without a Save button", async () =
     JSON.stringify({ models: ["a-1"] }),
     JSON.stringify({ models: ["a-1", "a-2"] }),
   ]);
+});
+
+test("order hint explains visible pinned model fill and the custom model picker order exception", async () => {
+  await mount();
+  const trigger = container.querySelector<HTMLButtonElement>(".swi-featured-head .ocx-tooltip");
+  if (!trigger) throw new Error("Expected the order-hint tooltip trigger to be rendered");
+  await act(async () => {
+    trigger.focus();
+    await new Promise<void>(resolve => testWindow.setTimeout(resolve, 250));
+  });
+  expect(trigger.getAttribute("aria-describedby")).toBeTruthy();
+  const tooltip = container.querySelector<HTMLElement>('[role="tooltip"]');
+  expect(tooltip?.textContent).toContain("spawn_agent");
+  expect(tooltip?.textContent).toContain("The order shown here sets positions 1–5 at the top of the Codex model picker and the default model candidates for spawn_agent.");
+  expect(tooltip?.textContent).toContain("fewer than 5 pinned models are visible in the picker");
+  expect(tooltip?.textContent).toContain("remaining slots are advertised by catalog priority");
+  expect(tooltip?.textContent).toContain("5 visible pinned models fill the list unless a custom model picker order changes catalog priority");
 });

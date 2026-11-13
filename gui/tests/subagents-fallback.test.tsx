@@ -8,7 +8,10 @@ import { LanguageProvider } from "../src/i18n/provider";
 import Subagents from "../src/pages/Subagents";
 import { readSessionListCache } from "../src/session-list-cache";
 
-const CACHE_KEY = "ocx.subagents.v1:";
+// The Subagents page owns only the fallback cache; the pinned roster has its own key.
+const CACHE_KEY = "ocx.subagents.fallback.v1:";
+const ROSTER_CACHE_KEY = "ocx.subagents.roster.v1:";
+const LEGACY_CACHE_KEY = "ocx.subagents.v1:";
 const FALLBACK_PATH = "/api/subagent-model-fallback";
 const ROSTER_PATH = "/api/subagent-models";
 const UNAVAILABLE_MODEL = "retired-provider/configured-model";
@@ -16,7 +19,8 @@ const globals = [
   "document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT",
 ] as const;
 
-type CachedSubagents = { available: string[]; chosen: string[]; fallback?: string[]; pollMs?: number; fallbackAvailable?: string[] };
+type CachedFallback = { fallback: string[]; pollMs: number; fallbackAvailable: string[] };
+type CachedRoster = { available: string[]; chosen: string[] };
 type FallbackSettings = { models: string[]; pollMs: number };
 type SentRequest = { path: string; method: string; init?: RequestInit };
 type V2Settings = {
@@ -221,8 +225,17 @@ function putBodies(path = FALLBACK_PATH): unknown[] {
     .map(request => JSON.parse(String(request.init?.body)) as unknown);
 }
 
-function cached(): CachedSubagents | null {
-  return readSessionListCache<CachedSubagents>(CACHE_KEY);
+function cached(): CachedFallback | null {
+  return readSessionListCache<CachedFallback>(CACHE_KEY);
+}
+
+function cachedRoster(): CachedRoster | null {
+  return readSessionListCache<CachedRoster>(ROSTER_CACHE_KEY);
+}
+
+/** The pinned models the Subagents page points at (it only reads the roster). */
+function pinned(): string[] {
+  return Array.from(container.querySelectorAll(".subagents-pinned-model"), node => node.textContent?.trim() ?? "");
 }
 
 const failedFallbackReads = [
@@ -240,20 +253,16 @@ test.each(failedFallbackReads)("cold roster survives fallback $name and recovers
   pendingFallbackResponse = Promise.resolve(response());
   await mount();
 
-  expect(Array.from(container.querySelectorAll(".swi-featured-name"), node => node.textContent?.trim())).toEqual(["a-1"]);
+  expect(pinned()).toEqual(["a-1"]);
   expect(pollInput().disabled).toBe(true);
   expect(saveButton().disabled).toBe(true);
   expect(labelledButton(editor(), en["sub.fallbackAdd"]).disabled).toBe(true);
   expect(container.textContent).toContain(en["sub.fallbackLabel"]);
   expect(container.textContent).toContain(en["sub.loadFail"]);
-  expect(cached()).not.toHaveProperty("fallback");
-  expect(cached()).not.toHaveProperty("pollMs");
+  expect(cached()).toBeNull();
+  expect(cachedRoster()?.chosen).toEqual(["a-1"]);
   await act(async () => { saveButton().click(); });
   expect(putBodies()).toEqual([]);
-
-  await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
-  expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-3"] }]);
-  expect(cached()).not.toHaveProperty("fallback");
 
   const rosterGets = requests.filter(request => request.path === ROSTER_PATH && request.method === "GET").length;
   const retry = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
@@ -265,25 +274,24 @@ test.each(failedFallbackReads)("cold roster survives fallback $name and recovers
   expectOrder(["a-2"]);
   expect(pollInput().value).toBe("45000");
   expect(saveButton().disabled).toBe(false);
-  expect(cached()?.chosen).toEqual(["a-1", "a-3"]);
+  expect(cached()?.fallback).toEqual(["a-2"]);
   await click(saveButton());
   expect(putBodies()).toEqual([{ models: ["a-2"], pollMs: 45_000 }]);
+  expect(putBodies(ROSTER_PATH)).toEqual([]);
 });
 
-test("cold roster is usable while fallback discovery remains pending", async () => {
+test("the pinned pointer is usable while fallback discovery remains pending", async () => {
   let releaseGet!: () => void;
   fallbackGetGate = new Promise<void>(resolve => { releaseGet = resolve; });
   try {
     await mount();
-    expect(container.querySelectorAll(".swi-featured-row")).toHaveLength(1);
+    expect(pinned()).toEqual(["a-1"]);
     expect(saveButton().disabled).toBe(true);
-    await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
-    expect(container.querySelectorAll(".swi-featured-row")).toHaveLength(2);
   } finally {
     await act(async () => { releaseGet(); });
   }
   expectOrder(["a-2"]);
-  expect(container.querySelectorAll(".swi-featured-row")).toHaveLength(2);
+  expect(pinned()).toEqual(["a-1"]);
 });
 
 test("fallback discovery excludes roster-only stale choices without losing configured values", async () => {
@@ -305,11 +313,11 @@ test("fallback discovery excludes roster-only stale choices without losing confi
   expect(putBodies()).toEqual([{ models: [UNAVAILABLE_MODEL, "a-2"], pollMs: 45_000 }]);
 });
 
-test.each([503, 200])("fresh roster choices stay independent of cached fallback discovery (HTTP %s)", async status => {
+test.each([503, 200])("a fresh roster read never widens cached fallback discovery (HTTP %s)", async status => {
   available = ["a-1", "a-2"];
   fallbackAvailable = ["a-1"];
   testWindow.sessionStorage.setItem(CACHE_KEY, JSON.stringify({
-    available: ["a-1"], chosen: ["a-1"], fallback: ["a-1"], pollMs: 90_000, fallbackAvailable: ["a-1"],
+    fallback: ["a-1"], pollMs: 90_000, fallbackAvailable: ["a-1"],
   }));
   if (status === 503) {
     pendingFallbackResponse = Promise.resolve(Response.json({ error: "Fallback unavailable" }, { status: 503 }));
@@ -321,9 +329,8 @@ test.each([503, 200])("fresh roster choices stay independent of cached fallback 
   expect(pollInput().disabled).toBe(status === 503);
   expect(saveButton().disabled).toBe(status === 503);
   expect(labelledButton(editor(), en["sub.fallbackAdd"]).disabled).toBe(status === 503);
-  await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-2")));
-  expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-2"] }]);
-  expect(cached()?.available).toEqual(["a-1", "a-2"]);
+  expect(pinned()).toEqual(["a-1"]);
+  expect(cachedRoster()?.available).toEqual(["a-1", "a-2"]);
   expect(cached()?.fallbackAvailable).toEqual(["a-1"]);
 
   if (status === 503) {
@@ -364,7 +371,7 @@ test("cached fallback availability survives remount while discovery is pending",
     await mount();
     expectOrder([UNAVAILABLE_MODEL]);
     expect(rows()[0]?.textContent).toContain(en["sub.fallbackUnavailable"]);
-    expect(container.querySelectorAll(".swi-featured-row")).toHaveLength(2);
+    expect(pinned()).toEqual([UNAVAILABLE_MODEL, "a-1"]);
   } finally {
     await act(async () => { releaseGet(); });
   }
@@ -372,7 +379,7 @@ test("cached fallback availability survives remount while discovery is pending",
 
 test("failed revalidation disables a cached fallback without replacing its committed settings", async () => {
   testWindow.sessionStorage.setItem(CACHE_KEY, JSON.stringify({
-    available, chosen, fallback: [UNAVAILABLE_MODEL], pollMs: 90_000, fallbackAvailable: available,
+    fallback: [UNAVAILABLE_MODEL], pollMs: 90_000, fallbackAvailable: available,
   }));
   pendingFallbackResponse = Promise.resolve(Response.json({ error: "Fallback unavailable" }, { status: 503 }));
   await mount();
@@ -382,7 +389,7 @@ test("failed revalidation disables a cached fallback without replacing its commi
   expect(cached()?.fallback).toEqual([UNAVAILABLE_MODEL]);
   expect(cached()?.pollMs).toBe(90_000);
   expect(container.textContent).toContain("Fallback unavailable");
-  expect(container.querySelectorAll(".swi-featured-row")).toHaveLength(1);
+  expect(pinned()).toEqual(["a-1"]);
 });
 
 test("preserves an unavailable configured fallback ID on load and save", async () => {
@@ -480,7 +487,7 @@ test("removes only the selected duplicate fallback occurrence by index", async (
 test("a failed fallback PUT retains the editable draft and leaves the committed cache unchanged", async () => {
   await mount();
   const committed = cached();
-  expect(committed).toEqual({ available, fallbackAvailable: available, chosen: ["a-1"], fallback: ["a-2"], pollMs: 45_000 });
+  expect(committed).toEqual({ fallbackAvailable: available, fallback: ["a-2"], pollMs: 45_000 });
   await addFallback("a-3");
   await changePollMs(90_000);
   failFallbackPut = true;
@@ -504,48 +511,28 @@ test("a failed fallback PUT retains the editable draft and leaves the committed 
   expect(cached()?.pollMs).toBe(90_000);
 });
 
-test("a successful fallback save updates committed session data and keeps the autosaved roster", async () => {
+test("a successful fallback save updates committed session data and never touches the roster", async () => {
   await mount();
-  await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
   await addFallback("a-3");
   await changePollMs(120_000);
   await click(saveButton());
 
   expect(putBodies()).toEqual([{ models: ["a-2", "a-3"], pollMs: 120_000 }]);
-  expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-3"] }]);
-  expect(cached()).toEqual({ available, fallbackAvailable: available, chosen: ["a-1", "a-3"], fallback: ["a-2", "a-3"], pollMs: 120_000 });
+  expect(putBodies(ROSTER_PATH)).toEqual([]);
+  expect(cached()).toEqual({ fallbackAvailable: available, fallback: ["a-2", "a-3"], pollMs: 120_000 });
+  expect(cachedRoster()).toEqual({ available, chosen: ["a-1"] });
   expectOrder(["a-2", "a-3"]);
-  expect(container.querySelectorAll(".swi-featured-row").length).toBe(2);
 });
 
-test("independent roster autosave never caches an unsaved fallback draft", async () => {
-  await mount();
-  await addFallback("a-3");
-  await changePollMs(90_000);
-  await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
-
-  expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-3"] }]);
-  expect(putBodies()).toEqual([]);
-  expect(cached()).toEqual({ available, fallbackAvailable: available, chosen: ["a-1", "a-3"], fallback: ["a-2"], pollMs: 45_000 });
-  expectOrder(["a-2", "a-3"]);
-  expect(pollInput().value).toBe("90000");
-
-  // Saving the fallback afterward must retain the already committed roster.
-  await click(saveButton());
-  expect(putBodies()).toEqual([{ models: ["a-2", "a-3"], pollMs: 90_000 }]);
-  expect(cached()).toEqual({ available, fallbackAvailable: available, chosen: ["a-1", "a-3"], fallback: ["a-2", "a-3"], pollMs: 90_000 });
-});
-
-test("remount shows the committed fallback and roster while a fresh fallback GET is pending", async () => {
+test("remount shows the committed fallback and pinned roster while a fresh fallback GET is pending", async () => {
   await mount();
   await addFallback("a-3");
   await changePollMs(120_000);
   await click(saveButton());
 
-  // A later roster autosave must not commit these newer fallback edits.
+  // Unsaved edits made after the save must not reach the committed cache.
   await click(rowButton(0, "sub.removeAria", "a-2"));
   await changePollMs(90_000);
-  await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
   expectOrder(["a-3"]);
   expect(pollInput().value).toBe("90000");
 
@@ -563,9 +550,8 @@ test("remount shows the committed fallback and roster while a fresh fallback GET
     // These assertions run before the fresh GET can return any data.
     expectOrder(["a-2", "a-3"]);
     expect(pollInput().value).toBe("120000");
-    expect(Array.from(container.querySelectorAll(".swi-featured-name"), node => node.textContent?.trim()))
-      .toEqual(["a-1", "a-3"]);
-    expect(cached()).toEqual({ available, fallbackAvailable: available, chosen: ["a-1", "a-3"], fallback: ["a-2", "a-3"], pollMs: 120_000 });
+    expect(pinned()).toEqual(["a-1"]);
+    expect(cached()).toEqual({ fallbackAvailable: available, fallback: ["a-2", "a-3"], pollMs: 120_000 });
   } finally {
     await act(async () => { releaseGet(); });
     fallbackGetGate = null;
@@ -574,13 +560,15 @@ test("remount shows the committed fallback and roster while a fresh fallback GET
   expect(pollInput().value).toBe("120000");
 });
 
-test("a legacy cache keeps fallback disabled through GET failure, roster Save, and remount", async () => {
-  const legacyCache = { available, chosen: ["a-1"] };
-  testWindow.sessionStorage.setItem(CACHE_KEY, JSON.stringify(legacyCache));
+test("the retired combined cache is ignored: fallback stays disabled through GET failure and remount", async () => {
+  // Before the roster moved to the Models page one key held roster and fallback together. A
+  // leftover entry must neither enable the fallback editor nor be written back.
+  const legacyCache = { available, chosen: ["a-1"], fallback: ["a-9"], pollMs: 90_000, fallbackAvailable: available };
+  testWindow.sessionStorage.setItem(LEGACY_CACHE_KEY, JSON.stringify(legacyCache));
   let releaseGet!: (response: Response) => void;
   pendingFallbackResponse = new Promise<Response>(resolve => { releaseGet = resolve; });
 
-  const assertBlocked = async (expectedCache = legacyCache) => {
+  const assertBlocked = async () => {
     expect(labelledButton(editor(), en["sub.fallbackAdd"]).disabled).toBe(true);
     expect(pollInput().disabled).toBe(true);
     expect(saveButton().disabled).toBe(true);
@@ -588,9 +576,8 @@ test("a legacy cache keeps fallback disabled through GET failure, roster Save, a
       .every(control => control.disabled)).toBe(true);
     await act(async () => { saveButton().click(); });
     expect(putBodies()).toEqual([]);
-    expect(cached()).toEqual(expectedCache);
-    expect(cached()).not.toHaveProperty("fallback");
-    expect(cached()).not.toHaveProperty("pollMs");
+    expect(cached()).toBeNull();
+    expect(readSessionListCache(LEGACY_CACHE_KEY)).toEqual(legacyCache);
     // A failed read must never turn the page's empty placeholder into a saved empty chain.
     expect(fallbackSettings).toEqual({ models: ["a-2"], pollMs: 45_000 });
   };
@@ -608,11 +595,6 @@ test("a legacy cache keeps fallback disabled through GET failure, roster Save, a
   expect(container.textContent).toContain(en["sub.loadFail"]);
   await assertBlocked();
 
-  await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
-  const savedRosterCache = { available, chosen: ["a-1", "a-3"] };
-  expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-3"] }]);
-  await assertBlocked(savedRosterCache);
-
   const current = root!;
   await act(async () => { current.unmount(); });
   root = null;
@@ -623,26 +605,26 @@ test("a legacy cache keeps fallback disabled through GET failure, roster Save, a
     await mount();
     expect(requests.filter(request => request.path === FALLBACK_PATH && request.method === "GET")).toHaveLength(getsBefore + 1);
     expect(pendingFallbackResponse).toBeNull();
-    await assertBlocked(savedRosterCache);
+    await assertBlocked();
   } finally {
     await act(async () => {
       releaseGet(Response.json({ error: "Fallback discovery still unavailable" }, { status: 503 }));
     });
   }
   expect(container.textContent).toContain(en["sub.loadFail"]);
-  await assertBlocked(savedRosterCache);
-  expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-3"] }]);
+  await assertBlocked();
+  expect(putBodies(ROSTER_PATH)).toEqual([]);
 });
 
 test.each([false, true])("a captured old fallback GET cannot overwrite a newer draft or save (saved=%s)", async (saveNewer) => {
-  const committedA = { available, fallbackAvailable: available, chosen: ["a-1"], fallback: ["a-2"], pollMs: 45_000 };
+  const committedA = { fallbackAvailable: available, fallback: ["a-2"], pollMs: 45_000 };
   testWindow.sessionStorage.setItem(CACHE_KEY, JSON.stringify(committedA));
   // Serialize A before any edit or PUT. Reading mutable fallbackSettings after the gate
   // would accidentally return B and let the stale-response regression pass.
   const capturedOldResponse = Response.json({ models: ["a-2"], pollMs: 45_000, available });
   let releaseGet!: (response: Response) => void;
   pendingFallbackResponse = new Promise<Response>(resolve => { releaseGet = resolve; });
-  const committedB = { available, fallbackAvailable: available, chosen: ["a-1"], fallback: ["a-3"], pollMs: 90_000 };
+  const committedB = { fallbackAvailable: available, fallback: ["a-3"], pollMs: 90_000 };
 
   try {
     await mount();
@@ -680,10 +662,7 @@ test.each(["", "1e309"])("blank or overflowing polling input stays invalid until
   expect(putBodies()).toEqual([]);
   expect(cached()).toEqual(committed);
 
-  // An unrelated roster edit must not restore the last valid interval or coerce the blank to zero.
-  await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
   expect(pollInput().value).toBe(value);
-  expect(saveButton().disabled).toBe(true);
   await changePollMs(90_000);
   expect(pollInput().getAttribute("aria-invalid")).toBe("false");
   expect(editor().querySelector('[role="alert"]')).toBeNull();
@@ -746,21 +725,4 @@ test.each(compatibilityCases)("V2 compatibility guidance: $name", async ({ model
     expect(container.textContent).not.toContain(en["sub.v2Compatibility.recoveryUnknown"]);
   }
   expect(requests.filter(request => request.method !== "GET")).toEqual([]);
-});
-
-test("order hint explains visible featured model fill and the custom model picker order exception", async () => {
-  await mount();
-  const trigger = container.querySelector<HTMLButtonElement>(".swi-featured-head .ocx-tooltip");
-  if (!trigger) throw new Error("Expected the order-hint tooltip trigger to be rendered");
-  await act(async () => {
-    trigger.focus();
-    await new Promise<void>(resolve => testWindow.setTimeout(resolve, 250));
-  });
-  expect(trigger.getAttribute("aria-describedby")).toBeTruthy();
-  const tooltip = container.querySelector<HTMLElement>('[role="tooltip"]');
-  expect(tooltip?.textContent).toContain("spawn_agent");
-  expect(tooltip?.textContent).toContain("The order shown here sets positions 1–5 at the top of the Codex model picker and the default model candidates for spawn_agent.");
-  expect(tooltip?.textContent).toContain("fewer than 5 pinned models are visible in the picker");
-  expect(tooltip?.textContent).toContain("remaining slots are advertised by catalog priority");
-  expect(tooltip?.textContent).toContain("5 visible pinned models fill the list unless a custom model picker order changes catalog priority");
 });

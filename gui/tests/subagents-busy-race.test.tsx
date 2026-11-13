@@ -2,12 +2,12 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import Subagents from "../src/pages/Subagents";
+import PickerPinnedRoster from "../src/components/PickerPinnedRoster";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 
 /**
- * Featured roster edits save themselves. Writes are serialized: while one PUT is in flight,
+ * Pinned roster edits (Models page client picker section) save themselves. Writes are serialized: while one PUT is in flight,
  * edits stay enabled and only the newest list waits. The server's applied list wins, and a
  * failed final write restores the last list the server accepted.
  */
@@ -101,7 +101,7 @@ async function mount() {
     root = createRoot(container);
     root.render(
       <LanguageProvider>
-        <Subagents apiBase="" />
+        <PickerPinnedRoster apiBase="" onSaved={() => {}} />
       </LanguageProvider>,
     );
   });
@@ -134,7 +134,7 @@ function addToggle(id: string): HTMLButtonElement {
   return row as unknown as HTMLButtonElement;
 }
 
-/** Featured-list remove only (rail also has "Remove … from featured"). */
+/** Pinned-list remove only (the model list also has "Remove … from the top of the model picker"). */
 function removeButton(id: string): HTMLButtonElement {
   const btn = Array.from(container.querySelectorAll(".swi-featured-actions button")).find(
     (b) => b.getAttribute("aria-label") === `Remove ${id}`,

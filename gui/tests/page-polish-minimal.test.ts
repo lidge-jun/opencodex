@@ -7,7 +7,7 @@ import { ko } from "../src/i18n/ko";
 const read = (p: string) => readFileSync(join(import.meta.dir, p), "utf8");
 const providers = read("../src/components/provider-workspace/ProviderOverviewDashboard.tsx");
 const logs = read("../src/pages/Logs.tsx");
-const subagents = read("../src/components/subagents-workspace/SubagentsWorkspace.tsx");
+const pinnedRoster = read("../src/components/PickerPinnedRoster.tsx");
 const delegation = read("../src/components/subagents-workspace/SubagentDelegationSection.tsx");
 const combos = read("../src/components/ComboWorkspace.tsx");
 const routing = read("../src/pages/RoutingProfiles.tsx");
@@ -32,10 +32,10 @@ describe("page polish", () => {
     expect(logs).not.toContain('{t("logs.subtitle")}');
   });
 
-  test("Subagents: order hint is a focusable named tooltip; guidance/ultra sit behind a closed details", () => {
-    expect(subagents).not.toContain("swi-featured-hint");
+  test("Pinned roster: order hint is a focusable named tooltip; Subagents guidance/ultra sit behind a closed details", () => {
+    expect(pinnedRoster).not.toContain("swi-featured-hint");
     // The "?" beside the counter is a HelpTip: a focusable Tooltip trigger named by orderHintAria.
-    expect(subagents).toContain('<HelpTip label={t("sub.orderHintAria")}><Trans k="sub.orderHint" cmd="spawn_agent" /></HelpTip>');
+    expect(pinnedRoster).toContain('<HelpTip label={t("sub.orderHintAria")}><Trans k="sub.orderHint" cmd="spawn_agent" /></HelpTip>');
     expect(read("../src/components/v2-subagents/frame.tsx")).toContain("<Tooltip content={children}");
     const at = delegation.indexOf('<details className="swi-advanced">');
     expect(at).toBeGreaterThan(-1);
