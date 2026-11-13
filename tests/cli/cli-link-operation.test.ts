@@ -259,6 +259,11 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
       expect(printed).toContain("repeat this revoke with the same operation id");
       expect(printed).toContain("although capacity is free");
       expect(printed).toContain("link_retirement_owned");
+      // That answer means some unfinished removal holds the link, not necessarily this operation (#8416).
+      expect(printed).not.toContain("still belongs to this id");
+      expect(printed).toContain("an unfinished removal holds this link");
+      expect(printed).toContain("ocx link operations");
+      expect(printed).toContain("ocx link revoke --force without --operation-id");
       expect(printed).not.toContain("the refusal was recorded");
       expect(printed).not.toContain("if it reads failed_clean");
       expect(printed).not.toContain("Nothing was changed");
