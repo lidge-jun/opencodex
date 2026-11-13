@@ -840,6 +840,14 @@ ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
 
 `--force` requiere `--yes`; `--yes` solo no es válido. La revocación ordinaria no cambia. Un éxito forzado devuelve `{linkId,remoteCleanup:"skipped",recovery}`. En su lugar, un link-not-found idempotente informa de `remoteCleanup:"unverified"`. Ambos pueden salir con 0; estos hechos derivan de la intención de la CLI, no de un informe de limpieza del servidor. Ninguno de los dos significa que se intentara o confirmara una desconexión remota. Siga la instrucción de recuperación, `ocx disconnect` en el cliente remoto, cuando esa acción esté autorizada.
 
+Una revocación forzada de un Child ligero (`ocx-child`) al que el Home llegó por SSH deja en el Home un registro (tombstone) con el enlace, su alias y su clave de host fijada; la instrucción de recuperación nombra entonces `ocx link recover`. Cuando ese equipo vuelva a responder, ejecute:
+
+```bash
+ocx link recover --link-id lnk_0123456789abcdef --json
+```
+
+El Home se conecta por el alias del enlace con la clave de host que registró (una clave cambiada se rechaza con `host_key_changed` antes de conectar) y ejecuta `disconnect --purge --expect-link <id>` del binario instalado. El Child restaura sus archivos de `~/.codex` y elimina el binario instalado solo cuando su estado y su registro de propiedad nombran ese enlace. Un éxito imprime `{linkId,outcome:"clean",purged:true}` y elimina el registro; `purged:false` significa que el Child restauró su estado pero conservó el binario instalado porque otro home de OpenCodex en ese equipo ejecuta un relay desde él, y el registro también se elimina. `child_residual` (salida 5) significa que el Child conserva registros que este comando no restaura, como un registro de propiedad escrito por un `ocx-child` anterior; ejecute `~/.cache/opencodex/bin/ocx-child detach` en ese equipo y vuelva a recuperar. `child_conflict` (salida 5) significa que el Child pertenece a otro enlace o a otro home de OpenCodex, y no se cambió nada. `--operation-id` recupera un Child que dejó una inscripción interrumpida; necesita el registro de operaciones del enlace y, de lo contrario, responde `operation_journal_unavailable`. La automatización puede detectar la compatibilidad con `ocx capabilities --contracts --json`: el array `contracts` contiene `link.recover/1`.
+
 <a id="observe-remote-workspace-from-the-hub"></a>
 
 ## Observar el espacio de trabajo remoto desde el Hub
