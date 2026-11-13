@@ -85,6 +85,16 @@ describe("xAI device login", () => {
     } finally { f.clock.mockRestore(); }
   });
 
+  for (const status of [503, 429] as const) test(`deadline after a ${status} carrying authorization_pending keeps the outage cause`, async () => {
+    const f = clockFixture();
+    try {
+      mockXai({ device_code: "d", user_code: "u", verification_uri: "https://accounts.x.ai/oauth2/device", expires_in: 3, interval: 1 },
+        [status, status].map(code => Response.json({ error: "authorization_pending" }, { status: code })));
+      const error = await loginXaiDevice({}, { sleep: f.sleep }).catch(e => e);
+      expect(classifyLoginCodeError(error)).toBe("provider_unreachable");
+    } finally { f.clock.mockRestore(); }
+  });
+
   test("shows the URL and code, polls at the interval, backs off on slow_down, and returns the token", async () => {
     const calls = mockXai(
       { device_code: "dev-1", user_code: "ABCD-EFGH", verification_uri: "https://accounts.x.ai/oauth2/device",

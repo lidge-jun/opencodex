@@ -550,7 +550,8 @@ export async function loginXaiDevice(
         // Still waiting for approval, or a network or server failure the grant can outlast.
         const status = error.status;
         if (error.oauthError === "authorization_pending" || status === undefined || status === 429 || status >= 500) {
-          lastFailure = error.oauthError === "authorization_pending" ? undefined : error;
+          // Only an ordinary pending answer clears the cause; a 429/5xx carrying that body is still an outage.
+          lastFailure = error.oauthError === "authorization_pending" && status === 400 ? undefined : error;
           // The server's own throttle wins over this client's interval, but never over the
           // grant deadline: the loop still sleeps at most what the grant has left.
           if (error.retryAfterMs !== undefined) nextWaitMs = Math.min(ttlMs, Math.max(waitMs, error.retryAfterMs));
