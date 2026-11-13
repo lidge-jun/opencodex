@@ -909,7 +909,12 @@ describe("recover while another link names the alias", () => {
     // The machine was enrolled again under the same alias (spelled differently), and that link still exists.
     h.store.links.push(link({ id: OTHER, alias: "DevBox" }));
     const res = await h.request("POST", "/api/link/recover", { linkId: ID });
-    expect([res.status, (await errorOf(res)).code]).toEqual([409, "alias_linked"]);
+    const error = await errorOf(res);
+    expect([res.status, error.code]).toEqual([409, "alias_linked"]);
+    // That link may be the one the machine runs now: the remedy revokes it only if it is stale too.
+    expect(error.message).toContain("Only if that link is stale too");
+    expect(error.message).toContain("If the machine runs that link, leave it");
+    expect(error.message).not.toContain("settle any open operation on that link (ocx link operations), revoke the link, then recover");
     expect(h.commands.filter(c => c.includes("ocx-managed-purge"))).toEqual([]);
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });

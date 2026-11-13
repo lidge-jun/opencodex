@@ -35,7 +35,7 @@ const isObject = (value: unknown): value is Record<string, unknown> => Boolean(v
 
 /** The CLI's own words for recover's refusals; any other code is shown as the code itself. */
 const RECOVER_REFUSALS: Record<string, string> = {
-  alias_linked: "another Home-initiated link still uses this machine's alias, so the Child there may belong to that link. Do not run ocx-child detach on the machine: settle any open operation on that link (ocx link operations), revoke it (ocx link revoke), then recover.",
+  alias_linked: "another Home-initiated link still uses this machine's alias, so the Child there may belong to that link. Do not run ocx-child detach on the machine. Check which link it runs (ocx connect status --json, or the planted ocx-child's connect status --json): only if that other link is stale too (the machine does not run it), settle any open operation on it (ocx link operations), revoke it (ocx link revoke), then recover. If the machine runs that link, leave it: this tombstone waits until that link is removed, and recover runs then; or, once the machine is confirmed clean, a person on this Home can run ocx link recover --forget --link-id <id> --yes.",
   link_present: "this link still exists; revoke it (ocx link revoke, with --purge for a lightweight Child) instead.",
   link_retirement_pending: "this link's removal is unfinished; repeat ocx link revoke for it, then recover.",
   tombstone_not_found: "no forced revoke of this link is waiting for cleanup (ocx link recover --list).",

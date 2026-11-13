@@ -94,6 +94,11 @@ describe("ocx link recover", () => {
       expect(stderr()).toContain("alias_linked");
       expect(stderr()).toContain("another Home-initiated link");
       expect(stderr()).toContain("ocx link revoke");
+      // The other link may be the live one: revoke it only if it is stale too, else leave it and let the tombstone wait (#8662 review).
+      expect(stderr()).toContain("only if that other link is stale too");
+      expect(stderr()).toContain("If the machine runs that link, leave it");
+      expect(stderr()).toContain("ocx link recover --forget --link-id <id> --yes");
+      expect(stderr()).not.toContain("Do not run ocx-child detach on the machine: settle");
       expect(stderr()).not.toContain("server text");
     }
   });
