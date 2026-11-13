@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { withClaudeContextSettings } from "../../src/cli/claude-context-settings";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildClaudeEnv as buildClaudeEnvWithIo,
@@ -61,6 +62,78 @@ function buildClaudeEnv(
     },
   });
 }
+
+describe("ocx claude per-model compact settings", () => {
+  const windows = { "mock/mid": 524_000, "ocx-claude-mock--mid": 524_000, "native-large": 872_000 };
+  const env = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "829800", KEEP: "unchanged" };
+  const build = (args: string[] = [], base: Record<string, string> = {}, map = windows, config = cfg()) =>
+    withClaudeContextSettings(args, env, config, map, base);
+  const settings = (args: string[]) => JSON.parse(args[args.indexOf("--settings") + 1]!);
+
+  test("switchable selectors get safe windows without changing the large-model default or source env", () => {
+    const result = build(["--model", "mock/mid"]);
+    expect(settings(result.args)).toEqual({ autoCompactWindow: 829_800, modelSettings: {
+      "mock/mid": { autoCompactWindow: 497_800 }, "ocx-claude-mock--mid": { autoCompactWindow: 497_800 },
+    } });
+    expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+    expect(result.env.KEEP).toBe("unchanged");
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
+  });
+
+  test("preserves explicit compact env, autocompact CLI, disabled accounting and missing metadata", () => {
+    for (const result of [
+      build([], { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "600000" }),
+      build(["--autocompact", "400k"]), build(["--autocompact=400k"]),
+      build([], {}, windows, cfg({ claudeCode: { autoContext: false } })),
+      build([], {}, windows, cfg({ claudeCode: { contextAccounting: "200k" } })),
+      build([], {}, windows, cfg({ claudeCode: { maxContextTokens: 500_000 } })),
+      build([], {}, {}), build([], {}, { huge: 1_000_000, invalid: Number.NaN, tiny: 50_000 }),
+    ]) {
+      expect(result.args).not.toContain("--settings");
+      expect(result.env).toEqual(env);
+    }
+  });
+
+  test("repeated settings and option values retain native client semantics", () => {
+    for (const args of [
+      ["--settings", '{"env":{"EXAMPLE":"discarded"}}', "--settings", '{"theme":"dark"}'],
+      ["--append-system-prompt", "--settings", "{}"],
+    ]) {
+      expect(build(args)).toEqual({ args, env });
+    }
+  });
+
+  test("explicit settings are forwarded unchanged and flags after the delimiter stay positional", () => {
+    for (const args of [["--settings", '{"autoCompactWindow":350000}'], ["--settings={\"theme\":\"dark\"}"]]) {
+      expect(build(args)).toEqual({ args, env });
+    }
+    const positional = ["--", "--settings", "literal prompt"];
+    expect(build(positional).args.slice(-3)).toEqual(positional);
+    expect(settings(build(positional).args).modelSettings["mock/mid"].autoCompactWindow).toBe(497_800);
+  });
+
+  test("injected options precede variadic client options and the positional prompt", () => {
+    const input = ["--mcp-config", '{"mcpServers":{}}', "/context"];
+    const result = build(input);
+    expect(result.args.slice(0, 1)).toEqual(["--settings"]);
+    expect(result.args.slice(2)).toEqual(input);
+  });
+
+  test("settings files and invalid settings remain the client's responsibility", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-compact-settings-"));
+    try {
+      const path = join(dir, "settings.json");
+      const text = '{"modelSettings":{"mock/mid":{"autoCompactWindow":420000}},"env":{"OTHER":"value"}}';
+      writeFileSync(path, text);
+      expect(build(["--settings", path])).toEqual({ args: ["--settings", path], env });
+      for (const input of ["{", "[]", join(dir, "missing.json")]) {
+        const result = build(["--settings", input]);
+        expect(result.args).toEqual(["--settings", input]);
+        expect(result.env).toEqual(env);
+      }
+    } finally { removeTreeWithRetry(dir); }
+  });
+});
 
 describe("ocx claude proxy liveness", () => {
   test("retries the initial liveness probe before spawning a proxy", async () => {
