@@ -6,7 +6,8 @@ import { fetchProviderModels } from "../../../src/codex/catalog/provider-models"
 import { readAntigravityWireSnapshot, writeAntigravityWireSnapshot } from "../../../src/providers/antigravity-wire-snapshot";
 import { createGoogleAdapter } from "../../../src/adapters/google";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
-import type { OcxParsedRequest } from "../../../src/types";
+import type { OcxConfig, OcxParsedRequest } from "../../../src/types";
+import { antigravityEffortFamilyIds, antigravityFamilyDisabled, collapseAntigravityPublicModels, projectAntigravitySelectedModels, type AntigravityEffortFamilyRow } from "../../../src/providers/antigravity-effort-families";
 import { expect, test } from "bun:test";
 import { antigravityUserAgentForWireModel, ANTIGRAVITY_CLI_REQUEST_UA, ANTIGRAVITY_REQUEST_UA } from "../../../src/adapters/google-antigravity-wire";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels, resolveAntigravityEffortWireModel } from "../../../src/providers/antigravity-models";
@@ -98,4 +99,26 @@ test("old snapshots load and optional xhigh is validated", () => {
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
     removeTreeWithRetry(home);
   }
+});
+
+test("an xhigh tier joins the family projection: selection, public collapse and disabled inheritance", () => {
+  const provider = "google-antigravity";
+  const base = "gemini-4-hydrogen";
+  const tiers = ["low", "medium", "high", "xhigh"].map(tier => `${base}-${tier}`);
+  const family: AntigravityEffortFamilyRow = { provider, id: base,
+    antigravityEffortWireModelIds: { low: tiers[0]!, medium: tiers[1]!, high: tiers[2]!, xhigh: tiers[3]! } };
+  expect(antigravityEffortFamilyIds(family)).toEqual(tiers);
+  // A mismatched xhigh id is not exact family evidence; a three-tier family is unchanged.
+  expect(antigravityEffortFamilyIds({ ...family, antigravityEffortWireModelIds: { ...family.antigravityEffortWireModelIds, xhigh: "other-xhigh" } })).toBeUndefined();
+  expect(antigravityEffortFamilyIds({ ...family, antigravityEffortWireModelIds: { low: tiers[0]!, medium: tiers[1]!, high: tiers[2]! } })).toEqual(tiers.slice(0, 3));
+
+  const rows = [family, ...tiers.map(id => ({ provider, id }))];
+  expect(projectAntigravitySelectedModels(provider, [tiers[3]!], rows)).toEqual([tiers[3]!, base]);
+  expect(collapseAntigravityPublicModels(rows)).toEqual([family]);
+
+  const config: OcxConfig = { providers: { [provider]: {} }, disabledModels: tiers.map(id => `${provider}/${id}`),
+    modelDiscovery: { newModelPolicy: "off", knownModels: { [provider]: { ids: [...tiers], removed: [], updatedAt: "2026-11-13T00:00:00Z" } } } } as OcxConfig;
+  expect(antigravityFamilyDisabled(config, family, rows)).toBe(true);
+  config.disabledModels = tiers.slice(0, 3).map(id => `${provider}/${id}`);
+  expect(antigravityFamilyDisabled(config, family, rows)).toBe(false);
 });
