@@ -37,7 +37,11 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
       return fail("tombstone_store_unreadable", "The link tombstone file cannot be read; it was left as it is.", 503);
     }
     if (!found) return fail("tombstone_not_found", "No forced revoke of this link is waiting for cleanup.", 404);
-    target = { linkId: found.linkId, alias: found.alias, hostKeyFingerprint: found.hostKeyFingerprint, ...(found.remotePlatform ? { remotePlatform: found.remotePlatform } : {}) };
+    target = {
+      linkId: found.linkId, alias: found.alias, hostKeyFingerprint: found.hostKeyFingerprint,
+      ...(found.remotePlatform ? { remotePlatform: found.remotePlatform } : {}),
+      ...(found.explicitRoute ? { explicitRoute: found.explicitRoute } : {}),
+    };
   } else {
     const resolver = operationRecoveryResolver();
     if (!resolver) return fail("operation_journal_unavailable", "This Home has no link operation journal; recover by --link-id.", 409);

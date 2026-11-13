@@ -1,3 +1,5 @@
+import type { ExplicitRoute } from "./explicit-route";
+
 /**
  * Core-owned slot through which the enrollment journal (lane O1, ocx link add --operation-id) lets
  * ocx link recover --operation-id find the Child an enrollment left behind before it reached
@@ -14,6 +16,8 @@ export interface LinkRecoveryTarget {
   alias: string;
   hostKeyFingerprint: string;
   remotePlatform?: "posix" | "windows";
+  /** The link's explicit route (O6), or absent for an ssh_config alias. */
+  explicitRoute?: ExplicitRoute;
 }
 
 export type OperationRecoveryLookup =

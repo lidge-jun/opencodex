@@ -74,7 +74,7 @@ export async function observeChild(record: LinkRecord, deps: ObserveDeps): Promi
   try { platform = record.remotePlatform ?? await deps.platformOf(record); } catch { return outcome("offline", "platform-unknown"); }
   let argv: string[];
   try {
-    argv = buildExecArgv({ alias: record.alias, knownHostsFile: deps.knownHostsFile, argv: remoteUpdatePlanArgv(deps.homeVersion, platform) });
+    argv = buildExecArgv({ alias: record.alias, knownHostsFile: deps.knownHostsFile, argv: remoteUpdatePlanArgv(deps.homeVersion, platform), route: record.explicitRoute ?? null });
   } catch (error) {
     if (error instanceof LinkSshArgumentError && error.message === "windows-command-too-long") return outcome("failed", "windows-command-too-long");
     if (error instanceof LinkSshArgumentError && error.message === "invalid Home version") return outcome("failed", "home-version-invalid");
@@ -104,7 +104,7 @@ export async function observeChild(record: LinkRecord, deps: ObserveDeps): Promi
       if (platform === "posix") {
         source = "inspect";
         try {
-          const inspected = await deps.inspect(deps.runner, record.alias, deps.knownHostsFile, "posix");
+          const inspected = await deps.inspect(deps.runner, record.alias, record.explicitRoute ?? null, deps.knownHostsFile, "posix");
           installedVersion = parseOcxVersion(inspected?.ocxVersionLine ?? "");
         } catch { installedVersion = null; }
       } else {

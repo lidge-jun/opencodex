@@ -1,6 +1,7 @@
 import { CHILD_TARGET_TRIPLES, type ChildTargetTriple } from "./child-binary-source";
 import { MANAGED_PURGE_CHILD_MISSING_MARKER, windowsInspectRuntimeArgv, windowsManagedPurgeDisconnectArgv, windowsPlantChildArgv, windowsPurgePlantedChildArgv, windowsRecoverReceiptArgv } from "./remote-windows";
 import { buildExecArgv, REMOTE_SERVED_RUNTIME, remoteServedRuntimeAttempt } from "./ssh-argv";
+import type { ExplicitRoute } from "./explicit-route";
 import { sshFailureHint, sshRunnerErrorHint, type SshRunner } from "./ssh-runner";
 
 export type RemoteRuntimeKind = "full" | "ephemeral" | "missing";
@@ -115,11 +116,12 @@ export function parseRemoteRuntimeInspection(platform: "posix" | "windows", stdo
 export async function inspectRemoteChildRuntime(
   runner: Pick<SshRunner, "run">,
   alias: string,
+  route: ExplicitRoute | null,
   knownHostsFile: string,
   platform: "posix" | "windows",
   timeoutMs = 30_000,
 ): Promise<ParsedRemoteRuntimeInspection | null> {
-  const res = await runner.run(buildExecArgv({ alias, argv: remoteInspectRuntimeArgv(platform), knownHostsFile }), { timeoutMs });
+  const res = await runner.run(buildExecArgv({ alias, argv: remoteInspectRuntimeArgv(platform), knownHostsFile, route }), { timeoutMs });
   if (res.code !== 0) return null;
   return parseRemoteRuntimeInspection(platform, res.stdout);
 }
@@ -306,6 +308,7 @@ export type PurgeDisconnectOutcome =
 export async function purgeDisconnectRemote(
   runner: Pick<SshRunner, "run">,
   alias: string,
+  route: ExplicitRoute | null,
   knownHostsFile: string,
   platform: "posix" | "windows",
   childKind: "ephemeral" | "full" | undefined,
@@ -314,7 +317,7 @@ export async function purgeDisconnectRemote(
   let kind = childKind;
   if (kind === undefined) {
     let inspected: ParsedRemoteRuntimeInspection | null;
-    try { inspected = await inspectRemoteChildRuntime(runner, alias, knownHostsFile, platform); } catch (error) { return failed("The Child runtime could not be inspected, so --purge was not attempted.", sshRunnerErrorHint(error) ?? "child_kind_unknown"); }
+    try { inspected = await inspectRemoteChildRuntime(runner, alias, route, knownHostsFile, platform); } catch (error) { return failed("The Child runtime could not be inspected, so --purge was not attempted.", sshRunnerErrorHint(error) ?? "child_kind_unknown"); }
     if (!inspected || inspected.runtimeKind === "missing") return failed("The Child runtime could not be identified, so --purge was not attempted.", "child_kind_unknown");
     kind = inspected.runtimeKind;
   }
@@ -322,7 +325,7 @@ export async function purgeDisconnectRemote(
     return { ok: false, status: 409, code: "purge_unsupported", message: "This Child runs a full OpenCodex install; --purge removes only a planted ocx-child. Disconnect without --purge." };
   }
   let result;
-  try { result = await runner.run(buildExecArgv({ alias, argv: remoteManagedPurgeDisconnectArgv(platform), knownHostsFile }), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
+  try { result = await runner.run(buildExecArgv({ alias, argv: remoteManagedPurgeDisconnectArgv(platform), knownHostsFile, route }), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
   if (result.code !== 0) {
     if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) return failed("No planted ocx-child was found in the managed directory, so nothing was purged.", "managed_child_missing");
     return failed("The remote client could not be disconnected.", sshFailureHint(result.stderr));

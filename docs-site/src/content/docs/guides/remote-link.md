@@ -188,8 +188,8 @@ The Child uses the Home computer's providers and provider credentials through th
 ## CLI reference
 
 ```text
-ocx link probe <alias> [--json]
-ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
+ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
+ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
@@ -211,6 +211,8 @@ ocx link capture stop [--json]
 ocx link capture status [--json]
 ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]
 ```
+
+An explicit, exclusive route is for callers that set up the SSH path themselves, such as a hub that provisions a disposable machine. `ocx link add <alias> --proxy-command <command> --ssh-user <user> --ssh-port <port> --exclusive` passes that ProxyCommand, user and port to ssh on the command line for every command and tunnel of the link, so a later edit of `~/.ssh/config` cannot move the link to another path, and the link then refuses `ocx link routes` edits. The command must start with an absolute path and use only letters, digits and `. _ / : @ + , = -` in words separated by single spaces; `%` tokens, quotes and shell characters are refused. `--exclusive` alone keeps the link to its one alias without changing how ssh reaches it.
 
 `ocx link status` needs the local admin token on a listener that only this machine can reach. When the public listener is bound to a non-loopback address, for example a Hub on `0.0.0.0`, no TCP listener qualifies: the hub management listener is reached through Tailscale Serve, so it refuses the raw admin token for link routes. On macOS and Linux the proxy therefore also opens a private Unix socket, `<OPENCODEX_HOME>/run/control-<port>.sock`, in a directory only your user can enter, and `ocx link status` uses it automatically. The socket answers only `GET /api/link/status` and still requires the admin token. Windows and runtimes older than this change keep the TCP path, where the read returns `403` on such a Hub.
 

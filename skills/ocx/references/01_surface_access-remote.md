@@ -12,7 +12,7 @@ Declared capabilities: 49.
 
 ### `ocx link probe`
 
-Usage: `ocx link probe <alias> [--json]`
+Usage: `ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
 
 Probe an SSH host fingerprint and OpenCodex version without trusting it.
 
@@ -24,13 +24,17 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit alias, fingerprint, key type and version as JSON. |
 
 - Requires loopback admin authority on the Home. Stores only a temporary pending offer; does not persist host trust or issue a link key.
 
 ### `ocx link add`
 
-Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]`
+Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
 
 Connect an SSH Child to this Home after confirming its fingerprint.
 
@@ -45,6 +49,10 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit the verified link result as JSON. |
 
 - Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.

@@ -60,7 +60,10 @@ export async function recoverRemoteChild(
   knownHostsFile: string,
 ): Promise<LinkRecoverOutcome> {
   const failed = (message: string, hint: string): LinkRecoverOutcome => ({ ok: false, status: 502, code: "remote_recover_failed", message, hint });
-  const exec = (argv: string[]) => runner.run(buildExecArgv({ alias: target.alias, argv, knownHostsFile }), { timeoutMs: 30_000 });
+  // With an explicit route (O6) its ProxyCommand, user and port go on the command line; otherwise
+  // the alias alone, with the pinned host key either way.
+  const route = target.explicitRoute ?? null;
+  const exec = (argv: string[]) => runner.run(buildExecArgv({ alias: target.alias, argv, knownHostsFile, route }), { timeoutMs: 30_000 });
   let trusted: string;
   try { trusted = readFileSync(knownHostsFile, "utf8"); } catch { trusted = ""; }
   const trust = checkRouteTrust(trusted, target.alias, target.hostKeyFingerprint);
@@ -71,7 +74,7 @@ export async function recoverRemoteChild(
   }
   let platform = target.remotePlatform;
   if (!platform) {
-    try { platform = await requireRemotePlatform(runner, target.alias, knownHostsFile); } catch { return failed("The Child's platform could not be determined, so recovery was not attempted.", "platform_unknown"); }
+    try { platform = await requireRemotePlatform(runner, target.alias, route, knownHostsFile); } catch { return failed("The Child's platform could not be determined, so recovery was not attempted.", "platform_unknown"); }
   }
   let result;
   try { result = await exec(remoteManagedPurgeDisconnectArgv(platform, target.linkId)); } catch { return failed("The Child could not be reached.", "ssh_failed"); }

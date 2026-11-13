@@ -4,6 +4,7 @@ import { atomicWriteFile, isMissingPathError } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir } from "../lib/windows-secret-acl";
 import { linkDir } from "./paths";
+import { parseExplicitRoute, type ExplicitRoute } from "./explicit-route";
 import { assertSshAlias } from "./ssh-argv";
 import { MAX_LINK_ROUTES } from "./store";
 
@@ -21,6 +22,10 @@ export interface LinkTombstone {
   remotePlatform?: "posix" | "windows";
   /** The link's route list when it had several; recover uses only alias, the pinned name. */
   routes?: string[];
+  /** The link's explicit route (src/link/explicit-route.ts); recover reaches the machine over it. */
+  explicitRoute?: ExplicitRoute;
+  /** The link was exclusive: no other route may reach it. Required by explicitRoute. */
+  exclusive?: true;
   revokedAt: string;
 }
 
@@ -38,7 +43,7 @@ export class LinkTombstoneStoreError extends Error {
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const FINGERPRINT = /^[A-Z0-9]+:[A-Za-z0-9+/=]{16,128}$/;
-const KEYS = new Set(["linkId", "alias", "hostKeyFingerprint", "remotePlatform", "routes", "revokedAt"]);
+const KEYS = new Set(["linkId", "alias", "hostKeyFingerprint", "remotePlatform", "routes", "explicitRoute", "exclusive", "revokedAt"]);
 
 export function tombstonesPath(configDir?: string): string {
   return join(linkDir(configDir), "tombstones.json");
@@ -64,12 +69,17 @@ function parseTombstone(value: unknown, index: number): LinkTombstone {
       || !routes.every(isAlias) || !routes.includes(raw.alias as string) || new Set(routes).size !== routes.length) fail();
   }
   if (typeof raw.revokedAt !== "string" || Number.isNaN(Date.parse(raw.revokedAt))) fail();
+  if (raw.exclusive !== undefined && (raw.exclusive !== true || raw.routes !== undefined)) fail();
+  const explicitRoute = raw.explicitRoute === undefined ? undefined : parseExplicitRoute(raw.explicitRoute);
+  if (explicitRoute === null || (explicitRoute && raw.exclusive !== true)) fail();
   return {
     linkId: raw.linkId as string,
     alias: raw.alias as string,
     hostKeyFingerprint: raw.hostKeyFingerprint as string,
     ...(raw.remotePlatform === undefined ? {} : { remotePlatform: raw.remotePlatform as "posix" | "windows" }),
     ...(raw.routes === undefined ? {} : { routes: [...raw.routes as string[]] }),
+    ...(explicitRoute ? { explicitRoute } : {}),
+    ...(raw.exclusive === true ? { exclusive: true as const } : {}),
     revokedAt: raw.revokedAt as string,
   };
 }

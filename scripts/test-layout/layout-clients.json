@@ -225,5 +225,10 @@
   "link-child-ops-no-timer.test.ts": "lab",
   "link-child-policy-routes.test.ts": "server",
   "cli-link-policy.test.ts": "cli",
-  "link-child-catalog-oracle.test.ts": "e2e-style"
+  "link-child-catalog-oracle.test.ts": "e2e-style",
+  "link-explicit-route.test.ts": "clients",
+  "link-explicit-route-paths.test.ts": "clients",
+  "link-route-edit-exclusive.test.ts": "server",
+  "link-enrollment-explicit-route.test.ts": "server",
+  "cli-link-explicit-route.test.ts": "cli"
 }

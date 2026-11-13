@@ -420,3 +420,30 @@ test("the Windows scripts keep a kept binary and require the planted binary to b
   expect(receipt).toContain("ocx-child.exe");
   expect(receipt).toContain("exit 4");
 });
+
+describe("recover over an exclusive explicit route (O6)", () => {
+  const route = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a 22", user: "builder", port: 22 };
+  test("the tombstone keeps the explicit route and recover passes it on the ssh command line", async () => {
+    const h = harness([link({ explicitRoute: route, exclusive: true })]);
+    await forceRevoke(h);
+    expect(tombstones()).toEqual([{
+      linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, remotePlatform: "posix",
+      explicitRoute: route, exclusive: true, revokedAt: new Date(1_800_000_000_000).toISOString(),
+    }]);
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(200);
+    expect(h.commands).toHaveLength(1);
+    expect(h.commands[0]).toContain("ProxyCommand=" + route.proxyCommand);
+    expect(h.commands[0]).toContain("User=builder");
+    expect(h.commands[0]).toContain("Port=22");
+    expect(tombstones()).toEqual([]);
+  });
+
+  test("an explicit route in a tombstone needs exclusive, as on a link record", async () => {
+    await Bun.write(tombstonesPath(), JSON.stringify({ version: 1, tombstones: [{ linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, explicitRoute: route, revokedAt: "2026-11-13T00:00:00.000Z" }] }));
+    const h = harness([]);
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(503);
+    expect((await errorOf(res)).code).toBe("tombstone_store_unreadable");
+  });
+});
