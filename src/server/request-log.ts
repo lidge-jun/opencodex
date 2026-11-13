@@ -2,6 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { normalizeRecordedClient, type UsageClient } from "../usage/client";
 import { anthropicAccountTagField, stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
+import { finalizeProviderCacheAffinity } from "./request-log-cache-affinity";
+import { aggregateAttemptUsage } from "./request-log-attempt-usage";
+export { aggregateAttemptUsage } from "./request-log-attempt-usage";
+
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
@@ -23,7 +27,7 @@ import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { readCodexCatalogPath } from "../codex/catalog";
-import type { AttemptTierOutcome, OcxProviderConfig, OcxUsage } from "../types";
+import type { AttemptTierOutcome, CacheAffinityLogReason, CacheAffinityOutcome, OcxProviderConfig, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { protocolTraceForRequest } from "../protocols/trace";
@@ -41,6 +45,8 @@ import {
   isKnownAdmissionKind,
   isKnownAffinityMove,
   isKnownAffinityReason,
+  isKnownCacheAffinity,
+  isKnownCacheAffinityReason,
   isKnownCacheTelemetryProvenance,
   isKnownInboundProtocol,
   isKnownTerminalSource,
@@ -276,6 +282,20 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
    * Codex pool account was not the issuer. Never an account identifier.
    */
   conversationStateScrub?: "account-change";
+  /** Explicit session lane for provider cache affinity; internal only, never persisted raw. */
+  affinityLane?: string;
+  affinityKeyEntryId?: string;
+  /** Configured provider owning the serving entry, independent of combo display labels. */
+  affinityProviderName?: string;
+  /** Whether provider cache affinity applies to this request's provider at all. */
+  cacheAffinityApplicable?: boolean;
+  /** Entry the consult kept this request on, when it did; rotation may still move it. */
+  affinityKeptEntryId?: string;
+  /** Model identity affinity consults with; recording reuses it so virtual models match. */
+  affinityModel?: string;
+  /** Provider cache-affinity outcome for this request (bounded enum, persisted on the entry). */
+  cacheAffinity?: CacheAffinityOutcome;
+  cacheAffinityReason?: CacheAffinityLogReason;
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
   /** Closed failure evidence supplied by the transport, never inferred from provider text. */
@@ -393,6 +413,9 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics, LinkRequestLo
   affinity?: CodexAffinityMove;
   /** Why that decision was made (#4546): a move is the expensive event, so it names its cause. */
   affinityReason?: CodexAffinityReason;
+  /** Provider cache-affinity outcome: kept on, newly bound to, or released from a key-pool credential. */
+  cacheAffinity?: CacheAffinityOutcome;
+  cacheAffinityReason?: CacheAffinityLogReason;
   /**
    * Set when this request dropped account-bound continuation after a Codex pool
    * account change. Never an account identifier.
@@ -550,6 +573,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       ? { cacheProvenance: entry.cacheProvenance }
       : {}),
     ...persistedAffinityFields(entry),
+    ...persistedCacheAffinityFields(entry),
     ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
     ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
     ...(routeDecision ? { routeDecision } : {}),
@@ -575,6 +599,16 @@ function persistedAffinityFields(
   return {
     affinity: entry.affinity,
     ...(isKnownAffinityReason(entry.affinityReason) ? { affinityReason: entry.affinityReason } : {}),
+  };
+}
+
+function persistedCacheAffinityFields(
+  entry: Pick<RequestLogEntry, "cacheAffinity" | "cacheAffinityReason">,
+): Pick<PersistedUsageEntry, "cacheAffinity" | "cacheAffinityReason"> {
+  if (!isKnownCacheAffinity(entry.cacheAffinity)) return {};
+  return {
+    cacheAffinity: entry.cacheAffinity,
+    ...(isKnownCacheAffinityReason(entry.cacheAffinityReason) ? { cacheAffinityReason: entry.cacheAffinityReason } : {}),
   };
 }
 
@@ -751,6 +785,7 @@ export function addRequestLog(entry: RequestLogEntry) {
         ? { cacheProvenance: entry.cacheProvenance }
         : {}),
       ...persistedAffinityFields(entry),
+      ...persistedCacheAffinityFields(entry),
       ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
       ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
       ...failureDiagnostics,
@@ -1564,6 +1599,14 @@ function writeFinalRequestLog(
     cacheProvenance,
     ...(logCtx.cacheDiagnosticDraft ? { draft: logCtx.cacheDiagnosticDraft } : {}),
   });
+  // Provider cache affinity: this is the one seam every request passes exactly
+  // once with its terminal status, the credential that ultimately served (the
+  // entry id captured beside the account label at each stamp, rotations
+  // included), and cache usage already normalized from whichever adapter
+  // answered. A success binds or refreshes the conversation on that
+  // credential; a quota/auth terminal releases it so the next request is
+  // placed fresh instead of re-offered a credential that just refused.
+  finalizeProviderCacheAffinity(logCtx, effectiveStatus, logCtx.usage ?? loggedUsage);
   // Sanitize at the logging layer, not only at the one call site that populates this today.
   // The value originates in an upstream-supplied model id, so an unsanitized newline would
   // let a single field forge a record boundary in any line-oriented log viewer. Doing it here
@@ -1633,6 +1676,8 @@ function writeFinalRequestLog(
     ...(loggedUsage || cacheProvenance !== "unknown" ? { cacheProvenance } : {}),
     ...(logCtx.affinity ? { affinity: logCtx.affinity } : {}),
     ...(logCtx.affinityReason ? { affinityReason: logCtx.affinityReason } : {}),
+    ...(logCtx.cacheAffinity ? { cacheAffinity: logCtx.cacheAffinity } : {}),
+    ...(logCtx.cacheAffinityReason ? { cacheAffinityReason: logCtx.cacheAffinityReason } : {}),
     ...(logCtx.conversationStateScrub === "account-change"
       ? { conversationStateScrub: "account-change" }
       : {}),
@@ -1925,67 +1970,6 @@ export function finishRequestAttempt(
   if (errorCode) attempt.errorCode = errorCode;
   else delete attempt.errorCode;
   return attempt;
-}
-
-export function aggregateAttemptUsage(
-  attempts: readonly PersistedUsageAttempt[],
-): FinalizedUsageResult {
-  // A usage-less attempt that never reached upstream spent nothing (summary.ts `spentNothing`),
-  // so it cannot leave the row's usage unknown.
-  const measured = attempts.filter(attempt => attempt.usage
-    || (attempt.sendCount !== 0 && attempt.locallyAnswered !== true));
-  const status: UsageStatus = measured.length > 0
-    && measured.every(attempt => attempt.usageStatus === "unsupported")
-    ? "unsupported"
-    : measured.some(attempt => (
-        attempt.usageStatus === "unreported" || attempt.usageStatus === "unsupported"
-      ))
-      ? "unreported"
-      : measured.some(attempt => attempt.usageStatus === "estimated")
-        ? "estimated"
-        : measured.length > 0
-          ? "reported"
-          : "unreported";
-
-  const usages = attempts.flatMap(attempt => attempt.usage ? [attempt.usage] : []);
-  if (usages.length === 0) return { status };
-
-  const sumOptional = (
-    key: "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens" | "cacheCreation1hInputTokens"
-      | "reasoningOutputTokens" | "providerCredits",
-  ): number | undefined => {
-    const present = usages.flatMap(usage => (
-      typeof usage[key] === "number" ? [usage[key] as number] : []
-    ));
-    return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) : undefined;
-  };
-  const cachedInputTokens = sumOptional("cachedInputTokens");
-  // Readers take `cacheReadInputTokens ?? cachedInputTokens` (usage/cost.ts), so once any attempt
-  // reports the read field, an attempt that only reports `cachedInputTokens` must count in it too.
-  const cacheReadInputTokens = sumOptional("cacheReadInputTokens") === undefined ? undefined
-    : usages.reduce((sum, usage) => sum + (usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? 0), 0);
-  const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
-  const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
-  const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
-  const providerCredits = sumOptional("providerCredits");
-  const totalTokens = usages.reduce(
-    (sum, usage) => sum + (usageTotalTokens(usage) ?? 0),
-    0,
-  );
-  const aggregate: OcxUsage = {
-    inputTokens: usages.reduce((sum, usage) => sum + usage.inputTokens, 0),
-    outputTokens: usages.reduce((sum, usage) => sum + usage.outputTokens, 0),
-    totalTokens,
-    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
-    ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
-    ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
-    ...(cacheCreation1hInputTokens !== undefined ? { cacheCreation1hInputTokens } : {}),
-    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
-    ...(providerCredits !== undefined ? { providerCredits } : {}),
-    ...(status === "estimated" ? { estimated: true } : {}),
-    ...(usages.every(usage => usage.upstreamReported) ? { upstreamReported: true as const } : {}),
-  };
-  return { usage: aggregate, status, totalTokens };
 }
 
 export function getRequestLogEntries(): RequestLogEntry[] { return requestLog; }
