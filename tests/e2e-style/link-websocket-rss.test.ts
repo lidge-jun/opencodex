@@ -180,8 +180,8 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
         // A load that completes before every pump waits never reached the condition being measured.
         expect(await Promise.race([announced, finished])).toBe("stalled");
       } else await Promise.all(signals.slice(1).map(signal => options.hold ? signal.reachedHold : signal.reachedStall));
-      // With a held upstream both transports also wait until every stream has supplied all it will.
-      if (options.hold && options.transport === "websocket") await Promise.all(signals.slice(1).map(signal => signal.reachedHold));
+      // A link turn reads its upstream only as its socket drains (#8601), so a stalled WebSocket pump stops pulling before
+      // the upstream's hold point: the pumps' own stall is the synchronization, and the upstream is never waited for here.
       const enqueuedAtStallMiB = delivered.slice(1).map(bytes => Math.round(bytes / MiB));
       if (HEAP) { child.stdin.write("heap\n"); child.stdin.flush(); console.log(JSON.stringify(await nextLine())); }
       // Cut every socket in a seeded random order, at different points of its stalled stream.

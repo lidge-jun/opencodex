@@ -53,7 +53,8 @@ const peakAnswer = (): { rss: number | null; method: string } => {
   return { rss: value, method: resetFailed ? "kernel-reset-failed" : "kernel-vmhwm" };
 };
 let waiting = 0;
-let announced = false;
+// Armed by the idle reading ("gc-rss"), so a warm-up turn whose pump waited for a drain cannot announce the load's stall.
+let announced = true;
 setLinkPumpWaitObserverForTests(isWaiting => {
   waiting += isWaiting ? 1 : -1;
   sample();
@@ -93,6 +94,7 @@ for (;;) {
     Bun.gc(true);
     if (kernel && !resetKernelPeak()) resetFailed = true;
     highWater = process.memoryUsage().rss;
+    announced = false;
     console.log(JSON.stringify({ rss: highWater }));
   }
   else if (command === "heap") {
