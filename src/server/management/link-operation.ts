@@ -274,30 +274,54 @@ export function settleRevokeAfterRetirement(ctx: ManagementContext, operationId:
  * resume, never a finished removal whose entry stays unknown with nothing left to resume.
  */
 export function resumedRevokeJournal(ctx: ManagementContext, operationId: string, markEffects: boolean): RevokeJournal {
-  const mark = (effect: RevokeEffect, phase: "intent" | "done", receipt?: { purged: true; linkId: string }) => updateJournalPinned(journalPathFor(ctx), nowOf(ctx), journal => {
+  const path = journalPathFor(ctx);
+  let reopened = false;
+  const mark = (effect: RevokeEffect, phase: "intent" | "done", receipt?: { purged: true; linkId: string }) => updateJournalPinned(path, nowOf(ctx), journal => {
     if (!markEffects) return;
     const op = findOperation(journal, operationId);
     if (!op) throw new Error("the revoke operation is no longer journalled");
     op.effects.push({ effect, phase, at: iso(ctx) });
     if (receipt) op.receipt = receipt;
     op.updatedAt = iso(ctx);
-    // A new Child cleanup attempt is uncertain until it settles: the owner is unknown and unresolved again, so an earlier
-    // resolution cannot cover it and the link stays suspended (revokeSuspendsLink) if the attempt does not finish.
-    if (effect === "remote_cleanup" && phase === "intent" && op.state !== "open") {
-      op.state = "unknown";
-      delete op.resolvedAt;
-      op.finishedAt = op.updatedAt;
-      op.error = op.error ?? { code: "operation_interrupted", status: 409 };
+    // A new Child cleanup attempt runs as an open, live revoke, as a fresh one does: resolve refuses an open entry, so no
+    // resolution (earlier or concurrent) can cover an attempt whose outcome is pending; if the resume fails the entry is
+    // settled unknown and unresolved (settleResumedRevoke), so the link stays suspended (revokeSuspendsLink).
+    if (effect === "remote_cleanup" && phase === "intent") {
+      if (op.state !== "open") {
+        op.state = "open";
+        delete op.finishedAt;
+        delete op.resolvedAt;
+        delete op.error;
+      }
+      reopened = true;
+      markRevokeLive(path, operationId, true);
     }
   });
   return {
     operationId,
     intent: effect => mark(effect, "intent"), done: (effect, receipt) => mark(effect, "done", receipt),
     beforeReceiptCleared: () => settleRevokeAfterRetirement(ctx, operationId),
-    // A resumed retirement registers no live mark of its own: its link is held for the whole resume (holdLink).
-    cleanupNotRun: () => {}, release: () => {},
+    cleanupNotRun: () => {},
+    release: () => { if (reopened) markRevokeLive(path, operationId, false); },
     finish: async response => response,
   };
+}
+
+/**
+ * A resumed retirement that did not finish (#8416): an owner it left open settles unknown, unresolved, with the
+ * failure's code, as a fresh revoke's finish settles it; its live mark goes in the same step.
+ */
+export async function settleResumedRevoke(ctx: ManagementContext, operationId: string, response: Response): Promise<void> {
+  const path = journalPathFor(ctx);
+  try {
+    let code = "revoke_failed";
+    try {
+      const body = await response.clone().json() as { error?: { code?: unknown } };
+      if (typeof body.error?.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(body.error.code)) code = body.error.code;
+    } catch { /* keeps revoke_failed */ }
+    const op = findOperation(readOperationsJournal(path), operationId);
+    if (op?.state === "open") settle(ctx, operationId, "unknown", { code, status: response.status >= 400 && response.status <= 599 ? response.status : 500 });
+  } finally { markRevokeLive(path, operationId, false); }
 }
 
 export interface EnrollJournal {

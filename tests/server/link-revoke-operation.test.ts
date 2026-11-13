@@ -775,3 +775,40 @@ test("a plain --force finishes an owned receipt even when the operation journal 
   expect(h.store.links).toEqual([]);
   expect(readLinkRetirement(LINK, root)).toBeNull();
 });
+
+test("a resolve during a resumed cleanup is refused, and an uncertain result leaves the owner unresolved and suspended", async () => {
+  let open!: () => void, running!: () => void;
+  const started = new Promise<void>(resolve => { running = resolve; });
+  const h = harness({ purgeReport: '{"restored":true,"outcome":"Restored","daemonRunning":false}\n', gate: new Promise<void>(resolve => { open = resolve; }), onRun: () => running() });
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, resolvedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 }, effects: [],
+  } as LinkOperation] });
+  const retry = h.revoke({ purge: true, operationId: OP });
+  await started;
+  // The attempt is pending: the owner is an open, live revoke, which resolve refuses.
+  expect(resolveLinkOperation(h.journalPath, OP, NOW)).toBe("not_resolvable");
+  open();
+  expect((await retry).status).toBeGreaterThanOrEqual(400);
+  const owner = h.journal().operations[0]!;
+  expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: undefined });
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+});
+
+test.skipIf(process.platform !== "darwin")("a plain --force whose readable journal cannot settle the open owner refuses before disowning its receipt", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "open", effects: [{ effect: "key_revoked", phase: "intent", at: AT_ISO }],
+  } as LinkOperation] });
+  // The journal stays readable but cannot be replaced (the user immutable flag), so settling the owner fails.
+  Bun.spawnSync(["chflags", "uchg", h.journalPath]);
+  let forced: Awaited<ReturnType<typeof h.revoke>>;
+  try { forced = await h.revoke({ force: true }); } finally { Bun.spawnSync(["chflags", "nouchg", h.journalPath]); }
+  expect({ status: forced.status, code: code(forced) }).toEqual({ status: 500, code: "operation_journal_failed" });
+  expect(readLinkRetirement(LINK, root)?.operationId).toBe(OP);
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  expect(h.journal().operations[0]!.state).toBe("open");
+});

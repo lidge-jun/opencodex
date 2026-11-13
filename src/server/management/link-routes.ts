@@ -27,7 +27,7 @@ import { readManagementJsonBodyOr, readOptionalManagementJsonBody, rethrowManage
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { cleanupRecorded, journalInUse, journalOpenFailure, journalPathFor, journalUnreadable, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, resumedRevokeJournal, retirementOwner, revokeOperationDigest, settleOpenRetirementOwner, underAliasLock, type RevokeJournal } from "./link-operation";
+import { cleanupRecorded, journalInUse, journalOpenFailure, journalPathFor, journalUnreadable, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, resumedRevokeJournal, retirementOwner, revokeOperationDigest, settleOpenRetirementOwner, settleResumedRevoke, underAliasLock, type RevokeJournal } from "./link-operation";
 import { findOperation, isOperationId, readOperationsJournal, revokeSuspendingLink } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -294,8 +294,15 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         try { receipt = readLinkRetirement(id); } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
         if (receipt) {
           // A damaged journal does not stop a plain force (as on dev): its owner cannot be settled, but the receipt is
-          // still disowned before anything changes.
-          try { settleOpenRetirementOwner(ctx, receipt); } catch { /* journal unreadable */ }
+          // still disowned before anything changes. A readable journal whose owner cannot be settled refuses here instead,
+          // before the receipt changes hands, so the owner keeps the receipt it resumes from.
+          let journalReadable = true;
+          try { readOperationsJournal(journalPathFor(ctx)); } catch { journalReadable = false; }
+          if (journalReadable) {
+            try { settleOpenRetirementOwner(ctx, receipt); } catch {
+              return fail("operation_journal_failed", "The unfinished revoke that owns this link's removal could not be settled; nothing was changed. Retry the request.", 500);
+            }
+          }
           try {
             if (receipt.operationId !== undefined && !disownLinkRetirement(receipt)) return fail("link_changed", "The link changed during removal.", 409);
           } catch { return fail("link_remove_failed", "The link retirement could not be updated.", 503); }
@@ -381,7 +388,9 @@ async function resumeRetirementBeforeReplay(
   }
   try {
     const resumed = await removeReserved(ctx, state, id, receipt.link, receipt, force, purge, resumedRevokeJournal(ctx, operation.id, recordListed));
-    return resumed.status === 200 ? null : resumed;
+    if (resumed.status === 200) return null;
+    try { await settleResumedRevoke(ctx, operation.id, resumed); } catch { /* the entry stays open: suspended, and replayed on repeat */ }
+    return resumed;
   } finally { releaseLink?.(); }
 }
 
