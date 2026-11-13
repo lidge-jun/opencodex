@@ -77,28 +77,6 @@ pub const LIMITS: Limits = Limits {
     control_operation: Duration::from_secs(30),
 };
 
-/// The limits in force. A build with the test feature may shorten the time bounds for its tests.
-fn limits() -> Limits {
-    #[cfg(feature = "link-ws-test-gate")]
-    {
-        if let Ok(ms) =
-            std::env::var("OCX_CHILD_TEST_LINK_WS_SHORT_MS").map(|v| v.parse::<u64>().unwrap_or(0))
-            && ms > 0
-        {
-            let d = Duration::from_millis(ms);
-            return Limits {
-                setup: d * 4,
-                close_bound: d,
-                stall: d * 2,
-                data_operation: d * 3,
-                control_operation: d * 2,
-                ..LIMITS
-            };
-        }
-    }
-    LIMITS
-}
-
 const SPAWNED_STACK: usize = 256 * KIB;
 /// A stop gives each socket's close at most this long: `stop_owned_daemon` (detach, restart, sync) waits 3 s
 /// for the port to close, so the link WebSocket's share of a stop must leave room for the rest of it.
@@ -876,14 +854,7 @@ pub(crate) fn serve(
     tunnel_port: u16,
     creds: RelayCredentials,
 ) -> std::io::Result<()> {
-    match open(
-        codex_reader,
-        codex_writer,
-        req,
-        tunnel_port,
-        creds,
-        limits(),
-    ) {
+    match open(codex_reader, codex_writer, req, tunnel_port, creds, LIMITS) {
         Ok(()) => Ok(()),
         Err(_) => write_upgrade_required(codex_writer),
     }
