@@ -295,16 +295,29 @@ describe("a repeat after the process died at a boundary", () => {
     }
   });
 
-  test("another link for the alias makes the outcome unknown and nothing is touched", async () => {
+  test("another link for the alias makes the outcome unknown; the foreign link stays, the reserved key is still revoked", async () => {
     const h = harness();
     writeOperationsJournal(h.journalPath, { version: 1, operations: [entry({ effects: marks("key_issued:intent", "key_issued:done") })] });
-    h.config.apiKeys = [reservedKey];
+    const foreignKey = { ...reservedKey, id: "someone-else" };
+    h.config.apiKeys = [reservedKey, foreignKey];
     const foreign = { ...reservedRecord(), id: "lnk_00000000000000bb", apiKeyId: "someone-else" };
     h.store = { version: 1, listenerPort: 18181, links: [foreign] };
     const repeat = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
     expect(repeat.body.outcome).toBe("unknown");
     expect(h.store.links).toEqual([foreign]);
-    expect(h.config.apiKeys).toEqual([reservedKey]);
+    // reserved.apiKeyId names only this operation's key, and no record carries the reserved link id.
+    expect(h.config.apiKeys).toEqual([foreignKey]);
+  });
+
+  test("with another link for the alias and a record carrying the reserved link id, that record is not touched either", async () => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [entry({ effects: marks("key_issued:intent", "key_issued:done", "link_recorded:intent") })] });
+    h.config.apiKeys = [reservedKey];
+    const foreign = { ...reservedRecord(), id: "lnk_00000000000000bb", apiKeyId: "someone-else", alias: ALIAS.toUpperCase() };
+    h.store = { version: 1, listenerPort: 18181, links: [reservedRecord(), foreign] };
+    const repeat = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
+    expect(repeat.body.outcome).toBe("unknown");
+    expect(h.store.links.map(link => link.id)).toEqual(["lnk_00000000000000aa", "lnk_00000000000000bb"]);
   });
 
   test("a reserved key that will not revoke leaves the outcome unknown", async () => {

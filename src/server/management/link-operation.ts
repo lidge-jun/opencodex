@@ -152,6 +152,9 @@ async function recoverEnroll(ctx: ManagementContext, state: LinkRouteState, op: 
   const store = readStoreFor(ctx), wanted = op.alias.toLowerCase();
   const childTouched = hasEffect(op, "child_enrolled", "intent") || hasEffect(op, "plant", "intent");
   if (store.links.some(link => link.direction === "hub-initiated" && link.alias.toLowerCase() === wanted && link.id !== reserved.linkId)) {
+    // Which link is whose is unclear, so the outcome is unknown; but the reserved key id names only this operation's
+    // key, and with no record carrying the reserved link id nothing depends on it.
+    if (!store.links.some(link => link.id === reserved.linkId)) revokeKeyIdempotent(ctx, reserved.apiKeyId);
     return settle(ctx, op.operationId, "unknown", interrupted, childTouched);
   }
   const record = store.links.find(link => link.id === reserved.linkId);
