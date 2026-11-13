@@ -347,7 +347,7 @@ estimated mark. The parser preserves
 `OcxUsage.providerCredits` independently of token metadata. The latest reading within a response
 is a snapshot; separate completion-fallback responses add their credits only when both report them.
 Partially observed credits use the invalid-reading sentinel and the configured credit charge is
-unavailable; both missing readings retain the legacy absent form, and measured zero stays zero.
+unavailable; both missing readings retain the legacy absent form, and measured zero stays zero. A retry failure after physical dispatch leaves credits incomplete; a failure before dispatch preserves the first reading.
 `initial-response` carries `conversationId` through the same
 validated provider-state path as `messageMetadataEvent`. Unknown event types produce opt-in
 `debugProviderDiagnostic` entries containing only the event-type length, never the raw header or payload.
