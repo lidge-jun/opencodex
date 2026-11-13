@@ -182,27 +182,11 @@ mock.module("../../src/config/process-state", () => ({
   removeRuntimePort() {},
 }));
 const service = await import("../../src/service");
-// The manager stop is a fixture on every host. Off Windows `ocx stop` calls the Detailed form. On Windows it
-// calls the Report form (src/cli/stop-windows-checked.ts), whose real Part A probes Task Scheduler and WinSW and
-// reads the proxy's command line through PowerShell or WMIC; dev run 43508374033 (windows 5/14) caught those as
-// unexpected execFileSync calls. Both forms answer the same outcome; the Report form carries the Part A result a
-// Windows host with no registered manager (or one that took the proxy down with it) reports.
-const fixtureServiceStop = (): "stopped" | "absent" => {
+mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDetailed: () => {
   calls.service++;
   if (options.managerCascades) { alive = false; return "stopped"; }
   return "absent";
-};
-mock.module("../../src/service", () => ({ ...service,
-  stopServiceIfInstalledDetailed: fixtureServiceStop,
-  stopServiceIfInstalledReport: async () => {
-    const outcome = fixtureServiceStop();
-    return { outcome, windows: {
-      outcome, reason: null, detail: "fixture " + outcome,
-      registration: { scheduler: outcome === "absent" ? "absent" : "present", winsw: "nonexistent" },
-      bound: [], unbound: [], terminated: [], changed: outcome === "stopped",
-    } };
-  },
-}));
+} }));
 if (options.guarded) {
   const approval = { pid: fakePid, ...endpoint, configHome: home, cliVersion: "2.93.0", compatibilityToken: "fixture" };
   const manager = options.windowsGuarded
@@ -365,6 +349,23 @@ if (options.windowsPartAUnderOwnWrapper) {
   });
 }
 if (options.handover) process.env.OCX_UPDATE_TEARDOWN_HANDOVER = "1";
+// The Windows stop wiring (on a Windows host, or windowsStopWiring) stops the manager through the checked
+// stop's Part A, not the Detailed form faked above; its real Part A probes Task Scheduler and WinSW and reads the
+// proxy's command line through PowerShell or WMIC, which dev run 43508374033 (windows 5/14) caught as unexpected
+// execFileSync calls. A case without a Part A scenario of its own gets the same answer the Detailed fake gives:
+// no registered manager, or one that took the proxy down with it.
+const windowsWiring = process.platform === "win32" || options.windowsStopWiring === true;
+if (windowsWiring && !options.windowsPartA && !options.windowsPartAReject && !options.windowsPartAUnderOwnWrapper) {
+  const { partAResult, partBResult } = await import("../helpers/windows-stop-caller-fixtures");
+  (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
+    partA: async () => {
+      calls.service++;
+      if (options.managerCascades) { alive = false; return partAResult("stopped", { bound: [], terminated: [] }); }
+      return partAResult("absent");
+    },
+    partB: async () => { calls.partB++; return partBResult("freed"); },
+  });
+}
 if (options.exitCleanup) {
   delete process.env.OCX_SERVICE;
   // Execute the actual startup exit closure, with only host/config effects replaced.
