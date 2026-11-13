@@ -62,10 +62,21 @@ test("a replayed residual plant gets the CLI's own purge guidance for both platf
     expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP], h.deps)).toBe(1);
     const message = h.err.join("\n");
     expect(message).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
-    expect(message).toContain("ocx-child.exe detach --purge");
+    expect(message).toContain('ocx-child.exe" detach --purge');
     expect(message).not.toContain("ocx disconnect");
     expect(message).not.toContain("server recovery text");
     expect(message).toContain("operation " + OP + ": unknown");
+  } finally { h.restore(); }
+});
+
+test.each(["child_port_busy", "child_external_provider_conflict"])("a %s answer whose plant rollback failed gives purge guidance, not 'no Child files were modified'", async errorCode => {
+  const h = harness([notFound, { body: probe }, { body: confirm }, { status: 409, body: { error: { code: errorCode, message: "server text" }, operationId: OP, outcome: "residual", residual: true, residualKind: "plant" } }]); try {
+    expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP], h.deps)).toBe(1);
+    const message = h.err.join("\n");
+    expect(message).toContain("ocx-child detach --purge");
+    expect(message).toContain("%USERPROFILE%");
+    expect(message).not.toContain("no Child files were modified");
+    expect(message).toContain("operation " + OP + ": residual");
   } finally { h.restore(); }
 });
 

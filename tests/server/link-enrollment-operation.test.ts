@@ -454,7 +454,8 @@ describe("review round 3", () => {
     // A plant is removed only by the managed binary's purge; a disconnect would leave it.
     expect(replay.body.residualKind).toBe("plant");
     expect(replay.body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
-    expect(replay.body.recovery).toContain("%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe detach --purge");
+    expect(replay.body.recovery).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge');
+    expect(replay.body.recovery).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge');
     expect(replay.body.recovery).not.toContain("ocx disconnect");
   });
 
