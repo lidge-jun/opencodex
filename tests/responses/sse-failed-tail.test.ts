@@ -1894,6 +1894,9 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     };
     expect(await kept([completed])).toBe(1);
     expect(await kept([`data: ${untypedFrame("cyber_policy", "fixture blocked")}\n\n`, completed])).toBe(0);
+    // A policy frame after an earlier genuine terminal ended nothing, so late completions still fire.
+    const failed = `data: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error: { code: "server_error" } } })}\n\n`;
+    expect(await kept([failed, `data: ${typedFrame("cyber_policy", "fixture blocked")}\n\n`, completed])).toBe(1);
   });
 
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {

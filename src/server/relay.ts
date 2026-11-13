@@ -1453,7 +1453,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     const policyTerminal = status === "failed"
       && isPolicyRewriteType(parsed)
       && cyberPolicyTerminalError(parsed) !== undefined;
-    if (policyTerminal) policyTerminalSeen = true;
+    // Only a policy frame that ends the stream first; after an earlier terminal it ended nothing.
+    if (policyTerminal && !sawTerminal) policyTerminalSeen = true;
     if (status) sawTerminal = true;
     try {
       if (!reported && handlers.onTerminal && status) {
