@@ -70,6 +70,7 @@ export function ChannelEditor({
   lastResortActive,
   labels,
   capability: initialCapability,
+  catalogContext,
   moreOpen: moreOpenInitially = false,
   saving,
   onSave,
@@ -86,6 +87,8 @@ export function ChannelEditor({
   /** Row-level provider labels, so two providers sharing a display name stay distinct here too. */
   labels?: ReadonlyMap<string, string>;
   capability: ComboCapabilitySettings;
+  /** The context window the server advertises for this combo today. */
+  catalogContext?: number;
   /** Open "More settings" and bring it into view (the row's context tag asks for this). */
   moreOpen?: boolean;
   saving: boolean;
@@ -137,7 +140,7 @@ export function ChannelEditor({
 
   const facts = channels.map((channel) => memberFacts(models, channel.provider, channel.model));
   const policy = capability.capabilityPolicy;
-  const context = comboContextWindow(facts, policy, undefined);
+  const context = comboContextWindow(facts, policy, catalogContext);
   const modalities = combineLists(facts.map((fact) => fact.inputModalities), policy, MODALITY_ORDER);
   const efforts = combineLists(facts.map((fact) => fact.reasoningEfforts), policy, COMBO_EFFORTS);
   const listText = (list: readonly string[] | undefined, word?: (value: string) => string) =>

@@ -148,7 +148,9 @@ describe("route board model", () => {
 
   test("context follows the policy: smallest member under intersection, largest under union", () => {
     const members = [{ contextWindow: 200_000 }, { contextWindow: 1_000_000 }, {}];
-    expect(comboContextWindow(members, "intersection", 64_000)).toEqual({ tokens: 200_000, basis: "min" });
+    // Intersection trusts the server's advertised number (it applies caps the member rows do not show).
+    expect(comboContextWindow(members, "intersection", 128_000)).toEqual({ tokens: 128_000, basis: "min" });
+    expect(comboContextWindow(members, "intersection", undefined)).toEqual({ tokens: 200_000, basis: "min" });
     expect(comboContextWindow(members, "union", 64_000)).toEqual({ tokens: 1_000_000, basis: "max" });
     expect(comboContextWindow([{}], "union", 64_000)).toEqual({ tokens: 64_000, basis: "catalog" });
     expect(combineLists([["text", "image"], ["text"], undefined], "intersection", ["text", "image"])).toEqual(["text"]);
@@ -179,7 +181,7 @@ describe("route board model", () => {
   });
 
   test("context windows read as tokens", () => {
-    expect([formatContextWindow(1_000_000), formatContextWindow(1_500_000), formatContextWindow(128_000)]).toEqual(["1M", "1.5M", "128K"]);
+    expect([formatContextWindow(1_000_000), formatContextWindow(1_048_576), formatContextWindow(1_500_000), formatContextWindow(128_000)]).toEqual(["1M", "1M", "1.5M", "128K"]);
   });
 });
 

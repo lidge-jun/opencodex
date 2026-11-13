@@ -81,9 +81,10 @@ export interface MemberModel extends MemberFacts {
 export type ContextBasis = "min" | "max" | "catalog";
 
 /**
- * The combo's context window as the policy advertises it: intersection takes the smallest
- * member, union the largest (union over context lands with the T4c backend). Falls back to the
- * catalog's own number when no member reports one.
+ * The combo's context window as the policy advertises it. Intersection is the server's own catalog
+ * number (it already takes the smallest member and applies context caps the member rows do not
+ * show); only without one does it fall back to the smallest member here. Union takes the largest
+ * member (union over context lands with the T4c backend).
  */
 export function comboContextWindow(
   members: readonly MemberFacts[],
@@ -91,8 +92,10 @@ export function comboContextWindow(
   catalog: number | undefined,
 ): { tokens?: number; basis: ContextBasis } {
   const known = members.flatMap((member) => typeof member.contextWindow === "number" && member.contextWindow > 0 ? [member.contextWindow] : []);
-  if (known.length === 0) return catalog !== undefined ? { tokens: catalog, basis: "catalog" } : { basis: "catalog" };
-  return policy === "union" ? { tokens: Math.max(...known), basis: "max" } : { tokens: Math.min(...known), basis: "min" };
+  if (policy === "union" && known.length > 0) return { tokens: Math.max(...known, catalog ?? 0), basis: "max" };
+  if (policy === "intersection" && catalog !== undefined) return { tokens: catalog, basis: "min" };
+  if (known.length > 0) return { tokens: Math.min(...known), basis: "min" };
+  return catalog !== undefined ? { tokens: catalog, basis: "catalog" } : { basis: "catalog" };
 }
 
 /** Combined list under the policy: every member's (intersection) or any member's (union); undefined when no member reports one. */
@@ -350,7 +353,7 @@ export function distinctProviderLabels(
 export function formatContextWindow(tokens: number): string {
   if (tokens >= 1_000_000) {
     const millions = tokens / 1_000_000;
-    return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
+    return `${Number(millions.toFixed(1))}M`;
   }
   return `${Math.round(tokens / 1000)}K`;
 }

@@ -132,6 +132,7 @@ export function RouteBoard(props: RouteBoardProps) {
           <ChannelEditor
             key={`${row.combo.id}:${moreFor === row.combo.id ? "more" : "plain"}`}
             moreOpen={moreFor === row.combo.id}
+            catalogContext={props.catalog[row.combo.id]?.contextWindow}
             comboModel={row.publicId}
             strategy={row.combo.strategy}
             channels={row.channels}
