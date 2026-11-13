@@ -31,7 +31,7 @@ import { detectInstallFromPath } from "../update/install-detection.mjs";
  * the builds still verified on disk; a same-version start never downloads. cache/ocx-child/.fill.lock (reclaimed once its
  * process is gone or after an hour) keeps concurrent starts from downloading twice; it is not the guarantee.
  *
- * Nobody else can substitute a build: each of cache, cache/ocx-child and the version
+ * Nobody else can substitute a build or forge a record: each of cache, cache/ocx-child, .versions and the version
  * directory must be a real directory (never a symlink; created 0700 when missing) owned by this user
  * and writable by nobody else, and every directory above them must be owned by this user or root and
  * writable by nobody else unless sticky. Every write re-checks the target directory's identity, so a
@@ -186,8 +186,11 @@ function readVersionRecord(root) {
   try {
     const st = lstatSync(join(root, VERSIONS_DIR));
     if (!st.isDirectory() || st.isSymbolicLink()) return null;
-    names = readdirSync(join(root, VERSIONS_DIR));
+    // Another user able to add or remove markers could suppress fills or fake an upgrade.
+    if (POSIX && (st.uid !== currentUid() || (st.mode & 0o022) !== 0)) names = null;
+    else names = readdirSync(join(root, VERSIONS_DIR));
   } catch { return null; }
+  if (names === null) throw new Error("unsafe cache directory: " + join(root, VERSIONS_DIR));
   let newest = null;
   for (const name of names) {
     const match = /^(.+)\.(baseline|filled)$/.exec(name);

@@ -327,6 +327,7 @@ describe.skipIf(process.platform === "win32")("nobody else can substitute a buil
     ["the version directory", () => join(home, "cache", "ocx-child", VERSION), true, 0o770],
     ["cache/ocx-child", () => join(home, "cache", "ocx-child"), true, 0o777],
     ["cache", () => join(home, "cache"), false, 0o775],
+    ["the version markers (cache/ocx-child/.versions)", () => versionsDir(), true, 0o777],
   ])("%s writable by others is refused before any download", async (_name, dir, record, mode) => {
     bothDigests();
     if (record) ranBefore();
