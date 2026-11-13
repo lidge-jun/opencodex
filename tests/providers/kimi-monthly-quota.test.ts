@@ -175,6 +175,20 @@ test("passive pool rejects a held OAuth report for a separately configured key o
   expect(getCachedProviderQuota("kimi", Date.now())).toBe(routingBefore);
 });
 
+test("passive pool keeps a held OAuth report when the provider retains an unused keychain key", async () => {
+  await saveKimiFixture();
+  mockUsage({ usages: { limit_month_total: monthlyRow } });
+  const oauth = config("oauth");
+  oauth.providers.kimi!.apiKey = "keychain:kimi-unused";
+  expect((await fetchProviderQuotaReports(oauth, true)).reports).toHaveLength(1);
+  let keychainReads = 0;
+  setProviderKeychainEntryFactoryForTests(() => { keychainReads++; throw new Error("unexpected keychain access"); });
+  expect((await runPassiveRead(async () => heldProviderQuotaReports(oauth))).reports).toHaveLength(1);
+  const key = { ...oauth, providers: { kimi: { ...oauth.providers.kimi!, authMode: "key" } } } as OcxConfig;
+  expect(heldProviderQuotaReports(key).reports).toEqual([]);
+  expect(keychainReads).toBe(0);
+});
+
 test.each(["key", "destination", "adapter"] as const)("publication drops an OAuth report after %s changes and keeps another provider", async change => {
   await saveKimiFixture();
   const cfg = config("oauth");

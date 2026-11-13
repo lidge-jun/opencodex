@@ -39,8 +39,10 @@ export async function collectOwnedReport(name: string, provider: OcxProviderConf
 }
 function reportOwnerCurrent(report: ProviderQuotaReport, provider: OcxProviderConfig | undefined, passive = false): boolean {
   const owner = reportOwners.get(report);
+  // Only a key-authenticated report depends on the keychain value a passive read cannot verify.
   return !!owner && !!provider && !provider.disabled && owner.name === report.provider
-    && !(passive && isKeychainReference(provider.apiKey)) && owner.signature === ownerSignature(provider, owner.credentialBound);
+    && !(passive && (provider.authMode ?? "key") === "key" && isKeychainReference(provider.apiKey))
+    && owner.signature === ownerSignature(provider, owner.credentialBound);
 }
 /** The measured quota a reset detector should observe when the shown quota is an estimate (pooled rows). */
 export const observedQuotaFor = new WeakMap<ProviderQuotaReport, ProviderQuota>();
