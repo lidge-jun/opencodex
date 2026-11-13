@@ -3,7 +3,8 @@ import { inspectResponseLogSsePayload, type RequestLogContext } from "../../src/
 import { relaySseWithFailedTail } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
-import { OutboundCredentialRegistry, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
+import { OutboundCredentialRegistry, createSentValueGuard, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
+import { noteRequestSentValueGuard } from "../../src/server/request-log-terminal-status";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -49,8 +50,9 @@ async function deliver(mode: "tee" | "eager", headers: Record<string, string>, p
     return `${typeof type === "string" ? `event: ${type}\n` : ""}data: ${JSON.stringify(payload)}`;
   });
   const chunks = (blocks: string[]): string[] => oneChunk ? [blocks.map(block => `${block}\n\n`).join("")] : blocks.map(block => `${block}\n\n`);
-  if (mode === "eager") return drain(relaySseEagerBounded(sourceStream(chunks(raw)), new AbortController(), hooks, { maskCredential }));
   const rewrite = createTerminalErrorRedactionBlockRewrite(headers, createOutboundCredentialMask(headers));
+  // Production eager delivery applies the client rewrite to what its boundary emits.
+  if (mode === "eager") return drain(relaySseEagerBounded(sourceStream(chunks(raw)), new AbortController(), { ...hooks, rewriteBlocks: rewrite }, { maskCredential }));
   return drain(relaySseWithFailedTail(sourceStream(chunks(raw.map(block => rewrite(block).join("\n")))), new AbortController(), undefined, { maskCredential }));
 }
 
@@ -276,6 +278,75 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: `Bearer ${credential}` });
     const out = rewrite(`event: response.failed\n${data}`).join("\n");
     expect([out.includes("fixture-selected-credential"), out.startsWith("event: response.failed")]).toEqual([false, true]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s typed error under a terminal event line classifies like the inspector when its code equals a credential", async mode => {
+    const credential = "rate_limit_exceeded";
+    const headers = { authorization: `Bearer ${credential}` };
+    await withRegistry(headers, async () => {
+      const frame = { type: "error", code: "rate_limit_exceeded", message: "busy" };
+      const out = await deliver(mode, headers, [`event: response.failed\ndata: ${JSON.stringify(frame)}`]);
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      inspectResponseLogSsePayload(log, JSON.stringify(frame));
+      expect([out.includes("upstream_server_error"), out.includes('"type":"rate_limit_error"'), log.terminalHttpStatus]).toEqual([false, true, 429]);
+    });
+  });
+
+  test.each([["tee", "one chunk"], ["tee", "split chunks"], ["eager", "one chunk"], ["eager", "split chunks"]] as const)("%s emits one [DONE] around an untyped policy terminal in %s", async (mode, delivery) => {
+    const oneChunk = delivery === "one chunk";
+    const headers = { "x-auth-token": "fixture-token-8415" };
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, ["data: [DONE]", { error: { code: "cyber_policy", message: "blocked" } }, "data: [DONE]"], oneChunk);
+      expect([terminalTypes(out), out.split("[DONE]").length - 1]).toEqual([["response.failed"], 1]);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s never repeats an 8+ character excerpt of a sent credential in a tail or policy terminal", async mode => {
+    const credential = "abcdefghijklmnopqrstuv123456";
+    const headers = { authorization: `Bearer ${credential}` };
+    await withRegistry(headers, async () => {
+      for (const frame of [{ error: { code: "mystery_code", message: "echo ijklmnopqrstuv12" } }, { error: { code: "cyber_policy", message: "blocked ijklmnopqrstuv12" } }]) {
+        const out = await deliver(mode, headers, [frame]);
+        expect([out.includes("ijklmnopqrstuv12"), out.includes("event: response.failed")]).toEqual([false, true]);
+      }
+    });
+  });
+
+  test("a request row never keeps an 8+ character excerpt of a sent credential", () => {
+    const credential = "abcdefghijklmnopqrstuv123456";
+    const headers = { authorization: `Bearer ${credential}` };
+    withRegistry(headers, () => {
+      for (const frame of [{ error: { code: "mystery_code", message: "echo ijklmnopqrstuv12" } },
+        { type: "response.failed", response: { status: "failed", error: { message: "echo ijklmnopqrstuv12" } } }]) {
+        const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+        noteRequestSentValueGuard(log, createSentValueGuard(headers));
+        inspectResponseLogSsePayload(log, JSON.stringify(frame));
+        expect(log.upstreamError ?? "").not.toContain("ijklmnopqrstuv12");
+      }
+    });
+  });
+
+  test.each([
+    ["tee", "unparsable JSON"], ["eager", "unparsable JSON"], ["tee", "a non-target JSON payload"], ["eager", "a non-target JSON payload"],
+  ] as const)("%s terminal frame with %s never carries a sent custom value", async (mode, shape) => {
+    const sent = "tenantOpaque987654";
+    const headers = { "x-tenant": sent };
+    await withRegistry(headers, async () => {
+      const data = shape === "unparsable JSON" ? `data: {"message":"${sent}"` : `data: ${JSON.stringify({ type: "other", message: sent })}`;
+      const out = await deliver(mode, headers, [`event: response.failed\n${data}`]);
+      expect(out).not.toContain(sent);
+    });
+  });
+
+  test("the sent-value guard reads excerpts of tokens, not of schemes or field names", () => {
+    const token = "fixture-key";
+    const guard = createSentValueGuard({ authorization: `Bearer ${token}`, cookie: "session=opaqueCookieValue42" });
+    expect([
+      guard("Upstream stream terminated unexpectedly: fixture reset"),
+      guard("the session=expired notice"),
+      guard("echo ixture-k"),
+      guard("echo queCookieVal"),
+    ]).toEqual([false, false, true, true]);
   });
 
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {

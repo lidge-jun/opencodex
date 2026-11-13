@@ -1184,7 +1184,7 @@ function captureUpstreamErrorParsed(
     if (logCtx.upstreamError) return;
     const message = upstreamErrorMessageFromPayload(parsed);
     if (typeof message === "string" && message.trim()) {
-      logCtx.upstreamError = guardedRowCopy(message);
+      logCtx.upstreamError = guardedRowCopy(logCtx, message);
       return;
     }
     // No human-readable error message: fall back to the structured incomplete reason emitted by
@@ -1193,7 +1193,7 @@ function captureUpstreamErrorParsed(
     // mapped HTTP code.
     if (typeof reason === "string" && reason.trim()) {
       const incomplete = incompleteReasonDetail(reason.trim()); // A known reason also gets a closed row detail.
-      logCtx.upstreamError = guardedRowCopy(incomplete.text);
+      logCtx.upstreamError = guardedRowCopy(logCtx, incomplete.text);
       if (incomplete.detail) logCtx.failureDetail = incomplete.detail;
     }
     return;
@@ -1201,7 +1201,7 @@ function captureUpstreamErrorParsed(
   if (logCtx.upstreamError) return;
   const trimmed = text.trim();
   if (trimmed) {
-    logCtx.upstreamError = guardedRowCopy(trimmed);
+    logCtx.upstreamError = guardedRowCopy(logCtx, trimmed);
   }
 }
 

@@ -37,6 +37,60 @@ export function isCorrelationHeaderName(name: string): boolean {
   return CORRELATION_HEADER_NAME.test(name);
 }
 
+/** Characters of a text a sent-value guard reads: a caller emits no copy beyond them. */
+export const SENT_VALUE_GUARD_SCAN_CHARS = 8_192;
+const MAX_SENT_CREDENTIAL_WINDOWS = 65_536;
+
+function spellings(part: string): string[] {
+  const escaped = JSON.stringify(part).slice(1, -1);
+  return escaped === part ? [part] : [part, escaped];
+}
+
+/**
+ * Whether text repeats a value these outbound headers carry, decided from this request's own
+ * headers so no global eviction can open it. A credential-named component is recognized whole at
+ * any length and by any excerpt of 8+ characters (its 8-character windows, capped: past the cap the
+ * guard fails closed); any other non-correlation component is recognized when 8+ characters of it
+ * occur whole. Only the first {@link SENT_VALUE_GUARD_SCAN_CHARS} characters are read, so work is
+ * bounded; callers emit nothing beyond them.
+ */
+export function createSentValueGuard(headers: Record<string, string>): (text: string) => boolean {
+  const wholeCredential = new Set<string>();
+  const credentialWindows = new Set<string>();
+  const contained: string[] = [];
+  let overflow = false;
+  for (const [name, value] of Object.entries(headers)) {
+    const credentialNamed = isCredentialName(name);
+    if (!credentialNamed && CORRELATION_HEADER_NAME.test(name)) continue;
+    for (const part of credentialComponents(value)) {
+      if (!credentialNamed) {
+        if (part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) contained.push(...spellings(part));
+        continue;
+      }
+      // Excerpt windows come from bare tokens only: a composite (an auth scheme and its token, a
+      // name=value pair) would yield windows of scheme or field-name text holding fewer than eight
+      // characters of secret. Its secret parts are components of their own.
+      const bareToken = !/[\s,;]/.test(part) && !/^[^=]+=[^=]/.test(part);
+      for (const spelling of spellings(part)) {
+        wholeCredential.add(spelling);
+        for (let at = 0; bareToken && at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= spelling.length && !overflow; at++) {
+          credentialWindows.add(spelling.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
+          if (credentialWindows.size > MAX_SENT_CREDENTIAL_WINDOWS) overflow = true;
+        }
+      }
+    }
+  }
+  return (text) => {
+    if (overflow) return true;
+    const head = text.length > SENT_VALUE_GUARD_SCAN_CHARS ? text.slice(0, SENT_VALUE_GUARD_SCAN_CHARS) : text;
+    if (wholeCredential.has(head)) return true;
+    for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= head.length; at++) {
+      if (credentialWindows.has(head.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH))) return true;
+    }
+    return contained.some(part => head.includes(part));
+  };
+}
+
 /**
  * Replace every span of text a secret covers: the whole text when it equals a whole-only value, and
  * every occurrence of each substring value. Coverage is marked on the original text before anything

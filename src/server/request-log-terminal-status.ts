@@ -11,7 +11,7 @@ import {
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
-import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
+import { SENT_VALUE_GUARD_SCAN_CHARS, outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
 import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
 import { isUntypedBareUpstreamError, reduceBareUpstreamEvidence, wrappedServerErrorStatus, type BareUpstreamError, type BareUpstreamEvidence } from "./bare-upstream-error";
 
@@ -120,8 +120,23 @@ export function diagnosticValueAllowed(
  * repeats a configured credential or one this process sent. Every row-copy write uses it, so no
  * ordering of frames can store an echoed credential through a pattern-only path.
  */
-export function guardedRowCopy(text: string): string {
-  return diagnosticValueAllowed(text) ? redactSecretString(text).slice(0, 500) : "[REDACTED]";
+export function guardedRowCopy(logCtx: TerminalStatusContext, text: string): string {
+  const head = text.length > SENT_VALUE_GUARD_SCAN_CHARS ? text.slice(0, SENT_VALUE_GUARD_SCAN_CHARS) : text;
+  return diagnosticValueAllowed(head) && !repeatsRequestSentValue(logCtx, head) ? redactSecretString(head).slice(0, 500) : "[REDACTED]";
+}
+
+/**
+ * The sent-value guard of the request a row belongs to, registered by its delivery path. The global
+ * registry can evict a value or miss an excerpt; this request's own headers do not.
+ */
+const requestSentValueGuards = new WeakMap<TerminalStatusContext, (text: string) => boolean>();
+
+export function noteRequestSentValueGuard(logCtx: TerminalStatusContext, guard: (text: string) => boolean): void {
+  requestSentValueGuards.set(logCtx, guard);
+}
+
+function repeatsRequestSentValue(logCtx: TerminalStatusContext, text: string): boolean {
+  return requestSentValueGuards.get(logCtx)?.(text) === true;
 }
 
 export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: Headers): void {
@@ -273,7 +288,8 @@ function recordBareEvidence(logCtx: TerminalStatusContext, evidence: BareUpstrea
   noteBoundedDiagnostic(logCtx, "upstreamErrorCode", evidence.verdict.refusalCode ?? evidence.verdict.errorCode);
   noteBoundedDiagnostic(logCtx, "upstreamErrorType", evidence.verdict.errorType);
   // Typed and untyped copy hold the same guard: the full-text configured check and the retained text.
-  if (!evidence.verdict.rowCopyAllowed || !diagnosticValueAllowed(evidence.verdict.message)) {
+  if (!evidence.verdict.rowCopyAllowed || !diagnosticValueAllowed(evidence.verdict.message)
+    || repeatsRequestSentValue(logCtx, evidence.verdict.message)) {
     logCtx.upstreamError = "[REDACTED]";
   } else {
     logCtx.upstreamError = evidence.verdict.message;

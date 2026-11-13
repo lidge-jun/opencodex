@@ -1,13 +1,14 @@
 import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib/redact";
 import {
   CREDENTIAL_SUBSTRING_MIN_LENGTH,
+  SENT_VALUE_GUARD_SCAN_CHARS,
+  createSentValueGuard,
   credentialComponents,
-  isCorrelationHeaderName,
-  isCredentialName,
   maskSecretSpans,
 } from "../../lib/outbound-credential-registry";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 import { isUntypedBareUpstreamError } from "../bare-upstream-error";
+import { isCyberPolicyCode, isTerminalRefusalCode, recognizedUpstreamError } from "../../lib/errors";
 
 /**
  * A custom header carries a credential when a credential word is a whole segment of its name
@@ -29,6 +30,18 @@ const PROTOCOL_KEYS = new Set([
 function withEscapedSpelling(part: string): string[] {
   const escaped = JSON.stringify(part).slice(1, -1);
   return escaped === part ? [part] : [part, escaped];
+}
+
+/**
+ * A recognized error class (a refusal, policy, rate-limit, overload or client-error class) is public
+ * protocol vocabulary, not a secret: masking it hides nothing and would make a reader that classifies
+ * the masked frame disagree with one that reads the original. An unrecognized code or type is masked.
+ */
+function isPublicClassValue(key: string, value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  if (key === "code") return isTerminalRefusalCode(value) || isCyberPolicyCode(value) || recognizedUpstreamError({ code: value }) !== undefined;
+  if (key === "type") return recognizedUpstreamError({ type: value }) !== undefined;
+  return false;
 }
 
 /**
@@ -57,24 +70,20 @@ export function createOutboundCredentialMask(outboundHeaders: Record<string, str
 /**
  * The mask for copy a terminal boundary synthesizes from upstream evidence (verdict tails, policy
  * terminals, buffered error presentations). Beyond the exact credential mask, copy that repeats any
- * value this request sent is refused whole, decided from this request's own headers so no global
- * eviction can open it: a credential-named component at any length when it is the whole text, and
- * any component of 8+ characters contained in it. Request-correlation identifiers are not
- * credentials and are left to diagnostics, as the outbound registry leaves them.
+ * value this request sent is refused whole ({@link createSentValueGuard}: credential-named values
+ * whole or by any 8+ character excerpt, other non-correlation values whole at 8+). Only the scanned
+ * head of the copy is returned, so nothing unread is emitted. Request-correlation identifiers are
+ * not credentials and are left to diagnostics, as the outbound registry leaves them.
  */
-export function createSynthesizedCopyMask(outboundHeaders: Record<string, string>): (text: string) => string {
+export function createSynthesizedCopyMask(
+  outboundHeaders: Record<string, string>,
+  repeatsSentValue = createSentValueGuard(outboundHeaders),
+): (text: string) => string {
   const exact = createOutboundCredentialMask(outboundHeaders);
-  const wholeOnly = new Set<string>();
-  const contained: string[] = [];
-  for (const [name, value] of Object.entries(outboundHeaders)) {
-    const credentialNamed = isCredentialName(name);
-    if (!credentialNamed && isCorrelationHeaderName(name)) continue;
-    for (const part of credentialComponents(value)) {
-      if (credentialNamed) wholeOnly.add(part);
-      if (part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) contained.push(...withEscapedSpelling(part));
-    }
-  }
-  return (text) => wholeOnly.has(text) || contained.some(part => text.includes(part)) ? REDACTED_SECRET : exact(text);
+  return (text) => {
+    const head = text.length > SENT_VALUE_GUARD_SCAN_CHARS ? text.slice(0, SENT_VALUE_GUARD_SCAN_CHARS) : text;
+    return repeatsSentValue(head) ? REDACTED_SECRET : exact(head);
+  };
 }
 
 /**
@@ -89,9 +98,12 @@ export function createTerminalErrorRedactionBlockRewrite(
   outboundHeaders: Record<string, string>,
   maskCredential = createOutboundCredentialMask(outboundHeaders),
 ): SseBlockRewrite {
-  const redactDiagnostic = (value: unknown): unknown => {
+  const repeatsSentValue = createSentValueGuard(outboundHeaders);
+  // `refuseSentValues`: a payload under a terminal event line that is not a Responses terminal is
+  // upstream copy throughout, so every string in it that repeats a sent value is withheld whole.
+  const redactDiagnostic = (value: unknown, refuseSentValues = false): unknown => {
     const maskKnown = (entry: unknown, root = false): unknown => {
-      if (typeof entry === "string") return maskCredential(entry);
+      if (typeof entry === "string") return refuseSentValues && repeatsSentValue(entry) ? REDACTED_SECRET : maskCredential(entry);
       if (Array.isArray(entry)) return entry.map(item => maskKnown(item));
       if (entry && typeof entry === "object") {
         // A key is upstream text too: a rewritten terminal copies extra root fields verbatim. Its
@@ -99,7 +111,7 @@ export function createTerminalErrorRedactionBlockRewrite(
         return Object.fromEntries(Object.entries(entry).map(([key, item]) => [
           PROTOCOL_KEYS.has(key) ? key : maskCredential(key),
           SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_SECRET
-            : root && key === "type" ? item : maskKnown(item),
+            : (root && key === "type") || isPublicClassValue(key, item) ? item : maskKnown(item),
         ]));
       }
       return entry;
@@ -118,7 +130,7 @@ export function createTerminalErrorRedactionBlockRewrite(
   // data payload masked, as text; only the event line is left as it is.
   const maskTerminalBlock = (block: string, payload: string | null): string => {
     if (payload === null) return maskExtensionLines(block);
-    const masked = maskCredential(payload);
+    const masked = repeatsSentValue(payload) ? REDACTED_SECRET : maskCredential(payload);
     return maskExtensionLines(masked === payload ? block : replaceSseDataPayload(block, masked));
   };
   return (block) => {
@@ -133,7 +145,12 @@ export function createTerminalErrorRedactionBlockRewrite(
     }
     if (isUntypedBareUpstreamError(event)) return [block];
     if (event?.type !== "response.failed" && event?.type !== "response.incomplete") {
-      return [terminalFrame ? maskTerminalBlock(block, payload) : block];
+      if (!terminalFrame) return [block];
+      // A terminal event line over another JSON payload (a typed error, for one) is masked field by
+      // field like a terminal, so recognized classes survive for every reader.
+      if (!event || typeof event !== "object" || Array.isArray(event)) return [maskTerminalBlock(block, payload)];
+      const rewrittenOther = JSON.stringify(redactDiagnostic(event, true));
+      return [maskExtensionLines(rewrittenOther === payload ? block : replaceSseDataPayload(block, rewrittenOther))];
     }
     const safeEvent = redactDiagnostic(event);
     const rewritten = JSON.stringify(safeEvent);

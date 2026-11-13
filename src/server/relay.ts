@@ -6,6 +6,7 @@ import {
   CYBER_POLICY_FALLBACK_MESSAGE,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  isTerminalRefusalCode,
   recognizedUpstreamError,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
@@ -216,9 +217,15 @@ function upstreamErrorFailedPayload(
   identity: { type: string; code: string; retryable: boolean },
   maskCredential?: (text: string) => string,
 ): string {
+  // The identity is protocol vocabulary (a recognized class, a refusal code or the generic upstream
+  // failure): masking it hides nothing and would blur the class a client acts on. Anything else is
+  // still masked.
+  const vocabulary = (value: string): boolean => value === "upstream_error" || value === "upstream_server_error"
+    || value === "invalid_request_error" || isTerminalRefusalCode(value) || isCyberPolicyCode(value)
+    || recognizedUpstreamError({ type: value }) !== undefined || recognizedUpstreamError({ code: value }) !== undefined;
   const error = {
-    type: maskCredential?.(identity.type) ?? identity.type,
-    code: maskCredential?.(identity.code) ?? identity.code,
+    type: vocabulary(identity.type) ? identity.type : maskCredential?.(identity.type) ?? identity.type,
+    code: vocabulary(identity.code) ? identity.code : maskCredential?.(identity.code) ?? identity.code,
     message: redactSecretString(maskCredential?.(message) ?? message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   return JSON.stringify({
@@ -328,6 +335,8 @@ export function createSseTerminalOutputBoundary(
   let terminal = false;
   let done = false;
   let pendingDone: { block: Uint8Array; delimiter: Uint8Array } | null = null;
+  // One sentinel per turn: a [DONE] repeated after the terminal is dropped.
+  let doneEmitted = false;
   let disposed = false;
   let upstreamError: string | undefined;
   let upstreamRefusalCode: string | undefined;
@@ -401,7 +410,8 @@ export function createSseTerminalOutputBoundary(
       if (isDone) {
         done = true;
         if (responsesTerminal) {
-          appendOutput(outboundBlock, frame.delimiter);
+          if (!doneEmitted) appendOutput(outboundBlock, frame.delimiter);
+          doneEmitted = true;
         } else if (!pendingDone) {
           // Do not expose a sentinel before a Responses terminal. If EOF
           // follows, the synthetic incomplete path owns the one sentinel;
@@ -419,6 +429,7 @@ export function createSseTerminalOutputBoundary(
         if (pendingDone) {
           appendOutput(pendingDone.block, pendingDone.delimiter);
           pendingDone = null;
+          doneEmitted = true;
         }
       }
     }

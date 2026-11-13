@@ -1,6 +1,7 @@
 import { clientFacingModelText } from "../../lib/error-destination";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
-import { noteRelaySyntheticTail } from "../request-log-terminal-status";
+import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../request-log-terminal-status";
+import { createSentValueGuard } from "../../lib/outbound-credential-registry";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
@@ -870,8 +871,11 @@ export async function deliverPassthroughResponse(
         }, { dispose: () => plaintextInspector.dispose() })
         : undefined;
       const maskCredential = createOutboundCredentialMask(nativeExchange.request.headers);
-      // Copy a boundary synthesizes from upstream evidence also refuses any value this request sent.
-      const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers);
+      // Copy a boundary synthesizes from upstream evidence, and the row's copy, also refuse any value
+      // this request sent, decided from its own headers.
+      const repeatsSentValue = createSentValueGuard(nativeExchange.request.headers);
+      noteRequestSentValueGuard(logCtx, repeatsSentValue);
+      const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers, repeatsSentValue);
       const requiredStreamEvidence = { replayUnsafe: !!webSearchBridgePlan };
       const normalizeRequiredToolItem = (item: unknown) => {
         item = restoreImageGenCalls(item, imageGenCallAliases).value;
