@@ -11,9 +11,10 @@ import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startStandinHome, standinIdentity, type StandinHome, type StandinHomeOptions } from "../fixtures/link-ws-standin-home";
 import { CodexSocket, manualTimers, RawCodex, rawUpgrade, startChild } from "../helpers/link-ws-child";
-import { connect, createServer, Socket } from "node:net";
+import { connect, createServer, type Socket } from "node:net";
 import { HomeLeg } from "../../src/client/link-websocket";
 import { LINK_CHILD_WS_LIMITS } from "../../src/client/link-websocket-limits";
+import { holdLargeSocketWrites, releaseHeldSocketWrites, restoreSocketWrites } from "../helpers/held-socket-writes";
 
 // Lane T6, design T4 3.2 and 3.3: a Child carries Codex's Responses WebSocket over its link when the
 // Home advertises it, and answers today's 426 otherwise. The Home is a raw-TCP stand-in, so every byte
@@ -222,23 +223,17 @@ describe("link WebSocket on the Child: an advertising Home", () => {
     const { port, home } = await setup();
     const codex = await CodexSocket.open(port);
     const leg = home.sockets.at(-1)!;
-    const write = Socket.prototype._write;
-    let release!: () => void;
-    Socket.prototype._write = function (chunk, encoding, callback) {
-      if (chunk.byteLength < 1024 * 1024) return write.call(this, chunk, encoding, callback);
-      let finished = false, released = false;
-      let error: Error | null | undefined;
-      release = () => { released = true; if (finished) callback(error); };
-      return write.call(this, chunk, encoding, result => { error = result; finished = true; if (released) callback(error); });
-    };
+    // Windows can take the whole 8 MiB into its socket buffer at once, so pausing the Home alone does
+    // not keep the first message unflushed there; hold the write's completion until the overload close.
+    holdLargeSocketWrites(1024 * 1024);
     try {
       codex.ws.send("a".repeat(8 * 1024 * 1024 - 64));
       codex.ws.send("second");
       expect((await codex.closed()).code).toBe(1013);
-      release(); // Let the queued close follow the first message to the Home.
+      releaseHeldSocketWrites(); // Let the queued close follow the first message to the Home.
       expect(await leg.until(frame => frame.type === "close")).toMatchObject({ code: 1001 });
       expect(leg.frames.filter(frame => frame.type === "text").map(frame => frame.type === "text" ? frame.data.length : 0)).toEqual([8 * 1024 * 1024 - 64]);
-    } finally { Socket.prototype._write = write; }
+    } finally { restoreSocketWrites(); }
   });
 
   test("toward a stalled Codex the Child stops reading the Home above 1 MiB and resumes on drain, dropping nothing", async () => {
