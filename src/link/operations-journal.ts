@@ -59,6 +59,8 @@ export interface LinkOperation {
   finishedAt?: string;
   /** residual or unknown only: when O5 or a person resolved it. */
   resolvedAt?: string;
+  /** enroll only: the Child may still hold an enrollment or a plant, whatever the outcome says about the Home's key. */
+  childResidual?: true;
 }
 
 export interface OperationsJournal { version: 1; operations: LinkOperation[] }
@@ -82,7 +84,7 @@ const EFFECTS: Readonly<Record<OperationKind, readonly OperationEffect[]>> = {
   enroll: ["plant", "key_issued", "link_recorded", "child_enrolled", "relay_verified"],
   revoke: ["remote_cleanup", "key_revoked", "record_removed"],
 };
-const ENTRY_KEYS = new Set(["operationId", "kind", "alias", "digest", "createdAt", "updatedAt", "state", "reserved", "linkId", "effects", "error", "receipt", "finishedAt", "resolvedAt"]);
+const ENTRY_KEYS = new Set(["operationId", "kind", "alias", "digest", "createdAt", "updatedAt", "state", "reserved", "linkId", "effects", "error", "receipt", "finishedAt", "resolvedAt", "childResidual"]);
 const RESERVED_KEYS = new Set(["linkId", "apiKeyId", "tunnelPort", "explicitRoute", "exclusive"]);
 
 export function isOperationId(value: unknown): value is string {
@@ -169,6 +171,7 @@ function parseEntry(value: unknown, index: number): LinkOperation {
   if (raw.finishedAt !== undefined && !isTime(raw.finishedAt)) fail("finishedAt");
   if ((state === "open") !== (raw.finishedAt === undefined)) fail("finishedAt");
   if (raw.resolvedAt !== undefined && (!isTime(raw.resolvedAt) || (state !== "residual" && state !== "unknown"))) fail("resolvedAt");
+  if (raw.childResidual !== undefined && (raw.childResidual !== true || kind !== "enroll")) fail("childResidual");
   return {
     operationId: raw.operationId as string, kind, alias: raw.alias as string, digest: raw.digest as string,
     createdAt: raw.createdAt as string, updatedAt: raw.updatedAt as string, state,
@@ -176,6 +179,7 @@ function parseEntry(value: unknown, index: number): LinkOperation {
     effects, ...(error ? { error } : {}), ...(receipt ? { receipt } : {}),
     ...(raw.finishedAt !== undefined ? { finishedAt: raw.finishedAt as string } : {}),
     ...(raw.resolvedAt !== undefined ? { resolvedAt: raw.resolvedAt as string } : {}),
+    ...(raw.childResidual === true ? { childResidual: true as const } : {}),
   };
 }
 

@@ -62,6 +62,8 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
   const callbacks = new Set<(id: string) => void>();
   const ssh: Array<{ step: Step; argv: readonly string[] }> = [];
   const overrides: Partial<Record<Step, () => SshRunResult>> = {};
+  const gates: Partial<Record<Step, Promise<void>>> = {};
+  let reachedStep: ((step: Step) => void) | undefined;
   const state: LinkRouteState = {
     pendingHosts: new Map(), confirmedHosts: new Map(), operations: new Set(),
     listener: {
@@ -86,6 +88,7 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
         : command.includes("'ocx-child-http' '10100' 'v1/catalog'") ? "catalog"
         : (() => { throw new Error("Unexpected SSH command: " + command.slice(0, 80)); })();
       ssh.push({ step, argv: [...argv] });
+      if (gates[step]) { reachedStep?.(step); await gates[step]; }
       if (overrides[step]) return overrides[step]!();
       switch (step) {
         case "probe": {
@@ -120,10 +123,10 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
     issueApiKey: (cfg, name, id) => { if (!issueWorks) throw new Error("reconcile failed after the save"); const key = { id: id ?? "unreserved-key", name, key: "fixture-child-key", createdAt: "2026-11-13T00:00:00Z" }; cfg.apiKeys = [...(cfg.apiKeys ?? []), key]; return key; },
     revokeApiKey: (cfg, id) => { if (!revokeWorks) return false; const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
   };
-  async function call(route: string, body: unknown) {
+  async function call(route: string, body: unknown, method = "POST") {
     const url = new URL("http://127.0.0.1:10100/api/link/" + route);
     const context: ManagementContext = {
-      req: new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+      req: new Request(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
       url, config, deps, version: "2.99.0", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
       sessionControl: { isCurrent: () => true, isPaired: () => false, revokeCurrent: () => true },
       convergeCodexCatalog: async () => { throw new Error("no catalog convergence"); }, syncClaudeAgentDefsBestEffort: async () => {},
@@ -139,6 +142,8 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
   }
   return {
     call, enroll, ssh, state, config, overrides, journalPath,
+    del: (linkId: string, body: unknown) => call(linkId, body, "DELETE"),
+    gateStep: (step: Step, gate: Promise<void>, reached?: () => void) => { gates[step] = gate; reachedStep = reached; },
     get store() { return store; }, set store(value: LinkStore) { store = value; },
     journal: () => readOperationsJournal(journalPath),
     advance: (ms: number) => { clock += ms; }, breakRevoke: () => { revokeWorks = false; }, failIssue: () => { issueWorks = false; },
@@ -408,6 +413,44 @@ describe("review round 1", () => {
       const busy = await h.call("apply", { alias: ALIAS, fingerprint });
       expect({ status: busy.status, code: code(busy) }).toEqual({ status: 409, code: "link_operation_in_progress" });
     } finally { held.release(); }
+  });
+});
+
+describe("review round 3", () => {
+  test("a journalled revoke cannot run while a plain apply of the same alias is still enrolling", async () => {
+    let open!: () => void;
+    let reached!: () => void;
+    const connecting = new Promise<void>(resolve => { reached = resolve; });
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [] });
+    h.gateStep("connect", new Promise<void>(resolve => { open = resolve; }), () => reached());
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+    // A plain apply on a Home that had no journal yet: no alias lock, but the per-alias operation set.
+    removeTreeWithRetry(h.journalPath);
+    const applying = h.call("apply", { alias: ALIAS, fingerprint });
+    await connecting;
+    const linkId = h.store.links[0]!.id;
+    const revoked = await h.del(linkId, { force: true, operationId: "detach-1" });
+    expect({ status: revoked.status, code: code(revoked) }).toEqual({ status: 409, code: "link_operation_in_progress" });
+    open();
+    expect((await applying).status).toBe(202);
+    expect(h.store.links.map(link => link.id)).toEqual([linkId]);
+  });
+
+  test("an unknown key outcome whose plant rollback failed replays the Child's residual plant too", async () => {
+    const h = harness();
+    h.overrides.inspect = () => ok("ocx-inspect:uname:Linux:x86_64\nocx-inspect:kind:missing\n");
+    h.overrides.config = () => ok('{"port":10100,"runtimeRole":"standalone","ephemeralChild":true}\n');
+    h.overrides.before = () => ({ code: 7, stdout: "", stderr: "" });
+    h.overrides.purgePlant = () => ({ code: 1, stdout: "", stderr: "" });
+    h.failIssue();
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true, allowMissing: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint, allowMissing: true })).status).toBe(200);
+    const applied = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
+    expect({ outcome: applied.body.outcome, residual: applied.body.residual }).toEqual({ outcome: "unknown", residual: true });
+    const replay = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
+    expect({ code: code(replay), outcome: replay.body.outcome, residual: replay.body.residual, recovery: typeof replay.body.recovery }).toEqual({ code: "key_issue_uncertain", outcome: "unknown", residual: true, recovery: "string" });
   });
 });
 

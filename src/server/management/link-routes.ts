@@ -1,4 +1,4 @@
-import { probe, confirmHost, apply } from "./link-enrollment";
+import { probe, confirmHost, apply, serialized } from "./link-enrollment";
 import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
 import { requireRemotePlatform } from "../../link/remote-platform";
@@ -238,7 +238,11 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   if (!releaseLink) return fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409);
   try {
     // Enrollment and revoke of one alias are serialized: a force revoke cannot run between a purge and its receipt.
-    return await underAliasLock(ctx, record.alias, operation !== null || journalInUse(ctx), async () => {
+    const admitted = operation !== null || journalInUse(ctx);
+    // A journalled revoke, and every revoke once this Home journals, also takes the per-alias operation set that apply
+    // holds for its whole run, so an apply and a revoke of one alias never overlap in this runtime.
+    const exclusive = (action: () => Promise<Response>) => admitted ? serialized(state, record.alias, action) : action();
+    return await underAliasLock(ctx, record.alias, admitted, () => exclusive(async () => {
       if (operation) {
         const replay = await replayOperation(ctx, state, operation, "revoke");
         if (replay) return replay;
@@ -254,7 +258,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         }
       }
       return journal.finish(await removeReserved(ctx, state, id, fresh, force, purge, journal));
-    });
+    }));
   } finally { releaseLink(); }
 }
 

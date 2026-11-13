@@ -94,7 +94,7 @@ export function replayResponse(op: LinkOperation): Response {
   return Response.json({
     error: { code: error.code, message: "The operation ended " + op.state + "; this is its recorded outcome." },
     ...outcomeBody(op),
-    ...(op.state === "residual" ? { residual: true, recovery: RESIDUAL_RECOVERY } : {}),
+    ...(op.state === "residual" || op.childResidual ? { residual: true, recovery: RESIDUAL_RECOVERY } : {}),
   }, { status: error.status, headers: { "cache-control": "no-store" } });
 }
 
@@ -114,10 +114,11 @@ export async function replayOperation(ctx: ManagementContext, state: LinkRouteSt
   return replayResponse(op);
 }
 
-function settle(ctx: ManagementContext, operationId: string, outcome: OperationState, error?: { code: string; status: number }): LinkOperation {
+function settle(ctx: ManagementContext, operationId: string, outcome: OperationState, error?: { code: string; status: number }, childResidual = false): LinkOperation {
   return updateOperationsJournal(journalPathFor(ctx), nowOf(ctx), journal => {
     const op = findOperation(journal, operationId)!;
     op.state = outcome;
+    if (childResidual && op.kind === "enroll") op.childResidual = true;
     op.updatedAt = iso(ctx);
     if (outcome !== "open") op.finishedAt = op.updatedAt;
     if (error && outcome !== "committed") op.error = error;
@@ -136,16 +137,16 @@ async function recoverEnroll(ctx: ManagementContext, state: LinkRouteState, op: 
   const interrupted = { code: "operation_interrupted", status: 409 };
   if (hasEffect(op, "relay_verified", "done")) return settle(ctx, op.operationId, "committed");
   const store = readStoreFor(ctx), wanted = op.alias.toLowerCase();
+  const childTouched = hasEffect(op, "child_enrolled", "intent") || hasEffect(op, "plant", "intent");
   if (store.links.some(link => link.direction === "hub-initiated" && link.alias.toLowerCase() === wanted && link.id !== reserved.linkId)) {
-    return settle(ctx, op.operationId, "unknown", interrupted);
+    return settle(ctx, op.operationId, "unknown", interrupted, childTouched);
   }
   const record = store.links.find(link => link.id === reserved.linkId);
   if (record) {
-    if (await compensateNewLink(ctx, state, record)) return settle(ctx, op.operationId, "unknown", interrupted);
+    if (await compensateNewLink(ctx, state, record)) return settle(ctx, op.operationId, "unknown", interrupted, childTouched);
   } else if (!revokeKeyIdempotent(ctx, reserved.apiKeyId)) {
-    return settle(ctx, op.operationId, "unknown", interrupted);
+    return settle(ctx, op.operationId, "unknown", interrupted, childTouched);
   }
-  const childTouched = hasEffect(op, "child_enrolled", "intent") || hasEffect(op, "plant", "intent");
   return settle(ctx, op.operationId, childTouched ? "residual" : "failed_clean", interrupted);
 }
 
@@ -209,7 +210,9 @@ export function openEnrollJournal(ctx: ManagementContext, request: OperationRequ
         : UNKNOWN_CODES.has(errorCode) ? "unknown"
           : body.residual === true || (plantUnsettled && hint !== "hash_tool_unavailable") ? "residual" : "failed_clean";
       let op: LinkOperation;
-      try { op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "apply_failed", status: response.status }); } catch {
+      // The Child's side is kept apart from the outcome: an unknown key and a plant whose rollback failed are both true.
+      const childResidual = outcome !== "committed" && (body.residual === true || plantUnsettled && hint !== "hash_tool_unavailable");
+      try { op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "apply_failed", status: response.status }, childResidual); } catch {
         // The live outcome stands; the open entry is recovered by the next repeat.
         return response;
       }
