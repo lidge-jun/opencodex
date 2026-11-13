@@ -299,6 +299,7 @@ export function resumedRevokeJournal(ctx: ManagementContext, operationId: string
   });
   return {
     operationId,
+    keepsTunnelDown: true,
     intent: effect => mark(effect, "intent"), done: (effect, receipt) => mark(effect, "done", receipt),
     beforeReceiptCleared: () => settleRevokeAfterRetirement(ctx, operationId),
     cleanupNotRun: () => {},
@@ -402,6 +403,11 @@ export interface RevokeJournal {
   done(effect: RevokeEffect, receipt?: { purged: true; linkId: string }): void;
   /** Runs after the post-commit cleanup and before the retirement receipt is cleared; a throw keeps the receipt. */
   beforeReceiptCleared?(): void;
+  /**
+   * A resumed retirement (#8416): an earlier cleanup attempt may already have reached the Child, so a failed cleanup never
+   * restarts the tunnel, even one that provably did not run this time; the owner settles unknown and stays suspended.
+   */
+  readonly keepsTunnelDown?: boolean;
   /** The Child's cleanup failed before it ran (removeReserved): the outcome can be failed_clean despite its intent. */
   cleanupNotRun(): void;
   /** Drop this revoke's live registration; finish does too, this covers a revoke that threw before it. */

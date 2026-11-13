@@ -464,7 +464,8 @@ async function removeReserved(
     // or purged the Child, so a journalled revoke leaves the tunnel down, unknown, and the supervisor keeps it down until
     // the operation is resolved (revokeSuspendsLink). A plain revoke restarts the tunnel either way, as before.
     const cleanupFailed = async (failure: Response, attempted: boolean): Promise<Response> => {
-      if (attempted && journal.operationId !== undefined) return failure;
+      // A resumed retirement keeps the tunnel down even when this attempt never ran: an earlier one may have (keepsTunnelDown).
+      if ((attempted || journal.keepsTunnelDown) && journal.operationId !== undefined) return failure;
       if (!attempted) journal.cleanupNotRun();
       await restartTunnel();
       return failure;

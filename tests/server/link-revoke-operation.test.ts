@@ -812,3 +812,22 @@ test.skipIf(process.platform !== "darwin")("a plain --force whose readable journ
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   expect(h.journal().operations[0]!.state).toBe("open");
 });
+
+test("a resumed cleanup that fails before it runs keeps the tunnel down when an earlier attempt may have reached the Child", async () => {
+  const h = harness({ onRun: () => { throw new Error("ssh unavailable"); } });
+  // No recorded platform, so the retry must discover it, and discovery fails before the disconnect runs.
+  const { remotePlatform: _platform, ...unprobed } = record();
+  h.store = { ...h.store, links: [unprobed] };
+  claimLinkRetirement(unprobed, root, () => h.store, "purge", OP);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 },
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }],
+  } as LinkOperation] });
+  const retried = await h.revoke({ purge: true, operationId: OP });
+  expect(retried.status).toBeGreaterThanOrEqual(400);
+  expect(h.restarts).toBe(0);
+  expect(h.journal().operations[0]!.state).toBe("unknown");
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+});
