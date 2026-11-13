@@ -42,7 +42,7 @@ afterEach(async () => {
 
 const ok = (stdout = ""): SshRunResult => ({ code: 0, stdout, stderr: "" });
 const http = (body: unknown) => ok(JSON.stringify(body) + "\n200");
-type Step = "probe" | "windows" | "uname" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog" | "disconnect";
+type Step = "census" | "probe" | "windows" | "uname" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog" | "disconnect";
 
 function harness() {
   const remoteOcx = (args: string[]) => quoteRemote(remoteOcxArgv(args, "posix"));
@@ -69,7 +69,7 @@ function harness() {
     async run(argv, options) {
       const command = argv.at(-1) ?? "";
       if (argv[0] === "ssh-keygen") return ok("256 " + fingerprint + " child (ED25519)");
-      const step: Step = command === "echo ocx-link-probe" ? "probe" : command === WINDOWS_OS_PROBE ? "windows"
+      const step: Step = command.includes("ocx-census") ? "census" : command === "echo ocx-link-probe" ? "probe" : command === WINDOWS_OS_PROBE ? "windows"
         : command.includes("ocx-platform") ? "uname" : command === remoteOcx(["--version"]) ? "version"
         : command === remoteOcx(["link", "port"]) ? "port" : command === remoteOcx(["config", "show", "--json"]) ? "config"
         : command.includes("ocx-curl-preflight") ? "curl" : command.includes("'connect' '--link' '--key-stdin'") ? "connect"
@@ -283,6 +283,43 @@ describe("a repeat after the process died at a boundary", () => {
     h.config.apiKeys = [reservedKey];
     h.breakRevoke();
     expect((await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP })).body.outcome).toBe("unknown");
+  });
+});
+
+describe("--require-ephemeral", () => {
+  test("a full ocx found by the census refuses before any plant, key or Child change, also beside ocx-child", async () => {
+    const h = harness();
+    h.overrides.census = () => ok("ocx-census:full\nocx-census:done\n");
+    const applied = await h.enroll({ requireEphemeral: true });
+    expect({ status: applied.status, code: code(applied), outcome: applied.body.outcome }).toEqual({ status: 409, code: "full_install_present", outcome: "failed_clean" });
+    const steps = h.ssh.map(call => call.step);
+    expect(steps.slice(steps.indexOf("census"))).toEqual(["census"]);
+    expect(h.config.apiKeys).toEqual([]);
+    expect(h.store.links).toEqual([]);
+  });
+
+  test("no full ocx lets the enrollment go on; the census runs once, before the port", async () => {
+    const h = harness();
+    h.overrides.census = () => ok("ocx-census:done\n");
+    const applied = await h.enroll({ requireEphemeral: true });
+    expect(applied.status).toBe(202);
+    const steps = h.ssh.map(call => call.step);
+    expect(steps.filter(step => step === "census")).toHaveLength(1);
+    expect(steps.indexOf("census")).toBeLessThan(steps.indexOf("port"));
+  });
+
+  test("a census that does not finish fails closed", async () => {
+    const h = harness();
+    h.overrides.census = () => ok("ocx-census:full\n");
+    const applied = await h.enroll({ requireEphemeral: true });
+    expect({ status: applied.status, code: code(applied) }).toEqual({ status: 502, code: "full_install_census_failed" });
+    expect(h.config.apiKeys).toEqual([]);
+  });
+
+  test("without the flag no census runs", async () => {
+    const h = harness();
+    await h.enroll();
+    expect(h.ssh.map(call => call.step)).not.toContain("census");
   });
 });
 

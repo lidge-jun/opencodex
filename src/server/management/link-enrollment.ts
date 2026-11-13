@@ -6,7 +6,7 @@ import { plantUnavailableGuidance, resolveChildBinarySource } from "../../link/c
 import { parseFingerprintLine } from "../../link/fingerprint";
 import { confirmedLineTrust as confirmedLineTrustIn, type ConfirmedLineTrust } from "../../link/route-trust";
 import { isDetachedEphemeralChildConfig } from "../../link/ephemeral-child";
-import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
+import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, parseFullInstallCensus, remoteFullInstallCensusArgv, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
 import { requireRemotePlatform } from "../../link/remote-platform";
 import { LINK_CATALOG_MAX_BYTES, LINK_RELAY_VERIFY_MS, isChildHealth, linkCommandBudget, linkRestartBudget, parseChildHttp, remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../link/remote-probe";
 import { newLinkId, type LinkStore } from "../../link/store";
@@ -319,6 +319,15 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     };
     try {
       remotePlatform = confirmed.remotePlatform ?? await requireRemotePlatform(runner, alias, route, knownHosts);
+      if (body.requireEphemeral === true) {
+        // Before any plant, key or Child change: a runnable full ocx anywhere the gated argv looks refuses.
+        phase = "full_install_census";
+        if (remotePlatform === "windows") return fail("require_ephemeral_unsupported", "--require-ephemeral is not supported for a Windows Child.", 409);
+        const census = await run(remoteFullInstallCensusArgv());
+        const verdict = census.code === 0 ? parseFullInstallCensus(census.stdout) : null;
+        if (verdict === null) return fail("full_install_census_failed", "The Child could not be checked for a full OpenCodex install.", 502, sshFailureHint(census.stderr));
+        if (verdict === "present") return fail("full_install_present", "A full OpenCodex install is on the Child; --require-ephemeral refuses it before any change.", 409);
+      }
       if (body.plant === true && confirmed.runtimeKind === "missing") {
         phase = "remote_plant";
         const source = resolveBinary(confirmed.targetTriple ?? null);

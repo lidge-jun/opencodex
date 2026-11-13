@@ -231,5 +231,6 @@
   "link-enrollment-explicit-route.test.ts": "server",
   "cli-link-explicit-route.test.ts": "cli",
   "link-alias-lock.test.ts": "clients",
-  "link-enrollment-operation.test.ts": "server"
+  "link-enrollment-operation.test.ts": "server",
+  "link-full-install-census.test.ts": "clients"
 }
