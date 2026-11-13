@@ -1566,8 +1566,8 @@ binary's `disconnect --purge --expect-link <id>`. The Child restores its
 `~/.codex` files and removes the planted binary only when its records name that
 link and no other: its state and its ownership record both name it, or an
 interrupted detach or attach of that link left the ownership record naming it
-without the state (an attach's rollback may name no link or that link, never
-another). Success prints
+without the state (any attach rollback left, including one a detach stopped
+while restoring, may name no link or that link, never another). Success prints
 `{linkId,outcome:"clean",purged:true}` and removes the tombstone; `purged:false`
 means the Child restored its state but kept the planted binary because another
 OpenCodex home on that machine runs a relay from it, and the tombstone is removed
