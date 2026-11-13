@@ -150,6 +150,73 @@ describe("a Child restart drains its link sockets before the tunnel stops", () =
     expect(records.filter(word => word === "link_ws_fallback:draining")).toHaveLength(2);
     expect(records.some(word => word.startsWith("link_ws_fallback:") && !word.endsWith(":draining"))).toBe(false);
   });
+
+  test("a link that ends (sidecar gone) drains too, before the tunnel is signalled", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-link-ws-drain-"));
+    const spawned: Array<{ signals: string[] }> = [];
+    const runner: SshRunner = {
+      async run() { return { code: 0, stdout: "", stderr: "" }; },
+      spawnTunnel(argv) {
+        let exit!: (code: number) => void;
+        const item = { signals: [] as string[] };
+        spawned.push(item);
+        return { pid: 32_000 + spawned.length, argv: [...argv], exited: new Promise<number>(resolve => { exit = resolve; }), stderr: Promise.resolve(""),
+          kill(signal = "SIGTERM") { item.signals.push(signal); if (signal === "SIGTERM") exit(143); } } satisfies SshChild;
+      },
+    };
+    let current: ClientLinkState | null = { linkId: "lnk_0123456789abcdef", alias: "home.example.test", hubHostKeyFingerprint: "SHA256:abcdefghijklmnop", peerListenerPort: 19001, tunnelPort: 19002 };
+    const ticks: Array<() => void> = [];
+    let ended = 0;
+    try {
+      const supervisor = createClientLinkSupervisor({
+        configDir, runner, readSidecar: () => current, connectedLinkId: () => "lnk_0123456789abcdef",
+        setTimer: (callback, ms) => { if (ms === 1_000) ticks.push(callback); return ticks.length as unknown as ReturnType<typeof setTimeout>; },
+        clearTimer: () => {}, onLinkEnded: () => { ended += 1; }, now: () => 0, random: () => 0.5,
+      });
+      const seen: string[][] = [];
+      supervisor.onStopping?.(() => seen.push([...(spawned[0]?.signals ?? [])]));
+      supervisor.start();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(spawned).toHaveLength(1);
+      current = null;
+      ticks[0]!();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(ended).toBe(1);
+      expect(seen).toEqual([[]]);
+      expect(spawned[0]!.signals).toContain("SIGTERM");
+      await supervisor.stop();
+      expect(seen).toHaveLength(1);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a drain still answers 503 after the Home's advertisement turned off", async () => {
+    const tunnel = stoppableGate();
+    let advertised = true;
+    const { port } = await child({ tunnel: tunnel.gate, websocket: { advertised: () => advertised } });
+    advertised = false;
+    tunnel.stop();
+    const late = rawUpgrade(port);
+    const answer = await late.answer;
+    late.socket.destroy();
+    expect(answer.status).toBe(503);
+  });
+
+  test("with the Child gate closed, or the Child opted out, a drain keeps today's 426 and touches no network", async () => {
+    for (const websocket of [{ ready: () => false }, { optOut: () => true }] satisfies Array<Partial<LinkWebsocketRelayDeps>>) {
+      const tunnel = stoppableGate();
+      const { port, home } = await child({ tunnel: tunnel.gate, websocket });
+      const before = home.connections();
+      tunnel.stop();
+      const attempt = rawUpgrade(port);
+      const answer = await attempt.answer;
+      attempt.socket.destroy();
+      expect(answer.status).toBe(426);
+      expect(home.connections()).toBe(before);
+    }
+  });
 });
 
 describe("a local upgrade that never opened", () => {

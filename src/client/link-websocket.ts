@@ -412,12 +412,13 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
     /**
      * Design 3.2 step 2: whether an upgrade may try the Home at all. False keeps today's 426 with no network
      * I/O. With the release gate closed nothing is counted or written; with it open, the Child-local opt-out
-     * and an unadvertised Home are counted in memory (never in the diagnostics file).
+     * and an unadvertised Home are counted in memory (never in the diagnostics file). While the relay drains,
+     * an upgrade goes on to its 503 whatever the Home last advertised (the opt-out still keeps it on HTTP).
      */
     wanted(linkId: string | undefined): boolean {
       try {
         if (!ready()) return false;
-        const why: LinkWsFallbackReason | null = optOut() ? "local_optout" : advertised(linkId) ? null : "not_advertised";
+        const why: LinkWsFallbackReason | null = optOut() ? "local_optout" : draining || advertised(linkId) ? null : "not_advertised";
         if (why) counted.fallbacks[why] = (counted.fallbacks[why] ?? 0) + 1;
         return why === null;
       } catch { return false; }
