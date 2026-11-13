@@ -31,6 +31,11 @@ and are only started by tests as child processes, which already receive a clean 
 doctor/lint/typecheck-gui-if-changed, generate-compatibility-version, setup-hooks. Scrubbing privacy-scan
 would change what a pre-commit hook (GIT_INDEX_FILE) scans, so it stays as it is.
 
+The messages-{sse,stream,overflow}-differential recorders stay byte-identical: they are children that only run
+read-only `git show`/`ls-tree`/`diff` against pinned commits, and messages-sse-baseline-contract pins the SSE
+recorder's SHA-256 as provenance for its golden (CI shard 3/5 caught the first revision, which had added an env).
+A child receives the env its parent test passes, which a wrapped run has already scrubbed.
+
 ## setup-hooks process.env mutation
 
 The old case assigned process.env.GIT_DIR and GIT_CONFIG_GLOBAL inside a synchronous try/finally. Nothing else
