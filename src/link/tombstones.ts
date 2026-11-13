@@ -178,6 +178,19 @@ export function removeOwnTombstone(written: LinkTombstone, linkExists: boolean, 
   return removeTombstone(written.linkId, path);
 }
 
+/**
+ * Remove the tombstone for `linkId` only when it is still exactly `seen` (the version read before a link-bound Child
+ * cleanup ran) and the link still exists. A tombstone written or replaced in the meantime (a force revoke in another
+ * process) is newer evidence and stays; so does every tombstone once the link is gone. Callers hold the config
+ * mutation lock.
+ */
+export function removeTombstoneIfUnchanged(linkId: string, seen: LinkTombstone, linkExists: boolean, path: string = tombstonesPath()): boolean {
+  if (!linkExists) return false;
+  const found = readTombstones(path).tombstones.find(t => t.linkId === linkId);
+  if (!found || JSON.stringify(found) !== JSON.stringify(seen)) return false;
+  return removeTombstone(linkId, path);
+}
+
 export type ForgetTombstoneOutcome = "forgotten" | "not_found" | "link_present";
 
 /**

@@ -650,6 +650,25 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     expect(tombstones()).toEqual([]);
   });
 
+  // A force revoke in another process can write its own tombstone for this link while the bound command is in flight
+  // (for example against a Child an enrollment has not attached yet). The bound answer settles only the tombstone that
+  // was there before the command ran, so that newer evidence stays.
+  test.each([
+    ["no tombstone before", false],
+    ["an older tombstone before", true],
+  ] as const)("a tombstone written during the bound command stays (%s)", async (_name, older) => {
+    const fresh = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "00112233aabbccdd" };
+    const h = harness([link()], { ordinary: command => {
+      if (!command.includes("--expect-link")) return undefined;
+      recordTombstone(fresh);
+      return ok();
+    } });
+    if (older) leftTombstone();
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect(res.status).toBe(200);
+    expect(tombstones()).toEqual([fresh]);
+  });
+
   test("a Child attached to another link refuses (exit 5): nothing is disconnected and the link stays", async () => {
     const h = harness([link()], { ordinary: () => ok("", 5, '{"phase":"child_link_mismatch","reason":"other_link"}') });
     const res = await h.request("DELETE", "/api/link/" + ID, {});
