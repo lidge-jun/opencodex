@@ -394,7 +394,10 @@ A passthrough turn also keeps no parsed copy of its outbound body while it strea
 the request is built, and only its tool scope (`outboundToolScope` in
 `src/server/responses/outbound-request-body.ts`: the tool catalog, the selection, the parallel
 flag and the input items that declare tools) stays for the later readers, snapshot repair and
-the Grok tool scope, so a large request's input is not held twice (#8601). A combo preflight's replay lets go of each buffered chunk as it hands it to the
+the Grok tool scope, so a large request's input is not held twice (#8601). A streaming combo
+child's required-tool check (`src/server/responses/combo-required-tool-fulfillments.ts`) also
+parses the outbound body once when it is built and keeps only whether that body denies every
+tool, never the parsed body. A combo preflight's replay lets go of each buffered chunk as it hands it to the
 client, and of all of them on cancel, so a committed child's prefix is not held for the rest of
 its turn.
 One tee branch's cancellation is never awaited by the wrapper, because that
