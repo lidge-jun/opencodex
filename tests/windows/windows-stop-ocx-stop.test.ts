@@ -46,6 +46,15 @@ function runStop(windowsPartA: string | undefined, windowsPartB?: string, extra:
 }
 
 describe("plain ocx stop on Windows: Part A holds the child stop", () => {
+  for (const guarded of [false, true]) {
+    test(`receipt failure holds the ${guarded ? "guarded" : "plain"} child stop`, () => {
+      const run = runStop("stopped", "freed", { receipt: false, guarded, windowsGuarded: guarded });
+      expect(run.urls).toEqual([]);
+      expect(run.calls.native).toBe(0);
+      expect(run.calls.grok).toBe(0);
+      expect(run.exitCode).toBe(1);
+    });
+  }
   test("a rejected Part A holds the child and shared teardown", () => {
     const run = runStop(undefined, undefined, { windowsPartAReject: true });
     expect(run.urls).toEqual([]);

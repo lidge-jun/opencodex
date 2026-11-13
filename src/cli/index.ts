@@ -126,7 +126,7 @@ import {
   type StopApproval,
 } from "./stop-approval";
 import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
-import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue, windowsPartBOwnsPortWait } from "./stop-windows-checked";
+import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue, windowsPartBOwnsPortWait, windowsStopRequiresReceipt } from "./stop-windows-checked";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
@@ -1150,9 +1150,8 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     try {
       teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined, windowsPartAReceiptRecord()).nonce;
     } catch (err) {
-      // Without a receipt the proxy performs its own teardown, which is the pre-#3008
-      // behaviour: correct for every backend that cannot respawn, and merely early for
-      // Task Scheduler. Losing the deferral is far better than losing the stop.
+      // Windows wrappers can relaunch the proxy, so an undeferred stop is unsafe.
+      if (windowsStopRequiresReceipt()) { ownershipBlocked = true; stopFailed = true; throw err; }
       console.warn(`⚠️  Could not record the deferred-teardown receipt: ${err instanceof Error ? err.message : String(err)}`);
     }
   };

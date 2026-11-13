@@ -152,7 +152,8 @@ stop instead of sliding forward.
   `evidence-unreadable`, and another program on the port sets `portHeldByForeign` without failing
   the stop. The port wait is skipped on BOTH Windows paths, guarded included, through
   `windowsPartBOwnsPortWait`; `windowsPartBDue` stays snapshotless-only because it also gates the
-  legacy respawn re-poll. `ocx uninstall`'s two `stopProxy` calls pass the same predicate.
+  legacy respawn re-poll. A failed owner receipt claim refuses the child stop and shared teardown
+  on both paths. `ocx uninstall`'s two `stopProxy` calls pass the same predicate.
 - The guarded path reads the evidence snapshot and the Schedule host PID once per inspection;
   `stopManager` binds on the revalidation's snapshot (so its admission does not count a second
   enumeration), Part B runs after `settle` on the approved endpoint, and the manager-state checks

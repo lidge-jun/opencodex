@@ -70,6 +70,10 @@ function windows(): boolean {
   return state.platform === "win32";
 }
 
+export function windowsStopRequiresReceipt(): boolean {
+  return windows();
+}
+
 function begin(snapshotless: boolean): void {
   state.result = null;
   state.snapshotless = snapshotless;
