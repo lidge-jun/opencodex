@@ -109,10 +109,10 @@ export type IdentityFileProblem = "identity_file_missing" | "identity_file_not_r
 export const IDENTITY_FILE_GUIDANCE: Readonly<Record<IdentityFileProblem, string>> = {
   identity_file_missing: "The identity file does not exist.",
   identity_file_not_regular: "The identity file must be a regular file, not a symlink or a directory.",
-  identity_file_permissions: "The identity file must be owned by this user with no group or other permissions (chmod 600 on it).",
-  identity_file_directory: "The directory that holds the identity file must be owned by this user or root and not writable by group or others (chmod g-w,o-w on it).",
-  identity_file_ancestor: "Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp, and every symlink on its path must be owned by this user or root. A home or state folder created under umask 002 (per-user groups on Ubuntu or Fedora) is group-writable: chmod g-w on that directory.",
-  identity_file_unreadable: "This user cannot read the identity file or a directory on its path.",
+  identity_file_permissions: "The identity file must be owned by this user with no group or other permissions (chmod 600 on it). Use a key file of this user's own; never chown another user's or the system's key.",
+  identity_file_directory: "The directory that holds the identity file must be owned by this user or root and not writable by group or others. Move the key to a path that passes; if a tool chose the path, run chmod go-w on that tool's own private folder or have it use a path that passes. Never change a shared or system directory such as /tmp, even when the Home runs as root.",
+  identity_file_ancestor: "Every directory above the identity file must be owned by this user or root and not writable by group or others unless sticky, and every symlink on its path must be owned by this user or root; a folder made under umask 002 is group-writable. Run chmod go-w on such a private folder of this user's or of the tool that chose the path, or use a path that passes. Never change a shared or system directory or another user's symlink, even as root.",
+  identity_file_unreadable: "This user cannot read the identity file or a directory on its path, or the path is too long or has too many symlinks. Use a shorter path without symlink loops; fix read access only on this user's own file or folder.",
   identity_file_unsupported_platform: "A Windows Home does not support an identity file yet.",
 };
 
@@ -179,6 +179,7 @@ function resolvedDirectory(path: string, lstat: (path: string) => Stats): Stats 
     let links = 0;
     while (pending.length > 0) {
       const name = pending.shift()!;
+      // After a symlink target's "..", the pending count can name the wrong level in the hint; the refusal itself still holds.
       if (name === "..") { current = dirname(current); stat = lstat(current); continue; }
       const next = current === "/" ? "/" + name : current + "/" + name;
       const entry = lstat(next);

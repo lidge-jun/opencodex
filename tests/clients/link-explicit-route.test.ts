@@ -409,7 +409,7 @@ describe("the explicit route's identity file", () => {
   });
 
   // The owner of a symlink cannot be faked without chown, so the walk takes its lstat as a parameter (as it takes the platform):
-  // the link's real metadata with another owner.
+  // the link's real metadata with another owner. Skipped on Windows: process.getuid does not exist there, so the walk trusts every owner.
   test.skipIf(process.platform === "win32")("a symlink on the key's path must be owned by this user or root: another user could repoint it", () => {
     // The walk follows the real path (on macOS the temp directory is reached through /var -> /private/var).
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "ocx-identity-link-")));
