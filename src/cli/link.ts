@@ -618,7 +618,7 @@ export function journalledRevokeError(error: unknown, operationId: string, linkI
   // It never says the link or key stay active either: an earlier attempt of a resumed revoke may have revoked the key and stopped
   // the tunnel before it failed and dropped its own tombstone, and this repeat then meets the limit while re-recording one.
   if (code === "tombstone_limit") {
-    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover --link-id <id> (ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget for machines that are gone. Then repeat this revoke with the same operation id (ocx link revoke --link-id " + (linkId !== undefined && LINK_ID.test(linkId) ? linkId : "<link id>") + " --operation-id " + operationId + " --force --yes): an interrupted removal resumes under it. If it answers this refusal again although capacity is free, try a new operation id; if that answers link_retirement_owned, an unfinished removal holds this link: repeat the open or unknown revoke of this link (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --force --yes without --operation-id. (code tombstone_limit)", error.status, error.body);
+    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover --link-id <id> (ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget for machines that are gone. Then repeat this revoke with the same operation id (ocx link revoke --link-id " + (linkId !== undefined && LINK_ID.test(linkId) ? linkId : "<link id>") + " --operation-id " + operationId + " --force --yes): an interrupted removal resumes under it. If it answers this refusal again although capacity is free, try a new operation id; if that answers link_retirement_owned, an unfinished removal holds this link: repeat the revoke of this link that owns it, whatever its recorded state (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --force --yes without --operation-id. (code tombstone_limit)", error.status, error.body);
   }
   const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
   // Repeating first resumes a removal this id still owns (#8416); resolving first would leave its receipt and record behind.
@@ -632,7 +632,9 @@ export function journalledRevokeError(error: unknown, operationId: string, linkI
  * path that answers the code.
  */
 const NEXT_STEP: Record<string, string> = {
-  operation_journal_failed: "Repeat the revoke with the same operation id; if that answers operation_journal_failed again, the journal cannot record this attempt: check the disk, then use a new operation id",
+  // A resumed owner can meet the same live write failure again and keep its receipt, so a repeat proves nothing: the same id after
+  // the fix, and a new id only through link_retirement_owned's guidance if one is tried.
+  operation_journal_failed: "The journal could not record a step: fix what keeps it from being written (disk space, permissions), then repeat the revoke with the same operation id. If it keeps answering operation_journal_failed, a new operation id can be tried; if that answers link_retirement_owned, this id may still own the removal: follow that answer",
   link_changed: "The link changed while this revoke ran: read ocx link status, then repeat the revoke with the same operation id",
 };
 
@@ -643,7 +645,7 @@ const NEXT_STEP: Record<string, string> = {
 const RETIREMENT_GUIDANCE: Record<string, string> = {
   // A journalled owner refuses any revoke without --force that is not its own id; a plain revoke without --force finishes only
   // a removal no journalled operation owns (link-routes.ts foreignRetirement).
-  link_retirement_owned: "An unfinished removal holds this link. Repeat the open or unknown revoke of this link (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --link-id <link id> --force --yes without --operation-id. If no journalled operation owns it, ocx link revoke without --operation-id and without --force also finishes it when its Child cleanup can run again.",
+  link_retirement_owned: "An unfinished removal holds this link. Repeat the revoke of this link that owns it, whatever its recorded state (ocx link operations --json shows each entry's linkId; another revoke's id answers its own outcome or this refusal again), or finish it with ocx link revoke --link-id <link id> --force --yes without --operation-id. If no journalled operation owns it, ocx link revoke without --operation-id and without --force also finishes it when its Child cleanup can run again.",
   // Unreachable with --operation-id at this head (foreignRetirement admits only this operation's own receipt, resumed in its own
   // mode); kept as a closed text with no state claim. "--force" with the same id would answer operation_mismatch, so it is not offered.
   link_retirement_mode_mismatch: "This link's removal was interrupted in another mode than this revoke asks for. Repeat the revoke that started it with its options (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --link-id <link id> --force --yes without --operation-id.",

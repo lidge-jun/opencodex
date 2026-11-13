@@ -261,7 +261,7 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
       // That answer means some unfinished removal holds the link, not necessarily this operation (#8416).
       expect(printed).not.toContain("still belongs to this id");
       expect(printed).toContain("an unfinished removal holds this link");
-      expect(printed).toContain("the open or unknown revoke of this link");
+      expect(printed).toContain("the revoke of this link that owns it, whatever its recorded state");
       expect(printed).toContain("ocx link revoke --link-id " + LINK + " --operation-id detach-8 --force --yes");
       expect(printed).toContain("ocx link recover --link-id");
       expect(printed).toContain("ocx link operations --json");
@@ -291,7 +291,7 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
 
   // Generic codes still get a next step that holds on every path (the table in structure/remote-link.md).
   test.each([
-    ["operation_journal_failed", 500, 1, ["Repeat the revoke with the same operation id", "if that answers operation_journal_failed again", "new operation id"]],
+    ["operation_journal_failed", 500, 1, ["then repeat the revoke with the same operation id", "if that answers link_retirement_owned", "this id may still own the removal"]],
     ["link_changed", 409, 5, ["ocx link status", "repeat the revoke with the same operation id"]],
   ])("%s names a next step and claims nothing about state", async (code, status, exit, parts) => {
     const h = harness([{ status, body: { error: { code, message: "server-chosen text" } } }]); try {
@@ -317,7 +317,7 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
 
   // #8416's refusals for an interrupted removal: the owner and the way out live only in the server's message, which is dropped.
   test.each([
-    ["link_retirement_owned", ["unfinished removal holds this link", "the open or unknown revoke of this link", "ocx link operations --json", "ocx link revoke --link-id <link id> --force --yes without --operation-id", "If no journalled operation owns it"]],
+    ["link_retirement_owned", ["unfinished removal holds this link", "the revoke of this link that owns it, whatever its recorded state", "ocx link operations --json", "ocx link revoke --link-id <link id> --force --yes without --operation-id", "If no journalled operation owns it"]],
     ["link_retirement_mode_mismatch", ["interrupted in another mode", "the revoke that started it", "--force --yes without --operation-id"]],
   ])("%s prints closed guidance that names the way out and makes no claim about state", async (code, parts) => {
     const h = harness([{ status: 409, body: { error: { code, message: "server-chosen text" } } }]); try {
