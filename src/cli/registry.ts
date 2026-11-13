@@ -190,7 +190,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "disconnect",
-    usage: "ocx disconnect [--keep-catalog] [--json] [--expect-link <linkId>]",
+    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] [--expect-link <linkId>]",
     summary: "Restore local client state offline and clear the remote-hub connection.",
     details: [
       "--expect-link <linkId> disconnects only when this machine is a connected Remote Link Child of that link; a Home's revoke sends it so a delayed revoke of an old link cannot disconnect a newer one. Any other state (disconnected, another link or key, a hub client, a pending key rotation, connect or disconnect) changes nothing, exits 5, and prints {\"phase\":\"child_link_mismatch\",\"reason\":...} as the last stderr line. A client-initiated link (this machine joined its Home itself) is refused the same way (reason client_initiated_link); disconnect it without --expect-link. A malformed or repeated flag, or one combined with --orphaned-token, exits 2.",
@@ -198,7 +198,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--overwrite-conflict [--overwrite-client <id>]] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "A current Home catalog fans out to linked Children; --local-only disables fan-out and --json emits the result. Partial fan-out exits 6.",
@@ -448,8 +448,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "route",
-    usage: "ocx route <combo|policy> <subcommand>",
-    summary: "Manage combo routing and routing profiles.",
+    usage: "ocx route <combo|policy|to> <subcommand>",
+    summary: "Manage combo routing, routing profiles and per-device client intent.",
   },
   {
     name: "effort",

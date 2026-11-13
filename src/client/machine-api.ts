@@ -4,7 +4,7 @@ import { readManagementJsonBody } from "../server/management/body";
 import type { OcxClientConnectionConfig } from "../types";
 import { disconnectClient, syncConnectedClient } from "./connect";
 import { linkHomeName } from "./link-home";
-import { isLinkConnection } from "./state";
+import { isLinkConnection, readClientConnectionState, sameClientConnectionOwner, type ClientConnectionState } from "./state";
 
 export type HubReachability = "unknown" | "online" | "offline" | "unauthorized";
 
@@ -34,6 +34,8 @@ export interface MachineApiDeps {
   setHubReachability?: (value: HubReachability) => void;
   /** Link mode: the Home's name as this listener knows it (sidecar alias or recorded host name). */
   linkHomeName?: () => string | null;
+  /** The saved connection; a scheduled route-intent sync can change its selection while this runs. */
+  readConnection?: () => ClientConnectionState;
 }
 
 const defaultDeps: MachineApiDeps = {
@@ -95,8 +97,13 @@ export async function handleMachineApi(
     return Response.json(statusPayload(req, state, deps), { headers: { "Cache-Control": "no-store" } });
   }
   if (url.pathname === "/api/machine/clients" && readMethod) {
+    // A Link Child's route-intent tick rewrites the saved selection after this listener started.
+    // Report the saved one while it still belongs to the connection this listener serves.
+    const current = (deps.readConnection ?? readClientConnectionState)();
+    const selected = current.kind === "connected" && sameClientConnectionOwner(current.value, state)
+      ? current.value.selectedClients : state.selectedClients;
     return Response.json({
-      selectedClients: [...state.selectedClients],
+      selectedClients: [...selected],
       journalOwner: journalOwner(),
       shim: diagnoseCodexShim(),
     }, { headers: { "Cache-Control": "no-store" } });

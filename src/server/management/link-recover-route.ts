@@ -1,6 +1,7 @@
 import { recoverRemoteChild } from "../../link/link-recover";
 import { operationRecoveryResolver, type LinkRecoveryTarget } from "../../link/operation-recovery-slot";
 import { readTombstones, removeTombstone, tombstonesPath } from "../../link/tombstones";
+import { readLinkRetirement } from "../../link/retirement";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
@@ -68,6 +69,17 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
   // Under the alias lock enrollment and revoke take (src/link/alias-lock.ts, across processes) and the per-alias
   // operation set within this runtime, both keyed without case.
   return underAliasLock(ctx, target.alias, true, () => serialized(state, target.alias, async () => {
+    // Under the lock a removal of this link takes: the link must still be gone, and its removal finished. A retirement
+    // receipt still outstanding (#8416) means the revoke has not settled; recovering now would let its retry act on a
+    // Child already cleaned (and, before, write a fresh tombstone for it).
+    if (readStoreFor(ctx).links.some(link => link.id === target.linkId)) {
+      return fail("link_present", "This link still exists; revoke it with --purge instead.", 409);
+    }
+    let pending: boolean;
+    try { pending = readLinkRetirement(target.linkId) !== null; } catch { pending = true; }
+    if (pending) {
+      return fail("link_retirement_pending", "This link's removal is unfinished; repeat ocx link revoke for it to finish, then recover.", 409);
+    }
     const outcome = await recoverRemoteChild(runnerFor(ctx), target, knownHostsFile(ctx));
     if (!outcome.ok) return fail(outcome.code, outcome.message, outcome.status, outcome.hint);
     try {

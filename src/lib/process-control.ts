@@ -62,6 +62,18 @@ export interface GracefulStopIo {
    */
   runtimeEndpoint?: { hostname: string; port: number };
   /**
+   * Send the stop only to `runtimeEndpoint`: without one, no request is sent and the runtime
+   * record is not read again. A caller whose deferral receipt names the endpoint it resolved sets
+   * this, so a record published in between cannot direct the request, and the receipt, elsewhere.
+   */
+  runtimeEndpointOnly?: boolean;
+  /**
+   * Asked again immediately before the forced-stop fallback signals `pid`; false refuses the
+   * signal (killProxy throws). A caller that proved which process it may stop rechecks that here,
+   * so a pid reused after the graceful attempt is never signalled.
+   */
+  mayTerminate?: () => boolean;
+  /**
    * Windows checked stop (#7771): Part B confirms the port after this stop returns and
    * owns the wait, so the 15 s waitForStoppedPort here is skipped (030 "Time budget").
    */
@@ -263,7 +275,7 @@ async function stopProxyGracefullyDetailed(
   const done = (result: GracefulStopResult): { result: GracefulStopResult; refusal: StopRefusal } =>
     ({ result, refusal });
   const readRuntime = io.readRuntime ?? readRuntimePort;
-  const runtime = io.runtimeEndpoint ?? readRuntime(pid);
+  const runtime = io.runtimeEndpoint ?? (io.runtimeEndpointOnly ? null : readRuntime(pid));
   if (!runtime?.port) return done(false);
   const env = io.env ?? process.env;
   const headers: Record<string, string> = {};
@@ -347,7 +359,7 @@ function drainDeadlineMs(): number {
 /** Graceful-first stop: management-API drain, then the platform kill ladder. */
 export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<boolean> {
   if (!isProcessAlive(pid)) return false;
-  const runtime = io.skipPortWait ? null : io.runtimeEndpoint ?? readRuntimePort(pid);
+  const runtime = io.skipPortWait ? null : io.runtimeEndpoint ?? (io.runtimeEndpointOnly ? null : readRuntimePort(pid));
   const { result: graceful, refusal } = await stopProxyGracefullyDetailed(pid, io);
   if (graceful === "refused") {
     // The proxy refused on purpose. Forcing would strip shared config while whatever owns
@@ -375,10 +387,10 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<b
     await waitForStoppedPort(runtime, pid, io);
     return false;
   }
-  // Written as a literal killProxy(pid) call so the refusal-before-kill ordering stays
+  // Written as a literal killProxy(pid, ...) call so the refusal-before-kill ordering stays
   // checkable in source (tests/providers/xai/grok-lifecycle.test.ts); the seam only swaps it.
   if (io.forceKill) io.forceKill(pid);
-  else killProxy(pid);
+  else killProxy(pid, io.mayTerminate);
   await waitForStoppedPort(runtime, pid, io);
   return false;
 }

@@ -87,7 +87,7 @@ Usage:
   ocx fallback <sub>          Turn model or provider fallback off per scope; per-device local fallback
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx inspect <sub>           Effective config, catalog, analytics, pacing, client-config
-  ocx route <sub>             Routing features (combo, policy)
+  ocx route <sub>             Routing features (to, combo, policy)
   ocx logs [filters]          Alias of ocx observe logs
   ocx usage [--range <today|1d|7d|30d|all>] [--provider <name>] [--model <id>] [--top <1-1000>]
                               Token and estimated-cost report (alias of ocx observe usage)

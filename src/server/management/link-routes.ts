@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { isRouteClientId, ROUTE_CLIENT_IDS } from "../../link/route-intent";
+import { seedRouteDeviceClients, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { probe, confirmHost, apply, serialized } from "./link-enrollment";
-import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, type LinkRouteState } from "./link-route-state";
+import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, reconcileLinkListener, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
 import { requireRemotePlatform } from "../../link/remote-platform";
 import { CHILD_EXPECT_CONFLICT_EXIT, CHILD_EXPECT_RESIDUAL_EXIT, CHILD_USAGE_EXIT, purgeDisconnectRemote } from "../../link/remote-plant";
@@ -9,6 +11,7 @@ import { clearCompensationFailed, compensationPath, readCompensation } from "../
 import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, removeTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
+import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, reownLinkRetirement, type LinkRetirement, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
@@ -22,11 +25,11 @@ import { clientLinkStatusIdentity } from "../../client/link-status";
 import { clientLinkTunnelStatus } from "../../client/link-tunnel";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
-import { readManagementJsonBodyOr } from "./body";
+import { readManagementJsonBodyOr, readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { journalInUse, journalOpenFailure, journalPathFor, journalUnreadable, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { cleanupRecorded, journalInUse, journalOpenFailure, journalPathFor, journalUnreadable, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, resumedRevokeJournal, retirementOwner, revokeOperationDigest, fenceRetirementOwnerForForce, settleResumedRevoke, underAliasLock, type ForceTakeover, type RevokeJournal } from "./link-operation";
 import { findOperation, isOperationId, readOperationsJournal, revokeSuspendingLink } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -80,9 +83,12 @@ async function candidates(ctx: ManagementContext): Promise<Response> {
 }
 
 async function issue(ctx: ManagementContext): Promise<Response> {
-  const body = exactBody(await readManagementJsonBodyOr(ctx.req, null), ["alias", "tunnelPort"]);
+  const raw = await readManagementJsonBodyOr(ctx.req, null);
+  const body = exactBody(raw, isRecord(raw) && Object.hasOwn(raw, "selectedClients") ? ["alias", "tunnelPort", "selectedClients"] : ["alias", "tunnelPort"]);
   if (!body || typeof body.alias !== "string" || !isLinkPort(body.tunnelPort)) return fail("invalid_body", "alias and tunnelPort are required.", 400);
   try { assertSshAlias(body.alias); } catch { return fail("invalid_alias", "alias must be a valid SSH host alias.", 400); }
+  const selection = body.selectedClients;
+  if (selection !== undefined && (!Array.isArray(selection) || selection.length === 0 || selection.length > ROUTE_CLIENT_IDS.length || !selection.every(isRouteClientId) || new Set(selection).size !== selection.length)) return fail("invalid_body", "selectedClients must contain unique supported clients", 400);
   let issued: IssuedApiKey;
   try { issued = issueKey(ctx, `link:${body.alias}`); }
   catch { return fail("key_issue_failed", "The link key could not be issued.", 503); }
@@ -110,6 +116,7 @@ async function issue(ctx: ManagementContext): Promise<Response> {
       const compensation = await compensateNewLink(ctx, state, record);
       return compensation ?? fail("link_exists", "A link for this alias already exists.", 409);
     }
+    withConfigMutationLockSync(() => seedRouteDeviceClients(ctx.config, ctx.version, id, selection as import("../../link/route-intent").RouteClientId[] | undefined, readStoreFor(ctx).links.map(link => link.id)));
     await state.listener.ensureStarted();
     if (state.listener.status().state !== "listening") {
       failureCode = "listener_unavailable";
@@ -231,13 +238,19 @@ function validRemoveBody(payload: unknown): payload is Record<string, unknown> {
 
 async function remove(ctx: ManagementContext, state: LinkRouteState, id: string): Promise<Response> {
   if (!LINK_ID.test(id)) return fail("invalid_link_id", "The link id is invalid.", 400);
-  const body = await readManagementJsonBodyOr(ctx.req, {});
-  const payload = body === null ? {} : body;
+  let payload: unknown;
+  try { payload = await readOptionalManagementJsonBody(ctx.req); }
+  catch (error) {
+    rethrowManagementBodyTooLarge(error);
+    return fail("invalid_body", "force and purge must be booleans and cannot both be true.", 400);
+  }
+  if (payload === null || payload === undefined) payload = {};
   const valid = validRemoveBody(payload);
-  const force = valid && payload.force === true, purge = valid && payload.purge === true;
+  const body = (valid ? payload : {}) as Record<string, unknown>;
+  const force = valid && body.force === true, purge = valid && body.purge === true;
   // ocx link revoke --operation-id (structure/remote-link.md, "Operation journal"): a recorded revoke replays even
   // after its link is gone, under the lock of the alias it recorded.
-  const operation = valid && typeof payload.operationId === "string" ? { id: payload.operationId, digest: revokeOperationDigest({ linkId: id, purge, force }) } : null;
+  const operation = valid && typeof body.operationId === "string" ? { id: body.operationId, digest: revokeOperationDigest({ linkId: id, purge, force }) } : null;
   if (operation) {
     let recordedAlias: string | undefined;
     try { recordedAlias = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id)?.alias; } catch {
@@ -247,13 +260,14 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       // Another write may prune the entry between that read and the replay: then this is a first revoke after all,
       // run below once the replay has released the alias lock.
       const notRecorded = new Response(null, { status: 204 });
-      const replayed = await underAliasLock(ctx, recordedAlias, true, async () => (await replayOperation(ctx, state, operation, "revoke")) ?? notRecorded);
+      const replayed = await underAliasLock(ctx, recordedAlias, true, async () =>
+        (await resumeRetirementBeforeReplay(ctx, state, id, operation, force, purge, true)) ?? (await replayOperation(ctx, state, operation, "revoke")) ?? notRecorded);
       if (replayed !== notRecorded) return replayed;
     }
   }
-  const current = readStoreFor(ctx);
-  const record = current.links.find(link => link.id === id);
-  if (!record) return fail("link_not_found", "The link was not found.", 404);
+  // An interrupted removal resumes from its retirement receipt even after the record is gone.
+  const target = readRemovalTarget(ctx, id);
+  if ("response" in target) return target.response;
   // A queued or running job would keep opening SSH sessions to a Child this removal disconnects, so removal takes the
   // link's job admission lock before its first teardown await and holds it to the end: a job submitted meanwhile gets
   // 409 (single link) or a busy item, and a link a job already holds is refused here, before anything is stopped.
@@ -265,26 +279,75 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   try {
     // Enrollment and revoke of one alias are serialized: a force revoke cannot run between a purge and its receipt.
     // Also whenever a tombstone names this alias: recover may run against that machine under the alias lock.
-    const admitted = operation !== null || journalInUse(ctx) || tombstoneNamesAlias(record.alias);
+    const admitted = operation !== null || journalInUse(ctx) || tombstoneNamesAlias(target.record.alias);
     // A journalled revoke, and every revoke once this Home journals, also takes the per-alias operation set that apply
     // holds for its whole run, so an apply and a revoke of one alias never overlap in this runtime.
-    const exclusive = (action: () => Promise<Response>) => admitted ? serialized(state, record.alias, action) : action();
-    return await underAliasLock(ctx, record.alias, admitted, () => exclusive(async () => {
+    const exclusive = (action: () => Promise<Response>) => admitted ? serialized(state, target.record.alias, action) : action();
+    return await underAliasLock(ctx, target.record.alias, admitted, () => exclusive(async () => {
       if (operation) {
+        const resumed = await resumeRetirementBeforeReplay(ctx, state, id, operation, force, purge, false);
+        if (resumed) return resumed;
         const replay = await replayOperation(ctx, state, operation, "revoke");
         if (replay) return replay;
       }
-      const open = openRevokeConflict(ctx, id, operation?.id, force && operation === null);
-      if (open) return open;
-      const fresh = readStoreFor(ctx).links.find(link => link.id === id);
-      if (!fresh) return fail("link_not_found", "The link was not found.", 404);
-      let journal: RevokeJournal = NO_REVOKE_JOURNAL;
-      if (operation) {
-        try { journal = openRevokeJournal(ctx, operation, fresh.alias, id); } catch (error) {
-          return journalOpenFailure(error);
+      // A plain --force may finish any receipt (foreignRetirement). Its refusals run first, before anything changes. Then its
+      // owner, if open or unknown, is fenced for the whole takeover (fenceRetirementOwnerForForce) and the receipt is disowned,
+      // so the owner is never credited with this removal and a link the force could not remove stays suspended; a takeover
+      // that stops before its removal begins restores the owner as it was. A damaged journal does not stop a plain force
+      // (as on dev): its owner cannot be fenced, but the receipt is still disowned. A readable journal whose owner cannot
+      // be fenced refuses before the receipt changes hands.
+      const plainForce = !operation && force;
+      let forceReceipt: ReturnType<typeof readLinkRetirement> = null;
+      let ownerId: string | undefined;
+      let journalReadable = true;
+      if (plainForce) {
+        try { forceReceipt = readLinkRetirement(id); } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
+        if (forceReceipt) {
+          try { ownerId = retirementOwner(readOperationsJournal(journalPathFor(ctx)), forceReceipt, true)?.operationId; } catch { journalReadable = false; }
         }
       }
-      try { return await journal.finish(await removeReserved(ctx, state, id, fresh, force, purge, journal)); } finally { journal.release(); }
+      const open = openRevokeConflict(ctx, id, operation?.id ?? ownerId, plainForce);
+      if (open) return open;
+      let fresh = readRemovalTarget(ctx, id);
+      if ("response" in fresh) return fresh.response;
+      const owned = foreignRetirement(ctx, fresh.receipt, operation?.id, force);
+      if (owned) return owned;
+      let takeover: ForceTakeover | null = null;
+      let disownedReceipt: LinkRetirement | null = null;
+      try {
+        if (plainForce && forceReceipt) {
+          if (journalReadable) {
+            try { takeover = fenceRetirementOwnerForForce(ctx, forceReceipt); } catch {
+              return fail("operation_journal_failed", "The unfinished revoke that owns this link's removal could not be settled; nothing was changed. Retry the request.", 500);
+            }
+          }
+          let disowned: boolean;
+          try {
+            if (forceReceipt.operationId === undefined) disowned = true;
+            else { disownedReceipt = disownLinkRetirement(forceReceipt); disowned = disownedReceipt !== null; }
+          } catch { disowned = false; }
+          if (!disowned) return fail("link_changed", "The link changed during removal.", 409);
+          fresh = readRemovalTarget(ctx, id);
+          if ("response" in fresh) return fresh.response;
+        }
+        let journal: RevokeJournal = takeover?.journal ?? NO_REVOKE_JOURNAL;
+        if (operation) {
+          try { journal = openRevokeJournal(ctx, operation, fresh.record.alias, id); } catch (error) {
+            return journalOpenFailure(error);
+          }
+        }
+        try { return await journal.finish(await removeReserved(ctx, state, id, fresh.record, fresh.receipt, force, purge, journal)); } finally { journal.release(); }
+      } finally {
+        if (takeover) {
+          if (takeover.began) {
+            try { takeover.settle(); } catch { /* the owner stays open: suspended, and replayed on repeat */ }
+          } else {
+            // The removal never reached the tunnel: the receipt goes back to its owner and the owner is restored as it was.
+            try { if (disownedReceipt && forceReceipt?.operationId) reownLinkRetirement(disownedReceipt, forceReceipt.operationId); } catch { /* a plain force can still finish it */ }
+            try { takeover.abandon(); } catch { /* the owner stays open: suspended, and replayed on repeat */ }
+          }
+        }
+      }
     }));
   } finally { releaseLink(); }
 }
@@ -299,7 +362,122 @@ function lastStderrReason(stderr: string): string | undefined {
   } catch { return undefined; }
 }
 
-async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id: string, record: LinkStore["links"][number], force: boolean, purge: boolean, journal: RevokeJournal): Promise<Response> {
+const removalMode = (force: boolean, purge: boolean): LinkRetirementMode => force ? "force" : purge ? "purge" : "disconnect";
+
+/**
+ * A fresh removal that meets an interrupted removal's receipt continues it only under the same identity (#8416).
+ * While the owning entry is journalled, only that operation continues it (its replay resumes the receipt and settles
+ * the entry from its own evidence); anything else would be credited with a removal, or a Child purge, it never ran
+ * and would clear the receipt the owner settles from. A receipt with no owner, or whose owning entry the journal has
+ * pruned, has no evidence any new journal entry could truthfully settle from, not even one reusing the old id: only a
+ * plain revoke, which writes no journal and claims no outcome, may finish it.
+ * A plain --force may finish any receipt: it removes the link and its key locally, claims no Child cleanup, writes no
+ * journal and leaves an owning entry with the outcome it recorded. It is the way out when the recorded cleanup cannot
+ * be repeated (a purge already removed the Child's executable).
+ */
+function foreignRetirement(ctx: ManagementContext, receipt: ReturnType<typeof readLinkRetirement>, operationId: string | undefined, force: boolean): Response | null {
+  if (!receipt || (operationId === undefined && force)) return null;
+  let ownerJournalled = false;
+  if (receipt.operationId !== undefined) {
+    try { ownerJournalled = retirementOwner(readOperationsJournal(journalPathFor(ctx)), receipt) !== undefined; } catch {
+      return journalUnreadable();
+    }
+  }
+  if (ownerJournalled) {
+    return receipt.operationId === operationId ? null
+      : fail("link_retirement_owned", `This link's removal was interrupted under operation ${receipt.operationId}; repeat it with --operation-id ${receipt.operationId} to finish it, or remove it locally with --force and no --operation-id.`, 409);
+  }
+  return operationId === undefined ? null
+    : fail("link_retirement_owned", "This link's removal was interrupted with no journalled operation left to settle it; repeat ocx link revoke without --operation-id (with --force if its Child cleanup cannot run again) to finish it.", 409);
+}
+
+/**
+ * Before a recorded revoke replays its outcome, finish the retirement it left behind (#8416). A revoke interrupted
+ * after its record removal, or one whose post-commit cleanup failed, would otherwise replay as committed (or unknown)
+ * with the retired device's route intent, the listener reconciliation and the receipt still pending. The cleanup
+ * resumes in the receipt's own mode; once it finishes, a revoke whose removal intent preceded the record's
+ * disappearance is settled as committed. Returns the cleanup's failure, or null to replay.
+ *
+ * A resume takes the link's Child-job reservation first (unless the caller already holds it), as a fresh removal
+ * does: a job admitted after the restart must not run while the resume revokes its key. While the record is still
+ * listed (the process died after claiming the receipt), the resumed revoke and removal are marked on this entry.
+ * Only this operation's own receipt, in the mode it asked for, is resumed: a receipt another removal claimed
+ * (another operation, or none) leaves the recorded outcome to replay as it stands.
+ */
+async function resumeRetirementBeforeReplay(
+  ctx: ManagementContext, state: LinkRouteState, id: string, operation: { id: string; digest: string }, force: boolean, purge: boolean, reserve: boolean,
+): Promise<Response | null> {
+  let receipt: ReturnType<typeof readLinkRetirement>;
+  let recordListed: boolean;
+  try {
+    const op = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id);
+    if (!op || op.kind !== "revoke" || op.digest !== operation.digest || op.linkId !== id) return null;
+    receipt = readLinkRetirement(id);
+    recordListed = readStoreFor(ctx).links.some(link => link.id === id);
+  } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
+  // A plain --force took this operation's receipt over and stopped (or died) before committing anything: the record is still
+  // listed and its key still present, so the force removed nothing and this operation takes its receipt back and finishes
+  // from its own evidence. Once the force has revoked the key or removed the record, the receipt stays the force's.
+  if (receipt && receipt.operationId === undefined && receipt.formerOwner === operation.id && receipt.mode === removalMode(force, purge)
+    && recordListed && (ctx.config.apiKeys ?? []).some(key => key.id === receipt!.link.apiKeyId)) {
+    try {
+      if (reownLinkRetirement(receipt, operation.id)) receipt = readLinkRetirement(id);
+    } catch { return fail("link_remove_failed", "The link retirement could not be updated.", 503); }
+  }
+  // Another identity's receipt is left alone; replay then cannot settle committed while it is outstanding (recoverRevoke).
+  if (!receipt || receipt.operationId !== operation.id || receipt.mode !== removalMode(force, purge)) return null;
+  let releaseLink: (() => void) | null = null;
+  if (reserve) {
+    const { childOpsEngineFor } = await import("./link-child-ops-routes");
+    releaseLink = childOpsEngineFor(state).reserve(id);
+    if (!releaseLink) return fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409);
+  }
+  try {
+    const resumed = await removeReserved(ctx, state, id, receipt.link, receipt, force, purge, resumedRevokeJournal(ctx, operation.id, recordListed));
+    if (resumed.status === 200) return null;
+    try { await settleResumedRevoke(ctx, operation.id, resumed); } catch { /* the entry stays open: suspended, and replayed on repeat */ }
+    return resumed;
+  } finally { releaseLink?.(); }
+}
+
+/** The link a removal acts on: its retirement receipt (an interrupted removal) or its stored record. */
+function readRemovalTarget(ctx: ManagementContext, id: string):
+  | { record: LinkStore["links"][number]; receipt: ReturnType<typeof readLinkRetirement> }
+  | { response: Response } {
+  let receipt: ReturnType<typeof readLinkRetirement>;
+  let found: LinkStore["links"][number] | undefined;
+  try {
+    receipt = readLinkRetirement(id);
+    found = readStoreFor(ctx).links.find(link => link.id === id);
+  } catch { return { response: fail("link_remove_failed", "The link retirement could not be read.", 503) }; }
+  if (!found && !receipt) return { response: fail("link_not_found", "The link was not found.", 404) };
+  if (receipt && found && JSON.stringify(found) !== JSON.stringify(receipt.link)) return { response: fail("link_changed", "The link changed during removal.", 409) };
+  return { record: receipt?.link ?? { ...found! }, receipt };
+}
+
+
+async function removeReserved(
+  ctx: ManagementContext,
+  state: LinkRouteState,
+  id: string,
+  record: LinkStore["links"][number],
+  initialReceipt: ReturnType<typeof readLinkRetirement>,
+  force: boolean,
+  purge: boolean,
+  journal: RevokeJournal,
+): Promise<Response> {
+  let receipt = initialReceipt;
+  // A receipt is never evidence that the Child was cleaned up (#8416): while the record is listed the cleanup runs
+  // again unless the owning journal entry recorded it (cleanupRecorded), as a removal on dev always runs it. Once the
+  // record is gone the commit already followed a cleanup, and the receipt only drives the local post-commit work.
+  let listed: boolean;
+  try { listed = readStoreFor(ctx).links.some(link => link.id === id); } catch { return fail("link_remove_failed", "The link store could not be read.", 503); }
+  const cleanupDone = receipt !== null && (!listed || cleanupRecorded(ctx, receipt));
+  // A retry asking for another cleanup than the one the receipt stands for, where that cleanup will not run again, would
+  // report success without it, so it is refused before anything is stopped. --force asks for no cleanup and is allowed.
+  if (receipt && cleanupDone && !force && record.direction === "hub-initiated" && (receipt.mode ?? "force") !== removalMode(force, purge)) {
+    return fail("link_retirement_mode_mismatch", `This link's removal was interrupted after its ${receipt.mode ?? "force"} cleanup; repeat it with the same options, or with --force, to finish it.`, 409);
+  }
   // An intent that cannot be written stops the revoke before its effect, answered with the operation id.
   const journalFailed = (): Response => Response.json({
     error: { code: "operation_journal_failed", message: "The link operation journal could not be written; the step after it did not run." },
@@ -308,11 +486,13 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
   const intend = (effect: "remote_cleanup" | "key_revoked" | "record_removed"): boolean => {
     try { journal.intent(effect); return true; } catch { return false; }
   };
-  const cleanup = !force && record.direction === "hub-initiated";
+  const cleanup = !cleanupDone && !force && record.direction === "hub-initiated";
   // A forced revoke leaves an ephemeral Child uncleaned. Its tombstone is durable before the first intent (key_revoked
   // for a force revoke) and before the tunnel stops, so ocx link recover can still reach and clean that machine;
   // without it, refuse with nothing touched.
-  const tombstoned = force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
+  // Only a forced revoke that will remove a still-listed record writes one: a resumed retirement whose record is already
+  // gone relies on the tombstone the original force wrote (#8416), and must not recreate one recover may have settled.
+  const tombstoned = force && listed && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
   // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: a later
   // ordinary revoke would otherwise leave one no recover can settle. Only that exact tombstone, and
   // only while the link still exists: another process may have committed its own forced revoke.
@@ -346,7 +526,7 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
   // Set when this revoke restarts the tunnel itself after a cleanup that never ran; every other way out leaves it down.
   let restarted = false;
   try {
-    await state.supervisor.stopLink(id);
+    if (listed) await state.supervisor.stopLink(id);
     const restartTunnel = async (): Promise<void> => {
       restarted = true;
       release?.();
@@ -362,7 +542,8 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     // or purged the Child, so a journalled revoke leaves the tunnel down, unknown, and the supervisor keeps it down until
     // the operation is resolved (revokeSuspendsLink). A plain revoke restarts the tunnel either way, as before.
     const cleanupFailed = async (failure: Response, attempted: boolean): Promise<Response> => {
-      if (attempted && journal.operationId !== undefined) return failure;
+      // A resumed retirement keeps the tunnel down even when this attempt never ran: an earlier one may have (keepsTunnelDown).
+      if ((attempted || journal.keepsTunnelDown) && journal.operationId !== undefined) return failure;
       if (!attempted) journal.cleanupNotRun();
       await restartTunnel();
       return failure;
@@ -426,35 +607,66 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
       }
     }
     if (cleanup && !intend("key_revoked")) return journalFailed();
-    if (!revokeKeyIdempotent(ctx, record.apiKeyId)) {
-      dropOwnTombstone();
-      return fail("key_revoke_failed", "The link key could not be revoked.", 502);
-    }
-    journal.done("key_revoked");
-    // The link stays when its record cannot be marked for removal, so the tombstone this revoke wrote goes too.
-    if (!intend("record_removed")) { dropOwnTombstone(); return journalFailed(); }
-    let next: LinkStore;
     try {
-      next = withConfigMutationLockSync(() => {
+      if (!receipt) {
+        try { receipt = claimLinkRetirement(record, undefined, () => readStoreFor(ctx), removalMode(force, purge), journal.operationId); }
+        catch {
+          const latest = readStoreFor(ctx).links.find(link => link.id === id);
+          if (!latest || JSON.stringify(latest) !== JSON.stringify(record)) {
+            // A journalled revoke whose Child cleanup ran (or a resumed one) leaves the tunnel down: the Child may already be
+            // disconnected or purged, and the revoke settles unknown, which keeps the link suspended. A plain revoke, or one
+            // that ran no cleanup, restarts it as before.
+            if (!((cleanup || journal.keepsTunnelDown) && journal.operationId !== undefined)) await restartTunnel();
+            dropOwnTombstone();
+            return fail("link_changed", "The link changed during removal.", 409);
+          }
+          dropOwnTombstone();
+          return fail("link_remove_failed", "The link retirement could not be claimed.", 503);
+        }
+      }
+      const owner = receipt;
+      // The key revoke and the record removal commit in one locked step; the operation journal (its own writes take the
+      // same, reentrant lock) records each intent before its effect and each completion after it.
+      const result = withConfigMutationLockSync(() => {
+        const currentReceipt = readLinkRetirement(id);
+        if (!currentReceipt || currentReceipt.nonce !== owner.nonce || JSON.stringify(currentReceipt.link) !== JSON.stringify(owner.link)) return "changed" as const;
         const latest = readStoreFor(ctx);
-        const filtered = { ...latest, links: latest.links.filter(link => link.id !== id) };
-        if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
-        return filtered;
+        const active = latest.links.find(link => link.id === id);
+        if (active && JSON.stringify(active) !== JSON.stringify(record)) return "changed" as const;
+        if (active && (ctx.config.apiKeys ?? []).some(key => key.id === record.apiKeyId) && !revokeKeyIdempotent(ctx, record.apiKeyId)) return "revoke_failed" as const;
+        journal.done("key_revoked");
+        if (!intend("record_removed")) return "journal_failed" as const;
+        if (active) writeStoreFor(ctx, { ...latest, links: latest.links.filter(link => link.id !== id) });
+        journal.done("record_removed");
+        reconcileHomeRouteDevices(readStoreFor(ctx).links.map(link => link.id));
+        return "ok" as const;
       });
+      // A revoke that does not commit keeps the link, so the tombstone it wrote goes too (only while the link still exists).
+      if (result !== "ok") dropOwnTombstone();
+      if (result === "journal_failed") return journalFailed();
+      if (result === "changed") return fail("link_changed", "The link changed during removal.", 409);
+      if (result === "revoke_failed") return fail("key_revoke_failed", "The link key could not be revoked.", 502);
+      // A revoke whose Child confirmed this link (--expect-link) and cleaned itself settles any tombstone an earlier forced
+      // revoke of this link left; an unbound answer (an older Child) leaves it for ocx link recover.
+      if (!force && linkBound) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
+      // Same task as the commit: an open link WebSocket must not outlive its link (design T4 2.4).
+      state.listener.closeLinkSockets?.(id);
+      clearCompensationFailed(id, compensationPath());
+      state.compensationFailures?.delete(id);
+      await state.supervisor.reload();
+      await reconcileLinkListener(ctx, state.listener);
+      try { journal.beforeReceiptCleared?.(); } catch {
+        return fail("operation_journal_failed", "The link removal finished, but its operation journal could not be updated; repeat the request.", 500);
+      }
+      if (!clearLinkRetirement(owner, undefined, () => !readStoreFor(ctx).links.some(link => link.id === id))) return fail("link_remove_failed", "The link retirement changed during removal.", 503);
     } catch {
       dropOwnTombstone();
+      // The record can already be gone when a later step (route-intent reconciliation, the
+      // listener) fails. Its sockets close then too, in this task, rather than at the next sweep.
+      try { if (!readStoreFor(ctx).links.some(link => link.id === id)) state.listener.closeLinkSockets?.(id); }
+      catch { /* the store is unreadable; the per-message reauthorization still refuses its frames */ }
       return fail("link_remove_failed", "The link record could not be removed.", 503);
     }
-    journal.done("record_removed");
-    // A revoke whose Child confirmed this link (--expect-link) and cleaned itself settles any tombstone an earlier forced
-    // revoke of this link left; an unbound answer (an older Child) leaves it for ocx link recover.
-    if (!force && linkBound) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
-    // Same task as the commit, before any fallible cleanup: an open link WebSocket must not outlive its link (design T4 2.4).
-    state.listener.closeLinkSockets?.(id);
-    try { clearCompensationFailed(id, compensationPath()); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
-    state.compensationFailures?.delete(id);
-    await state.supervisor.reload();
-    if (next.links.length === 0) await state.listener.close();
     return Response.json({ linkId: id });
   } finally {
     // The hold goes before finish writes the outcome. A revoke that leaves the tunnel down drops its live mark first, so a
