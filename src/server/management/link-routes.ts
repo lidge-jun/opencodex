@@ -8,7 +8,7 @@ import { requireRemotePlatform } from "../../link/remote-platform";
 import { CHILD_USAGE_EXIT, classifyBoundRefusal, purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
-import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
+import { LinkTombstoneLimitError, readTombstones, recordTombstone, removeOwnTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { effectiveLinkRoutes, newLinkId, type LinkStore } from "../../link/store";
 import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, reownLinkRetirement, type LinkRetirement, type LinkRetirementMode } from "../../link/retirement";
@@ -494,6 +494,8 @@ async function removeReserved(
     const own = written;
     try { withConfigMutationLockSync(() => { removeOwnTombstone(own, readStoreFor(ctx).links.some(link => link.id === id), tombstonesPath()); }); } catch { /* the link remains; recover refuses link_present */ }
   };
+  // The tombstone this forced revoke needs when its record goes; the commit step makes sure one is there.
+  let needed: LinkTombstone | null = null;
   if (tombstoned && record.hostKeyFingerprint) {
     const tombstone: LinkTombstone = {
       linkId: id, alias: record.alias, hostKeyFingerprint: record.hostKeyFingerprint,
@@ -504,6 +506,7 @@ async function removeReserved(
       revokedAt: new Date((ctx.deps.now ?? Date.now)()).toISOString(),
       attempt: randomBytes(8).toString("hex"),
     };
+    needed = tombstone;
     // A tombstone already there for this link (a forced revoke in flight in another runtime, or one that died) is kept,
     // and this attempt owns none: it then has nothing to drop if it does not commit.
     try { if (withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())) === "recorded") written = tombstone; } catch (error) {
@@ -636,6 +639,12 @@ async function removeReserved(
         const latest = readStoreFor(ctx);
         const active = latest.links.find(link => link.id === id);
         if (active && JSON.stringify(active) !== JSON.stringify(record)) return "changed" as const;
+        // A tombstone this attempt kept may have been dropped since by its owner, a forced revoke that failed in another
+        // runtime. Under the lock that removes the record, before the key goes, one must be there: else this attempt
+        // writes its own (and owns it), or stops with the link and key intact.
+        if (active && needed && !readTombstones(tombstonesPath()).tombstones.some(t => t.linkId === id)) {
+          try { if (recordTombstone(needed, tombstonesPath()) === "recorded") written = needed; } catch { return "tombstone_failed" as const; }
+        }
         if (active && (ctx.config.apiKeys ?? []).some(key => key.id === record.apiKeyId) && !revokeKeyIdempotent(ctx, record.apiKeyId)) return "revoke_failed" as const;
         journal.done("key_revoked");
         if (!intend("record_removed")) return "journal_failed" as const;
@@ -648,6 +657,7 @@ async function removeReserved(
       if (result !== "ok") dropOwnTombstone();
       if (result === "journal_failed") return journalFailed();
       if (result === "changed") return fail("link_changed", "The link changed during removal.", 409);
+      if (result === "tombstone_failed") return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
       if (result === "revoke_failed") return fail("key_revoke_failed", "The link key could not be revoked.", 502);
       committed = true;
       // Same task as the commit: an open link WebSocket must not outlive its link (design T4 2.4).

@@ -585,6 +585,19 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     expect(tombstones()).toEqual([t0]);
   });
 
+  // The reverse ordering: F1 keeps F0's T0, then F0 fails while the link is listed and drops T0, then F1 commits. The
+  // commit re-establishes a tombstone under the same lock as the record removal, so the Child keeps its evidence.
+  test("a forced revoke whose kept tombstone was dropped by its failed owner writes its own at the commit", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    recordTombstone(t0);
+    const h = harness([link()], { duringStop: () => { removeTombstone(ID); } });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect(res.status).toBe(200);
+    expect(h.store.links).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+    expect(tombstones()[0]?.attempt).not.toBe(t0.attempt);
+  });
+
   test("a forced revoke that commits beside an existing tombstone for its link keeps that one", async () => {
     const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
     recordTombstone(t0);
