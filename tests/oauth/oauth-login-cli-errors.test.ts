@@ -97,6 +97,32 @@ for (const scenario of [
   });
 }
 
+test("a refused xAI redirect is a definitive failure, not network_error", async () => {
+  // `redirect: "error"` makes fetch throw instead of returning a response. That throw carries no
+  // HTTP status, so the status-less branch used to label it `network_error` — advice to retry a
+  // request the client will always refuse. The message and cause must stay off the terminal: Bun's
+  // TypeError embeds the target URL, and the device-poll body carries the `device_code`.
+  const { stdout, stderr, code } = await runLoginChild(`
+    import { handleLogin } from ${moduleUrl("oauth", "login-cli.ts")};
+    import { OAUTH_PROVIDERS } from ${moduleUrl("oauth", "index.ts")};
+    import { XaiRedirectRefusedError } from ${moduleUrl("oauth", "xai.ts")};
+    const url = "https://auth.x.ai/oauth2/token?device_code=${marker}";
+    OAUTH_PROVIDERS.xai.login = async () => {
+      const error = new XaiRedirectRefusedError();
+      // A cause the public reporter must never echo, mirroring the runtime's redirect TypeError.
+      Object.defineProperty(error, "cause", { value: new TypeError(\`UnexpectedRedirect fetching "\${url}"\`) });
+      throw error;
+    };
+    await handleLogin("xai", { ask: async () => "" });
+  `);
+  expect(code).toBe(1);
+  expect(stderr.trim()).toBe(`❌ OAuth login failed (oauth_authentication_failed): ${publicMessage}`);
+  expect(stderr).not.toContain(marker);
+  expect(stderr).not.toContain("UnexpectedRedirect");
+  expect(stderr).not.toContain("network_error");
+  expect(stdout).not.toContain("Logged in");
+});
+
 test("Antigravity discovery diagnostics survive CLI reporting without provider text", async () => {
   const { stdout, stderr, code } = await runLoginChild(`
     import { handleLogin } from ${moduleUrl("oauth", "login-cli.ts")};

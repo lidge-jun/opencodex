@@ -1284,7 +1284,7 @@ test("the route refuses a self-unload before the manager is touched", () => {
     expect(handler).toContain('code: "self_unload_service"');
     // Same invariant the Windows guard carries: refuse BEFORE acting, and say so.
     expect(handler.indexOf('code: "self_unload_service"'))
-      .toBeLessThan(handler.indexOf("stopServiceIfInstalledDetailed()"));
+      .toBeLessThan(handler.indexOf("routeServiceStop(url, holdsReceipt)"));
     const branch = handler.slice(handler.indexOf('code: "self_unload_service"'), handler.indexOf('code: "self_unload_service"') + 600);
     expect(branch).toContain("Nothing was changed.");
     expect(branch).toContain("ocx stop");

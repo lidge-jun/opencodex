@@ -22,11 +22,14 @@ export const XAI_LOCAL_CLI_DETACH_WARNING =
 interface XaiDiscovery {
   authorizationEndpoint: string;
   tokenEndpoint: string;
+  /** RFC 8628 endpoint, when the issuer advertises one. */
+  deviceAuthorizationEndpoint?: string;
 }
 
 interface XaiDiscoveryPayload {
   authorization_endpoint?: unknown;
   token_endpoint?: unknown;
+  device_authorization_endpoint?: unknown;
 }
 
 export interface XaiTokenPayload {
@@ -69,12 +72,17 @@ function validateXaiEndpoint(rawUrl: string): string {
 }
 
 export async function discoverXaiOAuthEndpoints(signal?: AbortSignal): Promise<XaiDiscovery> {
-  const response = await fetch(XAI_OAUTH_DISCOVERY_URL, {
-    headers: { Accept: "application/json" },
-    signal: requestSignal(signal),
-  });
+  let response: Response;
+  try {
+    response = await fetch(XAI_OAUTH_DISCOVERY_URL, {
+      headers: { Accept: "application/json" },
+      signal: requestSignal(signal),
+    });
+  } catch (error) {
+    throw new XaiTokenRequestError(undefined, undefined, "xAI OAuth discovery failed: network error", { cause: error });
+  }
   if (!response.ok) {
-    throw new Error(`xAI OAuth discovery failed: ${response.status} ${await response.text()}`);
+    throw new XaiTokenRequestError(response.status, undefined, `xAI OAuth discovery failed: ${response.status} ${await response.text()}`);
   }
 
   const payload = (await response.json()) as XaiDiscoveryPayload;
@@ -85,6 +93,9 @@ export async function discoverXaiOAuthEndpoints(signal?: AbortSignal): Promise<X
   return {
     authorizationEndpoint: validateXaiEndpoint(payload.authorization_endpoint),
     tokenEndpoint: validateXaiEndpoint(payload.token_endpoint),
+    ...(typeof payload.device_authorization_endpoint === "string"
+      ? { deviceAuthorizationEndpoint: validateXaiEndpoint(payload.device_authorization_endpoint) }
+      : {}),
   };
 }
 
@@ -107,8 +118,56 @@ function getTokenIdentity(accessToken: string, idToken: string | undefined): { a
   return { accountId, email };
 }
 
-export class XaiTokenRequestError extends Error { constructor(public readonly status?:number,public readonly oauthError?:string,message="xAI token request failed",options?:{cause?:unknown}){super(message,options);this.name="XaiTokenRequestError";} }
-export interface XaiTokenRetryDeps { sleep?:(ms:number)=>Promise<void>; random?:()=>number }
+export class XaiTokenRequestError extends Error {
+  constructor(
+    public readonly status?: number,
+    public readonly oauthError?: string,
+    message = "xAI token request failed",
+    options?: { cause?: unknown },
+    /** Server-requested throttle from a retryable response, already floored and finite. */
+    public readonly retryAfterMs?: number,
+  ) {
+    super(message, options);
+    this.name = "XaiTokenRequestError";
+  }
+}
+
+/**
+ * The endpoint answered with a redirect while the caller asked `redirect: "error"`.
+ *
+ * Non-retriable by construction: replaying the request would send the same body to a host
+ * `validateXaiEndpoint` never approved. The message is fixed on purpose. Bun's redirect
+ * `TypeError` embeds the target URL in its text, and the poll body carries the
+ * bearer-equivalent `device_code`, so neither may reach a log, an error `cause`, a login
+ * status payload, or the terminal.
+ */
+export class XaiRedirectRefusedError extends XaiTokenRequestError {
+  constructor() {
+    super(undefined, undefined, "xAI token request refused a redirect");
+    this.name = "XaiRedirectRefusedError";
+  }
+}
+
+/**
+ * True when `fetch` refused a redirect because this caller passed `redirect: "error"`.
+ *
+ * The two runtimes signal it differently and both were checked against a real local server:
+ * Bun throws `TypeError` with `code: "UnexpectedRedirect"`; Node/undici throws
+ * `TypeError("fetch failed")` whose `cause` is `Error("unexpected redirect")`. Matching exactly
+ * keeps a programming `TypeError` (no marker) and a real connection failure (Bun
+ * `ECONNREFUSED`/`ENOTFOUND`, undici's own cause text) retriable.
+ */
+function isRedirectRefusal(error: unknown): boolean {
+  if (!(error instanceof TypeError)) return false;
+  if ((error as { code?: unknown }).code === "UnexpectedRedirect") return true;
+  const cause = (error as { cause?: unknown }).cause;
+  return cause instanceof Error && cause.message === "unexpected redirect";
+}
+export interface XaiTokenRetryDeps { sleep?:(ms:number)=>Promise<void>; random?:()=>number; /** Default 3; the device poll sends one request per interval. */ maxAttempts?:number; /**
+ * Fetch redirect policy. Inherited callers keep the runtime default (follow); the device poll sets
+ * `error` because its body carries the RFC 8628 `device_code`, a bearer-equivalent secret that must
+ * not be re-POSTed to a redirect target. A 307/308 preserves the method and body.
+ */ redirect?:RequestRedirect }
 const IMF_FIXDATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
 const RFC850_DATE_RE = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
 const ASCTIME_DATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( \d|\d{2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/i;
@@ -185,7 +244,7 @@ function parseRetryAfterMs(retryAfter: string | null): number | undefined {
   const text = retryAfter?.trim();
   if (!text) return undefined;
   if (/^\d+(?:\.\d+)?$/.test(text)) {
-    const ms = Math.ceil(Number(text) * 1000);
+    const ms = Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(Number(text) * 1000));
     return ms > 0 ? ms : undefined;
   }
   const now = Date.now();
@@ -231,30 +290,34 @@ async function sleepAbortable(
     signal.removeEventListener("abort", onAbort);
   }
 }
-async function readTokenError(response:Response):Promise<XaiTokenRequestError>{let oauthError:string|undefined,detail="";try{const body=await response.json() as {error?:unknown;error_description?:unknown};if(typeof body.error==="string")oauthError=body.error;if(typeof body.error_description==="string")detail=body.error_description;}catch{/* non-JSON error body: fall through to the generic message */}const suffix=detail?`: ${detail}`:oauthError?`: ${oauthError}`:"";return new XaiTokenRequestError(response.status,oauthError,`xAI token request failed: ${response.status}${suffix}`);}
+async function readTokenError(response:Response):Promise<XaiTokenRequestError>{let oauthError:string|undefined,detail="";try{const body=await response.json() as {error?:unknown;error_description?:unknown};if(typeof body.error==="string")oauthError=body.error;if(typeof body.error_description==="string")detail=body.error_description;}catch{/* non-JSON error body: fall through to the generic message */}const suffix=detail?`: ${detail}`:oauthError?`: ${oauthError}`:"";const retryAfterMs=response.status===429||response.status>=500||(response.status===400&&oauthError==="slow_down")?parseRetryAfterMs(response.headers.get("retry-after")):undefined;return new XaiTokenRequestError(response.status,oauthError,`xAI token request failed: ${response.status}${suffix}`,undefined,retryAfterMs!==undefined&&Number.isFinite(retryAfterMs)?retryAfterMs:undefined);}
 export async function postXaiToken(
   tokenEndpoint: string,
   body: Record<string, string>,
   signal?: AbortSignal, deps:XaiTokenRetryDeps={},
 ): Promise<XaiTokenPayload> {
- const sleep=deps.sleep??((ms:number)=>sleepWithAbort(ms,signal)),random=deps.random??Math.random;let last:unknown;
- for(let attempt=1;attempt<=3;attempt++){let response:Response;try{response=await fetch(tokenEndpoint, {
+ const sleep=deps.sleep??((ms:number)=>sleepWithAbort(ms,signal)),random=deps.random??Math.random,max=deps.maxAttempts??3,redirect=deps.redirect;let last:unknown;
+ for(let attempt=1;attempt<=max;attempt++){let response:Response;try{response=await fetch(tokenEndpoint, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams(body).toString(),
+    ...(redirect === undefined ? {} : { redirect }),
     signal: requestSignal(signal),
   });}catch(error){
   if(signal?.aborted)throw error;
   const name=(error as {name?:string}|undefined)?.name;
   if(name==="AbortError"||name==="TimeoutError")throw error;
+  // A refused redirect is deterministic: the same body replayed reaches the same answer, and
+  // the caller asked for `error` precisely so the request never leaves the approved endpoint.
+  if(redirect==="error"&&isRedirectRefusal(error))throw new XaiRedirectRefusedError();
   last=error;
-  if(attempt===3)throw new XaiTokenRequestError(undefined,undefined,"xAI token request failed: network error",{cause:error});
+  if(attempt===max)throw new XaiTokenRequestError(undefined,undefined,"xAI token request failed: network error",{cause:error});
   await sleepAbortable(jitterDelay(attempt,random),sleep,signal);
   continue;
-  }if(response.ok)return await response.json() as XaiTokenPayload;const error=await readTokenError(response);last=error;if(!(response.status===429||response.status>=500)||attempt===3)throw error;if(signal?.aborted)throw error;const delay=retryDelay(attempt,response.headers.get("retry-after"),random);if(delay===undefined)throw error;await sleepAbortable(delay,sleep,signal);}throw last;
+  }if(response.ok)return await response.json() as XaiTokenPayload;const error=await readTokenError(response);last=error;if(!(response.status===429||response.status>=500)||attempt===max)throw error;if(signal?.aborted)throw error;const delay=retryDelay(attempt,response.headers.get("retry-after"),random);if(delay===undefined)throw error;await sleepAbortable(delay,sleep,signal);}throw last;
 }
 
 function credentialsFromTokenPayload(payload: XaiTokenPayload, refreshFallback = ""): OAuthCredentials {
@@ -336,10 +399,181 @@ export class XaiOAuthFlow extends OAuthCallbackFlow {
   }
 }
 
+const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+/** RFC 8628 §3.2 `expires_in` default when the issuer omits it; also the fallback `interval`. */
+const XAI_DEVICE_DEFAULT_TTL_S = 900;
+const XAI_DEVICE_DEFAULT_INTERVAL_S = 5;
+/**
+ * Hard ceilings on values the issuer supplies, so a hostile or corrupt response cannot turn the
+ * poll into a hot loop or an unbounded login.
+ *
+ * `setTimeout` stores its delay in a 32-bit signed int. A larger value overflows and fires on the
+ * next tick, which is exactly a hot loop against the auth endpoint; a `0`/negative/fractional
+ * `interval` floors to ~1 ms for the same effect. So the interval is clamped into
+ * [MIN, TTL] and the grant lifetime into (0, MAX_TTL]. RFC 8628 §3.2 says the issuer supplies
+ * `interval` and `expires_in`, but sets no ceiling on either, so the values below are this client's
+ * policy rather than an RFC rule: a grant that outlives a plausible human approval at another
+ * machine is not worth holding a login open for. A grant the issuer would still honour past the
+ * ceiling ends here: pending approval reports `expired_token`, while a final transport or server
+ * failure retains its cause.
+ */
+const XAI_DEVICE_MIN_INTERVAL_MS = 1_000;
+const XAI_DEVICE_MAX_TTL_S = 30 * 60;
+
+interface XaiDeviceAuthorization {
+  device_code?: unknown;
+  user_code?: unknown;
+  verification_uri?: unknown;
+  verification_uri_complete?: unknown;
+  expires_in?: unknown;
+  interval?: unknown;
+}
+
+/** Coerce a provider-supplied seconds value to a finite, positive number, or undefined. */
+function secondsToPositive(value: unknown): number | undefined {
+  const seconds = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+}
+
+/**
+ * Poll wait in ms: floored at 1s and capped at the grant lifetime.
+ *
+ * The lifetime cap is also the overflow guard. `setTimeout` stores its delay in a 32-bit signed
+ * int, so anything above 2^31-1 ms fires on the next tick instead of waiting; a 30-minute ceiling
+ * is 1.8e6 ms, three orders of magnitude below that, and the floor keeps a `0`, negative or
+ * fractional `interval` from becoming a tight loop.
+ */
+function deviceIntervalMs(raw: unknown, ttlMs: number): number {
+  const seconds = secondsToPositive(raw) ?? XAI_DEVICE_DEFAULT_INTERVAL_S;
+  return Math.min(ttlMs, Math.max(XAI_DEVICE_MIN_INTERVAL_MS, Math.round(seconds * 1000)));
+}
+
+/** Grant lifetime in ms: defaulted when absent, capped so a login cannot run unbounded. */
+function deviceGrantTtlMs(raw: unknown): number {
+  const seconds = Math.min(secondsToPositive(raw) ?? XAI_DEVICE_DEFAULT_TTL_S, XAI_DEVICE_MAX_TTL_S);
+  return Math.round(seconds * 1000);
+}
+
+/**
+ * RFC 8628 device login, for a host whose browser cannot reach the 127.0.0.1:56121 callback:
+ * the user opens the URL in any browser, confirms the short code, and this polls for the token.
+ */
+export async function loginXaiDevice(
+  ctrl: OAuthController,
+  deps: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<OAuthCredentials> {
+  const signal = ctrl.signal;
+  const sleep = deps.sleep ?? ((ms: number) => sleepWithAbort(ms, signal));
+  const discovery = await discoverXaiOAuthEndpoints(signal);
+  if (!discovery.deviceAuthorizationEndpoint) {
+    throw new Error("xAI OAuth discovery does not advertise device authorization");
+  }
+  let response: Response;
+  try {
+    response = await fetch(discovery.deviceAuthorizationEndpoint, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: XAI_OAUTH_CLIENT_ID, scope: XAI_OAUTH_SCOPE }).toString(),
+      // The request carries the client id in its body and lands on a vetted issuer; a redirect would
+      // replay it somewhere `validateXaiEndpoint` never saw. Discovery already refused to produce a
+      // non-x.ai endpoint, so a redirect here can only be a downgrade, never a legitimate hop.
+      redirect: "error",
+      signal: requestSignal(signal),
+    });
+  } catch (error) {
+    if (isRedirectRefusal(error)) throw new XaiRedirectRefusedError();
+    throw error;
+  }
+  if (!response.ok) throw await readTokenError(response);
+  const device = (await response.json()) as XaiDeviceAuthorization;
+  const verificationUri = typeof device.verification_uri_complete === "string"
+    ? device.verification_uri_complete
+    : device.verification_uri;
+  if (
+    typeof device.device_code !== "string" || !device.device_code
+    || typeof device.user_code !== "string" || !device.user_code
+    || typeof verificationUri !== "string"
+  ) {
+    throw new Error("xAI device authorization response is incomplete");
+  }
+  // Validate before the optional call: `onAuth?.(…)` skips evaluating its argument when unset.
+  // `validateXaiEndpoint` parses the URL, which percent-encodes control characters out of the
+  // path/query. The user code is kept exact here: `deviceCode` is structured data that every login
+  // surface renders, and escaping belongs at the terminal boundary that prints it.
+  const url = validateXaiEndpoint(verificationUri);
+  ctrl.onAuth?.({
+    url,
+    instructions: `Open this URL in any browser and confirm the code ${device.user_code}.`,
+    deviceCode: device.user_code,
+  });
+  // Both bounds come from the issuer, so both are clamped before they reach a timer: an oversized
+  // `expires_in` would make `AbortSignal.timeout` and the deadline meaningless, and a tiny
+  // `interval` would poll the auth endpoint in a tight loop.
+  const ttlMs = deviceGrantTtlMs(device.expires_in);
+  const deadline = Date.now() + ttlMs;
+  let waitMs = deviceIntervalMs(device.interval, ttlMs);
+  // Wait for the next iteration. `slow_down` raises the grant interval itself; a 429/5xx
+  // `Retry-After` applies to the response that carried it, so it is held for one poll.
+  let nextWaitMs = waitMs;
+  let lastFailure: unknown;
+  for (let remaining = deadline - Date.now(); remaining > 0; remaining = deadline - Date.now()) {
+    await sleep(Math.min(nextWaitMs, remaining));
+    nextWaitMs = waitMs;
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    // One request per interval, cut off at the grant deadline; the loop owns every retry.
+    const pollSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(left)]) : AbortSignal.timeout(left);
+    try {
+      const payload = await postXaiToken(
+        discovery.tokenEndpoint,
+        { grant_type: XAI_DEVICE_GRANT, client_id: XAI_OAUTH_CLIENT_ID, device_code: device.device_code },
+        pollSignal,
+        // The device code is a bearer-equivalent secret; it must not survive a redirect hop.
+        { maxAttempts: 1, redirect: "error" },
+      );
+      return credentialsFromTokenPayload(payload);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      // Checked before the retriable branches: it subclasses `XaiTokenRequestError` with no
+      // status, which they would otherwise read as a transient network failure and poll on
+      // until the grant expires.
+      if (error instanceof XaiRedirectRefusedError) throw error;
+      if (error instanceof XaiTokenRequestError) {
+        if (error.oauthError === "slow_down") {
+          lastFailure = error.status === 400 ? undefined : error;
+          // RFC 8628 §3.5: lengthen the interval by 5s and never poll faster than before. Kept
+          // under the same ceiling so the sleep cannot overflow into an immediate retry.
+          waitMs = Math.min(ttlMs, waitMs + 5_000);
+          nextWaitMs = Math.min(ttlMs, Math.max(waitMs, error.retryAfterMs ?? 0));
+          continue;
+        }
+        // Still waiting for approval, or a network or server failure the grant can outlast.
+        const status = error.status;
+        if (error.oauthError === "authorization_pending" || status === undefined || status === 429 || status >= 500) {
+          // Only an ordinary pending answer clears the cause; a 429/5xx carrying that body is still an outage.
+          lastFailure = error.oauthError === "authorization_pending" && status === 400 ? undefined : error;
+          // The server's own throttle wins over this client's interval, but never over the
+          // grant deadline: the loop still sleeps at most what the grant has left.
+          if (error.retryAfterMs !== undefined) nextWaitMs = Math.min(ttlMs, Math.max(waitMs, error.retryAfterMs));
+          continue;
+        }
+        throw error;
+      }
+      // A timed-out poll (Bun reports it as TimeoutError or AbortError) is retried; the deadline still holds.
+      const name = (error as { name?: string } | undefined)?.name;
+      if (name === "TimeoutError" || name === "AbortError") { lastFailure = error; continue; }
+      throw error;
+    }
+  }
+  if (lastFailure) throw lastFailure;
+  throw new XaiTokenRequestError(undefined, "expired_token", "xAI device authorization expired");
+}
+
 export async function loginXai(
   ctrl: OAuthController,
-  opts?: { importLocal?: LocalTokenImportMode },
+  opts?: { importLocal?: LocalTokenImportMode; device?: boolean },
 ): Promise<OAuthCredentials> {
+  if (opts?.device) return loginXaiDevice(ctrl);
   const importLocal = opts?.importLocal ?? "off";
   if (importLocal !== "off") {
     const { detectGrokCliToken } = await import("./local-token-detect");
