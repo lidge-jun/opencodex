@@ -17,7 +17,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  * O6: a Home-initiated link may carry an explicit route {proxyCommand, user, port} and the flag
  * exclusive. The route reaches ssh on the command line, so ssh_config cannot change it.
  */
-const ROUTE: ExplicitRoute = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a9c --noise AbC+/x9= 22", user: "ubuntu", port: 22 };
+const ROUTE: ExplicitRoute = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a9c --noise noise-pub-7f3a9c 22", user: "ubuntu", port: 22 };
 const KNOWN_HOSTS = "/tmp/ocx-explicit-route/known_hosts";
 const SSH = Bun.which("ssh");
 
@@ -44,7 +44,7 @@ describe("accepted route forms", () => {
   test.each([
     ["the pen pipe command", ROUTE],
     ["a bare absolute command", { proxyCommand: "/usr/bin/nc", user: "_svc", port: 1 }],
-    ["host:port and user@host words", { proxyCommand: "/opt/bin/relay --to svc@relayhost:2222 --opt=a,b", user: "dev.user-1", port: 65535 }],
+    ["host:port and user@host words", { proxyCommand: "/opt/bin/relay --to svc@relayhost:2222 --opt=a,b --tag=a+b/c", user: "dev.user-1", port: 65535 }],
   ] as const)("%s is accepted as is", (_label, route) => {
     expect(checkExplicitRoute(route)).toEqual({ ok: true, route: { ...route } });
   });
