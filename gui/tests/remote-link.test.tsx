@@ -572,9 +572,11 @@ test("disconnect failure opens force confirmation and sends force body", async (
   await act(async () => { (confirm.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(confirm.textContent).toContain("Remove here only");
-  // The disconnect on the Child is conditional: the machine may belong to another link, a hub or another Home by now.
-  expect(confirm.textContent).toContain("still connected to this link");
-  expect(confirm.textContent).toContain("leave it as it is");
+  // No hint names a Child refusal, so the Home could not reach it.
+  expect(confirm.textContent).toContain("This machine could not reach child");
+  // The disconnect on the Child is link-bound: it acts only while the machine is connected to this link.
+  expect(confirm.textContent).toContain("disconnects only while child is connected to this link");
+  expect(confirm.querySelector("code.chip")?.textContent).toBe("ocx disconnect --expect-link lnk_0000000000000001");
   await act(async () => { (confirm.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(calls.some(call => call.method === "DELETE" && call.body === JSON.stringify({ force: true }))).toBe(true);
@@ -1267,7 +1269,7 @@ test("Ready-to-Plant, cached ephemeral, connected badges, conflict notices, and 
   // Force remove modal now points at the link-bound recover, which cleans the machine only while it still belongs to this link,
   // never at a bare ocx-child detach; the body stays the exclusive { force: true }.
   expect(confirmDialog.textContent).toContain("ocx link recover --link-id lnk_00000000000000e1");
-  expect(confirmDialog.textContent).toContain("only while it still belongs to this link");
+  expect(confirmDialog.textContent).toContain("it acts only when devbox-eph's records name this link or nothing at all");
   expect(confirmDialog.textContent).not.toContain("ocx-child detach");
   // A lightweight Child's forced removal leaves a tombstone that records the id, so the dialog does not ask to note it.
   expect(confirmDialog.textContent).not.toContain("Note the link id");
@@ -1306,30 +1308,65 @@ test("a forced removal of a full Child leaves a notice that checks the Child's l
   expect(host.querySelector(".remote-link-row")).toBeNull();
   // The row is gone, so the notice carries the id the Child must still show before anyone disconnects it there.
   const notice = host.querySelector(".remote-link-force-removed");
+  // The link-bound disconnect first; the check-then-disconnect order only for an OpenCodex older than the flag.
+  expect(notice?.textContent).toContain("disconnects only while devbox-full is connected to this link");
+  expect(notice?.textContent).toContain("An OpenCodex older than that flag refuses it before it acts on the link");
   expect(notice?.textContent).toContain("Link: " + id);
-  expect(notice?.textContent).toContain("leave it as it is");
+  expect(notice?.textContent).toContain("or its state cannot be read, leave it as it is");
   // The check and the disconnect are two commands: the notice names the window and keeps the machine of another link untouched.
   expect(notice?.textContent).toContain("an enrollment that lands between them would be removed");
   expect(notice?.textContent).toContain("do not disconnect a machine that shows another link");
-  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(["ocx connect status", "ocx disconnect"]);
+  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(["ocx disconnect --expect-link " + id, "ocx connect status", "ocx disconnect"]);
   await act(async () => { ([...notice!.querySelectorAll("button")].find(item => item.textContent === "Dismiss") as HTMLButtonElement).click(); });
   expect(host.querySelector(".remote-link-force-removed")).toBeNull();
+});
+
+test("a Child that refuses the bound disconnect opens the force dialog with its own title and reason", async () => {
+  // A link-bound refusal (#8662) comes from a Child that answered; the dialog says so instead of "could not reach", and names
+  // the reason from a closed set. A hint outside that set keeps the unreachable title.
+  for (const [hint, title, reason] of [
+    ["child_link_mismatch", "child refused to disconnect from this link", "It belongs to another link, a hub or another Home"],
+    ["child_residual", "child refused to disconnect from this link", "It keeps records it cannot restore"],
+    ["child_disconnect_pending", "child refused to disconnect from this link", "It has an unfinished disconnect it could not tie to this link"],
+    ["expect_link_unsupported", "child refused to disconnect from this link", "It runs a version older than the link check"],
+    ["ssh_failed", "This machine could not reach child", null],
+  ] as const) {
+    if (root) await act(async () => { root?.unmount(); });
+    globalThis.fetch = (async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/link/status") return response({ ...baseStatus, links: [{ id: "lnk_0000000000000001", alias: "child", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 43110, childKind: "full" }] });
+      if (init?.method === "DELETE") return response({ error: { code: "remote_disconnect_failed", hint } }, 502);
+      return response(baseStatus);
+    }) as typeof fetch;
+    const host = await mount();
+    await act(async () => { ([...host.querySelectorAll(".remote-link-row button")].find(item => item.textContent === "Disconnect") as HTMLButtonElement).click(); });
+    await flush();
+    const dialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
+    await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+    await flush();
+    expect(dialog.querySelector("#remote-link-confirm-title")?.textContent, hint).toBe(title);
+    if (reason) expect(dialog.querySelector(".remote-link-refusal")?.textContent, hint).toContain(reason);
+    else expect(dialog.querySelector(".remote-link-refusal"), hint).toBeNull();
+    expect(dialog.textContent, hint).not.toContain(hint === "ssh_failed" ? "refused to disconnect" : "could not reach");
+  }
 });
 
 test("every locale translates the forced-removal notice and keeps its command and link id slots", async () => {
   const { DICTS } = await import("../src/i18n/catalogs");
   for (const [locale, dict] of Object.entries(DICTS)) {
-    for (const key of ["remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.fullDisconnect", "remoteLink.forceRemoved.unknownCheck", "remoteLink.forceRemoved.unknownDisconnect"]) {
+    for (const key of ["remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullBound", "remoteLink.forceRemoved.fullDisconnect", "remoteLink.forceRemoved.unknownCheck", "remoteLink.forceRemoved.unknownDisconnect"]) {
       const text = (dict as Record<string, string>)[key];
       expect(typeof text, locale + " " + key).toBe("string");
       if (locale !== "en") expect(text, locale + " " + key).not.toBe((DICTS.en as Record<string, string>)[key]);
       expect(text.includes("{cmd}") && text.includes("{linkId}"), locale + " " + key).toBe(true);
     }
-    for (const key of ["remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemove.unknownBody"]) {
+    for (const key of ["remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.unknownFallback", "remoteLink.forceRemove.unknownBody",
+      "remoteLink.forceRemove.refusedTitle", "remoteLink.forceRemove.refusal.child_link_mismatch", "remoteLink.forceRemove.refusal.child_residual",
+      "remoteLink.forceRemove.refusal.child_disconnect_pending", "remoteLink.forceRemove.refusal.expect_link_unsupported"]) {
       const text = (dict as Record<string, string>)[key];
       expect(typeof text, locale + " " + key).toBe("string");
       if (locale !== "en") expect(text, locale + " " + key).not.toBe((DICTS.en as Record<string, string>)[key]);
-      expect(text.includes("{cmd}"), locale + " " + key).toBe(!key.endsWith("unknownBody"));
+      expect(text.includes("{cmd}"), locale + " " + key).toBe(!key.endsWith("unknownBody") && !key.includes("refus"));
     }
   }
 });
@@ -1339,7 +1376,8 @@ test("every locale keeps the force-remove and ownership texts' paths, commands a
   const { DICTS } = await import("../src/i18n/catalogs");
   const keys = ["remoteLink.forceRemove.body", "remoteLink.forceRemove.ephemeralBody", "remoteLink.forceRemove.unknownBody", "remoteLink.forceRemove.noteId",
     "remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.fullDisconnect", "remoteLink.forceRemoved.unknownCheck",
-    "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownDisconnect", "remoteLink.residual.ownership"];
+    "remoteLink.forceRemoved.unknownLocate", "remoteLink.forceRemoved.unknownLightweight", "remoteLink.forceRemoved.unknownDisconnect", "remoteLink.residual.ownership",
+    "remoteLink.forceRemoved.fullBound", "remoteLink.forceRemoved.unknownFallback", "remoteLink.forceRemove.refusedTitle"];
   const literals = ["{cmd}", "{alias}", "{linkId}", "Link: {linkId}", "~/.cache/opencodex/bin/ocx-child", "~/.local/bin", "PATH", "LOCALAPPDATA",
     "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where.exe ocx-child", "ocx-child connect status --json"];
   const en = DICTS.en as Record<string, string>;
@@ -1383,17 +1421,55 @@ test("a forced removal of a Child of unknown type names no command up front and 
   const notice = host.querySelector(".remote-link-force-removed");
   expect(notice?.textContent).toContain("keeps nothing to recover it from");
   expect(notice?.textContent).toContain("names link " + id);
-  expect(notice?.textContent).toContain("leave it as it is");
+  expect(notice?.textContent).toContain("or its state cannot be read, leave it as it is");
+  // Both installs' link-bound commands first (every released ocx-child parses them strictly); the check only for older builds.
+  expect(notice?.textContent).toContain("Each acts only while the machine still belongs to this link");
   expect(notice?.textContent).toContain("an enrollment that lands between them would be removed");
   expect(notice?.textContent).toContain("do not disconnect a machine that shows another link");
   // Every location the product plants or finds an ocx-child, with the planted copy kept as the example path.
   for (const where of ["~/.local/bin", "PATH", "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where.exe ocx-child"]) {
     expect(notice?.textContent, where).toContain(where);
   }
-  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([
-    "ocx connect status --json", "command -v ocx-child", "~/.cache/opencodex/bin/ocx-child connect status --json", "ocx disconnect", "~/.cache/opencodex/bin/ocx-child detach",
-  ]);
+  // No unbound ocx-child detach: its status cannot show an interrupted attach of another link, which a plain detach would
+  // restore and then remove, so an older lightweight Child is left as it is (#8691 review).
+  expect(notice?.textContent).toContain("On a lightweight Child, leave it as it is");
+  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(UNKNOWN_CHIPS(id));
   expect(notice?.textContent).not.toContain("ocx link recover");
+});
+
+const UNKNOWN_CHIPS = (id: string) => [
+  "ocx disconnect --expect-link " + id, "command -v ocx-child", "~/.cache/opencodex/bin/ocx-child detach --expect-link " + id,
+  "ocx connect status --json", "ocx disconnect",
+];
+
+test("in every locale the unknown-type notice offers no unbound ocx-child detach", async () => {
+  const id = "lnk_00000000000000d4";
+  for (const { code } of LOCALES) {
+    if (root) await act(async () => { root?.unmount(); });
+    root = null;
+    win.document.body.innerHTML = "";
+    win.localStorage.setItem("ocx-lang", code);
+    let listed = true;
+    globalThis.fetch = (async (_input, init) => {
+      if (init?.method === "DELETE") {
+        const body = init.body ? JSON.parse(String(init.body)) as { force?: boolean } : undefined;
+        if (body?.force !== true) return response({ error: { code: "remote_disconnect_failed" } }, 502);
+        listed = false;
+        return response({ linkId: id });
+      }
+      return response({ ...baseStatus, links: listed ? [{ id, alias: "devbox-old", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 24504 }] : [] });
+    }) as typeof fetch;
+    const host = await mount();
+    await act(async () => { (host.querySelector(".remote-link-row button:last-of-type") as HTMLButtonElement).click(); });
+    await flush();
+    const dialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
+    await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+    await flush();
+    await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+    await flush();
+    const notice = host.querySelector(".remote-link-force-removed");
+    expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent), code).toEqual(UNKNOWN_CHIPS(id));
+  }
 });
 
 test("a refused --purge on a full install explains why instead of a generic failure", async () => {

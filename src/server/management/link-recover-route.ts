@@ -88,7 +88,7 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
     const wanted = target.alias.toLowerCase();
     if (readStoreFor(ctx).links.some(link => link.direction === "hub-initiated"
       && [link.alias, ...effectiveLinkRoutes(link)].some(route => route.toLowerCase() === wanted))) {
-      return fail("alias_linked", "A link to this machine's alias still exists, so its Child may belong to that link. Only if that link is stale too (the machine does not run it), settle any open operation on it (ocx link operations), revoke it, then recover. If the machine runs that link, leave it: this tombstone waits until that link is removed, and recover runs then; or, once the machine is confirmed clean, a person on this Home can forget the tombstone.", 409);
+      return fail("alias_linked", "A link to this machine's alias still exists, so its Child may belong to that link. Leave that link: no status check on the machine can show it is stale, since an attach of it still in progress can show no link or an earlier one, and state that cannot be read shows none. This tombstone waits until that link is removed, and recover runs then. Revoking that link (after settling any open operation on it) ends it and disconnects the machine if the machine runs it, so do that only if you mean to end that link. A person on this Home can instead forget this tombstone once the machine is confirmed clean or gone.", 409);
     }
     const outcome = await recoverRemoteChild(runnerFor(ctx), target, knownHostsFile(ctx));
     if (!outcome.ok) return fail(outcome.code, outcome.message, outcome.status, outcome.hint);

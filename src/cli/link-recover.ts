@@ -33,9 +33,21 @@ interface WaitingTombstone { linkId: string; alias: string; revokedAt: string; r
 const invalid = (what: string): never => { throw new Error("invalid link API response: " + what); };
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
+/**
+ * alias_linked's step: the machine may run that other link now (enrolled again under this alias while the tombstone waited),
+ * and no status check proves it does not (ocx-child's status reads only state.json, so an attach in progress can show no link
+ * or an earlier one; unreadable state shows none). So the other link is left; ending it is the operator's own decision.
+ */
+const aliasLinked = (link: string): string => "another Home-initiated link still uses this machine's alias, so the Child there may belong to that link. Do not run ocx-child detach on the machine. Leave that link: no status check on the machine can show it is stale, since an attach of it still in progress can show no link or an earlier one, and state that cannot be read shows none. This tombstone waits until that link is removed, and recover runs then. Revoking that link (ocx link revoke, after settling any open operation on it: ocx link operations) ends it and disconnects the machine if the machine runs it, so do that only if you mean to end that link. A person on this Home can instead forget this tombstone (ocx link recover --forget --link-id " + link + " --yes) once the machine is confirmed clean or gone.";
+
+/**
+ * child_recover_unsupported's step: the planted ocx-child cannot bind its detach to the link, and its status cannot show an
+ * interrupted attach of another link that a plain detach would restore and then remove, so the machine is left.
+ */
+const recoverUnsupported = (link: string): string => "the planted ocx-child predates detach --expect-link, so it cannot check which link it belongs to, and nothing was changed. Do not run its plain detach on the machine: its status cannot show an interrupted attach of another link, which a plain detach would restore and then remove. Leave the machine: recover cannot confirm its cleanup with this build. Once the machine is confirmed clean or gone, a person on this Home can run ocx link recover --forget --link-id " + link + " --yes.";
+
 /** The CLI's own words for recover's refusals; any other code is shown as the code itself. */
 const RECOVER_REFUSALS: Record<string, string> = {
-  alias_linked: "another Home-initiated link still uses this machine's alias, so the Child there may belong to that link. Do not run ocx-child detach on the machine. Check which link it runs (ocx connect status --json, or the planted ocx-child's connect status --json): only if that other link is stale too (the machine does not run it), settle any open operation on it (ocx link operations), revoke it (ocx link revoke), then recover. If the machine runs that link, leave it: this tombstone waits until that link is removed, and recover runs then; or, once the machine is confirmed clean, a person on this Home can run ocx link recover --forget --link-id <id> --yes.",
   link_present: "this link still exists; revoke it (ocx link revoke, with --purge for a lightweight Child) instead.",
   link_retirement_pending: "this link's removal is unfinished; repeat ocx link revoke for it, then recover.",
   tombstone_not_found: "no forced revoke of this link is waiting for cleanup (ocx link recover --list).",
@@ -47,12 +59,16 @@ const RECOVER_REFUSALS: Record<string, string> = {
  * its hint when the hint is a plain word (a fixed hint or a record name). Only these closed or validated values reach
  * the terminal, never the server's message; the status is kept, so the exit code is unchanged.
  */
-function recoverRefusal(error: RuntimeApiError): RuntimeApiError {
+function recoverRefusal(error: RuntimeApiError, linkId: string | undefined): RuntimeApiError {
   const body = isObject(error.body) && isObject(error.body.error) ? error.body.error : null;
   const code = typeof body?.code === "string" && /^[a-z_]{1,64}$/.test(body.code) ? body.code : null;
   if (!code) return error;
   const hint = typeof body?.hint === "string" && /^[a-z0-9_-]{1,64}$/.test(body.hint) ? body.hint : null;
-  const known = Object.hasOwn(RECOVER_REFUSALS, code) ? RECOVER_REFUSALS[code] : undefined;
+  // A command is printed so that it runs as printed: only a validated link id, the placeholder otherwise (--operation-id).
+  const shown = linkId !== undefined && LINK_ID.test(linkId) ? linkId : "<id>";
+  const known = code === "alias_linked" ? aliasLinked(shown)
+    : code === "child_recover_unsupported" ? recoverUnsupported(shown)
+      : Object.hasOwn(RECOVER_REFUSALS, code) ? RECOVER_REFUSALS[code] : undefined;
   const message = "Link recover refused (" + error.status + "): " + code + (hint ? " (" + hint + ")" : "") + (known ? ": " + known : "");
   return new RuntimeApiError(message, error.status, error.body);
 }
@@ -120,7 +136,7 @@ export async function runLinkRecover(args: string[], deps: LinkCliDeps, linkRequ
       body: JSON.stringify(linkId !== undefined ? { linkId } : { operationId }),
     }, deps);
   } catch (error) {
-    throw error instanceof RuntimeApiError ? recoverRefusal(error) : error;
+    throw error instanceof RuntimeApiError ? recoverRefusal(error, linkId) : error;
   }
   const receipt = validateReceipt(response, linkId ?? null);
   printData(receipt, wantsJson, [receipt.purged

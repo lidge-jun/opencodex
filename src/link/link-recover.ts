@@ -88,7 +88,7 @@ export async function recoverRemoteChild(
     return { ok: false, status: 409, code: "child_conflict", message: "The Child belongs to another link or OpenCodex home, or its records cannot be read; nothing was changed.", ...(recordHint(report) ? { hint: recordHint(report) } : {}) };
   }
   if (result.code === EXIT_USAGE) {
-    return { ok: false, status: 409, code: "child_recover_unsupported", message: "The planted ocx-child predates detach --expect-link, so it cannot check which link it belongs to, and nothing was changed. Do not run a plain ocx-child detach on that machine: it would also restore and remove a link an interrupted attach left. When the machine is gone or its cleanup cannot be proven, a person on this Home can run ocx link recover --forget --link-id <id> --yes." };
+    return { ok: false, status: 409, code: "child_recover_unsupported", message: "The planted ocx-child predates detach --expect-link, so it cannot check which link it belongs to, and nothing was changed. Do not run its plain detach on that machine: its status cannot show an interrupted attach of another link, which a plain detach would restore and then remove. Leave the machine: recover cannot confirm its cleanup with this build. Once the machine is confirmed clean or gone, a person on this Home can run ocx link recover --forget --link-id " + target.linkId + " --yes." };
   }
   if (result.code !== 0) {
     if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) {
