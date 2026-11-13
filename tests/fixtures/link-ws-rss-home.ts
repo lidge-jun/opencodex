@@ -56,10 +56,24 @@ const peakAnswer = (): { rss: number | null; method: string } => {
 let waiting = 0;
 // Armed by the idle reading ("gc-rss"), so a warm-up turn whose pump waited for a drain cannot announce the load's stall.
 let announced = true;
+// A pump or relay also waits briefly while its reader still drains, and every one looks waiting while the event loop is
+// busy with another. The announcement therefore needs every reader waiting through three event-loop turns in which
+// none of them moved: a reader that still drains is served in those turns (its socket reports writable) and ends its
+// wait, which cancels the confirmation.
+let confirmation = 0;
 const observeWait = (isWaiting: boolean): void => {
   waiting += isWaiting ? 1 : -1;
   sample();
-  if (!announced && waiting >= setup.stalls) { announced = true; console.log(JSON.stringify({ stalled: true })); }
+  const attempt = ++confirmation;
+  if (announced || waiting < setup.stalls) return;
+  let turns = 0;
+  const confirm = (): void => {
+    if (attempt !== confirmation || announced || waiting < setup.stalls) return;
+    if (++turns < 3) { setImmediate(confirm); return; }
+    announced = true;
+    console.log(JSON.stringify({ stalled: true }));
+  };
+  setImmediate(confirm);
 };
 setLinkPumpWaitObserverForTests(observeWait);
 setLinkRelayWaitObserverForTests(observeWait);

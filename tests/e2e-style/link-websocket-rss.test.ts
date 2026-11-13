@@ -60,8 +60,8 @@ function eventsText(count: number): string {
 /**
  * How a run knew its load had stalled, always from the Home itself. "home-pumps-waiting": every link pump waits for a
  * drain. "home-relays-waiting": every relayed HTTP response waits for its reader (Bun stops reading a body whose socket
- * does not drain). A relay also waits briefly between two chunks while its body still flows, so the HTTP announcement
- * can come early; an early cut lowers the HTTP peak and makes the acceptance harder to pass, never easier.
+ * does not drain). Either kind also waits briefly while its reader still drains, so the fixture announces only after
+ * every reader stayed waiting through three event-loop turns in which none moved (tests/fixtures/link-ws-rss-home.ts).
  */
 type StallSync = "home-pumps-waiting" | "home-relays-waiting";
 interface LoadResult { method: string; idle: number; peak: number; delta: number; sync: StallSync }
