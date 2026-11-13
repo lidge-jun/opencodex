@@ -1281,7 +1281,7 @@ export async function deliverPassthroughResponse(
           clientGoneSignal: options.abortSignal,
           terminalBoundary: codexSafetyBufferingOptions,
           maskCredential,
-          onSyntheticTail: payload => noteRelaySyntheticTail(logCtx, payload),
+          onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict),
           ...(inlineEagerRewrite ? { rewriteBudget: translatorBudget } : {}),
           ...(logCtx.upstreamError === undefined ? {} : { upstreamError: logCtx.upstreamError }),
         });
@@ -1377,7 +1377,7 @@ export async function deliverPassthroughResponse(
           clientGone.abort(reason);
         },
         { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential,
-          onSyntheticTail: payload => noteRelaySyntheticTail(logCtx, payload) },
+          onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict) },
       );
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,

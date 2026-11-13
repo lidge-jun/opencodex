@@ -4,7 +4,7 @@ import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { noteRelaySyntheticTail } from "../../src/server/request-log-terminal-status";
 import { collectBufferedResponsesSse } from "../../src/server/responses/buffered-sse-json";
-import { bareUpstreamError } from "../../src/server/bare-upstream-error";
+import { bareUpstreamError, type BareUpstreamError } from "../../src/server/bare-upstream-error";
 import { consumeForInspection, consumeForResponseLogMetadata, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
 import { teeWithBoundedInspection } from "../../src/server/inspection-tee";
 import { classifyCodexUpstreamOutcome } from "../../src/codex/routing/cooldown-math";
@@ -1767,7 +1767,7 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     for (const copy of ["unauthorized request", "rate limit hit, slow down"]) {
       const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
       const src = sourceStream([`event: error\ndata: ${JSON.stringify({ error: { code: "mystery_code", message: copy } })}\n\n`]);
-      const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController(), undefined, { onSyntheticTail: payload => noteRelaySyntheticTail(log, payload) }) : relaySseEagerBounded(src, new AbortController(), parityHooks, { onSyntheticTail: payload => noteRelaySyntheticTail(log, payload) });
+      const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController(), undefined, { onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(log, payload, verdict) }) : relaySseEagerBounded(src, new AbortController(), parityHooks, { onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(log, payload, verdict) });
       const { frames, terminals } = await wsPump(relayed, log);
       expect([copy, frames.find(frame => frame.type === "response.failed")?.response?.error?.code]).toEqual([copy, "upstream_server_error"]);
       expect([copy, terminals, httpStatusForRequestLogTerminal("failed", log)]).toEqual([copy, [["failed", 502]], 502]);
@@ -1779,7 +1779,7 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
       activeAttempt: {} as NonNullable<RequestLogContext["activeAttempt"]> };
     const error = { code: "rate_limit_exceeded", message: "flagged for possible cybersecurity risk" };
     const src = sourceStream([`event: error\ndata: ${JSON.stringify({ error })}\n\n`]);
-    const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController(), undefined, { onSyntheticTail: payload => noteRelaySyntheticTail(log, payload) }) : relaySseEagerBounded(src, new AbortController(), parityHooks, { onSyntheticTail: payload => noteRelaySyntheticTail(log, payload) });
+    const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController(), undefined, { onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(log, payload, verdict) }) : relaySseEagerBounded(src, new AbortController(), parityHooks, { onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(log, payload, verdict) });
     const { frames, terminals } = await wsPump(relayed, log);
     expect(frames.find(frame => frame.type === "response.failed")?.response?.error?.code).toBe("rate_limit_exceeded");
     expect(terminals).toEqual([["failed", 429]]);
@@ -1811,7 +1811,7 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     const bare = `event: error\ndata: ${JSON.stringify({ error: { code: "rate_limit_exceeded", message: copy } })}\n\n`;
     const wsLog: RequestLogContext = { model: "fixture-model", provider: "openai" };
     const src = sourceStream([bare, genuine]);
-    const tail = { onSyntheticTail: (payload: string) => noteRelaySyntheticTail(wsLog, payload) };
+    const tail = { onSyntheticTail: (payload: string, verdict?: BareUpstreamError) => noteRelaySyntheticTail(wsLog, payload, verdict) };
     const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController(), undefined, tail) : relaySseEagerBounded(src, new AbortController(), parityHooks, tail);
     const { terminals } = await wsPump(relayed, wsLog);
     expect([terminals, httpStatusForRequestLogTerminal("failed", wsLog)]).toEqual([[["failed", 400]], 400]);

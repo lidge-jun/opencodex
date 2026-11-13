@@ -32,11 +32,6 @@ export function isCredentialName(name: string): boolean {
   return SENSITIVE_KEY_PATTERN.test(name) || CREDENTIAL_HEADER_NAME.test(name);
 }
 
-/** True for a request-correlation header, whose value is never recorded as a credential. */
-export function isCorrelationHeaderName(name: string): boolean {
-  return CORRELATION_HEADER_NAME.test(name);
-}
-
 /**
  * Replace every span of text a secret covers: the whole text when it equals a whole-only value, and
  * every occurrence of each substring value. Spans are found on the original text and merged before
@@ -247,21 +242,6 @@ export class OutboundCredentialRegistry {
   /** False once a credential-named value was dropped; callers must then fail closed. */
   complete(): boolean {
     return this.strict.complete;
-  }
-
-  /**
-   * Replace, inside text, every recorded value {@link matches} would recognize: the whole text when
-   * it equals a credential-named value at any length (or another value at 8+), and each contained
-   * value of 8+ characters. Unlike a whole-text refusal, the surrounding copy survives, so a reader
-   * that classifies it (refusal wording, codes) still sees the provider's words. Extra values from
-   * the caller are masked in the same pass, so overlaps across both sets are replaced as one span.
-   */
-  mask(text: string, replacement: string, extra: { substrings?: readonly string[]; wholeOnly?: readonly string[] } = {}): string {
-    const observed = [...this.observed.values.keys()].filter(value => value.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH);
-    const strictLong = [...this.strict.values.keys()].filter(value => value.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH);
-    return maskSecretSpans(text, replacement,
-      [...strictLong, ...observed, ...(extra.substrings ?? [])],
-      [...this.strict.values.keys(), ...observed, ...(extra.wholeOnly ?? [])]);
   }
 }
 

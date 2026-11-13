@@ -180,10 +180,10 @@ export function upstreamErrorTailFrame(
   errorType?: string,
   errorCode?: string,
   verdict?: BareUpstreamError,
-  onPayload?: (payload: string) => void,
+  onPayload?: (payload: string, verdict?: BareUpstreamError) => void,
 ): Uint8Array {
   const payload = upstreamErrorFailedPayload(message, tailIdentity({ refusalCode, errorType, errorCode }, verdict), maskCredential);
-  onPayload?.(payload);
+  onPayload?.(payload, verdict);
   return encoder.encode(`event: response.failed\ndata: ${payload}\n\n`);
 }
 
@@ -249,10 +249,10 @@ export function refusalFailedTailFrame(
   errorType?: string,
   errorCode?: string,
   verdict?: BareUpstreamError,
-  onPayload?: (payload: string) => void,
+  onPayload?: (payload: string, verdict?: BareUpstreamError) => void,
 ): Uint8Array {
   const payload = upstreamErrorFailedPayload(message, tailIdentity({ refusalCode, errorType, errorCode }, verdict), maskCredential);
-  onPayload?.(payload);
+  onPayload?.(payload, verdict);
   return encoder.encode(
     `\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`,
   );
@@ -381,6 +381,10 @@ export function createSseTerminalOutputBoundary(
         ? cyberPolicyTerminalError(parsed)
         : undefined;
       const policyPayload = policyError ? policyFailurePayload(policyError, parsed, options?.maskCredential) : undefined;
+      // An untyped envelope is evidence, not a Responses event: the client receives the terminal it
+      // decides (as the WebSocket bridge already does), never the provider's raw diagnostic frame.
+      // Its verdict was reduced above; an explicit policy envelope continues as the policy terminal.
+      if (policyPayload === undefined && parsed !== undefined && isUntypedBareUpstreamError(parsed)) continue;
       let outboundBlock = policyPayload !== undefined
         ? encoder.encode(rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload))
         : frame.block;
@@ -487,7 +491,7 @@ export function relaySseWithFailedTail(
   onClientGone?: (reason?: unknown) => void,
   opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string;
     /** Receives the exact payload of every synthesized bare-verdict tail, so a client-stream log can tell it from upstream. */
-    onSyntheticTail?: (payload: string) => void },
+    onSyntheticTail?: (payload: string, verdict?: BareUpstreamError) => void },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();

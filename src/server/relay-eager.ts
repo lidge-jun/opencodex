@@ -42,6 +42,7 @@ import {
   type SsePayloadRewrite,
 } from "./sse-payload-rewrite";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import type { BareUpstreamError } from "./bare-upstream-error";
 
 export type EagerRelayHooks = {
   /** Feed one upstream chunk through SSE inspection (createSseInspector.feed). */
@@ -91,7 +92,7 @@ export type EagerRelayOptions = {
   /** Mask the selected outbound credential in synthetic failures. */
   maskCredential?: (text: string) => string;
   /** Receives the exact payload of every synthesized bare-verdict tail (see relaySseWithFailedTail). */
-  onSyntheticTail?: (payload: string) => void;
+  onSyntheticTail?: (payload: string, verdict?: BareUpstreamError) => void;
   /** Injectable clock for tests. */
   now?: () => number;
 };

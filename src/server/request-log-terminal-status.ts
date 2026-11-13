@@ -13,7 +13,7 @@ import {
 import { redactSecretString } from "../lib/redact";
 import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
 import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
-import { isUntypedBareUpstreamError, reduceBareUpstreamEvidence, wrappedServerErrorStatus, type BareUpstreamEvidence } from "./bare-upstream-error";
+import { isUntypedBareUpstreamError, reduceBareUpstreamEvidence, wrappedServerErrorStatus, type BareUpstreamError, type BareUpstreamEvidence } from "./bare-upstream-error";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -134,23 +134,28 @@ export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: He
  * (the WebSocket log) sees those tails beside upstream frames; only a registered text is the
  * relay's own, however closely a genuine upstream terminal resembles it. Each entry matches once.
  */
-const relaySyntheticTails = new WeakMap<TerminalStatusContext, string[]>();
+const relaySyntheticTails = new WeakMap<TerminalStatusContext, Array<{ payload: string; verdict?: BareUpstreamError }>>();
 
-export function noteRelaySyntheticTail(logCtx: TerminalStatusContext, payload: string): void {
+/**
+ * The verdict travels with its tail: the relay withholds an untyped envelope from the client, so a
+ * client-stream reader sees only the tail and records the verdict it renders.
+ */
+export function noteRelaySyntheticTail(logCtx: TerminalStatusContext, payload: string, verdict?: BareUpstreamError): void {
   const tails = relaySyntheticTails.get(logCtx) ?? [];
-  tails.push(payload);
+  tails.push({ payload, verdict });
   if (tails.length > 4) tails.shift();
   relaySyntheticTails.set(logCtx, tails);
 }
 
-function consumeRelaySyntheticTail(logCtx: TerminalStatusContext, json: UpstreamErrorPayload): boolean {
+function consumeRelaySyntheticTail(logCtx: TerminalStatusContext, json: UpstreamErrorPayload): { verdict?: BareUpstreamError } | undefined {
   const tails = relaySyntheticTails.get(logCtx);
-  if (!tails?.length) return false;
+  if (!tails?.length) return undefined;
   // The relay serializes with JSON.stringify, so the parsed frame re-serializes to the same text.
-  const index = tails.indexOf(JSON.stringify(json));
-  if (index < 0) return false;
-  tails.splice(index, 1);
-  return true;
+  const text = JSON.stringify(json);
+  const index = tails.findIndex(tail => tail.payload === text);
+  if (index < 0) return undefined;
+  const [tail] = tails.splice(index, 1);
+  return tail;
 }
 
 /**
@@ -174,8 +179,14 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     // A reader of the client stream (the WebSocket log) also sees the relay's own synthesized
     // response.failed. It renders the winning bare verdict, so the row keeps that verdict, and the
     // evidence stays for the final row's code, instead of inferring a different class from the
-    // provider copy it carries.
-    if (prior !== undefined && type === "response.failed" && consumeRelaySyntheticTail(logCtx, json)) return true;
+    // provider copy it carries. The relay withholds untyped envelopes from the client, so such a
+    // reader may meet the tail first; it records the verdict the tail carries.
+    const tail = type === "response.failed" ? consumeRelaySyntheticTail(logCtx, json) : undefined;
+    if (tail !== undefined && prior === undefined && tail.verdict !== undefined) {
+      recordBareEvidence(logCtx, { typed: false, verdict: tail.verdict });
+      return true;
+    }
+    if (tail !== undefined && prior !== undefined) return true;
     bareEvidence.delete(logCtx);
     // The evidence wrote the diagnostics and the copy; the terminal that retires it owns them now,
     // so the row cannot keep a losing verdict's code or copy beside the terminal's status.
@@ -221,6 +232,12 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
   const previousEvidence = bareEvidence.get(logCtx);
   const evidence = reduceBareUpstreamEvidence(previousEvidence, json);
   if (evidence === undefined || evidence === previousEvidence) return true;
+  recordBareEvidence(logCtx, evidence);
+  return true;
+}
+
+/** The row writes for a winning bare verdict: status, code, type and guarded copy together. */
+function recordBareEvidence(logCtx: TerminalStatusContext, evidence: BareUpstreamEvidence): void {
   bareEvidence.set(logCtx, evidence);
   const previous = provisionalStatuses.get(logCtx);
   // A status set by the caller or another path is not this reducer's to overwrite; only a
@@ -261,7 +278,6 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
   } else {
     logCtx.upstreamError = evidence.verdict.message;
   }
-  return true;
 }
 
 /**

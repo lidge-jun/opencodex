@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail } from "../../src/server";
-import { createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
+import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
+import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
 import { OutboundCredentialRegistry, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
 
 const encoder = new TextEncoder();
@@ -27,6 +28,43 @@ async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
   }
 }
 
+const hooks: EagerRelayHooks = {
+  inspectChunk() {},
+  finishInspection() {},
+  sawTerminal: () => false,
+  onSynthetic() {},
+  onClientCancel() {},
+  onDone() {},
+};
+
+/**
+ * Client output as production composes it: the tee path rewrites each block before the terminal
+ * boundary, the eager path feeds the boundary raw frames; both receive the outbound mask.
+ */
+async function deliver(mode: "tee" | "eager", headers: Record<string, string>, payloads: readonly unknown[]): Promise<string> {
+  const maskCredential = createOutboundCredentialMask(headers);
+  const raw = payloads.map(payload => `data: ${JSON.stringify(payload)}`);
+  if (mode === "eager") return drain(relaySseEagerBounded(sourceStream(raw.map(block => `${block}\n\n`)), new AbortController(), hooks, { maskCredential }));
+  const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+  const rewritten = raw.map(block => `${rewrite(block).join("\n")}\n\n`);
+  return drain(relaySseWithFailedTail(sourceStream(rewritten), new AbortController(), undefined, { maskCredential }));
+}
+
+function withRegistry<T>(headers: Record<string, string>, run: () => T): T {
+  const registry = new OutboundCredentialRegistry();
+  registry.remember(headers);
+  const restore = setOutboundCredentialRegistryForTests(registry);
+  try {
+    const result = run();
+    if (result instanceof Promise) return result.finally(restore) as T;
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
+  }
+}
+
 describe("untyped error envelopes never carry a value this request sent", () => {
   test("a selected credential in a custom credential header is masked in an untyped error", () => {
     // Custom credential headers are recognized by the outbound registry's rule, not only the fixed list.
@@ -38,6 +76,7 @@ describe("untyped error envelopes never carry a value this request sent", () => 
   test.each([
     ["a Digest parameter that is a protocol word", { authorization: 'Digest username="response", response="a1b2c3d4e5f6"' }, true],
     ["a header whose name only contains a credential word", { "x-author": "response" }, false],
+    ["a full credential that equals a protocol name", { "x-auth-token": "response" }, false],
   ] as const)("masking keeps the terminal frame's protocol fields: %s", (_name, headers, digestSent) => {
     const rewrite = createTerminalErrorRedactionBlockRewrite(headers);
     const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message: "echo a1b2c3d4e5f6" } } };
@@ -48,67 +87,65 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     expect([parsed.type, parsed.response?.status, out.includes("a1b2c3d4e5f6")]).toEqual(["response.failed", "failed", !digestSent]);
   });
 
-  test.each([
-    ["a custom header value", { "x-tenant": "opaque-secret-12345" }, "opaque-secret-12345"],
-    ["a short Basic password", { authorization: "Basic YWNjb3VudGxvbmc6cGluNDI=" }, "pin42"],
-  ] as const)("an untyped error repeating %s this request sent is masked", (_name, headers, echoed) => {
-    const registry = new OutboundCredentialRegistry();
-    registry.remember(headers);
-    const restore = setOutboundCredentialRegistryForTests(registry);
-    try {
-      const rewrite = createTerminalErrorRedactionBlockRewrite(headers);
-      const out = rewrite(`data: ${JSON.stringify({ error: { code: "mystery_code", message: echoed } })}`).join("\n");
-      expect(out).not.toContain(echoed);
-      expect(JSON.parse(out.slice("data: ".length)).error.code).toBe("mystery_code");
-    } finally { restore(); }
+  test("overlapping selected credentials are masked as one span", () => {
+    const mask = createOutboundCredentialMask({ authorization: "Bearer abcdefghijkl", "x-api-key": "ijklmnopqrst" });
+    expect(mask("denied abcdefghijklmnopqrst")).toBe("denied [REDACTED]");
   });
 
-  test("masking a sent value inside untyped refusal copy keeps the refusal for the relay tail", async () => {
+  test.each(["tee", "eager"] as const)("%s never delivers the untyped frame, its extra fields or its keys", async mode => {
+    await withRegistry({ "x-tenant": "tenantSecret123" }, async () => {
+      const sent = "tenantSecret123";
+      const out = await deliver(mode, { "x-tenant": sent }, [{ error: { code: "mystery_code", message: "fixture", [sent]: "as a key" }, extra: `echo ${sent}` }]);
+      expect(out).not.toContain(sent);
+      expect(out).not.toContain('"extra"');
+      expect(out).toContain("event: response.failed");
+    });
+  });
+
+  test.each([
+    ["tee", "a custom header value", { "x-tenant": "opaque-secret-12345" }, "opaque-secret-12345"],
+    ["eager", "a custom header value", { "x-tenant": "opaque-secret-12345" }, "opaque-secret-12345"],
+    ["tee", "a short Basic password", { authorization: "Basic YWNjb3VudGxvbmc6cGluNDI=" }, "pin42"],
+    ["eager", "a short Basic password", { authorization: "Basic YWNjb3VudGxvbmc6cGluNDI=" }, "pin42"],
+  ] as const)("%s tail never repeats %s this request sent", async (mode, _name, headers, echoed) => {
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, [{ error: { code: "mystery_code", message: echoed } }]);
+      expect(out).not.toContain(echoed);
+      expect(out).toContain("event: response.failed");
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s keeps a refusal whose copy repeats a sent value", async mode => {
     const headers = { "x-tenant": "opaque-secret-12345" };
-    const registry = new OutboundCredentialRegistry();
-    registry.remember(headers);
-    const restore = setOutboundCredentialRegistryForTests(registry);
-    try {
-      const rewrite = createTerminalErrorRedactionBlockRewrite(headers);
-      const raw = `data: ${JSON.stringify({ error: { message: "This request was blocked by our safety systems. opaque-secret-12345" } })}\n\n`;
-      const rewritten = rewrite(raw.trimEnd()).join("\n") + "\n\n";
-      const out = await drain(relaySseWithFailedTail(sourceStream([rewritten]), new AbortController()));
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, [{ error: { message: "This request was blocked by our safety systems. opaque-secret-12345" } }]);
       expect(out).not.toContain("opaque-secret-12345");
       expect([out.includes("event: response.failed"), out.includes('"code":"invalid_prompt"')]).toEqual([true, true]);
-    } finally { restore(); }
+    });
   });
 
-  test("a value this request sent is masked in an untyped frame's extra fields and keys", () => {
-    const restore = setOutboundCredentialRegistryForTests(new OutboundCredentialRegistry());
-    try {
-      const sent = "tenantSecret123";
-      const rewrite = createTerminalErrorRedactionBlockRewrite({ "x-tenant": sent });
-      const out = rewrite(`data: ${JSON.stringify({ error: { message: "fixture", [sent]: "as a key" }, extra: `echo ${sent}` })}`).join("\n");
-      expect(out).not.toContain(sent);
-    } finally { restore(); }
+  test.each(["tee", "eager"] as const)("%s classifies a recognized code that equals a sent value the same as the inspector", async mode => {
+    const headers = { "x-tenant": "rate_limit_exceeded" };
+    await withRegistry(headers, async () => {
+      const frame = { error: { code: "rate_limit_exceeded", message: "try again" } };
+      const out = await deliver(mode, headers, [frame]);
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      inspectResponseLogSsePayload(log, JSON.stringify(frame));
+      expect([out.includes('"code":"rate_limit_exceeded"'), log.terminalHttpStatus]).toEqual([true, 429]);
+    });
   });
 
-  test("overlapping recorded values are masked as one span", () => {
-    const registry = new OutboundCredentialRegistry();
-    registry.remember({ "x-first": "abcdefghijkl", "x-second": "ijklmnopqrst" });
-    expect(registry.mask("denied abcdefghijklmnopqrst", "[REDACTED]")).toBe("denied [REDACTED]");
-  });
-
-  test("a sent value too large for the registry is still masked and recognized in bounded copy", () => {
+  test.each(["tee", "eager"] as const)("%s never repeats a sent value too large for the registry", async mode => {
     const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
     const huge = Array.from({ length: 16_400 }, (_, i) => alphabet[(i * 7 + (i >> 5)) % alphabet.length]).join("");
     const headers = { "x-tenant": huge };
-    const registry = new OutboundCredentialRegistry();
-    registry.remember(headers);
-    const restore = setOutboundCredentialRegistryForTests(registry);
-    try {
-      const out = createTerminalErrorRedactionBlockRewrite(headers)(`data: ${JSON.stringify({ error: { message: `echo ${huge}` } })}`).join("\n");
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, [{ error: { message: `echo ${huge}` } }]);
       expect([out.includes(huge.slice(0, 64)), out.includes(huge.slice(8_000, 8_064))]).toEqual([false, false]);
-      expect([registry.matches(`echo ${huge}`.slice(0, 500)), registry.matches(huge.slice(3_000, 3_400))]).toEqual([true, true]);
       const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
       inspectResponseLogSsePayload(log, JSON.stringify({ error: { message: `echo ${huge}` } }));
       expect(log.upstreamError ?? "").not.toContain(huge.slice(0, 64));
-    } finally { restore(); }
+    });
   });
 
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
