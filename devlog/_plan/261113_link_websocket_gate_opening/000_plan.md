@@ -24,3 +24,5 @@ Both Children can carry Codex's Responses WebSocket over a Remote Link, and both
 5. **Diagnostics table.** Show the `link_ws_*` events (open, close reasons, fallback reasons including `draining`) in the dashboard's diagnostics table.
 6. **Wording and counting.** Three comments and the structure doc still say a failed local upgrade counts nothing; one that threw after Bun opened Codex's socket counts as a stop. "As the Home counts it" is wrong for Bun's own oversized-message 1006, which the Home receives as 1011 and counts complete. The Child counts a 1015 close as complete where the Home's rule (#8647) does not: `finish("client", code !== 1006 && code !== 1015)`, with a test.
 7. **Platforms and docs.** macOS and Windows runs, and the user guide pages, with the Spanish mirror rule.
+
+On 2026-11-13 the owner decided that the design's 9.2 controlled validation and the U15 measurement are skipped and not measured; any text that opens a gate must say so.
