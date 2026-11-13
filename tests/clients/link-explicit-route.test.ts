@@ -44,7 +44,7 @@ describe("accepted route forms", () => {
   test.each([
     ["the pen pipe command", ROUTE],
     ["a bare absolute command", { proxyCommand: "/usr/bin/nc", user: "_svc", port: 1 }],
-    ["host:port and user@host words", { proxyCommand: "/opt/bin/relay --to user@relay.example:2222 --opt=a,b", user: "dev.user-1", port: 65535 }],
+    ["host:port and user@host words", { proxyCommand: "/opt/bin/relay --to svc@relayhost:2222 --opt=a,b", user: "dev.user-1", port: 65535 }],
   ] as const)("%s is accepted as is", (_label, route) => {
     expect(checkExplicitRoute(route)).toEqual({ ok: true, route: { ...route } });
   });
@@ -254,7 +254,7 @@ describe.skipIf(SSH === null)("an ssh_config edit after enrollment (ssh -G)", ()
     writeFileSync(config, [
       "Host pen-7f3a9c",
       "  ProxyCommand /usr/bin/evil-relay %h %p",
-      "  ProxyJump intruder@jump.example",
+      "  ProxyJump intruder@jumphost",
       "  User intruder",
       "  Port 2222",
       "  HostName elsewhere.example",
