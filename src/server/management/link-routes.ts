@@ -223,7 +223,7 @@ function suspendedRefusal(ctx: ManagementContext, id: string): Response {
   const resolve = "ocx link operations resolve --operation-id " + op + " --yes";
   const message = suspension.state === "unknown"
     ? "Revoke operation " + op + " ended unknown and may have disconnected or purged the Child, so this link's tunnel stays down. Check the Child, then run: " + resolve
-    : "Revoke operation " + op + " did not finish (the Home stopped during it), so this link's tunnel stays down. Repeat it with the same flags: ocx link revoke --link-id " + id + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve;
+    : "Revoke operation " + op + " did not record its outcome (the Home stopped or the revoke failed before writing it), so this link's tunnel stays down. Repeat it with the flags of the first attempt: ocx link revoke --link-id " + id + " --operation-id " + op + ", with --purge only if the first attempt had it (the journal keeps only a digest of the flags, so a different --purge answers operation_mismatch); if it then ends unknown, run: " + resolve;
   return Response.json({ error: { code: "link_suspended", message }, operationId: op, operationState: suspension.state }, { status: 409, headers });
 }
 
@@ -456,7 +456,8 @@ const BOUND_REFUSAL_MESSAGES: Record<string, string> = Object.assign(Object.crea
 
 // A forced revoke of an ephemeral Child refused for its tombstone. Either answer comes before this attempt revoked a key or
 // removed a record, and a forced revoke never contacts the Child; an earlier attempt of a resumed revoke may have done more.
-const tombstoneLimit = (): Response => fail("tombstone_limit", "Too many forced revokes are waiting for cleanup, so this attempt revoked no key and removed no record. Recover them (ocx link recover --list), or have a person on this Home run ocx link recover --forget for a machine that is gone or whose cleanup cannot be proven.", 409);
+// At the commit-time check this attempt has already stopped the tunnel, so it names only the key, the record and the Child.
+const tombstoneLimit = (): Response => fail("tombstone_limit", "Too many forced revokes are waiting for cleanup; this attempt revoked no key, removed no record and did not contact the Child. Recover them (ocx link recover --link-id <id>; ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget --link-id <id> --yes for a machine that is gone or whose cleanup cannot be proven.", 409);
 const tombstoneWriteFailed = (): Response => fail("tombstone_write_failed", "The tombstone a forced revoke of an ephemeral Child needs could not be written, so this attempt revoked no key and removed no record.", 503);
 
 async function removeReserved(
@@ -524,7 +525,9 @@ async function removeReserved(
     // and this attempt owns none: it then has nothing to drop if it does not commit.
     try { if (withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())) === "recorded") written = tombstone; } catch (error) {
       if (error instanceof LinkTombstoneLimitError) {
-        return tombstoneLimit();
+        // No state claim: an earlier, interrupted attempt of a resumed revoke may already have revoked the key and stopped the tunnel,
+        // and this one may have taken its receipt back (reownLinkRetirement), so it names only what this attempt left alone.
+        return fail("tombstone_limit", "Too many forced revokes are waiting for cleanup; this attempt did not touch the link, its key or the Child. Recover them (ocx link recover --link-id <id>; ocx link recover --list shows them), or have a person on this Home run ocx link recover --forget --link-id <id> --yes for machines that are gone.", 409);
       }
       // The file may already be written (a chmod or the lock's COMMIT failed after it); the link stays, so this
       // attempt's tombstone, if any, goes too. Its random attempt token makes that removal touch nothing else.

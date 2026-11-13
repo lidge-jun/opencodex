@@ -339,6 +339,14 @@ describe("the HTTP link relay reports when it waits for its reader (#8600)", () 
     expect(events).toEqual([true, false]);
   });
 
+  test("a test observer that throws never breaks the relayed body", async () => {
+    setLinkRelayWaitObserverForTests(() => { throw new Error("observer failed"); });
+    const h = relayHarness();
+    const nonce = await h.session("lnk_aaaaaaaaaaaaaaaa");
+    const response = await h.dispatch(h.request("/v1/responses", { method: "POST", nonce, body: "{}" }), async () => chunkedResponse(["a", "b"]));
+    expect(await response.text()).toBe("ab");
+  });
+
   test("without an observer the relay delivers its body as before", async () => {
     const h = relayHarness();
     const nonce = await h.session("lnk_aaaaaaaaaaaaaaaa");

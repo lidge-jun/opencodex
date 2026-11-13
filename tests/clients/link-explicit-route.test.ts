@@ -286,6 +286,7 @@ test("a links.json edit that only drops exclusive does not restart the tunnel: e
   await supervisor.stop();
 });
 
+/** The configuration ssh would use if it read config: the argv from its first -o (dropping -F none) with -F <config>. */
 function effective(argv: readonly string[], config: string): Map<string, string> {
   const tail = argv.slice(argv.indexOf("-o"));
   const result = Bun.spawnSync([SSH!, "-G", "-F", config, ...tail], { stdin: "ignore" });
@@ -298,7 +299,10 @@ function effective(argv: readonly string[], config: string): Map<string, string>
   return values;
 }
 
-describe.skipIf(SSH === null)("an ssh_config edit after enrollment (ssh -G)", () => {
+// Second line of defence: effective() runs the argv from its first -o with -F <config>, so it reads ssh_config on purpose,
+// which an explicit-route link no longer does (-F none, link-explicit-route-no-ssh-config.test.ts). It shows the route on the
+// command line would still win if ssh_config were read.
+describe.skipIf(SSH === null)("an ssh_config edit after enrollment, were ssh_config read (ssh -G, second line of defence)", () => {
   const hostile = () => {
     const config = join(dir, "hostile.conf");
     writeFileSync(config, [

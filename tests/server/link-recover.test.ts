@@ -531,11 +531,19 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
 
   test("forced revokes beyond the bound are refused, never dropped, and the link stays", async () => {
     for (let i = 0; i < MAX_TOMBSTONES; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
-    const h = harness([link()]);
+    // A fresh forced revoke at the limit stops nothing and revokes no key; the CLI (journalledRevokeError in src/cli/link.ts)
+    // says only that the attempt did not touch the link, its key or the Child, which also holds for a resumed revoke.
+    let stops = 0, keyRevokes = 0;
+    const h = harness([link()], { duringStop: () => { stops += 1; }, duringKeyRevoke: () => { keyRevokes += 1; } });
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
-    expect([res.status, (await errorOf(res)).code]).toEqual([409, "tombstone_limit"]);
+    const refusal = await errorOf(res);
+    expect([res.status, refusal.code]).toEqual([409, "tombstone_limit"]);
+    // A resumed revoke may take its receipt back before the limit, so the message names only what holds on both paths.
+    expect(refusal.message).toContain("did not touch the link, its key or the Child");
+    expect(refusal.message).not.toContain("before its own effects");
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
     expect(tombstones()).toHaveLength(MAX_TOMBSTONES);
+    expect({ stops, keyRevokes }).toEqual({ stops: 0, keyRevokes: 0 });
   });
 
   test("a newer Home's field under ext is kept verbatim and does not refuse forced revokes", async () => {

@@ -12,6 +12,7 @@ import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
 import type { AdapterEvent } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { markPacedStream } from "../../src/lib/paced-stream";
 
 const sse = (...payloads: unknown[]): Response => new Response(
   payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`).join(""),
@@ -1639,27 +1640,43 @@ describe("combo stream preflight", () => {
 
 describe("combo preflight replay under a stalled reader (#8601)", () => {
   const encoder = new TextEncoder();
-  const replay = (buffered: Uint8Array[]) => {
+  const replay = (buffered: Uint8Array[], paced: boolean) => {
     const source = new ReadableStream<Uint8Array>({ pull() { return new Promise<void>(() => {}); } }, { highWaterMark: 0 });
-    const response = new Response(source, { headers: { "content-type": "text/event-stream" } });
+    // A paced link turn's body is marked (src/lib/paced-stream.ts): the replay then queues nothing ahead of its client.
+    const response = new Response(paced ? markPacedStream(source) : source, { headers: { "content-type": "text/event-stream" } });
     return replayBufferedResponse(response, response.body!.getReader(), buffered).body!.getReader();
   };
+  // One event-loop turn after each read lets the replay run any pull it scheduled for its own queue.
+  const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
-  test("each replayed chunk leaves the buffer as the client reads it", async () => {
+  test("on a paced turn each replayed chunk leaves the buffer as the client reads it, and no sooner", async () => {
     const chunks = ["a", "bb", "ccc"].map(text => encoder.encode(text));
     const buffered = [...chunks];
-    const reader = replay(buffered);
+    const reader = replay(buffered, true);
     for (let read = 0; read < chunks.length; read++) {
       expect((await reader.read()).value).toBe(chunks[read]!);
-      // Every slot up to this read is empty; the rest still hold their chunks.
+      await turn();
       expect(buffered.map(chunk => chunk.byteLength)).toEqual(chunks.map((chunk, index) => index <= read ? 0 : chunk.byteLength));
+    }
+    await reader.cancel();
+  });
+
+  test("on any turn every chunk the client read has left the buffer", async () => {
+    const chunks = ["a", "bb", "ccc"].map(text => encoder.encode(text));
+    const buffered = [...chunks];
+    const reader = replay(buffered, false);
+    for (let read = 0; read < chunks.length; read++) {
+      expect((await reader.read()).value).toBe(chunks[read]!);
+      await turn();
+      // An unpaced replay keeps its default queue of one, so a slot past this read may already be taken.
+      expect(buffered.slice(0, read + 1).map(chunk => chunk.byteLength)).toEqual(Array(read + 1).fill(0));
     }
     await reader.cancel();
   });
 
   test("a cancel empties every slot the client never read", async () => {
     const buffered = ["a", "bb", "ccc"].map(text => encoder.encode(text));
-    const reader = replay(buffered);
+    const reader = replay(buffered, true);
     await reader.read();
     await reader.cancel();
     expect(buffered.map(chunk => chunk.byteLength)).toEqual([0, 0, 0]);

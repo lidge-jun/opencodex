@@ -30,21 +30,27 @@ const legacyPostMergeHook = [
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
 
-function gitEnv(root: string): NodeJS.ProcessEnv {
+// `base` stands in for the environment this process inherited, so a case can hand the harness a
+// hostile GIT_DIR/GIT_CONFIG_GLOBAL without assigning process.env, which every later spawn reads.
+function gitEnv(root: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   // The test preload retains the real global Git config. Never let it redirect
   // fixture commands or hook writes into the developer's own checkout.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+  const env = Object.fromEntries(Object.entries(base).filter(([key]) => !key.startsWith("GIT_")));
   return { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(root, ".fixture-gitconfig") };
 }
 
 function git(root: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd: root, env: gitEnv(root), encoding: "utf8", stdio: "pipe" }).trim();
+  return gitFrom(process.env, root, ...args);
 }
 
-function fixture(): string {
+function gitFrom(base: NodeJS.ProcessEnv, root: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd: root, env: gitEnv(root, base), encoding: "utf8", stdio: "pipe" }).trim();
+}
+
+function fixture(base: NodeJS.ProcessEnv = process.env): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-hook-setup-")));
   roots.push(root);
-  git(root, "init", "--quiet");
+  gitFrom(base, root, "init", "--quiet");
   mkdirSync(join(root, "scripts"));
   for (const name of ["setup-hooks.ts"]) {
     copyFileSync(repoPath("scripts", name), join(root, "scripts", name));
@@ -52,9 +58,9 @@ function fixture(): string {
   return root;
 }
 
-function setup(root: string): string {
+function setup(root: string, base: NodeJS.ProcessEnv = process.env): string {
   return execFileSync(process.execPath, [join(root, "scripts/setup-hooks.ts")], {
-    cwd: root, env: gitEnv(root), encoding: "utf8", timeout: 10_000, stdio: "pipe",
+    cwd: root, env: gitEnv(root, base), encoding: "utf8", timeout: 10_000, stdio: "pipe",
   });
 }
 
@@ -79,22 +85,13 @@ describe("local hook setup", () => {
     writeFileSync(externalHook, "user-owned hook\n");
     const globalConfig = join(external, "global-config");
     git(external, "config", "--file", globalConfig, "core.hooksPath", hooks(external));
-    const savedGlobal = process.env.GIT_CONFIG_GLOBAL;
-    const savedDir = process.env.GIT_DIR;
-    try {
-      process.env.GIT_CONFIG_GLOBAL = globalConfig;
-      process.env.GIT_DIR = join(external, ".git");
-      const root = fixture();
-      setup(root);
-      expect(existsSync(join(hooks(root), "pre-push"))).toBe(false);
-      expect(readFileSync(externalHook, "utf8")).toBe("user-owned hook\n");
-      expect(existsSync(join(hooks(external), "post-merge"))).toBe(false);
-    } finally {
-      if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
-      else process.env.GIT_CONFIG_GLOBAL = savedGlobal;
-      if (savedDir === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = savedDir;
-    }
+    const inherited = { ...process.env, GIT_CONFIG_GLOBAL: globalConfig, GIT_DIR: join(external, ".git") };
+    const root = fixture(inherited);
+    setup(root, inherited);
+    expect(existsSync(join(hooks(root), "pre-push"))).toBe(false);
+    expect(readFileSync(externalHook, "utf8")).toBe("user-owned hook\n");
+    expect(existsSync(join(hooks(external), "post-merge"))).toBe(false);
+    expect(process.env.GIT_DIR).toBeUndefined();
   });
 
   test("fresh setup installs no hooks and is idempotent", () => {
