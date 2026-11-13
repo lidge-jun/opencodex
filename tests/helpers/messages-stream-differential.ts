@@ -1,11 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { repositoryGitEnv } from "./git-fixture";
 import { repoPath, repoRoot } from "./repo-root";
 import type { OcxConfig } from "../../src/types";
 
 const [mode, scratch, output] = process.argv.slice(2) as [string, string, string];
 function git(...args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], { cwd: repoRoot() });
+  const result = Bun.spawnSync(["git", ...args], { cwd: repoRoot(), env: repositoryGitEnv() });
   if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
   return result.stdout.toString();
 }

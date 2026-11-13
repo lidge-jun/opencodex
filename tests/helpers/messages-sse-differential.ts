@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { repositoryGitEnv } from "./git-fixture";
 import { repoPath, repoRoot } from "./repo-root";
 import { messagesSseCaseHash, SSE_BASE } from "./messages-sse-cases";
 const [mode, scratch, output, selectedLane, offset = "0", count = "12"] = process.argv.slice(2);
@@ -7,7 +8,7 @@ if (mode !== "head" && mode !== "--generate-base") throw new Error("Expected hea
 const hashes: Record<string, string> = {};
 if (mode === "--generate-base") {
   const git = (...args: string[]) => {
-    const child = Bun.spawnSync(["git", ...args], { cwd: repoRoot() });
+    const child = Bun.spawnSync(["git", ...args], { cwd: repoRoot(), env: repositoryGitEnv() });
     if (child.exitCode !== 0) throw new Error(child.stderr.toString());
     return child.stdout.toString();
   };

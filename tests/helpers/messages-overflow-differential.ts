@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { repositoryGitEnv } from "./git-fixture";
 import { repoPath, repoRoot } from "./repo-root";
 import { applicableMessagesOverflowFixtures, messagesOverflowLanes, messagesOverflowCaseId, messagesOverflowCaseTableHash } from "./messages-overflow-cases";
 const [mode, scratch, output, selectedLane, offset = "0", limit] = process.argv.slice(2) as [string, string, string, string?, string?, string?];
@@ -10,7 +11,7 @@ if (selectedLane && !(messagesOverflowLanes as readonly string[]).includes(selec
 const first = Number(offset); const count = limit === undefined ? Infinity : Number(limit);
 if (!Number.isSafeInteger(first) || first < 0 || (count !== Infinity && (!Number.isSafeInteger(count) || count <= 0))) throw new Error("Invalid Messages slice");
 function git(...args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], { cwd: repoRoot() });
+  const result = Bun.spawnSync(["git", ...args], { cwd: repoRoot(), env: repositoryGitEnv() });
   if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
   return result.stdout.toString();
 }

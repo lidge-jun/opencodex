@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isGitRepositoryEnvName } from "../../scripts/git-repository-env";
+import { createGitConfigGuard, resolveCommonGitConfigPath } from "../helpers/git-config-guard";
+import { FIXTURE_GIT_IDENTITY, fixtureGitEnv, repositoryGitEnv } from "../helpers/git-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { helperPath } from "../helpers/repo-root";
+import { helperPath, repoRoot } from "../helpers/repo-root";
 
 // A test git helper that inherits GIT_DIR / GIT_WORK_TREE from a hook or a --git-dir/--work-tree
 // wrapper runs against THAT repository whatever its cwd: `git init` reinitialises it (and writes
@@ -122,3 +125,150 @@ describe("fixture git helpers ignore an inherited repository", () => {
     });
   });
 });
+
+describe("repository variable scrub", () => {
+  test("covers every variable the installed git clears for another repository", () => {
+    const local = git(tempDir("ocx-git-local-vars-"), "rev-parse", "--local-env-vars").split(/\r?\n/).filter(Boolean);
+    expect(local.length).toBeGreaterThan(5);
+    expect(local.filter(name => !isGitRepositoryEnvName(name))).toEqual([]);
+    for (const name of ["GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_12", "git_dir", "Git_Work_Tree"]) {
+      expect(isGitRepositoryEnvName(name)).toBe(true);
+    }
+    for (const name of ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_AUTHOR_NAME", "GIT_PAGER", "PATH"]) {
+      expect(isGitRepositoryEnvName(name)).toBe(false);
+    }
+  });
+
+  test("fixture env drops the repository and global config; checkout env keeps the global config", () => {
+    const base = { PATH: "/bin", GIT_DIR: "/outer/.git", GIT_INDEX_FILE: "/outer/.git/index", GIT_CONFIG_GLOBAL: "/home/.gitconfig" };
+    const fixture = fixtureGitEnv({}, base);
+    expect(fixture.GIT_DIR).toBeUndefined();
+    expect(fixture.GIT_INDEX_FILE).toBeUndefined();
+    expect(fixture.GIT_CONFIG_GLOBAL).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
+    expect(fixture.GIT_CONFIG_NOSYSTEM).toBe("1");
+    expect(fixture.GIT_AUTHOR_NAME).toBe(FIXTURE_GIT_IDENTITY.name);
+    expect(fixture.GIT_COMMITTER_EMAIL).toBe(FIXTURE_GIT_IDENTITY.email);
+    expect(repositoryGitEnv(base)).toEqual({ PATH: "/bin", GIT_CONFIG_GLOBAL: "/home/.gitconfig" });
+  });
+});
+
+describe("git config guard", () => {
+  function fixtureCheckout(): { root: string; config: string } {
+    const root = tempDir("ocx-git-guard-");
+    git(root, "init", "-q");
+    return { root, config: join(root, ".git", "config") };
+  }
+  const setKey = (config: string, key: string, value: string) => git(tmpdir(), "config", "--file", config, key, value);
+
+  test("resolves the common config for a checkout and for a linked worktree", () => {
+    const { root, config } = fixtureCheckout();
+    commitFile(root, "seed.txt");
+    const linked = join(tempDir("ocx-git-guard-linked-"), "wt");
+    git(root, "worktree", "add", "-q", "--detach", linked);
+    expect(resolveCommonGitConfigPath(root)).toBe(config);
+    expect(realpathSync(resolveCommonGitConfigPath(linked)!)).toBe(realpathSync(config));
+    expect(resolveCommonGitConfigPath(tempDir("ocx-git-guard-none-"))).toBeNull();
+  });
+
+  test("reports a guarded key once by name, ignores unrelated edits, and sees a same-size same-mtime rewrite", () => {
+    const { root, config } = fixtureCheckout();
+    const guard = createGitConfigGuard(root)!;
+    expect(guard.check()).toBeNull();
+    setKey(config, "user.name", "aaaa-private");
+    const report = guard.check();
+    expect(report).toContain("user.name changed");
+    expect(report).not.toContain("aaaa-private");
+    expect(report).not.toContain(root);
+    expect(guard.check()).toBeNull();
+    setKey(config, "branch.main.remote", "origin");
+    expect(guard.check()).toBeNull();
+    const { atime, mtime } = statSync(config);
+    writeFileSync(config, readFileSync(config, "utf8").replace("aaaa-private", "bbbb-private"));
+    utimesSync(config, atime, mtime);
+    expect(guard.check()).toContain("user.name changed");
+    setKey(config, "core.worktree", "/tmp/elsewhere");
+    expect(guard.check()).toContain("core.worktree changed");
+  });
+
+  test("a missing or unparsable config is reported once, and recovery compares with the last good state", () => {
+    const { root, config } = fixtureCheckout();
+    const guard = createGitConfigGuard(root)!;
+    const good = readFileSync(config);
+    renameSync(config, config + ".away");
+    expect(guard.check()).toContain("missing or unreadable");
+    expect(guard.check()).toBeNull();
+    renameSync(config + ".away", config);
+    expect(guard.check()).toBeNull();
+    writeFileSync(config, "[core\n\tbroken");
+    expect(guard.check()).toContain("could not parse");
+    writeFileSync(config, "[core\n\tbroken again");
+    expect(guard.check()).toBeNull();
+    writeFileSync(config, Buffer.concat([good, Buffer.from("[user]\n\temail = x\n")]));
+    expect(guard.check()).toContain("user.email changed");
+  });
+
+  test("an existing .git whose config cannot be read at arm time is reported by the first check", () => {
+    const { root, config } = fixtureCheckout();
+    renameSync(config, config + ".away");
+    const guard = createGitConfigGuard(root)!;
+    expect(guard.check()).toContain("missing or unreadable");
+    expect(guard.check()).toBeNull();
+    expect(createGitConfigGuard(tempDir("ocx-git-guard-none-"))).toBeNull();
+  });
+});
+
+describe("test preload", () => {
+  function runProbe(source: string, env: Record<string, string>) {
+    const dir = tempDir("ocx-git-probe-");
+    const file = join(dir, "git-probe.test.ts");
+    writeFileSync(file, source);
+    const result = Bun.spawnSync([process.execPath, "test", "--parallel=1", file], {
+      cwd: repoRoot(),
+      env: { ...withoutGit(), OCX_TEST_NO_QUEUE: "1", ...env },
+      stdout: "pipe", stderr: "pipe", timeout: 60_000,
+    });
+    return { exitCode: result.exitCode, output: result.stdout.toString() + result.stderr.toString() };
+  }
+
+  test("removes inherited repository variables before any test or child sees them", () => {
+    const outer = outerRepo();
+    const guarded = tempDir("ocx-git-probe-checkout-");
+    git(guarded, "init", "-q");
+    const probe = runProbe(String.raw`import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+const NAMES = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"];
+test("scrubbed", () => {
+  expect(NAMES.filter(name => name in process.env)).toEqual([]);
+  const seen = execFileSync(process.execPath, ["-e", "console.log(JSON.stringify(Object.keys(process.env)))"]).toString();
+  expect(NAMES.filter(name => JSON.parse(seen).includes(name))).toEqual([]);
+});
+`, {
+      GIT_DIR: join(outer, ".git"), GIT_WORK_TREE: outer, GIT_INDEX_FILE: join(outer, ".git", "index"),
+      OCX_GIT_CONFIG_GUARD_CHECKOUT: guarded,
+    });
+    expect(probe.exitCode, probe.output).toBe(0);
+    const warning = probe.output.split("\n").find(line => line.includes("removed inherited")) ?? "";
+    for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) expect(warning).toContain(name);
+  }, { timeout: 90_000 });
+
+  test("fails the case after which the guarded checkout's config changed", () => {
+    const guarded = tempDir("ocx-git-probe-checkout-");
+    git(guarded, "init", "-q");
+    const probe = runProbe(String.raw`import { test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { join } from "node:path";
+test("leaves the config alone", () => {});
+test("writes user.name", () => {
+  execFileSync("git", ["config", "--file", join(process.env.OCX_GIT_CONFIG_GUARD_CHECKOUT!, ".git", "config"), "user.name", "probe-private-value"]);
+});
+`, { OCX_GIT_CONFIG_GUARD_CHECKOUT: guarded });
+    expect(probe.exitCode, probe.output).toBe(1);
+    expect(probe.output).toContain("(pass) leaves the config alone");
+    expect(probe.output).toContain("(fail) writes user.name");
+    const report = probe.output.split("\n").find(line => line.includes("changed in the checkout's common .git/config")) ?? "";
+    expect(report).toContain("user.name changed");
+    expect(report).not.toContain("probe-private-value");
+    expect(probe.output).toMatch(/1 pass\s+1 fail/);
+  }, { timeout: 90_000 });
+});
+
