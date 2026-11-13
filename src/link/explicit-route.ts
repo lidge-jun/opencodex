@@ -98,25 +98,26 @@ export function explicitRouteSshOptions(route: ExplicitRoute): string[] {
   ];
 }
 
-export type IdentityFileProblem = "identity_file_missing" | "identity_file_not_regular" | "identity_file_permissions" | "identity_file_unreadable";
+export type IdentityFileProblem = "identity_file_missing" | "identity_file_not_regular" | "identity_file_permissions" | "identity_file_unreadable" | "identity_file_unsupported_platform";
 
 /**
  * Whether an identity file is usable as the link's key, decided from its metadata alone: the file is never opened or read.
  * It must be a regular file (a symlink is refused, so the path names the key itself), owned by this user with no group or
  * other permission bits (ssh ignores a key file of its owner that others can read, and the link would then fail public-key
  * authentication with nothing pointing at the cause), and readable by this user. Null when usable.
+ * A Windows Home refuses every identity file before looking at it: the accepted form is a POSIX path, which Windows resolves
+ * against the current drive, and owner and mode bits there say nothing about the file's ACL.
  */
-export function identityFileProblem(path: string): IdentityFileProblem | null {
+export function identityFileProblem(path: string, platform: NodeJS.Platform = process.platform): IdentityFileProblem | null {
+  if (platform === "win32") return "identity_file_unsupported_platform";
   let stat;
   try { stat = lstatSync(path); } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return code === "ENOENT" || code === "ENOTDIR" ? "identity_file_missing" : "identity_file_unreadable";
   }
   if (stat.isSymbolicLink() || !stat.isFile()) return "identity_file_not_regular";
-  if (process.platform !== "win32") {
-    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) return "identity_file_permissions";
-    if ((stat.mode & 0o077) !== 0) return "identity_file_permissions";
-  }
+  if (typeof process.getuid === "function" && stat.uid !== process.getuid()) return "identity_file_permissions";
+  if ((stat.mode & 0o077) !== 0) return "identity_file_permissions";
   try { accessSync(path, constants.R_OK); } catch { return "identity_file_unreadable"; }
   return null;
 }

@@ -37,9 +37,10 @@ export function splitRouteRequest(value: unknown): { body: unknown; route: Route
  * The 400 for a route whose identity file this Home cannot use, from its metadata only (the hint is a fixed code); null
  * without one. probe and confirm-host check it before their SSH, apply after its replay and before its journal entry.
  */
-export function identityFileRefusal(route: ExplicitRoute | null): Response | null {
-  const problem = route?.identityFile === undefined ? null : identityFileProblem(route.identityFile);
+export function identityFileRefusal(route: ExplicitRoute | null, platform: NodeJS.Platform = process.platform): Response | null {
+  const problem = route?.identityFile === undefined ? null : identityFileProblem(route.identityFile, platform);
   if (!problem) return null;
+  if (problem === "identity_file_unsupported_platform") return fail("invalid_identity_file", "A Windows Home does not support explicitRoute.identityFile yet.", 400, problem);
   return fail("invalid_identity_file", "explicitRoute.identityFile must be a regular file (not a symlink) that this user owns and can read, with no group or other permissions.", 400, problem);
 }
 

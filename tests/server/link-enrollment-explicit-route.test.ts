@@ -10,6 +10,7 @@ import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv, WINDOWS_OS_PROBE } from "../../src/link/ssh-argv";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { operationsJournalPath } from "../../src/link/operations-journal";
+import { identityFileRefusal } from "../../src/server/management/link-route-request";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -296,4 +297,10 @@ test("a new journalled enrollment whose key file went away after confirm-host is
   expect(h.ssh.length).toBe(before);
   expect(existsSync(operationsJournalPath())).toBe(false);
   expect(h.store.links).toEqual([]);
+});
+test("a Windows Home refuses an identity file with a fixed hint, whatever the file", async () => {
+  const refused = identityFileRefusal({ ...ROUTE, identityFile: keyFile() }, "win32")!;
+  expect({ status: refused.status, body: await refused.json() }).toEqual({ status: 400, body: { error: { code: "invalid_identity_file",
+    message: "A Windows Home does not support explicitRoute.identityFile yet.", hint: "identity_file_unsupported_platform" } } });
+  expect(identityFileRefusal(ROUTE, "win32")).toBeNull();
 });

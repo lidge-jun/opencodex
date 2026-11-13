@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkExplicitRoute, explicitRouteSshOptions, sameExplicitRoute, type ExplicitRoute } from "../../src/link/explicit-route";
+import { checkExplicitRoute, explicitRouteSshOptions, identityFileProblem, sameExplicitRoute, type ExplicitRoute } from "../../src/link/explicit-route";
 import { readTombstones, recordTombstone } from "../../src/link/tombstones";
 import { enrollOperationDigest } from "../../src/server/management/link-operation";
 import {
@@ -393,6 +393,19 @@ describe("the explicit route's identity file", () => {
     ["an empty string", ""], ["1025 characters", "/" + "a".repeat(1024)], ["a number", 7], ["null", null],
   ])("%s is refused", (_label, identityFile) => {
     expect(checkExplicitRoute({ ...ROUTE, identityFile })).toEqual({ ok: false, reason: "identity_file_form" });
+  });
+
+  test("a Windows Home refuses an identity file whatever the path, before looking at the file", () => {
+    // A POSIX-looking path resolves against the current drive there, and owner and mode bits say nothing about its ACL.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-identity-win32-"));
+    const key = join(dir, "id_ed25519");
+    writeFileSync(key, "x\n", { mode: 0o600 });
+    try {
+      expect(identityFileProblem(key)).toBe(process.platform === "win32" ? "identity_file_unsupported_platform" : null);
+      expect(identityFileProblem(key, "win32")).toBe("identity_file_unsupported_platform");
+      expect(identityFileProblem(join(dir, "missing"), "win32")).toBe("identity_file_unsupported_platform");
+      expect(identityFileProblem(key, "linux")).toBe(null);
+    } finally { removeTreeWithRetry(dir); }
   });
 
   test("the options are the route's, then IdentitiesOnly=yes, IdentityAgent=none and IdentityFile=<path>, one argument each", () => {
