@@ -92,7 +92,7 @@ import {
 } from "../live";
 import type { ServeOptionsContext } from "./serve-options";
 import type { RequestMetricsRecorder } from "../request-metrics";
-import { resolveInboundBodyLimitBytes } from "../request-decompress";
+import { attachParsedRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
 import { responseToolOwnership } from "../responses/response-tool-ownership";
 import { runTurnStateCallerScope } from "../turn-state-handles";
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse } from "../workflow-refusal";
@@ -354,6 +354,7 @@ export function createWebsocketHandler(
             headers: fwd,
             ...(linkSocket ? {} : { body: JSON.stringify(turnBody) }),
           });
+          if (linkSocket) attachParsedRequestBody(req, turnBody);
           try {
             // A socket can be the first ingress for a root. Admit every inference frame,
             // then keep its workflow lease with the turn until terminal output or cancellation.
@@ -374,7 +375,6 @@ export function createWebsocketHandler(
               inboundTransport: "websocket",
               nativeControl,
               ...(ws.data.linkTurnObserver ? { linkTurn: ws.data.linkTurnObserver(turnId) } : {}),
-              ...(linkSocket ? { preparsedBody: turnBody } : {}),
               abortSignal: turnAbort.signal,
               turnAdmissionLease,
               onFirstOutput: () => recordFirstOutput(logCtx, start),

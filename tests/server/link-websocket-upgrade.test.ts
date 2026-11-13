@@ -449,6 +449,14 @@ describe("a link create reaches the pipeline once (#8600)", () => {
     expect(JSON.stringify(upstreamRequests)).toContain("from the local socket");
   });
 
+  test("a link create through a combo reaches the upstream as the child the combo built, not as the parent's body", async () => {
+    const port = await startHome({ combos: { free: { strategy: "failover", targets: [{ provider: "fixture", model: "fixture" }] } } } as Partial<OcxConfig>);
+    const wire = await openSocket(port);
+    expect((await runTurn(wire, { ...create("through the combo"), model: "combo/free" })).map(frameType)).toContain("response.completed");
+    expect(upstreamRequests).toHaveLength(1);
+    expect((JSON.parse(upstreamRequests[0]!.body) as Record<string, unknown>).model).toBe("fixture");
+  });
+
   test("a link create past the configured inbound limit is refused as it was when it was read back", async () => {
     const port = await startHome({ maxInboundBodyBytes: 1024 * 1024 });
     const wire = await openSocket(port);

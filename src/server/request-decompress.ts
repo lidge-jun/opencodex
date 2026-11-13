@@ -406,3 +406,20 @@ export function admitParsedJsonRequestBody(body: unknown, maxBytes: number, budg
   budget?.observeAcceptedRequestCopy(parsedBytes);
   return body;
 }
+
+/**
+ * A parsed body bound to the one Request it stands for (#8600). It goes with that request alone: a request the pipeline
+ * builds for a combo child, a recovery or a retry is another Request and reads its own body. Taken once, like a body.
+ */
+const parsedBodies = new WeakMap<Request, unknown>();
+
+export function attachParsedRequestBody(req: Request, body: unknown): void {
+  parsedBodies.set(req, body);
+}
+
+export function takeParsedRequestBody(req: Request): { body: unknown } | undefined {
+  if (!parsedBodies.has(req)) return undefined;
+  const body = parsedBodies.get(req);
+  parsedBodies.delete(req);
+  return { body };
+}
