@@ -37,7 +37,7 @@ use crate::link_ws_frame::{
 use crate::platform::fill_random_bytes;
 use crate::relay::{
     CancelSlot, DeadlineStream, RelayCredentials, RequestLimits, open_link_ws_upstream,
-    token_request_head,
+    token_request_head, write_all_before,
 };
 use crate::relay_auth::LINK_RELAY_SESSION_HEADER;
 use crate::routes::RelayAuthKind;
@@ -562,6 +562,8 @@ pub(crate) struct SocketShared {
     codex: TcpStream,
     home: TcpStream,
     closing: AtomicBool,
+    /// Set under Codex's write lock once the local 101 is written: no frame reaches Codex before it.
+    upgraded: AtomicBool,
     codex_write: Mutex<()>,
     home_write: Mutex<()>,
     state: Mutex<SockState>,
@@ -616,6 +618,13 @@ fn write_frame(
         if kind == Kind::Data {
             tests::data_locked();
         }
+        if leg == Leg::Codex && !shared.upgraded.load(Ordering::SeqCst) {
+            // Before the local 101 Codex's connection is still HTTP; its owner answers it.
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "link websocket not upgraded",
+            ));
+        }
         if shared.closing.load(Ordering::SeqCst) && kind != Kind::Close {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -648,6 +657,29 @@ fn close_bytes(action: &CloseAction) -> Option<Vec<u8>> {
         CloseAction::Empty => Some(Vec::new()),
         CloseAction::Cut | CloseAction::Leave => None,
     }
+}
+
+/// The local 101 (draft 9 U1, review T6-4 r1): written under Codex's write lock inside a control
+/// operation deadline, so a close frame can only follow it. Ok(false) when closing began first (a stop
+/// between registration and the 101): nothing is written and the caller answers today's 426.
+fn write_101(shared: &Arc<SocketShared>, reply: &[u8], fail: bool) -> std::io::Result<bool> {
+    let token = register_deadline(Instant::now() + shared.limits.control_operation, shared);
+    let result = (|| {
+        let _guard = lock(&shared.codex_write);
+        if shared.closing.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        if fail {
+            return Err(std::io::Error::other("101 write refused by test"));
+        }
+        let mut stream = &shared.codex;
+        stream.write_all(reply)?;
+        stream.flush()?;
+        shared.upgraded.store(true, Ordering::SeqCst);
+        Ok(true)
+    })();
+    clear_deadline(token);
+    result
 }
 
 /// The terminal transition (draft 9 U4, X1, Y1). Idempotent; only the first caller writes close frames.
@@ -901,17 +933,15 @@ fn open(
         creds.raw_token.as_slice(),
         &after,
     );
-    // Each write gets the time left before the setup deadline.
-    let left = deadline.saturating_duration_since(Instant::now());
-    if left.is_zero() {
-        return Err(Fallback::Preflight);
-    }
-    let _ = upstream.writer.set_write_timeout(Some(left));
-    upstream
-        .writer
-        .write_all(head.as_slice())
-        .and_then(|()| upstream.writer.flush())
-        .map_err(|_| Fallback::Preflight)?;
+    // Each write call gets only the time left before the setup deadline (design R6).
+    write_all_before(
+        &mut upstream.writer,
+        head.as_slice(),
+        deadline,
+        l.setup,
+        &Instant::now,
+    )
+    .map_err(|_| Fallback::Preflight)?;
     drop(head);
     let resp = read_response_head(&mut upstream.reader).map_err(|_| Fallback::HomeRefused)?;
     if !valid_home_upgrade(&resp, &home_key) {
@@ -939,6 +969,7 @@ fn open(
             codex: codex_clone,
             home: home_clone,
             closing: AtomicBool::new(false),
+            upgraded: AtomicBool::new(false),
             codex_write: Mutex::new(()),
             home_write: Mutex::new(()),
             state: Mutex::new(SockState {
@@ -1023,15 +1054,20 @@ fn open(
     let fail_101 = tests::FAIL_101.swap(false, Ordering::SeqCst);
     #[cfg(not(test))]
     let fail_101 = false;
-    if fail_101
-        || codex_writer
-            .write_all(reply.as_bytes())
-            .and_then(|()| codex_writer.flush())
-            .is_err()
-    {
-        terminate(&shared, CloseAction::Cut, CloseAction::Cut);
-        finish(&shared, Some(handle));
-        return Ok(());
+    #[cfg(test)]
+    tests::before_101();
+    match write_101(&shared, reply.as_bytes(), fail_101) {
+        Ok(true) => {}
+        Ok(false) => {
+            // A stop claimed this socket first: no 101, today's 426 from the caller.
+            finish(&shared, Some(handle));
+            return Err(Fallback::Stopping);
+        }
+        Err(_) => {
+            terminate(&shared, CloseAction::Cut, CloseAction::Cut);
+            finish(&shared, Some(handle));
+            return Ok(());
+        }
     }
     test_barrier("link-ws-before-start");
     #[cfg(test)]
@@ -1343,6 +1379,70 @@ mod tests {
         assert_eq!(relay_code(Some(1006)), 1011);
     }
 
+    /// A Home that takes one byte per write call while time passes (design R6, review T6-4 r1).
+    struct Trickle {
+        clock: std::rc::Rc<std::cell::Cell<u64>>,
+        timeouts: Vec<Duration>,
+        written: usize,
+    }
+
+    impl Write for Trickle {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.clock.set(self.clock.get() + 1);
+            self.written += 1;
+            Ok(buf.len().min(1))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl crate::relay::TimedWrite for Trickle {
+        fn set_write_timeout_left(&mut self, left: Duration) -> std::io::Result<()> {
+            self.timeouts.push(left);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_setup_write_ends_at_the_absolute_deadline_however_the_home_drains() {
+        let base = Instant::now();
+        let clock = std::rc::Rc::new(std::cell::Cell::new(0u64));
+        let mut home = Trickle {
+            clock: std::rc::Rc::clone(&clock),
+            timeouts: Vec::new(),
+            written: 0,
+        };
+        let now = || base + Duration::from_secs(clock.get());
+        let err = crate::relay::write_all_before(
+            &mut home,
+            &[b'h'; 20],
+            base + Duration::from_secs(8),
+            Duration::from_secs(30),
+            &now,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert_eq!(home.written, 8, "no write starts after the deadline");
+        let expected: Vec<Duration> = (1..=8).rev().map(Duration::from_secs).collect();
+        assert_eq!(
+            home.timeouts, expected,
+            "each write gets only the time left"
+        );
+        // The per-call cap still applies when the deadline is far away.
+        clock.set(0);
+        home.timeouts.clear();
+        crate::relay::write_all_before(
+            &mut home,
+            b"ok",
+            base + Duration::from_secs(600),
+            Duration::from_secs(10),
+            &now,
+        )
+        .unwrap();
+        assert_eq!(home.timeouts, vec![Duration::from_secs(10); 2]);
+    }
+
     // ---- relay tests: a mock Home and a Codex-shaped client on real loopback sockets, in process ----
 
     use crate::http_wire::read_request_head;
@@ -1356,6 +1456,7 @@ mod tests {
     pub(super) static FAIL_SPAWN: AtomicBool = AtomicBool::new(false);
     pub(super) static FAIL_101: AtomicBool = AtomicBool::new(false);
     static BEFORE_START: Mutex<Option<fn()>> = Mutex::new(None);
+    static BEFORE_101: Mutex<Option<fn()>> = Mutex::new(None);
     /// Armed by a test: the next claiming terminal caller reports here, then waits for the release.
     static CLAIM_GATE: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mutex::new(None);
     /// Armed by a test: the next data write reports here once it holds its leg's write lock.
@@ -1366,6 +1467,47 @@ mod tests {
         if let Some(f) = hook {
             f();
         }
+    }
+
+    pub(super) fn before_101() {
+        let hook = *lock(&BEFORE_101);
+        if let Some(f) = hook {
+            f();
+        }
+    }
+
+    /// What stop does to each registered socket, run on the worker just before its local 101.
+    fn stop_claims_before_the_101() {
+        let (m, _) = registry();
+        lock(m).stopping = true;
+        let shared = only_socket();
+        terminate(
+            &shared,
+            CloseAction::Frame(1001, "link websocket stopping".into()),
+            CloseAction::Frame(1001, String::new()),
+        );
+    }
+
+    #[test]
+    fn a_stop_before_the_local_101_answers_426_and_writes_codex_no_close_frame() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, homes) = mock_home(HomeMode::Advertise);
+        *lock(&BEFORE_101) = Some(stop_claims_before_the_101);
+        let s = session(home_port, test_limits(), "", &[]);
+        *lock(&BEFORE_101) = None;
+        assert_eq!(
+            s.status, 426,
+            "Codex gets an HTTP answer, never a close frame first"
+        );
+        assert_eq!(s.worker.join().unwrap(), Err(Fallback::Stopping));
+        let mut home = homes.recv().unwrap();
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![FrameEvent::Close(Some(1001), String::new())]
+        );
+        wait_all_released();
+        reset_registry();
     }
 
     pub(super) fn after_claim() {

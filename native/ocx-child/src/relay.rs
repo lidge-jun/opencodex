@@ -173,6 +173,45 @@ impl RequestLimits<'_> {
     }
 }
 
+/// A writer whose next write call can be given its own timeout.
+pub(crate) trait TimedWrite: Write {
+    fn set_write_timeout_left(&mut self, left: Duration) -> std::io::Result<()>;
+}
+
+impl TimedWrite for TcpStream {
+    fn set_write_timeout_left(&mut self, left: Duration) -> std::io::Result<()> {
+        self.set_write_timeout(Some(left))
+    }
+}
+
+/// Write all of `buf` before `deadline`: every write call gets only the time left (at most `cap`), so
+/// a peer draining a little at a time cannot stretch the whole write past the deadline.
+pub(crate) fn write_all_before<W: TimedWrite>(
+    w: &mut W,
+    mut buf: &[u8],
+    deadline: Instant,
+    cap: Duration,
+    now: &dyn Fn() -> Instant,
+) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        let left = deadline.saturating_duration_since(now()).min(cap);
+        if left.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "write deadline exceeded",
+            ));
+        }
+        w.set_write_timeout_left(left)?;
+        match w.write(buf) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(n) => buf = &buf[n..],
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    w.flush()
+}
+
 pub struct AuthenticatedUpstream {
     pub reader: BufReader<DeadlineStream>,
     pub writer: TcpStream,
@@ -268,10 +307,20 @@ fn open_authenticated_upstream_with(
         preflight.push_str(&format!("{LINK_RELAY_PROBE_HEADER}: 1\r\n"));
     }
     preflight.push_str("\r\n");
-    writer
-        .write_all(preflight.as_bytes())
-        .and_then(|()| writer.flush())
-        .map_err(|e| UpstreamError::HomeUnreachable(format!("preflight write failed: {e}")))?;
+    // With a whole-request deadline every write call gets only the time left; without one, as before.
+    match limits.deadline {
+        Some(deadline) => write_all_before(
+            &mut writer,
+            preflight.as_bytes(),
+            deadline,
+            AUTH_TIMEOUT,
+            &Instant::now,
+        ),
+        None => writer
+            .write_all(preflight.as_bytes())
+            .and_then(|()| writer.flush()),
+    }
+    .map_err(|e| UpstreamError::HomeUnreachable(format!("preflight write failed: {e}")))?;
 
     let resp = read_response_head(&mut reader).map_err(|e| match e {
         FramingError::Eof => {
