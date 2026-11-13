@@ -1748,6 +1748,21 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     }
   });
 
+  test.each(["tee", "eager"] as const)("%s WS final row and attempt keep the verdict's code behind the relay tail", async mode => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai",
+      activeAttempt: {} as NonNullable<RequestLogContext["activeAttempt"]> };
+    const error = { code: "rate_limit_exceeded", message: "flagged for possible cybersecurity risk" };
+    const src = sourceStream([`event: error\ndata: ${JSON.stringify({ error })}\n\n`]);
+    const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController()) : relaySseEagerBounded(src, new AbortController(), parityHooks);
+    const { frames, terminals } = await wsPump(relayed, log);
+    expect(frames.find(frame => frame.type === "response.failed")?.response?.error?.code).toBe("rate_limit_exceeded");
+    expect(terminals).toEqual([["failed", 429]]);
+    const rows: Array<{ status: number; errorCode?: string }> = [];
+    addFinalRequestLog("ws-bare-row", 0, log, httpStatusForRequestLogTerminal("failed", log), { terminalStatus: "failed" }, entry => rows.push(entry));
+    expect(rows.map(row => [row.status, row.errorCode])).toEqual([[429, "rate_limit_exceeded"]]);
+    expect(log.activeAttempt?.errorCode).toBe("rate_limit_exceeded");
+  });
+
   test("a raw WS upstream body keeps an untyped envelope as the protocol error, off the row", async () => {
     const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
     const src = sourceStream([`event: error\ndata: ${JSON.stringify({ error: { code: "rate_limit_exceeded", message: "untyped quota" } })}\n\n`]);

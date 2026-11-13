@@ -128,15 +128,16 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     // evidence" result would be read as "keep the previous bare verdict" and the terminal would
     // never claim the row.
     const prior = bareEvidence.get(logCtx);
-    bareEvidence.delete(logCtx);
     genuineTerminals.add(logCtx);
     // A reader of the client stream (the WebSocket log) also sees the relay's own synthesized
-    // response.failed. It renders the winning bare verdict, so the row keeps that verdict
-    // instead of inferring a different class from the provider copy it carries. A genuine upstream
-    // terminal can carry the same generic type and code, so the copy must be the verdict's too.
+    // response.failed. It renders the winning bare verdict, so the row keeps that verdict, and the
+    // evidence stays for the final row's code, instead of inferring a different class from the
+    // provider copy it carries. A genuine upstream terminal can carry the same generic type and
+    // code, so the copy must be the verdict's too.
     const tail = json.response?.error;
     if (prior !== undefined && type === "response.failed" && tail?.code === prior.verdict.terminalCode
       && tail?.type === prior.verdict.terminalType && tail?.message === prior.verdict.message) return;
+    bareEvidence.delete(logCtx);
     // Untyped evidence wrote the diagnostics; the terminal that retires it owns them now.
     if (prior !== undefined && !prior.typed) {
       delete logCtx.upstreamErrorCode;
