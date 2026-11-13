@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
-import { readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { linkSuspendedByRevoke, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -21,6 +21,7 @@ const LINK = "lnk_0123456789abcdef";
 const ALIAS = "pen-7f3a9c";
 const OP = "detach-0001";
 const NOW = 1_800_000_000_000;
+const AT_ISO = new Date(NOW - 1000).toISOString();
 const ROUTE = { proxyCommand: "/usr/local/bin/pen pipe --node 7f3a9c 22", user: "ubuntu", port: 22 };
 
 let root = "";
@@ -39,16 +40,27 @@ function record(): LinkRecord {
     createdAt: "2026-11-13T00:00:00.000Z", remotePlatform: "posix", childKind: "ephemeral", explicitRoute: ROUTE, exclusive: true };
 }
 
-function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void } = {}) {
+function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void;
+  markHook?: (effect: string, phase: "intent" | "done") => void } = {}) {
+  const stops: string[] = [];
+  const closedSockets: string[] = [];
+  let restarts = 0;
+  // What the supervisor's spawn check sees when the revoke restarts the tunnel itself.
+  const suspendedAtRestart: boolean[] = [];
+  // What a reload landing right after the revoke releases its supervisor hold would see.
+  const suspendedAtHoldRelease: boolean[] = [];
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: [{ id: "link-key", name: "link:" + ALIAS, key: "k", createdAt: "2026-11-13T00:00:00Z" }] };
   const journalPath = join(root, "operations.json");
+  let journalPathOf = () => journalPath;
   let store: LinkStore = { version: 1, listenerPort: 18181, links: [record()] };
   const ssh: string[][] = [];
   const state: LinkRouteState = {
     pendingHosts: new Map(), confirmedHosts: new Map(), operations: new Set(),
-    listener: { ensureStarted: async () => {}, status: () => ({ state: "listening", port: 18181, reason: null }), close: async () => {}, onAuthenticatedCatalog: () => () => {} },
-    supervisor: { start() {}, ensureStarted: async () => {}, reload: async () => {}, stopLink: async () => {}, reconnect: async () => true, status: () => [], stop: async () => {} },
+    listener: { ensureStarted: async () => {}, status: () => ({ state: "listening", port: 18181, reason: null }), close: async () => {}, onAuthenticatedCatalog: () => () => {},
+      closeLinkSockets: id => { closedSockets.push(id); return 0; } },
+    supervisor: { start() {}, ensureStarted: async () => { restarts += 1; suspendedAtRestart.push(linkSuspendedByRevoke(journalPathOf(), LINK)); }, reload: async () => {}, stopLink: async id => { stops.push(id); }, reconnect: async () => true, status: () => [], stop: async () => {},
+      holdLink: () => { let released = false; return () => { if (!released) { released = true; suspendedAtHoldRelease.push(linkSuspendedByRevoke(journalPathOf(), LINK)); } }; } },
   };
   const runner: SshRunner = {
     async run(argv) {
@@ -63,14 +75,22 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   const deps: ManagementContext["deps"] = {
     now: () => NOW, sshRunner: runner,
     readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
-    linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => journalPath,
+    linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => journalPathOf(),
     linkAliasLock: { lockDir: join(root, "locks"), waitMs: options.lockWaitMs ?? 0, pollMs: 250, now: () => NOW, ...(options.sleep ? { sleep: options.sleep } : {}) },
+    ...(options.markHook ? { linkOperationMarkHook: options.markHook } : {}),
     revokeApiKey: (cfg, id) => { const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
   };
-  async function revoke(body: Record<string, unknown>) {
+  async function revoke(body: Record<string, unknown>, signal?: AbortSignal) {
     const url = new URL("http://127.0.0.1:10100/api/link/" + LINK);
+    return call(url, new Request(url, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(body), ...(signal ? { signal } : {}) }));
+  }
+  async function reconnect() {
+    const url = new URL("http://127.0.0.1:10100/api/link/" + LINK + "/reconnect");
+    return call(url, new Request(url, { method: "POST" }));
+  }
+  async function call(url: URL, req: Request) {
     const context: ManagementContext = {
-      req: new Request(url, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+      req,
       url, config, deps, version: "2.99.0", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
       sessionControl: { isCurrent: () => true, isPaired: () => false, revokeCurrent: () => true },
       convergeCodexCatalog: async () => { throw new Error("no catalog convergence"); }, syncClaudeAgentDefsBestEffort: async () => {},
@@ -78,7 +98,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     const response = await handleLinkRoutes(context, state);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   }
-  return { revoke, ssh, config, journalPath, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
+  return { revoke, reconnect, state, ssh, config, journalPath, stops, closedSockets, suspendedAtRestart, suspendedAtHoldRelease, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
@@ -96,12 +116,42 @@ test("a purge with an operation id records the Child's purged:true as its receip
   expect(h.ssh.length).toBe(calls);
 });
 
-test("a purge without the Child's report keeps the link; the Child may have changed, so the outcome is unknown", async () => {
+test("a purge without the Child's report keeps the link; the Child may have changed, so the outcome is unknown and the tunnel stays down until it is resolved", async () => {
   const h = harness({ purgeReport: '{"restored":true,"purged":false}\n' });
   const revoked = await h.revoke({ purge: true, operationId: OP });
   expect({ status: revoked.status, code: code(revoked), outcome: revoked.body.outcome }).toEqual({ status: 502, code: "remote_disconnect_failed", outcome: "unknown" });
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   expect(h.journal().operations[0]!.receipt).toBeUndefined();
+  expect(h.restarts).toBe(0);
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  // The hold goes before the outcome is written: a reload in that window must already find the link suspended.
+  expect(h.suspendedAtHoldRelease).toEqual([true]);
+});
+
+test("a journalled purge refused before it ran (a full install) changed nothing: failed_clean, and the tunnel restarts unsuspended", async () => {
+  const h = harness();
+  h.store = { ...h.store, links: h.store.links.map(link => ({ ...link, childKind: "full" as const })) };
+  const revoked = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: revoked.status, code: code(revoked), outcome: revoked.body.outcome }).toEqual({ status: 409, code: "purge_unsupported", outcome: "failed_clean" });
+  expect(h.suspendedAtRestart).toEqual([false]);
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(false);
+  expect(h.suspendedAtHoldRelease).toEqual([false]);
+});
+
+test("a plain purge without the Child's report restarts the tunnel as before: no journal, nothing suspended", async () => {
+  const h = harness({ purgeReport: '{"restored":true,"purged":false}\n' });
+  const revoked = await h.revoke({ purge: true });
+  expect({ status: revoked.status, code: code(revoked) }).toEqual({ status: 502, code: "remote_disconnect_failed" });
+  expect(h.restarts).toBe(1);
+});
+
+test("a journalled revoke that throws before its outcome is written does not stay registered as running", async () => {
+  const h = harness();
+  h.state.supervisor.stopLink = async () => { throw new Error("stop failed"); };
+  try { await h.revoke({ purge: true, operationId: OP }); } catch { /* the route may rethrow */ }
+  expect(h.journal().operations[0]!.state).toBe("open");
+  // The entry is abandoned, so the supervisor must treat it as a revoke that died.
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
 });
 
 test("the same id with another mode is refused", async () => {
@@ -190,6 +240,116 @@ test("before this Home ever journalled, a plain revoke takes no lock", async () 
   } finally { held.release(); }
 });
 
+test("a recorded revoke entry pruned between the read and the replay falls through to a normal revoke", async () => {
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  const gonePath = join(root, "operations-after-prune.json");
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{ operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: at, updatedAt: at, state: "committed", finishedAt: at, effects: [] }] });
+  writeOperationsJournal(gonePath, { version: 1, operations: [] });
+  // The first read sees the entry; every later one sees the journal after another write pruned it.
+  let reads = 0;
+  h.setJournalPath(() => (reads++ === 0 ? h.journalPath : gonePath));
+  const revoked = await h.revoke({ purge: true, operationId: OP });
+  expect(revoked.status).toBe(200);
+  expect(revoked.body).toMatchObject({ linkId: LINK, operationId: OP, outcome: "committed" });
+  expect(h.store.links).toEqual([]);
+});
+
+test("an invalid body on a link a Child job holds answers 409 as before journalling, not 400", async () => {
+  const h = harness();
+  const { childOpsEngineFor } = await import("../../src/server/management/link-child-ops-routes");
+  const release = childOpsEngineFor(h.state).reserve(LINK);
+  try {
+    const refused = await h.revoke({ force: "yes" });
+    expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "link_operation_in_progress" });
+  } finally { release?.(); }
+});
+
+test("a revoke whose client went away while waiting for the alias lock stops at once and changes nothing", async () => {
+  const controller = new AbortController();
+  let polls = 0;
+  // The harness clock stands still, so only the abort can end this wait; a wait that ignores it fails here, in bounded time.
+  const h = harness({ lockWaitMs: 100_000, sleep: async () => { polls += 1; if (polls === 1) controller.abort(); if (polls > 3) throw new Error("kept waiting after the abort"); } });
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [] });
+  const held = await acquireAliasLock(ALIAS, { lockDir: join(root, "locks") });
+  try {
+    const refused = await h.revoke({ force: true }, controller.signal);
+    expect(refused.status).toBe(409);
+    expect(polls).toBe(1);
+    expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  } finally { held.release(); }
+});
+
+test("a new journalled revoke past the bound of unsettled entries is refused and the link stays", async () => {
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: Array.from({ length: OPERATION_JOURNAL_MAX_UNSETTLED }, (_, i) => ({
+    operationId: "old-" + i, kind: "revoke" as const, alias: "pen-old-" + i, linkId: "lnk_00000000000000aa", digest: "d".repeat(64), createdAt: at, updatedAt: at,
+    state: "unknown" as const, finishedAt: at, effects: [] })) });
+  const refused = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_journal_full" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  expect(h.ssh).toEqual([]);
+});
+
+test("a damaged journal names its recovery step; a force revoke still goes through", async () => {
+  const h = harness();
+  writeFileSync(h.journalPath, "{ damaged");
+  const refused = await h.revoke({ purge: true });
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 500, code: "operation_journal_unreadable" });
+  expect((refused.body.error as { message: string }).message).toContain("move it aside");
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  expect((await h.revoke({ force: true })).status).toBe(200);
+  expect(h.store.links).toEqual([]);
+});
+
+describe("journal write failures during a revoke", () => {
+  test("a failed remote_cleanup intent leaves the tunnel running and answers with the operation id", async () => {
+    const h = harness({ markHook: (effect, phase) => { if (effect === "remote_cleanup" && phase === "intent") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ purge: true, operationId: OP });
+    expect({ status: revoked.status, code: code(revoked), operationId: revoked.body.operationId }).toEqual({ status: 500, code: "operation_journal_failed", operationId: OP });
+    expect(h.stops).toEqual([]);
+    expect(h.ssh).toEqual([]);
+    expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  });
+
+  test("a purge receipt that cannot be written stops the revoke before the key, unknown, with no tunnel restart toward the purged Child", async () => {
+    // Removing the link on a receipt held only in memory would lose the Child's purged:true if the process then died.
+    const h = harness({ markHook: (effect, phase) => { if (effect === "remote_cleanup" && phase === "done") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ purge: true, operationId: OP });
+    expect({ status: revoked.status, code: code(revoked), operationId: revoked.body.operationId, outcome: revoked.body.outcome })
+      .toEqual({ status: 500, code: "operation_journal_failed", operationId: OP, outcome: "unknown" });
+    expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+    expect(h.config.apiKeys!.map(key => key.id)).toEqual(["link-key"]);
+    expect(h.restarts).toBe(0);
+    // A later reload or a restart of the Home must not reconnect to the purged Child either (link-revoke-suspend.test.ts).
+    expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  });
+
+  test("a journalled force revoke whose first intent cannot be written leaves the tunnel running", async () => {
+    const h = harness({ markHook: (effect, phase) => { if (effect === "key_revoked" && phase === "intent") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ force: true, operationId: OP });
+    expect({ status: revoked.status, code: code(revoked), operationId: revoked.body.operationId }).toEqual({ status: 500, code: "operation_journal_failed", operationId: OP });
+    expect(h.stops).toEqual([]);
+    expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  });
+
+  test("a failed record_removed completion still closes the link's sockets", async () => {
+    const h = harness({ markHook: (effect, phase) => { if (effect === "record_removed" && phase === "done") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ purge: true, operationId: OP });
+    expect(revoked.status).toBe(200);
+    expect(h.closedSockets).toEqual([LINK]);
+  });
+
+  test("a failed key_revoked intent keeps the key, answers with the operation id and settles unknown", async () => {
+    const h = harness({ markHook: (effect, phase) => { if (effect === "key_revoked" && phase === "intent") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ purge: true, operationId: OP });
+    expect({ status: revoked.status, code: code(revoked), operationId: revoked.body.operationId, outcome: revoked.body.outcome }).toEqual({ status: 500, code: "operation_journal_failed", operationId: OP, outcome: "unknown" });
+    expect(h.config.apiKeys!.map(key => key.id)).toEqual(["link-key"]);
+  });
+});
+
 test("a revoke without an operation id writes no journal and answers as before", async () => {
   const h = harness();
   expect(await h.revoke({ purge: true })).toEqual({ status: 200, body: { linkId: LINK } });
@@ -211,4 +371,25 @@ test.each([
   const repeat = await h.revoke({ purge: true, operationId: OP });
   expect(repeat.body.outcome).toBe(outcome);
   expect(h.ssh).toEqual([]);
+});
+
+describe("reconnect of a suspended link", () => {
+  test.each([
+    ["unknown", { state: "unknown" as const, finishedAt: AT_ISO }, "ocx link operations resolve --operation-id " + OP + " --yes"],
+    ["open (the Home stopped during it)", { state: "open" as const }, "ocx link revoke --link-id " + LINK + " --operation-id " + OP],
+  ])("an %s revoke answers 409 link_suspended naming the operation and its next step", async (_label, shape, step) => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [{ operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: "a".repeat(64), createdAt: AT_ISO, updatedAt: AT_ISO,
+      effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }], ...shape }] });
+    h.state.supervisor.reconnect = async () => "suspended";
+    const answer = await h.reconnect();
+    expect({ status: answer.status, code: code(answer), operationId: answer.body.operationId, operationState: answer.body.operationState })
+      .toEqual({ status: 409, code: "link_suspended", operationId: OP, operationState: shape.state });
+    expect((answer.body.error as { message: string }).message).toContain(step);
+  });
+
+  test("a reconnect that restarts answers 200 as before", async () => {
+    const h = harness();
+    expect(await h.reconnect()).toEqual({ status: 200, body: { linkId: LINK } });
+  });
 });
