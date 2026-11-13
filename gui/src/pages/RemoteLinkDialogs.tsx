@@ -27,7 +27,9 @@ export function RemoteLinkDisconnectDialog({
 }: RemoteLinkDisconnectDialogProps): ReactElement {
   const t = useT();
   const isEphemeral = confirming?.row.childKind === "ephemeral";
-  const forceCmd = isEphemeral ? "~/.cache/opencodex/bin/ocx-child detach" : "ocx disconnect";
+  // Never a bare disconnect: a forced removal is also the way out when the Child now belongs to another link, a hub or another
+  // Home. A lightweight Child is cleaned by the link-bound recover (run here), which checks that it still belongs to this link.
+  const forceCmd = isEphemeral ? `ocx link recover --link-id ${confirming?.row.id ?? ""}` : "ocx disconnect";
 
   return (
     <dialog ref={confirmRef} aria-labelledby="remote-link-confirm-title" onCancel={event => { event.preventDefault(); onClose(); }}
@@ -37,7 +39,7 @@ export function RemoteLinkDisconnectDialog({
           <h3 id="remote-link-confirm-title" className="m-0 text-[16px] leading-6 font-semibold tracking-[-0.015em]">{confirming.force ? t("remoteLink.forceRemove.title", { alias: confirming.row.alias }) : t("link.disconnect")}</h3>
           <p className="m-0 text-[14px] leading-[21px] text-fg-muted">
             {confirming.force
-              ? <Trans k="remoteLink.forceRemove.body" cmd={forceCmd} vars={{ alias: confirming.row.alias }} />
+              ? <Trans k={isEphemeral ? "remoteLink.forceRemove.ephemeralBody" : "remoteLink.forceRemove.body"} cmd={forceCmd} vars={{ alias: confirming.row.alias }} />
               : isEphemeral
                 ? t("remoteLink.disconnect.ephemeralBody", { alias: confirming.row.alias })
                 : t("link.disconnectConfirm", { alias: confirming.row.alias })}

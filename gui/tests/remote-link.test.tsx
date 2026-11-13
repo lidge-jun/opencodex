@@ -563,6 +563,9 @@ test("disconnect failure opens force confirmation and sends force body", async (
   await act(async () => { (confirm.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(confirm.textContent).toContain("Remove here only");
+  // The disconnect on the Child is conditional: the machine may belong to another link, a hub or another Home by now.
+  expect(confirm.textContent).toContain("still connected to this link");
+  expect(confirm.textContent).toContain("leave it as it is");
   await act(async () => { (confirm.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(calls.some(call => call.method === "DELETE" && call.body === JSON.stringify({ force: true }))).toBe(true);
@@ -1252,8 +1255,11 @@ test("Ready-to-Plant, cached ephemeral, connected badges, conflict notices, and 
   await act(async () => { delBtn.click(); });
   await flush();
   expect(calls).toContainEqual({ method: "DELETE", path: "/api/link/lnk_eph", body: { purge: true } });
-  // Force remove modal now shown with ocx-child detach guidance and exclusive { force: true } body
-  expect(confirmDialog.textContent).toContain("~/.cache/opencodex/bin/ocx-child detach");
+  // Force remove modal now points at the link-bound recover, which cleans the machine only while it still belongs to this link,
+  // never at a bare ocx-child detach; the body stays the exclusive { force: true }.
+  expect(confirmDialog.textContent).toContain("ocx link recover --link-id lnk_eph");
+  expect(confirmDialog.textContent).toContain("only while it still belongs to this link");
+  expect(confirmDialog.textContent).not.toContain("ocx-child detach");
   const forceBtn = [...confirmDialog.querySelectorAll("button")].find(b => b.textContent?.includes("Remove here only")) as HTMLButtonElement;
   await act(async () => { forceBtn.click(); });
   await flush();
