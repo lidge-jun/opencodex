@@ -208,14 +208,12 @@ try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){
 /** Printed on stderr when the managed plant directory holds no runnable ocx-child to purge. */
 export const MANAGED_PURGE_CHILD_MISSING_MARKER = "ocx-purge-error:managed_child_missing";
 
-/** Read-only: exit 0 with marker only when no planted binary and no ocx-child recovery record remain. */
-export function windowsRecoverAbsentArgv(marker: string): string[] {
-  if (!/^[a-z:-]+$/.test(marker)) throw new Error("invalid marker");
+/** Read-only: print the link-bound detach receipt; exit 4 when it is missing, a reparse point or unreadable. */
+export function windowsRecoverReceiptArgv(linkId: string): string[] {
+  if (!/^lnk_[0-9a-f]{16}$/.test(linkId)) throw new Error("invalid link id");
   return packedPowerShellArgv(NATIVE_PROCESS + String.raw`
-$r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$cd="$h\child";$cx=if($env:CODEX_HOME){$env:CODEX_HOME}else{"$r\.codex"}
-$b=if($env:LOCALAPPDATA){"$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"}else{"$env:USERPROFILE\.cache\opencodex\bin\ocx-child.exe"}
-if(@(@($b,"$cd\state.json","$cd\codex-journal.json","$cd\attach-rollback.json","$cx\.ocx-child-owner.json")|?{[IO.File]::Exists($_)-or[IO.Directory]::Exists($_)}).Count -gt 0){exit 4}
-[Console]::Out.WriteLine('${marker}');exit 0
+$r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$f="$h\link-receipts\${linkId}.json"
+try{if(-not[IO.File]::Exists($f)){exit 4};if(((Get-Item -LiteralPath $f -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){exit 4};[Console]::Out.Write([IO.File]::ReadAllText($f))}catch{exit 4};exit 0
 `);
 }
 

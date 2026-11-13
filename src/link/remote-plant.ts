@@ -1,5 +1,5 @@
 import { CHILD_TARGET_TRIPLES, type ChildTargetTriple } from "./child-binary-source";
-import { MANAGED_PURGE_CHILD_MISSING_MARKER, windowsInspectRuntimeArgv, windowsManagedPurgeDisconnectArgv, windowsPlantChildArgv, windowsPurgePlantedChildArgv, windowsRecoverAbsentArgv } from "./remote-windows";
+import { MANAGED_PURGE_CHILD_MISSING_MARKER, windowsInspectRuntimeArgv, windowsManagedPurgeDisconnectArgv, windowsPlantChildArgv, windowsPurgePlantedChildArgv, windowsRecoverReceiptArgv } from "./remote-windows";
 import { buildExecArgv, REMOTE_SERVED_RUNTIME, remoteServedRuntimeAttempt } from "./ssh-argv";
 import { sshFailureHint, sshRunnerErrorHint, type SshRunner } from "./ssh-runner";
 
@@ -241,26 +241,22 @@ export const POSIX_MANAGED_PURGE_DISCONNECT_SCRIPT = [
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 
-/** Printed by the absence check when no planted binary and no ocx-child recovery record remain. */
-export const RECOVER_ABSENT_MARKER = "ocx-recover:absent";
-
 /**
- * ocx link recover's proof after a lost receipt: the managed binary is gone and no ocx-child
- * recovery record remains in the default homes, so no link's state is left to restore. Read-only.
+ * ocx link recover's proof after a lost answer: the link-bound receipt that ocx-child detach
+ * --expect-link writes to $OPENCODEX_HOME/link-receipts/<link id>.json once it restored the Child
+ * (native/ocx-child/src/cli.rs write_detach_receipt). Read-only; a missing, symlinked or unreadable
+ * receipt exits non-zero and proves nothing.
  */
-export const POSIX_RECOVER_ABSENT_SCRIPT = [
+export const POSIX_RECOVER_RECEIPT_SCRIPT = [
   "case \"$(uname -s 2>/dev/null)\" in Windows*|MSYS*|MINGW*|CYGWIN*) exit 125;; esac",
-  "dest=\"$HOME/.cache/opencodex/bin/ocx-child\"",
-  "child_dir=\"${OPENCODEX_HOME:-$HOME/.opencodex}/child\"",
-  "codex_home=\"${CODEX_HOME:-$HOME/.codex}\"",
-  "for f in \"$dest\" \"$child_dir/state.json\" \"$child_dir/codex-journal.json\" \"$child_dir/attach-rollback.json\" \"$codex_home/.ocx-child-owner.json\"; do",
-  "  if [ -e \"$f\" ] || [ -L \"$f\" ]; then exit 4; fi",
-  "done",
-  `printf '${RECOVER_ABSENT_MARKER}\\n'`,
+  "f=\"${OPENCODEX_HOME:-$HOME/.opencodex}/link-receipts/$1.json\"",
+  "if [ -L \"$f\" ] || [ ! -f \"$f\" ] || [ ! -r \"$f\" ]; then exit 4; fi",
+  "cat -- \"$f\"",
 ].join("\n");
 
-export function remoteRecoverAbsentArgv(platform: "posix" | "windows" = "posix"): string[] {
-  return platform === "windows" ? windowsRecoverAbsentArgv(RECOVER_ABSENT_MARKER) : ["sh", "-c", POSIX_RECOVER_ABSENT_SCRIPT, "ocx-recover-absent"];
+export function remoteRecoverReceiptArgv(platform: "posix" | "windows", linkId: string): string[] {
+  if (!LINK_ID.test(linkId)) throw new Error("invalid link id");
+  return platform === "windows" ? windowsRecoverReceiptArgv(linkId) : ["sh", "-c", POSIX_RECOVER_RECEIPT_SCRIPT, "ocx-recover-receipt", linkId];
 }
 
 /** With expectLink, the Child restores only when its state and owner record both name that link. */

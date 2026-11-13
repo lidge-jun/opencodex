@@ -492,4 +492,56 @@ fn purge_removes_the_planted_binary_while_the_lifecycle_lock_is_held() {
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("\"purged\":true"));
     assert!(!planted.exists());
+    assert_eq!(receipt(&homes, LINK_A).expect("no receipt")["purged"], true);
+}
+
+fn receipt(homes: &Homes, link: &str) -> Option<serde_json::Value> {
+    fs::read(homes.ocx.join("link-receipts").join(format!("{link}.json")))
+        .ok()
+        .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+}
+
+#[test]
+fn a_restore_for_the_expected_link_leaves_a_durable_receipt_naming_it() {
+    let homes = Homes::new("owner-link-receipt");
+    let _home = homes.attach(LINK_A);
+    let (code, _, err) = homes.detach_expect(LINK_A);
+    assert_eq!(code, 0, "{err}");
+    let found = receipt(&homes, LINK_A).expect("no receipt");
+    assert_eq!(found["schema"], "ocx.child.detach-receipt/1");
+    assert_eq!(found["linkId"], LINK_A);
+    assert_eq!(found["restored"], true);
+    // The test binary is outside the managed directory, so nothing was purged.
+    assert_eq!(found["purged"], false);
+    assert!(receipt(&homes, LINK_B).is_none());
+    // A plain detach writes none.
+    let other = Homes::new("owner-link-receipt-plain");
+    let _home = other.attach(LINK_A);
+    let (code, _, err) = run_bin(&other.ocx, &other.codex, other.port, &["detach"], None);
+    assert_eq!(code, 0, "{err}");
+    assert!(receipt(&other, LINK_A).is_none());
+}
+
+#[test]
+fn a_clean_child_records_a_receipt_for_the_expected_link() {
+    let homes = Homes::new("owner-link-receipt-clean");
+    let (code, _, err) = homes.detach_expect(LINK_A);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        receipt(&homes, LINK_A).expect("no receipt")["outcome"],
+        "NotAttached"
+    );
+}
+
+#[test]
+fn a_rollback_snapshot_recovery_would_refuse_is_refused_before_anything_changes() {
+    let homes = Homes::new("owner-link-bad-rollback");
+    let _home = homes.attach(LINK_A);
+    fs::write(
+        homes.ocx.join("child").join("attach-rollback.json"),
+        br#"{"priorState":null}"#,
+    )
+    .unwrap();
+    let report = assert_refused_untouched(&homes, LINK_A, 5, "conflict");
+    assert_eq!(report["record"], "attach-rollback");
 }

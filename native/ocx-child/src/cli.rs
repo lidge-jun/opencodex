@@ -1602,7 +1602,13 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
                 if let Err(code) = detach_without_codex_home(&local_paths) {
                     return code;
                 }
-                let purged = match purge_after_detach(purge, current_exe_override) {
+                let purged = match purge_with_receipt(
+                    purge,
+                    current_exe_override,
+                    &local_paths.opencodex_home,
+                    expect,
+                    crate::journal::DetachOutcome::NotAttached,
+                ) {
                     Ok(purged) => purged,
                     Err(code) => return code,
                 };
@@ -1729,7 +1735,13 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
     drop(_startup_gate);
     let _ = remove_optional_file(&paths.child_dir.join("daemon-start.lock"));
     let _ = fs::remove_dir(&paths.child_dir);
-    let purged = match purge_after_detach(purge, current_exe_override) {
+    let purged = match purge_with_receipt(
+        purge,
+        current_exe_override,
+        &paths.opencodex_home,
+        expect,
+        outcome,
+    ) {
         Ok(purged) => purged,
         Err(code) => return code,
     };
@@ -1795,18 +1807,10 @@ fn first_child_record(paths: &ChildPaths) -> Option<(&'static str, PathBuf)> {
 }
 
 /// The link an unresolved attach rollback would put back: `None` without a snapshot,
-/// `Some(None)` for a first attach (no prior state), `Some(Some(id))` for a re-attach.
+/// `Some(None)` for a first attach (no prior state), `Some(Some(id))` for a re-attach. The
+/// snapshot is parsed and checked exactly as `AttachRollbackSnapshot::recover` will, so a
+/// record recovery would refuse is refused here, before anything changes.
 fn rollback_prior_link(paths: &ChildPaths) -> Result<Option<Option<String>>, String> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct PriorLink {
-        link_id: String,
-    }
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct RollbackPrior {
-        prior_state: Option<PriorLink>,
-    }
     reject_symlink(&paths.rollback_file)?;
     let mut bytes = match fs::File::open(&paths.rollback_file) {
         Ok(file) => {
@@ -1822,11 +1826,75 @@ fn rollback_prior_link(paths: &ChildPaths) -> Result<Option<Option<String>>, Str
     let parsed = if bytes.len() as u64 > MAX_ROLLBACK_BYTES {
         Err("rollback snapshot exceeds size limit".to_owned())
     } else {
-        serde_json::from_slice::<RollbackPrior>(&bytes)
+        serde_json::from_slice::<AttachRollbackRecord>(&bytes)
             .map_err(|e| format!("malformed rollback snapshot: {e}"))
     };
     volatile_zero_bytes(&mut bytes);
-    Ok(Some(parsed?.prior_state.map(|prior| prior.link_id)))
+    let record = parsed?;
+    let (ocx, codex) = AttachRollbackSnapshot::canonical_homes(paths)?;
+    if record.schema != "ocx.child.attach-rollback/1"
+        || record.opencodex_home != ocx
+        || record.codex_home != codex
+        || record.opencodex_home_identity != directory_identity(Path::new(&ocx))?
+        || record.codex_home_identity != directory_identity(Path::new(&codex))?
+    {
+        return Err("rollback snapshot belongs to a different home".to_owned());
+    }
+    Ok(Some(
+        record
+            .prior_state
+            .as_ref()
+            .map(|prior| prior.link_id.clone()),
+    ))
+}
+
+/// Durable, link-bound proof that `detach --expect-link` restored this Child, kept in
+/// `$OPENCODEX_HOME/link-receipts/<link id>.json` after the child directory is gone, so a Home
+/// whose answer was lost after the purge can still read it. Holds no credential.
+fn write_detach_receipt(
+    opencodex_home: &Path,
+    link_id: &str,
+    outcome: crate::journal::DetachOutcome,
+    purged: bool,
+) -> Result<(), String> {
+    let dir = opencodex_home.join("link-receipts");
+    ensure_private_dir(&dir)?;
+    let body = serde_json::json!({
+        "schema": "ocx.child.detach-receipt/1",
+        "linkId": link_id,
+        "restored": true,
+        "outcome": format!("{outcome:?}"),
+        "purged": purged,
+    });
+    write_private_atomic(
+        &dir.join(format!("{link_id}.json")),
+        format!("{body}\n").as_bytes(),
+    )
+}
+
+/// Purge under the lifecycle lock; with `--expect-link`, record the receipt before the purge
+/// (purged false) and again after it, so a lost answer never leaves the purge unprovable.
+fn purge_with_receipt(
+    purge: bool,
+    current_exe_override: Option<&Path>,
+    opencodex_home: &Path,
+    expect: Option<&str>,
+    outcome: crate::journal::DetachOutcome,
+) -> Result<bool, u8> {
+    if let Some(link_id) = expect
+        && let Err(e) = write_detach_receipt(opencodex_home, link_id, outcome, false)
+    {
+        eprintln!("detach could not record its receipt: {e}");
+        return Err(1);
+    }
+    let purged = purge_after_detach(purge, current_exe_override)?;
+    if let Some(link_id) = expect
+        && purged
+        && let Err(e) = write_detach_receipt(opencodex_home, link_id, outcome, true)
+    {
+        eprintln!("detach could not update its receipt: {e}");
+    }
+    Ok(purged)
 }
 
 /// Restore only when both `state.json` and the ownership record name `link_id`, and an
