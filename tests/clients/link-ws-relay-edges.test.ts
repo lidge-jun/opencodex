@@ -6,7 +6,7 @@ import type { Server } from "bun";
 import { probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
 import { forgetLinkWebsocketAdvertisementsForTests } from "../../src/client/link-ws-advertisement";
 import { HOME_INITIATED_LINK_TUNNEL, type LinkTunnelGate } from "../../src/client/link-relay";
-import { createLinkWebsocketRelay, type LinkWebsocketRelayDeps } from "../../src/client/link-websocket";
+import { createLinkWebsocketRelay, type LinkWebsocketData, type LinkWebsocketRelayDeps } from "../../src/client/link-websocket";
 import { encodeClientClose } from "../../src/client/link-ws-framer";
 import { createClientLinkSupervisor } from "../../src/client/link-tunnel";
 import type { ClientLinkState } from "../../src/client/link-state";
@@ -70,7 +70,7 @@ function codexRequest(): Request {
 }
 
 /** The relay alone, against a stand-in Home, with a local server whose upgrade the test decides. */
-async function bareRelay(upgrade: () => boolean, extra: Partial<LinkWebsocketRelayDeps> = {}) {
+async function bareRelay(upgrade: (req: Request, options: { data: LinkWebsocketData }) => boolean, extra: Partial<LinkWebsocketRelayDeps> = {}) {
   const { identity, home } = await standin();
   const records: string[] = [];
   const traffic = createLinkTrafficBook("relayed");
@@ -242,6 +242,24 @@ describe("a local upgrade that never opened", () => {
     expect(relay.snapshot()).toEqual({ open: 0, settingUp: 0, reservedBytes: 0 });
     expect(relay.closeAll()).toBe(0);
     expect(records).toEqual(["link_ws_fallback:handshake"]);
+  });
+
+  test("server.upgrade throwing after Bun opened Codex's socket closes both legs and counts the socket once", async () => {
+    const closes: Array<[number | undefined, string | undefined]> = [];
+    const local = { send: () => 1, getBufferedAmount: () => 0, close: (code?: number, reason?: string) => { closes.push([code, reason]); } };
+    const { relay, records, traffic, identity, home, releasedOnce, run } = await bareRelay((_req, options) => {
+      options.data.leg.attach(local);
+      throw new Error("upgrade failed after open");
+    });
+    expect((await run())?.status).toBe(426);
+    expect(closes).toEqual([[1001, "link websocket stopping"]]);
+    expect(await home.sockets.at(-1)!.until(frame => frame.type === "close")).toMatchObject({ code: 1001 });
+    home.sockets.at(-1)!.sendClose(1001);
+    await releasedOnce;
+    expect(relay.counters()).toMatchObject({ upgrades: 0, fallbacks: { handshake: 1 }, closes: { stopped: 1 } });
+    expect(records).toEqual(["link_ws_close:stopped", "link_ws_fallback:handshake"]);
+    expect(traffic.snapshot(identity.linkId)).toMatchObject({ requests: 1, incomplete: 0 });
+    expect(relay.snapshot()).toEqual({ open: 0, settingUp: 0, reservedBytes: 0 });
   });
 
   test("a socket Bun upgraded but never opened is stopped after the close bound", async () => {

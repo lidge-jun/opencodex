@@ -180,9 +180,16 @@ export class HomeLeg {
     this.markOpened();
   }
 
-  /** The local upgrade failed (Bun refused or threw): close the Home leg and count nothing. */
+  /**
+   * The local upgrade failed (Bun refused or threw): close the Home leg and count nothing. If Bun had already
+   * opened Codex's socket before failing, the socket is Codex's: both legs close as on a stop, counted once.
+   */
   abandon(): void {
     if (this.ended) return;
+    if (this.opened) {
+      this.stop();
+      return;
+    }
     this.closeHome(1001, "");
     this.finish("stopped");
   }
