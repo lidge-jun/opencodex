@@ -14,6 +14,7 @@ function scenario(before: string, body: string, homePi: boolean) {
   const home = join(root, "home"); mkdirSync(home);
   try {
     const result = spawnSync(process.execPath, ["--eval", `
+      import { installRouteIntentAclFixture } from './tests/helpers/route-intent-acl-fixture';
       import { expect } from 'bun:test';
       import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
       import { join, dirname } from 'node:path';
@@ -25,6 +26,7 @@ function scenario(before: string, body: string, homePi: boolean) {
       import { applyIntegration } from './src/integrations/writer';
       import { setLocalRouteIntentOff } from './src/integrations/route-intent-state';
       import { ROUTE_CLIENT_IDS } from './src/link/route-intent';
+      installRouteIntentAclFixture();
       const home = process.env.HOME;
       const config = getDefaultConfig(); config.port = 18274; config.hostname = '127.0.0.1'; saveConfig(config);
       const path = INTEGRATION_CLIENTS.pi.configPath({}, home);

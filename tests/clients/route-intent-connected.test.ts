@@ -13,6 +13,7 @@ function scenario(body: string, enabledIds = ["pi"], explicitClients?: string[],
   const root = mkdtempSync(join(tmpdir(), "ocx-route-connected-")); const home = join(root, "home"); mkdirSync(home);
   try {
     const result = spawnSync(process.execPath, ["--eval", `
+      import { installRouteIntentAclFixture } from './tests/helpers/route-intent-acl-fixture';
       import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
       import { join, dirname } from 'node:path';
       import { getDefaultConfig, saveConfig, loadConfig, setPersistedConfigMutationBeforeCommitForTests } from './src/config';
@@ -34,6 +35,7 @@ function scenario(body: string, enabledIds = ["pi"], explicitClients?: string[],
       import { ROUTE_CLIENT_IDS } from './src/link/route-intent';
       import { setLocalRouteIntentOff, readRouteIntentReceipt, cleanupRouteIntent } from './src/integrations/route-intent';
       import { INTEGRATION_CLIENTS } from './src/integrations/registry';
+      installRouteIntentAclFixture();
       const home = process.env.HOME;
       const local = getDefaultConfig(); local.port = 18274; local.hostname = '0.0.0.0'; saveConfig(local);
       const path = INTEGRATION_CLIENTS.pi.configPath({}, home);

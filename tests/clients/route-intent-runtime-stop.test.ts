@@ -13,6 +13,8 @@ test("runtime recycle cancels its watch and tick before replacement handoff", ()
     writeFileSync(fixture, `
       import { test, expect, spyOn } from 'bun:test';
       test('isolated recycle', async () => {
+        const { installRouteIntentAclFixture } = await import(${JSON.stringify(repoPath("tests/helpers/route-intent-acl-fixture.ts"))});
+        installRouteIntentAclFixture();
         const { writeFileSync } = await import('node:fs');
         const { join } = await import('node:path');
         const configApi = await import(${JSON.stringify(repoPath("src/config.ts"))});
