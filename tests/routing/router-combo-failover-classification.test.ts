@@ -12,6 +12,7 @@ import {
   codexAccountModelRefusalHardStopCode,
   comboFailureCooldownScope,
   comboFailureDecision,
+  coolComboTargetForCommittedTerminal,
   isMalformedResponseFormatRequest,
   isOpenRouterOpaque400Envelope,
   isProviderModerationRefusal,
@@ -1865,5 +1866,78 @@ describe("provider moderation refusal: safety-system wording and framed native s
       expect(comboFailureDecision(400, message, { code: "content_filter" })).toBe("stop");
       expect(comboFailureCooldownScope(400, message, { code: "content_filter" })).not.toBe("none");
     }
+  });
+});
+
+describe("committed-terminal combo cooldown", () => {
+  const committed = { provider: "a", model: "m1", status: 200 };
+
+  test("output_limit on a committed incomplete cools the serving target for the local cap", () => {
+    const now = Date.now();
+    coolComboTargetForCommittedTerminal({
+      comboId: "free",
+      terminalStatus: "incomplete",
+      failureDetailCode: "output_limit",
+      servingAttempt: committed,
+      httpStatus: 200,
+    });
+    expect(isComboTargetInCooldown("free", first, now + 60_000)).toBe(true);
+    // The next pick skips the exhausted target instead of re-burning its output ceiling.
+    const pick = pickComboTarget(comboConfig(), "free", {
+      now: now + 1_000,
+      allowCooldownReprobe: false,
+    })!;
+    expect(targetKey(pick.target)).toBe(targetKey({ provider: "b", model: "m2" }));
+    // Read the expiry last: an expired-read may retire the entry the pick relied on.
+    expect(isComboTargetInCooldown("free", first, now + 10 * 60_000 + 1)).toBe(false);
+  });
+
+  test("stall_timeout on a committed incomplete cools briefly", () => {
+    const now = Date.now();
+    coolComboTargetForCommittedTerminal({
+      comboId: "free",
+      terminalStatus: "incomplete",
+      failureDetailCode: "stall_timeout",
+      servingAttempt: committed,
+      httpStatus: 502,
+    });
+    expect(isComboTargetInCooldown("free", first, now + 30_000)).toBe(true);
+    expect(isComboTargetInCooldown("free", first, now + 61_000)).toBe(false);
+  });
+
+  test("completed, failed, and non-capacity incompletes cool nothing", () => {
+    for (const terminalStatus of ["completed", "failed"] as const) {
+      coolComboTargetForCommittedTerminal({
+        comboId: "free",
+        terminalStatus,
+        failureDetailCode: "output_limit",
+        servingAttempt: committed,
+        httpStatus: 200,
+      });
+    }
+    for (const code of ["content_filter", "adapter_eof", "provider_error", "stream_failed"]) {
+      coolComboTargetForCommittedTerminal({
+        comboId: "free",
+        terminalStatus: "incomplete",
+        failureDetailCode: code,
+        servingAttempt: committed,
+        httpStatus: 502,
+      });
+    }
+    expect(isComboTargetInCooldown("free", first, Date.now() + 1)).toBe(false);
+  });
+
+  test("uncommitted, locally answered, and non-combo terminals cool nothing", () => {
+    const base = {
+      comboId: "free",
+      terminalStatus: "incomplete",
+      failureDetailCode: "output_limit",
+      httpStatus: 200,
+    };
+    coolComboTargetForCommittedTerminal({ ...base, servingAttempt: { ...committed, status: 502 } });
+    coolComboTargetForCommittedTerminal({ ...base, servingAttempt: { ...committed, locallyAnswered: true } });
+    coolComboTargetForCommittedTerminal({ ...base });
+    coolComboTargetForCommittedTerminal({ ...base, comboId: undefined, servingAttempt: committed });
+    expect(isComboTargetInCooldown("free", first, Date.now() + 1)).toBe(false);
   });
 });
