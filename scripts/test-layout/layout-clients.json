@@ -227,5 +227,8 @@
   "link-child-catalog-oracle.test.ts": "e2e-style",
   "link-ws-framer.test.ts": "clients",
   "link-ws-advertisement.test.ts": "clients",
-  "link-ws-transport.test.ts": "clients"
+  "link-ws-transport.test.ts": "clients",
+  "link-ws-relay.test.ts": "clients",
+  "link-ws-fallback.test.ts": "clients",
+  "link-ws-child-home.test.ts": "e2e-style"
 }
