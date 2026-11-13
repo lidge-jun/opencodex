@@ -80,7 +80,6 @@ export default function ProviderOverview({
   const t = useT();
   const { locale } = useI18n();
   const status = binProviderStatus(item);
-  const vertexUnverified = usesUnverifiedVertexCredentials(item);
   const needsAttention = Boolean(item.activeNeedsReauth) || oauth?.needsReauth === true;
   const needsOAuthLogin = item.authMode === "oauth" && oauth?.loggedIn === false;
   const effectiveStatus = item.disabled === true
@@ -104,6 +103,8 @@ export default function ProviderOverview({
   const connectionAbortRef = useRef<{ key: string; controller: AbortController } | null>(null);
   const testingConnection = connectionTest?.key === connectionProbeKey && connectionTest.testing;
   const connectionResult = connectionTest?.key === connectionProbeKey ? connectionTest.result : null;
+  // A passing connection test is the same proof the server reports; do not wait for a config re-read.
+  const vertexUnverified = usesUnverifiedVertexCredentials(item) && connectionResult?.ok !== true;
   const configuredModels = [
     ...new Set([
       ...(item.models ?? []),

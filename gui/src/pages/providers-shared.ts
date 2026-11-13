@@ -17,6 +17,7 @@ export interface ProvidersConfig {
     project?: string;
     location?: string;
     vertexCredentialKind?: "ambient" | "marker" | "reference" | "api-key";
+    vertexCredentialVerified?: boolean;
     anthropicOAuthInstance?: "anthropic2";
     keyOptional?: boolean;
     disabled?: boolean;

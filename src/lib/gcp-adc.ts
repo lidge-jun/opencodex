@@ -125,6 +125,18 @@ const sourceObservations = new Map<string, { source: string; generation: number 
 let sourceEpoch = 0;
 let lastReconciledGeneration = 0;
 let liveSources = new Set<string>();
+// Last token exchange that succeeded, per credential scope. Proof the dashboard can show without a
+// network call; it lapses on its own once the source the next resolve would use changes.
+const verifiedSources = new Map<string, { source: string; generation: number }>();
+const adcScope = (markerAccount: string | undefined) => markerAccount ? `marker:${markerAccount}` : "host";
+
+/** True when this process minted a token from the credential source the next request would use. */
+export function vertexAdcCredentialVerified(markerAccount?: string): boolean {
+  const verified = verifiedSources.get(adcScope(markerAccount));
+  if (!verified) return false;
+  const current = observeAdcSource(markerAccount);
+  return current.source === verified.source && current.generation === verified.generation;
+}
 
 export function sweepExpiredGcpAdcTokens(now = Date.now()): number {
   const skew = getRefreshSkewMs();
@@ -244,7 +256,7 @@ function currentAdcSourceKey(markerAccount: string | undefined): string {
 
 /** Every observed source transition gets a fresh incarnation, including A→B→A. */
 function observeAdcSource(markerAccount: string | undefined): { source: string; generation: number } {
-  const scope = markerAccount ? `marker:${markerAccount}` : "host";
+  const scope = adcScope(markerAccount);
   const source = currentAdcSourceKey(markerAccount);
   const previous = sourceObservations.get(scope);
   if (previous?.source === source) return previous;
@@ -454,7 +466,11 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
         tokenCache.set(source, { token: token.access_token, expiresAtMs, generation: expected.generation });
         sweepExpiredOnWrite(Date.now());
       }
+      verifiedSources.set(adcScope(markerAccount), { source, generation: expected.generation });
       return { token: token.access_token, source, generation: expected.generation, markerAccount };
+    } catch (error) {
+      if (!controller.signal.aborted) verifiedSources.delete(adcScope(markerAccount));
+      throw error;
     } finally {
       owned.settled = true;
       if (inflight.get(cacheKey) === owned) inflight.delete(cacheKey);
@@ -538,6 +554,7 @@ export function vertexRequestAuthorityIsCurrent(request: object, target?: string
 
 /** Test seam: restores complete process-local token and reconciliation state. */
 export function __resetVertexTokenCache(): void {
+  verifiedSources.clear();
   tokenCache.clear();
   for (const entry of inflight.values()) entry.controller.abort();
   inflight.clear();
