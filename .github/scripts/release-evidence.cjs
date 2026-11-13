@@ -17,17 +17,33 @@ const { createHash } = require('node:crypto');
 const { resolve } = require('node:path');
 const REPOSITORY_ID = 1273824907;
 const FULL_SHA = /^[0-9a-f]{40}$/;
-const CI_JOBS = Object.freeze([
-  'changes', 'select windows runner', 'storage policy', 'api usage', 'gates',
-  ...Array.from({length: 5}, (_, i) => `test ${i + 1}/5`),
-  ...Array.from({length: 4}, (_, i) => `macos ${i + 1}/4`),
-  ...Array.from({length: 11}, (_, i) => `windows ${i + 1}/11`),
-  'keyring ubuntu', 'keyring windows', 'keyring macos', 'docker smoke',
-  'docs site build', 'structure gate', 'macos widget + bundle', 'desktop shell',
-  ...['ubuntu-latest', 'windows-latest', 'macos-latest'].flatMap(os => [
-    `setup action ${os}`, `remote helper ${os}`, `npm-global ${os}`,
-  ]), 'ci',
-]);
+// The Windows leg count a ci policy's pinned workflow produces. Entries written before the
+// field existed pinned the eleven-shard ci.yml, so an absent value means eleven; a run is
+// held to the count of the entry its revision matched, never to the newest one, so a
+// historical revision stays verifiable and a new revision cannot pass with fewer legs.
+const LEGACY_WINDOWS_SHARDS = 11;
+function windowsShardsOf(policy) {
+  if (policy.windowsShards === undefined) return LEGACY_WINDOWS_SHARDS;
+  if (!Number.isSafeInteger(policy.windowsShards) || policy.windowsShards < 1 || policy.windowsShards > 64) {
+    throw new Error('invalid ci policy windowsShards');
+  }
+  return policy.windowsShards;
+}
+function ciJobs(windowsShards) {
+  return Object.freeze([
+    'changes', 'select windows runner', 'storage policy', 'api usage', 'gates',
+    ...Array.from({length: 5}, (_, i) => `test ${i + 1}/5`),
+    ...Array.from({length: 4}, (_, i) => `macos ${i + 1}/4`),
+    ...Array.from({length: windowsShards}, (_, i) => `windows ${i + 1}/${windowsShards}`),
+    'keyring ubuntu', 'keyring windows', 'keyring macos', 'docker smoke',
+    'docs site build', 'structure gate', 'macos widget + bundle', 'desktop shell',
+    ...['ubuntu-latest', 'windows-latest', 'macos-latest'].flatMap(os => [
+      `setup action ${os}`, `remote helper ${os}`, `npm-global ${os}`,
+    ]), 'ci',
+  ]);
+}
+// The job set the current workflow produces: the newest approved ci entry's.
+const CI_JOBS = ciJobs(windowsShardsOf(APPROVED_POLICIES.filter(policy => policy.kind === 'ci').at(-1)));
 
 function sha(value) {
   if (typeof value !== 'string' || !FULL_SHA.test(value)) throw new Error('expected full lowercase commit SHA');
@@ -109,7 +125,7 @@ async function assertPolicy(api, run, kind, policies) {
       }
       if (!FULL_SHA.test(expected) || entry.type !== 'blob' || !['100644', '100755'].includes(entry.mode) || entry.sha !== expected) { matches = false; break; }
     }
-    if (matches) return;
+    if (matches) return policy;
   }
   throw new Error(`unapproved ${kind} workflow or helper policy`);
 }
@@ -146,6 +162,7 @@ function serviceRange(candidate, baseline) {
 function checkPolicyFiles(policies, root) {
   const current = new Map(policies.map(policy => [policy.kind, policy]));
   for (const kind of ['ci', 'service']) if (!current.has(kind)) throw new Error(`missing ${kind} evidence policy`);
+  windowsShardsOf(current.get('ci'));
   for (const policy of current.values()) {
     for (const [name, expected] of Object.entries(policy.files)) {
       const bytes = readFileSync(resolve(root, name));
@@ -204,9 +221,9 @@ function createEvidence(rawApi, policies = APPROVED_POLICIES) {
   }
   async function eligible(run, wf, kind, sourceSha) {
     validateRun(run, wf, kind, sourceSha);
-    await assertPolicy(policyApi, run, kind, policies);
+    const policy = await assertPolicy(policyApi, run, kind, policies);
     const jobs = await pages(api, `/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
-    validateJobs(jobs, kind === 'ci' ? CI_JOBS : serviceJobs(sourceSha));
+    validateJobs(jobs, kind === 'ci' ? ciJobs(windowsShardsOf(policy)) : serviceJobs(sourceSha));
   }
   async function qualifies(run, wf, kind, candidate, dev) {
     try {
@@ -361,4 +378,4 @@ async function main(args) {
   if (args[0] === 'resolve') process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 if (require.main === module) main(process.argv.slice(2)).catch(error => { process.stderr.write(`release evidence: ${error.message}\n`); process.exitCode = 1; });
-module.exports = { CI_JOBS, serviceJobs, validateJobs, createEvidence, pages, validateRun, apiClient, serviceChangeRequired, serviceRange, checkPolicyFiles };
+module.exports = { CI_JOBS, ciJobs, windowsShardsOf, serviceJobs, validateJobs, createEvidence, pages, validateRun, apiClient, serviceChangeRequired, serviceRange, checkPolicyFiles };
