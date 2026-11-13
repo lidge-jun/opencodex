@@ -180,11 +180,15 @@ function validateKeyName(
 export type IssuedApiKey = Pick<OcxApiKeyEntry, "id" | "name" | "key" | "createdAt">;
 
 /** Shared one-time data-key issuance used by the dashboard and link transactions. */
-export function issueApiKeyInProcess(config: OcxConfig, name: string): IssuedApiKey {
+export function issueApiKeyInProcess(config: OcxConfig, name: string, reservedId?: string): IssuedApiKey {
   const checked = validateKeyName(name, { required: true });
   if ("error" in checked) throw new Error(checked.error);
+  // An operation journal reserves the id before it issues the key, so a crash can be matched to it later.
+  if (reservedId !== undefined && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(reservedId) || (config.apiKeys ?? []).some(key => key.id === reservedId))) {
+    throw new Error("The reserved key id is invalid or already in use.");
+  }
   const entry: IssuedApiKey = {
-    id: randomUUID(),
+    id: reservedId ?? randomUUID(),
     name: checked.value,
     key: `ocx_data_${randomBytes(20).toString("hex")}`,
     createdAt: new Date().toISOString(),
