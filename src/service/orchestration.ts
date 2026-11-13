@@ -191,12 +191,21 @@ export async function proxyStillLiveAfterStop(deps: {
   }
 }
 
-export async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
+type TrackedProxyStop = (pid: number, endpoint: { hostname: string; port: number } | null) => Promise<unknown>;
+
+type TrackedProxyStopOptions = {
+  stop?: TrackedProxyStop;
+  /** Throw when a proxy still answers that this home cannot verify, instead of leaving it alone silently. */
+  refuseUnverifiedLive?: boolean;
+};
+
+export async function stopTrackedProxyIfRunning(options: TrackedProxyStopOptions = {}): Promise<TrackedProxyCleanupResult> {
   let stopped = false;
   const pid = readPid();
   const trackedKillPid = verifiedKillTarget(pid);
   if (trackedKillPid !== null && isProcessAlive(trackedKillPid)) {
-    await stopProxy(trackedKillPid);
+    if (options.stop) await options.stop(trackedKillPid, null);
+    else await stopProxy(trackedKillPid);
     removePid(trackedKillPid);
     removeRuntimePort(trackedKillPid);
     stopped = true;
@@ -213,15 +222,29 @@ export async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupRe
     acceptPackageTreeFenced: true,
   });
   const liveKillPid = verifiedKillTarget(live?.pid);
-  if (liveKillPid !== null) {
-    await stopProxy(liveKillPid);
+  if (live && liveKillPid !== null) {
+    if (options.stop) await options.stop(liveKillPid, { hostname: live.probeHostname ?? live.hostname ?? "127.0.0.1", port: live.port });
+    else await stopProxy(liveKillPid);
     removePid(liveKillPid);
     removeRuntimePort(liveKillPid);
     stopped = true;
+  } else if (live && options.refuseUnverifiedLive) {
+    throw new Error("A proxy still answers for this home, but its process could not be verified as this home's proxy, so it was not stopped. "
+      + "Restart stopped before the scheduler wrappers were cleaned up, so whatever supervises it stays in place. Stop it with 'ocx stop', then run 'ocx service restart' again.");
   }
   if (stopped) return "stopped";
   if (pid) return "stale";
   return "none";
+}
+
+/**
+ * The tracked-proxy stop of a scheduler restart (#8416): receipt-backed, so the proxy's own respawn
+ * refusal does not apply to the restart that verifies the window, and refusing an unverifiable
+ * survivor so the caller can stop before it removes the wrappers that supervise it.
+ */
+export async function stopTrackedProxyForServiceRestart(): Promise<TrackedProxyCleanupResult> {
+  const { stopProxyForServiceRestart } = await import("./restart-proxy-stop");
+  return stopTrackedProxyIfRunning({ stop: (pid, endpoint) => stopProxyForServiceRestart(pid, endpoint), refuseUnverifiedLive: true });
 }
 
 export async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult> {

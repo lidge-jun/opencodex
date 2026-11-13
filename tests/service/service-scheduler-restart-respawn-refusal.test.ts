@@ -14,7 +14,7 @@
  * proxy means a stop the route ACCEPTS can only end the child.
  */
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { repairService } from "../../src/service/repair";
 import { withWindowsServiceMutationLock } from "../../src/lib/windows-service-mutation-lock";
@@ -23,6 +23,8 @@ import { fixturePath, repoRoot } from "../helpers/repo-root";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 const ADMIN_TOKEN = "fixture-admin-token-value";
+// The real restart path includes proxyStillLiveAfterStop's 7s respawn window and the stop drain.
+const RESTART_TIMEOUT_MS = 60_000;
 const sid = "S-1-5-21-111-222-333-1001";
 const launcher = "C:" + String.fromCharCode(92) + "fixture" + String.fromCharCode(92) + "launcher.vbs";
 const healthy = buildWindowsTaskXml("fixture.cmd", launcher, undefined, sid);
@@ -51,17 +53,21 @@ type Proxy = {
  * Bun.serve has bound and the pid and runtime-port records are written, which is exactly
  * the state the restart consumes.
  */
-async function startProxy(root: TempHome): Promise<Proxy> {
+async function startProxy(root: TempHome, entryName = "ocx"): Promise<Proxy> {
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = ADMIN_TOKEN;
   // verifyPidIdentity accepts this home's proxy only when the command line names ocx and
   // the start verb. A symlink named "ocx" next to the fixture gives that command line
   // while keeping the fixture's own relative module resolution.
-  const entry = root.path("ocx");
+  const entry = root.path(entryName);
   symlinkSync(fixturePath("service-restart-respawn-proxy-child.ts"), entry);
 
   let output = "";
+  // Launched through a shell that exits at once, so the proxy is reparented to init and reaped by
+  // it. As a direct child of this test it would stay a zombie after exiting: stopProxy waits with
+  // Atomics.wait, which blocks the event loop that reaps it, and a zombie still answers kill(0).
+  // A production proxy is never the restarting CLI's child either.
   const child = Bun.spawn({
-    cmd: [process.execPath, entry, "start", "--port", "0"],
+    cmd: ["/bin/sh", "-c", '"$0" "$1" start --port 0 &', process.execPath, entry],
     cwd: repoRoot(),
     env: {
       HOME: root.root,
@@ -94,8 +100,7 @@ async function startProxy(root: TempHome): Promise<Proxy> {
   const pid = Number(match[1]);
   const port = Number(match[2]);
   const stop = async () => {
-    if (child.exitCode === null) child.kill("SIGKILL");
-    await child.exited;
+    try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ }
   };
   return { pid, port, stop, output: () => output };
 }
@@ -136,30 +141,28 @@ test("a scheduler restart stops the surviving tracked proxy instead of aborting 
       // stopTrackedProxy and schedulerProxyStillLive stay ABSENT on purpose: the real
       // stopTrackedProxyIfRunning and proxyStillLiveAfterStop run against the child.
     });
-    // The whole sequence proves the stop was accepted and the replacement was started.
-    // On the regression the call rejects at the tracked-proxy step instead.
+    // The whole sequence proves the stop was accepted and the replacement was started. The
+    // wrappers are cleaned up only after the proxy accepted its stop, so a refusal leaves them.
     expect(effects).toEqual([
       "stop-scheduler", "kill-wrappers", "write-assets", "start-scheduler", "write-state",
     ]);
-  } catch (error) {
-    const receipt = JSON.parse(readFileSync(home.path("stop-response.json"), "utf8"));
-    expect(receipt.status).toBe(409);
-    expect(receipt.response.code).toBe("respawnable_service");
-    expect(receipt.query).toBe("");
-    expect(effects).toEqual(["stop-scheduler", "kill-wrappers"]);
-    expect((await fetch(`http://127.0.0.1:${proxy.port}/healthz`)).status).toBe(200);
-    const calls = JSON.parse(readFileSync(home.path("scheduler-calls.json"), "utf8")) as string[];
-    expect(calls.length).toBeGreaterThan(0);
-    expect(calls.every(call => call.startsWith("/query"))).toBe(true);
-    throw error;
   } finally {
     await proxy.stop();
   }
 
+  // The stop named a receipt the route could verify, so the route's respawn gate let it through
+  // and the proxy deferred its shared teardown to the restart instead of restoring client config.
+  const stop = JSON.parse(readFileSync(home.path("stop-response.json"), "utf8"));
+  expect(stop.status).toBe(200);
+  expect(stop.query).toMatch(/^\?deferSharedTeardown=1&teardownNonce=[0-9a-f]{32}$/);
+  expect(stop.response.sharedTeardown).toBe("deferred");
+  // The restart released its own receipt once the stop was answered; nothing is left for a later
+  // `ocx stop` or the updater to trip over.
+  expect(readdirSync(home.configDir).filter(name => name.startsWith("pending-teardown"))).toEqual([]);
   // The child accepted the stop and exited on its own; nothing was killed past a refusal.
   expect(existsSync(home.path("accepted-stop.json"))).toBe(true);
   expect(existsSync(home.path("ocx.pid"))).toBe(false);
-});
+}, RESTART_TIMEOUT_MS);
 
 test("a refused stop keeps the proxy serving and never reports a completed restart", async () => {
   home = createTempHome("ocx-scheduler-restart-8416-denied-");
@@ -208,13 +211,55 @@ test("a refused stop keeps the proxy serving and never reports a completed resta
     await proxy.stop();
   }
 
-  // The denied request changed nothing: no accepted stop, the records still name the proxy,
-  // and no replacement assets were written.
-  expect(effects).toEqual(["stop-scheduler", "kill-wrappers", "stop-denied"]);
+  // The denied request changed nothing: no accepted stop, the records still name the proxy, no
+  // replacement assets were written, and the wrappers that supervise the proxy were left running.
+  expect(effects).toEqual(["stop-scheduler", "stop-denied"]);
   expect(existsSync(home.path("accepted-stop.json"))).toBe(false);
   expect(existsSync(home.path("ocx.pid"))).toBe(true);
   expect(existsSync(home.path("opencodex-service.cmd"))).toBe(false);
-});
+}, RESTART_TIMEOUT_MS);
+
+test("a survivor this home cannot verify is refused before the wrappers that supervise it are removed", async () => {
+  home = createTempHome("ocx-scheduler-restart-8416-unverified-");
+  // Not named ocx: verifyPidIdentity cannot tie this process to the home, as for a reused pid.
+  const proxy = await startProxy(home, "unverified-proxy");
+  const effects: string[] = [];
+  try {
+    await expect(repairService({
+      platform: "win32",
+      verb: "restart",
+      configDir: () => home!.configDir,
+      inspectSupervision: () => ({ kind: "none" }),
+      diagnose: () => ({
+        supported: true, installed: true, enabled: true, running: true, viable: true,
+        startable: true, stale: false, conflict: false, backend: "scheduler", summary: "fixture",
+      }),
+      readOwnership: () => ({ kind: "none", revision: 0 }),
+      assertEnv: () => {},
+      assertAuth: () => {},
+      selectRuntime: () => ({ path: process.execPath, source: "override", overrideEnv: "OPENCODEX_BUN_PATH" }),
+      assertRuntimeWritable: () => {},
+      launcherPathDiagnostic: () => null,
+      readSchedulerXml: () => healthy,
+      resolveExpectedUserId: () => sid,
+      schedulerLauncher: launcher,
+      prepareDisconnectedClientRestart: async () => {},
+      stopScheduler: () => { effects.push("stop-scheduler"); },
+      killServiceWrappers: () => { effects.push("kill-wrappers"); },
+      writeSchedulerAssets: () => { effects.push("write-assets"); },
+      startScheduler: () => { effects.push("start-scheduler"); },
+      writeSchedulerState: () => { effects.push("write-state"); },
+      reregisterScheduler: async () => { throw new Error("no re-register expected"); },
+      settleSchedulerRead: () => {},
+    })).rejects.toThrow("could not be verified");
+    // Nothing was signalled, and the proxy still serves under the wrappers that were left running.
+    expect(effects).toEqual(["stop-scheduler"]);
+    expect(existsSync(home.path("stop-response.json"))).toBe(false);
+    expect((await fetch(`http://127.0.0.1:${proxy.port}/healthz`)).status).toBe(200);
+  } finally {
+    await proxy.stop();
+  }
+}, RESTART_TIMEOUT_MS);
 
 test("a direct stop still reaches the proxy while a service mutation owns the lock", async () => {
   home = createTempHome("ocx-scheduler-restart-lock-8416-");

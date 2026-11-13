@@ -63,11 +63,14 @@ export function winswListenPort(deps: { readXml?: () => string } = {}): number |
  * over, since before #2107 these files had no hardening at all and a failure here would
  * regress a user who has no credential to protect.
  */
-export function writeServiceDefinitionFile(path: string, content: string, encoding: "utf8" | "utf16le"): void {
-  writeFileSync(path, content, { encoding, mode: 0o600 });
+/** Bytes are written as they are: a restored snapshot must not be re-encoded through `encoding`. */
+export function writeServiceDefinitionFile(path: string, content: string | Buffer, encoding: "utf8" | "utf16le"): void {
+  if (typeof content === "string") writeFileSync(path, content, { encoding, mode: 0o600 });
+  else writeFileSync(path, content, { mode: 0o600 });
   try { chmodSync(path, 0o600); } catch { /* superseded by the Windows ACL below */ }
   if (process.platform === "win32") {
-    hardenSecretPath(path, { required: definitionCarriesCredential(content) });
+    const text = typeof content === "string" ? content : content.toString(encoding);
+    hardenSecretPath(path, { required: definitionCarriesCredential(text) });
   }
 }
 
@@ -152,7 +155,7 @@ export function snapshotWindowsSchedulerAssets(): () => void {
       }
       if (asset.bytes === null) { if (current !== null) unlinkSync(asset.path); continue; }
       if (current !== null && current.equals(asset.bytes)) continue;
-      writeServiceDefinitionFile(asset.path, asset.bytes.toString(asset.encoding), asset.encoding);
+      writeServiceDefinitionFile(asset.path, asset.bytes, asset.encoding);
     }
   };
 }

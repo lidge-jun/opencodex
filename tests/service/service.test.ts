@@ -2493,7 +2493,7 @@ describe("service lifecycle cleanup ordering", () => {
     expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');
     const health = await readText("src/service/health.ts");
     expect(health).toContain('import { proxyIdentityAt } from "../server/proxy-liveness";');
-    expect(service).toContain("async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult>");
+    expect(service).toContain("async function stopTrackedProxyIfRunning(options: TrackedProxyStopOptions = {}): Promise<TrackedProxyCleanupResult>");
     expect(service).toContain("...SERVICE_STOP_LIVENESS");
     expect(service).toContain("deadlineAt:");
     expect(service).toContain("SERVICE_STOP_LIVENESS");

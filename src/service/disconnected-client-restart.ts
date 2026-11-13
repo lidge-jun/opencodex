@@ -1,6 +1,6 @@
 import { assertNoClientDisconnectPending, pendingClientConnectMayOwnToken, readClientConnectionState } from "../client/state";
 import { readRuntimePort, verifyPidIdentity } from "../config/process-state";
-import { isProcessAlive, stopProxy } from "../lib/process-control";
+import { isProcessAlive } from "../lib/process-control";
 import { findLiveProxy, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";
 
 export interface DisconnectedClientRestartDeps {
@@ -49,7 +49,8 @@ export async function prepareDisconnectedClientServiceRestart(deps: Disconnected
   if (!disconnected()) throw new Error("Client connection changed during service restart; no replacement was started.");
   if (alive(pid)) {
     if (verify(pid) !== pid) throw new Error("Surviving client PID ownership is unverified; service restart stopped without killing it.");
-    await (deps.stop ?? stopProxy)(pid);
+    // Receipt-backed: a Task Scheduler restart keeps the task registered, so a bare stop is refused.
+    await (deps.stop ?? (async (target: number) => (await import("./restart-proxy-stop")).stopProxyForServiceRestart(target)))(pid);
   }
   if (alive(pid)) throw new Error("Disconnected client did not exit; rerun 'ocx service restart'.");
 }

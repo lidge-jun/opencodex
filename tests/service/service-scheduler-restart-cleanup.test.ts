@@ -35,10 +35,11 @@ async function scenario(run: (deps: RepairServiceDeps, effects: string[]) => Pro
   try { await run(deps, effects); } finally { removeTreeWithRetry(root); }
 }
 
-test("scheduler restart without a disconnected client cleans and verifies wrappers before replacement", async () => {
+test("scheduler restart stops the tracked proxy before wrapper cleanup and verifies before replacement", async () => {
   await scenario(async (deps, effects) => {
     await repairService(deps);
-    expect(effects).toEqual(["stop", "wrappers", "tracked", "verify-stopped", "assets", "start", "state"]);
+    // The wrappers still supervise the proxy until it accepted its stop (#8416).
+    expect(effects).toEqual(["stop", "tracked", "wrappers", "verify-stopped", "assets", "start", "state"]);
   });
 });
 
@@ -48,11 +49,11 @@ test("a Home or connected Child proxy that survives schtasks /end is stopped by 
     deps.stopTrackedProxy = async () => { effects.push("tracked"); trackedStopped = true; };
     deps.schedulerProxyStillLive = async () => { effects.push("verify-stopped"); return trackedStopped ? null : { port: 10100 }; };
     await repairService(deps);
-    expect(effects).toEqual(["stop", "wrappers", "tracked", "verify-stopped", "assets", "start", "state"]);
+    expect(effects).toEqual(["stop", "tracked", "wrappers", "verify-stopped", "assets", "start", "state"]);
   });
 });
 
-test("disconnected scheduler callback shares one guarded wrapper cleanup with ordinary restart", async () => {
+test("disconnected scheduler callback shares one guarded scheduler stop with ordinary restart", async () => {
   await scenario(async (deps, effects) => {
     deps.prepareDisconnectedClientRestart = undefined;
     const cleanup = spyOn(disconnectedCleanup, "prepareDisconnectedClientServiceRestart").mockImplementation(async callbacks => {
@@ -61,16 +62,33 @@ test("disconnected scheduler callback shares one guarded wrapper cleanup with or
     });
     try {
       await repairService(deps);
-      expect(effects).toEqual(["stop", "wrappers", "client-exited", "tracked", "verify-stopped", "assets", "start", "state"]);
+      expect(effects).toEqual(["stop", "client-exited", "tracked", "wrappers", "verify-stopped", "assets", "start", "state"]);
     } finally { cleanup.mockRestore(); }
   });
 });
 
-test("surviving scheduler proxy refuses replacement after owned wrapper cleanup", async () => {
+test("surviving scheduler proxy refuses replacement after owned wrapper cleanup and a second stop", async () => {
   await scenario(async (deps, effects) => {
     deps.schedulerProxyStillLive = async () => ({ port: 10100 });
     await expect(repairService(deps)).rejects.toThrow("still running");
-    expect(effects).toEqual(["stop", "wrappers", "tracked"]);
+    expect(effects).toEqual(["stop", "tracked", "wrappers", "tracked"]);
+  });
+});
+
+test("a refused tracked stop leaves the wrappers that supervise the proxy in place", async () => {
+  await scenario(async (deps, effects) => {
+    deps.stopTrackedProxy = async () => { effects.push("tracked"); throw new Error("proxy refused the stop"); };
+    await expect(repairService(deps)).rejects.toThrow("proxy refused the stop");
+    expect(effects).toEqual(["stop", "tracked"]);
+  });
+});
+
+test("a child a wrapper respawned before cleanup is stopped once more, and restart completes", async () => {
+  await scenario(async (deps, effects) => {
+    let checks = 0;
+    deps.schedulerProxyStillLive = async () => { effects.push("verify-stopped"); return ++checks === 1 ? { port: 10100 } : null; };
+    await repairService(deps);
+    expect(effects).toEqual(["stop", "tracked", "wrappers", "verify-stopped", "tracked", "verify-stopped", "assets", "start", "state"]);
   });
 });
 
@@ -89,7 +107,7 @@ test("wrapper cleanup failure refuses scheduler replacement", async () => {
   await scenario(async (deps, effects) => {
     deps.killServiceWrappers = () => { throw new Error("wrapper cleanup refused"); };
     await expect(repairService(deps)).rejects.toThrow("wrapper cleanup refused");
-    expect(effects).toEqual(["stop"]);
+    expect(effects).toEqual(["stop", "tracked"]);
   });
 });
 
@@ -107,7 +125,7 @@ test("ownership changing during awaited stop verification refuses replacement", 
     deps.readOwnership = () => ({ kind: "none", revision });
     deps.schedulerProxyStillLive = async () => { revision++; return null; };
     await expect(repairService(deps)).rejects.toThrow("ownership changed");
-    expect(effects).toEqual(["stop", "wrappers", "tracked"]);
+    expect(effects).toEqual(["stop", "tracked", "wrappers"]);
   });
 });
 
@@ -116,7 +134,7 @@ test("a failed asset rewrite after the stop puts the old assets back and restart
     deps.snapshotSchedulerAssets = () => { effects.push("snapshot"); return () => { effects.push("restore-assets"); }; };
     deps.writeSchedulerAssets = () => { effects.push("assets"); throw Object.assign(new Error("fixture read-only asset"), { code: "EACCES" }); };
     await expect(repairService(deps)).rejects.toThrow("fixture read-only asset");
-    expect(effects).toEqual(["snapshot", "stop", "wrappers", "tracked", "verify-stopped", "assets", "restore-assets", "start"]);
+    expect(effects).toEqual(["snapshot", "stop", "tracked", "wrappers", "verify-stopped", "assets", "restore-assets", "start"]);
   });
 });
 
@@ -138,7 +156,7 @@ test("a registration that changed after the failed asset rewrite is preserved an
     const failure = await repairService(deps).then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors.map(error => (error as Error).message).join("\n")).toContain("fixture read-only asset");
-    expect(effects).toEqual(["stop", "wrappers", "tracked", "verify-stopped", "restore-assets"]);
+    expect(effects).toEqual(["stop", "tracked", "wrappers", "verify-stopped", "restore-assets"]);
   });
 });
 
@@ -165,3 +183,26 @@ test("the asset snapshot restores changed bytes and removes an asset that did no
   }
 });
 
+
+test.each([
+  { kind: "script", bytes: Buffer.from([0x40, 0x80, 0x0d, 0x0a]) },
+  { kind: "launcher", bytes: Buffer.from([0xff, 0xfe, 0x41]) },
+])("the asset snapshot restores the original $kind byte for byte, even bytes its encoding cannot round-trip", ({ kind, bytes }) => {
+  const previousHome = process.env.OPENCODEX_HOME;
+  const configHome = mkdtempSync(join(tmpdir(), "ocx-scheduler-asset-bytes-"));
+  process.env.OPENCODEX_HOME = configHome;
+  const path = kind === "script" ? windowsServiceScriptPath() : windowsLauncherVbsPath();
+  mkdirSync(dirname(path), { recursive: true });
+  // A lone 0x80 is not UTF-8 and an odd byte count is not UTF-16LE: decoding either and writing the
+  // text back changed what the registered task runs.
+  writeFileSync(path, bytes);
+  try {
+    const restore = snapshotWindowsSchedulerAssets();
+    writeFileSync(path, "changed");
+    restore();
+    expect(readFileSync(path).equals(bytes)).toBe(true);
+  } finally {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(configHome);
+  }
+});

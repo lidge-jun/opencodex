@@ -43,7 +43,10 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
   killServiceWrappers?: () => void;
   /** Bounded post-stop respawn verification; null proves no proxy answered. */
   schedulerProxyStillLive?: () => Promise<{ port: number } | null>;
-  /** Stops the home-verified tracked proxy, as `ocx service stop` does; failures propagate. */
+  /**
+   * Stops the home-verified tracked proxy with a receipt-backed deferred stop, and throws for a proxy
+   * that still answers but cannot be verified (stopTrackedProxyForServiceRestart); failures propagate.
+   */
   stopTrackedProxy?: () => Promise<unknown>;
   startScheduler?: () => void;
   writeSchedulerState?: (runtime: DurableBunRuntime) => void;
@@ -209,13 +212,14 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     const current = (deps.readOwnership ?? resolveServiceOwnership)();
     if (!Bun.deepEquals(current, ownership, true)) throw new Error("Service ownership changed during restart.");
   };
+  // Ends the task instance only. The wrappers it leaves running still supervise the proxy, so they
+  // are cleaned up after that proxy accepted its stop (below): removing them first left a survivor
+  // whose stop was refused or unverifiable with nothing to restart it (#8416).
   let schedulerStopped = false;
   const stopSchedulerForRestart = (beforeStop: () => void) => {
     if (schedulerStopped) return;
     beforeStop();
     (deps.stopScheduler ?? stopWindows)();
-    beforeStop();
-    (deps.killServiceWrappers ?? killWindowsServiceWrapperProcesses)();
     schedulerStopped = true;
   };
   // Defer cleanup until the selected backend's registration has been verified.
@@ -321,19 +325,33 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       assertRestartOwnership();
       verifyRegistrationBeforeStop();
       stopSchedulerForRestart(() => { assertRestartOwnership(); verifyRegistrationBeforeStop(); });
-      // `schtasks /end` and the wrapper cleanup do not reach the wrapper's child, so a Home or a
-      // connected Child proxy survives them. Stop that home-verified tracked proxy the way
-      // `ocx service stop` does before proving nothing answers on the port.
-      assertRestartOwnership();
-      verifyRegistrationBeforeStop();
-      await (deps.stopTrackedProxy ?? (async () => {
-        const { stopTrackedProxyIfRunning } = await import("./orchestration");
-        return stopTrackedProxyIfRunning();
-      }))();
-      const live = await (deps.schedulerProxyStillLive ?? (async () => {
+      // `schtasks /end` does not reach the wrapper's child, so a Home or a connected Child proxy
+      // survives it. Stop that home-verified proxy with a receipt-backed deferred stop: the task is
+      // still registered, so a bare /api/stop is refused as respawnable, and this restart is what
+      // verifies the respawn window below. A refused stop propagates with the wrappers untouched.
+      const stopTracked = deps.stopTrackedProxy ?? (async () => {
+        const { stopTrackedProxyForServiceRestart } = await import("./orchestration");
+        return stopTrackedProxyForServiceRestart();
+      });
+      const stillLive = deps.schedulerProxyStillLive ?? (async () => {
         const { proxyStillLiveAfterStop } = await import("./orchestration");
         return proxyStillLiveAfterStop({ canRespawn: true });
-      }))();
+      });
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+      await stopTracked();
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+      (deps.killServiceWrappers ?? killWindowsServiceWrapperProcesses)();
+      let live = await stillLive();
+      if (live) {
+        // A wrapper can respawn its child between the proxy's exit and the cleanup above. Nothing
+        // brings it back once the wrappers are gone, so stop that one the same way and look again.
+        assertRestartOwnership();
+        verifyRegistrationBeforeStop();
+        await stopTracked();
+        live = await stillLive();
+      }
       if (live) throw new Error("The scheduler proxy is still running after wrapper cleanup; restart stopped.");
       assertRestartOwnership();
       verifyRegistrationBeforeStop();
