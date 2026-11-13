@@ -1172,8 +1172,10 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       // truthful, so the entry-time skip snapshot cannot stand in for this check.
       acceptNotOwnedTeardown: notOwnedTeardownIsAcceptable(readClientConnectionState(), stoppingSibling),
       // Only an exact endpoint may direct the request; the configured fallback is a guess
-      // good enough to record an obligation against, not to POST a stop to.
+      // good enough to record an obligation against, not to POST a stop to. Never re-read the
+      // record here: one published since would send the receipt to a port it does not name.
       runtimeEndpoint: exact ?? undefined,
+      runtimeEndpointOnly: true,
       skipPortWait: windowsPartBOwnsPortWait(), // #7771: Part B owns the Windows port wait on both paths.
     });
     // A valid receipt means the proxy deferred shared teardown to this process. If the

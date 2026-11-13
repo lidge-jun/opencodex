@@ -240,6 +240,22 @@ describe("an edit to the remote-workspace helper alone", () => {
   });
 });
 
+describe("an edit to ocx-child or its conformance fixture alone", () => {
+  test("selects the remote-helper job, whose Linux-only step formats, lints and tests the crate", () => {
+    for (const path of ["native/ocx-child/src/cli.rs", "tests/fixtures/link/ocx-child-conformance.json"]) {
+      expect(`${path}:${filtersMatching(path).includes("remote_helper")}`).toBe(`${path}:true`);
+    }
+    // The crate alone starts no full suite (the fixture, under tests/, already selects it, as on dev).
+    expect(matches(filters.ci, "native/ocx-child/src/cli.rs")).toBe(false);
+    const step = (jobs["remote-helper"]?.steps ?? []).find(s => (s.run ?? "").includes("native/ocx-child/Cargo.toml"));
+    expect(step?.if).toBe("runner.os == 'Linux'");
+    expect(step?.run).toContain("cargo fmt --manifest-path native/ocx-child/Cargo.toml --check");
+    expect(step?.run).toContain("cargo clippy --locked --manifest-path native/ocx-child/Cargo.toml --all-targets -- -D warnings");
+    expect(step?.run).toContain("cargo test --locked --manifest-path native/ocx-child/Cargo.toml");
+    expect(Object.entries(jobs).filter(([, job]) => scriptOf(job).includes("native/ocx-child/Cargo.toml")).map(([name]) => name)).toEqual(["remote-helper"]);
+  });
+});
+
 describe("the narrow checks stay narrow", () => {
   test("neither path starts the full suite or the native macOS jobs", () => {
     for (const path of [ACTION_PATH, HELPER_PATH]) {

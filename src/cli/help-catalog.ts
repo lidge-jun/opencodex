@@ -1,5 +1,6 @@
 import { CAPABILITIES, type Capability } from "./capabilities";
 import { CLI_COMMANDS, findCommand, type CliCommandEntry } from "./registry";
+import { EXPORT_CLIENT_IDS } from "../clients/client-ids";
 
 export type HelpResolution =
   | { kind: "entry"; entry: CliCommandEntry; canonicalName: string; capability?: Capability; children: readonly Capability[] }
@@ -88,6 +89,16 @@ export function resolveHelpPath(requested: readonly string[]): HelpResolution {
   const capability = declared.find(candidate => candidate.command.length === path.length && startsWithPath(candidate.command, path));
   const children = declared.filter(candidate => candidate.command.length > path.length && startsWithPath(candidate.command, path));
   if (capability) return { kind: "capability", path, capability, children };
+  // Clients and modes are operands of one capability, not registry leaves. Resolve their
+  // help without multiplying the generated operating surface by every client/action pair.
+  if (path[0] === "route" && path[1] === "to" && path.length >= 3
+    && ["codex", "claude", "claude-desktop", "grok", ...EXPORT_CLIENT_IDS].includes(path[2])) {
+    const owner = declared.find(candidate => candidate.command.join(" ") === "route to");
+    if (owner && path.length === 3) return { kind: "prefix", path, children: ["on", "off", "inherit"].map(action => ({ ...owner, command: [...path, action] })) };
+    if (owner && path.length === 4 && ["on", "off", "inherit"].includes(path[3])) {
+      return { kind: "capability", path, capability: { ...owner, command: path }, children: [] };
+    }
+  }
   if (children.length) return { kind: "prefix", path, children };
 
   for (let length = Math.min(path.length - 1, MAX_DOCUMENTED_DEPTH); length > 1; length--) {

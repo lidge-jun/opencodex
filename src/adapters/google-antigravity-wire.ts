@@ -29,9 +29,9 @@ export const ANTIGRAVITY_DISCOVERY_UA = ANTIGRAVITY_CLI_REQUEST_UA;
  * Wire ids sent with the CLI User-Agent: every Gemini 4 codename, bare or with a low, medium, high
  * or xhigh tier suffix. Observed on CCA: Argon was verified 2026-10-14, and on 2026-11-11 the CLI
  * discovery list was exactly the IDE list plus the Argon and Carbon tiers, with
- * `gemini-4-carbon-medium` answering 404 under the IDE UA and 200 under the CLI UA. Anticipated,
- * not observed: Hydrogen (low/medium/high/xhigh, verified on Vertex AI by #8583's author on
- * 2026-11-13) has not been seen on CCA. Matching the generation keeps a newly discovered codename
+ * `gemini-4-carbon-medium` answering 404 under the IDE UA and 200 under the CLI UA. Hydrogen
+ * (low/medium/high/xhigh, verified on Vertex AI by #8583's author on 2026-11-13) was listed by CCA
+ * discovery on 2026-11-12, and `gemini-4-hydrogen-xhigh` answered 200 under the CLI UA. Matching the generation keeps a newly discovered codename
  * callable instead of listing it in the picker and 404ing every request.
  */
 const ANTIGRAVITY_CLI_ONLY_WIRE_MODEL = /^gemini-4-[a-z][a-z0-9]*(?:-(?:low|medium|high|xhigh))?$/;

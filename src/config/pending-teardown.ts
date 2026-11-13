@@ -380,10 +380,19 @@ export function isPendingTeardownAbandoned(
   return !isAlive(read.receipt.ownerPid);
 }
 
-/** Does this request name an obligation that exists and is readable? */
-export function deferralMatchesReceipt(nonce: string | null): boolean {
+/**
+ * Does this request name an obligation that exists, is readable, and is about this proxy?
+ *
+ * A receipt records the endpoint its stop was sent to. With `servedPort`, only a receipt naming
+ * that port defers this proxy's teardown, so a nonce claimed for one proxy cannot be spent on
+ * another listening elsewhere: that stop would defer an obligation the receipt does not describe,
+ * and the receipt's owner could release it without knowing (#8416).
+ */
+export function deferralMatchesReceipt(nonce: string | null, servedPort?: number | null): boolean {
   if (!nonce || !NONCE_RE.test(nonce)) return false;
-  return readPendingTeardown(nonce).state === "valid";
+  const read = readPendingTeardown(nonce);
+  if (read.state !== "valid") return false;
+  return servedPort === undefined || (servedPort !== null && read.receipt.endpoint.port === servedPort);
 }
 
 /** Does this request name a valid obligation that an update handed to its replacement (#7423)? */

@@ -45,7 +45,7 @@ function meta(html: string, name: string): string {
   return match[1];
 }
 
-async function setup(config: Record<string, unknown> = {}, tunnel: LinkTunnelGate = connectedTunnel) {
+async function setup(config: Record<string, unknown> = {}, tunnel: LinkTunnelGate = connectedTunnel, onReleased?: () => void) {
   const identity = standinIdentity();
   const home = await startStandinHome({ identity });
   homes.push(home);
@@ -56,7 +56,7 @@ async function setup(config: Record<string, unknown> = {}, tunnel: LinkTunnelGat
   const before = home.connections();
   const child = startMachineListener(0, {
     state: childConnection(home.port, identity), managementAuthState: authState(), readSidecar: () => null,
-    linkKeySource: () => identity.secret, linkTunnel: tunnel, linkWebsocket: { ready: () => true },
+    linkKeySource: () => identity.secret, linkTunnel: tunnel, linkWebsocket: { ready: () => true, ...(onReleased ? { onReleased } : {}) },
   });
   children.push(child);
   const html = await (await fetch(new URL("/opencodex-session", child.url))).text();
@@ -67,7 +67,9 @@ async function setup(config: Record<string, unknown> = {}, tunnel: LinkTunnelGat
 
 describe("the Child's link WebSocket counters", () => {
   test("?transport=1 adds them; without it the status document is unchanged", async () => {
-    const { port, home, status } = await setup();
+    let released!: () => void;
+    const releasedOnce = new Promise<void>(resolve => { released = resolve; });
+    const { port, home, status } = await setup({}, connectedTunnel, () => released());
     const plain = await status();
     expect(plain).not.toHaveProperty("websocket");
     const codex = await CodexSocket.open(port);
@@ -81,6 +83,8 @@ describe("the Child's link WebSocket counters", () => {
     // The Home answers the close; the Child then ends the connection, which frees the socket's slot.
     leg.sendClose(1000);
     await leg.closed();
+    // The Child's own close event of the Home connection frees the slot; wait for it, not the stand-in's view.
+    await releasedOnce;
     const refused = rawUpgrade(port, { origin: "http://127.0.0.1:" + port });
     expect((await refused.answer).status).toBe(426);
     refused.socket.destroy();

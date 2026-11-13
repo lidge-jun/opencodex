@@ -1543,6 +1543,34 @@ these facts derive from CLI intent, not a server cleanup report. Neither means
 remote disconnect was attempted or confirmed. Follow the recovery instruction,
 `ocx disconnect` on the remote client, when that action is authorized.
 
+A forced revoke of a lightweight (`ocx-child`) Child that the Home reached over
+SSH leaves a tombstone on the Home naming the link, its alias and its pinned host
+key; the recovery instruction then names `ocx link recover`. Once that machine
+answers again, run:
+
+```bash
+ocx link recover --link-id lnk_0123456789abcdef --json
+```
+
+The Home connects over the link's alias with the host key it recorded (a changed
+key refuses with `host_key_changed` before connecting) and runs the planted
+binary's `disconnect --purge --expect-link <id>`. The Child restores its
+`~/.codex` files and removes the planted binary only when its state and its
+ownership record both name that link. Success prints
+`{linkId,outcome:"clean",purged:true}` and removes the tombstone; `purged:false`
+means the Child restored its state but kept the planted binary because another
+OpenCodex home on that machine runs a relay from it, and the tombstone is removed
+too. `child_residual`
+(exit 5) means the Child keeps records this command does not restore, such as an
+ownership record written by an older `ocx-child`; run
+`~/.cache/opencodex/bin/ocx-child detach` on that machine, then recover again.
+`child_conflict` (exit 5) means the Child belongs to another link or OpenCodex
+home, and nothing was changed. `--operation-id` recovers a Child that an
+interrupted enrollment left behind; it needs the link operation journal and
+otherwise answers `operation_journal_unavailable`.
+Automation can discover support with `ocx capabilities --contracts --json`: the
+`contracts` array contains `link.recover/1`.
+
 ## Observe Remote Workspace from the Hub
 
 ```bash

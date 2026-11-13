@@ -28,10 +28,10 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [lifecycle](01_surface_lifecycle.md) | 14 |
 | [providers-models](01_surface_providers-models.md) | 53 |
 | [accounts](01_surface_accounts.md) | 43 |
-| [agents-routing](01_surface_agents-routing.md) | 68 |
+| [agents-routing](01_surface_agents-routing.md) | 71 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 105 |
-| [access-remote](01_surface_access-remote.md) | 50 |
+| [access-remote](01_surface_access-remote.md) | 51 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -82,6 +82,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx link revoke`
 
 [State-changing task](01_surface_access-remote.md#ocx-link-revoke)
+
+### `ocx link recover`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-recover)
 
 ### `ocx link reconnect`
 
@@ -1627,8 +1631,20 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_lab.md#ocx-lab-run)
 
+### `ocx route to`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-to)
+
+### `ocx route to status`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-route-to-status)
+
+### `ocx route to sync`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-to-sync)
+
 ## Counts
 
-- declared capabilities: 395
-- of those, state-changing: 247
+- declared capabilities: 399
+- of those, state-changing: 250
 - head-resolved invocations: 2

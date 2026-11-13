@@ -52,6 +52,10 @@ describe("sync fan-out child evidence", () => {
     expect(run(126, "", "")).toEqual({ state: "failed", reason: "child-ocx-not-contained" });
     expect(run(125, "", "")).toEqual({ state: "skipped", reason: "child-platform-unsupported" });
     expect(run(121, "", "ocx-fanout:child-ocx-version-unknown\n")).toEqual({ state: "skipped", reason: "child-ocx-version-unknown" });
+    for (const reason of ["child-ocx-lacks-overwrite", "child-ephemeral-no-overwrite", "child-ocx-lacks-expect-link"]) {
+      expect(run(121, "", `warning\nocx-fanout:${reason}\n`)).toEqual({ state: "skipped", reason });
+      expect(run(121, "", `ocx-fanout:${reason}\nextra\n`)).toEqual({ state: "failed", reason: "child-sync-failed" });
+    }
     expect(run(121, "", "unexpected\n")).toEqual({ state: "failed", reason: "child-sync-failed" });
     expect(run(0, doc("synced"), "ocx-fanout:selected:2.93.0-01\n")).toEqual({ state: "failed", reason: "child-output-invalid" });
   });
