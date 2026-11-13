@@ -63,6 +63,8 @@ describe("link WebSocket client framer: reading server frames", () => {
     expect(fault(serverFrame(1, "short", { lengthForm: 64 }))).toBe(1002);
     const topBit = Buffer.from([0x81, 127, 0x80, 0, 0, 0, 0, 0, 0, 1]);
     expect(fault(topBit)).toBe(1002);
+    // A 64-bit length with a non-zero high word is far over any limit: refused before a byte is held.
+    expect(fault(Buffer.from([0x81, 127, 0, 0, 0, 1, 0, 0, 0, 1]))).toBe(1009);
   });
 
   test("RSV bits, unknown opcodes and masked server frames are protocol errors", () => {
@@ -101,7 +103,8 @@ describe("link WebSocket client framer: reading server frames", () => {
     expect(read(serverFrame(8, closePayload(4401, "link revoked")))).toEqual([{ type: "close", code: 4401, reason: "link revoked" }]);
     expect(read(serverFrame(8, Buffer.alloc(0)))).toEqual([{ type: "close", code: null, reason: "" }]);
     expect(fault(serverFrame(8, Buffer.from([3])))).toBe(1002);
-    for (const code of [999, 1004, 1005, 1006, 1012, 1015, 2999, 5000]) expect(fault(serverFrame(8, closePayload(code)))).toBe(1002);
+    for (const code of [999, 1004, 1005, 1006, 1015, 2999, 5000]) expect(fault(serverFrame(8, closePayload(code)))).toBe(1002);
+    for (const code of [1012, 1013, 1014]) expect(read(serverFrame(8, closePayload(code)))).toEqual([{ type: "close", code, reason: "" }]);
     expect(fault(serverFrame(8, Buffer.concat([closePayload(1000), Buffer.from([0xff])])))).toBe(1007);
   });
 
@@ -182,7 +185,7 @@ describe("link WebSocket client framer: writing client frames", () => {
   });
 
   test("wire close codes", () => {
-    expect([1000, 1003, 1007, 1011, 3000, 4999].every(isWireCloseCode)).toBe(true);
-    expect([999, 1004, 1005, 1006, 1012, 1015, 2999, 5000, 1000.5].some(isWireCloseCode)).toBe(false);
+    expect([1000, 1003, 1007, 1011, 1012, 1013, 1014, 3000, 4999].every(isWireCloseCode)).toBe(true);
+    expect([999, 1004, 1005, 1006, 1015, 2999, 5000, 1000.5].some(isWireCloseCode)).toBe(false);
   });
 });
