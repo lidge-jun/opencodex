@@ -32,7 +32,10 @@ export function linkRequestCompressible(url: URL, req: Request, declaredLength: 
   return length > LINK_REQUEST_COMPRESSION_MIN_BYTES && length <= LINK_REQUEST_COMPRESSION_MAX_BYTES;
 }
 
-/** Read exactly the declared bytes into one buffer; more than declared is refused, fewer is a short body. */
+/**
+ * Read exactly the declared bytes into one buffer. More than declared is refused, and so is a body
+ * that ends cleanly with fewer: forwarding that shorter slice would tell the Home it is complete.
+ */
 export async function readDeclaredBody(body: ReadableStream<Uint8Array>, declared: number, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
   const reader = body.getReader();
   const out = new Uint8Array(declared);
@@ -53,7 +56,8 @@ export async function readDeclaredBody(body: ReadableStream<Uint8Array>, declare
     signal.removeEventListener("abort", onAbort);
     try { reader.releaseLock(); } catch { /* a pending cancel may hold it */ }
   }
-  return filled === declared ? out : out.slice(0, filled);
+  if (filled !== declared) throw new RangeError("link request body shorter than declared");
+  return out;
 }
 
 /**
