@@ -104,7 +104,7 @@ import {
   collectVertexPublisherModelPages,
   countDiscoveryResponseBytes,
   extractGoogleNativeModelItems,
-  resolveObservedVertexDiscoveryToken,
+  resolveObservedVertexDiscoveryAuth,
   resolveVertexDiscoveryAuth,
   vertexDiscoveryAuthIsCurrent,
   vertexDiscoveryDeadline,
@@ -163,12 +163,9 @@ export function observedModelsAuthResolver(
     resolve(name, provider) {
       if (provider.authMode === "forward") return { apiKey: undefined, observed: true };
       if (provider.authMode !== "oauth") {
-        return {
-          apiKey: effectiveGoogleMode(name, provider) === "vertex"
-            ? resolveObservedVertexDiscoveryToken(provider)
-            : resolveProviderApiKey(provider.apiKey),
-          observed: true,
-        };
+        if (effectiveGoogleMode(name, provider) !== "vertex") return { apiKey: resolveProviderApiKey(provider.apiKey), observed: true };
+        const vertexAuth = resolveObservedVertexDiscoveryAuth(provider);
+        return { apiKey: vertexAuth?.token, observed: true, ...(vertexAuth ? { vertexAuth } : {}) };
       }
 
       const observation: OAuthActiveTokenObservation = mayResolveModelsOAuth(name, provider)
@@ -316,8 +313,9 @@ export async function fetchProviderModelsWithAuth(
       }
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
-  // A passive gather's Vertex credential is always an API key (ADC needs an async exchange).
-  if (vertexDeadline && !vertexAuth && apiKey && prov.authMode !== "oauth") vertexAuth = { token: apiKey, kind: "api-key" };
+  // A passive gather's Vertex credential (always an API key) arrives already bound to its authority.
+  vertexAuth ??= auth.vertexAuth;
+  const vertexSendGuard = vertexDeadline !== undefined && prov.authMode !== "oauth";
   if ((prov.authMode === "oauth" && !apiKey) || isProviderApiKeyPaused(prov)) {
     return observed(configured, "degraded");
   }
@@ -765,7 +763,8 @@ export async function fetchProviderModelsWithAuth(
     // fetch a different URL and keep the rejection.
     if (!maySendAnthropicDiscovery()) return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
     const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
-      beforeSend: () => maySendAnthropicDiscovery() && (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers)) };
+      beforeSend: () => maySendAnthropicDiscovery()
+        && (!vertexSendGuard || (vertexAuth !== undefined && vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers))) };
     const antigravityObservation = cloudCodeAssist ? captureAntigravityModelObservation() : undefined;
     const res = request.method === "POST"
       ? await providerOutboundPost(name, prov, url, {

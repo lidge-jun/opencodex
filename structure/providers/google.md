@@ -63,15 +63,16 @@ then `GOOGLE_CLOUD_API_KEY`, then host ADC. The selector follows inference's ste
 untrimmed bytes, and a parity test compares it with the credential the adapter sends. A resolved
 credential keeps its kind and marker (`VertexDiscoveryAuth`): a selection that changes during the
 ADC exchange discards the token, and `beforeSend` cancels any request whose row no longer selects
-that credential, whose ADC source or generation changed since minting (the same
-`bindVertexRequestAuthority` / `vertexRequestAuthorityIsCurrent` record inference checks, so a
-replaced host ADC file or marker credential stops the next page), or whose headers place it in the
+that credential, whose ADC source or generation, or ambient `GOOGLE_CLOUD_API_KEY` generation,
+changed since it was read (the same `bindVertexRequestAuthority` / `vertexRequestAuthorityIsCurrent`
+record inference checks, so a replaced host ADC file or marker credential, or an A→B→A change of the
+variable that inference observed, stops the next page), or whose headers place it in the
 other scheme's header. One deadline (`vertexDiscoveryDeadline`, 8 s, also
 tied to the request for the management probe) covers ADC token resolution, the first request and
 every follow-up page. `nextPageToken` is followed with three ceilings across all pages: five
 requests, the discovery row limit and the discovery byte limit, counted from the bytes actually
-read, page one included. A follow-up page must be a Vertex page: `publisherModels`, or an empty
-`{}` / token-only page, since Google omits empty repeated fields. A walk stopped by a ceiling, a
+read, page one included. Every page must be a Vertex page: `publisherModels`, or a token-only
+page (an empty `{}` ends a walk), since Google omits empty repeated fields. A walk stopped by a ceiling, a
 failed or foreign page, a malformed or repeated token, or the deadline is reported as an
 incomplete listing; the catalog keeps its stale or configured rows and the probe fails, so a
 partial roster is never cached as authoritative. Rows keep Gemini and Gemma chat models and drop embeddings, speech, Live,

@@ -8,6 +8,7 @@ import {
 } from "../lib/gcp-adc";
 import type { OcxProviderConfig } from "../types";
 import { resolveProviderApiKey } from "./api-key-resolve";
+import { captureVertexAmbientKey } from "./vertex-environment-authority";
 import { extractGoogleAiStudioModelItems } from "./google-ai-studio-model-discovery";
 import {
   extractModelEnvelopeRows,
@@ -106,7 +107,7 @@ function isExplicitKeyReference(value: string | undefined): value is string {
  * inference adapter actually sends for the same rows.
  */
 export type VertexDiscoveryCredential =
-  | { kind: "api-key"; key: string | undefined }
+  | { kind: "api-key"; key: string | undefined; ambient?: true }
   | { kind: "adc"; marker?: string };
 
 export function selectVertexDiscoveryCredential(provider: OcxProviderConfig): VertexDiscoveryCredential {
@@ -129,7 +130,7 @@ export function selectVertexDiscoveryCredential(provider: OcxProviderConfig): Ve
   const key = value && !value.startsWith("<") && value !== "N/A" ? value : undefined;
   if (key) return { kind: "api-key", key };
   const ambientKey = process.env.GOOGLE_CLOUD_API_KEY;
-  return ambientKey ? { kind: "api-key", key: ambientKey } : { kind: "adc" };
+  return ambientKey ? { kind: "api-key", key: ambientKey, ambient: true } : { kind: "adc" };
 }
 
 /** Whether a Vertex provider row authenticates discovery with an API key rather than GCP ADC. */
@@ -144,9 +145,14 @@ export function usesVertexApiKeyForDiscovery(provider: OcxProviderConfig): boole
  * either reuse a fresh model cache or degrade cleanly without sending an unauthenticated GET.
  */
 export function resolveObservedVertexDiscoveryToken(provider: OcxProviderConfig): string | undefined {
+  return resolveObservedVertexDiscoveryAuth(provider)?.token;
+}
+
+/** The passive gather's credential with its authority bound, for the same send-time checks. */
+export function resolveObservedVertexDiscoveryAuth(provider: OcxProviderConfig): VertexDiscoveryAuth | undefined {
   if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
-  const credential = selectVertexDiscoveryCredential(provider);
-  return credential.kind === "api-key" ? credential.key : undefined;
+  const selection = selectVertexDiscoveryCredential(provider);
+  return selection.kind === "api-key" ? apiKeyDiscoveryAuth(selection) : undefined;
 }
 
 /**
@@ -162,6 +168,18 @@ export interface VertexDiscoveryAuth {
 function sameVertexSelection(left: VertexDiscoveryCredential, right: VertexDiscoveryCredential): boolean {
   if (left.kind === "api-key") return right.kind === "api-key" && left.key === right.key;
   return right.kind === "adc" && left.marker === right.marker;
+}
+
+/**
+ * An API-key auth. A key read from `GOOGLE_CLOUD_API_KEY` is bound to the ambient-key authority
+ * observed when it was read (`captureVertexAmbientKey`, the record inference binds), so an A→B→A
+ * change of the variable invalidates it even though the bytes match again.
+ */
+function apiKeyDiscoveryAuth(selection: { key: string | undefined; ambient?: true }): VertexDiscoveryAuth | undefined {
+  if (!selection.key) return undefined;
+  const auth: VertexDiscoveryAuth = { token: selection.key, kind: "api-key" };
+  if (selection.ambient) bindVertexRequestAuthority(auth, "", selection.key, { ambientKey: captureVertexAmbientKey(selection.key) });
+  return auth;
 }
 
 /**
@@ -182,7 +200,7 @@ export async function resolveVertexDiscoveryAuth(
 ): Promise<VertexDiscoveryAuth | undefined> {
   if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
   const selection = selectVertexDiscoveryCredential(provider);
-  if (selection.kind === "api-key") return selection.key ? { token: selection.key, kind: "api-key" } : undefined;
+  if (selection.kind === "api-key") return apiKeyDiscoveryAuth(selection);
   let authority: Awaited<ReturnType<typeof getVertexAccessTokenWithAuthority>>;
   try {
     const markerAccount = gcpCredentialMarkerAccount(selection.marker);
@@ -221,12 +239,14 @@ export function vertexDiscoveryAuthIsCurrent(
   headers: Record<string, string>,
 ): boolean {
   if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return false;
+  // ADC source/generation and the ambient-key generation, exactly as inference checks them. Checked
+  // first so every send-time check also observes the current ambient key, as inference does.
+  if (!vertexRequestAuthorityIsCurrent(auth)) return false;
   const current = selectVertexDiscoveryCredential(provider);
   const issued: VertexDiscoveryCredential = auth.kind === "api-key"
     ? { kind: "api-key", key: auth.token }
     : { kind: "adc", ...(auth.marker ? { marker: auth.marker } : {}) };
   if (!sameVertexSelection(issued, current)) return false;
-  if (auth.kind === "adc" && !vertexRequestAuthorityIsCurrent(auth)) return false;
   const header = (name: string): string | undefined =>
     Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
   const bearer = `Bearer ${auth.token}`;
@@ -346,13 +366,16 @@ export async function collectVertexPublisherModelPages(
   const first = firstValue !== null && typeof firstValue === "object" && !Array.isArray(firstValue)
     ? firstValue as Record<string, unknown>
     : undefined;
-  if (!first || !Array.isArray(first.publisherModels)) return { ok: true, value: firstValue };
+  // Google omits an empty repeated field, so a token-only first page is an empty Vertex page.
+  const tokenOnlyFirstPage = first !== undefined && first.publisherModels === undefined
+    && typeof first.nextPageToken === "string" && Object.keys(first).every(key => key === "nextPageToken");
+  if (!first || (!Array.isArray(first.publisherModels) && !tokenOnlyFirstPage)) return { ok: true, value: firstValue };
   let token = nextVertexPageToken(first);
   if (token === undefined) return { ok: true, value: firstValue };
 
   const maxRows = Math.min(limits.maxModels, MODEL_DISCOVERY_MAX_MODELS);
   const maxBytes = Math.min(limits.maxResponseBytes, MODEL_DISCOVERY_MAX_RESPONSE_BYTES);
-  const rows: unknown[] = [...first.publisherModels];
+  const rows: unknown[] = Array.isArray(first.publisherModels) ? [...first.publisherModels] : [];
   let bytes = limits.firstPageBytes ?? new TextEncoder().encode(JSON.stringify(firstValue)).byteLength;
   const seenTokens = new Set<string>();
   const signal = limits.signal ?? vertexDiscoveryDeadline();

@@ -8,6 +8,7 @@ import { __resetVertexTokenCache } from "../../../src/lib/gcp-adc";
 import {
   collectVertexPublisherModelPages,
   extractGoogleNativeModelItems,
+  resolveObservedVertexDiscoveryAuth,
   resolveObservedVertexDiscoveryToken,
   resolveVertexDiscoveryAuth,
   resolveVertexDiscoveryToken,
@@ -442,4 +443,42 @@ describe("Vertex discovery ADC token stays bound to the authority that minted it
     expect(rows.filter(row => row.provider === "rotating-vertex").map(row => row.id)).not.toContain("gemini-4-carbon");
     clearModelCache();
   });
+});
+
+describe("Vertex discovery ambient key stays bound to the generation it was read in", () => {
+  test("GOOGLE_CLOUD_API_KEY changing A→B→A invalidates a key read as A, on the async and passive paths", async () => {
+    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-a";
+    const resolved = await resolveVertexDiscoveryAuth(vertex());
+    const passive = resolveObservedVertexDiscoveryAuth(vertex());
+    const headers = { "x-goog-api-key": "ambient-a" };
+    for (const auth of [resolved, passive]) {
+      expect(auth).toMatchObject({ token: "ambient-a", kind: "api-key" });
+      expect(vertexDiscoveryAuthIsCurrent(vertex(), auth!, headers)).toBe(true);
+    }
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-b";
+    // Inference routes a request while B is set, observing B as the current ambient authority.
+    routedProviderConfig("google-vertex", vertex({ project: "p", location: "global" }));
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-a";
+    for (const auth of [resolved, passive]) expect(vertexDiscoveryAuthIsCurrent(vertex(), auth!, headers)).toBe(false);
+    // A configured literal key is not ambient authority and is unaffected by the variable.
+    const literal = await resolveVertexDiscoveryAuth(vertex({ apiKey: "literal-key" }));
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-b";
+    expect(vertexDiscoveryAuthIsCurrent(vertex({ apiKey: "literal-key" }), literal!, { "x-goog-api-key": "literal-key" })).toBe(true);
+  });
+});
+
+test("a token-only first Vertex page is an empty page whose token is followed", async () => {
+  const seen: string[] = [];
+  const listing = await collectVertexPublisherModelPages(
+    "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=300",
+    { nextPageToken: "t1" },
+    { maxModels: 2_000, maxResponseBytes: 4 * 1024 * 1024 },
+    async url => {
+      seen.push(new URL(url).searchParams.get("pageToken") ?? "");
+      return Response.json({ publisherModels: [{ name: "publishers/google/models/gemini-4-hydrogen" }] });
+    },
+  );
+  expect(seen).toEqual(["t1"]);
+  expect(listing).toEqual({ ok: true, value: { publisherModels: [{ name: "publishers/google/models/gemini-4-hydrogen" }] } });
 });

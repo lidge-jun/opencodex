@@ -130,6 +130,8 @@ export interface ModelsAuthResolution {
   readonly oauthGeneration?: string;
   readonly oauthApiBaseUrl?: string;
   readonly oauthProjectId?: string;
+  /** Vertex discovery credential bound to its authority (passive gathers). */
+  readonly vertexAuth?: import("../../providers/google-vertex-model-discovery").VertexDiscoveryAuth;
 }
 
 export type ModelsAuthResolver =
