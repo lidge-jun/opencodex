@@ -404,6 +404,16 @@ describe("the explicit route's identity file", () => {
       expect(identityFileProblem(key)).toBe(process.platform === "win32" ? "identity_file_unsupported_platform" : null);
       expect(identityFileProblem(key, "win32")).toBe("identity_file_unsupported_platform");
       expect(identityFileProblem(join(dir, "missing"), "win32")).toBe("identity_file_unsupported_platform");
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  // The same private key passes the POSIX checks once the platform gate is passed. Off Windows only: a Windows stat's mode
+  // bits always carry group and other permissions, so the POSIX permission rule refuses any file there.
+  test.skipIf(process.platform === "win32")("off Windows, a private key in a private directory passes the POSIX checks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-identity-posix-"));
+    const key = join(dir, "id_ed25519");
+    writeFileSync(key, "x\n", { mode: 0o600 });
+    try {
       expect(identityFileProblem(key, "linux")).toBe(null);
     } finally { removeTreeWithRetry(dir); }
   });
