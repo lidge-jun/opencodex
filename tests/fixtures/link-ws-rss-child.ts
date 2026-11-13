@@ -7,15 +7,17 @@
  * reset the high-water mark to the current RSS, and arm the settle check), "peak", "stop".
  *
  * The stall is the Child's own. For the WebSocket, every link leg toward Codex has paused its Home leg (more than 1 MiB
- * waits toward Codex; the relay's onDownlinkPause seam). For HTTP, every relayed response waits for its reader
+ * waits toward Codex; the relay's onDownlinkPause seam). A leg that ends never reports "resumed", so the fixture also
+ * counts the relay's releases (onReleased): the idle reading waits for the warm-up socket's release, and a release after
+ * it and before the stall is announced reports the run invalid, so a dead leg can never count as a held one. For HTTP, every relayed response waits for its reader
  * (setLinkChildRelayWaitObserverForTests, #8680): the reader holds a chunk and the relay may hold one more queued, since
  * the relay reads one Home chunk ahead. The observer reports every relayed response, management reads included, so the
  * fixture counts every transition from the start: the idle reading reports how many waits are open (the test requires
  * none), and from then on the fixture reports a run invalid ({"invalid":true}) if more readers wait than the load has or
  * the count goes below zero; the "peak" answer carries the extremes through the measurement, which the test checks too.
  * The test sends nothing else through this Child during the load.
- * A wrong signal can otherwise only make a run settle early or never: an early HTTP settle lowers the HTTP peak, which
- * makes the acceptance harder to pass, and a load that never settles fails at the deadline.
+ * Otherwise a wrong HTTP signal can only make that run settle early or never: an early HTTP settle lowers the HTTP peak,
+ * which makes the acceptance harder to pass, and a load that never settles fails at the deadline.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -78,6 +80,11 @@ const currentPeak = (): number => {
 const tick = (): void => {
   if (done) return;
   const now = Date.now();
+  if (releasedWhileLoaded > 0) {
+    done = true; clearInterval(settle);
+    console.log(JSON.stringify({ invalid: true, reason: "a link socket was released before the stall was announced", releasedWhileLoaded }));
+    return;
+  }
   if (maxWaiting > setup.stalls || minWaiting < 0) {
     done = true; clearInterval(settle);
     console.log(JSON.stringify({ invalid: true, reason: maxWaiting > setup.stalls ? "more readers waited than the load has" : "a wait ended that began before the idle reading", maxWaiting, minWaiting, stalls: setup.stalls }));
@@ -104,11 +111,20 @@ const observeWait = (isWaiting: boolean): void => {
   if (waiting < setup.stalls) windowStart = null;
 };
 if (setup.transport === "http") setLinkChildRelayWaitObserverForTests(observeWait);
+// Link socket releases (the Home connection closed): before the idle reading only the warm-up's; after it, any release
+// before the stall is announced invalidates the run.
+let releasedWhileLoaded = 0;
+let warmReleased!: () => void;
+const warmRelease = new Promise<void>(resolve => { warmReleased = resolve; });
+const onReleased = (): void => {
+  if (armedAt === null) { warmReleased(); return; }
+  if (!done) releasedWhileLoaded += 1;
+};
 
 // The Child learns the Home's advertisement from one preflight, before anything is measured.
 const preflight = await probeLinkRelayPreflight({ tunnelPort: setup.homePort, admissionKey: setup.identity.secret, linkId: setup.identity.linkId, apiKeyId: setup.identity.keyId });
 const listener = startChild(setup.homePort, setup.identity, {
-  websocket: { ready: () => true, ...(setup.transport === "websocket" ? { onDownlinkPause: observeWait } : {}) },
+  websocket: { ready: () => true, ...(setup.transport === "websocket" ? { onDownlinkPause: observeWait, onReleased } : {}) },
 });
 Bun.gc(true);
 console.log(JSON.stringify({ ready: true, port: listener.port, preflight, rss: process.memoryUsage().rss }));
@@ -119,6 +135,8 @@ for (;;) {
   const command = String(next.value).trim();
   if (command === "peak") console.log(JSON.stringify({ ...peakAnswer(), maxWaiting, minWaiting }));
   else if (command === "gc-rss") {
+    // The WebSocket run's warm-up socket must have released its slot before the idle reading.
+    if (armedAt === null && setup.transport === "websocket") await warmRelease;
     Bun.gc(true);
     if (kernel && !resetKernelPeak()) resetFailed = true;
     highWater = process.memoryUsage().rss;
