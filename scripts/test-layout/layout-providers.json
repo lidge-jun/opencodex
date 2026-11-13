@@ -8,6 +8,7 @@
   "provider-anthropic-pool-capacity.test.ts": "providers",
   "xai-additional-tools.test.ts": "providers/xai",
   "xai-replay-provenance.test.ts": "providers/xai",
+  "xai-device-login.test.ts": "providers/xai",
   "xai-loaded-tool-provenance.test.ts": "providers/xai",
   "free-directory-runcrate.test.ts": "providers",
   "cc-switch-import.test.ts": "providers",

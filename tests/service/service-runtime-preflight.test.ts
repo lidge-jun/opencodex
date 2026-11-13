@@ -14,6 +14,7 @@ import { recordOwnedConfigPath, CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST } f
 import type { ServiceDiagnostic } from "../../src/service/diagnostics";
 import { windowsEnvIndirectBatchValue } from "../../src/lib/win-paths";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { partAResult, partBResult } from "../helpers/windows-stop-caller-fixtures";
 import { repoPath } from "../helpers/repo-root";
 
 const runtime: DurableBunRuntime = { path: process.execPath, source: "override", overrideEnv: "OPENCODEX_BUN_PATH" };
@@ -43,9 +44,8 @@ describe("service selected-runtime admission", () => {
       const deny = () => { throw new RuntimePreflightError(reason); };
       const deps = { platform: "win32" as const, selectRuntime: () => runtime, configDir: () => temporary(), assertRuntimeWritable: deny };
       await expect(installServiceSafely("scheduler", () => { effects.push("install"); }, {
-        ...deps, diagnose: () => { effects.push("diagnose"); return diagnostic; },
-        managerOps: () => ({ status: () => "present", stop: () => { effects.push("stop"); } }),
-        killServiceWrappers: () => {},
+        ...deps,
+        windowsPartA: async () => { effects.push("stop"); return partAResult("stopped"); },
         stopTrackedProxy: async () => { effects.push("proxy"); },
       })).rejects.toMatchObject({ code: "OCX_RUNTIME_PREFLIGHT_FAILED", reason });
       const home = join(temporary(), "absent-home");
@@ -89,13 +89,12 @@ describe("service selected-runtime admission", () => {
     }, {
       platform: "win32", configDir: temporary, selectRuntime: () => { selections++; return selected; },
       assertRuntimeWritable: admitted => { order.push("preflight"); expect(admitted).toEqual(runtime); selected.path = "unprobed.exe"; },
-      diagnose: () => diagnostic,
-      managerOps: () => ({ status: () => "present", stop: () => { order.push("stop"); } }),
-      killServiceWrappers: () => { order.push("wrappers"); },
+      windowsPartA: async () => { order.push("stop"); return partAResult("stopped"); },
+      windowsPartB: async () => { order.push("confirm"); return partBResult("freed"); },
       stopTrackedProxy: async () => { order.push("proxy"); },
     });
     expect(selections).toBe(1);
-    expect(order).toEqual(["preflight", "stop", "wrappers", "proxy", "install"]);
+    expect(order).toEqual(["preflight", "stop", "proxy", "confirm", "install"]);
   });
 
   for (const backend of ["scheduler", "native"] as const) {
@@ -138,9 +137,9 @@ describe("service selected-runtime admission", () => {
         };
         const ops = platformOps(backend, { platform: "win32", windowsInstall: effects })!;
         const result = installServiceSafely(backend, ops.install, {
-          ...admission, diagnose: () => ({ ...diagnostic, backend }),
-          managerOps: () => ({ status: () => "present", stop: () => { order.push("stop"); } }),
-          killServiceWrappers: () => { order.push("wrappers"); },
+          ...admission,
+          windowsPartA: async () => { order.push("stop"); return partAResult("stopped"); },
+          windowsPartB: async () => { order.push("confirm"); return partBResult("freed"); },
           stopTrackedProxy: async () => { order.push("proxy"); },
         });
         if (refuses) {
@@ -149,8 +148,8 @@ describe("service selected-runtime admission", () => {
         } else {
           await result;
           expect(order).toEqual(backend === "scheduler"
-            ? ["preflight", "stop", "wrappers", "proxy", "ownership", "remove-native", "installer-stop", "assets", "/create", "/run", "state"]
-            : ["preflight", "stop", "wrappers", "proxy", "account", "native-config", "/query", "winsw", "state"]);
+            ? ["preflight", "stop", "proxy", "confirm", "ownership", "remove-native", "installer-stop", "assets", "/create", "/run", "state"]
+            : ["preflight", "stop", "proxy", "confirm", "account", "native-config", "/query", "winsw", "state"]);
           expect(JSON.parse(readFileSync(join(home, "state.json"), "utf8"))).toMatchObject({ backend, bunPath: runtime.path });
         }
         expect(probes).toBe(1); expect(selections).toBe(1);

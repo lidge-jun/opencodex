@@ -6,7 +6,7 @@ import { plantUnavailableGuidance, resolveChildBinarySource } from "../../link/c
 import { parseFingerprintLine } from "../../link/fingerprint";
 import { confirmedLineTrust as confirmedLineTrustIn, type ConfirmedLineTrust } from "../../link/route-trust";
 import { isDetachedEphemeralChildConfig } from "../../link/ephemeral-child";
-import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
+import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, parseFullInstallCensus, remoteFullInstallCensusArgv, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
 import { requireRemotePlatform } from "../../link/remote-platform";
 import { LINK_CATALOG_MAX_BYTES, LINK_RELAY_VERIFY_MS, isChildHealth, linkCommandBudget, linkRestartBudget, parseChildHttp, remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../link/remote-probe";
 import { newLinkId, type LinkStore } from "../../link/store";
@@ -16,18 +16,24 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
+import { enrollOperationDigest, journalInUse, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { isOperationId } from "../../link/operations-journal";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
 const PROBE_TTL_MS = 5 * 60_000;
 const MIN_REMOTE_OCX = [2, 66, 0] as const;
 const REMOTE_OCX_VERSION = /^opencodex (\d{1,9})\.(\d{1,9})\.(\d{1,9})(-[0-9A-Za-z.-]{1,64})?(\+[0-9A-Za-z.-]{1,64})?(?=\s|$)/;
 
-/** Same-alias operations refuse overlap rather than overwrite a confirmed generation. */
+/**
+ * Same-alias operations refuse overlap rather than overwrite a confirmed generation. Keyed without case, as OpenSSH
+ * matches known_hosts names and as the alias lock and the operation journal match aliases.
+ */
 export async function serialized(state: LinkRouteState, alias: string, action: () => Promise<Response>): Promise<Response> {
   const operations = state.operations ??= new Set();
-  if (operations.has(alias)) return fail("link_operation_in_progress", "A link operation for this alias is already running.", 409);
-  operations.add(alias);
-  try { return await action(); } finally { operations.delete(alias); }
+  const key = alias.toLowerCase();
+  if (operations.has(key)) return fail("link_operation_in_progress", "A link operation for this alias is already running.", 409);
+  operations.add(key);
+  try { return await action(); } finally { operations.delete(key); }
 }
 
 function remoteFailure(result: SshRunResult, code: string, message: string): Response | null {
@@ -218,6 +224,8 @@ function linkPinConflict(): Response {
   return fail("link_pin_conflict", "A Home-initiated link already pins another key for this alias; remove that link before trusting another key.", 409);
 }
 
+const APPLY_KEYS = new Set(["alias", "fingerprint", "plant", "operationId", "requireEphemeral"]);
+
 function parsePort(stdout: string): number | null {
   try { const value: unknown = JSON.parse(stdout.trim()); return isRecord(value) && Object.keys(value).length === 1 && port(value.port) ? value.port : null; }
   catch { return null; }
@@ -227,12 +235,23 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
   const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
   if ("error" in split) return split.error;
   const value = split.body, wanted = split.route;
-  const body = exactBody(value, ["alias"]) ?? exactBody(value, ["alias", "fingerprint"]) ?? exactBody(value, ["alias", "plant"]) ?? exactBody(value, ["alias", "fingerprint", "plant"]);
-  if (!body || typeof body.alias !== "string" || (body.fingerprint !== undefined && typeof body.fingerprint !== "string") || (body.plant !== undefined && typeof body.plant !== "boolean")) {
+  const body = isRecord(value) && Object.keys(value).every(key => APPLY_KEYS.has(key)) ? value : null;
+  if (!body || typeof body.alias !== "string" || (body.fingerprint !== undefined && typeof body.fingerprint !== "string") || (body.plant !== undefined && typeof body.plant !== "boolean")
+    || (body.operationId !== undefined && !isOperationId(body.operationId)) || (body.requireEphemeral !== undefined && body.requireEphemeral !== true)) {
     return fail("invalid_body", "alias and optional fingerprint/plant are required.", 400);
   }
   const alias = body.alias;
   const resolveBinary = ctx.deps.resolveChildBinarySource ?? resolveChildBinarySource;
+  // ocx link add --operation-id (structure/remote-link.md, "Operation journal"): replay, recovery and the reserved ids.
+  const operation = typeof body.operationId === "string" ? { id: body.operationId, digest: enrollOperationDigest({ alias,
+    ...(typeof body.fingerprint === "string" ? { fingerprint: body.fingerprint } : {}), route: wanted, requireEphemeral: body.requireEphemeral === true }) } : null;
+  return underAliasLock(ctx, alias, operation !== null || journalInUse(ctx), async () => {
+  if (operation) {
+    const replay = await replayOperation(ctx, state, operation, "enroll");
+    if (replay) return replay;
+  }
+  const open = openEnrollmentConflict(ctx, alias, operation?.id);
+  if (open) return open;
   return serialized(state, alias, async () => {
     const confirmed = state.confirmedHosts?.get(alias), now = ctx.deps.now ?? Date.now;
     if (!confirmed) return fail("host_not_confirmed", "Confirm the SSH host before applying the link.", 409);
@@ -244,6 +263,13 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     if (confirmed.runtimeKind === "missing" && body.plant !== true) {
       return fail("remote_ocx_missing", "ocx was not found on the remote host; confirm planting ocx-child before applying.", 409);
     }
+    let journal: EnrollJournal = NO_ENROLL_JOURNAL;
+    if (operation) {
+      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch {
+        return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+      }
+    }
+    return journal.finish(await (async (): Promise<Response> => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-link-apply-")), knownHosts = join(dir, "known_hosts");
     writeFileSync(knownHosts, confirmed.knownHostLine + "\n", { mode: 0o600 });
     const runner = runnerFor(ctx), budget = linkCommandBudget(confirmed.sshLatencyMs);
@@ -297,11 +323,21 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     };
     try {
       remotePlatform = confirmed.remotePlatform ?? await requireRemotePlatform(runner, alias, route, knownHosts);
+      if (body.requireEphemeral === true) {
+        // Before any plant, key or Child change: a runnable full ocx anywhere the gated argv looks refuses.
+        phase = "full_install_census";
+        if (remotePlatform === "windows") return fail("require_ephemeral_unsupported", "--require-ephemeral is not supported for a Windows Child.", 409);
+        const census = await run(remoteFullInstallCensusArgv());
+        const verdict = census.code === 0 ? parseFullInstallCensus(census.stdout) : null;
+        if (verdict === null) return fail("full_install_census_failed", "The Child could not be checked for a full OpenCodex install.", 502, sshFailureHint(census.stderr));
+        if (verdict === "present") return fail("full_install_present", "A full OpenCodex install is on the Child; --require-ephemeral refuses it before any change.", 409);
+      }
       if (body.plant === true && confirmed.runtimeKind === "missing") {
         phase = "remote_plant";
         const source = resolveBinary(confirmed.targetTriple ?? null);
         if (!source.ok) return fail("remote_plant_unavailable", plantUnavailableGuidance(source.reason, confirmed.targetTriple ?? null), 409, source.reason);
         let planted: SshRunResult;
+        journal.intent("plant");
         try {
           planted = await runner.run(
             buildExecArgv({ alias, argv: remotePlantChildArgv(remotePlatform, source.artifact.sizeBytes, source.artifact.sha256), knownHostsFile: knownHosts, route }),
@@ -319,6 +355,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
           return fail("remote_plant_failed", "Could not plant ocx-child on the remote host.", 502, sshFailureHint(planted.stderr));
         }
         plantedFreshBinary = true;
+        journal.done("plant");
         ephemeralChild = true;
       }
       phase = "remote_port";
@@ -327,6 +364,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       if (denied) return await failed(denied);
       const remotePort = parsePort(chosen.stdout);
       if (!remotePort) return await failed(fail("remote_port_failed", "The remote link port could not be determined.", 502));
+      journal.port(remotePort);
       phase = "child_preflight";
       const configured = await run(ocx(["config", "show", "--json"]), budget, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES);
       let childConfig: unknown = null;
@@ -350,8 +388,21 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       }
       state.confirmedHosts?.delete(alias);
       phase = "home_setup";
-      const id = newLinkId(), issued = issueKey(ctx, "link:" + alias);
+      const id = journal.reservedLinkId ?? newLinkId();
+      journal.intent("key_issued");
+      let issued: ReturnType<typeof issueKey>;
+      if (journal.reservedKeyId === undefined) issued = issueKey(ctx, "link:" + alias);
+      else {
+        // The config may be saved before issuing throws (a reconcile that fails afterwards), leaving the reserved key
+        // durable while memory says it is absent: never settle that as clean.
+        // failed() still rolls back a binary this apply planted; the key's own outcome stays unknown.
+        try { issued = issueKey(ctx, "link:" + alias, journal.reservedKeyId); } catch {
+          return await failed(fail("key_issue_uncertain", "Issuing the link key failed after it may have been saved; whether the reserved key exists is unknown.", 500));
+        }
+      }
       unvalidatedKeyId = issued.id;
+      if (journal.reservedKeyId !== undefined && issued.id !== journal.reservedKeyId) return await failed(fail("key_reservation_failed", "The link key was not issued under its reserved id.", 500));
+      journal.done("key_issued");
       const candidate: LinkStore["links"][number] = { id, alias, direction: "hub-initiated", hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date(now()).toISOString(), remotePlatform, childKind: ephemeralChild ? "ephemeral" : "full", ...routeFields(routeOf(confirmed)) };
       // Under the same lock as the store write: no Home-initiated link may own this alias in any
       // case, and the live known_hosts must still trust exactly the confirmed key for it (another
@@ -359,6 +410,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       // passed both becomes `record`, the one compensation handles; any earlier failure, an
       // exception included, leaves it unset and revokes the key alone. A write that throws leaves
       // its outcome unknown: compensation re-runs the same checks before it would store the record.
+      journal.intent("link_recorded");
       const created = withConfigMutationLockSync((): "written" | "exists" | ConfirmedLineTrust => {
         const current = readStoreFor(ctx);
         const check = linkCheck(current);
@@ -376,12 +428,14 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
             ? fail("trust_file_unexpected", "The link known_hosts file has a pattern, host-list, marker or malformed line; remove that line, then probe and confirm the host again.", 409)
             : fail("host_key_changed", "The confirmed host key is no longer the one trusted for this alias; probe and confirm the host again.", 409));
       }
+      journal.done("link_recorded");
       await state.listener.ensureStarted();
       if (state.listener.status().state !== "listening") return await failed(fail("listener_unavailable", "The link listener is unavailable.", 503));
       await state.supervisor.ensureStarted();
       await state.supervisor.reload();
       phase = "remote_connect";
       input = new TextEncoder().encode(JSON.stringify({ apiKeyId: issued.id, key: issued.key }));
+      journal.intent("child_enrolled");
       remoteMayBeConnected = true;
       const connected = await runner.run(buildExecArgv({ alias, argv: ocx(["connect", "--link", "--key-stdin", "--tunnel-port", String(remotePort), "--link-id", id]), knownHostsFile: knownHosts, route }), { stdin: input, timeoutMs: budget });
       if (connected.code !== 0) {
@@ -398,6 +452,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       const connectDenied = remoteFailure(connected, "remote_connect_failed", "The Child enrollment command failed.");
       if (connectDenied) return await failed(connectDenied);
       input.fill(0);
+      journal.done("child_enrolled");
+      journal.intent("relay_verified");
       phase = "child_restart";
       const restarted = await run(ocx(["restart"]), linkRestartBudget(confirmed.sshLatencyMs));
       if (restarted.code !== 0) return await failed(fail("child_restart_failed", "The Child restart could not be verified.", 502, sshFailureHint(restarted.stderr)));
@@ -413,6 +469,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
         let data: unknown = null;
         try { if (catalog.code === 0) data = parseChildHttp(catalog.stdout); } catch { /* malformed is not a completed catalog */ }
         if (!isRecord(data) || !Array.isArray(data.models) || !admitted || now() > deadline) return await failed(fail("child_relay_failed", "The Child did not relay a complete authenticated catalog through this Home.", 502));
+        journal.done("relay_verified");
         return Response.json({ linkId: id }, { status: 202 });
       } finally { unsubscribe(); }
     } catch (error) {
@@ -421,5 +478,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       }
       return await failed(fail(phase + (error instanceof SshRunnerError && error.code === "timeout" ? "_timeout" : "_failed"), "Remote Link failed during " + phase.replaceAll("_", " ") + ".", 502, sshRunnerErrorHint(error)));
     } finally { input?.fill(0); rmSync(dir, { recursive: true, force: true }); }
+    })());
+  });
   });
 }

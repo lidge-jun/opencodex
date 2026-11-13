@@ -29,12 +29,20 @@ export interface LinkTurnObserver {
   terminal(status: string | undefined, source: string | undefined): void;
   /** Request-log fields; present only while the link WebSocket feature is on. */
   logFields?(body: unknown): LinkTurnLogFields | null;
+  /**
+   * Set only while the link WebSocket feature is on (#8601): the turn's upstream body is read only as its client drains,
+   * so a stalled link reader holds about one upstream chunk instead of the pipeline's inspection read-ahead.
+   */
+  pacedReads?: boolean;
 }
 
 /** The continuation outcome preparation saw: expanded locally, left for the upstream, or none sent. */
 export type LinkTurnChain = "chained" | "unexpanded" | "none";
 
 export const LINK_TURN_HEADER = "x-opencodex-link-turn";
+
+/** A paced link turn's upstream chunks are relayed in slices of at most this size, so each relay stage holds one slice. */
+export const LINK_PACED_SLICE_BYTES = 256 * 1024;
 
 const byToken = new Map<string, LinkTurnObserver>();
 const byLog = new WeakMap<object, LinkTurnObserver>();
@@ -111,6 +119,11 @@ export function failLinkTurnExpansion(explicit: LinkTurnObserver | undefined, re
 export function markLinkTurnMissing(logCtx: object): void {
   const link = (logCtx as LinkRequestLogCarrier).link;
   if (link) (logCtx as LinkRequestLogCarrier).link = { ...link, continuation: "miss", continuationReason: "missing" };
+}
+
+/** Whether a link turn bound to this context reads its upstream only as its client drains; false for every other request. */
+export function linkTurnPacesReads(logCtx: object): boolean {
+  return byLog.get(logCtx)?.pacedReads === true;
 }
 
 /** Called by the final request log of every turn; a no-op unless a link turn bound this context. */
