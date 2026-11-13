@@ -6,7 +6,7 @@ import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
 export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
-import { bareVerdictRowErrorCode, captureUpstreamTerminalDiagnostics, linkLogField, notifyLinkTurnFinal, upstreamDiagnosticLogFields, type LinkRequestLogCarrier, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
+import { bareVerdictRowErrorCode, captureUpstreamTerminalDiagnostics, guardedRowCopy, linkLogField, notifyLinkTurnFinal, upstreamDiagnosticLogFields, type LinkRequestLogCarrier, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
@@ -1184,7 +1184,7 @@ function captureUpstreamErrorParsed(
     if (logCtx.upstreamError) return;
     const message = upstreamErrorMessageFromPayload(parsed);
     if (typeof message === "string" && message.trim()) {
-      logCtx.upstreamError = redactSecretString(message).slice(0, 500);
+      logCtx.upstreamError = guardedRowCopy(message);
       return;
     }
     // No human-readable error message: fall back to the structured incomplete reason emitted by
@@ -1193,7 +1193,7 @@ function captureUpstreamErrorParsed(
     // mapped HTTP code.
     if (typeof reason === "string" && reason.trim()) {
       const incomplete = incompleteReasonDetail(reason.trim()); // A known reason also gets a closed row detail.
-      logCtx.upstreamError = redactSecretString(incomplete.text).slice(0, 500);
+      logCtx.upstreamError = guardedRowCopy(incomplete.text);
       if (incomplete.detail) logCtx.failureDetail = incomplete.detail;
     }
     return;
@@ -1201,7 +1201,7 @@ function captureUpstreamErrorParsed(
   if (logCtx.upstreamError) return;
   const trimmed = text.trim();
   if (trimmed) {
-    logCtx.upstreamError = redactSecretString(trimmed).slice(0, 500);
+    logCtx.upstreamError = guardedRowCopy(trimmed);
   }
 }
 

@@ -115,6 +115,15 @@ export function diagnosticValueAllowed(
   return !registry.matches(value) && !configured.matches(value);
 }
 
+/**
+ * Row copy taken from upstream text: pattern-redacted and bounded, or wholly redacted when it
+ * repeats a configured credential or one this process sent. Every row-copy write uses it, so no
+ * ordering of frames can store an echoed credential through a pattern-only path.
+ */
+export function guardedRowCopy(text: string): string {
+  return diagnosticValueAllowed(text) ? redactSecretString(text).slice(0, 500) : "[REDACTED]";
+}
+
 export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: Headers): void {
   noteBoundedDiagnostic(logCtx, "upstreamRequestId", headers.get("openai-request-id") ?? headers.get("x-request-id"));
 }
@@ -170,12 +179,6 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
       delete logCtx.upstreamErrorCode;
       delete logCtx.upstreamErrorType;
       delete logCtx.upstreamError;
-      // The replacement copy holds the same guard as the verdict copy it displaces: a terminal
-      // echoing a credential must not reach the row through the pattern-only message fallback.
-      const message = upstreamErrorMessageFromPayload(json);
-      if (typeof message === "string" && message.trim()) {
-        logCtx.upstreamError = diagnosticValueAllowed(message) ? redactSecretString(message).slice(0, 500) : "[REDACTED]";
-      }
     }
     // The classifier retires the provisional status it owns; clearing the map first would
     // hide that ownership from it and leave the stale status on the row.

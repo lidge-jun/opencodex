@@ -1870,6 +1870,27 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     } finally { restore(); }
   });
 
+  test.each([
+    ["an incomplete reason after a typed verdict", (credential: string) => [typedFrame("rate_limit_exceeded", "typed quota"),
+      JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: credential } } })], "incomplete"],
+    ["a later terminal after a completion retired the verdict", (credential: string) => [typedFrame("rate_limit_exceeded", "typed quota"),
+      JSON.stringify({ type: "response.completed", response: { status: "completed" } }),
+      JSON.stringify({ type: "response.failed", response: { status: "failed", error: { message: `echo ${credential}` } } })], "failed"],
+  ] as const)("row copy cannot store an echoed credential: %s", (_name, frames, terminal) => {
+    const credential = "fixture-secret-rowcopy-8415";
+    const registry = new OutboundCredentialRegistry();
+    registry.remember({ authorization: `Bearer ${credential}` });
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      for (const payload of frames(credential)) inspectResponseLogSsePayload(log, payload);
+      const rows: unknown[] = [];
+      addFinalRequestLog("row-copy", 0, log, httpStatusForRequestLogTerminal(terminal, log), { terminalStatus: terminal }, entry => rows.push(entry));
+      expect(log.upstreamError ?? "").not.toContain(credential);
+      expect(JSON.stringify(rows)).not.toContain(credential);
+    } finally { restore(); }
+  });
+
   test("a bare frame after a genuine terminal does not supply the row copy", () => {
     const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
     inspectResponseLogSsePayload(log, JSON.stringify({ type: "response.failed", response: { status: "failed", error: { code: "server_error" } } }));
