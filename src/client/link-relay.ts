@@ -386,34 +386,41 @@ function idleBoundedStream(
 
 /**
  * Test-only (link-websocket-limits.ts): the relayed body passed through unchanged, with the observer told from each
- * chunk handed over until the reader asks again, and when the body ends or is cancelled. A high-water mark of 0 means
- * it reads only when the reader does, so the wait it reports is the reader's. Used only while a test sets an observer.
+ * chunk handed over until the reader asks again, and when the body ends, errors or is cancelled. A high-water mark of 0
+ * means it reads only when the reader does, so the wait it reports is the reader's. `ended` runs from the relay's own
+ * cleanup, so a relay that ends underneath a reader holding a chunk (a caller abort, the SSE idle limit) stops being
+ * reported as waiting at once and is never reported again. Used only while a test sets an observer.
  */
-function waitObservedStream(body: ReadableStream<Uint8Array>, observer: (waiting: boolean) => void): ReadableStream<Uint8Array> {
-  const reader = body.getReader();
+function waitObservation(observer: (waiting: boolean) => void) {
   let waiting = false;
+  let ended = false;
   const tell = (value: boolean): void => {
-    if (waiting === value) return;
+    if (waiting === value || (value && ended)) return;
     waiting = value;
     try { observer(value); } catch { /* a test observer never breaks the relay */ }
   };
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      tell(false);
-      try {
-        const next = await reader.read();
-        if (next.done) { controller.close(); return; }
-        controller.enqueue(next.value);
-        tell(true);
-      } catch (error) {
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      tell(false);
-      try { await reader.cancel(reason); } catch { /* best effort */ }
-    },
-  }, { highWaterMark: 0 });
+  const end = (): void => { ended = true; tell(false); };
+  const stream = (body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> => {
+    const reader = body.getReader();
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        tell(false);
+        try {
+          const next = await reader.read();
+          if (next.done) { controller.close(); return; }
+          controller.enqueue(next.value);
+          tell(true);
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        tell(false);
+        try { await reader.cancel(reason); } catch { /* best effort */ }
+      },
+    }, { highWaterMark: 0 });
+  };
+  return { ended: end, stream };
 }
 
 /**
@@ -646,11 +653,13 @@ export async function relayLinkDataRequest(
 
   // The header deadline ends once a response exists. The body owns cleanup after that.
   stopHeaderDeadline();
+  const waitObserver = linkChildRelayWaitObserver();
+  const observed = waitObserver ? waitObservation(waitObserver) : null;
+  const bodyCleanup = observed ? () => { observed.ended(); cleanup(); } : cleanup;
   const responseBody = sse
     ? idleBoundedStream(upstream.body, relayAbort.signal, clock,
-      deps.sseIdleTimeoutMs ?? LINK_RELAY_SSE_IDLE_TIMEOUT_MS, () => relayAbort.abort(new DOMException("link relay SSE idle timeout", "TimeoutError")), cleanup)
-    : boundedRelayResponseStream(upstream.body, bodyLimit, relayAbort.signal, cleanup);
-  const waitObserver = linkChildRelayWaitObserver();
-  return new Response(waitObserver ? waitObservedStream(responseBody, waitObserver) : responseBody,
+      deps.sseIdleTimeoutMs ?? LINK_RELAY_SSE_IDLE_TIMEOUT_MS, () => relayAbort.abort(new DOMException("link relay SSE idle timeout", "TimeoutError")), bodyCleanup)
+    : boundedRelayResponseStream(upstream.body, bodyLimit, relayAbort.signal, bodyCleanup);
+  return new Response(observed ? observed.stream(responseBody) : responseBody,
     { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
 }

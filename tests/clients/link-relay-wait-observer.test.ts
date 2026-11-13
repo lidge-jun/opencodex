@@ -49,13 +49,16 @@ function manualClock() {
   return { clock, fire };
 }
 
-/** Records every event; `ended` settles on the first false, the milestone a stalled-reader case waits for. */
+/** Records every event; `nextFalse()` settles on the first false after it is called, the milestone each case waits for. */
 function recordWaits() {
   const events: boolean[] = [];
-  let stopped!: () => void;
-  const ended = new Promise<void>(resolve => { stopped = resolve; });
-  setLinkChildRelayWaitObserverForTests(waiting => { events.push(waiting); if (!waiting) stopped(); });
-  return { events, ended };
+  let waiters: Array<() => void> = [];
+  setLinkChildRelayWaitObserverForTests(waiting => {
+    events.push(waiting);
+    if (!waiting) { const settled = waiters; waiters = []; for (const settle of settled) settle(); }
+  });
+  const nextFalse = (): Promise<void> => new Promise(resolve => { waiters.push(resolve); });
+  return { events, nextFalse };
 }
 
 describe("the Child relay's test-only wait observer", () => {
@@ -64,17 +67,30 @@ describe("the Child relay's test-only wait observer", () => {
   });
 
   for (const contentType of ["application/json", "text/event-stream"]) {
-    test("a " + contentType + " response waits from each chunk handed over until its reader asks again", async () => {
-      const events: boolean[] = [];
-      setLinkChildRelayWaitObserverForTests(waiting => events.push(waiting));
-      const response = await relayed(["one", "two"], contentType);
+    test("a " + contentType + " response waits from each chunk handed over until its reader asks again or the relay ends", async () => {
+      const { events, nextFalse } = recordWaits();
+      // The test sends each chunk and the end itself, so every event follows from one step it took.
+      let home!: ReadableStreamDefaultController<Uint8Array>;
+      const upstreamBody = new ReadableStream<Uint8Array>({ start(controller) { home = controller; } });
+      const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses",
+        { method: "POST", body: "{}", headers: { "content-type": "application/json" } }),
+      target, { tunnel, fetchImpl: (async () => new Response(upstreamBody, { headers: { "content-type": contentType } })) as unknown as typeof fetch });
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
-      expect(decoder.decode((await reader.read()).value)).toBe("one");
+      const first = reader.read();
+      home.enqueue(new TextEncoder().encode("one"));
+      expect(decoder.decode((await first).value)).toBe("one");
       // The reader holds the first chunk and has not asked again: the relay waits for it.
       expect(events).toEqual([true]);
-      expect(decoder.decode((await reader.read()).value)).toBe("two");
+      const second = reader.read();
+      home.enqueue(new TextEncoder().encode("two"));
+      expect(decoder.decode((await second).value)).toBe("two");
       expect(events).toEqual([true, false, true]);
+      // The Home's body ends while the reader holds the last chunk: the relay has finished and holds nothing.
+      const relayEnded = nextFalse();
+      home.close();
+      await relayEnded;
+      expect(events).toEqual([true, false, true, false]);
       expect((await reader.read()).done).toBe(true);
       expect(events).toEqual([true, false, true, false]);
     });
@@ -94,7 +110,7 @@ describe("the Child relay's test-only wait observer", () => {
   // The relay can end underneath a reader that holds a chunk and never asks again: a dead relay is not a waiting one.
   for (const contentType of ["application/json", "text/event-stream"]) {
     test("a caller abort while the reader holds a " + contentType + " chunk ends the wait", async () => {
-      const { events, ended } = recordWaits();
+      const { events, nextFalse } = recordWaits();
       const caller = new AbortController();
       const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses",
         { method: "POST", body: "{}", headers: { "content-type": "application/json" }, signal: caller.signal }),
@@ -102,8 +118,9 @@ describe("the Child relay's test-only wait observer", () => {
       const reader = response.body!.getReader();
       await reader.read();
       expect(events).toEqual([true]);
+      const relayEnded = nextFalse();
       caller.abort();
-      await ended;
+      await relayEnded;
       expect(events).toEqual([true, false]);
       // Nothing the reader does afterwards reports the ended relay as waiting again.
       await reader.read().catch(() => undefined);
@@ -112,7 +129,7 @@ describe("the Child relay's test-only wait observer", () => {
   }
 
   test("the SSE idle limit firing while the reader holds a chunk ends the wait", async () => {
-    const { events, ended } = recordWaits();
+    const { events, nextFalse } = recordWaits();
     const { clock, fire } = manualClock();
     const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses",
       { method: "POST", body: "{}", headers: { "content-type": "application/json" } }),
@@ -120,8 +137,9 @@ describe("the Child relay's test-only wait observer", () => {
     const reader = response.body!.getReader();
     await reader.read();
     expect(events).toEqual([true]);
+    const relayEnded = nextFalse();
     fire(777);
-    await ended;
+    await relayEnded;
     expect(events).toEqual([true, false]);
     await reader.read().catch(() => undefined);
     expect(events).toEqual([true, false]);
