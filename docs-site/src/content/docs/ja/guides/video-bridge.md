@@ -18,15 +18,13 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 >
 > ```json
 > {
->   「プロバイダー」: {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>   "providers": {
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> `ocx login xai` (OAuth) 経由でオンボードした場合、プロバイダーは `authMode: "oauth"` のままになります。
-> ブリッジは静かに起動しません。 **または**環境で`XAI_API_KEY`を設定します
-> 上に示したようにキーをハードコーディングします。
+> プロキシの起動環境に `XAI_API_KEY` を設定し、`${XAI_API_KEY}` と `authMode: "key"` を維持してください。他の端末での export は稼働中のプロキシに届きません。所有する Desktop、サービスまたは前景端末から再起動します。キーをコミットやログに残さないでください。
 
 ## 構成
 

@@ -49,7 +49,10 @@ describe("docs-site leaderboard", () => {
   });
 
   test("every site locale carries complete leaderboard copy", () => {
-    expect(TELEMETRY_LEADERBOARD_LOCALES).toEqual(["en", "fr", "ko", "zh-cn", "zh-tw", "ru", "ja", "tr"]);
+    const configured = ["en", ...readFileSync(repoPath("docs-site/astro.config.mjs"), "utf8")
+      .matchAll(/^\s*["']?([a-z]{2}(?:-[a-z]{2})?)["']?:\s*\{\s*label:/gm)]
+      .map(value => typeof value === "string" ? value : value[1]!);
+    expect([...TELEMETRY_LEADERBOARD_LOCALES].sort()).toEqual(configured.sort());
     const keys = Object.keys(TELEMETRY_LEADERBOARD_STRINGS.en).sort();
     const hangul = /[\uac00-\ud7af]/;
     for (const locale of TELEMETRY_LEADERBOARD_LOCALES) {
@@ -148,4 +151,3 @@ describe("docs-site leaderboard", () => {
     expect(mdx.indexOf("<TelemetryDashboard />")).toBeLessThan(mdx.indexOf("<TelemetryLeaderboard />"));
   });
 });
-

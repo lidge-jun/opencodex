@@ -56,8 +56,8 @@ fallback하지 않습니다.
    | `claude-`, `claude-sonnet-`, `claude-opus-`, `claude-haiku-` | `anthropic` |
    | `llama-`, `mixtral-`, `gemma-` | `groq` |
 
-   이 검사는 이름만 봅니다. `defaultModel` / `models[]` 검사와 달리, 현재는 이름이 일치한 프로바이더의
-   `disabled` 값이 true여도 건너뛰지 않습니다.
+   이 검사는 이름만 봅니다. `defaultModel` / `models[]` 검사와 마찬가지로, 이름이 일치한 프로바이더의
+   `disabled` 값이 true이면 건너뜁니다.
 
 7. **프로바이더의 `models[]`** — 프리픽스 규칙과 일치하지 않고 활성 프로바이더의 `models[]`에 id가
    있으면 그 프로바이더를 사용합니다. 규칙 4가 bare `gpt-*` id를 다른 provider의 `models[]`가
