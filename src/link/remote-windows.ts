@@ -209,11 +209,14 @@ try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){
 export const MANAGED_PURGE_CHILD_MISSING_MARKER = "ocx-purge-error:managed_child_missing";
 
 /** Runs `disconnect --purge --json` through the planted %LOCALAPPDATA% binary, never a PATH candidate. */
-export function windowsManagedPurgeDisconnectArgv(): string[] {
+/** expectLink is validated by the caller (lnk_ and 16 hex digits), so it is safe inside the script. */
+export function windowsManagedPurgeDisconnectArgv(expectLink?: string): string[] {
+  if (expectLink !== undefined && !/^lnk_[0-9a-f]{16}$/.test(expectLink)) throw new Error("invalid link id");
+  const extra = expectLink === undefined ? "" : " --expect-link " + expectLink;
   return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
 try{$dir=Resolve-PlantDir}catch{[Console]::Error.WriteLine('Refusing a reparse point in the managed ocx-child directory.');exit 1}
 $dst="$dir\ocx-child.exe";if(-not([IO.File]::Exists($dst)-and[OcxJob]::Ok($dst))){[Console]::Error.WriteLine('${MANAGED_PURGE_CHILD_MISSING_MARKER}');exit 1}
-try{$rc=[OcxJob]::Run($dst,('"'+$dst+'" disconnect --purge --json'))}catch{exit 1}
+try{$rc=[OcxJob]::Run($dst,('"'+$dst+'" disconnect --purge --json${extra}'))}catch{exit 1}
 Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}};exit $rc
 `);
 }

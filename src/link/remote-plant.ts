@@ -235,13 +235,19 @@ export const POSIX_MANAGED_PURGE_DISCONNECT_SCRIPT = [
   "done",
   "dest=\"$HOME/.cache/opencodex/bin/ocx-child\"",
   `if [ ! -f "$dest" ] || [ ! -x "$dest" ]; then printf '${MANAGED_PURGE_CHILD_MISSING_MARKER}\\n' >&2; exit 1; fi`,
-  "exec \"$dest\" disconnect --purge --json",
+  // "$@" is empty for a revoke; ocx link recover passes --expect-link <link id>.
+  "exec \"$dest\" disconnect --purge --json \"$@\"",
 ].join("\n");
 
-export function remoteManagedPurgeDisconnectArgv(platform: "posix" | "windows" = "posix"): string[] {
+const LINK_ID = /^lnk_[0-9a-f]{16}$/;
+
+/** With expectLink, the Child restores only when its state and owner record both name that link. */
+export function remoteManagedPurgeDisconnectArgv(platform: "posix" | "windows" = "posix", expectLink?: string): string[] {
+  if (expectLink !== undefined && !LINK_ID.test(expectLink)) throw new Error("invalid link id");
+  const extra = expectLink === undefined ? [] : ["--expect-link", expectLink];
   return platform === "windows"
-    ? windowsManagedPurgeDisconnectArgv()
-    : ["sh", "-c", POSIX_MANAGED_PURGE_DISCONNECT_SCRIPT, "ocx-managed-purge"];
+    ? windowsManagedPurgeDisconnectArgv(expectLink)
+    : ["sh", "-c", POSIX_MANAGED_PURGE_DISCONNECT_SCRIPT, "ocx-managed-purge", ...extra];
 }
 
 /** The `purged` flag from `ocx-child disconnect --json`, or null when no such report was printed. */

@@ -1,0 +1,92 @@
+import { readFileSync } from "node:fs";
+import type { LinkRecoveryTarget } from "./operation-recovery-slot";
+import { requireRemotePlatform } from "./remote-platform";
+import { remoteManagedPurgeDisconnectArgv } from "./remote-plant";
+import { MANAGED_PURGE_CHILD_MISSING_MARKER } from "./remote-windows";
+import { checkRouteTrust } from "./route-trust";
+import { buildExecArgv } from "./ssh-argv";
+import { sshFailureHint, sshRunnerErrorHint, type SshRunner } from "./ssh-runner";
+
+/**
+ * ocx link recover's remote step (lane O5): run the managed planted ocx-child's
+ * "disconnect --purge --json --expect-link <id>" over the target's alias, with the link known_hosts
+ * pinned to the recorded host key. Only the alias is used, never a sibling route, so the command
+ * reaches the machine whose key the link confirmed. Cleanup is proven only by the Child's exit 0
+ * report that names this link and says the planted binary was removed.
+ */
+export type LinkRecoverOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly status: number; readonly code: string; readonly message: string; readonly hint?: string };
+
+/** Child exit codes of detach --expect-link (native/ocx-child/src/cli.rs). */
+const EXIT_USAGE = 2;
+const EXIT_CONFLICT = 5;
+const EXIT_RESIDUAL = 6;
+/** Record names the Child reports; anything else is not echoed. */
+const RECORDS = new Set(["codex-home-owner", "child-state", "attach-rollback", "codex-journal", "link-key", "catalog-backup"]);
+
+interface ExpectLinkReport {
+  restored?: unknown;
+  outcome?: unknown;
+  linkId?: unknown;
+  purged?: unknown;
+  record?: unknown;
+}
+
+/** The last JSON object line of the Child's stdout, or null. */
+export function parseExpectLinkReport(stdout: string): ExpectLinkReport | null {
+  for (const raw of stdout.split(/\r?\n/).reverse()) {
+    const line = raw.trim();
+    if (!line.startsWith("{")) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as ExpectLinkReport;
+    } catch { /* not the report line */ }
+  }
+  return null;
+}
+
+function recordHint(report: ExpectLinkReport | null): string | undefined {
+  return typeof report?.record === "string" && RECORDS.has(report.record) ? report.record : undefined;
+}
+
+export async function recoverRemoteChild(
+  runner: Pick<SshRunner, "run">,
+  target: LinkRecoveryTarget,
+  knownHostsFile: string,
+): Promise<LinkRecoverOutcome> {
+  const failed = (message: string, hint?: string): LinkRecoverOutcome => ({ ok: false, status: 502, code: "remote_recover_failed", message, ...(hint ? { hint } : {}) });
+  let trusted: string;
+  try { trusted = readFileSync(knownHostsFile, "utf8"); } catch { trusted = ""; }
+  const trust = checkRouteTrust(trusted, target.alias, target.hostKeyFingerprint);
+  if (!trust.ok) {
+    return trust.code === "trust_file_unexpected"
+      ? { ok: false, status: 409, code: "trust_file_unexpected", message: "The link known_hosts file has a pattern, host-list, marker or malformed line; remove that line, then try again." }
+      : { ok: false, status: 409, code: "host_key_changed", message: "The link known_hosts file no longer trusts the host key this link recorded for its alias, so the machine was not contacted." };
+  }
+  let platform = target.remotePlatform;
+  if (!platform) {
+    try { platform = await requireRemotePlatform(runner, target.alias, knownHostsFile); } catch (error) { return failed("The Child's platform could not be determined, so recovery was not attempted.", sshRunnerErrorHint(error)); }
+  }
+  let result;
+  try {
+    result = await runner.run(buildExecArgv({ alias: target.alias, argv: remoteManagedPurgeDisconnectArgv(platform, target.linkId), knownHostsFile }), { timeoutMs: 30_000 });
+  } catch (error) { return failed("The Child could not be reached.", sshRunnerErrorHint(error)); }
+  const report = parseExpectLinkReport(result.stdout);
+  if (result.code === EXIT_RESIDUAL && report?.outcome === "residual") {
+    return { ok: false, status: 409, code: "child_residual", message: "The Child keeps state this command does not restore (an ownership record without a link id, or state missing beside its record); run ocx-child detach on that machine, then recover again.", ...(recordHint(report) ? { hint: recordHint(report) } : {}) };
+  }
+  if (result.code === EXIT_CONFLICT && report?.outcome === "conflict") {
+    return { ok: false, status: 409, code: "child_conflict", message: "The Child belongs to another link or OpenCodex home, or its records cannot be read; nothing was changed.", ...(recordHint(report) ? { hint: recordHint(report) } : {}) };
+  }
+  if (result.code === EXIT_USAGE) {
+    return { ok: false, status: 409, code: "child_recover_unsupported", message: "The planted ocx-child predates detach --expect-link; run ocx-child detach on that machine instead." };
+  }
+  if (result.code !== 0) {
+    if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) return failed("No planted ocx-child was found in the managed directory, so cleanup could not be proven.", "managed_child_missing");
+    return failed("The Child could not be recovered.", sshFailureHint(result.stderr));
+  }
+  if (report?.restored !== true || report.linkId !== target.linkId) return failed("The Child did not report a cleanup bound to this link.", "receipt_unbound");
+  if (report.purged !== true) return failed("The Child was cleaned but did not report removing the planted ocx-child binary.", "purge_incomplete");
+  return { ok: true };
+}

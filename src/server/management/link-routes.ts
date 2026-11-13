@@ -5,6 +5,7 @@ import { requireRemotePlatform } from "../../link/remote-platform";
 import { purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
+import { recordTombstone, tombstonesPath } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
@@ -259,6 +260,20 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
       }
     }
+    // A forced revoke leaves an ephemeral Child uncleaned. Its tombstone is durable before the key and
+    // record go, so ocx link recover can still reach and clean that machine; without it, refuse.
+    if (force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && record.hostKeyFingerprint) {
+      const tombstone = {
+        linkId: id, alias: record.alias, hostKeyFingerprint: record.hostKeyFingerprint,
+        ...(record.remotePlatform ? { remotePlatform: record.remotePlatform } : {}),
+        ...(record.routes ? { routes: [...record.routes] } : {}),
+        revokedAt: new Date((ctx.deps.now ?? Date.now)()).toISOString(),
+      };
+      try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); } catch {
+        await restartTunnel();
+        return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
+      }
+    }
     if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
     let next: LinkStore;
     try {
@@ -383,6 +398,12 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     const denied = auth(ctx, "admin");
     if (denied) return denied;
     return issue(ctx);
+  }
+  if (url.pathname === "/api/link/recover" && req.method === "POST") {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    const { handleLinkRecover } = await import("./link-recover-route");
+    return handleLinkRecover(ctx, state);
   }
   // Before the reconnect and DELETE matchers, which would read "children" as a link id.
   if (path.startsWith("/api/link/children/")) {
