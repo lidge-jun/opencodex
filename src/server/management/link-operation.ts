@@ -48,6 +48,11 @@ export function ownsRetirement(op: LinkOperation): boolean {
   try { return readLinkRetirement(op.linkId)?.operationId === op.operationId; } catch { return true; }
 }
 
+function retirementOutstanding(op: LinkOperation): boolean {
+  if (op.linkId === undefined) return false;
+  try { return readLinkRetirement(op.linkId) !== null; } catch { return true; }
+}
+
 /** The journalled owner of a retirement receipt: the revoke of that same link under the receipt's operation id. */
 export function retirementOwner(journal: OperationsJournal, receipt: LinkRetirement): LinkOperation | undefined {
   if (receipt.operationId === undefined) return undefined;
@@ -191,7 +196,9 @@ async function recoverEnroll(ctx: ManagementContext, state: LinkRouteState, op: 
 function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation {
   const removed = !readStoreFor(ctx).links.some(link => link.id === op.linkId);
   const removalStarted = hasEffect(op, "record_removed", "intent");
-  if (removed && removalStarted) return settle(ctx, op.operationId, "committed");
+  // A retirement receipt still outstanding for the link means its post-commit work has not finished (#8416): this
+  // revoke's own receipt was resumed before replay, so one left here belongs to another identity or is unreadable.
+  if (removed && removalStarted && !retirementOutstanding(op)) return settle(ctx, op.operationId, "committed");
   const touched = removalStarted || hasEffect(op, "remote_cleanup", "intent") || hasEffect(op, "key_revoked", "intent");
   return settle(ctx, op.operationId, removed || touched ? "unknown" : "failed_clean", { code: "operation_interrupted", status: 409 });
 }
@@ -205,7 +212,8 @@ function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation
 export function settleRevokeAfterRetirement(ctx: ManagementContext, operationId: string): void {
   updateJournalPinned(journalPathFor(ctx), nowOf(ctx), journal => {
     const current = findOperation(journal, operationId);
-    if (!current || current.kind !== "revoke" || (current.state !== "open" && current.state !== "unknown")) return;
+    // failed_clean too: a write failure right after the receipt claim can leave the owner recorded clean (#8416).
+    if (!current || current.kind !== "revoke" || (current.state !== "open" && current.state !== "unknown" && current.state !== "failed_clean")) return;
     if (!hasEffect(current, "record_removed", "intent") || readStoreFor(ctx).links.some(link => link.id === current.linkId)) return;
     current.state = "committed";
     delete current.error;

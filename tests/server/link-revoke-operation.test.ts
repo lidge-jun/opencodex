@@ -439,3 +439,46 @@ test("a receipt under an unprotected config root is not honoured, by a plain rev
   expect(readLinkRetirement(LINK, root)).not.toBeNull();
   expect(h.ssh).toEqual([]);
 });
+
+test("a failed_clean owner whose removal resumes from its receipt settles committed", async () => {
+  const h = harness();
+  // A journal write failed right after the receipt claim, so the owner was recorded clean with nothing marked.
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "failed_clean", finishedAt: at, error: { code: "operation_journal_failed", status: 500 }, effects: [],
+  } as LinkOperation] });
+  const replayed = await h.revoke({ force: true, operationId: OP });
+  expect({ status: replayed.status, outcome: replayed.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  expect(h.store.links).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+});
+
+test("an open revoke whose record is gone does not replay committed while another identity's receipt is outstanding", async () => {
+  const h = harness();
+  // Its own receipt was replaced by one without its operation id: the post-commit work is not known to be done.
+  claimLinkRetirement(record(), root, () => h.store, "force");
+  h.store = { ...h.store, links: [] };
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "open",
+    effects: [{ effect: "key_revoked", phase: "intent", at }, { effect: "key_revoked", phase: "done", at }, { effect: "record_removed", phase: "intent", at }],
+  } as LinkOperation] });
+  const replayed = await h.revoke({ force: true, operationId: OP });
+  expect(replayed.body.outcome).toBe("unknown");
+  expect(readLinkRetirement(LINK, root)).not.toBeNull();
+});
+
+test("an owner's replay checks a mismatched receipt's provenance before replaying", async () => {
+  const h = harness({ trusted: () => false });
+  claimLinkRetirement(record(), root, () => h.store, "force", "other-op");
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "unknown", finishedAt: at, error: { code: "operation_interrupted", status: 409 }, effects: [],
+  } as LinkOperation] });
+  const refused = await h.revoke({ force: true, operationId: OP });
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 503, code: "link_retirement_untrusted" });
+});

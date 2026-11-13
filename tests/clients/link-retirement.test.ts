@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdtempSync, readFileSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claimLinkRetirement, clearLinkRetirement, LinkRetirementError, readLinkRetirement, retirementRootProtected } from "../../src/link/retirement";
+import { claimLinkRetirement, clearLinkRetirement, LinkRetirementError, LinkRetirementUntrustedError, readLinkRetirement, readTrustedLinkRetirement } from "../../src/link/retirement";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore, type LinkRecord, type LinkStore } from "../../src/link/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -118,12 +118,30 @@ test("a receipt keeps the operation that claimed it, refuses a malformed one, an
   expect(readLinkRetirement(link.id, dir)).toEqual({ version: 1, link, nonce: receipt.nonce });
 });
 
-test.skipIf(process.platform === "win32")("a receipt is trusted only under a config root no one else can write", () => {
+test.skipIf(process.platform === "win32")("a receipt is trusted only when this user demonstrably wrote it", () => {
   const dir = setup();
-  chmodSync(dir, 0o700);
-  expect(retirementRootProtected(dir)).toBe(true);
-  chmodSync(dir, 0o777);
-  expect(retirementRootProtected(dir)).toBe(false);
-  chmodSync(dir, 0o700);
-  expect(retirementRootProtected(join(dir, "missing"))).toBe(false);
+  chmodSync(dir, 0o755);
+  const receipt = claimLinkRetirement(link, dir, undefined, "purge", "detach-0001");
+  expect(readTrustedLinkRetirement(link.id, dir)).toEqual(receipt);
+  const linkDirectory = join(dir, "link");
+  for (const [path, mode] of [[dir, 0o777], [linkDirectory, 0o777], [receiptPath(dir), 0o644]] as const) {
+    const before = statSync(path).mode & 0o777;
+    chmodSync(path, mode);
+    expect(() => readTrustedLinkRetirement(link.id, dir)).toThrow(LinkRetirementUntrustedError);
+    chmodSync(path, before);
+  }
+  expect(readTrustedLinkRetirement(link.id, dir)).toEqual(receipt);
+  // A symlink in its place, and a second hard link to it, are refused even when the target is private.
+  const aside = join(dir, "aside.json");
+  renameSync(receiptPath(dir), aside);
+  symlinkSync(aside, receiptPath(dir));
+  expect(() => readTrustedLinkRetirement(link.id, dir)).toThrow(LinkRetirementUntrustedError);
+  renameSync(aside, join(dir, "aside2.json"));
+  unlinkSync(receiptPath(dir));
+  renameSync(join(dir, "aside2.json"), receiptPath(dir));
+  linkSync(receiptPath(dir), join(dir, "second-name.json"));
+  expect(() => readTrustedLinkRetirement(link.id, dir)).toThrow(LinkRetirementUntrustedError);
+  unlinkSync(join(dir, "second-name.json"));
+  expect(readTrustedLinkRetirement(link.id, dir)).toEqual(receipt);
+  expect(readTrustedLinkRetirement("lnk_fedcba9876543210", dir)).toBeNull();
 });

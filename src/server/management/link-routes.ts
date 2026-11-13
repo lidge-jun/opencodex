@@ -9,7 +9,7 @@ import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-arg
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
-import { claimLinkRetirement, clearLinkRetirement, readLinkRetirement, retirementRootProtected, type LinkRetirementMode } from "../../link/retirement";
+import { claimLinkRetirement, clearLinkRetirement, LinkRetirementUntrustedError, readLinkRetirement, readTrustedLinkRetirement, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
@@ -329,11 +329,11 @@ async function resumeRetirementBeforeReplay(
   try {
     const op = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id);
     if (!op || op.kind !== "revoke" || op.digest !== operation.digest || op.linkId !== id) return null;
-    receipt = readLinkRetirement(id);
+    receipt = readReceipt(ctx, id);
     recordListed = readStoreFor(ctx).links.some(link => link.id === id);
-  } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
+  } catch (error) { return error instanceof LinkRetirementUntrustedError ? untrustedRetirement() : fail("link_remove_failed", "The link retirement could not be read.", 503); }
+  // Another identity's receipt is left alone; replay then cannot settle committed while it is outstanding (recoverRevoke).
   if (!receipt || receipt.operationId !== operation.id || receipt.mode !== removalMode(force, purge)) return null;
-  if (!retirementTrusted(ctx)) return untrustedRetirement();
   let releaseLink: (() => void) | null = null;
   if (reserve) {
     const { childOpsEngineFor } = await import("./link-child-ops-routes");
@@ -353,17 +353,24 @@ function readRemovalTarget(ctx: ManagementContext, id: string):
   let receipt: ReturnType<typeof readLinkRetirement>;
   let found: LinkStore["links"][number] | undefined;
   try {
-    receipt = readLinkRetirement(id);
+    receipt = readReceipt(ctx, id);
     found = readStoreFor(ctx).links.find(link => link.id === id);
-  } catch { return { response: fail("link_remove_failed", "The link retirement could not be read.", 503) }; }
+  } catch (error) {
+    return { response: error instanceof LinkRetirementUntrustedError ? untrustedRetirement() : fail("link_remove_failed", "The link retirement could not be read.", 503) };
+  }
   if (!found && !receipt) return { response: fail("link_not_found", "The link was not found.", 404) };
-  if (receipt && !retirementTrusted(ctx)) return { response: untrustedRetirement() };
   if (receipt && found && JSON.stringify(found) !== JSON.stringify(receipt.link)) return { response: fail("link_changed", "The link changed during removal.", 409) };
   return { record: receipt?.link ?? { ...found! }, receipt };
 }
 
-/** A receipt is honoured only under a protected config root (retirementRootProtected); deps inject the check in tests. */
-const retirementTrusted = (ctx: ManagementContext): boolean => (ctx.deps.linkRetirementTrusted ?? retirementRootProtected)();
+/**
+ * A receipt is honoured only when its provenance holds (readTrustedLinkRetirement); a receipt it cannot vouch for throws
+ * LinkRetirementUntrustedError. deps.linkRetirementTrusted returning false makes any present receipt untrusted (tests).
+ */
+function readReceipt(ctx: ManagementContext, id: string): ReturnType<typeof readLinkRetirement> {
+  if (ctx.deps.linkRetirementTrusted?.() === false && readLinkRetirement(id)) throw new LinkRetirementUntrustedError("untrusted by configuration");
+  return readTrustedLinkRetirement(id);
+}
 const untrustedRetirement = (): Response => fail("link_retirement_untrusted",
   "This link's removal was interrupted, but the configuration directory is not protected, so its receipt cannot be trusted. Restrict the OpenCodex configuration directory to your user, then repeat the removal.", 503);
 
