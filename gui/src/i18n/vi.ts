@@ -2986,7 +2986,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.back": "Quay lại",
   "codexAuth.oauthAlreadyInProgress": "Đang tiến hành đăng nhập. Vui lòng hoàn tất quá trình này trong trình duyệt của bạn.",
   "codexAuth.oauthWaiting": "Đang đợi quá trình đăng nhập ChatGPT hoàn tất trên trình duyệt...",
-  "codexAuth.deviceOnlyEnforced": "Proxy này chỉ cho phép đăng nhập bằng mã thiết bị cho tài khoản Codex (codexAuthMethod: device-only).",
+  "codexAuth.deviceOnlyEnforced": "Proxy này chỉ cho phép đăng nhập bằng mã thiết bị cho tài khoản pool Codex (codexAuthMethod: device-only).",
   "codexAuth.oauthSubmittingCode": "Đang gửi mã…",
   "codexAuth.oauthCodeSubmitted": "Đã gửi mã — đang đợi đăng nhập hoàn tất…",
   "codexAuth.oauthStatusRetrying": "Lỗi mạng hoặc proxy trong khi kiểm tra trạng thái đăng nhập — đang thử lại…",
