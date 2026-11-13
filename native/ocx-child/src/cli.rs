@@ -1602,11 +1602,11 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
                 if let Err(code) = detach_without_codex_home(&local_paths) {
                     return code;
                 }
-                drop(lock);
                 let purged = match purge_after_detach(purge, current_exe_override) {
                     Ok(purged) => purged,
                     Err(code) => return code,
                 };
+                drop(lock);
                 print_detached(
                     json_mode,
                     crate::journal::DetachOutcome::NotAttached,
@@ -1729,11 +1729,11 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
     drop(_startup_gate);
     let _ = remove_optional_file(&paths.child_dir.join("daemon-start.lock"));
     let _ = fs::remove_dir(&paths.child_dir);
-    drop(lock);
     let purged = match purge_after_detach(purge, current_exe_override) {
         Ok(purged) => purged,
         Err(code) => return code,
     };
+    drop(lock);
     print_detached(json_mode, outcome, purged, expect);
     0
 }
@@ -1794,9 +1794,45 @@ fn first_child_record(paths: &ChildPaths) -> Option<(&'static str, PathBuf)> {
     .map(|(name, path)| (name, path.clone()))
 }
 
-/// Restore only when both `state.json` and the ownership record name `link_id`, or when
-/// nothing at all is left. Runs with the lifecycle and `CODEX_HOME` locks held, which the
-/// restore keeps, so no other enrollment can run between this check and the restore.
+/// The link an unresolved attach rollback would put back: `None` without a snapshot,
+/// `Some(None)` for a first attach (no prior state), `Some(Some(id))` for a re-attach.
+fn rollback_prior_link(paths: &ChildPaths) -> Result<Option<Option<String>>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PriorLink {
+        link_id: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RollbackPrior {
+        prior_state: Option<PriorLink>,
+    }
+    reject_symlink(&paths.rollback_file)?;
+    let mut bytes = match fs::File::open(&paths.rollback_file) {
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            file.take(MAX_ROLLBACK_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| format!("cannot read rollback snapshot: {e}"))?;
+            bytes
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot open rollback snapshot: {e}")),
+    };
+    let parsed = if bytes.len() as u64 > MAX_ROLLBACK_BYTES {
+        Err("rollback snapshot exceeds size limit".to_owned())
+    } else {
+        serde_json::from_slice::<RollbackPrior>(&bytes)
+            .map_err(|e| format!("malformed rollback snapshot: {e}"))
+    };
+    volatile_zero_bytes(&mut bytes);
+    Ok(Some(parsed?.prior_state.map(|prior| prior.link_id)))
+}
+
+/// Restore only when both `state.json` and the ownership record name `link_id`, and an
+/// unresolved attach rollback would not put back another link; or when nothing at all is left.
+/// Runs with the lifecycle and `CODEX_HOME` locks held, which the restore keeps, so no other
+/// enrollment can run between this check and the restore.
 fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -> Result<(), u8> {
     let paths = guard.paths();
     let owner_path = paths.codex_owner_path();
@@ -1807,33 +1843,60 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
         ))
     };
     let state = read_child_state(state_path);
-    match &state {
-        StateReadOutcome::Invalid(e) => {
+    if let StateReadOutcome::Invalid(e) = &state {
+        return refuse(
+            ExpectLinkRefusal::Conflict,
+            "child-state",
+            state_path,
+            &format!("the Child state cannot be read ({e})"),
+        );
+    }
+    let rollback = match rollback_prior_link(paths) {
+        Ok(rollback) => rollback,
+        Err(e) => {
             return refuse(
                 ExpectLinkRefusal::Conflict,
-                "child-state",
-                state_path,
-                &format!("the Child state cannot be read ({e})"),
+                "attach-rollback",
+                &paths.rollback_file,
+                &format!("the attach rollback snapshot cannot be read ({e})"),
             );
         }
-        StateReadOutcome::Valid(st) if st.link_id != link_id => {
-            return refuse(
+    };
+    let owner = guard.owner_record();
+    // Every link the records name. More than one means an attach replaced another link's
+    // attachment; an interrupted one (phase attaching, or a rollback left) is the owner's to
+    // finish with a plain detach, and any other mix is a conflict.
+    let mut named: Vec<(&'static str, PathBuf, String)> = Vec::new();
+    if let StateReadOutcome::Valid(st) = &state {
+        named.push(("child-state", state_path.clone(), st.link_id.clone()));
+    }
+    if let Some(id) = owner.and_then(|r| r.link_id.clone()) {
+        named.push(("codex-home-owner", owner_path.clone(), id));
+    }
+    if let Some(Some(id)) = &rollback {
+        named.push(("attach-rollback", paths.rollback_file.clone(), id.clone()));
+    }
+    if let Some((record, path, _)) = named.iter().find(|(_, _, id)| id != link_id) {
+        let interrupted =
+            rollback.is_some() || owner.is_some_and(|r| r.phase == OwnershipPhase::Attaching);
+        return if interrupted && named.iter().any(|(_, _, id)| id == link_id) {
+            refuse(
+                ExpectLinkRefusal::Residual,
+                record,
+                path,
+                "an interrupted attach replaced another link's attachment; run ocx-child detach on this machine",
+            )
+        } else {
+            refuse(
                 ExpectLinkRefusal::Conflict,
-                "child-state",
-                state_path,
+                record,
+                path,
                 "the Child is linked to another link",
-            );
-        }
-        _ => {}
+            )
+        };
     }
     let state_names_link = matches!(state, StateReadOutcome::Valid(_));
-    match guard.owner_record().map(|r| r.link_id.as_deref()) {
-        Some(Some(owner_link)) if owner_link != link_id => refuse(
-            ExpectLinkRefusal::Conflict,
-            "codex-home-owner",
-            &owner_path,
-            "the Codex home is owned for another link",
-        ),
+    match owner.map(|r| r.link_id.as_deref()) {
         Some(None) => refuse(
             ExpectLinkRefusal::Residual,
             "codex-home-owner",
@@ -1866,11 +1929,13 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
 }
 
 /// Removes the running binary when `--purge` was requested and it sits in the managed plant
-/// directory. Runs only after every recovery record is gone and the lifecycle lock is released.
+/// directory. Runs only after every recovery record is gone, while the caller still holds the
+/// lifecycle lock, so an attach waiting on that lock cannot start before the binary is gone.
 fn purge_after_detach(purge: bool, current_exe_override: Option<&Path>) -> Result<bool, u8> {
     if !purge {
         return Ok(false);
     }
+    crate::test_hooks::barrier("purge-before-remove");
     let exe = match current_exe_override {
         Some(p) => p.to_path_buf(),
         None => match std::env::current_exe() {

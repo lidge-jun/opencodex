@@ -10,6 +10,7 @@ import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { keyFingerprint } from "../../src/link/route-trust";
 import { tombstonesPath } from "../../src/link/tombstones";
 import { registerOperationRecoveryResolver } from "../../src/link/operation-recovery-slot";
+import { POSIX_RECOVER_ABSENT_SCRIPT, remoteRecoverAbsentArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Home side of lane O5: a forced revoke of an ephemeral link leaves a tombstone, and
@@ -50,6 +51,7 @@ function harness(links: LinkRecord[]) {
   let store: LinkStore = { version: 1, listenerPort: 18181, links };
   const commands: string[] = [];
   let answer: () => SshRunResult = () => report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true, linkId: ID });
+  let absent: () => SshRunResult = () => ok("ocx-recover:absent\n");
   const state: LinkRouteState = {
     pendingHosts: new Map(),
     operations: new Set(),
@@ -68,6 +70,7 @@ function harness(links: LinkRecord[]) {
     async run(argv) {
       const command = argv.at(-1) ?? "";
       commands.push(argv.join(" "));
+      if (command.includes("ocx-recover-absent")) return absent();
       if (!command.includes("ocx-managed-purge")) throw new Error("Unexpected SSH command: " + command);
       return answer();
     },
@@ -98,6 +101,7 @@ function harness(links: LinkRecord[]) {
     request, commands, knownHosts,
     get store() { return store; },
     answer(next: () => SshRunResult) { answer = next; },
+    absent(next: () => SshRunResult) { absent = next; },
   };
 }
 
@@ -274,3 +278,52 @@ describe("POST /api/link/recover", () => {
   });
 });
 
+
+describe("recover after a lost receipt and with remote failures", () => {
+  const missing = () => ok("", 1, "ocx-purge-error:managed_child_missing\n");
+
+  test("a purge whose receipt was lost settles once nothing is left on the machine", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    h.answer(missing);
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ linkId: ID, outcome: "clean", purged: true });
+    expect(tombstones()).toEqual([]);
+    expect(h.commands).toHaveLength(2);
+    expect(h.commands[1]).toContain("HostKeyAlias=devbox");
+  });
+
+  test("a missing binary with records still on the machine keeps the tombstone", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    h.answer(missing);
+    h.absent(() => ok("", 4));
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(502);
+    expect(await errorOf(res)).toMatchObject({ code: "remote_recover_failed", hint: "managed_child_missing" });
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
+
+  test.each([
+    [1, "child_failed"],
+    [255, "ssh_failed"],
+  ])("exit %d answers the fixed hint %s and never the machine's stderr", async (code, hint) => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    h.answer(() => ok("", code, "detach failed: cannot open /home/someone/.codex/config.toml: denied\n"));
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(502);
+    const error = await errorOf(res);
+    expect(error).toMatchObject({ code: "remote_recover_failed", hint });
+    expect(JSON.stringify(error)).not.toContain("someone");
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
+
+  test("the absence check only reads: it never runs the binary or removes anything", () => {
+    expect(POSIX_RECOVER_ABSENT_SCRIPT).not.toMatch(/\brm\b|\bexec\b|detach|disconnect|--purge/);
+    expect(POSIX_RECOVER_ABSENT_SCRIPT).not.toMatch(/^\s*"?\$dest"? /m);
+    const windows = remoteRecoverAbsentArgv("windows");
+    expect(windows.join(" ").length).toBeLessThanOrEqual(8000);
+  });
+});

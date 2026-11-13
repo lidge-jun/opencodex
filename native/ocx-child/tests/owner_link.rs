@@ -391,3 +391,105 @@ fn an_owner_record_whose_link_id_does_not_match_its_schema_is_unreadable() {
     homes.write_owner(&owner);
     assert_refused_untouched(&homes, LINK_A, 5, "conflict");
 }
+
+fn attach_until_barrier(homes: &Homes, link: &str, barrier_name: &str, start_daemon: bool) {
+    let home = MockHomeServer::start(&raw_token(), KEY_ID, link);
+    let tunnel = home.port.to_string();
+    let listen = homes.port.to_string();
+    let mut args = attach_args(&tunnel, link, &listen);
+    if !start_daemon {
+        args.push("--no-daemon");
+    }
+    let mut cmd = child_command(&homes.ocx, &homes.codex, homes.port, &args);
+    let barrier = Barrier::new(&homes.scratch.0, &format!("crash-{link}"));
+    barrier.apply(&mut cmd, barrier_name);
+    let mut child = spawn_with_creds(cmd);
+    assert!(
+        barrier.wait_reached(barrier_name, Duration::from_secs(20)),
+        "attach never reached {barrier_name}"
+    );
+    // A crash at this point: the process is gone, its records stay.
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn an_attach_interrupted_before_it_wrote_anything_leaves_both_links_residual() {
+    let homes = Homes::new("owner-link-reattach-early");
+    let _home = homes.attach(LINK_A);
+    attach_until_barrier(&homes, LINK_B, "attach-protected", false);
+    assert_eq!(homes.owner()["linkId"], LINK_B);
+    assert_eq!(homes.owner()["phase"], "attaching");
+    assert_refused_untouched(&homes, LINK_A, 6, "residual");
+    assert_refused_untouched(&homes, LINK_B, 6, "residual");
+    // The owner's plain detach still finishes it.
+    let (code, _, err) = run_bin(&homes.ocx, &homes.codex, homes.port, &["detach"], None);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        fs::read(homes.codex.join("config.toml")).unwrap(),
+        ORIGINAL_CONFIG
+    );
+}
+
+#[test]
+fn a_reattach_interrupted_after_its_state_write_never_restores_the_previous_link() {
+    let homes = Homes::new("owner-link-reattach-late");
+    let _home = homes.attach(LINK_A);
+    attach_until_barrier(&homes, LINK_B, "attach-before-daemon-start", true);
+    // State and owner record already name B, but the rollback would put back A.
+    assert!(
+        homes
+            .ocx
+            .join("child")
+            .join("attach-rollback.json")
+            .exists()
+    );
+    let report = assert_refused_untouched(&homes, LINK_B, 6, "residual");
+    assert_eq!(report["record"], "attach-rollback");
+    assert_refused_untouched(&homes, LINK_A, 6, "residual");
+    assert_refused_untouched(&homes, "lnk_00000000000000aa", 5, "conflict");
+}
+
+#[cfg(unix)]
+#[test]
+fn purge_removes_the_planted_binary_while_the_lifecycle_lock_is_held() {
+    let homes = Homes::new("owner-link-purge-lock");
+    let fake_home = homes.scratch.0.join("home");
+    let bin_dir = fake_home.join(".cache").join("opencodex").join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let planted = bin_dir.join("ocx-child");
+    fs::copy(env!("CARGO_BIN_EXE_ocx-child"), &planted).unwrap();
+    let _home = homes.attach(LINK_A);
+    let barrier = Barrier::new(&homes.scratch.0, "purge");
+    let mut cmd = std::process::Command::new(&planted);
+    cmd.args(["detach", "--purge", "--json", "--expect-link", LINK_A])
+        .env("HOME", &fake_home)
+        .env("OPENCODEX_HOME", &homes.ocx)
+        .env("CODEX_HOME", &homes.codex)
+        .env("OCX_CHILD_LISTEN_PORT", homes.port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    barrier.apply(&mut cmd, "purge-before-remove");
+    let child = cmd.spawn().unwrap();
+    assert!(
+        barrier.wait_reached("purge-before-remove", Duration::from_secs(20)),
+        "detach never reached the purge"
+    );
+    let local = FileLock::try_acquire_nonblocking(&homes.ocx.join("child.lock"));
+    let busy = matches!(local, Err(LockAcquireError::Busy));
+    drop(local);
+    barrier.release("purge-before-remove");
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        busy,
+        "an attach could take the lifecycle lock before the purge"
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("\"purged\":true"));
+    assert!(!planted.exists());
+}

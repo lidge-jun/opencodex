@@ -1,18 +1,20 @@
 import { readFileSync } from "node:fs";
 import type { LinkRecoveryTarget } from "./operation-recovery-slot";
 import { requireRemotePlatform } from "./remote-platform";
-import { remoteManagedPurgeDisconnectArgv } from "./remote-plant";
+import { RECOVER_ABSENT_MARKER, remoteManagedPurgeDisconnectArgv, remoteRecoverAbsentArgv } from "./remote-plant";
 import { MANAGED_PURGE_CHILD_MISSING_MARKER } from "./remote-windows";
 import { checkRouteTrust } from "./route-trust";
 import { buildExecArgv } from "./ssh-argv";
-import { sshFailureHint, sshRunnerErrorHint, type SshRunner } from "./ssh-runner";
+import type { SshRunner } from "./ssh-runner";
 
 /**
  * ocx link recover's remote step (lane O5): run the managed planted ocx-child's
  * "disconnect --purge --json --expect-link <id>" over the target's alias, with the link known_hosts
  * pinned to the recorded host key. Only the alias is used, never a sibling route, so the command
  * reaches the machine whose key the link confirmed. Cleanup is proven only by the Child's exit 0
- * report that names this link and says the planted binary was removed.
+ * report that names this link and says the planted binary was removed, or, when that report was
+ * lost after the purge, by a read-only check that neither the planted binary nor any ocx-child
+ * recovery record remains. Hints are fixed words: the machine's own text never reaches the caller.
  */
 export type LinkRecoverOutcome =
   | { readonly ok: true }
@@ -22,6 +24,7 @@ export type LinkRecoverOutcome =
 const EXIT_USAGE = 2;
 const EXIT_CONFLICT = 5;
 const EXIT_RESIDUAL = 6;
+const SSH_TRANSPORT_FAILURE = 255;
 /** Record names the Child reports; anything else is not echoed. */
 const RECORDS = new Set(["codex-home-owner", "child-state", "attach-rollback", "codex-journal", "link-key", "catalog-backup"]);
 
@@ -55,7 +58,8 @@ export async function recoverRemoteChild(
   target: LinkRecoveryTarget,
   knownHostsFile: string,
 ): Promise<LinkRecoverOutcome> {
-  const failed = (message: string, hint?: string): LinkRecoverOutcome => ({ ok: false, status: 502, code: "remote_recover_failed", message, ...(hint ? { hint } : {}) });
+  const failed = (message: string, hint: string): LinkRecoverOutcome => ({ ok: false, status: 502, code: "remote_recover_failed", message, hint });
+  const exec = (argv: string[]) => runner.run(buildExecArgv({ alias: target.alias, argv, knownHostsFile }), { timeoutMs: 30_000 });
   let trusted: string;
   try { trusted = readFileSync(knownHostsFile, "utf8"); } catch { trusted = ""; }
   const trust = checkRouteTrust(trusted, target.alias, target.hostKeyFingerprint);
@@ -66,12 +70,10 @@ export async function recoverRemoteChild(
   }
   let platform = target.remotePlatform;
   if (!platform) {
-    try { platform = await requireRemotePlatform(runner, target.alias, knownHostsFile); } catch (error) { return failed("The Child's platform could not be determined, so recovery was not attempted.", sshRunnerErrorHint(error)); }
+    try { platform = await requireRemotePlatform(runner, target.alias, knownHostsFile); } catch { return failed("The Child's platform could not be determined, so recovery was not attempted.", "platform_unknown"); }
   }
   let result;
-  try {
-    result = await runner.run(buildExecArgv({ alias: target.alias, argv: remoteManagedPurgeDisconnectArgv(platform, target.linkId), knownHostsFile }), { timeoutMs: 30_000 });
-  } catch (error) { return failed("The Child could not be reached.", sshRunnerErrorHint(error)); }
+  try { result = await exec(remoteManagedPurgeDisconnectArgv(platform, target.linkId)); } catch { return failed("The Child could not be reached.", "ssh_failed"); }
   const report = parseExpectLinkReport(result.stdout);
   if (result.code === EXIT_RESIDUAL && report?.outcome === "residual") {
     return { ok: false, status: 409, code: "child_residual", message: "The Child keeps state this command does not restore (an ownership record without a link id, or state missing beside its record); run ocx-child detach on that machine, then recover again.", ...(recordHint(report) ? { hint: recordHint(report) } : {}) };
@@ -83,8 +85,14 @@ export async function recoverRemoteChild(
     return { ok: false, status: 409, code: "child_recover_unsupported", message: "The planted ocx-child predates detach --expect-link; run ocx-child detach on that machine instead." };
   }
   if (result.code !== 0) {
-    if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) return failed("No planted ocx-child was found in the managed directory, so cleanup could not be proven.", "managed_child_missing");
-    return failed("The Child could not be recovered.", sshFailureHint(result.stderr));
+    if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) {
+      // A purge whose receipt was lost already removed the binary: settle only if nothing is left.
+      let absent;
+      try { absent = await exec(remoteRecoverAbsentArgv(platform)); } catch { return failed("The Child could not be reached.", "ssh_failed"); }
+      if (absent.code === 0 && absent.stdout.split(/\r?\n/).some(line => line.trim() === RECOVER_ABSENT_MARKER)) return { ok: true };
+      return failed("No planted ocx-child was found in the managed directory, but ocx-child records remain, so cleanup could not be proven.", "managed_child_missing");
+    }
+    return failed(result.code === SSH_TRANSPORT_FAILURE ? "The Child could not be reached." : "The Child could not be recovered.", result.code === SSH_TRANSPORT_FAILURE ? "ssh_failed" : "child_failed");
   }
   if (report?.restored !== true || report.linkId !== target.linkId) return failed("The Child did not report a cleanup bound to this link.", "receipt_unbound");
   if (report.purged !== true) return failed("The Child was cleaned but did not report removing the planted ocx-child binary.", "purge_incomplete");
