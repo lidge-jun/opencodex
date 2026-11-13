@@ -5,6 +5,7 @@ import { hasKeyPoolFailover } from "./key-failover";
 import type { OcxConfig } from "../types";
 import { registerProviderResponseProvenance } from "./request-pacing";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
+import { inheritPassiveKeyProof } from "../lib/passive-key-fetch-proof";
 
 interface BillingSendOwnership {
   readonly providerName: string;
@@ -45,6 +46,7 @@ export function anthropicBillingPhysicalFetch(
     responseOwners.set(response, responseOwners.has(response) ? null : owner);
     return response;
   }) as typeof globalThis.fetch;
+  inheritPassiveKeyProof(wrapped, physicalFetch);
   return isEgressTransparentExecutor(physicalFetch) ? markEgressTransparentExecutor(wrapped) : wrapped;
 }
 

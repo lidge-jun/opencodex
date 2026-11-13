@@ -69,6 +69,8 @@ account without a formable ARN is not probed. Persisted quota and exhaustion evi
 are bound independently by observation time, reset, and login identity, never by token
 or raw account label; removal, identity change, expiry, or malformed disk degrades routing
 evidence to unknown. Initial routing reads it through `kiroAccountEvidence`.
+Display-only account quota is excluded from that evidence; an independently recorded refusal
+verdict remains separate.
 The same identity-fenced reading carries precise plan `kiroCreditsUsed` and
 `kiroCreditsLimit`; missing or expired evidence has no metric sample. The automatic
 candidate filter and account list both use `kiroAutoSelection` from
