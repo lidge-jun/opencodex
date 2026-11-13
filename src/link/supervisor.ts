@@ -297,9 +297,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     record.apiKeyId,
     record.createdAt,
     listenerPort,
-    // How ssh reaches the alias: an edit of either restarts the tunnel on the new route instead of keeping the old one.
+    // How ssh reaches the alias: an edit restarts the tunnel on the new route instead of keeping the old one. exclusive
+    // alone changes no argv (it only locks the route list), so it is not part of the instance.
     record.explicitRoute ?? null,
-    record.exclusive ?? false,
   ]);
 
   const conditionalRemovePidfile = (linkId: string, pid: number): void => {
