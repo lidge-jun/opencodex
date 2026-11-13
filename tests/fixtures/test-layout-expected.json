@@ -180,7 +180,7 @@
   "anthropic2-discovery-ownership.test.ts": "oauth",
   "codex-shim-runtime-preflight.test.ts": "codex-integration",
   "cli-anthropic2-account.test.ts": "cli", "anthropic2-catalog.test.ts": "codex-integration", "provider-anthropic-instance-quota.test.ts": "providers", "anthropic2-management.test.ts": "server",
-  "management-sidecar-anthropic-instance.test.ts": "server", "anthropic2-usage-attribution.test.ts": "usage", "vision-anthropic-instance-sidecar.test.ts": "vision", "web-search-anthropic-instance.test.ts": "web-search",
+  "management-sidecar-anthropic-instance.test.ts": "server", "anthropic2-usage-attribution.test.ts": "usage", "live-meter.test.ts": "usage", "vision-anthropic-instance-sidecar.test.ts": "vision", "web-search-anthropic-instance.test.ts": "web-search",
   "provider-anthropic-instance.test.ts": "providers", "config-anthropic-instance-pool.test.ts": "config", "oauth-anthropic-instance-registration.test.ts": "oauth", "oauth-anthropic-instance-refresh.test.ts": "oauth",
   "claude-picker-upload.test.ts": "claude-integration", "claude-picker-linger.test.ts": "claude-integration",
   "model-costs-pricing-cache.test.ts": "server",
