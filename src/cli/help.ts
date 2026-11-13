@@ -64,8 +64,8 @@ Usage:
   ocx debug <scope>           provider/usage/injection/claude on|off|status|reset
   ocx login <provider>        OAuth or API-key provider login (ocx login codex for Codex/ChatGPT)
   ocx logout <provider>       Remove a stored OAuth login
-  ocx gui [pair --origin <browser-origin> [--json]]
-                              Open the dashboard or create a single-use remote pairing grant
+  ocx gui [pair [--desktop] --origin <browser-origin> [--json]]
+                              Open the dashboard, pair a remote GUI, or authorize local Desktop changes (--desktop)
   ocx hub invite [--json]     Print a ready-to-run \`ocx connect\` line for one more machine
                               (hub only; see \`ocx help hub\` for the one-port topology)
   ocx link <sub>              Machine links over SSH (port|issue|revoke|status|check)
