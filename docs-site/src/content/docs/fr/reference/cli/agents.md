@@ -57,7 +57,7 @@ ocx v2 mode-hint --clear
 La sous-commande `mode` écrit `multiAgentMode` dans la configuration opencodex et resynchronise le catalogue Codex.
 Les changements de mode et d’indicateur déplacent la limite numérique actuelle de fils entre les clés v1/v2 Codex valides ;
 une transition ratée restaure le `config.toml` original. Les modifications s'appliquent aux nouvelles sessions Codex, tandis que
-les sessions de course conservent leur surface épinglée.
+les sessions en cours conservent leur surface épinglée. Le compilateur en clair suit toutefois le réglage actuel pour les requêtes admissibles ultérieures, y compris dans les sessions V2 existantes.
 
 `mode-hint` écrit `features.multi_agent_v2.multi_agent_mode_hint_text` en Codex
 `$CODEX_HOME/config.toml` même si `multi_agent_v2` est actuellement désactivé. Le

@@ -208,6 +208,10 @@ canoniques pour les tâches chiffrées.
 - **Tableau de bord** → **Délégation de sous-agent** : définissez les conseils model/effort et l'activation explicite natif par défaut.
 - **Sous-agents** : choisissez et ordonnez la liste, puis configurez la chaîne de repli globale.
 
+Le champ expérimental `plaintextV2AgentMessages` est absent d’une configuration neuve. La valeur explicite `true` ou le mode distinct `v2-plaintext` active le compilateur ; quitter ce mode conserve la préférence indépendante. Le mode fixe V2 au catalogue pour les nouvelles sessions sans priorité globale, mais le compilateur suit le réglage actuel pour les requêtes admissibles ultérieures, y compris dans les sessions V2 existantes. Il ne déchiffre pas les tâches existantes et ne réécrit pas l’historique ; sa désactivation ne supprime pas les copies conservées.
+
+La requête doit utiliser Responses et la destination finale le transport ChatGPT Codex canonique : `adapter: "openai-responses"`, `authMode: "forward"` et `https://chatgpt.com/backend-api/codex`. Les fournisseurs à clé API OpenAI, passerelles compatibles personnalisées, autres destinations et clients non Responses sont exclus. Pour les appels V2 admissibles, le compilateur traite `spawn_agent`, `send_message` et `followup_task` sans requête de récupération supplémentaire. HTTPS reste chiffré, mais le texte peut être conservé dans l’historique Codex, les requêtes des fournisseurs routés et l’état local de réponse ou de débogage. Voir [messages d’agent v2 en clair](/reference/configuration/agents/#plaintext-v2-agent-messages).
+
 ### CLI
 
 Utilisez `ocx v2` pour les paramètres de la surface de collaboration et des fonctionnalités natives :
@@ -217,6 +221,7 @@ ocx v2 status
 ocx v2 mode v1
 ocx v2 mode default
 ocx v2 mode v2
+ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages
 ocx v2 keep-native-v1 on
 ocx v2 keep-native-v1 off
 ocx v2 threads 8
