@@ -563,4 +563,18 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     expect([out.includes("aaaaaaaa"), out.includes("keep [REDACTED] tail")]).toEqual([false, true]);
     expect(elapsed).toBeLessThan(1_500);
   });
+
+  test("exact masking stays linear with many repeated or self-overlapping credentials", () => {
+    // One full-text scan per secret, duplicates included, took seconds for 100 headers over ~4 MB.
+    const repeated = createTerminalErrorRedactionBlockRewrite(Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`x-api-key-${i}`, "aaaaaaaa"])));
+    const overlapping = Array.from({ length: 100 }, (_, i) => `ab${String(i).padStart(6, "0")}ab`);
+    const distinct = createTerminalErrorRedactionBlockRewrite(Object.fromEntries(overlapping.map((value, i) => [`x-api-key-${i}`, value])));
+    const frame = (message: string) => `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error: { code: "server_error", message } } })}`;
+    const startedAt = performance.now();
+    const repeatedOut = repeated(frame("a".repeat(3_900_000))).join("\n");
+    const distinctOut = distinct(frame(`${overlapping.join(" ")} ${"q".repeat(3_900_000)}`)).join("\n");
+    const elapsed = performance.now() - startedAt;
+    expect([repeatedOut.includes("aaaaaaaa"), overlapping.some(value => distinctOut.includes(value))]).toEqual([false, false]);
+    expect(elapsed).toBeLessThan(1_500);
+  });
 });

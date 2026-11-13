@@ -186,19 +186,33 @@ export function maskSecretSpans(text: string, replacement: string, substrings: I
 
 function markSubstringSpans(text: string, substrings: Iterable<string>, initial: Uint8Array | undefined): Uint8Array | undefined {
   let covered = initial;
-  for (const secret of substrings) {
-    if (!secret || !text.includes(secret)) continue;
-    covered = markOccurrences(text, secret, covered ?? new Uint8Array(text.length));
+  // Self-overlapping secrets need a scan of their own; together they may read the text a bounded
+  // number of times, past which the whole text is covered (fail closed) so the work stays linear.
+  const budget = { steps: OVERLAP_SCAN_PASSES * text.length };
+  for (const secret of new Set(substrings)) {
+    if (!secret) continue;
+    const first = text.indexOf(secret);
+    if (first < 0) continue;
+    covered ??= new Uint8Array(text.length);
+    if (!markOccurrences(text, secret, first, covered, budget)) {
+      covered.fill(1);
+      return covered;
+    }
   }
   return covered;
 }
 
+/** Text reads the self-overlapping secrets of one masking call may share before it fails closed. */
+const OVERLAP_SCAN_PASSES = 8;
+
 /**
- * Mark every occurrence of secret, overlapping ones included, in one Knuth-Morris-Pratt pass: work
- * is linear in text plus secret length even when a long repetitive secret overlaps itself at every
- * position (restarting a search one character after each match would be quadratic there).
+ * Mark every occurrence of secret from its first one. A secret with no border (no proper prefix that
+ * is also a suffix) cannot overlap itself, so the native search resumes past each match. Otherwise
+ * one Knuth-Morris-Pratt pass finds overlapping occurrences in linear time (restarting a search one
+ * character after each match would recheck a long repetitive secret at every position), charged to
+ * the shared budget; false means the budget ran out and coverage is incomplete.
  */
-function markOccurrences(text: string, secret: string, covered: Uint8Array): Uint8Array {
+function markOccurrences(text: string, secret: string, first: number, covered: Uint8Array, budget: { steps: number }): boolean {
   const m = secret.length;
   const fail = new Int32Array(m);
   for (let i = 1, k = 0; i < m; i++) {
@@ -206,8 +220,14 @@ function markOccurrences(text: string, secret: string, covered: Uint8Array): Uin
     if (secret.charCodeAt(i) === secret.charCodeAt(k)) k++;
     fail[i] = k;
   }
+  if (fail[m - 1] === 0) {
+    for (let at = first; at >= 0; at = text.indexOf(secret, at + m)) covered.fill(1, at, at + m);
+    return true;
+  }
+  budget.steps -= text.length - first;
+  if (budget.steps < 0) return false;
   let markedTo = 0;
-  for (let i = 0, k = 0; i < text.length; i++) {
+  for (let i = first, k = 0; i < text.length; i++) {
     while (k > 0 && text.charCodeAt(i) !== secret.charCodeAt(k)) k = fail[k - 1]!;
     if (text.charCodeAt(i) === secret.charCodeAt(k)) k++;
     if (k === m) {
@@ -217,7 +237,7 @@ function markOccurrences(text: string, secret: string, covered: Uint8Array): Uin
       k = fail[m - 1]!;
     }
   }
-  return covered;
+  return true;
 }
 
 function renderCoveredSpans(text: string, covered: Uint8Array, replacement: string): string {
