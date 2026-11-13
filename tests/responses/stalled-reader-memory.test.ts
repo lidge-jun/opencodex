@@ -122,18 +122,21 @@ describe("request copies under a stalled reader (#8601)", () => {
     const parse = spyOn(passthroughCompletion, "parseOutboundRequestBody").mockImplementation(text => {
       const body = parseOutboundRequestBody(text);
       if (body) copies.push(new WeakRef(body));
+      // A descendant too: keeping a part of the parsed body (its input) would keep the copy that matters.
+      if (body && typeof body.input === "object" && body.input !== null) copies.push(new WeakRef(body.input));
       return body;
     });
     releaseSpendHome = acquireOwnedSpendHome();
     upstream();
     try {
-      const response = await handleResponses(request(), config, { model: "", provider: "" });
+      const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/m", stream: true, input: [{ role: "user", content: "ping" }] }) }), config, { model: "", provider: "" });
       const reader = response.body!.getReader();
       await reader.read();
       await settle();
       parse.mockClear(); // the spy records every result; only the pipeline may keep one
       Bun.gc(true);
-      expect(copies.length).toBeGreaterThan(0);
+      expect(copies.length).toBeGreaterThanOrEqual(2);
       expect(copies.filter(copy => copy.deref() !== undefined)).toHaveLength(0);
       await reader.cancel();
     } finally { parse.mockRestore(); }
