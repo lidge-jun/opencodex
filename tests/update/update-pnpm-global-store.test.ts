@@ -388,6 +388,8 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     }
     writeFileSync(join(group, "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
     writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
+    // An entry with a store-like name beside the versioned directory is not store evidence either.
+    mkdirSync(join(root, "v1", "files"), { recursive: true });
     link(pkg, exposed);
     const calls: Call[] = [];
     const result = resolvePnpmGlobalOwner({
