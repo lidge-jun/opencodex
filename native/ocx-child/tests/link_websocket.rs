@@ -1,4 +1,4 @@
-//! The link WebSocket through the real ocx-child binary (T6-4): the relay route decides between today's
+//! The link WebSocket through the real ocx-child binary: the relay route decides between today's
 //! 426 and the link WebSocket, and a daemon built with the test feature carries frames both ways.
 //! Requires the link-ws-test-gate feature (Cargo.toml [[test]] required-features).
 
