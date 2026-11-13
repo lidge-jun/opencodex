@@ -607,6 +607,11 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store, global
     return { ok: false, failures: ["pnpm global links are outside the selected store"] };
   }
   if (globalLinks) {
+    // The reported package spelling is walked as written below; resolve() would delete "." and ".."
+    // segments without visiting the links they cross, so such a spelling is refused first.
+    if (String(packageDir).split(/[\\/]+/).some(part => part === "." || part === "..")) {
+      return { ok: false, failures: ["pnpm package path is not canonical"] };
+    }
     // Hop roots are only as narrow as their spelling: a link component in the lexical store or global
     // group would make its target, and any relay below it, count as inside.
     for (const root of [lexicalStore, globalRoot]) {

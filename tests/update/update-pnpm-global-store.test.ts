@@ -327,6 +327,25 @@ describe("pnpm global virtual-store owner (#8183)", () => {
       .toEqual({ ok: false, failures: ["pnpm store or global group path is not canonical"] });
   });
 
+  test("a listed package spelling with .. that hides an outside relay is refused", () => {
+    const layout = globalStoreLayout(root);
+    // <group>/relay -> <root>/outside/deep, so the OS reads <group>/relay/../node_modules as
+    // <root>/outside/node_modules while path.resolve reads it as <group>/node_modules.
+    const group = dirname(dirname(dirname(layout.exposed)));
+    link(join(root, "outside", "deep"), join(group, "relay"));
+    mkdirSync(join(root, "outside", "deep"), { recursive: true });
+    link(layout.real, join(root, "outside", "node_modules", "@bitkyc08", "opencodex"));
+    const dotted = join(group, "relay") + "/../node_modules/@bitkyc08/opencodex";
+    expect(realpathSync(dotted)).toBe(realpathSync(layout.real));
+    const run = layout.run;
+    layout.run = args => args[0] === "list"
+      ? { status: 0, stdout: JSON.stringify([{ path: layout.globalRoot, dependencies: { [PKG]: { version: layout.version, path: dotted } } }]) }
+      : run(args);
+    expect(verifyPnpmInstallTree(dotted, "1.0.0", layout.store, layout.globalRoot))
+      .toEqual({ ok: false, failures: ["pnpm package path is not canonical"] });
+    expect(resolveOwner(layout, dotted)).toEqual({ ok: false, reason: "pnpm package path is not canonical" });
+  });
+
   test("a pnpm home containing a control character refuses before pnpm runs a store query", () => {
     const layout = globalStoreLayout(root);
     layout.env = { PNPM_HOME: layout.home + "\nrm" };
