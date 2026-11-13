@@ -755,4 +755,14 @@ describe("recover while another link names the alias", () => {
     expect(res.status).toBe(200);
     expect(tombstones()).toEqual([]);
   });
+
+  test("a Home-initiated link that lists the alias among its routes blocks it too", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    h.store.links.push(link({ id: OTHER, alias: "other-box", routes: ["other-box", "DEVBOX"] }));
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect([res.status, (await errorOf(res)).code]).toEqual([409, "alias_linked"]);
+    expect(h.commands.filter(c => c.includes("ocx-managed-purge"))).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
 });
