@@ -1,5 +1,6 @@
 {
   "note": "Expectations for the Autobahn fuzzingserver client run of the Child's Home-facing link WebSocket leg (design T4 3.3, R2-06; tests/clients/link-ws-autobahn.test.ts). Rules, not results: the first rule whose case pattern matches decides what a case must show. The Child never offers an extension, refuses a Home message over 4 MiB + 64 KiB or over 4,096 data frames (1009) before it looks at the payload, refuses binary messages within those limits (1003), and must pass every other case. Frame counts are the fuzzingserver's own (its case reports, txFrameStats). Changes only through review.",
+  "caseCount": 517,
   "limits": {
     "homeMessageBytes": 4259840,
     "maxFragments": 4096

@@ -34,7 +34,7 @@ const EXPECTATIONS_FILE = fixturePath("link-ws-autobahn-expectations.json");
 
 interface Rule { cases: string[]; expect: "pass" | "unimplemented" | { closeCode: number }; why: string }
 const EXPECTATIONS_TEXT = readFileSync(EXPECTATIONS_FILE, "utf8");
-const EXPECT = JSON.parse(EXPECTATIONS_TEXT) as { rules: Rule[] };
+const EXPECT = JSON.parse(EXPECTATIONS_TEXT) as { caseCount: number; rules: Rule[] };
 const timers: LinkWebsocketTimers = { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) };
 const wsBase = () => BASE.replace(/^http/, "ws");
 
@@ -118,7 +118,8 @@ describe.skipIf(!ENABLED)("link WebSocket Child leg: Autobahn fuzzingserver clie
     // The server is a local fixture: a fuzzingserver anywhere else is not the recorded run.
     expect(["127.0.0.1", "localhost", "[::1]"]).toContain(new URL(BASE).hostname);
     const count = Number(await control("/getCaseCount"));
-    expect(count).toBeGreaterThan(0);
+    // The case set is pinned: the image's suite has exactly the cases the expectations were reviewed against.
+    expect(count).toBe(EXPECT.caseCount);
     const ends: Record<string, number> = {};
     for (let index = 1; index <= count; index++) {
       const reason = await runCase(index);
@@ -154,6 +155,9 @@ describe.skipIf(!ENABLED)("link WebSocket Child leg: Autobahn fuzzingserver clie
       if (!ok) mismatches.push(id + ": expected " + label + ", got " + report.behavior + "/" + report.behaviorClose + " close " + report.remoteCloseCode
         + " clean " + report.wasClean + " frames from the Child " + JSON.stringify(report.rxFrameStats));
     }
+    // Every rule names cases that exist: a rule that matches nothing is a stale or mistyped expectation.
+    const unused = EXPECT.rules.filter(rule => !Object.keys(results).some(id => rule.cases.some(pattern => matches(pattern, id))));
+    expect(unused.map(rule => rule.cases.join(","))).toEqual([]);
     const expectationsSha256 = createHash("sha256").update(EXPECTATIONS_TEXT).digest("hex");
     console.info("[autobahn] " + JSON.stringify({ agent: AGENT, server: BASE, cases: count, expectationsSha256, byClass, legEnds: ends }));
     expect(mismatches).toEqual([]);
