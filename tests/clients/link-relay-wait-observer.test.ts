@@ -3,8 +3,8 @@ import { relayLinkDataRequest, type LinkRelayClock, type LinkTunnelGate } from "
 import { linkChildRelayWaitObserver, setLinkChildRelayWaitObserverForTests } from "../../src/client/link-websocket-limits";
 
 // The Child's HTTP relay tells a test when a relayed response waits for its reader after handing it a chunk,
-// and when it stops waiting: the counterpart of the Home's setLinkRelayWaitObserverForTests, used by the
-// Child's memory acceptance (design 6.3) to see the relay hold a stalled reader without reading ahead.
+// and when it stops waiting: the counterpart of the Home's setLinkRelayWaitObserverForTests, for the Child's
+// memory acceptance (design 6.3), to see the relay hold a stalled reader.
 
 const target = { tunnelPort: 12000, admissionKey: "ocx_data_" + "w".repeat(40) };
 const tunnel: LinkTunnelGate = { connected: () => ({ kind: "match" }), pending: () => false, waitForConnected: async () => true };
