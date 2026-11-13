@@ -1936,6 +1936,13 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     }
   });
 
+  test("a selected credential in a custom credential header is masked in an untyped error", () => {
+    // Custom credential headers are recognized by the outbound registry's rule, not only the fixed list.
+    const custom = createTerminalErrorRedactionBlockRewrite({ "x-auth-token": "custom-credential-ALPHA12345", "x-proxy-secret": "Token custom-part-BRAVO67890" });
+    const echoed = custom(`data: ${JSON.stringify({ error: { message: "echo custom-credential-ALPHA12345 and custom-part-BRAVO67890" } })}`).join("\n");
+    expect([echoed.includes("ALPHA12345"), echoed.includes("BRAVO67890")]).toEqual([false, false]);
+  });
+
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: "Bearer auth" });
     const block = `data: ${JSON.stringify({ error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } })}`;

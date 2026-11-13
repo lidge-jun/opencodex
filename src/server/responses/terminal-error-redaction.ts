@@ -1,22 +1,28 @@
 import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib/redact";
+import { CREDENTIAL_SUBSTRING_MIN_LENGTH, credentialComponents, isCredentialName } from "../../lib/outbound-credential-registry";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 import { isUntypedBareUpstreamError } from "../bare-upstream-error";
 
 /**
  * Mask the selected outbound credential even when upstream echoes only its raw value. A secret
  * containing a quote, backslash or control character appears JSON-escaped inside an SSE payload,
- * so the escaped spelling is masked too.
+ * so the escaped spelling is masked too. Headers are recognized as credentials by the same rule as
+ * the outbound registry (custom names such as x-auth-token included), and every part a server could
+ * authenticate with on its own is masked once it is long enough not to occur in copy by chance.
  */
 export function createOutboundCredentialMask(outboundHeaders: Record<string, string>): (text: string) => string {
   const knownSecrets = Object.entries(outboundHeaders)
-    .filter(([name]) => SENSITIVE_KEY_PATTERN.test(name))
+    .filter(([name]) => isCredentialName(name))
     .flatMap(([name, value]) => {
       const credential = /^(?:authorization|proxy-authorization)$/i.test(name)
         ? value.replace(/^\S+\s+/, "")
         : value;
       if (!credential) return [];
-      const escaped = JSON.stringify(credential).slice(1, -1);
-      return escaped === credential ? [credential] : [credential, escaped];
+      const parts = new Set([credential, ...credentialComponents(value).filter(part => part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH)]);
+      return [...parts].flatMap(part => {
+        const escaped = JSON.stringify(part).slice(1, -1);
+        return escaped === part ? [part] : [part, escaped];
+      });
     })
     .sort((a, b) => b.length - a.length);
   return (text) => knownSecrets.reduce((safe, secret) => safe.replaceAll(secret, REDACTED_SECRET), text);
