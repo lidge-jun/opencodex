@@ -20,6 +20,7 @@ import {
 } from "./tunnel-state";
 import { effectiveLinkRoutes, emptyLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
 import { createRouteRounds, type LinkRouteStatus } from "./route-rounds";
+import { linkSuspendedByRevoke, operationsJournalPath } from "./operations-journal";
 import type { RouteProofRegistry } from "./route-proof";
 
 export type LinkTunnelStatus =
@@ -122,6 +123,8 @@ export interface LinkSupervisorDeps {
   sshCapture?: SshCaptureOpener;
   /** Readiness proofs of multi-route candidates; without it no multi-route link can be proven. */
   routeProof?: RouteProofRegistry;
+  /** The operation journal; a link with an unsettled revoke there is not reconnected (src/link/operations-journal.ts). */
+  operationsJournalPath?: string;
 }
 
 const TIMER_MS = 1_000;
@@ -201,6 +204,7 @@ function defaultKillProcess(pid: number, signal: NodeJS.Signals = "SIGTERM"): vo
 
 export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervisor {
   const storePath = linkStorePath();
+  const journalPath = deps.operationsJournalPath ?? operationsJournalPath();
   const storeDir = deps.pidfileDir ?? linkDir();
   const readStore = deps.readStore ?? (() => readLinkStore(storePath));
   const runner = deps.runner ?? createSshRunner();
@@ -581,6 +585,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
 
   const spawnFor = (record: LinkRecord): void => {
     if (stopping || holds.has(record.id) || record.direction !== "hub-initiated" || children.has(record.id)) return;
+    // A revoke that reached the Child's cleanup and stopped unknown may have purged it: no reconnect until resolved.
+    if (linkSuspendedByRevoke(journalPath, record.id)) return;
     // Only a fresh link or a due attempt spawns. A reload must neither skip the backoff nor start
     // a second child while an exited one is still reporting its stderr.
     const prior = states.get(record.id);

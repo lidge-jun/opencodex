@@ -9,7 +9,7 @@
  * secret: key ids, link ids, ports and the public explicit route only. links.json is unchanged by it.
  */
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWriteFile, isMissingPathError } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
@@ -292,4 +292,39 @@ export function resolveLinkOperation(path: string, operationId: string, nowMs: n
     }
     return structuredClone(op);
   });
+}
+
+/**
+ * Revokes running in this process, by journal path and operation id. While one runs, its entry is open and the tunnel
+ * decisions are its own: a failed cleanup restarts the tunnel. An open entry no process runs belongs to a revoke that died.
+ */
+const liveRevokes = new Set<string>();
+
+export function markRevokeLive(path: string, operationId: string, live: boolean): void {
+  if (live) liveRevokes.add(path + "\0" + operationId);
+  else liveRevokes.delete(path + "\0" + operationId);
+}
+
+/** The codes of a cleanup that failed, after which the revoke restarted the link's tunnel itself (removeReserved). */
+const CLEANUP_FAILED_TUNNEL_RESTARTED: ReadonlySet<string> = new Set(["remote_disconnect_failed", "purge_unsupported"]);
+
+/**
+ * A revoke that reached the Child's cleanup and has not settled suspends its link's tunnel: the Child may be purged or
+ * disconnected, so the supervisor must not reconnect to it on a reload or after a restart. That is an unresolved unknown
+ * entry past its `remote_cleanup` intent, unless the cleanup failed and the revoke restarted the tunnel, and an open one
+ * no process in this Home runs (it died). Resolving the entry, or a revoke that removes the link, lifts it.
+ */
+export function revokeSuspendsLink(journal: OperationsJournal, linkId: string, isLive: (operationId: string) => boolean): boolean {
+  return journal.operations.some(op => op.kind === "revoke" && op.linkId === linkId && op.resolvedAt === undefined
+    && hasEffect(op, "remote_cleanup", "intent")
+    && (op.state === "open" ? !isLive(op.operationId) : op.state === "unknown" && !CLEANUP_FAILED_TUNNEL_RESTARTED.has(op.error?.code ?? "")));
+}
+
+/**
+ * The supervisor's check: one stat on a Home that never journalled. A damaged journal suspends nothing (a tunnel toward
+ * a purged Child serves nothing without its key, and stopping every tunnel would be worse); its readers report it.
+ */
+export function linkSuspendedByRevoke(path: string, linkId: string): boolean {
+  if (!existsSync(path)) return false;
+  try { return revokeSuspendsLink(readOperationsJournal(path), linkId, id => liveRevokes.has(path + "\0" + id)); } catch { return false; }
 }

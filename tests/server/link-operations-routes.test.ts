@@ -20,19 +20,20 @@ function entry(operationId: string, state: LinkOperation["state"]): LinkOperatio
     reserved: { linkId: "lnk_00000000000000aa", apiKeyId: "k-1", tunnelPort: 2200 }, effects: [], ...(state === "open" ? {} : { finishedAt: at }) };
 }
 
-function harness(principal: "admin-token" | "gui-session" = "admin-token") {
+function harness(principal: "admin-token" | "gui-session" = "admin-token", reloads: string[] = []) {
   const journalPath = join(root, "operations.json");
   writeOperationsJournal(journalPath, { version: 1, operations: [entry("op-residual", "residual"), entry("op-done", "committed")] });
   const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", providers: {}, apiKeys: [] } as unknown as OcxConfig;
   const state = { pendingHosts: new Map() } as unknown as LinkRouteState;
   async function call(method: string, path: string) {
     const url = new URL("http://127.0.0.1:10100" + path);
-    const ctx = { req: new Request(url, { method }), url, config, deps: { now: () => NOW, linkOperationsPath: () => journalPath }, version: "2.99.0",
+    const linkSupervisor = () => ({ reload: async () => { reloads.push(path); } });
+    const ctx = { req: new Request(url, { method }), url, config, deps: { now: () => NOW, linkOperationsPath: () => journalPath, linkSupervisor }, version: "2.99.0",
       principal, trustedLoopbackIngress: true, guiSessionIssuance: null, sessionControl: { isCurrent: () => false, isPaired: () => false, revokeCurrent: () => false } } as unknown as ManagementContext;
     const response = await handleLinkRoutes(ctx, state);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   }
-  return { call, journal: () => readOperationsJournal(journalPath) };
+  return { call, journalPath, journal: () => readOperationsJournal(journalPath) };
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
@@ -89,4 +90,17 @@ test("a session without link authority is refused", async () => {
   const h = harness("gui-session");
   expect((await h.call("GET", "/api/link/operations")).status).toBe(403);
   expect((await h.call("POST", "/api/link/operations/op-residual/resolve")).status).toBe(403);
+});
+
+test("resolving a revoke reloads the tunnels, so a link its unknown cleanup suspended reconnects; resolving an enrollment does not", async () => {
+  const reloads: string[] = [];
+  const h = harness("admin-token", reloads);
+  const at = new Date(NOW - 1000).toISOString();
+  const revoke: LinkOperation = { operationId: "op-revoke", kind: "revoke", alias: "pen-r", linkId: "lnk_00000000000000bb", digest: "b".repeat(64), createdAt: at, updatedAt: at,
+    state: "unknown", finishedAt: at, effects: [{ effect: "remote_cleanup", phase: "intent", at }] };
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [entry("op-residual", "residual"), revoke] });
+  expect((await h.call("POST", "/api/link/operations/op-residual/resolve")).status).toBe(200);
+  expect(reloads).toEqual([]);
+  expect((await h.call("POST", "/api/link/operations/op-revoke/resolve")).status).toBe(200);
+  expect(reloads).toEqual(["/api/link/operations/op-revoke/resolve"]);
 });

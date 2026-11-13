@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { AliasLockError, withAliasLock } from "../../link/alias-lock";
 import type { ExplicitRoute } from "../../link/explicit-route";
-import { assertRoomForNewOperation, findOperation, hasEffect, isOperationId, OperationsJournalFullError, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
+import { assertRoomForNewOperation, findOperation, hasEffect, isOperationId, markRevokeLive, OperationsJournalFullError, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
   type EnrollEffect, type LinkOperation, type OperationState, type RevokeEffect } from "../../link/operations-journal";
 import { newLinkId } from "../../link/store";
 import type { ManagementContext } from "./context";
@@ -279,6 +279,8 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
     assertRoomForNewOperation(journal, nowOf(ctx));
     journal.operations.push({ operationId: request.id, kind: "revoke", alias, linkId, digest: request.digest, createdAt: iso(ctx), updatedAt: iso(ctx), state: "open", effects: [] });
   });
+  // Until finish, this entry is the running revoke's: the supervisor does not suspend its link for it (revokeSuspendsLink).
+  markRevokeLive(path, request.id, true);
   const change = (edit: (op: LinkOperation) => void) => updateOperationsJournal(path, nowOf(ctx), journal => {
     const op = findOperation(journal, request.id)!;
     edit(op);
@@ -297,20 +299,23 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
       }
     },
     async finish(response) {
-      let body: Record<string, unknown> = {};
-      try { body = await response.clone().json() as Record<string, unknown>; } catch { /* keeps its status */ }
-      const errorCode = typeof (body.error as { code?: unknown } | undefined)?.code === "string" ? (body.error as { code: string }).code : "revoke_failed";
-      let current: LinkOperation | undefined;
-      try { current = findOperation(readOperationsJournal(path), request.id); } catch { current = undefined; }
-      // Clean only when nothing was touched: a cleanup on the Child, a key revoke or a record removal that started
-      // (finished or not) may have changed something the failed response does not describe.
-      const touched = !current || hasEffect(current, "remote_cleanup", "intent") || hasEffect(current, "key_revoked", "intent") || hasEffect(current, "record_removed", "intent");
-      const outcome: OperationState = response.status === 200 ? "committed" : touched ? "unknown" : "failed_clean";
-      let op: LinkOperation;
-      try { op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "revoke_failed", status: response.status }); } catch { return response; }
-      return Response.json({ ...body, ...outcomeBody(op), ...(op.state === "committed" && op.receipt ? { purged: true } : {}) }, { status: response.status, headers: response.headers });
+      try { return await settleRevoke(response); } finally { markRevokeLive(path, request.id, false); }
     },
   };
+  async function settleRevoke(response: Response): Promise<Response> {
+    let body: Record<string, unknown> = {};
+    try { body = await response.clone().json() as Record<string, unknown>; } catch { /* keeps its status */ }
+    const errorCode = typeof (body.error as { code?: unknown } | undefined)?.code === "string" ? (body.error as { code: string }).code : "revoke_failed";
+    let current: LinkOperation | undefined;
+    try { current = findOperation(readOperationsJournal(path), request.id); } catch { current = undefined; }
+    // Clean only when nothing was touched: a cleanup on the Child, a key revoke or a record removal that started
+    // (finished or not) may have changed something the failed response does not describe.
+    const touched = !current || hasEffect(current, "remote_cleanup", "intent") || hasEffect(current, "key_revoked", "intent") || hasEffect(current, "record_removed", "intent");
+    const outcome: OperationState = response.status === 200 ? "committed" : touched ? "unknown" : "failed_clean";
+    let op: LinkOperation;
+    try { op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "revoke_failed", status: response.status }); } catch { return response; }
+    return Response.json({ ...body, ...outcomeBody(op), ...(op.state === "committed" && op.receipt ? { purged: true } : {}) }, { status: response.status, headers: response.headers });
+  }
 }
 
 /** GET /api/link/operations[/{id}] and POST /api/link/operations/{id}/resolve (structure/remote-link.md, "Operation journal"). */
@@ -340,6 +345,11 @@ export function handleLinkOperationRoutes(ctx: ManagementContext): Response | nu
     }
     if (resolved === null) return fail("operation_not_found", "No operation has this id.", 404);
     if (resolved === "not_resolvable") return fail("operation_not_resolvable", "Only a residual or unknown operation can be resolved.", 409);
+    // An unknown revoke past its Child cleanup suspended its link's tunnel (revokeSuspendsLink); resolving lifts that,
+    // and an idle link is not retried on a tick, so the tunnels are reloaded. Best effort: the resolve is already stored.
+    if (resolved.kind === "revoke") {
+      void ctx.deps.linkSupervisor?.()?.reload().catch(() => console.warn("[link] operation resolved; tunnel reload failed"));
+    }
     return Response.json(resolved, { headers });
   }
   return null;

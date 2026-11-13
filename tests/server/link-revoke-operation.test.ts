@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
-import { OPERATION_JOURNAL_MAX_ENTRIES, readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { linkSuspendedByRevoke, OPERATION_JOURNAL_MAX_ENTRIES, readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -44,6 +44,8 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   const stops: string[] = [];
   const closedSockets: string[] = [];
   let restarts = 0;
+  // What the supervisor's spawn check sees when the revoke restarts the tunnel itself.
+  const suspendedAtRestart: boolean[] = [];
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: [{ id: "link-key", name: "link:" + ALIAS, key: "k", createdAt: "2026-11-13T00:00:00Z" }] };
   const journalPath = join(root, "operations.json");
@@ -54,7 +56,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     pendingHosts: new Map(), confirmedHosts: new Map(), operations: new Set(),
     listener: { ensureStarted: async () => {}, status: () => ({ state: "listening", port: 18181, reason: null }), close: async () => {}, onAuthenticatedCatalog: () => () => {},
       closeLinkSockets: id => { closedSockets.push(id); return 0; } },
-    supervisor: { start() {}, ensureStarted: async () => { restarts += 1; }, reload: async () => {}, stopLink: async id => { stops.push(id); }, reconnect: async () => true, status: () => [], stop: async () => {} },
+    supervisor: { start() {}, ensureStarted: async () => { restarts += 1; suspendedAtRestart.push(linkSuspendedByRevoke(journalPathOf(), LINK)); }, reload: async () => {}, stopLink: async id => { stops.push(id); }, reconnect: async () => true, status: () => [], stop: async () => {} },
   };
   const runner: SshRunner = {
     async run(argv) {
@@ -85,7 +87,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     const response = await handleLinkRoutes(context, state);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   }
-  return { revoke, state, ssh, config, journalPath, stops, closedSockets, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
+  return { revoke, state, ssh, config, journalPath, stops, closedSockets, suspendedAtRestart, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
@@ -103,12 +105,14 @@ test("a purge with an operation id records the Child's purged:true as its receip
   expect(h.ssh.length).toBe(calls);
 });
 
-test("a purge without the Child's report keeps the link; the Child may have changed, so the outcome is unknown", async () => {
+test("a purge without the Child's report keeps the link; the Child may have changed, so the outcome is unknown, and the tunnel it restarts is not suspended", async () => {
   const h = harness({ purgeReport: '{"restored":true,"purged":false}\n' });
   const revoked = await h.revoke({ purge: true, operationId: OP });
   expect({ status: revoked.status, code: code(revoked), outcome: revoked.body.outcome }).toEqual({ status: 502, code: "remote_disconnect_failed", outcome: "unknown" });
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   expect(h.journal().operations[0]!.receipt).toBeUndefined();
+  expect(h.suspendedAtRestart).toEqual([false]);
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(false);
 });
 
 test("the same id with another mode is refused", async () => {
@@ -280,6 +284,8 @@ describe("journal write failures during a revoke", () => {
     expect(h.store.links.map(link => link.id)).toEqual([LINK]);
     expect(h.config.apiKeys!.map(key => key.id)).toEqual(["link-key"]);
     expect(h.restarts).toBe(0);
+    // A later reload or a restart of the Home must not reconnect to the purged Child either (link-revoke-suspend.test.ts).
+    expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
   });
 
   test("a journalled force revoke whose first intent cannot be written leaves the tunnel running", async () => {
