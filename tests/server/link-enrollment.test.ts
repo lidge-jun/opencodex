@@ -174,6 +174,8 @@ function harness(remotePlatform: "posix" | "windows" = "posix") {
   function confirmed(alias = "child", latency = 0) {
     state.confirmedHosts!.set(alias, { ...seed(alias, latency), ocxVersion: "2.83.0" });
     state.pendingHosts.delete(alias);
+    // A real confirm-host also trusts the probed line; apply checks it is still the trusted one.
+    writeFileSync(knownHosts, alias + " ssh-ed25519 AAAA\n", { flag: "a" });
   }
   return { config, deps, state, knownHosts, events, calls, callbacks, admissions, overrides, emit, call, seed, confirmed,
     advance: (ms: number) => { clock += ms; }, get store() { return store; }, get input() { return input; },
