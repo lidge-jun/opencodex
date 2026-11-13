@@ -4257,7 +4257,7 @@ export const ja: Record<TKey, string> = {
   "remoteLink.forceRemoved.fullCheck": "{alias} はこのコンピューターでのみ削除されました（リンク {linkId}）。{alias} が応答したら、そこで {cmd} を実行してください。",
   "remoteLink.forceRemoved.fullDisconnect": "確認と切断は続けて実行してください。その間に登録が行われると、それが削除されます。Link: {linkId} と表示された場合、または接続されていないと表示された場合に限り、そこで {cmd} を実行してください。別のリンクが表示される場合、またはハブや別の Home が所有している場合は、そのままにしてください。この Home は自分のリンクをすでに取り消しているため、別のリンクを表示しているマシンは切断しないでください。",
   "remoteLink.forceRemoved.unknownCheck": "{alias} はこのコンピューターでのみ削除されました（リンク {linkId}）。この Home はそれがフルインストールか軽量エージェント（ocx-child）かを記録していないため、復旧に使える記録を残しません。{alias} が応答したら、そこで {cmd} を実行してください。",
-  "remoteLink.forceRemoved.unknownLocate": "軽量な Child のエージェントは ocx-child です。配置されたコピーは ~/.cache/opencodex/bin/ocx-child にあります（Windows では %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe、LOCALAPPDATA が未設定なら %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe）。手動で置いたコピーは ~/.local/bin か PATH 上の別の場所にあり、{cmd} で PATH 上のものを表示できます（Windows では where ocx-child）。",
+  "remoteLink.forceRemoved.unknownLocate": "軽量な Child のエージェントは ocx-child です。配置されたコピーは ~/.cache/opencodex/bin/ocx-child にあります（Windows では %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe、LOCALAPPDATA が未設定なら %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe）。手動で置いたコピーは ~/.local/bin か PATH 上の別の場所にあり、{cmd} で PATH 上のものを表示できます（Windows では where.exe ocx-child）。",
   "remoteLink.forceRemoved.unknownLightweight": "軽量な Child では、代わりに {cmd} を実行してください。動いている ocx-child が配置されたコピーでない場合は、そのパスを使ってください。",
   "remoteLink.forceRemoved.unknownDisconnect": "確認と切断は続けて実行してください。その間に登録が行われると、それが削除されます。出力がリンク {linkId} を示す場合、または接続されていないと示す場合に限り、そこで {cmd} を実行してください。別のリンクを示す場合、またはハブや別の Home が所有している場合は、そのままにしてください。この Home は自分のリンクをすでに取り消しているため、別のリンクを表示しているマシンは切断しないでください。",
   "remote.title": "リモートワークスペース",

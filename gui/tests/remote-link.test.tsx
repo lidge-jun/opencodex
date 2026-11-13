@@ -1361,7 +1361,7 @@ test("a forced removal of a Child of unknown type names no command up front and 
   expect(notice?.textContent).toContain("an enrollment that lands between them would be removed");
   expect(notice?.textContent).toContain("do not disconnect a machine that shows another link");
   // Every location the product plants or finds an ocx-child, with the planted copy kept as the example path.
-  for (const where of ["~/.local/bin", "PATH", "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where ocx-child"]) {
+  for (const where of ["~/.local/bin", "PATH", "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where.exe ocx-child"]) {
     expect(notice?.textContent, where).toContain(where);
   }
   expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([

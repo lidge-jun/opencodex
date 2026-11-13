@@ -4221,7 +4221,7 @@ export const zhTW: Record<TKey, string> = {
   "remoteLink.forceRemoved.fullCheck": "{alias} 只在此電腦上被刪除（連線 {linkId}）。{alias} 有回應後，在其上執行 {cmd}。",
   "remoteLink.forceRemoved.fullDisconnect": "請緊接著依序執行檢查和中斷：在兩者之間完成的註冊會被刪除。僅當輸出顯示 Link: {linkId} 或顯示該機器未連線時，才在其上執行 {cmd}。如果顯示其他連線，或它屬於 Hub 或其他 Home，請保持原狀：不要中斷顯示其他連線的機器，因為此 Home 已撤銷了自己的連線。",
   "remoteLink.forceRemoved.unknownCheck": "{alias} 只在此電腦上被刪除（連線 {linkId}）。此 Home 未記錄它執行的是完整安裝還是輕量代理（ocx-child），因此不保留任何可用於復原它的記錄。{alias} 有回應後，在其上執行 {cmd}。",
-  "remoteLink.forceRemoved.unknownLocate": "在輕量子裝置上，代理是 ocx-child。放置的副本位於 ~/.cache/opencodex/bin/ocx-child（Windows 上為 %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe，未設定 LOCALAPPDATA 時為 %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe）；手動放置的副本位於 ~/.local/bin 或 PATH 中的其他位置，{cmd} 會顯示 PATH 中的那一個（Windows 上為 where ocx-child）。",
+  "remoteLink.forceRemoved.unknownLocate": "在輕量子裝置上，代理是 ocx-child。放置的副本位於 ~/.cache/opencodex/bin/ocx-child（Windows 上為 %LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe，未設定 LOCALAPPDATA 時為 %USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe）；手動放置的副本位於 ~/.local/bin 或 PATH 中的其他位置，{cmd} 會顯示 PATH 中的那一個（Windows 上為 where.exe ocx-child）。",
   "remoteLink.forceRemoved.unknownLightweight": "在輕量子裝置上，請改為執行 {cmd}；如果執行的 ocx-child 不是放置的副本，請使用它的路徑。",
   "remoteLink.forceRemoved.unknownDisconnect": "請緊接著依序執行檢查和中斷：在兩者之間完成的註冊會被刪除。僅當輸出指出連線 {linkId} 或顯示該機器未連線時，才在其上執行 {cmd}。如果指出其他連線，或它屬於 Hub 或其他 Home，請保持原狀：不要中斷顯示其他連線的機器，因為此 Home 已撤銷了自己的連線。",
   "remote.title": "遠端工作區",
