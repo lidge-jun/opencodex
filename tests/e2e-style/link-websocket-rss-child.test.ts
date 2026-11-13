@@ -149,15 +149,16 @@ async function runLoad(transport: "websocket" | "http"): Promise<LoadResult> {
     const ready = await nextLine();
     expect(ready.preflight).toBe("ok");
     const port = Number(ready.port);
-    // Warm-up, one whole turn on each transport, so one-time first-request costs land before "idle".
+    // Warm-up, one whole turn on each transport with a near-maximum input (as the Home acceptance warms), so one-time
+    // first-request costs land before "idle".
     const { socket: warmSocket, answer } = rawUpgrade(port);
     const warmAnswer = await answer;
     expect(warmAnswer.status).toBe(101);
     const warmCodex = new RawCodex(warmSocket, warmAnswer.rest);
-    warmSocket.write(encodeClientText(JSON.stringify({ type: "response.create", model: "fixture/fixture", input: "warm", stream: true })));
+    warmSocket.write(encodeClientText(JSON.stringify({ type: "response.create", model: "fixture/fixture", input: "y".repeat(INPUT_BYTES), stream: true })));
     expect(await warmCodex.until(event => event.type === "text" && event.data.includes("response.completed"))).not.toBeNull();
     warmSocket.destroy();
-    const warmHttp = await fetch("http://127.0.0.1:" + port + "/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "fixture/fixture", input: "warm", stream: true }) });
+    const warmHttp = await fetch("http://127.0.0.1:" + port + "/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "fixture/fixture", input: "y".repeat(INPUT_BYTES), stream: true }) });
     expect(await warmHttp.text()).toContain("response.completed");
     warm = false;
     child.stdin.write("gc-rss\n"); child.stdin.flush();
