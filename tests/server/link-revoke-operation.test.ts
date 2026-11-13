@@ -1115,6 +1115,10 @@ test("a failed_clean receipt owner refused at the tombstone limit finishes with 
   const refused = await h.revoke({ force: true, operationId: OP });
   expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "tombstone_limit" });
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  // Repeated while capacity is still full, the resumed revoke meets the live limit again: a second refusal proves nothing.
+  const again = await h.revoke({ force: true, operationId: OP });
+  expect({ status: again.status, code: code(again) }).toEqual({ status: 409, code: "tombstone_limit" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   // A new id cannot take the removal over while this operation owns its receipt.
   const other = await h.revoke({ force: true, operationId: "detach-other" });
   expect({ status: other.status, code: code(other) }).toEqual({ status: 409, code: "link_retirement_owned" });

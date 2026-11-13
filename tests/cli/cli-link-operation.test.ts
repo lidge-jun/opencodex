@@ -254,8 +254,10 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
       const printed = [...h.out, ...h.err].join("\n");
       expect(printed).toContain("waiting for cleanup");
       expect(printed).toContain("did not touch the link, its key or the Child");
-      expect(printed).toContain("repeat this revoke with the same operation id first");
-      expect(printed).toContain("only if that repeat answers this refusal again");
+      expect(printed).toContain("repeat this revoke with the same operation id");
+      expect(printed).toContain("although capacity is free");
+      expect(printed).toContain("link_retirement_owned");
+      expect(printed).not.toContain("the refusal was recorded");
       expect(printed).not.toContain("if it reads failed_clean");
       expect(printed).not.toContain("Nothing was changed");
       expect(printed).toContain("(code tombstone_limit)");
