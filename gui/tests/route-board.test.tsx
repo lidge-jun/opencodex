@@ -120,7 +120,7 @@ describe("route board model", () => {
     const item = combo("a", [["p", "m"]]);
     expect(planStrategyChange(item, "failover", () => null)).toEqual({ kind: "unchanged" });
     expect(planStrategyChange(item, "jev", () => null)).toEqual({ kind: "open-advanced" });
-    expect(planStrategyChange(item, "random", () => "noEnabledTarget")).toEqual({ kind: "invalid", error: "noEnabledTarget" });
+    expect(planStrategyChange(item, "random", () => "noEnabledTarget")).toEqual({ kind: "invalid", error: "noEnabledTarget", item: { ...item, strategy: "random" } });
     expect(planStrategyChange(item, "random", () => null)).toEqual({ kind: "save", item: { ...item, strategy: "random" } });
   });
 

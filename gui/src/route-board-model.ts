@@ -248,7 +248,7 @@ export function formatContextWindow(tokens: number): string {
 export type StrategyChange =
   | { kind: "unchanged" }
   | { kind: "open-advanced" }
-  | { kind: "invalid"; error: ComboDraftError }
+  | { kind: "invalid"; error: ComboDraftError; item: ComboItem }
   | { kind: "save"; item: ComboItem };
 
 export function planStrategyChange(
@@ -260,7 +260,7 @@ export function planStrategyChange(
   if (next === "jev") return { kind: "open-advanced" };
   const item = { ...combo, strategy: next };
   const error = validate(item);
-  return error ? { kind: "invalid", error } : { kind: "save", item };
+  return error ? { kind: "invalid", error, item } : { kind: "save", item };
 }
 
 /** Move one channel; out-of-range moves leave the list as it was. */
@@ -273,10 +273,10 @@ export function moveChannel<T>(list: readonly T[], from: number, to: number): T[
 }
 
 /** `PUT /api/combos` target list for an edited channel list: `lastResort` sent explicitly. */
-export function channelTargetsForPut(
-  putTargets: ReadonlyArray<Record<string, unknown> & { provider: string; model: string }>,
+export function channelTargetsForPut<T extends { provider: string; model: string }>(
+  putTargets: readonly T[],
   channels: readonly Pick<RouteChannel, "provider" | "model" | "lastResort">[],
-): Array<Record<string, unknown>> {
+): Array<T & { lastResort: boolean }> {
   return putTargets.map((target) => {
     const channel = channels.find((c) => c.provider === target.provider && c.model === target.model);
     return { ...target, lastResort: channel?.lastResort === true };

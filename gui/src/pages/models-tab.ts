@@ -7,7 +7,8 @@
  */
 
 import { navigateHash, normalizeHashPath, splitHashQuery } from "../hash-routing";
-import { COMBOS_ADVANCED_HASH, JEV_AUTO_CREATE_HASH } from "../app-routing";
+import { JEV_AUTO_CREATE_HASH } from "../app-routing";
+import { COMBOS_ADVANCED_HASH } from "./combos-advanced-hash";
 
 /**
  * `catalog` rather than `models` for the first tab: the page is Models and its first

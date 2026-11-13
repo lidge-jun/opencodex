@@ -333,8 +333,13 @@ test("an unsaved combo draft survives a tab switch", async () => {
       (container.querySelector("#models-tab-combos") as HTMLButtonElement).click();
     });
     await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      [...panel(container, "combos")!.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent?.trim() === "Advanced")!.click();
+    });
+    await act(async () => { await Promise.resolve(); });
 
-    const field = () => panel(container, "combos")?.querySelector("input") as HTMLInputElement | null;
+    const field = () => panel(container, "combos")?.querySelector(".combos-workspace-root input") as HTMLInputElement | null;
     const input = field();
     expect(input).toBeTruthy();
 
@@ -385,6 +390,11 @@ test("a failed combos reload keeps the workspace instead of replacing it", async
   try {
     await act(async () => {
       (container.querySelector("#models-tab-combos") as HTMLButtonElement).click();
+    });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      [...panel(container, "combos")!.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent?.trim() === "Advanced")!.click();
     });
     await act(async () => { await Promise.resolve(); });
     expect(panel(container, "combos")?.querySelector(".combos-workspace-root")).toBeTruthy();

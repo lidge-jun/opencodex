@@ -3,7 +3,8 @@
  * full combo workspace at `#models/combos/advanced` and the JEV Auto deep link, which opens the
  * workspace's add flow.
  */
-import { COMBOS_ADVANCED_HASH, JEV_AUTO_CREATE_HASH } from "../app-routing";
+import { JEV_AUTO_CREATE_HASH } from "../app-routing";
+import { COMBOS_ADVANCED_HASH } from "./combos-advanced-hash";
 import { normalizeHashPath, splitHashQuery } from "../hash-routing";
 
 export type CombosView = "overview" | "advanced";

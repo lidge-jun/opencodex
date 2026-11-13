@@ -1,6 +1,7 @@
 /** Pure hash → page resolution used by App route state. */
 
 import { normalizeHashPath, splitHashQuery } from "./hash-routing";
+import { COMBOS_ADVANCED_HASH } from "./pages/combos-advanced-hash";
 
 export type Page =
   | "home"
@@ -99,8 +100,6 @@ export const DASHBOARD_TAB_HASHES = ["dashboard/providers", "dashboard/models"] 
 export const MODELS_TAB_HASHES = ["models/combos", "models/routing", "models/compatibility"] as const;
 /** Action deep link that opens the editable JEV Auto template in the Combos tab. */
 export const JEV_AUTO_CREATE_HASH = "models/combos/jev-auto";
-/** The full combo workspace, behind the Combos overview's "Advanced" entry. */
-export const COMBOS_ADVANCED_HASH = "models/combos/advanced";
 
 /** JEV Auto deep link; a self-hosted `jev-decision` row rides along as `?decisionProvider=`. */
 export function jevAutoCreateHash(decisionProvider?: string | null): string {
