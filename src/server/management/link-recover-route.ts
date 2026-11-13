@@ -68,6 +68,13 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
   // Under the alias lock enrollment and revoke take (src/link/alias-lock.ts, across processes) and the per-alias
   // operation set within this runtime, both keyed without case.
   return underAliasLock(ctx, target.alias, true, () => serialized(state, target.alias, async () => {
+    // A Home-initiated link that still names this alias may own the Child now: a re-enrollment, or one whose
+    // revoke ran its disconnect but did not commit (journalled or not). Recover would then settle the old
+    // link and purge the binary under it, so it waits until no such link exists. Read under the lock.
+    const wanted = target.alias.toLowerCase();
+    if (readStoreFor(ctx).links.some(link => link.direction === "hub-initiated" && link.alias.toLowerCase() === wanted)) {
+      return fail("alias_linked", "A link to this machine's alias still exists, so its Child may belong to that link; revoke or settle that link first, then recover.", 409);
+    }
     const outcome = await recoverRemoteChild(runnerFor(ctx), target, knownHostsFile(ctx));
     if (!outcome.ok) return fail(outcome.code, outcome.message, outcome.status, outcome.hint);
     try {

@@ -620,3 +620,25 @@ describe("final review follow-ups", () => {
     expect(tombstones()).toEqual([]);
   });
 });
+
+describe("recover while another link names the alias", () => {
+  test("is refused with 409 before any SSH, whatever the alias's case, and the tombstone stays", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    // The machine was enrolled again under the same alias (spelled differently), and that link still exists.
+    h.store.links.push(link({ id: OTHER, alias: "DevBox" }));
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect([res.status, (await errorOf(res)).code]).toEqual([409, "alias_linked"]);
+    expect(h.commands.filter(c => c.includes("ocx-managed-purge"))).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
+
+  test("a client-initiated link with the same alias does not block it", async () => {
+    const h = harness([link()]);
+    await forceRevoke(h);
+    h.store.links.push(link({ id: OTHER, direction: "client-initiated" }));
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(200);
+    expect(tombstones()).toEqual([]);
+  });
+});
