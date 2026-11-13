@@ -214,7 +214,7 @@ export function safetyRefusalCodeFromMessage(text: string): string | undefined {
   return undefined;
 }
 
-function isSubscriptionGateMessage(text: string): boolean {
+export function isSubscriptionGateMessage(text: string): boolean {
   return (
     text.includes("requires a subscription") ||
     text.includes("requires subscription") ||

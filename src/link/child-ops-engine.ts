@@ -15,7 +15,8 @@ export const CHILD_JOB_RETENTION_COUNT = 32;
 /** The CLI's job validator keeps strings up to this length; a longer hint would make the whole document unreadable. */
 const HINT_MAX = 256;
 
-export interface ChildOpRequest { op: ChildOp; linkIds: readonly string[] | "all"; restart: ChildRestart; trigger: ChildTrigger }
+/** ignoreActivity (D8) is honoured only on a manual request; the route accepts it only with one link and a restart. */
+export interface ChildOpRequest { op: ChildOp; linkIds: readonly string[] | "all"; restart: ChildRestart; trigger: ChildTrigger; ignoreActivity?: true }
 export type SubmitRefusal = "link_not_found" | "link_not_home_initiated" | "link_operation_in_progress" | "no_eligible_links";
 export type SubmitResult = { ok: true; job: ChildJob } | { ok: false; code: SubmitRefusal; linkId: string | null };
 export interface ChildJobHold { jobId: string; op: ChildOp; state: "queued" | "running" }
@@ -162,7 +163,8 @@ export function createChildOpsEngine(options: ChildOpsEngineOptions = {}): Child
         if (only && locks.has(only.id)) return { ok: false, code: "link_operation_in_progress", linkId: only.id };
       }
       const job: ChildJob = { schema: CHILD_JOB_SCHEMA, jobId: newJobId(), op: request.op, trigger: request.trigger,
-        restart: request.restart, state: "queued", createdAt: iso(env), finishedAt: null,
+        restart: request.restart, ...(request.ignoreActivity === true && request.trigger === "manual" ? { ignoreActivity: true as const } : {}),
+        state: "queued", createdAt: iso(env), finishedAt: null,
         items: records.map(record => ({ linkId: record.id, alias: record.alias, state: "queued" as const, reason: null,
           startedAt: null, finishedAt: null })) };
       jobs.set(job.jobId, { job, env });
