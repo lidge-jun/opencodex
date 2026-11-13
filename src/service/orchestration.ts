@@ -21,7 +21,9 @@ import type { WindowsCheckedStopResult } from "./windows-checked-stop";
 import { WINDOWS_STOP_CAPS } from "./windows-stop-budget";
 import type { WindowsStopConfirmResult } from "./windows-stop-confirm";
 import { claimPendingTeardown, clearPendingTeardown, type PendingTeardownReceipt } from "../config/pending-teardown";
-import { confirmWindowsServiceStop, describeWindowsPartA, describeWindowsPartB, runWindowsServiceStopPartA, serviceStopOutcomeFromWindows, windowsPartARecord, windowsReceiptEndpoint, windowsServiceStopPort, windowsStopAdmission, windowsStopRemainingMs, type WindowsPartARequest } from "./windows-service-stop";
+import { probeEndpointLiveness, type EndpointLiveness } from "../server/proxy-liveness";
+import type { ProbeEndpoint } from "../cli/uninstall-plan";
+import { confirmWindowsServiceStop, describeWindowsPartA, describeWindowsPartB, endpointsAllDead, runWindowsServiceStopPartA, serviceStopOutcomeFromWindows, windowsPartARecord, windowsReceiptEndpoint, windowsRemovalEndpoints, windowsServiceStopPort, windowsStopAdmission, windowsStopRemainingMs, type WindowsPartARequest } from "./windows-service-stop";
 import { schtasks, probeWindowsSchedulerTask, rollbackWindowsSchedulerTaskOwnedByAttempt, settleDelay } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy } from "./windows-taskxml";
@@ -288,6 +290,9 @@ export interface ServiceInstallPreparationDeps extends RuntimePreflightDeps {
   teardownEndpoint?: typeof windowsReceiptEndpoint;
   claimTeardown?: typeof claimPendingTeardown;
   clearTeardown?: (nonce: string) => boolean;
+  /** Every endpoint an absent-manager install must prove down, resolved once. */
+  installEndpoints?: () => ProbeEndpoint[];
+  endpointLiveness?: (endpoint: ProbeEndpoint) => Promise<EndpointLiveness>;
   platform?: NodeJS.Platform;
 }
 
@@ -354,6 +359,13 @@ export async function prepareServiceInstall(
     if (partA.outcome !== "stopped" && partA.outcome !== "absent") {
       throw new Error(`The installed Windows service could not be proven stopped (${partA.outcome}); nothing was replaced. ${describeWindowsPartA(partA)}`);
     }
+    // With no manager registered, Part B is skipped and the tracked stop can come back
+    // "none" after its discovery cap while an unresponsive proxy still holds the port.
+    // Resolve the candidates now: the cleanup below deletes the runtime record that is one
+    // of them. Nothing may be published over a candidate that is not definitively dead.
+    const absentProofEndpoints = partA.outcome === "absent"
+      ? (deps.installEndpoints ?? windowsRemovalEndpoints)()
+      : [];
     let nonce: string | undefined;
     if (partA.outcome === "stopped") {
       // Before the tracked stop: a receipt-less POST would answer 409 and abort the install
@@ -378,6 +390,14 @@ export async function prepareServiceInstall(
         throw new Error(`The service port is not free after the stop; nothing was published or started. ${describeWindowsPartB(partB)}`);
       }
       return { deferredTeardownNonce: nonce };
+    }
+    if (partA.outcome === "absent") {
+      const proof = await endpointsAllDead(absentProofEndpoints, deps.endpointLiveness ?? probeEndpointLiveness);
+      if (!proof.dead) {
+        throw new Error(proof.live.length > 0
+          ? `A proxy is still listening on port ${proof.live.join(", ")}; nothing was published or started. Check for a manually started proxy, then retry.`
+          : `The endpoint on port ${(proof.unknown.join(", ") || stopPort)} could not be confirmed down; nothing was published or started. Check for a manually started proxy, then retry.`);
+      }
     }
     return {};
   }

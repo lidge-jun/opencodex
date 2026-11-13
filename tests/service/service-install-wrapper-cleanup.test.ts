@@ -97,6 +97,8 @@ describe("service install preparation wrapper cleanup", () => {
       platform: "win32",
       windowsPartA: async () => { calls.push("partA"); return partAResult("absent"); },
       windowsPartB: async () => { calls.push("partB"); return partBResult("freed"); },
+      installEndpoints: () => [{ hostname: "127.0.0.1", port: 10100 }],
+      endpointLiveness: async () => "dead",
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
     });
     expect(calls).toEqual(["partA", "stop:standalone"]);
@@ -164,6 +166,53 @@ describe("service install preparation wrapper cleanup", () => {
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
     })).rejects.toThrow(/deferred-teardown receipt could not be recorded[\s\S]*disk full/);
     expect(calls).toEqual(["partA"]);
+  });
+
+  test("an absent manager still proves every endpoint down before the install callback", async () => {
+    // #7771 round 9: with Part A absent, Part B is skipped and the tracked stop can return
+    // "none" after its orphan-discovery cap while an unresponsive proxy still holds the port.
+    // The install must not publish assets over it.
+    const calls: string[] = [];
+    let installed = false;
+    await expect(installServiceSafely("scheduler", () => { installed = true; }, {
+      platform: "win32",
+      windowsPartA: async () => { calls.push("partA"); return partAResult("absent"); },
+      windowsStopPort: () => 12000,
+      installEndpoints: () => [{ hostname: "127.0.0.1", port: 12000 }, { hostname: "127.0.0.1", port: 10100 }],
+      endpointLiveness: async endpoint => (endpoint.port === 10100 ? "live" : "dead"),
+      stopTrackedProxy: async () => { calls.push("stop:standalone"); },
+    })).rejects.toThrow(/port 10100/);
+    expect(installed).toBe(false);
+    expect(calls).toEqual(["partA", "stop:standalone"]);
+  });
+
+  test("an absent manager with an unreadable endpoint refuses too", async () => {
+    let installed = false;
+    await expect(installServiceSafely("scheduler", () => { installed = true; }, {
+      platform: "win32",
+      windowsPartA: async () => partAResult("absent"),
+      windowsStopPort: () => 12000,
+      installEndpoints: () => [{ hostname: "127.0.0.1", port: 12000 }],
+      endpointLiveness: async () => "unknown",
+      stopTrackedProxy: async () => {},
+    })).rejects.toThrow(/could not be confirmed down/);
+    expect(installed).toBe(false);
+  });
+
+  test("an absent manager with every endpoint dead proceeds without a receipt", async () => {
+    const calls: string[] = [];
+    let installed = false;
+    await installServiceSafely("scheduler", () => { installed = true; }, {
+      platform: "win32",
+      windowsPartA: async () => partAResult("absent"),
+      windowsStopPort: () => 12000,
+      installEndpoints: () => [{ hostname: "127.0.0.1", port: 12000 }],
+      endpointLiveness: async () => "dead",
+      claimTeardown: () => { calls.push("claim"); return { nonce: "unused" }; },
+      stopTrackedProxy: async () => { calls.push("stop:standalone"); },
+    });
+    expect(installed).toBe(true);
+    expect(calls).toEqual(["stop:standalone"]);
   });
 
   test("non-Windows install preparation never reaches the checked Windows stop", async () => {

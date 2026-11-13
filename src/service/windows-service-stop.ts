@@ -15,6 +15,8 @@
  * - a hook seam so caller tests run hermetically (no schtasks, PowerShell or FFI).
  */
 import { loadConfig } from "../config";
+import { endpointsToProve, type ProbeEndpoint } from "../cli/uninstall-plan";
+import { probeEndpointLiveness, type EndpointLiveness } from "../server/proxy-liveness";
 import type { PendingTeardownPartA } from "../config/pending-teardown";
 import { readRuntimePort } from "../config/process-state";
 import type { WinswStatus } from "../lib/winsw";
@@ -229,6 +231,41 @@ export function windowsPartARecord(result: WindowsCheckedStopResult): PendingTea
     },
     wrappers: result.bound.map(wrapper => ({ pid: wrapper.pid, startTime: wrapper.startTime })),
   };
+}
+
+/**
+ * Every endpoint this home could be serving on, exactly the set `ocx uninstall` proves.
+ *
+ * The receipt endpoint is ONE candidate; a stale runtime record naming a closed port must
+ * not stand in for the configured port where a live listener can sit (#3008, #7771).
+ */
+export function windowsRemovalEndpoints(): ProbeEndpoint[] {
+  let config: { port?: number; hostname?: string } = {};
+  try { config = loadConfig(); } catch { /* defaults below */ }
+  return endpointsToProve(readRuntimePort(), config);
+}
+
+/**
+ * Definitive absence on EVERY candidate. "unknown" is not absence: a listener that
+ * accepts connections but withholds /healthz, or one that times out, is exactly the state
+ * where deleting a registration or installing over it is most harmful.
+ */
+export async function endpointsAllDead(
+  endpoints: readonly ProbeEndpoint[],
+  probe: (endpoint: ProbeEndpoint) => Promise<EndpointLiveness> = probeEndpointLiveness,
+): Promise<{ dead: boolean; live: number[]; unknown: number[] }> {
+  const results = await Promise.all(endpoints.map(async endpoint => (
+    await probe(endpoint).catch((): EndpointLiveness => "unknown")
+  )));
+  const live: number[] = [];
+  const unknown: number[] = [];
+  endpoints.forEach((endpoint, index) => {
+    const answer = results[index];
+    if (answer === "live") live.push(endpoint.port);
+    else if (answer !== "dead") unknown.push(endpoint.port);
+  });
+  // No candidate is not proof of anything.
+  return { dead: endpoints.length > 0 && live.length === 0 && unknown.length === 0, live, unknown };
 }
 
 /**

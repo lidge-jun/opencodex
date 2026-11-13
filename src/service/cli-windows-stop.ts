@@ -15,18 +15,19 @@
  *   receipt is kept until the caller's restore succeeds.
  */
 import { clearPendingTeardown, claimPendingTeardown } from "../config/pending-teardown";
-import { readRuntimePort } from "../config/process-state";
-import { loadConfig } from "../config";
 import { readClientConnectionState } from "../client/state";
-import { endpointsToProve, type ProbeEndpoint } from "../cli/uninstall-plan";
+import type { ProbeEndpoint } from "../cli/uninstall-plan";
 import { probeEndpointLiveness, type EndpointLiveness } from "../server/proxy-liveness";
 import { proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand } from "./orchestration";
 import {
   confirmWindowsServiceStop,
   describeWindowsPartA,
   describeWindowsPartB,
+  endpointsAllDead,
   runWindowsServiceStopPartA,
   windowsPartARecord,
+  windowsReceiptEndpoint,
+  windowsRemovalEndpoints,
   windowsServiceStopPort,
   windowsStopAdmission,
   windowsStopRemainingMs,
@@ -48,52 +49,6 @@ export interface WindowsServiceStopCommandIo {
    * `endpointsToProve(readRuntimePort(), loadConfig())` — the set `ocx uninstall` proves.
    */
   endpoints?: () => ProbeEndpoint[];
-}
-
-/**
- * Every endpoint removal has to account for, exactly the set `ocx uninstall` proves.
- *
- * The receipt endpoint is ONE candidate; a stale runtime record naming a closed port must
- * not stand in for the configured port where a live listener can sit (#3008, #7771).
- */
-function removalEndpoints(): ProbeEndpoint[] {
-  let config: { port?: number; hostname?: string } = {};
-  try { config = loadConfig(); } catch { /* defaults below */ }
-  return endpointsToProve(readRuntimePort(), config);
-}
-
-/**
- * Definitive absence on EVERY candidate. "unknown" is not absence: a listener that
- * accepts connections but withholds /healthz, or one that times out, is exactly the state
- * where deleting the registration is most harmful.
- */
-async function endpointsAllDead(
-  endpoints: readonly ProbeEndpoint[],
-  probe: (endpoint: ProbeEndpoint) => Promise<EndpointLiveness>,
-): Promise<{ dead: boolean; live: number[]; unknown: number[] }> {
-  const results = await Promise.all(endpoints.map(async endpoint => (
-    await probe(endpoint).catch((): EndpointLiveness => "unknown")
-  )));
-  const live: number[] = [];
-  const unknown: number[] = [];
-  endpoints.forEach((endpoint, index) => {
-    const answer = results[index];
-    if (answer === "live") live.push(endpoint.port);
-    else if (answer !== "dead") unknown.push(endpoint.port);
-  });
-  // No candidate is not proof of anything.
-  return { dead: endpoints.length > 0 && live.length === 0 && unknown.length === 0, live, unknown };
-}
-
-function receiptEndpoint(): { endpoint: { hostname: string; port: number }; source: "exact" | "guessed" } {
-  const runtime = readRuntimePort();
-  if (runtime?.port) return { endpoint: { hostname: runtime.hostname ?? "127.0.0.1", port: runtime.port }, source: "exact" };
-  try {
-    const config = loadConfig();
-    return { endpoint: { hostname: config.hostname ?? "127.0.0.1", port: typeof config.port === "number" && config.port > 0 ? config.port : 10100 }, source: "guessed" };
-  } catch {
-    return { endpoint: { hostname: "127.0.0.1", port: 10100 }, source: "guessed" };
-  }
 }
 
 /** Shared teardown belongs to this home unless a client connection owns the routing. */
@@ -124,7 +79,7 @@ export async function windowsServiceStopBeforeRestore(io: WindowsServiceStopComm
   }
   let nonce: string | undefined;
   if ((io.ownsSharedTeardown ?? ownsSharedTeardownByDefault)()) {
-    const { endpoint, source } = receiptEndpoint();
+    const { endpoint, source } = windowsReceiptEndpoint();
     try {
       nonce = (io.claim ?? claimPendingTeardown)(endpoint, source, process.pid, undefined, windowsPartARecord(partA)).nonce;
     } catch (error) {
@@ -176,7 +131,7 @@ export async function windowsServiceRemovalStop(
   const port = windowsServiceStopPort();
   // Resolved once: the receipt and the absent-Part-A probe must name the same address, or
   // the proof would be about an endpoint the stop never contacted.
-  const { endpoint, source } = receiptEndpoint();
+  const { endpoint, source } = windowsReceiptEndpoint();
   const partA = await runWindowsServiceStopPartA({ admission: windowsStopAdmission({ orphanDiscovery: true }) });
   if (partA.outcome !== "stopped" && partA.outcome !== "absent") {
     console.error("❌ Service uninstall refused: the Windows service could not be proven stopped (" + partA.outcome + "), so the task was not deleted.");
@@ -208,7 +163,7 @@ export async function windowsServiceRemovalStop(
     // a stale runtime record pointing at a closed port used to prove removal while the
     // configured port had a live listener. No respawn hold: with no manager registered
     // there is nothing to relaunch the proxy.
-    const proof = await endpointsAllDead((io.endpoints ?? removalEndpoints)(), io.endpointLiveness ?? probeEndpointLiveness);
+    const proof = await endpointsAllDead((io.endpoints ?? windowsRemovalEndpoints)(), io.endpointLiveness ?? probeEndpointLiveness);
     if (proof.dead) return withNonce(nonce);
     console.error(proof.live.length > 0
       ? "❌ Service uninstall refused: a proxy is still listening on port " + proof.live.join(", ") + "."
