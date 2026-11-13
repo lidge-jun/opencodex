@@ -353,11 +353,12 @@ jobs:
             # real only on macOS and Windows, so its job lints and tests the crate on all three.
             remote_helper:
               - 'native/remote-workspace-helper/**'
-            # The Rust lightweight Child (native/ocx-child). Nothing else in CI reliably builds or tests
-            # it (the Bun suites run it only where the runner has cargo); its job runs fmt, clippy and the
-            # crate's tests, including the process-level lifecycle suites, on Linux. The conformance
-            # fixture is the crate's test input too (tests/conformance.rs), and ci.yml is listed so an
-            # edit to the job verifies itself.
+            # The Rust lightweight Child (native/ocx-child). The Linux test shards and test changed install
+            # cargo and, through the Bun wrappers, build it and run its conformance suite, but only when those
+            # tests are selected (the shards run on a pull request only with ci:full or a CI change). Nothing
+            # else runs fmt, clippy or the crate's own tests (unit tests and the process-level lifecycle
+            # suites); this job runs all three on Linux. The conformance fixture is the crate's test input
+            # too (tests/conformance.rs), and ci.yml is listed so an edit to the job verifies itself.
             ocx_child:
               - 'native/ocx-child/**'
               - 'tests/fixtures/link/ocx-child-conformance.json'
