@@ -1480,7 +1480,8 @@ mod tests {
         }
     }
 
-    /// What stop does to each registered socket, run on the worker just before its local 101.
+    /// The claim a stop makes on each registered socket (without the reaper drain that follows it in
+    /// stop_all), run on the worker just before its local 101.
     fn stop_claims_before_the_101() {
         let (m, _) = registry();
         lock(m).stopping = true;
@@ -1493,13 +1494,14 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_before_the_local_101_answers_426_and_writes_codex_no_close_frame() {
+    fn a_stop_claim_before_the_local_101_leaves_it_unwritten_and_codex_gets_no_frame() {
         let _serial = lock(&SERIAL);
         reset_registry();
         let (home_port, homes) = mock_home(HomeMode::Advertise);
         *lock(&BEFORE_101) = Some(stop_claims_before_the_101);
         let s = session(home_port, test_limits(), "", &[]);
         *lock(&BEFORE_101) = None;
+        // No frame precedes the 101: with only the claim, Codex's connection is intact and gets the 426.
         assert_eq!(
             s.status, 426,
             "Codex gets an HTTP answer, never a close frame first"
@@ -1510,6 +1512,39 @@ mod tests {
             read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
             vec![FrameEvent::Close(Some(1001), String::new())]
         );
+        wait_all_released();
+        reset_registry();
+    }
+
+    static REAL_STOP: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
+
+    /// The real stop_all, from another thread, once it has claimed this socket (before the worker's 101).
+    fn real_stop_before_the_101() {
+        let shared = only_socket();
+        *lock(&REAL_STOP) = Some(thread::spawn(stop_all));
+        let mut st = lock(&shared.state);
+        while st.lifecycle == Lifecycle::Registered {
+            st = shared.cv.wait(st).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    #[test]
+    fn a_real_stop_before_the_local_101_gives_codex_the_426_at_best_and_never_a_frame_or_a_hang() {
+        let _serial = lock(&SERIAL);
+        reset_registry();
+        let (home_port, _homes) = mock_home(HomeMode::Advertise);
+        *lock(&BEFORE_101) = Some(real_stop_before_the_101);
+        let s = session(home_port, test_limits(), "", &[]);
+        *lock(&BEFORE_101) = None;
+        // The stop also shuts Codex's connection down, so the 426 is best effort: an HTTP 426 or nothing.
+        assert!(
+            s.status == 426 || (s.status == 0 && s.response.is_empty()),
+            "status {} {}",
+            s.status,
+            s.response
+        );
+        assert_eq!(s.worker.join().unwrap(), Err(Fallback::Stopping));
+        lock(&REAL_STOP).take().unwrap().join().unwrap();
         wait_all_released();
         reset_registry();
     }
