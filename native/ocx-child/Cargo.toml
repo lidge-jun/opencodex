@@ -10,6 +10,10 @@ publish = false
 name = "ocx-child"
 path = "src/main.rs"
 
+[[test]]
+name = "link_websocket"
+required-features = ["link-ws-test-gate"]
+
 [lib]
 name = "ocx_child"
 path = "src/lib.rs"

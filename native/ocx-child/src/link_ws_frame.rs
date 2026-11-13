@@ -131,12 +131,17 @@ impl FrameReader {
         result
     }
 
-    fn push_inner(&mut self, data: &[u8], events: &mut Vec<FrameEvent>) -> Result<(), ProtocolFault> {
+    fn push_inner(
+        &mut self,
+        data: &[u8],
+        events: &mut Vec<FrameEvent>,
+    ) -> Result<(), ProtocolFault> {
         let mut offset = 0;
         while offset < data.len() && !self.done {
             if self.frame.is_none() {
                 let take = (self.header_needed - self.header_len).min(data.len() - offset);
-                self.header[self.header_len..self.header_len + take].copy_from_slice(&data[offset..offset + take]);
+                self.header[self.header_len..self.header_len + take]
+                    .copy_from_slice(&data[offset..offset + take]);
                 self.header_len += take;
                 offset += take;
                 if self.header_len < self.header_needed {
@@ -162,7 +167,12 @@ impl FrameReader {
             match frame.mask {
                 Some(mask) => {
                     let base = frame.filled;
-                    target.extend(chunk.iter().enumerate().map(|(i, b)| b ^ mask[(base + i) & 3]));
+                    target.extend(
+                        chunk
+                            .iter()
+                            .enumerate()
+                            .map(|(i, b)| b ^ mask[(base + i) & 3]),
+                    );
                 }
                 None => target.extend_from_slice(chunk),
             }
@@ -257,7 +267,19 @@ impl FrameReader {
         }
         self.header_len = 0;
         self.header_needed = 2;
-        let frame = Frame { fin, opcode, mask, len, filled: 0, fragment, own: if fragment { Vec::new() } else { Vec::with_capacity(len) } };
+        let frame = Frame {
+            fin,
+            opcode,
+            mask,
+            len,
+            filled: 0,
+            fragment,
+            own: if fragment {
+                Vec::new()
+            } else {
+                Vec::with_capacity(len)
+            },
+        };
         if len == 0 {
             self.end_frame(frame, events)
         } else {
@@ -266,7 +288,11 @@ impl FrameReader {
         }
     }
 
-    fn end_frame(&mut self, frame: Frame, events: &mut Vec<FrameEvent>) -> Result<(), ProtocolFault> {
+    fn end_frame(
+        &mut self,
+        frame: Frame,
+        events: &mut Vec<FrameEvent>,
+    ) -> Result<(), ProtocolFault> {
         match frame.opcode {
             9 => {
                 events.push(FrameEvent::Ping(frame.own));
@@ -290,7 +316,8 @@ impl FrameReader {
                 if !is_wire_close_code(code) {
                     return Err(ProtocolFault::Protocol);
                 }
-                let reason = String::from_utf8(payload[2..].to_vec()).map_err(|_| ProtocolFault::Utf8)?;
+                let reason =
+                    String::from_utf8(payload[2..].to_vec()).map_err(|_| ProtocolFault::Utf8)?;
                 events.push(FrameEvent::Close(Some(code), reason));
                 return Ok(());
             }
@@ -303,7 +330,11 @@ impl FrameReader {
         if !frame.fin {
             return Ok(());
         }
-        let message = if frame.fragment { self.assembly.take().unwrap_or_default() } else { frame.own };
+        let message = if frame.fragment {
+            self.assembly.take().unwrap_or_default()
+        } else {
+            frame.own
+        };
         let opcode = self.message_opcode;
         self.fragment_count = 0;
         self.message_opcode = 0;
@@ -400,8 +431,12 @@ mod tests {
         out
     }
 
-    fn server(opcode: u8, payload: &[u8]) -> Vec<u8> { frame(opcode, payload, true, false) }
-    fn client(opcode: u8, payload: &[u8]) -> Vec<u8> { frame(opcode, payload, true, true) }
+    fn server(opcode: u8, payload: &[u8]) -> Vec<u8> {
+        frame(opcode, payload, true, false)
+    }
+    fn client(opcode: u8, payload: &[u8]) -> Vec<u8> {
+        frame(opcode, payload, true, true)
+    }
 
     fn read(role: Role, max: usize, chunks: &[&[u8]]) -> Result<Vec<FrameEvent>, ProtocolFault> {
         let mut reader = FrameReader::new(role, max, 4);
@@ -426,76 +461,206 @@ mod tests {
         let bytes: Vec<&[u8]> = f.chunks(1).collect();
         assert_eq!(read(Role::FromServer, 1024, &bytes).unwrap(), whole);
         let c = client(1, b"masked");
-        assert_eq!(read(Role::FromClient, 1024, &[&c]).unwrap(), vec![FrameEvent::Text("masked".into())]);
+        assert_eq!(
+            read(Role::FromClient, 1024, &[&c]).unwrap(),
+            vec![FrameEvent::Text("masked".into())]
+        );
     }
 
     #[test]
     fn masking_must_match_the_role() {
-        assert_eq!(read(Role::FromServer, 1024, &[&client(1, b"a")]), Err(ProtocolFault::Protocol));
-        assert_eq!(read(Role::FromClient, 1024, &[&server(1, b"a")]), Err(ProtocolFault::Protocol));
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&client(1, b"a")]),
+            Err(ProtocolFault::Protocol)
+        );
+        assert_eq!(
+            read(Role::FromClient, 1024, &[&server(1, b"a")]),
+            Err(ProtocolFault::Protocol)
+        );
     }
 
     #[test]
     fn rsv_opcodes_and_control_rules() {
         let mut rsv = server(1, b"a");
         rsv[0] |= 0x40;
-        assert_eq!(read(Role::FromServer, 1024, &[&rsv]), Err(ProtocolFault::Protocol));
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&rsv]),
+            Err(ProtocolFault::Protocol)
+        );
         for op in [3u8, 7, 11, 15] {
-            assert_eq!(read(Role::FromServer, 1024, &[&server(op, b"a")]), Err(ProtocolFault::Protocol));
+            assert_eq!(
+                read(Role::FromServer, 1024, &[&server(op, b"a")]),
+                Err(ProtocolFault::Protocol)
+            );
         }
-        assert_eq!(read(Role::FromServer, 1024, &[&server(9, &[0; 126])]), Err(ProtocolFault::Protocol));
-        assert_eq!(read(Role::FromServer, 1024, &[&frame(9, b"x", false, false)]), Err(ProtocolFault::Protocol));
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&server(9, &[0; 126])]),
+            Err(ProtocolFault::Protocol)
+        );
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&frame(9, b"x", false, false)]),
+            Err(ProtocolFault::Protocol)
+        );
     }
 
     #[test]
     fn continuation_order() {
-        assert_eq!(read(Role::FromServer, 1024, &[&server(0, b"a")]), Err(ProtocolFault::Protocol));
-        assert_eq!(read(Role::FromServer, 1024, &[&frame(1, b"a", false, false), &server(1, b"b")]), Err(ProtocolFault::Protocol));
-        let events = read(Role::FromServer, 1024, &[&frame(1, b"he", false, false), &server(9, b"p"), &frame(0, b"ll", false, false), &server(0, b"o")]).unwrap();
-        assert_eq!(events, vec![FrameEvent::Ping(b"p".to_vec()), FrameEvent::Text("hello".into())]);
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&server(0, b"a")]),
+            Err(ProtocolFault::Protocol)
+        );
+        assert_eq!(
+            read(
+                Role::FromServer,
+                1024,
+                &[&frame(1, b"a", false, false), &server(1, b"b")]
+            ),
+            Err(ProtocolFault::Protocol)
+        );
+        let events = read(
+            Role::FromServer,
+            1024,
+            &[
+                &frame(1, b"he", false, false),
+                &server(9, b"p"),
+                &frame(0, b"ll", false, false),
+                &server(0, b"o"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            events,
+            vec![
+                FrameEvent::Ping(b"p".to_vec()),
+                FrameEvent::Text("hello".into())
+            ]
+        );
     }
 
     #[test]
     fn length_encodings() {
         let mut short16 = vec![0x81, 126, 0, 5];
         short16.extend_from_slice(b"short");
-        assert_eq!(read(Role::FromServer, 1024, &[&short16]), Err(ProtocolFault::Protocol));
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&short16]),
+            Err(ProtocolFault::Protocol)
+        );
         let mut short64 = vec![0x81, 127, 0, 0, 0, 0, 0, 0, 0, 5];
         short64.extend_from_slice(b"short");
-        assert_eq!(read(Role::FromServer, 1024, &[&short64]), Err(ProtocolFault::Protocol));
-        assert_eq!(read(Role::FromServer, 1024, &[&[0x81, 127, 0x80, 0, 0, 0, 0, 0, 0, 1]]), Err(ProtocolFault::Protocol));
-        assert_eq!(read(Role::FromServer, 1024, &[&[0x81, 127, 0, 0, 0, 1, 0, 0, 0, 1]]), Err(ProtocolFault::TooLarge));
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&short64]),
+            Err(ProtocolFault::Protocol)
+        );
+        assert_eq!(
+            read(
+                Role::FromServer,
+                1024,
+                &[&[0x81, 127, 0x80, 0, 0, 0, 0, 0, 0, 1]]
+            ),
+            Err(ProtocolFault::Protocol)
+        );
+        assert_eq!(
+            read(
+                Role::FromServer,
+                1024,
+                &[&[0x81, 127, 0, 0, 0, 1, 0, 0, 0, 1]]
+            ),
+            Err(ProtocolFault::TooLarge)
+        );
         let big = vec![b'y'; 70_000];
-        assert_eq!(read(Role::FromServer, 70_000, &[&server(1, &big)]).unwrap(), vec![FrameEvent::Text(String::from_utf8(big).unwrap())]);
+        assert_eq!(
+            read(Role::FromServer, 70_000, &[&server(1, &big)]).unwrap(),
+            vec![FrameEvent::Text(String::from_utf8(big).unwrap())]
+        );
     }
 
     #[test]
     fn limits_and_utf8() {
-        assert_eq!(read(Role::FromServer, 1024, &[&[0x81, 126, 0x04, 0x01]]), Err(ProtocolFault::TooLarge));
-        assert_eq!(read(Role::FromServer, 1024, &[&frame(1, &[b'x'; 600], false, false), &server(0, &[b'y'; 600])]), Err(ProtocolFault::TooLarge));
-        let five: Vec<Vec<u8>> = (0..5).map(|i| frame(if i == 0 { 1 } else { 0 }, b"a", i == 4, false)).collect();
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&[0x81, 126, 0x04, 0x01]]),
+            Err(ProtocolFault::TooLarge)
+        );
+        assert_eq!(
+            read(
+                Role::FromServer,
+                1024,
+                &[
+                    &frame(1, &[b'x'; 600], false, false),
+                    &server(0, &[b'y'; 600])
+                ]
+            ),
+            Err(ProtocolFault::TooLarge)
+        );
+        let five: Vec<Vec<u8>> = (0..5)
+            .map(|i| frame(if i == 0 { 1 } else { 0 }, b"a", i == 4, false))
+            .collect();
         let refs: Vec<&[u8]> = five.iter().map(|v| v.as_slice()).collect();
-        assert_eq!(read(Role::FromServer, 1024, &refs), Err(ProtocolFault::TooLarge));
-        assert_eq!(read(Role::FromServer, 1024, &[&server(1, &[0xc3, 0x28])]), Err(ProtocolFault::Utf8));
+        assert_eq!(
+            read(Role::FromServer, 1024, &refs),
+            Err(ProtocolFault::TooLarge)
+        );
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&server(1, &[0xc3, 0x28])]),
+            Err(ProtocolFault::Utf8)
+        );
         let e = "\u{e9}".as_bytes();
-        assert_eq!(read(Role::FromServer, 1024, &[&frame(1, &e[..1], false, false), &server(0, &e[1..])]).unwrap(), vec![FrameEvent::Text("\u{e9}".into())]);
-        assert_eq!(read(Role::FromServer, 1024, &[&server(1, "\u{feff}bom".as_bytes())]).unwrap(), vec![FrameEvent::Text("\u{feff}bom".into())]);
+        assert_eq!(
+            read(
+                Role::FromServer,
+                1024,
+                &[&frame(1, &e[..1], false, false), &server(0, &e[1..])]
+            )
+            .unwrap(),
+            vec![FrameEvent::Text("\u{e9}".into())]
+        );
+        assert_eq!(
+            read(
+                Role::FromServer,
+                1024,
+                &[&server(1, "\u{feff}bom".as_bytes())]
+            )
+            .unwrap(),
+            vec![FrameEvent::Text("\u{feff}bom".into())]
+        );
     }
 
     #[test]
     fn close_frames() {
-        assert_eq!(read(Role::FromServer, 1024, &[&server(8, &close(4401, "link revoked"))]).unwrap(), vec![FrameEvent::Close(Some(4401), "link revoked".into())]);
-        assert_eq!(read(Role::FromServer, 1024, &[&server(8, &[])]).unwrap(), vec![FrameEvent::Close(None, String::new())]);
-        assert_eq!(read(Role::FromServer, 1024, &[&server(8, &[3])]), Err(ProtocolFault::Protocol));
+        assert_eq!(
+            read(
+                Role::FromServer,
+                1024,
+                &[&server(8, &close(4401, "link revoked"))]
+            )
+            .unwrap(),
+            vec![FrameEvent::Close(Some(4401), "link revoked".into())]
+        );
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&server(8, &[])]).unwrap(),
+            vec![FrameEvent::Close(None, String::new())]
+        );
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&server(8, &[3])]),
+            Err(ProtocolFault::Protocol)
+        );
         for code in [999u16, 1004, 1005, 1006, 1015, 2999, 5000] {
-            assert_eq!(read(Role::FromServer, 1024, &[&server(8, &close(code, ""))]), Err(ProtocolFault::Protocol));
+            assert_eq!(
+                read(Role::FromServer, 1024, &[&server(8, &close(code, ""))]),
+                Err(ProtocolFault::Protocol)
+            );
         }
         for code in [1012u16, 1013, 1014] {
-            assert_eq!(read(Role::FromServer, 1024, &[&server(8, &close(code, ""))]).unwrap(), vec![FrameEvent::Close(Some(code), String::new())]);
+            assert_eq!(
+                read(Role::FromServer, 1024, &[&server(8, &close(code, ""))]).unwrap(),
+                vec![FrameEvent::Close(Some(code), String::new())]
+            );
         }
         let mut bad = close(1000, "");
         bad.push(0xff);
-        assert_eq!(read(Role::FromServer, 1024, &[&server(8, &bad)]), Err(ProtocolFault::Utf8));
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&server(8, &bad)]),
+            Err(ProtocolFault::Utf8)
+        );
     }
 
     #[test]
@@ -504,7 +669,10 @@ mod tests {
         let mut events = Vec::new();
         let mut input = server(1, b"done");
         input.extend_from_slice(&[0xc1, 1, b'x']);
-        assert_eq!(reader.push(&input, &mut events), Err(ProtocolFault::Protocol));
+        assert_eq!(
+            reader.push(&input, &mut events),
+            Err(ProtocolFault::Protocol)
+        );
         assert_eq!(events, vec![FrameEvent::Text("done".into())]);
         assert!(reader.closed());
         let mut after = Vec::new();
@@ -516,20 +684,27 @@ mod tests {
     fn held_bytes_stay_within_the_limit() {
         let mut reader = FrameReader::new(Role::FromServer, 1024, 8);
         let mut events = Vec::new();
-        reader.push(&frame(1, &[b'a'; 600], false, false), &mut events).unwrap();
+        reader
+            .push(&frame(1, &[b'a'; 600], false, false), &mut events)
+            .unwrap();
         reader.push(&server(0, &[b'b'; 400]), &mut events).unwrap();
         assert_eq!(reader.held_bytes(), 0);
         let big = server(1, &[b'c'; 1020]);
         reader.push(&big[..big.len() - 10], &mut events).unwrap();
         assert!(reader.held_bytes() <= 1024 + 14);
         reader.push(&big[big.len() - 10..], &mut events).unwrap();
-        reader.push(&frame(1, &[b'd'; 500], false, false), &mut events).unwrap();
+        reader
+            .push(&frame(1, &[b'd'; 500], false, false), &mut events)
+            .unwrap();
         assert_eq!(reader.held_bytes(), 1024);
     }
 
     #[test]
     fn binary_by_size() {
-        assert_eq!(read(Role::FromServer, 1024, &[&server(2, &[1, 2, 3])]).unwrap(), vec![FrameEvent::Binary(3)]);
+        assert_eq!(
+            read(Role::FromServer, 1024, &[&server(2, &[1, 2, 3])]).unwrap(),
+            vec![FrameEvent::Binary(3)]
+        );
     }
 
     #[test]
@@ -537,7 +712,10 @@ mod tests {
         let mut payload = b"ab".to_vec();
         let header = frame_header(1, payload.len(), Some([0, 0, 0, 0]));
         mask_in_place(&mut payload, [0, 0, 0, 0]);
-        assert_eq!([header, payload].concat(), vec![0x81, 0x82, 0, 0, 0, 0, b'a', b'b']);
+        assert_eq!(
+            [header, payload].concat(),
+            vec![0x81, 0x82, 0, 0, 0, 0, b'a', b'b']
+        );
         for size in [0usize, 125, 126, 65_535, 65_536] {
             let text = vec![b'z'; size];
             let mut body = text.clone();
@@ -545,7 +723,10 @@ mod tests {
             mask_in_place(&mut body, MASK);
             wire.extend_from_slice(&body);
             let events = read(Role::FromClient, 70_000, &[&wire]).unwrap();
-            assert_eq!(events, vec![FrameEvent::Text(String::from_utf8(text).unwrap())]);
+            assert_eq!(
+                events,
+                vec![FrameEvent::Text(String::from_utf8(text).unwrap())]
+            );
         }
         let unmasked = control_frame(10, b"hi", None);
         assert_eq!(unmasked, vec![0x8a, 2, b'h', b'i']);
@@ -554,7 +735,15 @@ mod tests {
         let long = close_payload(Some(1000), &"\u{e9}".repeat(100));
         assert!(long.len() <= 125);
         assert!(std::str::from_utf8(&long[2..]).is_ok());
-        assert!([1000u16, 1003, 1007, 1011, 1012, 1013, 1014, 3000, 4999].iter().all(|c| is_wire_close_code(*c)));
-        assert!(![999u16, 1004, 1005, 1006, 1015, 2999, 5000].iter().any(|c| is_wire_close_code(*c)));
+        assert!(
+            [1000u16, 1003, 1007, 1011, 1012, 1013, 1014, 3000, 4999]
+                .iter()
+                .all(|c| is_wire_close_code(*c))
+        );
+        assert!(
+            ![999u16, 1004, 1005, 1006, 1015, 2999, 5000]
+                .iter()
+                .any(|c| is_wire_close_code(*c))
+        );
     }
 }

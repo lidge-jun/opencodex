@@ -1708,5 +1708,6 @@
   "link-websocket-pump.test.ts": "server",
   "link-websocket-rss.test.ts": "e2e-style",
   "link-websocket-holds.test.ts": "server",
-  "link-ws-activity-holds.test.ts": "clients"
+  "link-ws-activity-holds.test.ts": "clients",
+  "link-ocx-child-ws-gate.test.ts": "clients"
 }

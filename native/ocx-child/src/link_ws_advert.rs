@@ -50,8 +50,17 @@ pub fn next_preflight() -> u64 {
 
 /// HMAC-SHA256 under the 32 bytes decoded from the hex fingerprint, over
 /// "opencodex-link-ws-v1" NUL keyId NUL linkId NUL nonce NUL "on" (src/link/relay-auth.ts).
-pub fn ws_state_proof(fingerprint_hex: &str, key_id: &str, link_id: &str, nonce: &str) -> Option<String> {
-    if !is_valid_hex64(fingerprint_hex) || !is_valid_key_id(key_id) || !is_valid_link_id(link_id) || !is_valid_hex64(nonce) {
+pub fn ws_state_proof(
+    fingerprint_hex: &str,
+    key_id: &str,
+    link_id: &str,
+    nonce: &str,
+) -> Option<String> {
+    if !is_valid_hex64(fingerprint_hex)
+        || !is_valid_key_id(key_id)
+        || !is_valid_link_id(link_id)
+        || !is_valid_hex64(nonce)
+    {
         return None;
     }
     let key = hex_decode_lower(fingerprint_hex)?;
@@ -76,12 +85,21 @@ fn only<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 }
 
 /// Whether one verified relay-auth answer names the link WebSocket as on.
-pub fn answer_is_on(headers: &[(String, String)], fingerprint_hex: &str, key_id: &str, link_id: &str, nonce: &str) -> bool {
+pub fn answer_is_on(
+    headers: &[(String, String)],
+    fingerprint_hex: &str,
+    key_id: &str,
+    link_id: &str,
+    nonce: &str,
+) -> bool {
     if only(headers, LINK_RELAY_WS_STATE_HEADER) != Some("on") {
         return false;
     }
     let expected = ws_state_proof(fingerprint_hex, key_id, link_id, nonce);
-    relay_proof_matches(only(headers, LINK_RELAY_WS_STATE_PROOF_HEADER), expected.as_deref())
+    relay_proof_matches(
+        only(headers, LINK_RELAY_WS_STATE_PROOF_HEADER),
+        expected.as_deref(),
+    )
 }
 
 #[derive(Default)]
@@ -114,17 +132,16 @@ pub fn apply(link_id: &str, preflight: u64, on: bool) -> bool {
         book.watermark_order.retain(|id| id != link_id);
     }
     book.links.push_back((link_id.to_owned(), preflight, on));
-    if book.links.len() > MAX_LINKS {
-        if let Some((evicted, mark, _)) = book.links.pop_front() {
-            book.watermarks.insert(evicted.clone(), mark);
-            book.watermark_order.push_back(evicted);
-            if book.watermark_order.len() > MAX_WATERMARKS {
-                if let Some(dropped) = book.watermark_order.pop_front() {
-                    if let Some(m) = book.watermarks.remove(&dropped) {
-                        book.floor = book.floor.max(m);
-                    }
-                }
-            }
+    if book.links.len() > MAX_LINKS
+        && let Some((evicted, mark, _)) = book.links.pop_front()
+    {
+        book.watermarks.insert(evicted.clone(), mark);
+        book.watermark_order.push_back(evicted);
+        if book.watermark_order.len() > MAX_WATERMARKS
+            && let Some(dropped) = book.watermark_order.pop_front()
+            && let Some(m) = book.watermarks.remove(&dropped)
+        {
+            book.floor = book.floor.max(m);
         }
     }
     true
@@ -133,7 +150,9 @@ pub fn apply(link_id: &str, preflight: u64, on: bool) -> bool {
 /// advertisedSeen: "on" in the last answer applied for this link.
 pub fn advertised(link_id: &str) -> bool {
     let guard = BOOK.lock().unwrap_or_else(|e| e.into_inner());
-    guard.as_ref().is_some_and(|b| b.links.iter().any(|(id, _, on)| id == link_id && *on))
+    guard
+        .as_ref()
+        .is_some_and(|b| b.links.iter().any(|(id, _, on)| id == link_id && *on))
 }
 
 #[cfg(test)]
@@ -153,27 +172,95 @@ mod tests {
     const LINK: &str = "lnk_0123456789abcdef";
 
     fn hdrs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
     fn proof_matches_the_typescript_home() {
         // linkWebsocketStateProof("a" x 64, "key-1", "lnk_0123456789abcdef", "b" x 64, "on") in src/link/relay-auth.ts.
-        assert_eq!(ws_state_proof(FP, "key-1", LINK, NONCE).as_deref(), Some("1a770bf50e23218071ca4f04df9b05b550f9f31b5ea65e75aef9eee805ed7218"));
+        assert_eq!(
+            ws_state_proof(FP, "key-1", LINK, NONCE).as_deref(),
+            Some("1a770bf50e23218071ca4f04df9b05b550f9f31b5ea65e75aef9eee805ed7218")
+        );
     }
 
     #[test]
     fn exactly_one_verified_on() {
         let proof = ws_state_proof(FP, "key-1", LINK, NONCE).unwrap();
-        assert!(answer_is_on(&hdrs(&[(LINK_RELAY_WS_STATE_HEADER, "on"), (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)]), FP, "key-1", LINK, NONCE));
+        assert!(answer_is_on(
+            &hdrs(&[
+                (LINK_RELAY_WS_STATE_HEADER, "on"),
+                (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)
+            ]),
+            FP,
+            "key-1",
+            LINK,
+            NONCE
+        ));
         assert!(!answer_is_on(&hdrs(&[]), FP, "key-1", LINK, NONCE));
-        assert!(!answer_is_on(&hdrs(&[(LINK_RELAY_WS_STATE_HEADER, "on")]), FP, "key-1", LINK, NONCE));
-        assert!(!answer_is_on(&hdrs(&[(LINK_RELAY_WS_STATE_HEADER, "off"), (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)]), FP, "key-1", LINK, NONCE));
-        assert!(!answer_is_on(&hdrs(&[(LINK_RELAY_WS_STATE_HEADER, "on"), (LINK_RELAY_WS_STATE_HEADER, "on"), (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)]), FP, "key-1", LINK, NONCE));
-        assert!(!answer_is_on(&hdrs(&[(LINK_RELAY_WS_STATE_HEADER, "on"), (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof), (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)]), FP, "key-1", LINK, NONCE));
-        assert!(!answer_is_on(&hdrs(&[(LINK_RELAY_WS_STATE_HEADER, "on"), (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)]), FP, "key-2", LINK, NONCE));
+        assert!(!answer_is_on(
+            &hdrs(&[(LINK_RELAY_WS_STATE_HEADER, "on")]),
+            FP,
+            "key-1",
+            LINK,
+            NONCE
+        ));
+        assert!(!answer_is_on(
+            &hdrs(&[
+                (LINK_RELAY_WS_STATE_HEADER, "off"),
+                (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)
+            ]),
+            FP,
+            "key-1",
+            LINK,
+            NONCE
+        ));
+        assert!(!answer_is_on(
+            &hdrs(&[
+                (LINK_RELAY_WS_STATE_HEADER, "on"),
+                (LINK_RELAY_WS_STATE_HEADER, "on"),
+                (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)
+            ]),
+            FP,
+            "key-1",
+            LINK,
+            NONCE
+        ));
+        assert!(!answer_is_on(
+            &hdrs(&[
+                (LINK_RELAY_WS_STATE_HEADER, "on"),
+                (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof),
+                (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)
+            ]),
+            FP,
+            "key-1",
+            LINK,
+            NONCE
+        ));
+        assert!(!answer_is_on(
+            &hdrs(&[
+                (LINK_RELAY_WS_STATE_HEADER, "on"),
+                (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)
+            ]),
+            FP,
+            "key-2",
+            LINK,
+            NONCE
+        ));
         let other_nonce = "c".repeat(64);
-        assert!(!answer_is_on(&hdrs(&[(LINK_RELAY_WS_STATE_HEADER, "on"), (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)]), FP, "key-1", LINK, &other_nonce));
+        assert!(!answer_is_on(
+            &hdrs(&[
+                (LINK_RELAY_WS_STATE_HEADER, "on"),
+                (LINK_RELAY_WS_STATE_PROOF_HEADER, &proof)
+            ]),
+            FP,
+            "key-1",
+            LINK,
+            &other_nonce
+        ));
     }
 
     #[test]

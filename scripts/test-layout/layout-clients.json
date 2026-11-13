@@ -229,5 +229,6 @@
   "link-explicit-route-paths.test.ts": "clients",
   "link-route-edit-exclusive.test.ts": "server",
   "link-enrollment-explicit-route.test.ts": "server",
-  "cli-link-explicit-route.test.ts": "cli"
+  "cli-link-explicit-route.test.ts": "cli",
+  "link-ocx-child-ws-gate.test.ts": "clients"
 }

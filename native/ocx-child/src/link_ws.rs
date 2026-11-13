@@ -27,15 +27,18 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use crate::http_wire::{
-    CALLER_CREDENTIAL_HEADERS, HOP_BY_HOP_HEADERS, HttpRequestHead, HttpResponseHead, read_response_head,
-    write_json_response,
+    CALLER_CREDENTIAL_HEADERS, HOP_BY_HOP_HEADERS, HttpRequestHead, HttpResponseHead,
+    read_response_head, write_json_response,
 };
 use crate::link_ws_frame::{
     FrameEvent, FrameReader, Role, close_payload, control_frame, frame_header, is_wire_close_code,
     mask_in_place,
 };
 use crate::platform::fill_random_bytes;
-use crate::relay::{CancelSlot, DeadlineStream, RelayCredentials, RequestLimits, open_link_ws_upstream, token_request_head};
+use crate::relay::{
+    CancelSlot, DeadlineStream, RelayCredentials, RequestLimits, open_link_ws_upstream,
+    token_request_head,
+};
 use crate::relay_auth::LINK_RELAY_SESSION_HEADER;
 use crate::routes::RelayAuthKind;
 
@@ -78,11 +81,19 @@ pub const LIMITS: Limits = Limits {
 fn limits() -> Limits {
     #[cfg(feature = "link-ws-test-gate")]
     {
-        if let Ok(ms) = std::env::var("OCX_CHILD_TEST_LINK_WS_SHORT_MS").map(|v| v.parse::<u64>().unwrap_or(0))
+        if let Ok(ms) =
+            std::env::var("OCX_CHILD_TEST_LINK_WS_SHORT_MS").map(|v| v.parse::<u64>().unwrap_or(0))
             && ms > 0
         {
             let d = Duration::from_millis(ms);
-            return Limits { setup: d * 4, close_bound: d, stall: d * 2, data_operation: d * 3, control_operation: d * 2, ..LIMITS };
+            return Limits {
+                setup: d * 4,
+                close_bound: d,
+                stall: d * 2,
+                data_operation: d * 3,
+                control_operation: d * 2,
+                ..LIMITS
+            };
         }
     }
     LIMITS
@@ -114,7 +125,12 @@ fn sha1(data: &[u8]) -> [u8; 20] {
     for block in message.chunks(64) {
         let mut w = [0u32; 80];
         for (i, word) in w.iter_mut().take(16).enumerate() {
-            *word = u32::from_be_bytes([block[i * 4], block[i * 4 + 1], block[i * 4 + 2], block[i * 4 + 3]]);
+            *word = u32::from_be_bytes([
+                block[i * 4],
+                block[i * 4 + 1],
+                block[i * 4 + 2],
+                block[i * 4 + 3],
+            ]);
         }
         for i in 16..80 {
             w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
@@ -127,7 +143,12 @@ fn sha1(data: &[u8]) -> [u8; 20] {
                 40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
                 _ => (b ^ c ^ d, 0xCA62C1D6),
             };
-            let t = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(*word);
+            let t = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*word);
             e = d;
             d = c;
             c = b.rotate_left(30);
@@ -155,16 +176,26 @@ pub fn websocket_accept(key: &str) -> String {
 // Headers.
 
 fn header_values<'a>(headers: &'a [(String, String)], name: &str) -> Vec<&'a str> {
-    headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str()).collect()
+    headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+        .collect()
 }
 
 fn single<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     let values = header_values(headers, name);
-    if values.len() == 1 { Some(values[0]) } else { None }
+    if values.len() == 1 {
+        Some(values[0])
+    } else {
+        None
+    }
 }
 
 fn names_token(value: &str, token: &str) -> bool {
-    value.split(',').any(|t| t.trim().eq_ignore_ascii_case(token))
+    value
+        .split(',')
+        .any(|t| t.trim().eq_ignore_ascii_case(token))
 }
 
 /// Codex's handshake: GET /v1/responses without a query, Upgrade websocket, Connection upgrade,
@@ -177,13 +208,18 @@ pub fn codex_handshake_key(req: &HttpRequestHead) -> Option<String> {
     if !single(h, "upgrade").is_some_and(|v| v.trim().eq_ignore_ascii_case("websocket")) {
         return None;
     }
-    if !header_values(h, "connection").iter().any(|v| names_token(v, "upgrade")) {
+    if !header_values(h, "connection")
+        .iter()
+        .any(|v| names_token(v, "upgrade"))
+    {
         return None;
     }
     if single(h, "sec-websocket-version") != Some("13") {
         return None;
     }
-    if !header_values(h, "content-length").is_empty() || !header_values(h, "transfer-encoding").is_empty() {
+    if !header_values(h, "content-length").is_empty()
+        || !header_values(h, "transfer-encoding").is_empty()
+    {
         return None;
     }
     let key = single(h, "sec-websocket-key")?.trim();
@@ -219,7 +255,10 @@ pub fn forward_upgrade_headers(headers: &[(String, String)]) -> Option<Vec<(Stri
             || INTERNAL_HEADERS.contains(&lower.as_str())
             || nominated.contains(&lower)
             || lower.starts_with("sec-websocket-")
-            || matches!(lower.as_str(), "origin" | "host" | "content-length" | "accept-encoding" | "proxy-connection")
+            || matches!(
+                lower.as_str(),
+                "origin" | "host" | "content-length" | "accept-encoding" | "proxy-connection"
+            )
         {
             continue;
         }
@@ -231,8 +270,11 @@ pub fn forward_upgrade_headers(headers: &[(String, String)]) -> Option<Vec<(Stri
 /// A 101 that completes the Home-leg upgrade and nothing more.
 pub fn valid_home_upgrade(resp: &HttpResponseHead, key: &str) -> bool {
     resp.status == 101
-        && single(&resp.headers, "upgrade").is_some_and(|v| v.trim().eq_ignore_ascii_case("websocket"))
-        && header_values(&resp.headers, "connection").iter().any(|v| names_token(v, "upgrade"))
+        && single(&resp.headers, "upgrade")
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("websocket"))
+        && header_values(&resp.headers, "connection")
+            .iter()
+            .any(|v| names_token(v, "upgrade"))
         && single(&resp.headers, "sec-websocket-accept") == Some(websocket_accept(key).as_str())
         && header_values(&resp.headers, "sec-websocket-extensions").is_empty()
         && header_values(&resp.headers, "sec-websocket-protocol").is_empty()
@@ -255,7 +297,15 @@ fn registry() -> &'static (Mutex<Registry>, Condvar) {
     static REGISTRY: OnceLock<(Mutex<Registry>, Condvar)> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         (
-            Mutex::new(Registry { stopping: false, open: 0, setting_up: 0, reserved: 0, next_id: 0, sockets: HashMap::new(), setups: HashMap::new() }),
+            Mutex::new(Registry {
+                stopping: false,
+                open: 0,
+                setting_up: 0,
+                reserved: 0,
+                next_id: 0,
+                sockets: HashMap::new(),
+                setups: HashMap::new(),
+            }),
             Condvar::new(),
         )
     })
@@ -318,7 +368,14 @@ fn admit(l: &Limits) -> Option<(SetupSlot, Arc<CancelSlot>)> {
     let id = r.next_id;
     let cancel = Arc::new(CancelSlot::default());
     r.setups.insert(id, Arc::clone(&cancel));
-    Some((SetupSlot { id, reservation: l.socket_reservation, converted: false }, cancel))
+    Some((
+        SetupSlot {
+            id,
+            reservation: l.socket_reservation,
+            converted: false,
+        },
+        cancel,
+    ))
 }
 
 struct Reaper {
@@ -337,7 +394,15 @@ static REAPER: OnceLock<Reaper> = OnceLock::new();
 static REAPER_THREAD: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
 
 fn reaper() -> &'static Reaper {
-    REAPER.get_or_init(|| Reaper { inner: Mutex::new(ReaperInner { entries: Vec::new(), next: 0, exit: false, started: false }), cv: Condvar::new() })
+    REAPER.get_or_init(|| Reaper {
+        inner: Mutex::new(ReaperInner {
+            entries: Vec::new(),
+            next: 0,
+            exit: false,
+            started: false,
+        }),
+        cv: Condvar::new(),
+    })
 }
 
 /// Start the reaper thread if it is not running; false when it cannot be created.
@@ -348,7 +413,10 @@ fn ensure_reaper() -> bool {
         return true;
     }
     inner.exit = false;
-    let spawned = thread::Builder::new().name("ocx-link-ws-reaper".into()).stack_size(SPAWNED_STACK).spawn(reaper_loop);
+    let spawned = thread::Builder::new()
+        .name("ocx-link-ws-reaper".into())
+        .stack_size(SPAWNED_STACK)
+        .spawn(reaper_loop);
     match spawned {
         Ok(handle) => {
             inner.started = true;
@@ -374,7 +442,9 @@ fn reaper_loop() {
                 }
                 match inner.entries.iter().map(|(_, at, _)| *at).min() {
                     Some(next) => {
-                        let (g, _) = r.cv.wait_timeout(inner, next - now).unwrap_or_else(|e| e.into_inner());
+                        let (g, _) =
+                            r.cv.wait_timeout(inner, next - now)
+                                .unwrap_or_else(|e| e.into_inner());
                         inner = g;
                     }
                     None => inner = r.cv.wait(inner).unwrap_or_else(|e| e.into_inner()),
@@ -513,15 +583,28 @@ fn random_mask() -> [u8; 4] {
     let mut m = [0u8; 4];
     if fill_random_bytes(&mut m).is_err() {
         // A mask only has to be unpredictable to intermediaries; fall back to the clock.
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) ^ 0x9e37_79b9;
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos())
+            ^ 0x9e37_79b9;
         m = n.to_le_bytes();
     }
     m
 }
 
 /// One bounded frame write (design draft 9 U1/V1): the deadline is registered before the lock.
-fn write_frame(shared: &Arc<SocketShared>, leg: Leg, opcode: u8, mut payload: Vec<u8>, kind: Kind) -> std::io::Result<()> {
-    let bound = if kind == Kind::Data { shared.limits.data_operation } else { shared.limits.control_operation };
+fn write_frame(
+    shared: &Arc<SocketShared>,
+    leg: Leg,
+    opcode: u8,
+    mut payload: Vec<u8>,
+    kind: Kind,
+) -> std::io::Result<()> {
+    let bound = if kind == Kind::Data {
+        shared.limits.data_operation
+    } else {
+        shared.limits.control_operation
+    };
     let token = register_deadline(Instant::now() + bound, shared);
     let result = (|| {
         let (lock_m, mut stream) = match leg {
@@ -530,9 +613,16 @@ fn write_frame(shared: &Arc<SocketShared>, leg: Leg, opcode: u8, mut payload: Ve
         };
         let _guard = lock(lock_m);
         if shared.closing.load(Ordering::SeqCst) && kind != Kind::Close {
-            return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "link websocket closing"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "link websocket closing",
+            ));
         }
-        let mask = if leg == Leg::Home { Some(random_mask()) } else { None };
+        let mask = if leg == Leg::Home {
+            Some(random_mask())
+        } else {
+            None
+        };
         if opcode >= 8 {
             stream.write_all(&control_frame(opcode, &payload, mask))?;
         } else {
@@ -569,7 +659,10 @@ fn terminate(shared: &Arc<SocketShared>, codex: CloseAction, home: CloseAction) 
         } else {
             st.terminal_started = true;
             shared.closing.store(true, Ordering::SeqCst);
-            st.close_token = Some(register_deadline(Instant::now() + shared.limits.close_bound, shared));
+            st.close_token = Some(register_deadline(
+                Instant::now() + shared.limits.close_bound,
+                shared,
+            ));
             st.close_io += 1;
             true
         }
@@ -584,7 +677,11 @@ fn terminate(shared: &Arc<SocketShared>, codex: CloseAction, home: CloseAction) 
             }
             None if matches!(action, CloseAction::Leave) => {}
             None => {
-                let stream = if leg == Leg::Codex { &shared.codex } else { &shared.home };
+                let stream = if leg == Leg::Codex {
+                    &shared.codex
+                } else {
+                    &shared.home
+                };
                 let _ = stream.shutdown(Shutdown::Both);
             }
         }
@@ -595,10 +692,11 @@ fn terminate(shared: &Arc<SocketShared>, codex: CloseAction, home: CloseAction) 
 }
 
 fn retire_if_done(st: &mut SockState) {
-    if st.cleanup_done && st.close_io == 0 {
-        if let Some(token) = st.close_token.take() {
-            clear_deadline(token);
-        }
+    if st.cleanup_done
+        && st.close_io == 0
+        && let Some(token) = st.close_token.take()
+    {
+        clear_deadline(token);
     }
 }
 
@@ -624,7 +722,11 @@ fn pump<R: Read>(shared: &Arc<SocketShared>, from: Leg, mut source: R) {
                     // Codex dropped: the Home connection ends without a close frame (the Home's 1006).
                     Leg::Codex => terminate(shared, CloseAction::Cut, CloseAction::Cut),
                     // The Home dropped (a tunnel drop, a killed Home): 1011 to Codex.
-                    Leg::Home => terminate(shared, CloseAction::Frame(1011, "home connection ended".into()), CloseAction::Cut),
+                    Leg::Home => terminate(
+                        shared,
+                        CloseAction::Frame(1011, "home connection ended".into()),
+                        CloseAction::Cut,
+                    ),
                 }
                 return;
             }
@@ -636,13 +738,21 @@ fn pump<R: Read>(shared: &Arc<SocketShared>, from: Leg, mut source: R) {
             match event {
                 FrameEvent::Text(text) => {
                     if write_frame(shared, to, 1, text.into_bytes(), Kind::Data).is_err() {
-                        terminate(shared, CloseAction::Frame(1011, String::new()), CloseAction::Frame(1001, String::new()));
+                        terminate(
+                            shared,
+                            CloseAction::Frame(1011, String::new()),
+                            CloseAction::Frame(1001, String::new()),
+                        );
                         return;
                     }
                 }
                 FrameEvent::Binary(_) => {
                     let reason = "binary messages are not relayed".to_owned();
-                    terminate(shared, CloseAction::Frame(1003, reason), CloseAction::Frame(1003, String::new()));
+                    terminate(
+                        shared,
+                        CloseAction::Frame(1003, reason),
+                        CloseAction::Frame(1003, String::new()),
+                    );
                     return;
                 }
                 FrameEvent::Ping(payload) => {
@@ -682,8 +792,16 @@ fn pump<R: Read>(shared: &Arc<SocketShared>, from: Leg, mut source: R) {
         if let Some(fault) = fault {
             let code = fault.close_code();
             match from {
-                Leg::Codex => terminate(shared, CloseAction::Frame(code, String::new()), CloseAction::Frame(1011, String::new())),
-                Leg::Home => terminate(shared, CloseAction::Frame(1011, "home message refused".into()), CloseAction::Frame(code, String::new())),
+                Leg::Codex => terminate(
+                    shared,
+                    CloseAction::Frame(code, String::new()),
+                    CloseAction::Frame(1011, String::new()),
+                ),
+                Leg::Home => terminate(
+                    shared,
+                    CloseAction::Frame(1011, "home message refused".into()),
+                    CloseAction::Frame(code, String::new()),
+                ),
             }
             return;
         }
@@ -715,7 +833,14 @@ pub(crate) fn serve(
     tunnel_port: u16,
     creds: RelayCredentials,
 ) -> std::io::Result<()> {
-    match open(codex_reader, codex_writer, req, tunnel_port, creds, limits()) {
+    match open(
+        codex_reader,
+        codex_writer,
+        req,
+        tunnel_port,
+        creds,
+        limits(),
+    ) {
         Ok(()) => Ok(()),
         Err(_) => write_upgrade_required(codex_writer),
     }
@@ -743,8 +868,12 @@ fn open(
         return Err(Fallback::Unavailable);
     }
     let deadline = Instant::now() + l.setup;
-    let limits_for_setup = RequestLimits { deadline: Some(deadline), cancel: Some(&cancel) };
-    let mut upstream = open_link_ws_upstream(tunnel_port, &creds, limits_for_setup).map_err(|_| Fallback::Preflight)?;
+    let limits_for_setup = RequestLimits {
+        deadline: Some(deadline),
+        cancel: Some(&cancel),
+    };
+    let mut upstream = open_link_ws_upstream(tunnel_port, &creds, limits_for_setup)
+        .map_err(|_| Fallback::Preflight)?;
     if !upstream.link_ws_on {
         return Err(Fallback::NotAdvertised);
     }
@@ -760,14 +889,23 @@ fn open(
         after.push_str(&format!("{k}: {v}\r\n"));
     }
     after.push_str("\r\n");
-    let head = token_request_head(&before, RelayAuthKind::Bearer, creds.raw_token.as_slice(), &after);
+    let head = token_request_head(
+        &before,
+        RelayAuthKind::Bearer,
+        creds.raw_token.as_slice(),
+        &after,
+    );
     // Each write gets the time left before the setup deadline.
     let left = deadline.saturating_duration_since(Instant::now());
     if left.is_zero() {
         return Err(Fallback::Preflight);
     }
     let _ = upstream.writer.set_write_timeout(Some(left));
-    upstream.writer.write_all(head.as_slice()).and_then(|()| upstream.writer.flush()).map_err(|_| Fallback::Preflight)?;
+    upstream
+        .writer
+        .write_all(head.as_slice())
+        .and_then(|()| upstream.writer.flush())
+        .map_err(|_| Fallback::Preflight)?;
     drop(head);
     let resp = read_response_head(&mut upstream.reader).map_err(|_| Fallback::HomeRefused)?;
     if !valid_home_upgrade(&resp, &home_key) {
@@ -797,10 +935,20 @@ fn open(
             closing: AtomicBool::new(false),
             codex_write: Mutex::new(()),
             home_write: Mutex::new(()),
-            state: Mutex::new(SockState { lifecycle: Lifecycle::Registered, terminal_started: false, close_io: 0, cleanup_done: false, close_token: None, spawned_done: false }),
+            state: Mutex::new(SockState {
+                lifecycle: Lifecycle::Registered,
+                terminal_started: false,
+                close_io: 0,
+                cleanup_done: false,
+                close_token: None,
+                spawned_done: false,
+            }),
             cv: Condvar::new(),
             limits: l,
-            _lease: Lease { id: slot.id, reservation: slot.reservation },
+            _lease: Lease {
+                id: slot.id,
+                reservation: slot.reservation,
+            },
         });
         r.sockets.insert(slot.id, Arc::clone(&shared));
         shared
@@ -824,22 +972,33 @@ fn open(
     let fail_spawn = tests::FAIL_SPAWN.swap(false, Ordering::SeqCst);
     #[cfg(not(test))]
     let fail_spawn = false;
-    let spawned = if fail_spawn { Err(std::io::Error::other("spawn refused by test")) } else { thread::Builder::new().name("ocx-link-ws-home".into()).stack_size(SPAWNED_STACK).spawn(move || {
-        let shared = spawned_shared;
-        let started = {
-            let mut st = lock(&shared.state);
-            while st.lifecycle == Lifecycle::Registered {
-                st = shared.cv.wait(st).unwrap_or_else(|e| e.into_inner());
-            }
-            st.lifecycle == Lifecycle::Started
-        };
-        if started {
-            pump(&shared, Leg::Home, Cursor::new(home_buffered).chain(home_reader));
-        }
-        let mut st = lock(&shared.state);
-        st.spawned_done = true;
-        shared.cv.notify_all();
-    }) };
+    let spawned = if fail_spawn {
+        Err(std::io::Error::other("spawn refused by test"))
+    } else {
+        thread::Builder::new()
+            .name("ocx-link-ws-home".into())
+            .stack_size(SPAWNED_STACK)
+            .spawn(move || {
+                let shared = spawned_shared;
+                let started = {
+                    let mut st = lock(&shared.state);
+                    while st.lifecycle == Lifecycle::Registered {
+                        st = shared.cv.wait(st).unwrap_or_else(|e| e.into_inner());
+                    }
+                    st.lifecycle == Lifecycle::Started
+                };
+                if started {
+                    pump(
+                        &shared,
+                        Leg::Home,
+                        Cursor::new(home_buffered).chain(home_reader),
+                    );
+                }
+                let mut st = lock(&shared.state);
+                st.spawned_done = true;
+                shared.cv.notify_all();
+            })
+    };
     let handle = match spawned {
         Ok(h) => h,
         Err(_) => {
@@ -854,7 +1013,11 @@ fn open(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n{MAX_MESSAGE_HEADER}: {}\r\n\r\n",
         l.local_message
     );
-    if codex_writer.write_all(reply.as_bytes()).and_then(|()| codex_writer.flush()).is_err() {
+    if codex_writer
+        .write_all(reply.as_bytes())
+        .and_then(|()| codex_writer.flush())
+        .is_err()
+    {
         terminate(&shared, CloseAction::Cut, CloseAction::Cut);
         finish(&shared, Some(handle));
         return Ok(());
@@ -876,7 +1039,11 @@ fn open(
         }
     };
     if !started {
-        terminate(&shared, CloseAction::Frame(1001, "link websocket stopping".into()), CloseAction::Frame(1001, String::new()));
+        terminate(
+            &shared,
+            CloseAction::Frame(1001, "link websocket stopping".into()),
+            CloseAction::Frame(1001, String::new()),
+        );
         finish(&shared, Some(handle));
         return Ok(());
     }
@@ -926,7 +1093,10 @@ pub fn stop_all() {
         let (m, _) = registry();
         let mut r = lock(m);
         r.stopping = true;
-        (r.sockets.values().cloned().collect::<Vec<_>>(), r.setups.values().cloned().collect::<Vec<_>>())
+        (
+            r.sockets.values().cloned().collect::<Vec<_>>(),
+            r.setups.values().cloned().collect::<Vec<_>>(),
+        )
     };
     for setup in &setups {
         setup.cancel();
@@ -942,15 +1112,30 @@ pub fn stop_all() {
         if !st.terminal_started {
             st.terminal_started = true;
             shared.closing.store(true, Ordering::SeqCst);
-            st.close_token = Some(register_deadline(Instant::now() + shared.limits.close_bound, shared));
+            st.close_token = Some(register_deadline(
+                Instant::now() + shared.limits.close_bound,
+                shared,
+            ));
             st.close_io += 1;
             claimed.push(Arc::clone(shared));
         }
     }
     drop(sockets);
     for shared in &claimed {
-        let _ = write_frame(shared, Leg::Codex, 8, close_payload(Some(1001), "link websocket stopping"), Kind::Close);
-        let _ = write_frame(shared, Leg::Home, 8, close_payload(Some(1001), ""), Kind::Close);
+        let _ = write_frame(
+            shared,
+            Leg::Codex,
+            8,
+            close_payload(Some(1001), "link websocket stopping"),
+            Kind::Close,
+        );
+        let _ = write_frame(
+            shared,
+            Leg::Home,
+            8,
+            close_payload(Some(1001), ""),
+            Kind::Close,
+        );
         let mut st = lock(&shared.state);
         st.close_io -= 1;
         retire_if_done(&mut st);
@@ -971,7 +1156,9 @@ pub fn stop_all() {
             if r.open == 0 && r.setting_up == 0 {
                 break;
             }
-            let (g, _) = cv.wait_timeout(r, Duration::from_millis(50)).unwrap_or_else(|e| e.into_inner());
+            let (g, _) = cv
+                .wait_timeout(r, Duration::from_millis(50))
+                .unwrap_or_else(|e| e.into_inner());
             r = g;
         }
         drop(r);
@@ -985,13 +1172,25 @@ mod tests {
 
     #[test]
     fn sha1_and_accept_follow_rfc_6455() {
-        assert_eq!(websocket_accept("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+        assert_eq!(
+            websocket_accept("dGhlIHNhbXBsZSBub25jZQ=="),
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        );
         let empty = sha1(b"");
-        assert_eq!(crate::platform::hex_encode(&empty), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(
+            crate::platform::hex_encode(&empty),
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        );
         let abc = sha1(b"abc");
-        assert_eq!(crate::platform::hex_encode(&abc), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(
+            crate::platform::hex_encode(&abc),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
         let long = sha1(&vec![b'a'; 1_000_000]);
-        assert_eq!(crate::platform::hex_encode(&long), "34aa973cd4c4daa4f61eeb2bdbad27316534016f");
+        assert_eq!(
+            crate::platform::hex_encode(&long),
+            "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
+        );
     }
 
     fn req(headers: &[(&str, &str)]) -> HttpRequestHead {
@@ -1000,7 +1199,10 @@ mod tests {
             target: "/v1/responses".into(),
             path: "/v1/responses".into(),
             query: String::new(),
-            headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
         }
     }
 
@@ -1008,12 +1210,23 @@ mod tests {
 
     #[test]
     fn codex_handshake_validation() {
-        let good = req(&[("Host", "127.0.0.1"), ("Upgrade", "websocket"), ("Connection", "keep-alive, Upgrade"), ("Sec-WebSocket-Version", "13"), ("Sec-WebSocket-Key", KEY)]);
+        let good = req(&[
+            ("Host", "127.0.0.1"),
+            ("Upgrade", "websocket"),
+            ("Connection", "keep-alive, Upgrade"),
+            ("Sec-WebSocket-Version", "13"),
+            ("Sec-WebSocket-Key", KEY),
+        ]);
         assert_eq!(codex_handshake_key(&good).as_deref(), Some(KEY));
         let mut q = good.clone();
         q.query = "a=1".into();
         assert!(codex_handshake_key(&q).is_none());
-        for drop in ["Upgrade", "Connection", "Sec-WebSocket-Version", "Sec-WebSocket-Key"] {
+        for drop in [
+            "Upgrade",
+            "Connection",
+            "Sec-WebSocket-Version",
+            "Sec-WebSocket-Key",
+        ] {
             let mut r = good.clone();
             r.headers.retain(|(k, _)| k != drop);
             assert!(codex_handshake_key(&r).is_none(), "{drop}");
@@ -1026,19 +1239,36 @@ mod tests {
         assert!(codex_handshake_key(&body).is_none());
         let mut short = good.clone();
         short.headers.retain(|(k, _)| k != "Sec-WebSocket-Key");
-        short.headers.push(("Sec-WebSocket-Key".into(), "c2hvcnQ=".into()));
+        short
+            .headers
+            .push(("Sec-WebSocket-Key".into(), "c2hvcnQ=".into()));
         assert!(codex_handshake_key(&short).is_none());
     }
 
     #[test]
     fn forwarded_headers_drop_handshake_credentials_and_nominated() {
         let headers: Vec<(String, String)> = [
-            ("Host", "127.0.0.1:10100"), ("Upgrade", "websocket"), ("Connection", "Upgrade, x-private"), ("x-private", "1"),
-            ("Sec-WebSocket-Key", KEY), ("Sec-WebSocket-Version", "13"), ("Sec-WebSocket-Extensions", "permessage-deflate"),
-            ("Origin", "http://127.0.0.1"), ("Authorization", "Bearer codex"), ("x-api-key", "k"), ("Cookie", "c"),
-            ("x-opencodex-link-session", "n"), ("x-opencodex-link-turn", "t"), ("thread-id", "thread-1"), ("Keep-Alive", "5"),
-            ("Accept-Encoding", "gzip"), ("OpenAI-Beta", "responses_websockets=2026"),
-        ].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            ("Host", "127.0.0.1:10100"),
+            ("Upgrade", "websocket"),
+            ("Connection", "Upgrade, x-private"),
+            ("x-private", "1"),
+            ("Sec-WebSocket-Key", KEY),
+            ("Sec-WebSocket-Version", "13"),
+            ("Sec-WebSocket-Extensions", "permessage-deflate"),
+            ("Origin", "http://127.0.0.1"),
+            ("Authorization", "Bearer codex"),
+            ("x-api-key", "k"),
+            ("Cookie", "c"),
+            ("x-opencodex-link-session", "n"),
+            ("x-opencodex-link-turn", "t"),
+            ("thread-id", "thread-1"),
+            ("Keep-Alive", "5"),
+            ("Accept-Encoding", "gzip"),
+            ("OpenAI-Beta", "responses_websockets=2026"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         let out = forward_upgrade_headers(&headers).unwrap();
         let names: Vec<&str> = out.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(names, vec!["thread-id", "OpenAI-Beta"]);
@@ -1058,17 +1288,39 @@ mod tests {
             ];
             headers.retain(|(k, _)| k != omit);
             headers.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-            valid_home_upgrade(&HttpResponseHead { status: 101, reason: "Switching Protocols".into(), headers }, KEY)
+            valid_home_upgrade(
+                &HttpResponseHead {
+                    status: 101,
+                    reason: "Switching Protocols".into(),
+                    headers,
+                },
+                KEY,
+            )
         };
         assert!(ok(&[], ""));
         assert!(!ok(&[], "Upgrade"));
         assert!(!ok(&[], "Connection"));
         assert!(!ok(&[], "Sec-WebSocket-Accept"));
-        assert!(!ok(&[("Sec-WebSocket-Extensions", "permessage-deflate")], ""));
+        assert!(!ok(
+            &[("Sec-WebSocket-Extensions", "permessage-deflate")],
+            ""
+        ));
         assert!(!ok(&[("Sec-WebSocket-Protocol", "x")], ""));
-        let wrong = HttpResponseHead { status: 101, reason: String::new(), headers: vec![("Upgrade".into(), "websocket".into()), ("Connection".into(), "Upgrade".into()), ("Sec-WebSocket-Accept".into(), websocket_accept("other"))] };
+        let wrong = HttpResponseHead {
+            status: 101,
+            reason: String::new(),
+            headers: vec![
+                ("Upgrade".into(), "websocket".into()),
+                ("Connection".into(), "Upgrade".into()),
+                ("Sec-WebSocket-Accept".into(), websocket_accept("other")),
+            ],
+        };
         assert!(!valid_home_upgrade(&wrong, KEY));
-        let plain = HttpResponseHead { status: 200, reason: String::new(), headers: vec![] };
+        let plain = HttpResponseHead {
+            status: 200,
+            reason: String::new(),
+            headers: vec![],
+        };
         assert!(!valid_home_upgrade(&plain, KEY));
     }
 
@@ -1119,7 +1371,11 @@ mod tests {
     }
 
     fn test_limits() -> Limits {
-        Limits { setup: Duration::from_secs(3), close_bound: Duration::from_millis(300), ..LIMITS }
+        Limits {
+            setup: Duration::from_secs(3),
+            close_bound: Duration::from_millis(300),
+            ..LIMITS
+        }
     }
 
     #[derive(Clone, Copy, PartialEq)]
@@ -1156,45 +1412,91 @@ mod tests {
         let fp = token_fingerprint_hex(TOKEN);
         let mut writer = stream.try_clone().unwrap();
         let mut reader = BufReader::new(stream);
-        let Ok(pre) = read_request_head(&mut reader) else { return };
-        let param = |name: &str| pre.query.split('&').find_map(|kv| kv.strip_prefix(&format!("{name}="))).unwrap_or("").to_owned();
+        let Ok(pre) = read_request_head(&mut reader) else {
+            return;
+        };
+        let param = |name: &str| {
+            pre.query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix(&format!("{name}=")))
+                .unwrap_or("")
+                .to_owned()
+        };
         let nonce = param("nonce");
-        if compute_relay_proof(&fp, "caller", KEY_ID, LINK_ID, &nonce).as_deref() != Some(param("proof").as_str()) {
+        if compute_relay_proof(&fp, "caller", KEY_ID, LINK_ID, &nonce).as_deref()
+            != Some(param("proof").as_str())
+        {
             let _ = writer.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
             return;
         }
-        let mut answer = format!("HTTP/1.1 204 No Content\r\nx-opencodex-link-proof: {}\r\n", compute_relay_proof(&fp, "listener", KEY_ID, LINK_ID, &nonce).unwrap());
+        let mut answer = format!(
+            "HTTP/1.1 204 No Content\r\nx-opencodex-link-proof: {}\r\n",
+            compute_relay_proof(&fp, "listener", KEY_ID, LINK_ID, &nonce).unwrap()
+        );
         if mode != HomeMode::Silent {
-            answer.push_str(&format!("x-opencodex-link-ws-state: on\r\nx-opencodex-link-ws-proof: {}\r\n", ws_state_proof(&fp, KEY_ID, LINK_ID, &nonce).unwrap()));
+            answer.push_str(&format!(
+                "x-opencodex-link-ws-state: on\r\nx-opencodex-link-ws-proof: {}\r\n",
+                ws_state_proof(&fp, KEY_ID, LINK_ID, &nonce).unwrap()
+            ));
         }
         answer.push_str("\r\n");
         writer.write_all(answer.as_bytes()).unwrap();
-        let Ok(up) = read_request_head(&mut reader) else { return };
-        let key = up.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("sec-websocket-key")).map(|(_, v)| v.clone()).unwrap_or_default();
+        let Ok(up) = read_request_head(&mut reader) else {
+            return;
+        };
+        let key = up
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("sec-websocket-key"))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
         match mode {
             HomeMode::Refuse => {
-                let _ = writer.write_all(b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\n\r\n");
+                let _ =
+                    writer.write_all(b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\n\r\n");
                 return;
             }
             HomeMode::Hold => {
                 let leftover = reader.buffer().to_vec();
-                let _ = tx.send(HomeSide { stream: writer, request: up, leftover });
+                let _ = tx.send(HomeSide {
+                    stream: writer,
+                    request: up,
+                    leftover,
+                });
                 return;
             }
             _ => {}
         }
-        let accept = if mode == HomeMode::WrongAccept { websocket_accept("other") } else { websocket_accept(&key) };
+        let accept = if mode == HomeMode::WrongAccept {
+            websocket_accept("other")
+        } else {
+            websocket_accept(&key)
+        };
         writer.write_all(format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").as_bytes()).unwrap();
         let leftover = reader.buffer().to_vec();
-        let _ = tx.send(HomeSide { stream: writer, request: up, leftover });
+        let _ = tx.send(HomeSide {
+            stream: writer,
+            request: up,
+            leftover,
+        });
     }
 
     fn creds() -> RelayCredentials {
-        RelayCredentials { api_key_id: KEY_ID.into(), link_id: LINK_ID.into(), token_fingerprint: token_fingerprint_hex(TOKEN), raw_token: SecretBytes::new(TOKEN.as_bytes().to_vec()) }
+        RelayCredentials {
+            api_key_id: KEY_ID.into(),
+            link_id: LINK_ID.into(),
+            token_fingerprint: token_fingerprint_hex(TOKEN),
+            raw_token: SecretBytes::new(TOKEN.as_bytes().to_vec()),
+        }
     }
 
     /// Reads frames off a raw socket (either role) until \`count\` events arrived or the connection ended.
-    fn read_events(stream: &mut TcpStream, role: Role, leftover: &[u8], count: usize) -> Vec<FrameEvent> {
+    fn read_events(
+        stream: &mut TcpStream,
+        role: Role,
+        leftover: &[u8],
+        count: usize,
+    ) -> Vec<FrameEvent> {
         let mut reader = FrameReader::new(role, 16 * MIB, 4096);
         let mut events = Vec::new();
         let _ = reader.push(leftover, &mut events);
@@ -1238,7 +1540,8 @@ mod tests {
         let worker = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             let mut writer = stream.try_clone().unwrap();
-            let mut reader = BufReader::new(DeadlineStream::new(stream, None, Duration::from_secs(1)));
+            let mut reader =
+                BufReader::new(DeadlineStream::new(stream, None, Duration::from_secs(1)));
             let req = read_request_head(&mut reader).unwrap();
             let result = open(&mut reader, &mut writer, &req, home_port, creds(), limits);
             if result.is_err() {
@@ -1247,13 +1550,26 @@ mod tests {
             result
         });
         let mut codex = TcpStream::connect(SocketAddr::from(([127, 0, 0, 1], port))).unwrap();
-        let head = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {KEY}\r\nAuthorization: Bearer codex-own\r\nthread-id: thread-1\r\n{extra}\r\n");
+        let head = format!(
+            "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {KEY}\r\nAuthorization: Bearer codex-own\r\nthread-id: thread-1\r\n{extra}\r\n"
+        );
         codex.write_all(&[head.as_bytes(), first].concat()).unwrap();
         let mut reader = BufReader::new(codex.try_clone().unwrap());
         let resp = read_response_head(&mut reader).unwrap();
         let leftover = reader.buffer().to_vec();
-        let response = resp.headers.iter().map(|(k, v)| format!("{}: {v}", k.to_ascii_lowercase())).collect::<Vec<_>>().join("\n");
-        Session { codex, codex_leftover: leftover, status: resp.status, response, worker }
+        let response = resp
+            .headers
+            .iter()
+            .map(|(k, v)| format!("{}: {v}", k.to_ascii_lowercase()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Session {
+            codex,
+            codex_leftover: leftover,
+            status: resp.status,
+            response,
+            worker,
+        }
     }
 
     #[test]
@@ -1264,22 +1580,49 @@ mod tests {
         let first = client_frame(1, br#"{"type":"response.create"}"#);
         let mut s = session(home_port, test_limits(), "", &first);
         assert_eq!(s.status, 101);
-        assert!(s.response.contains("x-codex-websocket-max-message-bytes: 8388608"));
-        assert!(s.response.contains(&format!("sec-websocket-accept: {}", websocket_accept(KEY))));
+        assert!(
+            s.response
+                .contains("x-codex-websocket-max-message-bytes: 8388608")
+        );
+        assert!(
+            s.response
+                .contains(&format!("sec-websocket-accept: {}", websocket_accept(KEY)))
+        );
         let mut home = homes.recv().unwrap();
-        let header = |n: &str| home.request.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)).map(|(_, v)| v.clone());
-        assert_eq!(header("authorization").as_deref(), Some(format!("Bearer {TOKEN}").as_str()));
+        let header = |n: &str| {
+            home.request
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(n))
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(
+            header("authorization").as_deref(),
+            Some(format!("Bearer {TOKEN}").as_str())
+        );
         assert_eq!(header("thread-id").as_deref(), Some("thread-1"));
         assert!(header("x-opencodex-link-session").is_some());
         assert!(header("origin").is_none() && header("sec-websocket-extensions").is_none());
         let got = read_events(&mut home.stream, Role::FromClient, &home.leftover, 1);
-        assert_eq!(got, vec![FrameEvent::Text(r#"{"type":"response.create"}"#.into())]);
-        home.stream.write_all(&server_frame(1, b"from-home")).unwrap();
+        assert_eq!(
+            got,
+            vec![FrameEvent::Text(r#"{"type":"response.create"}"#.into())]
+        );
+        home.stream
+            .write_all(&server_frame(1, b"from-home"))
+            .unwrap();
         let back = read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1);
         assert_eq!(back, vec![FrameEvent::Text("from-home".into())]);
-        s.codex.write_all(&client_frame(8, &close_payload(Some(1000), ""))).unwrap();
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &[], 1), vec![FrameEvent::Close(Some(1000), String::new())]);
-        home.stream.write_all(&server_frame(8, &close_payload(Some(1000), ""))).unwrap();
+        s.codex
+            .write_all(&client_frame(8, &close_payload(Some(1000), "")))
+            .unwrap();
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &[], 1),
+            vec![FrameEvent::Close(Some(1000), String::new())]
+        );
+        home.stream
+            .write_all(&server_frame(8, &close_payload(Some(1000), "")))
+            .unwrap();
         assert!(s.worker.join().unwrap().is_ok());
         wait_all_released();
     }
@@ -1288,7 +1631,11 @@ mod tests {
     fn a_home_that_does_not_advertise_refuses_or_answers_a_broken_101_gets_426() {
         let _serial = lock(&SERIAL);
         reset_registry();
-        for (mode, why) in [(HomeMode::Silent, Fallback::NotAdvertised), (HomeMode::Refuse, Fallback::HomeRefused), (HomeMode::WrongAccept, Fallback::HomeRefused)] {
+        for (mode, why) in [
+            (HomeMode::Silent, Fallback::NotAdvertised),
+            (HomeMode::Refuse, Fallback::HomeRefused),
+            (HomeMode::WrongAccept, Fallback::HomeRefused),
+        ] {
             let (home_port, _homes) = mock_home(mode);
             let s = session(home_port, test_limits(), "", &[]);
             assert_eq!(s.status, 426);
@@ -1298,7 +1645,12 @@ mod tests {
         assert_eq!(s.status, 426);
         assert_eq!(s.worker.join().unwrap(), Err(Fallback::Preflight));
         let (home_port, _homes) = mock_home(HomeMode::Advertise);
-        let s = session(home_port, test_limits(), "Origin: http://127.0.0.1\r\n", &[]);
+        let s = session(
+            home_port,
+            test_limits(),
+            "Origin: http://127.0.0.1\r\n",
+            &[],
+        );
         assert_eq!(s.status, 426);
         assert_eq!(s.worker.join().unwrap(), Err(Fallback::Origin));
         wait_all_released();
@@ -1312,8 +1664,17 @@ mod tests {
         let mut s = session(home_port, test_limits(), "", &[]);
         let mut home = homes.recv().unwrap();
         s.codex.write_all(&client_frame(2, &[1, 2, 3])).unwrap();
-        assert_eq!(read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1), vec![FrameEvent::Close(Some(1003), "binary messages are not relayed".into())]);
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &home.leftover, 1), vec![FrameEvent::Close(Some(1003), String::new())]);
+        assert_eq!(
+            read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1),
+            vec![FrameEvent::Close(
+                Some(1003),
+                "binary messages are not relayed".into()
+            )]
+        );
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![FrameEvent::Close(Some(1003), String::new())]
+        );
         assert!(s.worker.join().unwrap().is_ok());
         wait_all_released();
     }
@@ -1326,13 +1687,19 @@ mod tests {
         let mut s = session(home_port, test_limits(), "", &[]);
         let mut home = homes.recv().unwrap();
         s.codex.write_all(&client_frame(8, &[])).unwrap();
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &home.leftover, 1), vec![FrameEvent::Close(None, String::new())]);
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![FrameEvent::Close(None, String::new())]
+        );
         assert!(s.worker.join().unwrap().is_ok());
         // Codex gone without a close frame: the Home connection ends without one.
         let s = session(home_port, test_limits(), "", &[]);
         let mut home = homes.recv().unwrap();
         s.codex.shutdown(Shutdown::Both).unwrap();
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &home.leftover, 1), vec![]);
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![]
+        );
         assert!(s.worker.join().unwrap().is_ok());
         wait_all_released();
     }
@@ -1345,15 +1712,29 @@ mod tests {
         for code in [4401u16, 1012, 1013, 1014] {
             let mut s = session(home_port, test_limits(), "", &[]);
             let mut home = homes.recv().unwrap();
-            home.stream.write_all(&server_frame(8, &close_payload(Some(code), "bye"))).unwrap();
-            assert_eq!(read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1), vec![FrameEvent::Close(Some(code), "bye".into())]);
-            assert_eq!(read_events(&mut home.stream, Role::FromClient, &[], 1), vec![FrameEvent::Close(Some(code), String::new())]);
+            home.stream
+                .write_all(&server_frame(8, &close_payload(Some(code), "bye")))
+                .unwrap();
+            assert_eq!(
+                read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1),
+                vec![FrameEvent::Close(Some(code), "bye".into())]
+            );
+            assert_eq!(
+                read_events(&mut home.stream, Role::FromClient, &[], 1),
+                vec![FrameEvent::Close(Some(code), String::new())]
+            );
             assert!(s.worker.join().unwrap().is_ok());
         }
         let mut s = session(home_port, test_limits(), "", &[]);
         let home = homes.recv().unwrap();
         home.stream.shutdown(Shutdown::Both).unwrap();
-        assert_eq!(read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1), vec![FrameEvent::Close(Some(1011), "home connection ended".into())]);
+        assert_eq!(
+            read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1),
+            vec![FrameEvent::Close(
+                Some(1011),
+                "home connection ended".into()
+            )]
+        );
         assert!(s.worker.join().unwrap().is_ok());
         wait_all_released();
     }
@@ -1363,11 +1744,27 @@ mod tests {
         let _serial = lock(&SERIAL);
         reset_registry();
         let (home_port, homes) = mock_home(HomeMode::Advertise);
-        let mut s = session(home_port, Limits { home_message: 1024, ..test_limits() }, "", &[]);
+        let mut s = session(
+            home_port,
+            Limits {
+                home_message: 1024,
+                ..test_limits()
+            },
+            "",
+            &[],
+        );
         let mut home = homes.recv().unwrap();
-        home.stream.write_all(&server_frame(1, &[b'y'; 2048])).unwrap();
-        assert_eq!(read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1), vec![FrameEvent::Close(Some(1011), "home message refused".into())]);
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &home.leftover, 1), vec![FrameEvent::Close(Some(1009), String::new())]);
+        home.stream
+            .write_all(&server_frame(1, &[b'y'; 2048]))
+            .unwrap();
+        assert_eq!(
+            read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1),
+            vec![FrameEvent::Close(Some(1011), "home message refused".into())]
+        );
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![FrameEvent::Close(Some(1009), String::new())]
+        );
         assert!(s.worker.join().unwrap().is_ok());
         wait_all_released();
     }
@@ -1377,20 +1774,36 @@ mod tests {
         let _serial = lock(&SERIAL);
         reset_registry();
         let (home_port, homes) = mock_home(HomeMode::Advertise);
-        let one = Limits { open_sockets: 1, ..test_limits() };
+        let one = Limits {
+            open_sockets: 1,
+            ..test_limits()
+        };
         let mut first = session(home_port, one, "", &[]);
         let mut home = homes.recv().unwrap();
         let second = session(home_port, one, "", &[]);
         assert_eq!(second.status, 426);
         assert_eq!(second.worker.join().unwrap(), Err(Fallback::Cap));
         // Codex closes; the Home never answers: the slot is held until the close bound shuts it down.
-        first.codex.write_all(&client_frame(8, &close_payload(Some(1000), ""))).unwrap();
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &home.leftover, 1), vec![FrameEvent::Close(Some(1000), String::new())]);
+        first
+            .codex
+            .write_all(&client_frame(8, &close_payload(Some(1000), "")))
+            .unwrap();
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![FrameEvent::Close(Some(1000), String::new())]
+        );
         let mut rest = [0u8; 16];
-        assert_eq!(home.stream.read(&mut rest).unwrap_or(0), 0, "the Child ends the Home connection at the close bound");
+        assert_eq!(
+            home.stream.read(&mut rest).unwrap_or(0),
+            0,
+            "the Child ends the Home connection at the close bound"
+        );
         assert!(first.worker.join().unwrap().is_ok());
         wait_all_released();
-        let mem = Limits { memory_budget: 0, ..test_limits() };
+        let mem = Limits {
+            memory_budget: 0,
+            ..test_limits()
+        };
         let refused = session(home_port, mem, "", &[]);
         assert_eq!(refused.worker.join().unwrap(), Err(Fallback::Cap));
     }
@@ -1400,7 +1813,15 @@ mod tests {
         let _serial = lock(&SERIAL);
         reset_registry();
         let (home_port, homes) = mock_home(HomeMode::Hold);
-        let s = session(home_port, Limits { setup: Duration::from_millis(300), ..test_limits() }, "", &[]);
+        let s = session(
+            home_port,
+            Limits {
+                setup: Duration::from_millis(300),
+                ..test_limits()
+            },
+            "",
+            &[],
+        );
         assert_eq!(s.status, 426);
         assert_eq!(s.worker.join().unwrap(), Err(Fallback::HomeRefused));
         drop(homes);
@@ -1415,8 +1836,17 @@ mod tests {
         let mut s = session(home_port, test_limits(), "", &[]);
         let mut home = homes.recv().unwrap();
         stop_all();
-        assert_eq!(read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1), vec![FrameEvent::Close(Some(1001), "link websocket stopping".into())]);
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &home.leftover, 1), vec![FrameEvent::Close(Some(1001), String::new())]);
+        assert_eq!(
+            read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1),
+            vec![FrameEvent::Close(
+                Some(1001),
+                "link websocket stopping".into()
+            )]
+        );
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![FrameEvent::Close(Some(1001), String::new())]
+        );
         assert!(s.worker.join().unwrap().is_ok());
         let after = session(home_port, test_limits(), "", &[]);
         assert_eq!(after.worker.join().unwrap(), Err(Fallback::Cap));
@@ -1431,11 +1861,20 @@ mod tests {
         let mut s = session(home_port, test_limits(), "", &[]);
         let mut home = homes.recv().unwrap();
         home.stream.write_all(&server_frame(9, b"hp")).unwrap();
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &home.leftover, 1), vec![FrameEvent::Pong(b"hp".to_vec())]);
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![FrameEvent::Pong(b"hp".to_vec())]
+        );
         s.codex.write_all(&client_frame(9, b"cp")).unwrap();
-        assert_eq!(read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1), vec![FrameEvent::Pong(b"cp".to_vec())]);
+        assert_eq!(
+            read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1),
+            vec![FrameEvent::Pong(b"cp".to_vec())]
+        );
         home.stream.write_all(&server_frame(1, b"after")).unwrap();
-        assert_eq!(read_events(&mut s.codex, Role::FromServer, &[], 1), vec![FrameEvent::Text("after".into())]);
+        assert_eq!(
+            read_events(&mut s.codex, Role::FromServer, &[], 1),
+            vec![FrameEvent::Text("after".into())]
+        );
         s.codex.shutdown(Shutdown::Both).unwrap();
         assert!(s.worker.join().unwrap().is_ok());
         wait_all_released();
@@ -1446,7 +1885,11 @@ mod tests {
         let _serial = lock(&SERIAL);
         reset_registry();
         let (home_port, homes) = mock_home(HomeMode::Advertise);
-        let limits = Limits { stall: Duration::from_millis(200), data_operation: Duration::from_millis(400), ..test_limits() };
+        let limits = Limits {
+            stall: Duration::from_millis(200),
+            data_operation: Duration::from_millis(400),
+            ..test_limits()
+        };
         let s = session(home_port, limits, "", &[]);
         let home = homes.recv().unwrap();
         let mut writer = home.stream.try_clone().unwrap();
@@ -1482,7 +1925,9 @@ mod tests {
                 }
             }
         });
-        home.stream.write_all(&server_frame(8, &close_payload(Some(4000), "home"))).unwrap();
+        home.stream
+            .write_all(&server_frame(8, &close_payload(Some(4000), "home")))
+            .unwrap();
         let events = read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1);
         assert_eq!(events, vec![FrameEvent::Close(Some(4000), "home".into())]);
         assert!(s.worker.join().unwrap().is_ok());
@@ -1495,12 +1940,21 @@ mod tests {
         let _serial = lock(&SERIAL);
         reset_registry();
         let (home_port, homes) = mock_home(HomeMode::Advertise);
-        *lock(&BEFORE_START) = Some(|| stop_all_without_join());
+        *lock(&BEFORE_START) = Some(stop_all_without_join);
         let mut s = session(home_port, test_limits(), "", &[]);
         let mut home = homes.recv().unwrap();
         assert_eq!(s.status, 101);
-        assert_eq!(read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1), vec![FrameEvent::Close(Some(1001), "link websocket stopping".into())]);
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &home.leftover, 1), vec![FrameEvent::Close(Some(1001), String::new())]);
+        assert_eq!(
+            read_events(&mut s.codex, Role::FromServer, &s.codex_leftover, 1),
+            vec![FrameEvent::Close(
+                Some(1001),
+                "link websocket stopping".into()
+            )]
+        );
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![FrameEvent::Close(Some(1001), String::new())]
+        );
         assert!(s.worker.join().unwrap().is_ok());
         *lock(&BEFORE_START) = None;
         wait_all_released();
@@ -1523,7 +1977,10 @@ mod tests {
         assert_eq!(s.status, 426);
         assert_eq!(s.worker.join().unwrap(), Err(Fallback::Unavailable));
         let mut home = homes.recv().unwrap();
-        assert_eq!(read_events(&mut home.stream, Role::FromClient, &home.leftover, 1), vec![]);
+        assert_eq!(
+            read_events(&mut home.stream, Role::FromClient, &home.leftover, 1),
+            vec![]
+        );
         wait_all_released();
     }
 }
