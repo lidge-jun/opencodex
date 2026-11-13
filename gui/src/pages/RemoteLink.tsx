@@ -149,16 +149,21 @@ function paritySynced(homeDigest: string | null, childDigest: string | null): bo
   return homeDigest !== null && childDigest !== null ? homeDigest === childDigest : null;
 }
 
-const RESIDUAL_TKEY = {
-  purge: "remoteLink.residual.purge",
-  ephemeral: "remoteLink.residual.ephemeral",
-  full: "remoteLink.residual.full",
-  unknown: "remoteLink.residual.unknown",
-} as const satisfies Record<LinkResidualStep, TKey>;
+/**
+ * The Child's recovery step for each residual variant. A single command is a chip ({cmd}); the full
+ * install's step names two commands, which one Trans chip cannot hold, so it stays prose.
+ */
+const RESIDUAL_STEP = {
+  purge: { key: "remoteLink.residual.purge", cmd: "~/.cache/opencodex/bin/ocx-child detach --purge" },
+  purgeWindows: { key: "remoteLink.residual.purgeWindows", cmd: '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge' },
+  ephemeral: { key: "remoteLink.residual.ephemeral", cmd: "ocx-child detach" },
+  full: { key: "remoteLink.residual.full" },
+  unknown: { key: "remoteLink.residual.unknown" },
+} as const satisfies Record<LinkResidualStep, { key: TKey; cmd?: string }>;
 
 function linkActionError(error: unknown): LinkActionErrorView {
   if (!(error instanceof LinkApiError)) return { key: errorKey(error), hint: null };
-  return { key: errorKey(error), hint: error.hint, childStep: error.residual ? RESIDUAL_TKEY[error.residual] : null };
+  return { key: errorKey(error), hint: error.hint, childStep: error.residual ? RESIDUAL_STEP[error.residual] : null };
 }
 
 export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {

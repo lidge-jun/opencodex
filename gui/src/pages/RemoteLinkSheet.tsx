@@ -6,6 +6,7 @@ import {
   type LinkProbeView,
 } from "../remote-link-api";
 import { IconLink, IconRefresh, IconX } from "../icons";
+import { Trans } from "../i18n/provider";
 import { type TKey, useT } from "../i18n/shared";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
@@ -15,13 +16,13 @@ import { SheetSteps } from "../components/v2-startup/remote-link-parts";
 export interface LinkActionErrorView {
   readonly key: TKey;
   readonly hint: string | null;
-  /** The Child's own recovery step when it may still be connected. */
-  readonly childStep?: TKey | null;
+  /** The Child-side recovery step; cmd, when set, is shown as a command chip in the {cmd} slot. */
+  readonly childStep?: { readonly key: TKey; readonly cmd?: string } | null;
 }
 
 export function LinkErrorNotice({ error }: { error: LinkActionErrorView }): ReactElement {
   const t = useT();
-  return <Banner tone="err"><span className="remote-link-error">{t(error.key)}</span>{error.childStep && <span className="remote-link-child-step mt-1 block">{t(error.childStep)}</span>}{error.hint && <span className="remote-link-hint mt-1 block text-[12px] text-fg-muted [overflow-wrap:anywhere]">{t("remoteLink.reason.generic")} <code className="font-mono">{error.hint}</code></span>}</Banner>;
+  return <Banner tone="err"><span className="remote-link-error">{t(error.key)}</span>{error.childStep && <span className="remote-link-child-step mt-1 block">{error.childStep.cmd === undefined ? t(error.childStep.key) : <Trans k={error.childStep.key} cmd={error.childStep.cmd} />}</span>}{error.hint && <span className="remote-link-hint mt-1 block text-[12px] text-fg-muted [overflow-wrap:anywhere]">{t("remoteLink.reason.generic")} <code className="font-mono">{error.hint}</code></span>}</Banner>;
 }
 
 export interface RemoteLinkSheetProps {
