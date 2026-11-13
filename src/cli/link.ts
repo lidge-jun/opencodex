@@ -608,10 +608,11 @@ export function journalledRevokeError(error: unknown, operationId: string): unkn
   if (!/^[a-z_]{1,64}$/.test(code)) return error;
   if (code === "operation_journal_full") return new RuntimeApiError(journalFullGuidance(error.body), error.status, error.body);
   if (Object.hasOwn(REVOKE_REFUSALS, code)) return new RuntimeApiError(REVOKE_REFUSALS[code] + " (code " + code + ")", error.status, error.body);
-  // A fresh forced revoke is refused before its tombstone, first intent and tunnel stop and settles failed_clean; a resumed one may
-  // re-own its retirement receipt first and stay open or unknown (#8416). So neither "nothing changed" nor "use a new id" is claimed.
+  // A fresh forced revoke is refused before its tombstone, first intent and tunnel stop and its refusal is recorded; a resumed one
+  // (even one recorded failed_clean) may re-own its retirement receipt first and can finish under the same id once capacity is
+  // freed, while a new id is refused with link_retirement_owned (#8416). So: the same id first, a new id only if it replays this.
   if (code === "tombstone_limit") {
-    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup, so the link and its key stay active; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover, or have a person on this Home run ocx link recover --forget for machines that are gone. Then check ocx link operations --operation-id " + operationId + ": if it reads failed_clean, a repeat of this id returns this refusal, so retry with a new operation id; otherwise repeat this one. (code tombstone_limit)", error.status, error.body);
+    return new RuntimeApiError("Too many forced revokes of ephemeral Children are waiting for cleanup, so the link and its key stay active; this attempt did not touch the link, its key or the Child. Recover them with ocx link recover, or have a person on this Home run ocx link recover --forget for machines that are gone. Then repeat this revoke with the same operation id first (--operation-id " + operationId + "): an interrupted removal resumes under it, and a new id is refused while it owns the removal. Use a new operation id only if that repeat answers this refusal again (the refusal was recorded). (code tombstone_limit)", error.status, error.body);
   }
   const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
   const resolve = outcome === "unknown" ? "; check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";

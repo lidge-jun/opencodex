@@ -13,7 +13,7 @@ import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { readTombstones, removeTombstone, tombstonesPath } from "../../src/link/tombstones";
+import { MAX_TOMBSTONES, readTombstones, recordTombstone, removeTombstone, tombstonesPath } from "../../src/link/tombstones";
 
 /**
  * O1: ocx link revoke --operation-id. Every Home-initiated revoke takes the alias lock, so a force revoke waits for a
@@ -1099,4 +1099,28 @@ test("recover waits for an unfinished removal, and a resumed forced revoke does 
   expect((await h.revoke({ force: true })).status).toBe(200);
   expect(readLinkRetirement(LINK, root)).toBeNull();
   expect(readTombstones(tombstonesPath()).tombstones).toEqual([]);
+});
+
+test("a failed_clean receipt owner refused at the tombstone limit finishes with its own id once capacity is freed; a new id is refused", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "failed_clean", finishedAt: at, error: { code: "operation_journal_failed", status: 500 }, effects: [],
+  } as LinkOperation] });
+  for (let i = 0; i < MAX_TOMBSTONES; i++) {
+    recordTombstone({ linkId: "lnk_" + i.toString(16).padStart(16, "0"), alias: "other-" + i, hostKeyFingerprint: "SHA256:abcdefghijklmnop", revokedAt: at }, tombstonesPath());
+  }
+  const refused = await h.revoke({ force: true, operationId: OP });
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "tombstone_limit" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  // A new id cannot take the removal over while this operation owns its receipt.
+  const other = await h.revoke({ force: true, operationId: "detach-other" });
+  expect({ status: other.status, code: code(other) }).toEqual({ status: 409, code: "link_retirement_owned" });
+  // Once capacity is freed, the original id resumes and finishes (the CLI's guidance: repeat the same id first).
+  removeTombstone("lnk_" + (0).toString(16).padStart(16, "0"), tombstonesPath());
+  const resumed = await h.revoke({ force: true, operationId: OP });
+  expect({ status: resumed.status, outcome: resumed.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  expect(h.store.links).toEqual([]);
 });
