@@ -40,7 +40,9 @@ v2'de ebeveyn, ChatGPT arka ucunun ürettiği `encrypted_content` olarak görevi
 verir. Anahtar o arka uçta kalır. OpenCodex anahtara hiç sahip olmadığından
 proxy'nin çözebileceği veya yeniden yazabileceği bir şey yoktur: değer, bir
 bayrağın arkasındaki düz metin değil gerçekten şifreli metindir. Bu yüzden
-sorun yapılandırma hatası değil yapısaldır ve proxy tarafı ayarlarla çözülemez.
+sorun yapılandırma hatası değil yapısaldır; proxy tarafı ayarlar yerel şifre çözmeyi etkinleştiremez.
+
+Hiçbir proxy ayarı yerel şifre çözmeyi etkinleştirmez. Deneysel `agentTaskRecovery`, uygun görevleri kurtarmak için ChatGPT arka ucuna başvurabilir; şifreli metni yerel olarak çözmez. Yukarıdaki yetkilendirme, uygunluk ve hata sınırları geçerlidir.
 
 Üç topoloji etkilenmez; bu, hatanın şeklini açıklar:
 

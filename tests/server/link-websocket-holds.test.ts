@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,8 +14,15 @@ import { createLinkActivity } from "../../src/link/child-activity";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { LinkStore } from "../../src/link/store";
 import type { WsData } from "../../src/server/ws-bridge";
+import * as requestDecompress from "../../src/server/request-decompress";
+import { createInboundBodyBudget } from "../../src/server/inbound-body-budget";
+import { withRaisedInboundBodyAdmission } from "../../src/server/inbound-body-admission";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient } from "../helpers/link-ws-client";
+import { relayHarness } from "../helpers/link-relay-harness";
+import type { LinkActivity } from "../../src/link/child-activity";
+import type { LinkTrafficBook } from "../../src/link/traffic";
+import { linkTurnPacesReads, observeLinkTurnExpansion } from "../../src/server/link-turn";
 
 // Lane T5d1: link WebSocket closes that leave durable activity holds, and their release (design T4 5).
 
@@ -309,4 +316,171 @@ describe("release over HTTP through the real listener", () => {
     expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(0);
   });
 
+  // #8608: the copy is decoded only after the handler accepted the request, under the listener's resolved inbound limit.
+  async function heldLink(thread: string, callId: string, maxRequestBodySize: number, dispatch: (req: Request) => Promise<Response>) {
+    const store: LinkStore = { version: 1, listenerPort: null, links: [{ id: KEY.linkId, alias: "holds", direction: "client-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: KEY.id, createdAt: "2026-11-12T00:00:00.000Z" }] as LinkStore["links"] };
+    const current = { value: store };
+    let finish: (() => void) | undefined;
+    const seen: { message?: () => void; closed?: () => void } = {};
+    const base: WebSocketHandler<WsData> = {
+      open(ws) { ws.data.admissionLease?.bind(ws); },
+      message(ws) { finish = ws.data.responsesActivity!.beginTurn("go"); ws.data.responsesActivity!.observePayload(toolCall(callId)); seen.message?.(); },
+      close(ws) { ws.data.admissionLease?.release(); seen.closed?.(); },
+    };
+    const lifecycle = createLinkListenerLifecycle<WsData>({ storePath: join(dir, "link", "links.json"), readStore: () => current.value, writeStore: (_p, next) => { current.value = next; }, warn: () => {} });
+    lifecycle.start({ maxRequestBodySize, dispatch, keyFingerprints: () => [serviceApiTokenFingerprint(KEY.key)], responsesWebsocket: { handler: base, enabled: () => true, policy } });
+    cleanups.push(() => lifecycle.stop());
+    const port = lifecycle.status().port!;
+    const identity = { keyId: KEY.id, linkId: KEY.linkId, fingerprint: serviceApiTokenFingerprint(KEY.key) };
+    const ws = await LinkWireClient.open(port);
+    const { nonce } = await ws.challenge(identity);
+    expect((await ws.upgrade({ nonce, bearer: KEY.key, headers: { "thread-id": thread } })).status).toBe(101);
+    const delivered = new Promise<void>(resolve => { seen.message = resolve; });
+    ws.sendText("{}");
+    await delivered;
+    finish!();
+    const closed = new Promise<void>(resolve => { seen.closed = resolve; });
+    ws.destroy();
+    await closed;
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(1);
+    const postZstd = async (body: Uint8Array) => {
+      const http = await LinkWireClient.open(port);
+      const session = await http.challenge(identity);
+      http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", "content-encoding": "zstd", authorization: "Bearer " + KEY.key, "x-opencodex-link-session": session.nonce, "thread-id": thread }, body);
+      const head = await http.readHead();
+      await lifecycle.activityHoldsSettled();
+      http.destroy();
+      return head.status;
+    };
+    return { lifecycle, postZstd, port, identity };
+  }
+
+  test("a relayed POST that the inbound body budget refuses never decodes the copy (#8608)", async () => {
+    // The handler admits through the real inbound body budget, which another request already fills: an encoded body
+    // reserves 8 MiB, the budget has none left, and the refusal cancels the handler's half unread with a 503. The upload
+    // has fully arrived by then, as it does while a request waits in the budget's queue (read here through a clone first).
+    const budget = createInboundBodyBudget(8 << 20);
+    const occupied = await budget.acquire(8 << 20, new AbortController().signal);
+    let worked = false;
+    const { lifecycle, postZstd } = await heldLink("thread-b", "call_b", 1 << 20, async req => {
+      await req.clone().arrayBuffer();
+      return withRaisedInboundBodyAdmission(req, "/v1/responses", undefined,
+        async () => { worked = true; await req.arrayBuffer(); return new Response("{}", { status: 200 }); }, undefined, { budget, maxWaitMs: 0 });
+    });
+    const decode = spyOn(requestDecompress, "decodeRequestBody");
+    try {
+      expect(await postZstd(Bun.zstdCompressSync(new TextEncoder().encode(JSON.stringify({ model: "m", input: result("call_b") }))))).toBe(503);
+      expect(decode).not.toHaveBeenCalled();
+    } finally { decode.mockRestore(); }
+    expect(worked).toBe(false);
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(1);
+    occupied!.release();
+  });
+
+  test("an accepted relayed POST whose copy decodes past the resolved inbound limit releases nothing (#8608)", async () => {
+    // The listener's resolved limit is 1 MiB; the body decodes to about 2 MiB, under the 8 MiB ratio floor, so only the limit refuses it.
+    const { lifecycle, postZstd } = await heldLink("thread-l", "call_l", 1 << 20, async req => { await req.arrayBuffer(); return new Response("{}", { status: 200 }); });
+    const large = JSON.stringify({ model: "m", input: result("call_l"), padding: "x".repeat(2 << 20) });
+    expect(await postZstd(Bun.zstdCompressSync(new TextEncoder().encode(large)))).toBe(200);
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(1);
+    // Under the limit, the same accepted request releases the hold.
+    expect(await postZstd(Bun.zstdCompressSync(new TextEncoder().encode(JSON.stringify({ model: "m", input: result("call_l") }))))).toBe(200);
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(0);
+  });
+
+  test("a relayed POST aborted before its headers never decodes its copy, and the copy is cancelled (#8613 review)", async () => {
+    let bodyRead!: () => void;
+    const read = new Promise<void>(resolve => { bodyRead = resolve; });
+    let abortSeen!: () => void;
+    const aborted = new Promise<void>(resolve => { abortSeen = resolve; });
+    const { lifecycle, port, identity } = await heldLink("thread-x", "call_x", 1 << 20, async req => {
+      await req.arrayBuffer();
+      bodyRead();
+      // The Child goes away before the handler answers.
+      await new Promise<void>(resolve => { if (req.signal.aborted) resolve(); else req.signal.addEventListener("abort", () => resolve(), { once: true }); });
+      abortSeen();
+      return new Response("{}", { status: 200 });
+    });
+    const originalClone = Request.prototype.clone;
+    const copies: Request[] = [];
+    const clone = spyOn(Request.prototype, "clone").mockImplementation(function (this: Request) { const copy = originalClone.call(this); copies.push(copy); return copy; });
+    const decode = spyOn(requestDecompress, "decodeRequestBody");
+    try {
+      const http = await LinkWireClient.open(port);
+      const session = await http.challenge(identity);
+      http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", "content-encoding": "zstd", authorization: "Bearer " + KEY.key, "x-opencodex-link-session": session.nonce, "thread-id": "thread-x" },
+        Bun.zstdCompressSync(new TextEncoder().encode(JSON.stringify({ model: "m", input: result("call_x") }))));
+      await read;
+      http.destroy();
+      await aborted;
+      await lifecycle.activityHoldsSettled();
+      expect(decode).not.toHaveBeenCalled();
+      expect(copies).toHaveLength(1);
+      // The copy was consumed without a decode: the refusal cancelled it, so it holds no bytes for anyone to read.
+      expect(copies[0]!.bodyUsed).toBe(true);
+    } finally { clone.mockRestore(); decode.mockRestore(); }
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(1);
+  });
 });
+
+describe("a relayed POST whose traffic accounting throws (#8613 review)", () => {
+  test("decides its body observation (not accepted) and releases its lease", async () => {
+    const decisions: boolean[] = [];
+    let ended = 0;
+    const h = relayHarness({
+      activity: { begin: () => () => { ended += 1; } } as unknown as LinkActivity,
+      traffic: { begin: () => { throw new Error("traffic book failed"); } } as unknown as LinkTrafficBook,
+      observeResponsesRequest: () => accepted => { decisions.push(accepted); },
+    });
+    const nonce = await h.session(KEY.linkId);
+    const req = h.request("/v1/responses", { method: "POST", nonce, headers: { "content-type": "application/json" }, body: "{}" });
+    await expect(h.dispatch(req, async () => new Response("{}"))).rejects.toThrow("traffic book failed");
+    expect(decisions).toEqual([false]);
+    expect(ended).toBe(1);
+  });
+  test("returns its lease even when ending the broken flow throws too, before and after dispatch", async () => {
+    for (const where of ["before", "after"] as const) {
+      const decisions: boolean[] = [];
+      let ended = 0;
+      const flow = { toHome() { if (where === "before") throw new Error("count failed"); }, uncounted() {}, fromHome() {}, end() { throw new Error("end failed"); } };
+      const h = relayHarness({
+        activity: { begin: () => () => { ended += 1; } } as unknown as LinkActivity,
+        traffic: { begin: () => flow } as unknown as LinkTrafficBook,
+        observeResponsesRequest: () => accepted => { decisions.push(accepted); },
+      });
+      const nonce = await h.session(KEY.linkId);
+      const req = h.request("/v1/responses", { method: "POST", nonce, headers: { "content-type": "application/json", "content-length": "2" }, body: "{}" });
+      await expect(h.dispatch(req, async () => { throw new Error("dispatch failed"); })).rejects.toThrow(where === "before" ? "count failed" : "dispatch failed");
+      expect({ where, decisions, ended }).toEqual({ where, decisions: [false], ended: 1 });
+    }
+  });
+
+});
+
+describe("paced reads on the relay (#8601)", () => {
+  test.each([[true, true], [false, false]] as const)("with the feature on=%p, a relayed POST's turn paces its reads: %p", async (on, expected) => {
+    const store: LinkStore = { version: 1, listenerPort: null, links: [{ id: KEY.linkId, alias: "paced", direction: "client-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: KEY.id, createdAt: "2026-11-12T00:00:00.000Z" }] as LinkStore["links"] };
+    const seen: boolean[] = [];
+    const lifecycle = createLinkListenerLifecycle<WsData>({ storePath: join(dir, "link", "links.json"), readStore: () => store, writeStore: () => {}, warn: () => {} });
+    lifecycle.start({
+      maxRequestBodySize: 1 << 20,
+      // What preparation does with the relay's turn token: claim the observer for this request's log context.
+      dispatch: async req => { const logCtx = {}; observeLinkTurnExpansion(undefined, req, logCtx, {}); seen.push(linkTurnPacesReads(logCtx)); await req.text(); return new Response("{}"); },
+      keyFingerprints: () => [serviceApiTokenFingerprint(KEY.key)],
+      responsesWebsocket: { handler: turnHandler().handler, enabled: () => on, policy },
+    });
+    cleanups.push(() => lifecycle.stop());
+    const http = await LinkWireClient.open(lifecycle.status().port!);
+    const session = await http.challenge({ keyId: KEY.id, linkId: KEY.linkId, fingerprint: serviceApiTokenFingerprint(KEY.key) });
+    http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", authorization: "Bearer " + KEY.key, "x-opencodex-link-session": session.nonce }, JSON.stringify({ model: "m", input: "go" }));
+    expect((await http.readHead()).status).toBe(200);
+    http.destroy();
+    expect(seen).toEqual([expected]);
+  });
+
+  test("a link socket's turn observer paces its reads", () => {
+    const s = harness().open();
+    expect(s.ws!.data.linkTurnObserver?.(1).pacedReads).toBe(true);
+  });
+});
+

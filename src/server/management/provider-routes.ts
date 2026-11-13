@@ -74,9 +74,8 @@ import {
 import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
-import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
-import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
+import { clearPassiveKeyLimits, listPassiveKeyLimits, passiveProviderOwnership } from "../../providers/passive-key-observation";
+import { providerRoutingQuota } from "./provider-routing-quota";
 import { probeJevDecisionProvider } from "../../combos/jev";
 import { comboDependsOnProviderRoute } from "./decision-model-validation";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
@@ -863,40 +862,6 @@ function canonicalOpenAiBudgetPatchError(
     ?? providerEmptyToolOutputConfigError("openai", applied.next);
 }
 
-function providerRoutingQuota(config: OcxConfig, name: string, now: number): ProviderRoutingQuota {
-  const provider = hasOwnProvider(config.providers, name) ? config.providers[name] : undefined;
-  const quota = getCachedProviderRoutingQuota(name, provider, now);
-  if (!quota || !Number.isFinite(quota.updatedAt) || quota.updatedAt < 0 || quota.updatedAt > now
-    || now >= quota.updatedAt + PROVIDER_QUOTA_MAX_AGE_MS) return { state: "unknown" };
-
-  // Removing search/MCP windows may leave only a timestamp. That is not inference evidence.
-  const percentages = [quota.fiveHourPercent, quota.weeklyPercent, quota.monthlyPercent,
-    ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.percent)];
-  const hasPercentage = percentages.some(value => typeof value === "number" && Number.isFinite(value) && value >= 0);
-  const credits = quota.creditsUsd;
-  const hasCredits = credits !== undefined && Number.isFinite(credits.percent)
-    && credits.percent >= 0 && Number.isFinite(credits.remaining);
-  if (!hasPercentage && !hasCredits) return { state: "unknown" };
-
-  const state = cachedProviderQuotaIsExhausted(quota, now) ? "exhausted" : "available";
-  let validUntil = quota.updatedAt + PROVIDER_QUOTA_MAX_AGE_MS;
-  if (state === "exhausted") {
-    const resets = [quota.fiveHourResetAt, quota.weeklyResetAt, quota.monthlyResetAt,
-      ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.resetAt)]
-      .filter((reset): reset is number => typeof reset === "number" && Number.isFinite(reset)
-        && reset > now && reset < validUntil)
-      .sort((left, right) => left - right);
-    // Reuse dispatch's predicate: another exhausted window or USD cap may still block.
-    for (const reset of resets) {
-      if (!cachedProviderQuotaIsExhausted(quota, reset)) {
-        validUntil = reset;
-        break;
-      }
-    }
-  }
-  return { state, updatedAt: quota.updatedAt, validUntil };
-}
-
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -906,6 +871,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const now = Date.now();
     return jsonResponse({
       ...snapshot,
+      passiveKeyLimits: listPassiveKeyLimits(config),
       reports: snapshot.reports.map(report => ({
         ...report,
         routingQuota: providerRoutingQuota(config, report.provider, now),
@@ -1027,6 +993,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (sourceChanged || currentDiskConfig === null) {
       return jsonResponse({ error: "provider reload source changed" }, 409);
     }
+    clearPassiveKeyLimits(name);
     reconcileLiveStateStores();
     // The complete disk snapshot owns display overlays, including providers that this
     // live routing instance deliberately does not adopt.
@@ -1134,6 +1101,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
     cleanupRemovedGcpCredentials(removedCredentials);
     adoptProviderEditorCandidate(config, outcome.value.config);
+    clearPassiveKeyLimits();
     reconcileLiveStateStores();
     refreshConfigDerivedRegistries(outcome.value.config);
     clearGatherRoutedModelsInflight();
@@ -1413,6 +1381,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }
     });
     if (validationError !== undefined) return jsonResponse({ error: validationError }, 400);
+    clearPassiveKeyLimits(name);
     cleanupRemovedGcpCredentials(removedCredentials);
     reconcileLiveStateStores();
     if (prov.apiKey && prov.apiKeyPool) {
@@ -1604,9 +1573,18 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const validation = validateConfigCandidate({ ...config, providers: { ...config.providers, [name]: candidate } });
         if (!validation.ok) { replayError = validation.error; return; }
       }
-      commitProviderPatch(config, () => {
-        config.providers[name] = candidate;
-      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+      const previousOwnership = passiveProviderOwnership(config.providers[name]);
+      try {
+        commitProviderPatch(config, () => {
+          config.providers[name] = candidate;
+        }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+      } finally {
+        // Persistence may rebase the row or publish before throwing. Compare the resulting
+        // live owner under the lock, after rollback when the save did not publish.
+        if (!isDeepStrictEqual(previousOwnership, passiveProviderOwnership(config.providers[name]))) {
+          clearPassiveKeyLimits(name);
+        }
+      }
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();

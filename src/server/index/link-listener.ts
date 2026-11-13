@@ -190,6 +190,10 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     }
     const requestedPort = store.listenerPort ?? 0;
     const linkWebsocket = startContext.responsesWebsocket;
+    // The resolved inbound limit (index.ts resolves maxInboundBodyBytes), fixed at bind like the public listener's. The
+    // handler re-resolves the live config per request, so after a live raise without a restart a coded body between the
+    // two limits is accepted but releases no hold until the next bind: the safe direction (the link stays in flight).
+    const inboundLimit = startContext.maxRequestBodySize;
     const sessions = createLinkRelaySessions({ peers, activity, traffic, homeFeatures: () => startContext?.homeFeatures?.() ?? buildPeerFeatures(), connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId),
       catalogServed: served => { for (const listener of catalogServedListeners) listener(served); }, fingerprints: fingerprintsFor,
       ...(linkWebsocket ? { upgrade: websocketGate.upgrade, websocketAdvertised: websocketEnabled } : {}),
@@ -213,7 +217,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
             expanded(body, chain) { threadHash = threadHashOf(body); resent = chain === "unexpanded" ? [] : marksResent(holds, linkId, threadHash, body); },
             expansionFailed() { resent = []; },
             terminal(status, source) { if (resent.length && threadHash && upstreamCompleted(status, source)) holds.releaseMarks(linkId, threadHash, resent); },
-            ...(logging ? { logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, linkId, header?.trim() ?? "", body) }) } : {}),
+            ...(logging ? { pacedReads: true, logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, linkId, header?.trim() ?? "", body) }) } : {}),
           });
           try { req.headers.set(LINK_TURN_HEADER, token); } catch { releaseLinkTurnToken(token); token = null; }
         }
@@ -223,14 +227,17 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
         const beganAt = holds.sequence();
         if (holds.releasable(linkId)) {
           const decision = new Promise<boolean>(resolve => { decide = resolve; });
-          // The copy is read alongside the request, but released only if the handler accepted it.
-          // A Child may send the body coded (#8594); the copy is decoded through the handlers' bounded reader, and a body
-          // that does not decode releases nothing.
+          // The copy is read and decoded only after the handler accepted the request; a refusal, the inbound budget's 503
+          // included, cancels it unread (#8608). A Child may send the body coded (#8594); the copy is decoded through the
+          // handlers' bounded reader under the same resolved inbound limit, and a body that does not decode releases nothing.
           const encoding = req.headers.get("content-encoding");
-          const parsed = req.clone().arrayBuffer()
-            .then(raw => JSON.parse(new TextDecoder().decode(decodeRequestBody(new Uint8Array(raw), encoding))) as unknown).catch(() => null);
-          const observation = Promise.all([parsed, decision]).then(([body, accepted]) => {
-            if (!accepted || !body || typeof body !== "object") return;
+          const copy = req.clone();
+          const observation = decision.then(async accepted => {
+            // Never awaited: a tee's cancel waits for the other half, which a refusal may leave unread.
+            if (!accepted) { void copy.body?.cancel().catch(() => {}); return; }
+            const raw = new Uint8Array(await copy.arrayBuffer());
+            const body = JSON.parse(new TextDecoder().decode(decodeRequestBody(raw, encoding, inboundLimit))) as unknown;
+            if (!body || typeof body !== "object") return;
             holds.observe(linkId, threadHashOf(body), resultKeysOf((body as Record<string, unknown>).input), beganAt);
           }).catch(() => {}).finally(() => { holdObservations.delete(observation); });
           holdObservations.add(observation);

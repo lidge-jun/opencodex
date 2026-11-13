@@ -5,6 +5,7 @@ import {
   comboStreamPayloadCommitsOutput,
   deferProtocolSafeResetRecovery,
   preflightComboStreamResponse,
+  replayBufferedResponse,
 } from "../../src/server/responses/combo-stream-preflight";
 import { stageCommitment, type RequestFailureStage } from "../../src/lib/request-failure-model";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -1632,6 +1633,37 @@ describe("combo stream preflight", () => {
     });
   });
 
+});
+
+
+
+describe("combo preflight replay under a stalled reader (#8601)", () => {
+  const encoder = new TextEncoder();
+  const replay = (buffered: Uint8Array[]) => {
+    const source = new ReadableStream<Uint8Array>({ pull() { return new Promise<void>(() => {}); } }, { highWaterMark: 0 });
+    const response = new Response(source, { headers: { "content-type": "text/event-stream" } });
+    return replayBufferedResponse(response, response.body!.getReader(), buffered).body!.getReader();
+  };
+
+  test("each replayed chunk leaves the buffer as the client reads it", async () => {
+    const chunks = ["a", "bb", "ccc"].map(text => encoder.encode(text));
+    const buffered = [...chunks];
+    const reader = replay(buffered);
+    for (let read = 0; read < chunks.length; read++) {
+      expect((await reader.read()).value).toBe(chunks[read]!);
+      // Every slot up to this read is empty; the rest still hold their chunks.
+      expect(buffered.map(chunk => chunk.byteLength)).toEqual(chunks.map((chunk, index) => index <= read ? 0 : chunk.byteLength));
+    }
+    await reader.cancel();
+  });
+
+  test("a cancel empties every slot the client never read", async () => {
+    const buffered = ["a", "bb", "ccc"].map(text => encoder.encode(text));
+    const reader = replay(buffered);
+    await reader.read();
+    await reader.cancel();
+    expect(buffered.map(chunk => chunk.byteLength)).toEqual([0, 0, 0]);
+  });
 });
 
 

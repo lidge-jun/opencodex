@@ -46,7 +46,7 @@ ocx advisor set --context-mode question-only
 
 透過儀表板的 **Advisor** 頁面或 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` 管理。
 
-沒有目前同意時，`ocx advisor on` 不會開啟跨 provider 傳送：它會印出揭露並停止。`ocx advisor on --ack-context-sharing` 與 `ocx advisor consent` 記錄 `v1`。`ocx advisor consent --revoke` 會移除同意並立即停止傳送。`ocx advisor set` 不授予同意。儀表板上的同意核取方塊預設不勾選。
+沒有目前同意時，`ocx advisor on` 不會開啟跨 provider 傳送：它會印出揭露並停止。`ocx advisor on --ack-context-sharing` 與 `ocx advisor consent` 記錄 `v1`。`ocx advisor consent --revoke` 會移除同意。尚未發出的諮詢會被阻擋，但已經發出的諮詢無法取消，已經離開代理的上下文也無法收回。`ocx advisor set` 不授予同意。儀表板上的同意核取方塊預設不勾選。
 
 ## 策略
 
@@ -98,6 +98,7 @@ Advisor 失敗是 fail-open 的：已經發出的諮詢若失敗（模型不可�
 ## PR1 限制
 
 - 原生 OpenAI passthrough 回合（ChatGPT 池 Worker）不會獲得合成工具；advisor 支援覆蓋路由（translated）provider。preflight 諮詢適用於 run-turn 介面卡；工具不適用。
+- 翻譯後的 `/v1/messages` 請求（例如將 Claude Code 路由至翻譯 provider）與 `/v1/responses`、`/v1/chat/completions` 一樣取得合成工具與 preflight 諮詢。`policy` 與上下文共享同意遵循相同規則，設定從目前組態讀取，因此撤銷同意會阻止進行中的請求發起尚未送出的諮詢；它不會取消已送出的諮詢，也無法收回已離開代理的上下文。
 - 不提供語義卡住偵測、任務完成複核、升級分層、多專家或投票；自適應觸發只使用已觀察到的工具證據。
 - preflight 去重帳本是行程內的；代理重啟後，進行中的任務可能再收到一次 preflight 諮詢。
 

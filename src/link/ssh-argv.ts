@@ -19,6 +19,7 @@
  */
 
 import { isAbsolute } from "node:path";
+import { ExplicitRouteError, explicitRouteSshOptions, type ExplicitRoute } from "./explicit-route";
 import { POWERSHELL_ENCODED_MAX, PowerShellCommandTooLongError, windowsGatedOcxArgv, windowsOcxArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
@@ -70,7 +71,21 @@ function optionPath(path: string): string {
 /** ERROR everywhere; DEBUG1 only for a tunnel spawned while opt-in SSH capture is on (src/link/ssh-capture.ts). */
 export type SshLogLevel = "ERROR" | "DEBUG1";
 
-function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel = "ERROR"): string[] {
+/**
+ * The link's explicit route (src/link/explicit-route.ts) as command-line options, which ssh takes before
+ * anything in ssh_config. It names how to reach the link's own alias, so it is refused with any other
+ * destination; null adds nothing, which is the argv of a link without one.
+ */
+function routeOptions(route: ExplicitRoute | null | undefined, alias: string, destination: string): string[] {
+  if (!route) return [];
+  if (destination !== alias) throw new LinkSshArgumentError("an explicit route reaches the link alias only");
+  try { return explicitRouteSshOptions(route); } catch (error) {
+    if (error instanceof ExplicitRouteError) throw new LinkSshArgumentError(error.message);
+    throw error;
+  }
+}
+
+function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel, route: readonly string[]): string[] {
   return [
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
@@ -91,6 +106,7 @@ function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "a
     "-o", "ForwardX11=no",
     "-o", "PermitLocalCommand=no",
     "-o", `LogLevel=${logLevel}`,
+    ...route,
   ];
 }
 
@@ -110,6 +126,11 @@ export interface TunnelArgvOptions {
   knownHostsFile: string;
   /** Defaults to ERROR. DEBUG1 is requested only by opt-in SSH capture; the argv is otherwise unchanged. */
   logLevel?: SshLogLevel;
+  /**
+   * The link's explicit route, or null. Required so every caller decides: a Home-initiated link passes
+   * its record's explicitRoute (absent: null); Child-initiated and messaging commands pass null.
+   */
+  route: ExplicitRoute | null;
 }
 
 export function buildTunnelArgv(options: TunnelArgvOptions): string[] {
@@ -122,7 +143,7 @@ export function buildTunnelArgv(options: TunnelArgvOptions): string[] {
   if (logLevel !== "ERROR" && logLevel !== "DEBUG1") throw new LinkSshArgumentError("logLevel must be ERROR or DEBUG1");
   return [
     "ssh", "-N", "-T",
-    ...commonOptions(alias, options.knownHostsFile, "yes", logLevel),
+    ...commonOptions(alias, options.knownHostsFile, "yes", logLevel, routeOptions(options.route, alias, destination)),
     "-o", "ExitOnForwardFailure=yes",
     `-${options.direction}`, `127.0.0.1:${bind}:127.0.0.1:${target}`,
     "--", destination,
@@ -136,6 +157,11 @@ export interface ExecArgvOptions {
   /** Remote argv. The command must be sh; its arguments are quoted for the remote shell. */
   argv: readonly string[];
   knownHostsFile: string;
+  /**
+   * The link's explicit route, or null. Required so every caller decides: a Home-initiated link passes
+   * its record's explicitRoute (absent: null); Child-initiated and messaging commands pass null.
+   */
+  route: ExplicitRoute | null;
 }
 
 export function buildExecArgv(options: ExecArgvOptions): string[] {
@@ -144,7 +170,7 @@ export function buildExecArgv(options: ExecArgvOptions): string[] {
   if (options.argv.length === 0) throw new LinkSshArgumentError("remote argv must not be empty");
   return [
     "ssh", "-T",
-    ...commonOptions(alias, options.knownHostsFile, "yes"),
+    ...commonOptions(alias, options.knownHostsFile, "yes", "ERROR", routeOptions(options.route, alias, destination)),
     "-o", "ClearAllForwardings=yes",
     "--", destination,
     quoteRemote(options.argv),
@@ -273,6 +299,11 @@ export interface ProbeArgvOptions {
   alias: string;
   /** An empty, private, temporary file. The probe records the offered host key here. */
   tempKnownHostsFile: string;
+  /**
+   * The link's explicit route, or null. Required so every caller decides: a Home-initiated link passes
+   * its record's explicitRoute (absent: null); Child-initiated and messaging commands pass null.
+   */
+  route: ExplicitRoute | null;
 }
 
 /**
@@ -284,7 +315,7 @@ export function buildProbeArgv(options: ProbeArgvOptions): string[] {
   const alias = assertSshAlias(options.alias);
   return [
     "ssh", "-T",
-    ...commonOptions(alias, options.tempKnownHostsFile, "accept-new"),
+    ...commonOptions(alias, options.tempKnownHostsFile, "accept-new", "ERROR", routeOptions(options.route, alias, alias)),
     "-o", "ClearAllForwardings=yes",
     "--", alias,
     "echo ocx-link-probe",
@@ -298,6 +329,11 @@ export interface RouteProbeArgvOptions {
   destination: string;
   /** The link known_hosts file. It is only read: the route must offer the key already pinned. */
   knownHostsFile: string;
+  /**
+   * The link's explicit route, or null. Required so every caller decides: a Home-initiated link passes
+   * its record's explicitRoute (absent: null); Child-initiated and messaging commands pass null.
+   */
+  route: ExplicitRoute | null;
 }
 
 /**
@@ -310,7 +346,7 @@ export function buildRouteProbeArgv(options: RouteProbeArgvOptions): string[] {
   const destination = assertSshAlias(options.destination);
   return [
     "ssh", "-T",
-    ...commonOptions(alias, options.knownHostsFile, "yes"),
+    ...commonOptions(alias, options.knownHostsFile, "yes", "ERROR", routeOptions(options.route, alias, destination)),
     "-o", "ClearAllForwardings=yes",
     "--", destination,
     "echo ocx-link-probe",
@@ -325,12 +361,12 @@ export function buildRouteProbeArgv(options: RouteProbeArgvOptions): string[] {
 export const WINDOWS_OS_PROBE = "cmd /c echo %OS%";
 
 /** Run WINDOWS_OS_PROBE against an already trusted (pinned or just-probed) host key only. */
-export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string; destination?: string }): string[] {
+export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string; destination?: string; route: ExplicitRoute | null }): string[] {
   const alias = assertSshAlias(options.alias);
   const destination = assertSshAlias(options.destination ?? alias);
   return [
     "ssh", "-T",
-    ...commonOptions(alias, options.knownHostsFile, "yes"),
+    ...commonOptions(alias, options.knownHostsFile, "yes", "ERROR", routeOptions(options.route, alias, destination)),
     "-o", "ClearAllForwardings=yes",
     "--", destination,
     WINDOWS_OS_PROBE,

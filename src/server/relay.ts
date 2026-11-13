@@ -11,6 +11,7 @@ import {
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
 import {
@@ -549,7 +550,7 @@ export function relaySseWithFailedTail(
     terminalBoundary.dispose();
     return "terminal";
   };
-  return new ReadableStream<Uint8Array>({
+  return carryPacedStream(body, new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         for (;;) {
@@ -621,7 +622,7 @@ export function relaySseWithFailedTail(
       else upstream.abort(reason);
       reader.cancel(reason).catch(() => {});
     },
-  });
+  }, pacedQueuingStrategy(body)));
 }
 
 export { nextSseBlock, sseDataPayload } from "./sse-payload-rewrite";

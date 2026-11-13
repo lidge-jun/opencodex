@@ -164,7 +164,12 @@ export interface ManagementApiDeps {
   writeLinkStore?: (store: LinkStore) => void;
   linkKnownHostsPath?: () => string;
   sshRunner?: SshRunner;
-  issueApiKey?: (config: OcxConfig, name: string) => IssuedApiKey;
+  /** id: the key id an operation reserved before issuing it (src/server/management/link-operation.ts). */
+  issueApiKey?: (config: OcxConfig, name: string, id?: string) => IssuedApiKey;
+  /** The operation journal (src/link/operations-journal.ts); defaults to <configDir>/link/operations.json. */
+  linkOperationsPath?: () => string;
+  /** The per-alias lock (src/link/alias-lock.ts): directory, clock, sleep and wait bound. */
+  linkAliasLock?: import("../../link/alias-lock").AliasLockDeps;
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
   resolveChildBinarySource?: typeof import("../../link/child-binary-source").resolveChildBinarySource;

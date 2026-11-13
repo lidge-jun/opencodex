@@ -20,6 +20,9 @@ export interface PendingLinkHost {
   remotePlatform?: "posix" | "windows";
   runtimeKind?: "full" | "ephemeral" | "missing";
   targetTriple?: import("../../link/child-binary-source").ChildTargetTriple | null;
+  /** The explicit route every SSH command of this enrollment uses; the record keeps it (link-route-request.ts). */
+  explicitRoute?: import("../../link/explicit-route").ExplicitRoute;
+  exclusive?: true;
 }
 
 export interface ConfirmedLinkHost extends PendingLinkHost {
@@ -164,8 +167,9 @@ export function putConfirmedKnownHost(ctx: ManagementContext, alias: string, lin
   });
 }
 
-export function issueKey(ctx: ManagementContext, name: string): IssuedApiKey {
-  return (ctx.deps.issueApiKey ?? issueApiKeyInProcess)(ctx.config, name);
+export function issueKey(ctx: ManagementContext, name: string, reservedId?: string): IssuedApiKey {
+  const issue = ctx.deps.issueApiKey ?? issueApiKeyInProcess;
+  return reservedId === undefined ? issue(ctx.config, name) : issue(ctx.config, name, reservedId);
 }
 
 export function revokeKey(ctx: ManagementContext, id: string): boolean {

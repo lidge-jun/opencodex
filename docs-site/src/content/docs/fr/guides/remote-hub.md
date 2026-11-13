@@ -12,7 +12,13 @@ Un hub conserve les identifiants fournisseur, le catalogue et l’usage sur un h
 `standalone` réunit données et gestion. `hub` possède les secrets fournisseur et l’usage. `client` ne conserve que l’état de connexion et une clé de données dédiée.
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --pairing-code-stdin
+unset pairing_code
 ocx connect status
 ocx sync
 ```
@@ -66,6 +72,8 @@ tailscale serve status
 
 `/healthz` ne prouve que la vie du processus. Validez aussi `/readyz`, `GET /v1/catalog` authentifié et une vraie réponse routée. Le port de gestion doit écouter uniquement sur `127.0.0.1`. Pour un proxy TLS privé, utilisez `tailscale cert hub-name.tailnet-name.ts.net` et ne fabriquez jamais d’en-têtes `Tailscale-User-*`; utilisez l’association à usage unique.
 
+<a id="giving-the-data-listener-tls"></a>
+
 ### Donner du TLS à l'écoute de données
 
 Le mappage Serve ci-dessus ne publie que l'entrée de **gestion**. Celle-ci ne sert jamais `/v1/*`, `/healthz` ni `/readyz` : à elle seule, elle ne donne donc à un client distant aucun plan de données utilisable. opencodex ne termine par ailleurs aucun TLS : l'écoute est en HTTP clair et le HTTPS vient toujours d'un frontal détenu par l'opérateur.
@@ -86,9 +94,13 @@ Serve n'accepte qu'un jeu limité de ports HTTPS; confirmez avec `tailscale serv
 Connectez-vous ensuite en énonçant les deux origines séparément. L'URL positionnelle est l'origine **de données** — c'est là que sont récupérés `/readyz` et `/v1/catalog` — et `--management-url` est l'origine du tableau de bord, utilisée pour l'association et l'émission de clé. Elles ne partagent pas nécessairement le même port :
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the management admin token without echoing it.
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --admin-token-stdin
+unset admin_token
 ```
 
 Quand `--management-url` est omis, il est repris de la réponse `/readyz`, qui rapporte `hub.managementPublicOrigin`. L'indiquer explicitement est plus clair lorsque les deux origines diffèrent.
@@ -102,10 +114,16 @@ Une fois Serve en place, rejouez les contrôles d'acceptation sur l'origine de d
 ## OAuth, rotation et déconnexion
 
 ```bash
-ocx config set oauthOpenBrowser false
-ocx connect rotate --pairing-code-stdin
-# uniquement en HTTPS :
-ocx connect rotate --admin-token-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: choose one authority source.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
+unset pairing_code
+
+# Alternatively, only over HTTPS, use the management admin token:
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect rotate --admin-token-stdin
+unset admin_token
 ```
 
 Démarrez OAuth avec `POST /api/oauth/login`; si le rappel ne rejoint pas le hub, envoyez l’URL finale ou le code à `POST /api/oauth/login/code` sous `{provider,input}`. Ne placez jamais le code OAuth dans argv ou les journaux.

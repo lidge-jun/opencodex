@@ -8,11 +8,11 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 48.
+Declared capabilities: 50.
 
 ### `ocx link probe`
 
-Usage: `ocx link probe <alias> [--json]`
+Usage: `ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
 
 Probe an SSH host fingerprint and OpenCodex version without trusting it.
 
@@ -24,13 +24,17 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit alias, fingerprint, key type and version as JSON. |
 
 - Requires loopback admin authority on the Home. Stores only a temporary pending offer; does not persist host trust or issue a link key.
 
 ### `ocx link add`
 
-Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]`
+Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]`
 
 Connect an SSH Child to this Home after confirming its fingerprint.
 
@@ -45,6 +49,12 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
+| `--operation-id` | string | Journal the enrollment under this id (1-128 letters, digits, . _ : -): reserved ids, a mark per Home effect and the outcome; a repeat with the same id and parameters replays it. Needs --expect-fingerprint. |
+| `--require-ephemeral` | boolean | Refuse (409 full_install_present) a Child where any runnable full ocx exists, before any plant, key or Child change. |
 | `--json` | boolean | Emit the verified link result as JSON. |
 
 - Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.
@@ -127,7 +137,7 @@ Drives no management route.
 
 ### `ocx link revoke`
 
-Usage: `ocx link revoke --link-id <id> [--force --yes] [--json]`
+Usage: `ocx link revoke --link-id <id> [--force --yes] [--operation-id <id>] [--json]`
 
 Revoke a link credential and remove its link record.
 
@@ -143,6 +153,7 @@ State-changing: yes. JSON mode: `envelope`.
 | `--json` | boolean | Emit the revoked link id as JSON. |
 | `--force` | boolean | Explicitly skip remote disconnect while retiring the local link; requires --yes. |
 | `--yes` | boolean | Confirms force only; refused without --force. |
+| `--operation-id` | string | Journal the revoke under this id; a purge records the Child's purged:true as its receipt, and a repeat replays the outcome even after the link is gone. |
 
 - Requires a valid link ID and loopback admin authority. Explicit force additionally requires --yes.
 - Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.
@@ -954,6 +965,46 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
 
 - The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. A reorder does not move a running tunnel. Requires loopback admin authority on the Home.
+
+### `ocx link operations`
+
+Usage: `ocx link operations [--operation-id <id>] [--json]`
+
+List or read the enrollments and revokes journalled under an operation id.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/link/operations` |
+| GET | `/api/link/operations/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--operation-id` | string | Read one operation. |
+| `--json` | boolean | Emit {operations} or the one entry as JSON. |
+
+- Each entry names its reserved link and key ids, the intent and completion of every effect and its outcome: open, committed, failed_clean, residual (the Child may still hold an enrollment or a plant) or unknown. Committed and failed_clean entries stay 30 days; residual and unknown entries stay until resolved, then 30 days. Requires loopback admin authority on the Home.
+
+### `ocx link operations resolve`
+
+Usage: `ocx link operations resolve --operation-id <id> --yes [--json]`
+
+Mark a residual or unknown link operation resolved.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/operations/{id}/resolve` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--operation-id` | string | The residual or unknown operation. |
+| `--yes` | boolean | Confirms that the Child is clean or the loss is accepted. |
+| `--json` | boolean | Emit the resolved entry as JSON. |
+
+- Changes nothing on the Child or in links.json: it records the resolution, and the entry's 30 days of retention start then. operation_not_resolvable (exit 5) for any other state, operation_not_found (exit 4). Requires loopback admin authority on the Home.
 
 ### `ocx link activity clear`
 

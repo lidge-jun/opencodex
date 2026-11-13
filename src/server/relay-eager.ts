@@ -43,6 +43,7 @@ import {
 } from "./sse-payload-rewrite";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import type { BareUpstreamError } from "./bare-upstream-error";
+import { carryPacedStream, isPacedStream, PACED_READ_AHEAD_BYTES } from "../lib/paced-stream";
 
 export type EagerRelayHooks = {
   /** Feed one upstream chunk through SSE inspection (createSseInspector.feed). */
@@ -115,7 +116,8 @@ export function relaySseEagerBounded(
   hooks: EagerRelayHooks,
   opts?: EagerRelayOptions,
 ): ReadableStream<Uint8Array> {
-  const maxQueueBytes = opts?.maxQueueBytes ?? DEFAULT_MAX_QUEUE_BYTES;
+  // A paced source (#8601) queues one chunk for its client instead of the default allowance.
+  const maxQueueBytes = opts?.maxQueueBytes ?? (isPacedStream(body) ? PACED_READ_AHEAD_BYTES : DEFAULT_MAX_QUEUE_BYTES);
   const drainMs = opts?.postCancelDrainMs ?? DEFAULT_DRAIN_MS;
   const drainBytes = opts?.postCancelDrainBytes ?? DEFAULT_DRAIN_BYTES;
   const now = opts?.now ?? Date.now;
@@ -533,7 +535,7 @@ export function relaySseEagerBounded(
     }
   };
 
-  return new ReadableStream<Uint8Array>({
+  return carryPacedStream(body, new ReadableStream<Uint8Array>({
     start(controller) {
       controllerRef = controller;
       clientGoneSignal?.addEventListener("abort", markClientGone, { once: true });
@@ -550,7 +552,7 @@ export function relaySseEagerBounded(
     cancel() {
       markClientGone();
     },
-  });
+  }));
 }
 
 function joinUint8Arrays(first: Uint8Array, second: Uint8Array): Uint8Array {

@@ -23,14 +23,12 @@ achèvement, puis télécharge le résultat.
 > ```json
 > {
 >   "providers": {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> Si vous avez configuré xAI avec `ocx login xai` (OAuth), le fournisseur reste en `authMode: "oauth"`
-> et le pont ne s'activera pas, sans produire d'erreur. Définissez `XAI_API_KEY` dans l'environnement
-> **ou** enregistrez directement la clé comme dans l'exemple ci-dessus.
+> Définissez `XAI_API_KEY` dans l’environnement de démarrage du proxy et gardez `${XAI_API_KEY}` avec `authMode: "key"`. Une exportation dans un autre terminal ne change pas un proxy actif : redémarrez-le via Desktop, son service ou son terminal propriétaire. Ne partagez pas les clés littérales.
 
 ## Configuration
 

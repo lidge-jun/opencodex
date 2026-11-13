@@ -35,7 +35,9 @@ import {
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { isNonReplayableResponse, isReplayRefusalResponse } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
-import { teeWithBoundedInspection } from "../inspection-tee";
+import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
+import { markPacedStream } from "../../lib/paced-stream";
+import { LINK_PACED_SLICE_BYTES, linkTurnPacesReads } from "../link-turn";
 import {
   codexForwardTerminalOutcomeRecorder,
   usesCodexForwardPoolAuth,
@@ -1207,6 +1209,10 @@ export async function deliverPassthroughResponse(
       }
 
       const relayPlatform = relayPlatformForTests ?? process.platform;
+      // A Remote Link turn while the link WebSocket feature is on reads its upstream only as its client drains (#8601);
+      // every other request keeps the relays' read-ahead below. Its chunks travel in slices, and the paced mark makes the
+      // tee, the eager relay and every stage after them read one slice at a time as the client asks (src/lib/paced-stream.ts).
+      if (linkTurnPacesReads(logCtx)) passthroughSseBody = markPacedStream(sliceChunks(passthroughSseBody, LINK_PACED_SLICE_BYTES));
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
       // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
       // lost). The eager single reader applies the same rewrites inline.
