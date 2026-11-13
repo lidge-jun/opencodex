@@ -185,14 +185,9 @@ Kiro 沒有 `minimal` 檔位。除 `claude-opus-5` 和 `claude-opus-5.5` 外的�
 只有 Responses 會標明模型與 effort。串流與非串流在所有介面上回傳相同內容：拒絕發生在建構上游
 請求體時，因此沒有開啟串流，也沒有發出上游呼叫。
 
-`ultra` 需要區分。呼叫方自己送出的 `ultra` 會在適配器建置請求前被降為 `max`，Responses 和
-Messages 路徑都是如此。設定的 pin 則不同：`pinnedReasoningEffort`、`modelPinnedReasoningEfforts`
-和 `modelPinnedEfforts` 接受 `ultra`，並在請求解析之後才套用，因此會到達適配器。對所有使用原生
-Kiro effort 的模型（即上面的 Claude id 與 GPT 模型），這個 pin 都不是 Kiro 接受的檔位，請求會在
-傳送任何內容之前以 400 `invalid_request_error` 失敗。這次拒絕也像 `minimal` 一樣按介面區分：
-Responses 正文標明模型與 effort，Messages 與 Chat Completions 正文只帶代理的固定文案，兩者都不標明。
-對使用模擬推理的模型，pin 會被靜默丟棄，請求在沒有推理訊號的情況下送出。如果你已把其中某個
-Claude id 升級為原生 effort，那麼以前會被丟棄的 `ultra` pin 現在會失敗；請改用 `max`。
+呼叫方的 `ultra` 在解析時轉為 `max`。`pinnedReasoningEffort`、`modelPinnedReasoningEfforts`
+和 `modelPinnedEfforts` 固定值在解析後套用；對使用原生 Kiro effort 的模型，適配器也會將固定的
+`ultra` 轉為 `max`。對使用模擬推理的模型，該固定值會被丟棄，請求不帶推理訊號送出。
 
 `claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro
 模型在每個 effort 上都使用模擬推理；提供 effort 選項不代表原生支援。

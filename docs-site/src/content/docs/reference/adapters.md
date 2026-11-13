@@ -760,18 +760,11 @@ adapter detail with their own sentence rather than relaying it. Only Responses n
 the effort. Stream and non-stream requests read identically on every surface: the refusal is raised
 while the wire payload is built, so no stream has opened and no request has gone upstream.
 
-`ultra` needs a distinction. A caller's own `ultra` is reduced to `max` before the adapter builds
-a request, on both the Responses and Messages paths. A configured pin is not: `pinnedReasoningEffort`,
-`modelPinnedReasoningEfforts` and `modelPinnedEfforts` accept `ultra` and are applied after the
-request is parsed, so the adapter does receive it. For every model with native Kiro effort — the
-Claude ids above and the GPT models — that pin fails the request with a 400
-`invalid_request_error` before anything is sent, because `ultra` is not a rung Kiro accepts. That
-refusal is split across the surfaces exactly as `minimal` is: the Responses body names the model
-and the effort, while the Messages and Chat Completions bodies carry only the fixed condition copy
-and name neither.
-For a model that uses emulated reasoning the pin is dropped instead, and the request goes out with
-no reasoning signal at all. If you upgraded onto native effort for one of these Claude ids, a pin of
-`ultra` that used to be dropped now fails: pin `max` instead.
+A caller's `ultra` is reduced to `max` during parsing. The configured pins
+`pinnedReasoningEffort`, `modelPinnedReasoningEfforts` and `modelPinnedEfforts` are applied later;
+for models with native Kiro effort, the adapter also folds a pinned `ultra` to native `max`.
+For models using emulated reasoning, a pinned `ultra` is dropped and the request is sent without
+a reasoning signal.
 
 `claude-haiku-4.5`, `claude-opus-4.5` and `claude-sonnet-4.5`, along with any Kiro
 model not listed above, use emulated reasoning at every effort; an advertised effort control is

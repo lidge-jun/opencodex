@@ -172,18 +172,10 @@ niveau. Les requêtes en flux et hors flux se lisent à l’identique sur toutes
 survient pendant la construction du corps envoyé en amont, donc aucun flux ne s’ouvre et aucun appel
 amont n’a lieu.
 
-`ultra` demande une distinction. Le `ultra` envoyé par l’appelant est réduit à `max` avant que
-l’adaptateur ne construise la requête, sur les chemins Responses et Messages. Un pin configuré, non :
-`pinnedReasoningEffort`, `modelPinnedReasoningEfforts` et `modelPinnedEfforts` acceptent `ultra` et
-s’appliquent après l’analyse de la requête, donc l’adaptateur le reçoit. Pour chaque modèle à effort
-natif Kiro — les identifiants Claude ci-dessus et les modèles GPT — ce pin fait échouer la requête
-par une erreur 400 `invalid_request_error` avant tout envoi, car `ultra` n’est pas un palier que
-Kiro accepte. Ce refus se répartit entre les surfaces exactement comme `minimal` : le corps
-Responses nomme le modèle et le niveau, les corps Messages et Chat Completions ne portent que le
-libellé fixe du proxy et ne nomment ni l’un ni l’autre.
-Pour un modèle qui utilise l’émulation, le pin est abandonné et la requête part sans aucun signal de
-raisonnement. Si vous avez fait passer l’un de ces identifiants Claude en effort natif, un pin
-`ultra` autrefois ignoré échoue désormais : épinglez `max`.
+Le `ultra` envoyé par l’appelant est réduit à `max` à l’analyse. Les pins `pinnedReasoningEffort`,
+`modelPinnedReasoningEfforts` et `modelPinnedEfforts` sont appliqués ensuite : pour les modèles à
+effort natif Kiro, l’adaptateur réduit aussi `ultra` à `max`. Pour les modèles en émulation, ce pin
+est ignoré et la requête part sans signal de raisonnement.
 
 `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5`, ainsi que tout modèle Kiro non
 listé ci-dessus, utilisent une émulation à chaque niveau ; un réglage d’effort ne prouve pas une

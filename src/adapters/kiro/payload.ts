@@ -485,8 +485,9 @@ export function buildKiroPayload(
       ...(history.length > 0 ? { history } : {}),
     },
   };
-  const effort = parsed.options.reasoning;
   const effortField = kiroNativeEffortField(parsed.modelId);
+  const effort = effortField && parsed.options.reasoning === "ultra" && KIRO_NATIVE_EFFORTS.includes("max")
+    ? "max" : parsed.options.reasoning;
   if (effortField && effort && effort !== "none") {
     if (!KIRO_NATIVE_EFFORTS.includes(effort) && !kiroEmulatesUnsupportedEffort(parsed.modelId, effort)) {
       throw new Error(`Kiro ${normalizeKiroModelId(parsed.modelId)} does not support reasoning effort ${JSON.stringify(effort)}`);

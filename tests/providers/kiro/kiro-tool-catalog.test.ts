@@ -254,7 +254,7 @@ describe("kiro tool schemas by model family", () => {
 
 describe("Kiro effort fallback", () => {
   test("the minimal fallback is that one value, not any effort the ladder does not know", async () => {
-    // The reachable outside-ladder value is `minimal`; `ultra` is folded to `max` upstream. If the
+    // The legacy outside-ladder value is `minimal`; `ultra` is folded to `max`. If the
     // fallback keyed on "not in KIRO_NATIVE_EFFORTS" instead of the value, a future rung would
     // silently lose reasoning here instead of failing where the operator can see it.
     for (const modelId of ["claude-opus-4.8", "claude-sonnet-5.5"]) {

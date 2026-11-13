@@ -2,7 +2,6 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KIRO_NATIVE_EFFORT_FIELDS } from "../../../src/adapters/kiro/reasoning";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
 import { handleChatCompletions } from "../../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../../src/server/claude-messages";
@@ -41,11 +40,17 @@ afterEach(() => {
 });
 
 /** A provider pin is an operator setting; `ultra` is a declared effort, so config admits it. */
-function config(models: string[], pin?: string): OcxConfig {
-  return { port: 0, defaultProvider: "kiro", providers: { kiro: {
-    adapter: "kiro", authMode: "oauth", baseUrl: "https://runtime.us-east-1.kiro.dev",
-    models, ...(pin ? { pinnedReasoningEffort: pin } : {}),
-  } } } as unknown as OcxConfig;
+type Pin = string | { form: "provider" | "model" | "global"; effort: string };
+function config(models: string[], pin?: Pin): OcxConfig {
+  const form = typeof pin === "string" ? "provider" : pin?.form;
+  const effort = typeof pin === "string" ? pin : pin?.effort;
+  return { port: 0, defaultProvider: "kiro",
+    ...(form === "global" ? { modelPinnedEfforts: { [models[0]!]: effort } } : {}),
+    providers: { kiro: {
+      adapter: "kiro", authMode: "oauth", baseUrl: "https://runtime.us-east-1.kiro.dev", models,
+      ...(form === "provider" ? { pinnedReasoningEffort: effort } : {}),
+      ...(form === "model" ? { modelPinnedReasoningEfforts: { [models[0]!]: effort } } : {}),
+    } } } as unknown as OcxConfig;
 }
 
 /** Capture the wire body; answer 500 so no case depends on a synthetic success frame. */
@@ -59,7 +64,7 @@ function captureWire(): { bodies: Record<string, unknown>[] } {
 }
 
 async function responsesRequest(
-  model: string, effort: string | undefined, pin: string | undefined, stream = false,
+  model: string, effort: string | undefined, pin: Pin | undefined, stream = false,
 ) {
   const captured = captureWire();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
@@ -83,7 +88,7 @@ async function responsesRequest(
  * not the adapter's detail, so this returns the raw body for an exact-shape assertion rather than
  * digging out `error.message` and hiding an extra field.
  */
-async function messagesRequest(model: string, pin: string | undefined, stream = false) {
+async function messagesRequest(model: string, pin: Pin | undefined, stream = false) {
   const captured = captureWire();
   const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
     method: "POST",
@@ -101,7 +106,7 @@ async function messagesRequest(model: string, pin: string | undefined, stream = 
 }
 
 /** Chat Completions is the third surface that reaches this adapter, and its copy is fixed too. */
-async function chatRequest(model: string, pin: string | undefined, stream = false) {
+async function chatRequest(model: string, pin: Pin | undefined, stream = false) {
   const captured = captureWire();
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", headers: { "content-type": "application/json" },
@@ -122,70 +127,45 @@ const userContent = (wire: Record<string, unknown> | undefined) => (wire?.conver
   currentMessage: { userInputMessage: { content: string } };
 } | undefined)?.currentMessage.userInputMessage.content;
 
-// The claim this file replaces: "ultra never reaches the adapter". It reaches the adapter whenever
-// an operator pin supplies it, because pins are applied AFTER the inbound fold — the Responses
-// parser turns a caller's `ultra` into `max` (src/responses/parser.ts) and the Messages translator
-// copies a caller's `output_config.effort` through (src/claude/inbound.ts), but
-// `applyPinnedEffort` (src/server/effort-policy.ts) writes the configured value last.
-test("an operator pin of ultra reaches the adapter, which admits only its own ladder", async () => {
-  const native = await responsesRequest("claude-opus-4.8", "high", "ultra");
-  expect(native.status).toBe(400);
-  expect(native.error).toEqual({
-    message: 'Kiro claude-opus-4.8 does not support reasoning effort "ultra"',
-    type: "invalid_request_error", code: "invalid_request_error",
-  });
-  // Nothing was sent: the refusal happens while the payload is built, not after an upstream round trip.
-  expect(native.wires).toHaveLength(0);
-
-  // The same request without the pin is folded to `max` and does reach the wire.
-  const folded = await responsesRequest("claude-opus-4.8", "ultra", undefined);
-  expect(folded.status).toBe(500);
-  expect(folded.wires).toHaveLength(1);
-  expect(reasoningField(folded.wires[0])).toEqual({ output_config: { effort: "max" } });
-});
-
-test("every model with a native Kiro effort field rejects a pinned ultra instead of sending it", async () => {
-  const models = Object.keys(KIRO_NATIVE_EFFORT_FIELDS);
-  // Guard the enumeration itself: an empty table would make the loop below pass vacuously.
-  expect(models.length).toBeGreaterThan(0);
-  for (const model of models) {
-    for (const stream of [false, true]) {
-      const { status, error, wires, contentType } = await responsesRequest(model, undefined, "ultra", stream);
-      expect({ model, stream, status }).toEqual({ model, stream, status: 400 });
-      // The Responses public contract carries the adapter's sentence verbatim, stream or not.
-      expect({ model, stream, error }).toEqual({
-        model, stream,
-        error: {
-          message: `Kiro ${model} does not support reasoning effort "ultra"`,
-          type: "invalid_request_error", code: "invalid_request_error",
-        },
+// Pins are applied after parsing. Exercise each form through every client surface, including
+// the seven Claude ids newly moved from emulated to native effort.
+const affectedModels = [
+  "claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-5.5",
+  "claude-sonnet-5", "claude-sonnet-4.6", "claude-haiku-5.5",
+];
+for (const model of affectedModels) {
+  for (const form of ["provider", "model", "global"] as const) {
+    for (const surface of ["responses", "chat", "messages"] as const) {
+      test(`${surface}: ${model} ${form} ultra pin sends native max`, async () => {
+        const pin = { form, effort: "ultra" };
+        for (const stream of [false, true]) {
+          const result = surface === "responses" ? await responsesRequest(model, "high", pin, stream)
+            : surface === "chat" ? await chatRequest(model, pin, stream)
+            : await messagesRequest(model, pin, stream);
+          expect(result.status).toBe(surface === "messages" ? 529 : 500);
+          expect(result.wires).toHaveLength(1);
+          expect(reasoningField(result.wires[0])).toEqual({ output_config: { effort: "max" } });
+        }
       });
-      expect({ model, stream, sends: wires.length }).toEqual({ model, stream, sends: 0 });
-      // A refusal raised before the stream opens is JSON on both request shapes, never SSE.
-      expect(contentType).toContain("application/json");
     }
   }
+}
+
+test("native GPT ultra pin also sends max", async () => {
+  const result = await responsesRequest("gpt-5.6-sol", undefined, "ultra");
+  expect(result.status).toBe(500);
+  expect(result.wires).toHaveLength(1);
+  expect(reasoningField(result.wires[0])).toEqual({ reasoning: { effort: "max" } });
 });
 
-test("Chat Completions answers the same refusals with its own fixed copy", async () => {
-  // The OpenAI-compatible body adds `param`/`code` around the same fixed sentence. That surface is
-  // asserted separately so a Messages-only change cannot silently leave it forwarding the detail.
-  for (const [model, pin] of [["gpt-5.6-sol", "ultra"], ["claude-opus-5.5", "minimal"]] as const) {
-    for (const stream of [false, true]) {
-      const { status, body, wires, contentType } = await chatRequest(model, pin, stream);
-      expect({ model, pin, stream, status }).toEqual({ model, pin, stream, status: 400 });
-      expect({ model, pin, stream, body }).toEqual({
-        model, pin, stream,
-        body: {
-          error: {
-            message: "The provider rejected the request.", type: "invalid_request_error",
-            param: null, code: "invalid_request_error",
-          },
-        },
-      });
-      expect({ model, pin, stream, sends: wires.length }).toEqual({ model, pin, stream, sends: 0 });
-      expect(contentType).toContain("application/json");
-    }
+test("Chat Completions retains fixed refusal copy for minimal", async () => {
+  for (const stream of [false, true]) {
+    const { status, body, wires, contentType } = await chatRequest("claude-opus-5.5", "minimal", stream);
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: { message: "The provider rejected the request.",
+      type: "invalid_request_error", param: null, code: "invalid_request_error" } });
+    expect(wires).toHaveLength(0);
+    expect(contentType).toContain("application/json");
   }
 });
 
@@ -229,7 +209,7 @@ test("the Messages surface replaces the adapter detail with the fixed condition 
   // Responses error and keeps only `upstreamConditionMessage("request_rejected")`, so the model and
   // effort never reach a Messages client. Asserting the whole body pins that replacement rather
   // than a substring a future forwarding change would still satisfy.
-  for (const [model, pin] of [["claude-opus-4.8", "ultra"], ["claude-opus-5", "minimal"]] as const) {
+  for (const [model, pin] of [["claude-opus-5", "minimal"]] as const) {
     for (const stream of [false, true]) {
       const { status, body, wires, contentType } = await messagesRequest(model, pin, stream);
       expect({ model, pin, stream, status }).toEqual({ model, pin, stream, status: 400 });

@@ -59,18 +59,9 @@ const KIRO_NO_XHIGH_NATIVE_MODELS = new Set(["claude-opus-4.6", "claude-sonnet-4
 // value check is what keeps it that way: an effort this file has never seen still throws instead
 // of silently dropping reasoning.
 //
-// `ultra` is a separate case, and the inbound fold is not the whole story. Caller-supplied
-// `ultra` is folded to `max` before the adapter — the Responses parser
-// (`src/responses/parser.ts`) does it for both surfaces, because the Messages translator
-// (`src/claude/inbound.ts`) copies `output_config.effort` through verbatim and then hands the
-// translated body to that same parser — but an operator pin is applied later, in
-// `applyPinnedEffort` (`src/server/effort-policy.ts`), which runs after parsing and accepts
-// `ultra` because it is a declared effort. So a `pinnedReasoningEffort: "ultra"` — or a
-// `modelPinnedReasoningEfforts` / `modelPinnedEfforts` value — does reach this file. Every model
-// in the native table then throws,
-// and the request becomes HTTP 400 `invalid_request_error` before anything is sent. Models
-// outside the table keep the emulated path, where `kiroThinkingBudget` has no `ultra` entry, so
-// the pin is dropped and no reasoning signal goes out at all.
+// Caller-supplied `ultra` is folded by the Responses parser, but operator pins are applied
+// afterward. The Kiro payload builder folds `ultra` to `max` for native models; emulated
+// models retain their existing path, which has no `ultra` thinking budget.
 const KIRO_EMULATED_EXTRA_EFFORT_MODELS = new Set([
   "claude-opus-4.8",
   "claude-opus-4.7",

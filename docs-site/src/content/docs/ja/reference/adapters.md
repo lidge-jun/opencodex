@@ -200,17 +200,10 @@ Kiro には `minimal` の段階がありません。`claude-opus-5` と `claude-
 どのサーフェスでも同じ応答になります。拒否は上流へ送る本文を組み立てる途中で起きるため、ストリームは
 開かれず上流呼び出しも発生しません。
 
-`ultra` には区別が必要です。呼び出し元が送った `ultra` は、Responses と Messages のどちらの経路でも
-アダプターがリクエストを組み立てる前に `max` へ下げます。設定した pin は違います。
-`pinnedReasoningEffort`、`modelPinnedReasoningEfforts`、`modelPinnedEfforts` は `ultra` を受け付け、
-リクエストを解析した後に適用するため、アダプターまで届きます。ネイティブ Kiro effort を持つすべての
-モデル、つまり上記の Claude id と GPT モデルでは、この pin が Kiro の受け付けない段階であるため、
-何も送信する前に 400 `invalid_request_error` でリクエストが失敗します。この拒否も `minimal` と
-同じくサーフェスごとに分かれます。Responses の本文はモデルと effort を示し、Messages と Chat
-Completions の本文はプロキシの固定文言だけを載せ、どちらも示しません。エミュレーションを使う
-モデルでは pin は黙って捨てられ、推論シグナルのないままリクエストが送られます。これらの Claude id
-のいずれかをネイティブ effort に上げた後では、以前は捨てられていた `ultra` の pin が失敗します。
-`max` を pin してください。
+呼び出し元の `ultra` は解析時に `max` へ変換されます。`pinnedReasoningEffort`、
+`modelPinnedReasoningEfforts`、`modelPinnedEfforts` はその後に適用されます。ネイティブ Kiro
+effort を持つモデルでは、アダプターも pin の `ultra` を `max` に変換します。エミュレーション
+モデルでは pin は破棄され、推論シグナルなしでリクエストが送られます。
 
 `claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` と、上記にない Kiro モデルは
 すべての effort でエミュレーションを使います。effort の選択肢だけではネイティブ対応を意味しません。

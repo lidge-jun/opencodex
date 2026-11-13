@@ -325,17 +325,10 @@ aktarmak yerine kendi metniyle değiştirir. Modeli ve seviyeyi yalnızca Respon
 akışsız istekler bütün yüzeylerde aynı okunur: ret, sağlayıcıya giden istek gövdesi kurulurken oluşur;
 bu yüzden akış açılmaz ve sağlayıcıya çağrı yapılmaz.
 
-`ultra` için bir ayrım gerekir. Çağıranın kendi gönderdiği `ultra`, hem Responses hem Messages
-yolunda adaptör isteği kurmadan önce `max` seviyesine indirilir. Yapılandırılmış pin ise böyle
-değildir: `pinnedReasoningEffort`, `modelPinnedReasoningEfforts` ve `modelPinnedEfforts` `ultra`
-değerini kabul eder ve istek ayrıştırıldıktan sonra uygulanır, dolayısıyla adaptör onu gerçekten
-alır. Yerel Kiro çabası kullanan her modelde, yani yukarıdaki Claude kimliklerinde ve GPT
-modellerinde, bu pin `ultra` Kiro'nun kabul ettiği bir seviye olmadığı için isteği hiçbir şey
-gönderilmeden önce 400 `invalid_request_error` ile başarısız kılar. Bu ret de `minimal` gibi yüzeylere
-ayrılır: Responses gövdesi modeli ve seviyeyi belirtir, Messages ve Chat Completions gövdeleri yalnızca
-proxy'nin sabit metnini taşır ve ikisini de belirtmez. Öykünme kullanan bir modelde ise pin sessizce düşürülür ve istek hiçbir akıl
-yürütme sinyali olmadan gider. Bu Claude kimliklerinden birini yerel çabaya yükselttiyseniz, önceden
-düşürülen bir `ultra` pin artık başarısız olur: `max` pinleyin.
+Çağıranın `ultra` değeri ayrıştırma sırasında `max` olur. `pinnedReasoningEffort`,
+`modelPinnedReasoningEfforts` ve `modelPinnedEfforts` pinleri daha sonra uygulanır. Yerel Kiro
+çabası kullanan modellerde adaptör pinlenmiş `ultra` değerini de `max` yapar. Öykünme kullanan
+modellerde pin düşürülür ve istek akıl yürütme sinyali olmadan gönderilir.
 
 `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5` ve
 yukarıda listelenmeyen Kiro modelleri her seviyede öykünme kullanır; çaba seçeneği yerel desteğin
