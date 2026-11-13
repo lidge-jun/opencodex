@@ -1727,5 +1727,6 @@
   "link-ws-relay.test.ts": "clients",
   "link-ws-fallback.test.ts": "clients",
   "link-ws-child-home.test.ts": "e2e-style",
-  "link-ws-child-status.test.ts": "clients"
+  "link-ws-child-status.test.ts": "clients",
+  "link-ws-relay-edges.test.ts": "clients"
 }

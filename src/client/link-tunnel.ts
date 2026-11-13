@@ -607,6 +607,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   let timer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let stopping = false;
+  // Told once when stop() begins, before the tunnel is signalled (the link WebSocket drains here).
+  const stoppingListeners: Array<() => void> = [];
   let initialized = false;
   let initializing = false;
   let onLinkEndedCalled = false;
@@ -1014,6 +1016,9 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
         return;
       }
       stopping = true;
+      for (const listener of stoppingListeners.splice(0)) {
+        try { listener(); } catch { /* a listener never delays the stop */ }
+      }
       abortProbe();
       settleWaiters();
       if (timer !== undefined) {
@@ -1023,6 +1028,9 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       if (tickFlight) await tickFlight;
       await stopTunnel();
       failure = undefined;
+    },
+    onStopping(listener: () => void): void {
+      stoppingListeners.push(listener);
     },
     connectionGeneration(): string | undefined {
       if (!started || stopping || failure !== undefined || state.kind !== "connected") return undefined;
