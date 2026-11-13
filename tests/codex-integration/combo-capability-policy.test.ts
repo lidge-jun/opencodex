@@ -85,11 +85,21 @@ describe("combo capabilityPolicy: catalog", () => {
     expect(row?.reasoningEfforts).toEqual(["low", "medium", "high"]);
   });
 
-  test("context window, input and output limits stay the minimum under union", () => {
+  test("union advertises the largest window, input limit and auto-compact; max output stays the minimum", () => {
     const row = deriveComboCatalogModel("x", combo({ capabilityPolicy: "union" }), [imageMember, textMember]);
+    expect(row?.contextWindow).toBe(200_000);
+    expect(row?.maxInputTokens).toBe(180_000);
+    expect(row?.maxOutputTokens).toBe(32_000);
+    expect(row?.autoCompactTokenLimit).toBeGreaterThan(100_000);
+    expect(row?.autoCompactTokenLimit).toBeLessThanOrEqual(180_000);
+  });
+
+  test("intersection keeps the smallest window, input limit, output limit and auto-compact", () => {
+    const row = deriveComboCatalogModel("x", combo(), [imageMember, textMember]);
     expect(row?.contextWindow).toBe(128_000);
     expect(row?.maxInputTokens).toBe(100_000);
     expect(row?.maxOutputTokens).toBe(32_000);
+    expect(row?.autoCompactTokenLimit).toBeLessThanOrEqual(100_000);
   });
 
   test("unionEfforts sorts known rungs by rank and keeps unknown rungs last in first-seen order", () => {

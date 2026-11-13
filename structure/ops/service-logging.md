@@ -15,7 +15,7 @@ position in configuration and targets by position plus the validated provider-id
 combo aliases, model ids and URLs. `src/combos/request.ts` effort diagnostics retain the
 validated provider and closed effort/capability fields, with no model field. The `capabilityPolicy: "union"`
 effort clamp in `src/combos/request-capability.ts` logs a debug line with the same validated provider
-label and the requested and sent rungs only; the unservable-image warning in `core-combo.ts` names no
+label and the requested and sent rungs only; the unservable-image and no-window-fits warnings in `core-combo.ts` name no
 combo, target or model. Operational
 selection and cooldown keys remain internal. `tests/responses/chat-error-body-normalization.test.ts`
 covers failure, wait, last-resort, reprobe and effort diagnostic output.

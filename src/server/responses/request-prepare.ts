@@ -1571,7 +1571,7 @@ export async function prepareResponsesRequest(
     // A combo child is the one caller that can afford a strict gate: skipping a target it
     // cannot fit is safe before any upstream bytes are sent, and the ladder continues. A
     // direct request has nowhere to go, so it keeps the loose pathological-input gate.
-    const inputAdmission = options.comboAttempt
+    const inputAdmission = options.comboAttempt && options.comboContextDegraded !== true
       ? checkComboTargetInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config))
       : checkInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config));
     if (!inputAdmission.admitted) {

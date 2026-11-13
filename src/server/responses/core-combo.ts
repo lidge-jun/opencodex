@@ -489,9 +489,12 @@ export async function executeComboResponses(
     try { return routeConcreteModel(config, `${target.provider}/${target.model}`); } catch { return undefined; }
   });
   if (capability.unservable && combo.onUnservable === "reject") {
-    return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept image input");
+    return formatErrorResponse(400, "invalid_request_error", capability.unservable === "context"
+      ? "No target of this combo has a context window large enough for this request"
+      : "No target of this combo can accept image input");
   }
-  if (capability.unservable) console.warn("[opencodex] combo has no image-capable target; images will be omitted");
+  if (capability.unservable === "image") console.warn("[opencodex] combo has no image-capable target; images will be omitted");
+  if (capability.unservable === "context") console.warn("[opencodex] combo has no target whose context window fits; sending to the largest");
   // The combo ladder owns the whole logical request, so the catalog diagnostic is counted here for
   // combo-routed turns; children run as concrete selections and would otherwise never report it.
   // Counting after the replay expansion keeps restored history out of the tally.
@@ -1266,6 +1269,7 @@ export async function executeComboResponses(
         // parent arrived with.
         sendBudget: targetSendBudget,
         comboAttempt: true,
+        ...(capability.unservable === "context" ? { comboContextDegraded: true } : {}),
         comboInitialSend: initialSend,
         comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         comboReplaySnapshot,

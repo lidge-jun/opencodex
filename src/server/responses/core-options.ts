@@ -242,6 +242,8 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** `union` combo with no member whose window fits: the child keeps the loose direct admission. */
+  comboContextDegraded?: boolean;
   /**
    * Set by the combo loop for each child. A child logs into its own context, which the combo
    * copies once when the child commits, and the bridge reports usage after that, at the terminal

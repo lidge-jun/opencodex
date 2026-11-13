@@ -1,6 +1,9 @@
+import { nativeContextLimits } from "../codex/catalog/metadata";
 import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import { isCodexReasoningEffort, resolveEffortAtOrBelow } from "../reasoning-effort";
-import type { OcxComboTarget, OcxConfig, OcxProviderConfig } from "../types";
+import { parseRequest } from "../responses/parser";
+import { checkComboTargetInputAdmission } from "../server/responses/input-admission";
+import type { OcxComboTarget, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { requiresVisionPreprocessing } from "../vision/plan";
 import { comboRequestHasImageInput } from "./request";
 import { targetKey, type NormalizedComboConfig } from "./types";
@@ -37,21 +40,70 @@ export function comboTargetImageService(
   return config.visionSidecar?.enabled === false ? "unable" : "degraded";
 }
 
+/** What no enabled member could serve: an image nobody can take, or an input nobody can hold. */
+export type ComboUnservable = false | "image" | "context";
+
 export interface ComboCapabilityGate {
   /** Selection filter: false only for a member that cannot serve this request. */
   eligible: (target: Pick<OcxComboTarget, "provider" | "model">) => boolean;
-  /** Every enabled member is `unable`; the caller applies `onUnservable`. */
-  unservable: boolean;
+  /** No enabled member can serve the request as is; the caller applies `onUnservable`. */
+  unservable: ComboUnservable;
 }
 
 const OPEN_GATE: ComboCapabilityGate = { eligible: () => true, unservable: false };
 
+interface ContextFit {
+  fits: boolean;
+  /** Known context window, or null when the target publishes none (fail-open, like the child). */
+  window: number | null;
+}
+
+/**
+ * Context fit for one member: the estimated input must sit inside the member's input ceiling, and,
+ * when the caller declares an output allowance, the strict combo admission the child applies
+ * (`checkComboTargetInputAdmission`) must also pass. Without a declared allowance the child falls
+ * back to the loose 2.5x pathological-input gate, which would let a member far too small through,
+ * so the filter is the stricter of the two. The estimator overcounts on purpose, so the filter
+ * leaves a member slightly early rather than late. An unresolved route or unknown window fits,
+ * matching the child's fail-open.
+ */
+function comboTargetContextFit(
+  config: OcxConfig,
+  parsed: OcxParsedRequest | undefined,
+  route: ComboTargetRoute | undefined,
+): ContextFit {
+  if (!parsed || !route) return { fits: true, window: null };
+  const result = checkComboTargetInputAdmission(
+    { ...parsed, modelId: route.modelId }, route.provider, route.providerName, route.modelId, nativeContextLimits(config),
+  );
+  if (result.ceiling === null) return { fits: true, window: null };
+  return { fits: result.admitted && result.estimatedTokens <= result.ceiling, window: result.contextWindow ?? result.ceiling };
+}
+
+/** The request as the child will parse it; undefined (no context filtering) when it does not parse. */
+function parsedForContext(body: unknown): OcxParsedRequest | undefined {
+  try {
+    const parsed = parseRequest(body);
+    // Compaction turns shrink the context; the child exempts them from admission, and so do we.
+    return parsed._compactionRequest === true ? undefined : parsed;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Request-side half of `capabilityPolicy: "union"`. The catalog advertises the union of member
- * capabilities, so a request may need something only some members have. Members that can
- * degrade stay eligible (keeping the subscription order and the prompt cache); only `unable`
- * members are filtered. When every enabled member is `unable` the filter opens again so the
- * request is never stranded on a 503; `unservable` tells the caller to warn or reject.
+ * capabilities and the largest member window, so a request may need something only some members
+ * have. Two needs are checked: image input and input size. Members that can degrade an image stay
+ * eligible (keeping the subscription order and the prompt cache); members that cannot take the
+ * image, or whose window cannot hold the input, are filtered.
+ *
+ * When no enabled member can serve, the gate reports why and never strands the request on a 503:
+ * - `"context"`: no member can hold the input. Only the members with the largest known window stay
+ *   eligible; the caller sends there with the loose direct-request admission (`onUnservable:
+ *   "degrade"`) or refuses before any send (`"reject"`).
+ * - `"image"`: every member that can hold the input is unable to take the image. Those members stay
+ *   eligible and the child strips the image, or the caller refuses.
  */
 export function comboCapabilityGate(
   config: OcxConfig,
@@ -59,23 +111,35 @@ export function comboCapabilityGate(
   body: unknown,
   route: ComboTargetRouter,
 ): ComboCapabilityGate {
-  if (combo.capabilityPolicy !== "union" || !comboRequestHasImageInput(body)) return OPEN_GATE;
-  const services = new Map<string, ComboTargetService>();
-  const service = (target: Pick<OcxComboTarget, "provider" | "model">): ComboTargetService => {
-    const key = targetKey(target);
-    let value = services.get(key);
-    if (value === undefined) {
-      value = comboTargetImageService(config, route(target));
-      services.set(key, value);
-    }
-    return value;
-  };
+  if (combo.capabilityPolicy !== "union") return OPEN_GATE;
+  const hasImage = comboRequestHasImageInput(body);
+  const parsed = parsedForContext(body);
+  if (!hasImage && !parsed) return OPEN_GATE;
   const enabled = combo.targets.filter(target => config.providers[target.provider]?.disabled !== true);
-  const unservable = enabled.length > 0 && enabled.every(target => service(target) === "unable");
-  return {
-    eligible: target => unservable || service(target) !== "unable",
-    unservable,
-  };
+  const judged = new Map<string, { image: ComboTargetService; context: ContextFit }>();
+  for (const target of enabled) {
+    const key = targetKey(target);
+    if (judged.has(key)) continue;
+    const resolved = route(target);
+    judged.set(key, {
+      image: hasImage ? comboTargetImageService(config, resolved) : "native",
+      context: comboTargetContextFit(config, parsed, resolved),
+    });
+  }
+  const verdicts = [...judged.values()];
+  const filter = (keep: (verdict: { image: ComboTargetService; context: ContextFit }) => boolean): ComboCapabilityGate["eligible"] =>
+    target => {
+      const verdict = judged.get(targetKey(target));
+      return verdict === undefined || keep(verdict);
+    };
+  if (verdicts.length === 0 || verdicts.some(v => v.context.fits && v.image !== "unable")) {
+    return { eligible: filter(v => v.context.fits && v.image !== "unable"), unservable: false };
+  }
+  if (verdicts.some(v => v.context.fits)) {
+    return { eligible: filter(v => v.context.fits), unservable: "image" };
+  }
+  const largest = Math.max(...verdicts.map(v => v.context.window ?? 0));
+  return { eligible: filter(v => (v.context.window ?? 0) === largest), unservable: "context" };
 }
 
 /**
