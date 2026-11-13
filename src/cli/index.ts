@@ -1230,10 +1230,10 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     ownershipBlocked = windowsPartAHolds(record) || ownershipBlocked; // #7771: no POST and no shared teardown.
   } catch (err) {
     record.service = "error";
-    if (isServiceOwnershipError(err)) {
+    if (isServiceOwnershipError(err) || windowsChildStopHeld()) {
       ownershipBlocked = true;
       stopFailed = true;
-      console.error(`❌ ${err.message}`);
+      console.error(`❌ ${err instanceof Error ? err.message : String(err)}`);
       console.error("   Skipping shared teardown (native Codex restore, Grok config): the installed service is still running.");
     } else {
       console.error(`⚠️  Service manager stop failed: ${err instanceof Error ? err.message : String(err)}`);

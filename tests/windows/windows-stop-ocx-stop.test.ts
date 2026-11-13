@@ -46,6 +46,14 @@ function runStop(windowsPartA: string | undefined, windowsPartB?: string, extra:
 }
 
 describe("plain ocx stop on Windows: Part A holds the child stop", () => {
+  test("a rejected Part A holds the child and shared teardown", () => {
+    const run = runStop(undefined, undefined, { windowsPartAReject: true });
+    expect(run.urls).toEqual([]);
+    expect(run.calls.native).toBe(0);
+    expect(run.calls.grok).toBe(0);
+    expect(run.exitCode).toBe(1);
+    expect(run.summary).toMatchObject({ outcome: "failed", service: "error", proxy: "unknown", sharedTeardown: "skipped" });
+  });
   for (const [outcome, service, reason] of [
     ["denied", "failed", "access-denied"],
     ["survived", "failed", undefined],

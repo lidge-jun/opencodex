@@ -61,6 +61,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
    * no WinSW service registered, so the own-wrapper refusal has to answer for itself.
    */
   windowsPartAUnderOwnWrapper?: boolean;
+  windowsPartAReject?: boolean;
 };
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
@@ -313,12 +314,12 @@ mock.module("../../src/server/direct-local-http", () => ({ ...direct,
 }));
 
 process.argv = [process.execPath, "ocx", "stop", ...(options.json ? ["--json"] : [])];
-if (options.windowsPartA) {
+if (options.windowsPartA || options.windowsPartAReject) {
   // The stop wiring acts for win32 while the host stays untouched: Part A and Part B answer here.
   (await import("../../src/cli/stop-windows-checked")).resetOcxWindowsStopForTests("win32");
   const { partAResult, partBResult } = await import("../helpers/windows-stop-caller-fixtures");
   (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
-    partA: async () => { calls.service++; return partAResult(options.windowsPartA!); },
+    partA: async () => { calls.service++; if (options.windowsPartAReject) throw new Error("wrapper watch rejected"); return partAResult(options.windowsPartA!); },
     partB: async () => { calls.partB++; return partBResult(options.windowsPartB ?? "freed"); },
     // The guarded inspection reads evidence before it asks the mocked manager; nothing may
     // reach the host's process table.

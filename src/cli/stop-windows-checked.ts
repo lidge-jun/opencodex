@@ -117,7 +117,7 @@ export function windowsPartAReceiptRecord(): PendingTeardownPartA | null {
 /** Part A held the child stop; handleStopUnlocked skips the POST branch entirely. */
 export function windowsChildStopHeld(): boolean {
   const outcome = state.result?.outcome;
-  return windows() && state.snapshotless && !!outcome && outcome !== "stopped" && outcome !== "absent";
+  return windows() && state.snapshotless && outcome !== "stopped" && outcome !== "absent";
 }
 
 /** ocx uninstall's service stop: Part A on Windows (60 s deadline), today's stop elsewhere. */

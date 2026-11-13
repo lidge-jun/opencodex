@@ -146,7 +146,7 @@ stop instead of sliding forward.
 - Plain `ocx stop` (`src/cli/stop-windows-checked.ts`) admits against the deadline with orphan
   discovery and the inherited receipts counted. A Part A other than stopped or absent holds the
   child: no `/api/stop` POST, the shared teardown skipped, `service` failed or state-unknown,
-  `proxy` unknown. After a stopped Part A, the POST skips `stopProxy`'s legacy 15 s
+  `proxy` unknown. A thrown Part A also holds the child and reports a service error. After a stopped Part A, the POST skips `stopProxy`'s legacy 15 s
   `waitForStoppedPort`, orphan discovery is capped at 3 s, and Part B replaces the respawn re-poll:
   our identity back on the port is `proxy: respawned`, an unconfirmed port is
   `evidence-unreadable`, and another program on the port sets `portHeldByForeign` without failing
