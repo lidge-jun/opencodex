@@ -48,7 +48,7 @@ export function requiredToolFulfillments(
     const identity = record(normalize({ ...substitution, type: "function_call" }));
     if (identity && intendedClient(identity) && wire?.hosted.has(substitution.callType)) hosted.add(substitution.callType);
   }
-  // Read once here: the predicate lives as long as the stream, so it keeps this answer, never the parsed body (#8601).
+  // Read once here: the predicate lives as long as the stream, so it keeps this answer and the wire declarations, never the parsed body (#8601).
   const deniesAll = request !== undefined && (!outbound || outbound.tool_choice === "none");
   return (item, clientCall) => {
     if (deniesAll) return false;
