@@ -162,7 +162,7 @@ function listMarkdown(dir: string, root: string, out: string[] = []): string[] {
 }
 
 /** Tracked files plus every directory on their way up, read once from the git index. */
-function trackedPaths(repoRoot: string): Set<string> | null {
+export function trackedPaths(repoRoot: string): Set<string> | null {
   let stdout: string;
   try {
     const run = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
