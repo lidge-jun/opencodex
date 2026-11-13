@@ -1075,7 +1075,7 @@
   "management-route-registry.test.ts": "server", "protocol-routes.test.ts": "server",
   "protocol-settings-route.test.ts": "server", "protocol-provider-summary.test.ts": "server",
   "management-workflow-budget-routes.test.ts": "server", "managing-cli.test.ts": "service",
-  "memory-watchdog.test.ts": "server", "meta-model-api-provider.test.ts": "providers", "meta-muse-wonder.test.ts": "providers",
+  "memory-watchdog.test.ts": "server", "meta-model-api-provider.test.ts": "providers", "meta-muse-wonder.test.ts": "providers", "morph-ultra-provider.test.ts": "providers",
   "meta-muse-oauth.test.ts": "providers",
   "meta-muse-keychain.test.ts": "providers",
   "meta-muse-plan-refusal.test.ts": "providers",
