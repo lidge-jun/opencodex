@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
+import { withoutGitRepositoryEnv } from "./git-repository-env";
 
 export const THRESHOLD = 2000;
 export const BASELINE_REL = "tests/fixtures/file-size-baseline.json";
@@ -134,7 +135,7 @@ export function isOffender(row: Evaluation): boolean {
 }
 
 export function gitLsFiles(repoRoot: string): string[] {
-  const result = Bun.spawnSync(["git", "ls-files"], { cwd: repoRoot });
+  const result = Bun.spawnSync(["git", "ls-files"], { cwd: repoRoot, env: withoutGitRepositoryEnv(process.env) });
   if (result.exitCode !== 0) {
     throw new Error(`git ls-files failed: ${new TextDecoder().decode(result.stderr)}`);
   }

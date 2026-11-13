@@ -405,7 +405,7 @@
   "artifacts-ssrf.test.ts": "images", "aside-client.test.ts": "providers",
   "aside-profile-identity.test.ts": "clients", "aside-profile-paths.test.ts": "clients",
   "aside-profile-sync-owner.test.ts": "clients", "pi-sync-owner.test.ts": "clients", "aside-profiles-routes.test.ts": "server",
-  "aside-profiles.test.ts": "clients", "assert-mergeable-review.test.ts": "ci-workflows",
+  "aside-profiles.test.ts": "clients", "assert-mergeable-review.test.ts": "ci-workflows", "test-git-isolation.test.ts": "ci-workflows",
   "audio-client.test.ts": "server", "audio-dictation.test.ts": "server",
   "audio-transcriptions.test.ts": "server", "auto-compact-budget.test.ts": "providers",
   "autostart-health.test.ts": "service", "azure-adapter.test.ts": "providers",
@@ -1738,5 +1738,6 @@
   "link-ws-relay-edges.test.ts": "clients",
   "link-ocx-child-ws-gate.test.ts": "clients",
   "link-ocx-child-ws-feature.test.ts": "clients",
+  "link-relay-wait-observer.test.ts": "clients",
   "link-ws-autobahn.test.ts": "clients"
 }
