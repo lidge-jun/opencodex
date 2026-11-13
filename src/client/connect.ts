@@ -79,7 +79,7 @@ import {
 } from "./state";
 import { assertClientCatalogCompatible, type CatalogCompatibilityDeps } from "./catalog-compatibility";
 import {
-  assertClientSyncExpectation, ClientSyncExpectationError, isClientSyncLockBusy, type ClientSyncExpectation,
+  assertClientSyncExpectation, assertDisconnectLinkExpectation, ClientSyncExpectationError, isClientSyncLockBusy, type ClientSyncExpectation,
 } from "./sync-expectation";
 import { overlayHomeCodexSettings } from "../link/codex-settings";
 import {
@@ -1128,7 +1128,7 @@ function restoreConnectedCodex(connection: OcxClientConnectionConfig): void {
  * delayed revoke of an old link then cannot disconnect a newer one. Throws ClientSyncExpectationError.
  */
 export function assertDisconnectExpectation(linkId: string, deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {}): void {
-  withClientLifecycleSync(() => withConfigMutationLockSync(() => assertClientSyncExpectation({ kind: "link", linkId })), deps.lifecycleLockDeps);
+  withClientLifecycleSync(() => withConfigMutationLockSync(() => assertDisconnectLinkExpectation(linkId)), deps.lifecycleLockDeps);
 }
 
 export async function disconnectClient(
@@ -1146,7 +1146,7 @@ export async function disconnectClient(
   // before phase 1 writes nothing; one before phase 2 leaves the prepared receipt it resumes from.
   const prepared = await withConfigDirHardeningSettled(getConfigDir(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     // Checked first, under the same locks, before anything is read for writing or written.
-    if (options.expectLink !== undefined) assertClientSyncExpectation({ kind: "link", linkId: options.expectLink });
+    if (options.expectLink !== undefined) assertDisconnectLinkExpectation(options.expectLink);
     const read = readDesktopDisconnectReceipt();
     if (read.kind === "unsafe") throw new Error("client_disconnect_receipt_unsafe");
     const state = readClientConnectionState();

@@ -18,7 +18,7 @@ import {
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import { readClientLinkState } from "../client/link-state";
 import { probeLinkTunnelStatus, type LinkTunnelStatus } from "../client/link-tunnel-status";
-import { teardownClientLink } from "../client/link-teardown";
+import { teardownClientLink, type ClientLinkTeardownResult } from "../client/link-teardown";
 import { ClientSyncExpectationError } from "../client/sync-expectation";
 import { SYNC_EXPECTATION_MISMATCH_EXIT } from "./sync-expectation";
 import { reapOrphanTunnel } from "../client/link-tunnel";
@@ -618,7 +618,10 @@ export async function handleDisconnectCommand(
         throw error;
       }
     }
-    const teardown = await teardownClientLink({
+    // A Home's link-bound disconnect (--expect-link) comes from the Home that owns that link's tunnel and record,
+    // and it is sent only for Home-initiated links, which have no client-link sidecar. Running this Child's
+    // client-link teardown there would only open a gap between the identity check and the locked disconnect.
+    const teardown: ClientLinkTeardownResult = expectLink !== undefined ? { linkId: null, homeRevoke: "not_applicable", tunnel: null } : await teardownClientLink({
       readSidecar: readClientLinkState,
       connectedLinkId: () => {
         const state = readClientConnectionState();

@@ -9,7 +9,7 @@
  */
 import type { DesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { readDesktopDisconnectReceipt } from "../claude/desktop-remote-store";
-import { isLinkConnection, pendingClientConnectMayOwnToken, readClientConnectionState, type ClientConnectionState } from "./state";
+import { isLinkConnection, pendingClientConnectMayOwnToken, readClientConnectionState, sameClientConnectionOwner, type ClientConnectionState } from "./state";
 
 export type ClientSyncExpectation =
   | { kind: "link"; linkId: string }
@@ -115,4 +115,30 @@ export function assertClientSyncExpectation(expectation: ClientSyncExpectation):
     state.kind === "disconnected" ? readPendingConnect() : "absent",
   );
   if (reason) throw new ClientSyncExpectationError(expectation, reason);
+}
+
+/**
+ * `ocx disconnect --expect-link` (a Home's revoke): the link expectation, except that an unfinished disconnect
+ * may resume when the machine is still connected to that very link and the receipt belongs to that connection,
+ * so a Home whose earlier bound disconnect lost its answer can finish it. Pure verdict: null when it may proceed.
+ */
+export function classifyDisconnectLinkExpectation(
+  state: ClientConnectionState,
+  receipt: { kind: "absent" } | { kind: "unsafe" } | { kind: "valid"; value: Pick<DesktopDisconnectReceipt, "phase" | "owner"> },
+  linkId: string,
+  pendingConnect: PendingConnectRead = "absent",
+): ClientSyncMismatchReason | null {
+  const reason = classifyClientSyncExpectation(state, receipt, { kind: "link", linkId }, pendingConnect);
+  if (reason !== "disconnect_pending") return reason;
+  const resumesOwnDisconnect = receipt.kind === "valid" && receipt.value.phase !== "complete"
+    && state.kind === "connected" && !state.value.pendingOperation && isLinkConnection(state.value)
+    && state.value.link?.linkId === linkId && sameClientConnectionOwner(receipt.value.owner, state.value);
+  return resumesOwnDisconnect ? null : reason;
+}
+
+/** Read-only; the caller holds the client lifecycle and config mutation locks. */
+export function assertDisconnectLinkExpectation(linkId: string): void {
+  const state = readClientConnectionState();
+  const reason = classifyDisconnectLinkExpectation(state, readDesktopDisconnectReceipt(), linkId, state.kind === "disconnected" ? readPendingConnect() : "absent");
+  if (reason) throw new ClientSyncExpectationError({ kind: "link", linkId }, reason);
 }

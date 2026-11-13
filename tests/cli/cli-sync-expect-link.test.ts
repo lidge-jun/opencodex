@@ -578,3 +578,58 @@ test("the machine sync route reports a failed journal handover as not complete",
   expect(response?.status).toBe(409);
   expect(await response?.json()).toMatchObject({ success: false, journalHandoverFailed: true });
 });
+
+describe("ocx disconnect --expect-link (a Home's revoke)", () => {
+  test("may resume only its own link's unfinished disconnect", async () => {
+    const { classifyDisconnectLinkExpectation } = await import("../../src/client/sync-expectation");
+    const value = clientBlock({ transport: "link" }) as unknown as OcxClientConnectionConfig;
+    const connected = { kind: "connected", value } as const;
+    const owner = { serverUrl: value.serverUrl, apiKeyId: value.apiKeyId, connectedAt: value.connectedAt };
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "absent" }, LINK_ID)).toBeNull();
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "absent" }, OTHER_LINK_ID)).toBe("other_link");
+    // The receipt belongs to this connection, still connected to the expected link: resume it.
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "valid", value: { phase: "prepared", owner } }, LINK_ID)).toBeNull();
+    // Not for another link, another owner, an unreadable receipt, or a machine no longer connected.
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "valid", value: { phase: "prepared", owner } }, OTHER_LINK_ID)).toBe("disconnect_pending");
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "valid", value: { phase: "prepared", owner: { ...owner, apiKeyId: "someone-else" } } }, LINK_ID)).toBe("disconnect_pending");
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "unsafe" }, LINK_ID)).toBe("disconnect_pending");
+    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "clearing_connection", owner } }, LINK_ID)).toBe("disconnect_pending");
+  });
+
+  test("its own link disconnects without running the client-link teardown", async () => {
+    writeClient({ transport: "link" });
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const teardownModule = await import("../../src/client/link-teardown");
+    const teardown = spyOn(teardownModule, "teardownClientLink");
+    const errors: string[] = [];
+    const errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(String(args[0])); });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    let exit: number;
+    try {
+      exit = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog", "--json"], {
+        linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+      });
+    } finally { errorSpy.mockRestore(); logSpy.mockRestore(); }
+    const teardownCalls = teardown.mock.calls.length;
+    teardown.mockRestore();
+    expect([exit, errors.join(" | "), teardownCalls]).toEqual([0, "", 0]);
+    expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+  });
+
+  test("a machine connected to another link refuses with exit 5 and changes nothing", async () => {
+    writeClient({ transport: "link" });
+    const before = readClientConnectionState();
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const lines: string[] = [];
+    const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+    let exit: number;
+    try {
+      exit = await handleDisconnectCommand(["--expect-link", OTHER_LINK_ID], {
+        linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+      });
+    } finally { errors.mockRestore(); }
+    expect(exit).toBe(5);
+    expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "other_link" });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+});
