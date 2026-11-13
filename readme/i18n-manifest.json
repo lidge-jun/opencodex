@@ -6,49 +6,49 @@
       "file": "readme/README.fr.md",
       "label": "Français",
       "docsPath": "fr",
-      "sourceSha256": "f818773bde8477096c2afdbbd6018ee6f21bfc2764348ecdbb2e8f7831e8ed18"
+      "sourceSha256": "a51933cadb7bb02afe00c4a3660d2bb4282da6c4430ee064cfbe007be34d6f4a"
     },
     "ko": {
       "file": "readme/README.ko.md",
       "label": "한국어",
       "docsPath": "ko",
-      "sourceSha256": "f818773bde8477096c2afdbbd6018ee6f21bfc2764348ecdbb2e8f7831e8ed18"
+      "sourceSha256": "a51933cadb7bb02afe00c4a3660d2bb4282da6c4430ee064cfbe007be34d6f4a"
     },
     "zh-CN": {
       "file": "readme/README.zh-CN.md",
       "label": "简体中文",
       "docsPath": "zh-cn",
-      "sourceSha256": "f818773bde8477096c2afdbbd6018ee6f21bfc2764348ecdbb2e8f7831e8ed18"
+      "sourceSha256": "a51933cadb7bb02afe00c4a3660d2bb4282da6c4430ee064cfbe007be34d6f4a"
     },
     "zh-TW": {
       "file": "readme/README.zh-TW.md",
       "label": "繁體中文",
       "docsPath": "zh-tw",
-      "sourceSha256": "f818773bde8477096c2afdbbd6018ee6f21bfc2764348ecdbb2e8f7831e8ed18"
+      "sourceSha256": "a51933cadb7bb02afe00c4a3660d2bb4282da6c4430ee064cfbe007be34d6f4a"
     },
     "ru": {
       "file": "readme/README.ru.md",
       "label": "Русский",
       "docsPath": "ru",
-      "sourceSha256": "f818773bde8477096c2afdbbd6018ee6f21bfc2764348ecdbb2e8f7831e8ed18"
+      "sourceSha256": "a51933cadb7bb02afe00c4a3660d2bb4282da6c4430ee064cfbe007be34d6f4a"
     },
     "ja": {
       "file": "readme/README.ja.md",
       "label": "日本語",
       "docsPath": "ja",
-      "sourceSha256": "f818773bde8477096c2afdbbd6018ee6f21bfc2764348ecdbb2e8f7831e8ed18"
+      "sourceSha256": "a51933cadb7bb02afe00c4a3660d2bb4282da6c4430ee064cfbe007be34d6f4a"
     },
     "tr": {
       "file": "readme/README.tr.md",
       "label": "Türkçe",
       "docsPath": "tr",
-      "sourceSha256": "f818773bde8477096c2afdbbd6018ee6f21bfc2764348ecdbb2e8f7831e8ed18"
+      "sourceSha256": "a51933cadb7bb02afe00c4a3660d2bb4282da6c4430ee064cfbe007be34d6f4a"
     },
     "es": {
       "file": "readme/README.es.md",
       "label": "Español",
       "docsPath": "es",
-      "sourceSha256": "f818773bde8477096c2afdbbd6018ee6f21bfc2764348ecdbb2e8f7831e8ed18"
+      "sourceSha256": "a51933cadb7bb02afe00c4a3660d2bb4282da6c4430ee064cfbe007be34d6f4a"
     }
   }
 }

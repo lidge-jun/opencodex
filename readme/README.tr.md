@@ -104,11 +104,11 @@ Zaten kullandığınız aracı bağlayın:
 
 | Araç | Bağlantı yöntemi |
 |---|---|
-| Codex | Panelin **Connect** sayfasındaki Codex anahtarını açın, ardından `codex` komutunu her zamanki gibi çalıştırın. Yerel dinleyicide bu, Codex’in yerleşik sağlayıcısını proxy’ye yönlendirir. Terminalden, panelde sağlayıcı eklemeden önce `ocx init` çalıştırın ve Codex istemini kabul edin. |
+| Codex | Panelin **Rota** sayfasındaki Codex anahtarını açın, ardından `codex` komutunu her zamanki gibi çalıştırın. Yerel dinleyicide bu, Codex’in yerleşik sağlayıcısını proxy’ye yönlendirir. Terminalden, panelde sağlayıcı eklemeden önce `ocx init` çalıştırın ve Codex istemini kabul edin. |
 | Claude Code | `claude` CLI kuruluysa `ocx claude` çalıştırın. Gerekirse proxy’yi başlatır ve Claude Code’u onun üzerinden açar. |
 | Claude Desktop | `ocx claude desktop` çalıştırın. Yeni kurulumda tüm uygulama için ağ geçidi profilini ayarlar; mevcut first-party yapılandırması korunur ve `ocx claude desktop apply --gateway` açıkça geçiş yapar. [Claude Code kılavuzuna](https://opencodex.me/tr/guides/claude-code/) bakın. Geçişten sonra Claude Desktop’tan tamamen çıkıp yeniden açın. |
 | Grok Build | Yerel bir dinleyicide Grok entegrasyonu etkinse ve `~/.grok` mevcutsa, `ocx start` modelleri kaydeder; Grok Build içinde bir `ocx-*` modeli seçin. Uzak kurulumlar için [Grok Build kılavuzuna](https://opencodex.me/tr/guides/grok-build/) bakın. Sağlayıcı ekledikten sonra listeyi yenilemek için proxy’yi yeniden başlatın (veya Codex otomatik başlatma etkinse `ocx ensure` çalıştırın). |
-| Yönetilen entegrasyonu olan araçlar | Panelin **Connect** sayfasını veya `ocx integration client enable --client <id>` komutunu kullanın. |
+| Yönetilen entegrasyonu olan araçlar | Panelin **Rota** sayfasını veya `ocx integration client enable --client <id>` komutunu kullanın. |
 | Diğer tüm araçlar | Özel OpenAI uyumlu temel URL’yi `http://localhost:10100/v1` veya Anthropic temel URL’sini `http://localhost:10100` olarak ayarlayın. |
 
 [İstemci desteği sayfası](https://opencodex.me/tr/reference/client-support/), her aracın bağlantı yolunu ve kullandığı protokolü listeler.
@@ -253,10 +253,12 @@ ocx start     # ya da `ocx service`
 ocx init      # etkileşimli kurulum: ~/.opencodex/config.json yazar ve Codex'i bağlar
 ```
 
-`ocx init` proxy'yi hiçbir zaman başlatmaz; önce onu başlatın (ya da sonra — sıra fark etmez, ancak
-`ocx provider add` ve `ocx combo set` gibi başsız komutlar **çalışan** proxy ile konuşur ve ona
-ulaşamadıklarında sıfırdan farklı bir kodla çıkar). `ocx status` / `ocx doctor` / `ocx health`
-çalışma durumunu bildirir.
+Proxy'yi `ocx init` komutundan önce veya sonra başlatabilirsiniz. `ocx init` proxy'yi başlatmaz.
+`ocx provider add`, çalışan bir proxy olmadan yerel yapılandırmayı kaydeder. `--sync` ile
+önce sağlayıcı kaydedilir, ardından modelleri Codex ile eşitlemek için çalışan proxy kullanılır.
+Proxy'ye ulaşılamazsa sağlayıcı kayıtlı kalır, ancak komut sıfırdan farklı bir kodla çıkar.
+Proxy çalışmaya başladığında `ocx sync` komutunu çalıştırın. `ocx provider add --live` ve
+`ocx combo set` çalışan bir proxy gerektirir. `ocx status` / `ocx doctor` / `ocx health` çalışma durumunu bildirir.
 
 > **opencodex'i kuran ya da çalıştıran ajanlar:**
 > [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md) dosyasını okuyun. Etkileşimli bir `ocx start` bu depoya
@@ -429,11 +431,13 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## Uzaktan erişim
 
-opencodex varsayılan olarak `127.0.0.1` adresine bağlanır ve ek bir kimlik doğrulaması gerektirmez.
-Geri döngünün dışına bağlanmak (`"hostname": "0.0.0.0"`) bir bearer belirteci **gerektirir**: proxy
-`OPENCODEX_API_AUTH_TOKEN` olmadan başlamayı reddeder ve her istemci isteği bu belirteci
-`x-opencodex-api-key` olarak taşımalıdır. Ayrıntılar:
-[yapılandırma başvurusu](https://opencodex.me/tr/reference/configuration/).
+opencodex varsayılan olarak `127.0.0.1` adresini dinler ve veri istekleri için ek kimlik
+doğrulaması gerekmez. Geri döngü dışındaki bir adreste dinlemek (örneğin `"hostname": "0.0.0.0"`)
+**yapılandırılmış bir istemci API anahtarı veya paylaşılan bir veri belirteci gerektirir**.
+Paylaşılan belirteç `OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE` veya kurulumla gelen ve
+yalnızca sahibinin erişebildiği `service-api-token` dosyasından alınır. Model istemcileri kabul
+edilen kimlik bilgisini `x-opencodex-api-key` başlığında gönderir. Yönetim için ayrı bir yönetici
+kimlik bilgisi kullanılır. Bkz. [yapılandırma başvurusu](https://opencodex.me/tr/reference/configuration/).
 
 ## Gelişmiş kullanım
 

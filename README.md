@@ -110,11 +110,11 @@ Connect the tool you already use:
 
 | Tool | How to connect |
 |---|---|
-| Codex | Turn on the Codex switch on the dashboard's **Connect** page, then run `codex` as usual. On a local listener this points Codex's built-in provider at the proxy. From the terminal, run `ocx init` before adding providers in the dashboard and accept its Codex prompt. |
+| Codex | Turn on the Codex switch on the dashboard's **Route** page, then run `codex` as usual. On a local listener this points Codex's built-in provider at the proxy. From the terminal, run `ocx init` before adding providers in the dashboard and accept its Codex prompt. |
 | Claude Code | With the `claude` CLI installed, run `ocx claude`. It starts the proxy if needed and launches Claude Code through it. |
 | Claude Desktop | Run `ocx claude desktop`. On a new install it sets up the gateway profile for the whole app; an existing first-party setup is kept, and `ocx claude desktop apply --gateway` switches explicitly. See the [Claude Code guide](https://opencodex.me/guides/claude-code/). Fully quit and reopen Claude Desktop after a switch. |
 | Grok Build | On a local listener with Grok integration enabled, `ocx start` registers the models when `~/.grok` exists; pick an `ocx-*` model in Grok Build. Remote setups: see the [Grok Build guide](https://opencodex.me/guides/grok-build/). After adding providers, restart the proxy (or run `ocx ensure` when Codex autostart is enabled) to refresh the list. |
-| Tools with a managed integration | Use the dashboard **Connect** page, or `ocx integration client enable --client <id>`. |
+| Tools with a managed integration | Use the dashboard **Route** page, or `ocx integration client enable --client <id>`. |
 | Any other tool | Set a custom OpenAI-compatible base URL of `http://localhost:10100/v1`, or an Anthropic base URL of `http://localhost:10100`. |
 
 The [client support page](https://opencodex.me/reference/client-support/) lists which path each tool has
@@ -258,9 +258,12 @@ ocx start     # or `ocx service`
 ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
 ```
 
-`ocx init` never starts the proxy; start it first (or after — either order works, but headless
-commands like `ocx provider add` and `ocx combo set` talk to the **live** proxy and exit nonzero
-when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the running state.
+You can start the proxy before or after `ocx init`; `ocx init` never starts it for you.
+`ocx provider add` saves local configuration without a running proxy. With `--sync`,
+it saves first and then needs a running proxy to sync models to Codex. If the proxy is
+unavailable, the provider stays saved, but the command exits nonzero; run `ocx sync`
+once the proxy is up. `ocx provider add --live` and `ocx combo set` require a running
+proxy. `ocx status` / `ocx doctor` / `ocx health` report the running state.
 
 > **Agents installing or running opencodex:** read
 > [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ocx start` may ask once whether to
@@ -429,10 +432,12 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## Remote access
 
-By default opencodex binds to `127.0.0.1` and needs no extra authentication. Binding beyond
-loopback (`"hostname": "0.0.0.0"`) **requires** a bearer token — the proxy refuses to start
-without `OPENCODEX_API_AUTH_TOKEN`, and every client request must carry it as
-`x-opencodex-api-key`. Details: [configuration reference](https://opencodex.me/reference/configuration/).
+By default, opencodex binds to `127.0.0.1` and needs no extra data-plane authentication.
+A non-loopback bind (for example, `"hostname": "0.0.0.0"`) **requires a configured client
+API key or a shared data token**. The shared token is resolved from `OPENCODEX_API_AUTH_TOKEN`,
+`OCX_API_TOKEN_FILE`, or the installed owner-only `service-api-token`. Inference clients
+send an accepted credential in `x-opencodex-api-key`. Management uses a separate admin
+credential. See the [configuration reference](https://opencodex.me/reference/configuration/).
 
 ## Advanced usage
 
