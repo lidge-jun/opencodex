@@ -126,7 +126,7 @@ Estas lecturas necesitan una versión OpenCodex con el relé de gestión de enla
 
 ## Eliminar un archivo Child
 
-Seleccione **Desconectar** para el Child y confirme el alias. El Home detiene el túnel, revoca la clave de enlace de ese Child y elimina el registro de enlace guardado. El Home indica el enlace al desconectar el Child (`--expect-link`), así que un Child que ahora pertenece a otro enlace lo rechaza y el Home conserva el enlace (`child_link_mismatch`); un Child más antiguo sin esa opción se desconecta como antes.
+Seleccione **Desconectar** para el Child y confirme el alias. El Home detiene el túnel, revoca la clave de enlace de ese Child y elimina el registro de enlace guardado. El Home indica el enlace al desconectar el Child (`--expect-link`), así que un Child que ahora pertenece a otro enlace lo rechaza y el Home conserva el enlace (`child_link_mismatch`); un Child más antiguo sin esa opción se desconecta como antes, sin esa comprobación, mientras ningún otro enlace use su alias; si no, el Home lo rechaza (`expect_link_unsupported`).
 
 Si el Home no puede alcanzar el Child para ejecutar su comando de desconexión, elija **Eliminar aquí solamente**. Esto elimina el túnel local, la clave y el registro. A continuación, inicie sesión en el Child y ejecute:
 

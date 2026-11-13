@@ -289,6 +289,16 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   } finally { releaseLink(); }
 }
 
+/** The reason in the Child's final stderr JSON line ({"phase","reason"}), when it printed one. */
+function lastStderrReason(stderr: string): string | undefined {
+  const line = stderr.trim().split(/\r?\n/).at(-1) ?? "";
+  if (!line.startsWith("{")) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(line);
+    return parsed && typeof parsed === "object" && typeof (parsed as { reason?: unknown }).reason === "string" ? (parsed as { reason: string }).reason : undefined;
+  } catch { return undefined; }
+}
+
 async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id: string, record: LinkStore["links"][number], force: boolean, purge: boolean, journal: RevokeJournal): Promise<Response> {
   // An intent that cannot be written stops the revoke before its effect, answered with the operation id.
   const journalFailed = (): Response => Response.json({
@@ -361,6 +371,12 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     // True once the Child confirmed this link before cleaning (--expect-link); only then may the commit settle a
     // tombstone an earlier forced revoke of this link left. An older Child runs the command unbound.
     let linkBound = false;
+    const unboundStillSafe = (): boolean => {
+      const links = readStoreFor(ctx).links;
+      const wanted = record.alias.toLowerCase();
+      return links.some(link => link.id === id)
+        && !links.some(link => link.id !== id && link.direction === "hub-initiated" && link.alias.toLowerCase() === wanted);
+    };
     if (cleanup) {
       const runner = runnerFor(ctx);
       let platform: Awaited<ReturnType<typeof requireRemotePlatform>>;
@@ -369,7 +385,7 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
       }
       if (purge) {
         let purged: Awaited<ReturnType<typeof purgeDisconnectRemote>>;
-        try { purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind, id); } catch (error) {
+        try { purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind, id, unboundStillSafe); } catch (error) {
           return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
         }
         if (!purged.ok) return cleanupFailed(fail(purged.code, purged.message, purged.status, purged.hint), purged.notAttempted !== true);
@@ -386,7 +402,10 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
           return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
         }
         // An ocx or ocx-child older than --expect-link rejects it as a usage error (exit 2) before doing anything.
+        // The unbound retry is the old behaviour, so it runs only while this link is still the only Home-initiated
+        // link naming its alias (re-read now): a re-enrolled machine is refused instead of disconnected unbound.
         if (result.code === CHILD_USAGE_EXIT) {
+          if (!unboundStillSafe()) return cleanupFailed(disconnectFailed("expect_link_unsupported"), false);
           linkBound = false;
           try { result = await runner.run(disconnectArgv(false), { timeoutMs: 30_000 }); } catch (error) {
             return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
@@ -395,6 +414,11 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         // A link-bound refusal changed nothing on the Child: another link (or a hub, or no connection) owns it now (5),
         // or an ocx-child keeps state it cannot restore (6). The tunnel restarts and the link stays.
         if (linkBound && (result.code === CHILD_EXPECT_CONFLICT_EXIT || result.code === CHILD_EXPECT_RESIDUAL_EXIT)) {
+          // Except an unfinished disconnect the Child could not prove is this link's: an earlier attempt may have
+          // cleaned part of it, so that is a cleanup attempted, never failed_clean.
+          if (result.code === CHILD_EXPECT_CONFLICT_EXIT && lastStderrReason(result.stderr) === "disconnect_pending") {
+            return cleanupFailed(disconnectFailed("child_disconnect_pending"), true);
+          }
           return cleanupFailed(disconnectFailed(result.code === CHILD_EXPECT_CONFLICT_EXIT ? "child_link_mismatch" : "child_residual"), false);
         }
         if (result.code !== 0) return cleanupFailed(disconnectFailed(sshFailureHint(result.stderr)), true);

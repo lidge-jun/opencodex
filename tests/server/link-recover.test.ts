@@ -644,6 +644,21 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
   });
 
+  test("an older Child cannot be disconnected unbound once another link names its alias", async () => {
+    const h = harness([link(), link({ id: OTHER, alias: "DevBox" })], { ordinary: () => ok("", 2, "Error: Unexpected argument(s)") });
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect([res.status, (await errorOf(res)).hint]).toEqual([502, "expect_link_unsupported"]);
+    expect(h.commands.filter(c => c.includes("disconnect"))).toHaveLength(1);
+    expect(h.store.links.map(l => l.id)).toEqual([ID, OTHER]);
+  });
+
+  test("an unfinished disconnect the Child cannot bind to the link counts as cleanup attempted", async () => {
+    const h = harness([link()], { ordinary: () => ok("", 5, 'Disconnect refused\n{"phase":"child_link_mismatch","reason":"disconnect_pending"}') });
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect([res.status, (await errorOf(res)).hint]).toEqual([502, "child_disconnect_pending"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+  });
+
   test("a --purge revoke on a planted binary older than --expect-link runs unbound and keeps the tombstone", async () => {
     const h = harness([link()]);
     let calls = 0;

@@ -318,6 +318,8 @@ export async function purgeDisconnectRemote(
   platform: "posix" | "windows",
   childKind: "ephemeral" | "full" | undefined,
   expectLink?: string,
+  /** Asked before the unbound retry for a binary older than --expect-link; false refuses it (nothing changed). */
+  unboundStillSafe: () => boolean = () => true,
 ): Promise<PurgeDisconnectOutcome> {
   const failed = (message: string, hint?: string): PurgeDisconnectOutcome => ({ ok: false, status: 502, code: "remote_disconnect_failed", message, ...(hint ? { hint } : {}) });
   const notAttempted = (message: string, hint?: string): PurgeDisconnectOutcome => ({ ok: false, status: 502, code: "remote_disconnect_failed", message, ...(hint ? { hint } : {}), notAttempted: true });
@@ -337,6 +339,7 @@ export async function purgeDisconnectRemote(
   try { result = await runner.run(purgeArgv(expectLink), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
   // A planted binary older than --expect-link rejects it as a usage error (exit 2) before doing anything: run unbound.
   if (bound && result.code === CHILD_USAGE_EXIT) {
+    if (!unboundStillSafe()) return notAttempted("The planted ocx-child predates --expect-link and another link now names this machine's alias, so it was not purged.", "expect_link_unsupported");
     bound = false;
     try { result = await runner.run(purgeArgv(), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
   }
