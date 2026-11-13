@@ -84,7 +84,9 @@ reports no floor. `gui/src/pages/logs-cost-format.ts` applies the same rule to a
 older build or served by an older proxy, where the marker and reasons were already persisted. A
 credit-priced row whose count or price cannot produce a representable amount is unavailable with
 `credit_cost_unrepresentable` rather than falling back to a token estimate. A missing credit reading
-with no output is also unavailable because the charge is unknown. A token-priced row whose
+with no output is also unavailable because the charge is unknown. Combined attempts retain incomplete
+credit evidence when any attempt lacks a reading and another has one, including a retry HTTP failure.
+A token-priced row whose
 normalized token count exceeds the bound is `invalid_usage`.
 `tests/usage/usage-provider-credit-price.test.ts`, `tests/server/management-api-logs-metrics.test.ts`
 and `gui/tests/logs-cost-credit-billing.test.tsx` cover the bounds, the mixed aggregation and the

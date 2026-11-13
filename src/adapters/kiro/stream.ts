@@ -166,13 +166,11 @@ function mergeKiroUsage(
   second: OcxUsage | undefined,
   preserveFirstContextGrowth = false,
 ): OcxUsage | undefined {
-  if (!first) return second;
-  if (!second) return first;
-  const providerCredits = first.providerCredits === undefined && second.providerCredits === undefined
-    ? undefined
-    : first.providerCredits === undefined || second.providerCredits === undefined
-      ? -1
-      : sumCreditReadings([first.providerCredits, second.providerCredits]);
+  const providerCredits = sumCreditReadings([first?.providerCredits, second?.providerCredits]);
+  if (!first || !second) {
+    const usage = first ?? second;
+    return usage && { ...usage, ...(providerCredits !== undefined ? { providerCredits } : {}) };
+  }
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
     const a = first[key];
     const b = second[key];
@@ -1362,7 +1360,7 @@ export async function* parseKiroStream(
         errorType: failure.errorType,
         code: failure.code,
         retryable: priorEmittedOutput ? false : failure.retryable,
-        usage: firstResult.usage,
+        usage: mergeKiroUsage(firstResult.usage, undefined),
       };
       return;
     }
