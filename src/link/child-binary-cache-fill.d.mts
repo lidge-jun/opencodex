@@ -2,15 +2,17 @@ export declare const CHILD_RELEASE_DIGESTS_PATH: string;
 export declare const CHILD_RELEASE_REPOSITORY: string;
 export declare const CHILD_CACHE_ARTIFACT_FILES: readonly string[];
 export declare function childReleaseAssetUrl(version: string, file: string): string;
+/** "ocx-child-builds": the fill's own directory under OPENCODEX_HOME. */
+export declare const CHILD_FILL_DIR: string;
 export declare function childBinaryCacheDir(opencodexHome: string, version: string): string;
 export declare function compareReleaseVersions(left: string, right: string): -1 | 0 | 1 | null;
 
 /**
- * Why the startup step's ownership claim stopped a fill before any write: an existing cache/ocx-child the
- * ownership manifest does not list (an operator's), an uninstall in progress, or a manifest that is full
- * or locked by another process (the next start tries again).
+ * Why the startup step's ownership claim stopped a fill before any write: an ocx-child-builds directory
+ * the ownership manifest does not list that already holds files (OpenCodex did not create it), an
+ * uninstall in progress, or a manifest that is full or locked by another process (the next start tries again).
  */
-export type ChildCacheClaimRefusal = "operator_cache" | "uninstall_in_progress" | "ownership_unavailable";
+export type ChildCacheClaimRefusal = "foreign_directory" | "uninstall_in_progress" | "ownership_unavailable";
 
 export type ChildCacheFillOutcome =
   /** first_start: no record of an earlier version (a fresh install), so the version is recorded and nothing fetched. */

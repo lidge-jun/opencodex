@@ -104,6 +104,8 @@ const INITIAL_OWNED_PATHS = [
   "kimi-device-id",
   "mimo-client-id",
   "ocx.pid",
+  // The ocx-child build cache the Home fills (src/link/child-binary-cache-fill.mjs); cache/ stays the operator's.
+  "ocx-child-builds",
   "opencodex-service-launcher.vbs",
   "opencodex-service-task.xml",
   "opencodex-service.cmd",

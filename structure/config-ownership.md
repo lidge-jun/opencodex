@@ -26,8 +26,8 @@ because it records its own database through `recordOwnedConfigPath`.
 - `configPathOwnership` is the read-only check: it reports whether the manifest lists a path or one
   of its ancestors, lists neither, or the home has no ownership metadata, writes nothing, and throws
   `ConfigUninstallInProgressError` under a tombstone like a registration. A writer that must not adopt
-  existing data (the ocx-child cache fill, `src/link/child-binary-cache-start.ts`) uses it to tell its
-  own earlier directory from one an operator created, and registers only a path that is still absent.
+  existing data (the ocx-child cache fill, `src/link/child-binary-cache-start.ts`) registers its directory
+  only while it is absent or still empty, and leaves one that already holds entries alone.
 - A registration that would push the manifest past 1,024 paths, or past the 64 KiB metadata limit
   less room for the tombstone, records nothing and warns once, so the manifest always stays one
   uninstall accepts. Writers keep working, and uninstall reports such files as residual paths. A

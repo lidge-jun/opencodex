@@ -219,9 +219,12 @@ export function resolveChildBinarySource(
   // An empty OPENCODEX_HOME counts as unset, as in ocx-child; joining "" would search the cwd.
   const ocxHome = options.opencodexHome || env.OPENCODEX_HOME?.trim() || join(env.HOME || homedir(), ".opencodex");
   const version = options.version ?? packageVersion("0.0.0");
-  const cachedCandidate = join(ocxHome, "cache", "ocx-child", version, artifactFile);
-  const cacheRes = verifyManifestCandidate(cachedCandidate, targetTriple, "cache", hostPlatform);
-  if (cacheRes) return cacheRes;
+  // A build an operator placed in cache/ocx-child/ first, then the one the Home filled after an update
+  // (ocx-child-builds/, src/link/child-binary-cache-fill.mjs); both need a SHA256SUMS that lists them.
+  for (const dir of [join(ocxHome, "cache", "ocx-child"), join(ocxHome, "ocx-child-builds")]) {
+    const cacheRes = verifyManifestCandidate(join(dir, version, artifactFile), targetTriple, "cache", hostPlatform);
+    if (cacheRes) return cacheRes;
+  }
 
   return { ok: false, reason: "artifact_not_found" };
 }

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { detectInstallFromPath } from "../update/install-detection.mjs";
 
 /**
- * Fills $OPENCODEX_HOME/cache/ocx-child/<version>/ when an updated Home of that version starts (lane
+ * Fills $OPENCODEX_HOME/ocx-child-builds/<version>/ when an updated Home of that version starts (lane
  * O2 of the disposable-machines design), so a packaged Home can plant ocx-child on a bare machine
  * after an update by any installer.
  *
@@ -16,7 +16,7 @@ import { detectInstallFromPath } from "../update/install-detection.mjs";
  * running package tree, which its installer verified, and each binary, fetched from the GitHub
  * release of exactly that version, is cached only when its SHA-256 equals that digest. Nothing is
  * fetched without that file, from a source checkout, on Windows, or without evidence of an upgrade:
- * cache/ocx-child/.versions/ holds one marker per version, "<version>.filled" when its fill completed
+ * ocx-child-builds/.versions/ holds one marker per version, "<version>.filled" when its fill completed
  * and "<version>.baseline" when it ran and fetched nothing (a first start, or a package without
  * digests, silently, so the first release that ships them sees an upgrade); markers are only added,
  * so the newest can never go down, and only a running version newer than it fills. A first start (no record: a fresh install) records
@@ -28,10 +28,13 @@ import { detectInstallFromPath } from "../update/install-detection.mjs";
  * the record stays, so a repaired package still fills. Overlapping fills cannot lose a build: the
  * manifest is rebuilt from the builds verified on disk when it is written, and a completed record
  * whose manifest no longer covers the package's digests is repaired on the next start by re-listing
- * the builds still verified on disk; a same-version start never downloads. cache/ocx-child/.fill.lock (reclaimed once its
+ * the builds still verified on disk; a same-version start never downloads. ocx-child-builds/.fill.lock (reclaimed once its
  * process is gone or after an hour) keeps concurrent starts from downloading twice; it is not the guarantee.
  *
- * Nobody else can substitute a build or forge a record: each of cache, cache/ocx-child, .versions and the version
+ * The directory is OpenCodex's own (uninstall removes it); an operator's hand-placed builds live in
+ * cache/ocx-child/<version>/, which the reader checks first and this module never reads or writes.
+ *
+ * Nobody else can substitute a build or forge a record: each of ocx-child-builds, .versions and the version
  * directory must be a real directory (never a symlink; created 0700 when missing) owned by this user
  * and writable by nobody else, and every directory above them must be owned by this user or root and
  * writable by nobody else unless sticky. Every write re-checks the target directory's identity, so a
@@ -58,8 +61,11 @@ export function childReleaseAssetUrl(version, file) {
   return "https://github.com/" + CHILD_RELEASE_REPOSITORY + "/releases/download/v" + encodeURIComponent(version) + "/" + encodeURIComponent(file);
 }
 
+/** The fill's own directory under OPENCODEX_HOME, an owned config path (never cache/, which is the operator's). */
+export const CHILD_FILL_DIR = "ocx-child-builds";
+
 export function childBinaryCacheDir(opencodexHome, version) {
-  return join(opencodexHome, "cache", "ocx-child", version);
+  return join(opencodexHome, CHILD_FILL_DIR, version);
 }
 
 function parseVersion(value) {
@@ -182,7 +188,7 @@ function unpublish(dir, identity, name) {
 }
 
 /**
- * The record is one empty marker per version in cache/ocx-child/.versions/: "<version>.filled" when
+ * The record is one empty marker per version in ocx-child-builds/.versions/: "<version>.filled" when
  * that version's fill completed, "<version>.baseline" when it ran and fetched nothing (a first start,
  * or a package without digests). Markers are only ever added, so the newest version recorded can never
  * go down, whichever fill writes last. null: no marker (or an unreadable directory), no evidence.
@@ -261,7 +267,7 @@ async function download(url, fetchImpl, timeoutMs) {
 /** A cache directory for a version newer than this one: this Home was downgraded. */
 function newerVersionCached(home, version) {
   let names;
-  try { names = readdirSync(join(home, "cache", "ocx-child")); } catch { return false; }
+  try { names = readdirSync(join(home, CHILD_FILL_DIR)); } catch { return false; }
   return names.some(name => compareReleaseVersions(name, version) === 1);
 }
 
@@ -365,16 +371,16 @@ export async function fillChildBinaryCacheForVersion(options) {
   // A digest file that is there but unusable is not "no digests": the record stays, so a repair still fills.
   if (digests === "invalid") return { kind: "skipped", reason: "invalid_digests" };
   const home = options.opencodexHome || process.env.OPENCODEX_HOME?.trim() || join(process.env.HOME || homedir(), ".opencodex");
-  const root = join(home, "cache", "ocx-child");
+  const root = join(home, CHILD_FILL_DIR);
   const dir = childBinaryCacheDir(home, options.version);
   let rootIdentity, lock = null, recorded;
   try {
     assertTrustedAncestors(home);
     if (newerVersionCached(home, options.version)) return { kind: "skipped", reason: "downgrade" };
-    // Before the first directory is created: the startup step claims for uninstall what the fill creates.
+    // After the Home directory itself passed the ancestor checks and before the fill's directory is
+    // created: the startup step claims it for uninstall.
     const refused = options.claimCache?.() ?? null;
     if (refused) return { kind: "skipped", reason: refused };
-    realDirectory(join(home, "cache"));
     rootIdentity = realDirectory(root);
     const early = decideFromRecord(readVersionRecord(root), options.version, digests, dir);
     if (early) return early;

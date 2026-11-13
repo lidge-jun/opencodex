@@ -13,7 +13,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startChildBinaryCacheFill } from "../../src/link/child-binary-cache-start";
 import { CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 
-// Lane O2: an updated Home of version V fills cache/ocx-child/V/ from the GitHub release of V, trusting
+// Lane O2: an updated Home of version V fills ocx-child-builds/V/ from the GitHub release of V, trusting
 // only the digests inside its own installed package, so a packaged Home can plant ocx-child after an update.
 
 const VERSION = "2.100.0";
@@ -38,7 +38,7 @@ function shipDigests(lines: string, into = packageRoot): void {
   writeFileSync(join(into, CHILD_RELEASE_DIGESTS_PATH), lines);
 }
 const bothDigests = () => shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n" + sha(macBuild) + "  ocx-child-darwin-arm64\n");
-const versionsDir = () => join(home, "cache", "ocx-child", ".versions");
+const versionsDir = () => join(home, "ocx-child-builds", ".versions");
 /** The evidence of an upgrade: this Home last completed a fill as `version` (or ran it, "<version> baseline"). */
 function ranBefore(version = "2.99.0"): void {
   mkdirSync(versionsDir(), { recursive: true, mode: 0o700 });
@@ -152,7 +152,7 @@ describe("filling the ocx-child cache for the running version", () => {
 
   test("a downgraded Home fetches nothing: a newer version's cache exists", async () => {
     bothDigests();
-    mkdirSync(join(home, "cache", "ocx-child", "2.101.0"), { recursive: true });
+    mkdirSync(join(home, "ocx-child-builds", "2.101.0"), { recursive: true });
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
     expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "downgrade" });
     expect(requested).toEqual([]);
@@ -185,7 +185,7 @@ describe("filling the ocx-child cache for the running version", () => {
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
     expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(requested).toEqual([]);
-    expect(readdirSync(join(home, "cache", "ocx-child"))).toEqual([".versions"]);
+    expect(readdirSync(join(home, "ocx-child-builds"))).toEqual([".versions"]);
     expect(recorded()).toBe(VERSION + " baseline");
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "artifact_not_found" });
   });
@@ -257,7 +257,7 @@ describe("filling the ocx-child cache for the running version", () => {
     shipDigests(digests);
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
     expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "invalid_digests" });
-    expect([requested, recorded(), readdirSync(join(home, "cache", "ocx-child"))]).toEqual([[], "2.99.0", [".versions"]]);
+    expect([requested, recorded(), readdirSync(join(home, "ocx-child-builds"))]).toEqual([[], "2.99.0", [".versions"]]);
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     expect(await fill(fetchImpl)).toMatchObject({ kind: "filled", fetched: ["ocx-child-linux-x64"], failed: [] });
     expect(recorded()).toBe(VERSION);
@@ -327,10 +327,10 @@ describe.skipIf(process.platform === "win32")("nobody else can substitute a buil
   });
 
   test.each([
-    ["the version directory", () => join(home, "cache", "ocx-child", VERSION), true, 0o770],
-    ["cache/ocx-child", () => join(home, "cache", "ocx-child"), true, 0o777],
-    ["cache", () => join(home, "cache"), false, 0o775],
-    ["the version markers (cache/ocx-child/.versions)", () => versionsDir(), true, 0o777],
+    ["the version directory", () => join(home, "ocx-child-builds", VERSION), true, 0o770],
+    ["ocx-child-builds", () => join(home, "ocx-child-builds"), true, 0o777],
+    ["the Home directory", () => home, false, 0o775],
+    ["the version markers (ocx-child-builds/.versions)", () => versionsDir(), true, 0o777],
   ])("%s writable by others is refused before any download", async (_name, dir, record, mode) => {
     bothDigests();
     if (record) ranBefore();
@@ -359,7 +359,7 @@ describe.skipIf(process.platform === "win32")("nobody else can substitute a buil
 });
 
 describe.skipIf(process.platform === "win32")("one fill at a time per OPENCODEX_HOME", () => {
-  const lockPath = () => join(home, "cache", "ocx-child", ".fill.lock");
+  const lockPath = () => join(home, "ocx-child-builds", ".fill.lock");
 
   test("an overlapping fill whose download would fail skips, and cannot undo the one that succeeds", async () => {
     bothDigests();
@@ -411,8 +411,8 @@ describe.skipIf(process.platform === "win32")("one fill at a time per OPENCODEX_
 
 describe.skipIf(process.platform === "win32")("the cache is never written through a symlink", () => {
   test.each([
-    ["the version directory", () => join(home, "cache", "ocx-child", VERSION), true],
-    ["cache/ocx-child", () => join(home, "cache", "ocx-child"), false],
+    ["the version directory", () => join(home, "ocx-child-builds", VERSION), true],
+    ["ocx-child-builds", () => join(home, "ocx-child-builds"), false],
   ])("%s as a symlink is refused before any write", async (_name, link, record) => {
     bothDigests();
     if (record) ranBefore();
@@ -494,7 +494,7 @@ describe("startup", () => {
     const out = { log: (line: string) => { logs.push(line); }, warn: (line: string) => { logs.push(line); } };
     expect(await fillChildBinaryCacheOnStart({ packageRoot, opencodexHome: home }, out)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(logs).toEqual([]);
-    expect([readdirSync(join(home, "cache", "ocx-child")), recorded()]).toEqual([[".versions"], VERSION + " baseline"]);
+    expect([readdirSync(join(home, "ocx-child-builds")), recorded()]).toEqual([[".versions"], VERSION + " baseline"]);
   });
 });
 
@@ -515,55 +515,87 @@ describe("parity with the reader", () => {
 describe("final review: uninstall, startup gates and download edges", () => {
   const quiet = { log: () => {}, warn: () => {} };
 
-  test("ocx uninstall removes the cache the startup step created, which it records as owned", async () => {
-    const outcome = await startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: VERSION, fetchImpl: release({}).fetchImpl }, quiet);
-    expect(outcome).toEqual({ kind: "skipped", reason: "no_digests" });
-    expect(readdirSync(versionsDir())).toEqual([VERSION + ".baseline"]);
-    expect((JSON.parse(readFileSync(join(home, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] }).paths).toContain("cache");
-    const removed = removeOwnedConfigState(home);
-    expect(removed.status).toBe("removed");
-    expect(existsSync(join(home, "cache"))).toBe(false);
-  });
-
   const ownedPaths = () => (JSON.parse(readFileSync(join(home, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] }).paths;
-  const start = () => startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: VERSION, fetchImpl: release({}).fetchImpl }, quiet);
-
-  test("a new Home claims no cache/ until the fill creates it", () => {
+  const start = (fetchImpl = release({}).fetchImpl) => startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: VERSION, fetchImpl }, quiet);
+  const fillDir = () => join(home, "ocx-child-builds");
+  /** A Home created before this change: owned, but its manifest does not list ocx-child-builds. */
+  function olderOwnedHome(): void {
     expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    const manifestPath = join(home, CONFIG_UNINSTALL_MANIFEST);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] };
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, paths: manifest.paths.filter(path => path !== "ocx-child-builds") }, null, 2) + "\n", { mode: 0o600 });
+  }
+
+  test("a new Home owns ocx-child-builds from the start, and uninstall removes what the fill created", async () => {
+    expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
+    expect(readdirSync(versionsDir())).toEqual([VERSION + ".baseline"]);
+    expect(ownedPaths()).toContain("ocx-child-builds");
     expect(ownedPaths().filter(path => path.startsWith("cache"))).toEqual([]);
+    expect(removeOwnedConfigState(home).status).toBe("removed");
+    expect(existsSync(fillDir())).toBe(false);
   });
 
-  test("an operator's existing cache/ocx-child is never claimed or filled, and survives uninstall", async () => {
-    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+  test.each([["absent", false], ["empty", true]])("an older Home registers an %s ocx-child-builds before the fill writes it", async (_name, precreate) => {
+    olderOwnedHome();
+    if (precreate) mkdirSync(fillDir(), { mode: 0o700 });
+    expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
+    expect(ownedPaths()).toContain("ocx-child-builds");
+    expect(removeOwnedConfigState(home).status).toBe("removed");
+  });
+
+  test("the operator's cache/ is never claimed or written, and its files survive uninstall, also those added after a fill", async () => {
+    olderOwnedHome();
     const handPlaced = join(home, "cache", "ocx-child", "2.99.0", "ocx-child-linux-x64");
     mkdirSync(join(home, "cache", "ocx-child", "2.99.0"), { recursive: true, mode: 0o700 });
     writeFileSync(handPlaced, linuxBuild, { mode: 0o700 });
+    writeFileSync(join(home, "cache", "notes.txt"), "mine");
     bothDigests();
-    expect(await start()).toEqual({ kind: "skipped", reason: "operator_cache" });
+    // The upgrade evidence an earlier start of this Home left, in the directory it claimed then.
+    expect(recordOwnedConfigPath(home, fillDir())).toBe(true);
+    ranBefore();
+    expect(await start(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl))
+      .toEqual({ kind: "filled", cached: ["ocx-child-darwin-arm64", "ocx-child-linux-x64"], fetched: ["ocx-child-darwin-arm64", "ocx-child-linux-x64"], failed: [] });
+    writeFileSync(join(home, "cache", "later.txt"), "added after the fill");
     expect(ownedPaths().filter(path => path.startsWith("cache"))).toEqual([]);
-    expect(existsSync(versionsDir())).toBe(false);
+    expect(readdirSync(join(home, "cache")).sort()).toEqual(["later.txt", "notes.txt", "ocx-child"]);
     expect(removeOwnedConfigState(home).status).toBe("partial");
-    expect(readFileSync(handPlaced)).toEqual(Buffer.from(linuxBuild));
+    expect([readFileSync(handPlaced, "utf8"), readFileSync(join(home, "cache", "notes.txt"), "utf8"), readFileSync(join(home, "cache", "later.txt"), "utf8"), existsSync(fillDir())])
+      .toEqual(["linux build bytes", "mine", "added after the fill", false]);
   });
 
-  test("beside other files in an existing cache/, the fill claims only cache/ocx-child", async () => {
-    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
-    mkdirSync(join(home, "cache"), { mode: 0o700 });
-    writeFileSync(join(home, "cache", "notes.txt"), "mine");
-    expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
-    expect(ownedPaths().filter(path => path.startsWith("cache"))).toEqual(["cache/ocx-child"]);
-    const removed = removeOwnedConfigState(home);
-    expect(removed.status).toBe("partial");
-    expect([existsSync(join(home, "cache", "ocx-child")), readFileSync(join(home, "cache", "notes.txt"), "utf8")]).toEqual([false, "mine"]);
+  test("the reader takes an operator's build in cache/ocx-child before the one the Home filled", async () => {
+    const operatorBuild = new TextEncoder().encode("operator linux build");
+    const operatorDir = join(home, "cache", "ocx-child", VERSION);
+    mkdirSync(operatorDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(operatorDir, "ocx-child-linux-x64"), operatorBuild, { mode: 0o600 });
+    writeFileSync(join(operatorDir, "SHA256SUMS"), sha(operatorBuild) + "  ocx-child-linux-x64\n", { mode: 0o600 });
+    bothDigests();
+    ranBefore();
+    await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
+    const linux = resolve("linux-x64");
+    expect(linux.ok && Buffer.from(linux.artifact.bytes).toString()).toBe("operator linux build");
+    const mac = resolve("darwin-arm64");
+    expect(mac.ok && Buffer.from(mac.artifact.bytes).toString()).toBe("mac build bytes");
+  });
+
+  test("an unlisted ocx-child-builds that already holds entries is not adopted or written", async () => {
+    olderOwnedHome();
+    mkdirSync(join(fillDir(), "2.99.0"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(fillDir(), "2.99.0", "notes.txt"), "not OpenCodex's");
+    bothDigests();
+    expect(await start()).toEqual({ kind: "skipped", reason: "foreign_directory" });
+    expect([ownedPaths().includes("ocx-child-builds"), readdirSync(fillDir())]).toEqual([false, ["2.99.0"]]);
+    expect(removeOwnedConfigState(home).status).toBe("partial");
+    expect(readFileSync(join(fillDir(), "2.99.0", "notes.txt"), "utf8")).toBe("not OpenCodex's");
   });
 
   test("a start during an uninstall stops and creates nothing", async () => {
-    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    olderOwnedHome();
     const manifestPath = join(home, CONFIG_UNINSTALL_MANIFEST);
     writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf8")), uninstallStartedAt: Date.now() }, null, 2) + "\n", { mode: 0o600 });
     bothDigests();
     expect(await start()).toEqual({ kind: "skipped", reason: "uninstall_in_progress" });
-    expect(existsSync(join(home, "cache"))).toBe(false);
+    expect(existsSync(fillDir())).toBe(false);
   });
 
   test("a Home without ownership metadata fills as before (its uninstall removes nothing)", async () => {
@@ -573,9 +605,19 @@ describe("final review: uninstall, startup gates and download edges", () => {
   });
 
   test("a start stopped by a gate claims nothing", async () => {
-    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    olderOwnedHome();
     expect(await startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: "2.99.9" }, quiet)).toEqual({ kind: "skipped", reason: "version_mismatch" });
-    expect(ownedPaths().filter(path => path.startsWith("cache"))).toEqual([]);
+    expect(ownedPaths().includes("ocx-child-builds")).toBe(false);
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a Home directory others can write is refused before anything is claimed", async () => {
+    olderOwnedHome();
+    bothDigests();
+    chmodSync(home, 0o775);
+    try {
+      expect(await start()).toBeNull();
+    } finally { chmodSync(home, 0o700); }
+    expect([ownedPaths().includes("ocx-child-builds"), existsSync(fillDir())]).toEqual([false, false]);
   });
 
   test("a client runtime records and writes nothing", async () => {
@@ -599,14 +641,14 @@ describe("final review: uninstall, startup gates and download edges", () => {
 
   test("a package.json that is not the running code's version records nothing", async () => {
     expect(await fillChildBinaryCacheOnStart({ packageRoot, opencodexHome: home, bundledVersion: "2.99.9" }, quiet)).toEqual({ kind: "skipped", reason: "version_mismatch" });
-    expect(existsSync(join(home, "cache"))).toBe(false);
+    expect(existsSync(join(home, "ocx-child-builds"))).toBe(false);
   });
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a same-version restart takes no lock and writes nothing", async () => {
     bothDigests();
     ranBefore();
     await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
-    const root = join(home, "cache", "ocx-child");
+    const root = join(home, "ocx-child-builds");
     chmodSync(root, 0o500);
     try {
       expect(await fill(release({}).fetchImpl)).toEqual({ kind: "skipped", reason: "not_an_upgrade" });
