@@ -6,8 +6,8 @@
  *   stopped, so the proxy defers the shared teardown to this command. When the claim fails
  *   while this home owns the shared teardown, no undeferred child stop is sent: a wrapper
  *   appearing later could relaunch the proxy after its own teardown ran. Part B replaces
- *   proxyStillLiveAfterStop after a Part A stopped; the receipt is completed only after the
- *   restore ran, and kept for recovery otherwise.
+ *   the legacy survivor check after a Part A stopped. With an absent Part A every candidate
+ *   endpoint must be proven dead before restore; the receipt is kept otherwise.
  * - uninstall / remove: Part A before the task is deleted (a looping wrapper used to
  *   outlive its task, #764), refusing on anything but stopped/absent, then a receipt that
  *   carries Part A's record before the tracked proxy stop (Part A leaves the task
@@ -18,7 +18,7 @@ import { clearPendingTeardown, claimPendingTeardown } from "../config/pending-te
 import { readClientConnectionState } from "../client/state";
 import type { ProbeEndpoint } from "../cli/uninstall-plan";
 import { probeEndpointLiveness, type EndpointLiveness } from "../server/proxy-liveness";
-import { proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand } from "./orchestration";
+import { stopTrackedProxyForServiceCommand } from "./orchestration";
 import {
   confirmWindowsServiceStop,
   describeWindowsPartA,
@@ -38,7 +38,6 @@ export interface WindowsServiceStopCommandIo {
   ownsSharedTeardown?: () => boolean;
   claim?: typeof claimPendingTeardown;
   stopTracked?: typeof stopTrackedProxyForServiceCommand;
-  survivor?: typeof proxyStillLiveAfterStop;
   /**
    * Tri-state probe of an endpoint. Only a definitive "dead" on EVERY candidate permits
    * deleting the task; "live" and "unknown" refuse and keep the receipt.
@@ -88,16 +87,18 @@ export async function windowsServiceStopBeforeRestore(io: WindowsServiceStopComm
       return { ok: false };
     }
   }
+  const endpoints = partA.outcome === "absent" ? (io.endpoints ?? windowsRemovalEndpoints)() : [];
   await (io.stopTracked ?? stopTrackedProxyForServiceCommand)({
     ...(nonce ? { deferSharedTeardownNonce: nonce } : {}),
     skipPortWait: partA.outcome === "stopped",
     orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery,
   });
   if (partA.outcome === "absent") {
-    const survivor = await (io.survivor ?? proxyStillLiveAfterStop)();
-    if (!survivor) return withNonce(nonce);
-    console.error("❌ service stop did not take effect: a proxy is still listening on port " + survivor.port + ".");
-    console.error("   Native Codex was NOT restored. Check for a manually started proxy, then re-run 'ocx service stop'.");
+    const proof = await endpointsAllDead(endpoints, io.endpointLiveness ?? probeEndpointLiveness);
+    if (proof.dead) return withNonce(nonce);
+    console.error(proof.live.length ? "❌ service stop did not take effect: a proxy is still listening on port " + proof.live.join(", ") + "."
+      : "❌ service stop did not take effect: endpoint liveness could not be confirmed on port " + proof.unknown.join(", ") + ".");
+    console.error("   Native Codex was NOT restored; the teardown receipt is kept for a later stop.");
     return { ok: false };
   }
   const partB = await confirmWindowsServiceStop({ port, remainingMs: windowsStopRemainingMs() });

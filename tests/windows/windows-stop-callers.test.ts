@@ -156,11 +156,21 @@ describe("ocx service stop on Windows", () => {
     }
   });
 
-  test("absent keeps today's survivor check instead of Part B", async () => {
+  test("absent refuses an unknown endpoint and keeps the receipt", async () => {
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent") });
+    const result = await windowsServiceStopBeforeRestore({
+      ownsSharedTeardown: () => true, claim: () => ({ nonce: "kept" }) as never,
+      stopTracked: async () => "none",
+      endpoints: () => [{ hostname: "127.0.0.1", port: 10100 }], endpointLiveness: async () => "unknown",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("absent checks endpoints instead of Part B", async () => {
     let partB = 0;
     setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent"), partB: async () => { partB++; return partBResult("freed"); } });
     const live = await windowsServiceStopBeforeRestore({
-      ownsSharedTeardown: () => false, stopTracked: async () => "none", survivor: async () => ({ port: 10100 }),
+      ownsSharedTeardown: () => false, stopTracked: async () => "none", endpoints: () => [{ hostname: "127.0.0.1", port: 10100 }], endpointLiveness: async () => "live",
     });
     expect(live.ok).toBe(false);
     expect(partB).toBe(0);

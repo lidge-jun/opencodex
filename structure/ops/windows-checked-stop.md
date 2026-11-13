@@ -177,7 +177,8 @@ stop instead of sliding forward.
 - `ocx service stop` (`src/service/cli-windows-stop.ts`) refuses on a Part A other than stopped or
   absent, claims a teardown receipt before the deferred tracked-proxy stop when this home owns the
   shared teardown (a failed claim sends no child stop), runs Part B, and clears the receipt only
-  after the restore. `ocx service uninstall` / `remove` refuse before deleting the task unless
+  after the restore. With Part A absent it requires every candidate endpoint to be definitively
+  dead; live or unknown keeps the receipt and blocks restoration. `ocx service uninstall` / `remove` refuse before deleting the task unless
   Part A stopped (or found nothing) and Part B did not find our identity or an unreadable port.
   Removal claims the same receipt, carrying Part A's record, before its child stop: Part A leaves
   the scheduler task registered, so a receipt-less POST answers `respawnable_service` (409) and
