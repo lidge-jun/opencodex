@@ -339,3 +339,51 @@ test("a key whose directory is private, or owned by this user and only readable 
     expect({ mode: mode.toString(8), status: probed.status }).toEqual({ mode: mode.toString(8), status: 200 });
   }
 });
+/** A 0600 key in a 0700 directory under one more directory with the given mode: a directory above the key must be safe too. */
+function keyUnder(ancestorMode: number): string {
+  const shared = join(root, "shared");
+  mkdirSync(shared);
+  mkdirSync(join(shared, "keys"), { mode: 0o700 });
+  const path = join(shared, "keys", "goat_hub_ed25519");
+  writeFileSync(path, KEY_CANARY + "\n");
+  chmodSync(path, 0o600);
+  chmodSync(shared, ancestorMode);
+  return path;
+}
+
+test.each([
+  ["under a directory others can write, which could rename the key's directory away", () => keyUnder(0o777)],
+  ["under a directory its group can write", () => keyUnder(0o775)],
+  ["reached through a symlink kept in a directory others can write", () => {
+    mkdirSync(join(root, "private"), { mode: 0o700 });
+    const path = join(root, "private", "goat_hub_ed25519");
+    writeFileSync(path, KEY_CANARY + "\n");
+    chmodSync(path, 0o600);
+    mkdirSync(join(root, "shared"));
+    symlinkSync(join(root, "private"), join(root, "shared", "link"));
+    chmodSync(join(root, "shared"), 0o777);
+    return join(root, "shared", "link", "goat_hub_ed25519");
+  }],
+  ["in a directory a symlink resolves to, which others can write", () => {
+    mkdirSync(join(root, "open"));
+    const path = join(root, "open", "goat_hub_ed25519");
+    writeFileSync(path, KEY_CANARY + "\n");
+    chmodSync(path, 0o600);
+    chmodSync(join(root, "open"), 0o777);
+    symlinkSync(join(root, "open"), join(root, "keys"));
+    return join(root, "keys", "goat_hub_ed25519");
+  }],
+] as const)("a probe whose identity file is %s is refused before any SSH", async (_label, pick) => {
+  const h = harness();
+  const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: pick() }, exclusive: true });
+  expect({ status: refused.status, code: code(refused), hint: (refused.body.error as { hint?: string }).hint })
+    .toEqual({ status: 400, code: "invalid_identity_file", hint: "identity_file_directory" });
+  expect(h.ssh).toEqual([]);
+});
+
+test("a key under a sticky directory such as /tmp, in a private directory of its own, is accepted", async () => {
+  const h = harness();
+  const identityFile = keyUnder(0o1777);
+  const probed = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile }, exclusive: true });
+  expect(probed.status).toBe(200);
+});

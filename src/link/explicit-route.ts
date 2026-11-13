@@ -1,4 +1,4 @@
-import { accessSync, constants, lstatSync, statSync } from "node:fs";
+import { accessSync, constants, lstatSync, readlinkSync, type Stats } from "node:fs";
 import { dirname } from "node:path";
 /**
  * An explicit SSH route for a Home-initiated link (structure/remote-link.md, "Explicit route"): the
@@ -106,9 +106,11 @@ export type IdentityFileProblem = "identity_file_missing" | "identity_file_not_r
  * It must be a regular file (a symlink is refused, so the path names the key itself), owned by this user with no group or
  * other permission bits (ssh ignores a key file of its owner that others can read, and the link would then fail public-key
  * authentication with nothing pointing at the cause), and readable by this user. Its directory must be owned by this user or
- * root and not writable by group or others, so no other user can rename another file into the key's name after this check
- * (a world-writable sticky directory such as /tmp is refused too). Only the directory that holds the file is checked, after
- * symlinks in its path resolve. Null when usable.
+ * root and not writable by group or others (a world-writable sticky directory such as /tmp is refused too), and so must every
+ * directory the path passes through as it resolves, symlinks followed and the directories holding them included, except that
+ * a directory above it may be a sticky one such as /tmp, where no other user can rename this user's entries. So no other user
+ * can put another file at the key's path after this check. It is a check of metadata at request time: ssh opens the path
+ * later, and a change this user or root makes in between is not caught. Null when usable.
  * A Windows Home refuses every identity file before looking at it: the accepted form is a POSIX path, which Windows resolves
  * against the current drive, and owner and mode bits there say nothing about the file's ACL.
  */
@@ -122,12 +124,56 @@ export function identityFileProblem(path: string, platform: NodeJS.Platform = pr
   if (stat.isSymbolicLink() || !stat.isFile()) return "identity_file_not_regular";
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) return "identity_file_permissions";
   if ((stat.mode & 0o077) !== 0) return "identity_file_permissions";
-  let directory;
-  try { directory = statSync(dirname(path)); } catch { return "identity_file_unreadable"; }
-  if (typeof process.getuid === "function" && directory.uid !== process.getuid() && directory.uid !== 0) return "identity_file_directory";
+  const directory = resolvedDirectory(dirname(path));
+  if (typeof directory === "string") return directory;
   if ((directory.mode & 0o022) !== 0) return "identity_file_directory";
   try { accessSync(path, constants.R_OK); } catch { return "identity_file_unreadable"; }
   return null;
+}
+
+const MAX_SYMLINKS = 40;
+
+/** Owned by this user or root, and not writable by group or others unless sticky. */
+function safeDirectory(stat: Stats): boolean {
+  if (typeof process.getuid === "function" && stat.uid !== process.getuid() && stat.uid !== 0) return false;
+  return (stat.mode & 0o022) === 0 || (stat.mode & 0o1000) !== 0;
+}
+
+/**
+ * Resolves an absolute directory path one entry at a time, as the kernel does, and checks every directory it passes
+ * through with safeDirectory: the root, each directory on the way, the directory holding each symlink and each symlink's
+ * target. Answers the final directory's metadata, or the problem.
+ */
+function resolvedDirectory(path: string): Stats | IdentityFileProblem {
+  const failed = (error: unknown): IdentityFileProblem => {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "identity_file_missing" : "identity_file_unreadable";
+  };
+  try {
+    let current = "/";
+    let stat = lstatSync(current);
+    if (!safeDirectory(stat)) return "identity_file_directory";
+    const pending = path.split("/").filter(name => name !== "" && name !== ".");
+    let links = 0;
+    while (pending.length > 0) {
+      const name = pending.shift()!;
+      if (name === "..") { current = dirname(current); stat = lstatSync(current); continue; }
+      const next = current === "/" ? "/" + name : current + "/" + name;
+      const entry = lstatSync(next);
+      if (entry.isSymbolicLink()) {
+        if (++links > MAX_SYMLINKS) return "identity_file_unreadable";
+        const target = readlinkSync(next);
+        if (target.startsWith("/")) current = "/";
+        pending.unshift(...target.split("/").filter(part => part !== "" && part !== "."));
+        continue;
+      }
+      if (!entry.isDirectory()) return "identity_file_missing";
+      if (!safeDirectory(entry)) return "identity_file_directory";
+      current = next;
+      stat = entry;
+    }
+    return stat;
+  } catch (error) { return failed(error); }
 }
 
 export class ExplicitRouteError extends Error {
