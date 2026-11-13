@@ -24,7 +24,7 @@ export const MAX_PROVIDER_CREDITS = 1_000_000_000;
 export function sumCreditReadings(values: readonly (number | undefined)[]): number | undefined {
   const readings = values.filter((value): value is number => value !== undefined);
   if (readings.length === 0) return undefined;
-  if (readings.some(value => !Number.isFinite(value) || value < 0)) return -1;
+  if (readings.length !== values.length || readings.some(value => !Number.isFinite(value) || value < 0)) return -1;
   return readings.reduce((sum, value) => sum + value, 0);
 }
 
