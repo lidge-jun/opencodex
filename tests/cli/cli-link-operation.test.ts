@@ -264,9 +264,9 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
     } finally { h.restore(); }
   });
 
-  // Only --force can meet the tombstone limit (#8612). A fresh revoke is refused before anything and settles failed_clean, but a
+  // Only --force can meet the tombstone limit (#8612). A fresh revoke is refused before it touches the link, its key or the Child and settles failed_clean, but a
   // resumed one may re-own its retirement receipt first and stay open or unknown (#8416), so the text claims neither.
-  test("a forced revoke refused at the tombstone limit claims only that this attempt touched nothing, and to repeat the same id before using a new one", async () => {
+  test("a forced revoke refused at the tombstone limit claims only that this attempt revoked no key, removed no record and did not contact the Child, and to repeat the same id before using a new one", async () => {
     const h = harness([{ status: 409, body: { error: { code: "tombstone_limit", message: "server-chosen text" } } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--force", "--yes", "--operation-id", "detach-8"], h.deps)).toBe(5);
       const printed = [...h.out, ...h.err].join("\n");
@@ -306,6 +306,9 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
       const printed = [...h.out, ...h.err].join("\n");
       expect(printed).toContain("Keep a copy, move it aside");
       expect(printed).toContain("link_not_found");
+      // The way out runs as printed: a forced revoke needs the link id and --yes.
+      expect(printed).toContain("ocx link revoke --link-id " + LINK + " --force --yes, without --operation-id");
+      expect(printed).not.toContain("ocx link revoke --force without --operation-id");
       expect(printed).not.toContain("Nothing was changed");
       expect(printed).toContain("(code operation_journal_unreadable)");
       expect(printed).not.toContain("server-chosen text");
@@ -342,6 +345,8 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
       expect(printed).toContain("ocx link operations --operation-id detach-13 shows its state");
       // A resume that failed and could not settle leaves the entry open, which resolve refuses: only unknown or residual resolve.
       expect(printed).toContain("if it reads unknown or residual, check the Child, then run ocx link operations resolve --operation-id detach-13 --yes");
+      // A resume whose record was already gone settles committed, and clearing its receipt can still fail: one more repeat clears it.
+      expect(printed).toContain("if it reads committed, the removal finished: repeat it once more to clear what it left");
       expect(printed).toContain("if it reads open, fix what stopped the revoke (for example the journal's disk) and repeat it with the same operation id");
       expect(printed).not.toContain("it resumes a removal this id still owns");
     } finally { h.restore(); }

@@ -628,9 +628,11 @@ export function journalledRevokeError(error: unknown, operationId: string, linkI
   const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
   // Repeating first resumes a removal if this id still owns one (#8416); resolving first would leave its receipt and record behind. An
   // unknown can also arise before any receipt was claimed (a disconnect timeout or failure, a journal write), so the resume is
-  // conditional. A resume reopens the entry, and one that fails and cannot settle leaves it open, which resolve refuses
-  // (operation_not_resolvable), so the next step follows the state the repeat left: resolve only unknown or residual.
-  const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first (if this id still owns an unfinished removal, the repeat resumes it). If it does not finish, ocx link operations --operation-id " + operationId + " shows its state: if it reads unknown or residual, check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes; if it reads open, fix what stopped the revoke (for example the journal's disk) and repeat it with the same operation id" : "";
+  // conditional. A resume while the record is still listed reopens the entry, and one that fails and cannot settle leaves it open,
+  // which resolve refuses (operation_not_resolvable), so the next step follows the state the repeat left: resolve only unknown or
+  // residual. A resume whose record was already gone settles committed, and clearing its receipt can still fail (503): one more
+  // repeat clears what it left.
+  const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first (if this id still owns an unfinished removal, the repeat resumes it). If it does not finish, ocx link operations --operation-id " + operationId + " shows its state: if it reads committed, the removal finished: repeat it once more to clear what it left; if it reads unknown or residual, check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes; if it reads open, fix what stopped the revoke (for example the journal's disk) and repeat it with the same operation id" : "";
   const next = Object.hasOwn(NEXT_STEP, code) ? ". " + NEXT_STEP[code] : "";
   // A link-bound refusal's hint (#8662), only from the closed set and only in its plain-word form; never the server's text.
   const hint = code === "remote_disconnect_failed" ? boundRefusalHint(error) : undefined;
@@ -704,6 +706,9 @@ const RETIREMENT_GUIDANCE: Record<string, (link: string) => string> = {
   // Unreachable with --operation-id at this head (foreignRetirement admits only this operation's own receipt, resumed in its own
   // mode); kept as a closed text with no state claim. "--force" with the same id would answer operation_mismatch, so it is not offered.
   link_retirement_mode_mismatch: link => "This link's removal was interrupted in another mode than this revoke asks for. Repeat the revoke that started it with its options (ocx link operations --json shows each entry's linkId), or finish it with ocx link revoke --link-id " + link + " --force --yes without --operation-id.",
+  // Not a retirement refusal, but its way out names the link too, so it runs as printed. A replay that follows a resumed removal
+  // can meet an unreadable journal after that removal finished (#8416): no state claim.
+  operation_journal_unreadable: link => "The link operation journal (<configDir>/link/operations.json) is damaged or could not be read. Keep a copy, move it aside and repeat the revoke with the same operation id; if that answers link_not_found, the link is already gone (a resumed removal can finish before the read fails). A forced revoke runs without the journal: ocx link revoke --link-id " + link + " --force --yes, without --operation-id (it skips the Child's cleanup).",
 };
 
 /**
@@ -716,6 +721,4 @@ const REVOKE_REFUSALS: Record<string, string> = {
   link_operation_open: "An unfinished revoke holds this link; repeat it with its own operation id to settle it first. Nothing was changed.",
   // A resumed revoke can re-own its retirement receipt before this 409 (#8416), so it claims only what holds for every path.
   link_operation_in_progress: "Another link operation for this alias or link is running. This attempt did not touch the link, its key or the Child; retry when it ends.",
-  // A replay that follows a resumed removal can meet an unreadable journal after that removal finished (#8416): no state claim.
-  operation_journal_unreadable: "The link operation journal (<configDir>/link/operations.json) is damaged or could not be read. Keep a copy, move it aside and repeat the revoke with the same operation id; if that answers link_not_found, the link is already gone (a resumed removal can finish before the read fails). ocx link revoke --force without --operation-id also runs.",
 };
