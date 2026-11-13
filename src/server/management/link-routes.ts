@@ -446,6 +446,14 @@ function readRemovalTarget(ctx: ManagementContext, id: string):
 }
 
 
+// What each link-bound refusal means and what to do; fixed text, never the Child's own output.
+const BOUND_REFUSAL_MESSAGES: Record<string, string> = Object.assign(Object.create(null) as Record<string, string>, {
+  child_link_mismatch: "The Child is not connected to this link, so nothing was disconnected and the link was kept. If it now belongs to another link, a hub or another Home, do not disconnect it there: revoke this link with --force. If it has a connect or key rotation in progress, or its state cannot be read, repair that on the Child first.",
+  child_residual: "The lightweight Child keeps records it cannot restore, so nothing was disconnected and the link was kept; run ~/.cache/opencodex/bin/ocx-child detach on it, then revoke again.",
+  child_disconnect_pending: "The Child has an unfinished disconnect it could not tie to this link and may be partly cleaned; check it, finish it there with ocx disconnect, then revoke again or with --force.",
+  expect_link_unsupported: "The Child runs an OpenCodex older than --expect-link and another Home-initiated link of this Home may reach the same machine, so it was not disconnected unbound. Update OpenCodex on the Child, revoke the other link first, or revoke this one with --force.",
+});
+
 // A forced revoke of an ephemeral Child refused for its tombstone. Either answer comes before this attempt revoked a key or
 // removed a record, and a forced revoke never contacts the Child; an earlier attempt of a resumed revoke may have done more.
 const tombstoneLimit = (): Response => fail("tombstone_limit", "Too many forced revokes are waiting for cleanup, so this attempt revoked no key and removed no record. Recover them (ocx link recover --list), or have a person on this Home run ocx link recover --forget for a machine that is gone or whose cleanup cannot be proven.", 409);
@@ -556,7 +564,7 @@ async function removeReserved(
       await restartTunnel();
       return failure;
     };
-    const disconnectFailed = (hint: string | undefined) => fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, hint);
+    const disconnectFailed = (hint: string | undefined) => fail("remote_disconnect_failed", BOUND_REFUSAL_MESSAGES[hint ?? ""] ?? "The remote client could not be disconnected.", 502, hint);
     // True once the Child confirmed this link before cleaning (--expect-link). A revoke never settles a tombstone, bound or
     // not: beside a listed link one belongs to a forced revoke still in flight in another process (or one that died), and
     // removing it here could lose the only recovery evidence for a Child that revoke leaves attached. ocx link recover
@@ -583,7 +591,7 @@ async function removeReserved(
         try { purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind, id, unboundStillSafe); } catch (error) {
           return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
         }
-        if (!purged.ok) return cleanupFailed(fail(purged.code, purged.message, purged.status, purged.hint), purged.notAttempted !== true);
+        if (!purged.ok) return cleanupFailed(fail(purged.code, (purged.hint !== undefined ? BOUND_REFUSAL_MESSAGES[purged.hint] : undefined) ?? purged.message, purged.status, purged.hint), purged.notAttempted !== true);
         // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route. The
         // receipt must be durable before the link goes; if it cannot be written, stop here (unknown) and leave the
         // tunnel down, since the Child it would reach is purged.
