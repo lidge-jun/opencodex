@@ -16,7 +16,11 @@ export type LinkRetirementMode = "force" | "disconnect" | "purge";
  * operationId names the journalled revoke that claimed the receipt: only that operation's replay resumes it (#8416),
  * so a recorded revoke is never credited with, or skips its own cleanup through, another removal's receipt.
  */
-export interface LinkRetirement { version: 1; link: LinkRecord; nonce: string; mode?: LinkRetirementMode; operationId?: string }
+/**
+ * formerOwner names the operation a plain --force took the receipt over from (disownLinkRetirement): that operation may
+ * take it back only while the force has provably committed nothing (#8416).
+ */
+export interface LinkRetirement { version: 1; link: LinkRecord; nonce: string; mode?: LinkRetirementMode; operationId?: string; formerOwner?: string }
 export class LinkRetirementError extends Error {
   constructor(message: string) { super(message); this.name = "LinkRetirementError"; }
 }
@@ -33,10 +37,11 @@ function parse(text: string, id: string): LinkRetirement {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new LinkRetirementError("invalid retirement record");
   const value = raw as Record<string, unknown>;
   const keys = Object.keys(value);
-  const allowed = new Set(["version", "link", "nonce", "mode", "operationId"]);
+  const allowed = new Set(["version", "link", "nonce", "mode", "operationId", "formerOwner"]);
   if (keys.some(key => !allowed.has(key)) || !("link" in value) || value.version !== 1 || typeof value.nonce !== "string" || !NONCE.test(value.nonce)
     || (value.mode !== undefined && value.mode !== "force" && value.mode !== "disconnect" && value.mode !== "purge")
-    || (value.operationId !== undefined && !isOperationId(value.operationId))) {
+    || (value.operationId !== undefined && !isOperationId(value.operationId))
+    || (value.formerOwner !== undefined && (!isOperationId(value.formerOwner) || value.operationId !== undefined))) {
     throw new LinkRetirementError("invalid retirement record");
   }
   let link: LinkRecord;
@@ -44,7 +49,8 @@ function parse(text: string, id: string): LinkRetirement {
   catch { throw new LinkRetirementError("invalid retirement link"); }
   if (link.id !== id) throw new LinkRetirementError("retirement id mismatch");
   return { version: 1, link, nonce: value.nonce, ...(value.mode === undefined ? {} : { mode: value.mode as LinkRetirementMode }),
-    ...(value.operationId === undefined ? {} : { operationId: value.operationId as string }) };
+    ...(value.operationId === undefined ? {} : { operationId: value.operationId as string }),
+    ...(value.formerOwner === undefined ? {} : { formerOwner: value.formerOwner as string }) };
 }
 function sameLink(a: LinkRecord, b: LinkRecord): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -87,8 +93,8 @@ export function disownLinkRetirement(expected: LinkRetirement, configDir: string
     const current = readLinkRetirement(owner.link.id, configDir);
     if (!current || current.nonce !== owner.nonce || !sameLink(current.link, owner.link)) return null;
     if (current.operationId === undefined) return current;
-    const { operationId: _owner, ...unowned } = current;
-    const next = parse(JSON.stringify(unowned), owner.link.id);
+    const { operationId: former, ...unowned } = current;
+    const next = parse(JSON.stringify({ ...unowned, formerOwner: former }), owner.link.id);
     atomicWriteFileNoFollow(pathFor(owner.link.id, configDir), JSON.stringify(next, null, 2) + "\n");
     return next;
   }, configDir);
@@ -103,7 +109,8 @@ export function reownLinkRetirement(expected: LinkRetirement, operationId: strin
   return withConfigMutationLockSync(() => {
     const current = readLinkRetirement(owner.link.id, configDir);
     if (!current || current.nonce !== owner.nonce || !sameLink(current.link, owner.link) || current.operationId !== undefined) return false;
-    const next = parse(JSON.stringify({ ...current, operationId }), owner.link.id);
+    const { formerOwner: _former, ...rest } = current;
+    const next = parse(JSON.stringify({ ...rest, operationId }), owner.link.id);
     atomicWriteFileNoFollow(pathFor(owner.link.id, configDir), JSON.stringify(next, null, 2) + "\n");
     return true;
   }, configDir);

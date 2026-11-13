@@ -402,6 +402,15 @@ async function resumeRetirementBeforeReplay(
     receipt = readLinkRetirement(id);
     recordListed = readStoreFor(ctx).links.some(link => link.id === id);
   } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
+  // A plain --force took this operation's receipt over and stopped (or died) before committing anything: the record is still
+  // listed and its key still present, so the force removed nothing and this operation takes its receipt back and finishes
+  // from its own evidence. Once the force has revoked the key or removed the record, the receipt stays the force's.
+  if (receipt && receipt.operationId === undefined && receipt.formerOwner === operation.id && receipt.mode === removalMode(force, purge)
+    && recordListed && (ctx.config.apiKeys ?? []).some(key => key.id === receipt!.link.apiKeyId)) {
+    try {
+      if (reownLinkRetirement(receipt, operation.id)) receipt = readLinkRetirement(id);
+    } catch { return fail("link_remove_failed", "The link retirement could not be updated.", 503); }
+  }
   // Another identity's receipt is left alone; replay then cannot settle committed while it is outstanding (recoverRevoke).
   if (!receipt || receipt.operationId !== operation.id || receipt.mode !== removalMode(force, purge)) return null;
   let releaseLink: (() => void) | null = null;

@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { resumedRevokeJournal, revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
-import { claimLinkRetirement, readLinkRetirement } from "../../src/link/retirement";
+import { claimLinkRetirement, disownLinkRetirement, readLinkRetirement } from "../../src/link/retirement";
 import { linkSuspendedByRevoke, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, resolveLinkOperation, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
@@ -969,7 +969,11 @@ test("a plain --force settles the owner it took over before clearing the receipt
   expect(h.store.links).toEqual([]);
   expect(readLinkRetirement(LINK, root)).not.toBeNull();
   broken = false;
-  const replay = await harness().revoke({ force: true, operationId: OP });
+  // A later process sees what the force left: the record and its key gone, the disowned receipt outstanding.
+  const later = harness();
+  later.store = { ...later.store, links: [] };
+  later.config.apiKeys = [];
+  const replay = await later.revoke({ force: true, operationId: OP });
   expect(replay.body.outcome).toBe("unknown");
 });
 
@@ -989,4 +993,28 @@ test.each([1, 2])("a plain --force whose store read fails after the disown (read
   expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: AT_ISO });
   expect(readLinkRetirement(LINK, root)?.operationId).toBe(OP);
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+});
+
+test.each([true, false])("an owner whose receipt a plain --force disowned and then died takes it back only while nothing was committed (key present: %p)", async keyPresent => {
+  const h = harness();
+  // The owner purged the Child and claimed its receipt; a plain force disowned it and died before its first effect.
+  const receipt = claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  disownLinkRetirement(receipt, root);
+  if (!keyPresent) h.config.apiKeys = [];
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "open",
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }, { effect: "remote_cleanup", phase: "done", at: AT_ISO }], receipt: { purged: true, linkId: LINK },
+  } as LinkOperation] });
+  const replay = await h.revoke({ purge: true, operationId: OP });
+  if (keyPresent) {
+    expect({ status: replay.status, outcome: replay.body.outcome, purged: replay.body.purged }).toEqual({ status: 200, outcome: "committed", purged: true });
+    expect(h.store.links).toEqual([]);
+    expect(readLinkRetirement(LINK, root)).toBeNull();
+  } else {
+    // The key is gone, so the force may have committed: the receipt stays the force's and the owner is not credited.
+    expect(replay.body.outcome).toBe("unknown");
+    expect(readLinkRetirement(LINK, root)?.formerOwner).toBe(OP);
+  }
+  expect(h.ssh).toEqual([]);
 });

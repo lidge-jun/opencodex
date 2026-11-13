@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claimLinkRetirement, clearLinkRetirement, LinkRetirementError, readLinkRetirement } from "../../src/link/retirement";
+import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, LinkRetirementError, readLinkRetirement, reownLinkRetirement } from "../../src/link/retirement";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore, type LinkRecord, type LinkStore } from "../../src/link/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -116,4 +116,16 @@ test("a receipt keeps the operation that claimed it, refuses a malformed one, an
   const { mode: _mode, operationId: _operationId, ...legacy } = stored;
   writeFileSync(receiptPath(dir), JSON.stringify(legacy));
   expect(readLinkRetirement(link.id, dir)).toEqual({ version: 1, link, nonce: receipt.nonce });
+});
+
+test("a disowned receipt names its former owner, which a re-own clears, and a receipt cannot name both", () => {
+  const dir = setup();
+  const receipt = claimLinkRetirement(link, dir, undefined, "purge", "detach-0001");
+  const disowned = disownLinkRetirement(receipt, dir)!;
+  expect({ operationId: disowned.operationId, formerOwner: disowned.formerOwner }).toEqual({ operationId: undefined, formerOwner: "detach-0001" });
+  expect(reownLinkRetirement(disowned, "detach-0001", dir)).toBe(true);
+  expect(readLinkRetirement(link.id, dir)).toEqual({ ...receipt });
+  const stored = JSON.parse(readFileSync(receiptPath(dir), "utf8")) as Record<string, unknown>;
+  writeFileSync(receiptPath(dir), JSON.stringify({ ...stored, formerOwner: "other-op" }));
+  expect(() => readLinkRetirement(link.id, dir)).toThrow(LinkRetirementError);
 });
