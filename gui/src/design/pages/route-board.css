@@ -131,3 +131,6 @@
   .rb-channel-quota, .rb-channel-actions { grid-column: 3 / -1; }
 }
 .rb-advanced:not([hidden]) { display: contents; }
+.rb-capability { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.rb-capability-title { color: var(--ocx-fg-muted); font-size: 12.5px; }
+.rb-capability-hint { flex: 1 1 100%; color: var(--ocx-fg-subtle); font-size: 12.5px; }

@@ -1,6 +1,6 @@
 import { formatProviderDisplayName } from "../../provider-icons";
 import { useT, type TFn, type TKey } from "../../i18n/shared";
-import type { ProviderQuotaLine, QuotaWindowView } from "../../route-board-model";
+import { quotaFamilyWindow, type ProviderQuotaLine, type QuotaWindowView } from "../../route-board-model";
 
 const WINDOW_NAME_KEYS: Partial<Record<TKey, TKey>> = {
   "quota.weeklyLimit": "routeBoard.window.weekly",
@@ -10,7 +10,10 @@ const WINDOW_NAME_KEYS: Partial<Record<TKey, TKey>> = {
 
 function windowName(window: QuotaWindowView, t: TFn): string {
   const key = window.labelKey ? WINDOW_NAME_KEYS[window.labelKey] ?? window.labelKey : undefined;
-  return key ? t(key) : window.label ?? window.id;
+  if (key) return t(key);
+  const pool = quotaFamilyWindow(window.label ?? "");
+  if (pool) return t("routeBoard.quota.family", { family: pool.family, window: t(pool.weekly ? "routeBoard.window.weekly" : "routeBoard.window.fiveHour") });
+  return window.label ?? window.id;
 }
 
 /** "Anthropic (2 accounts): weekly 51% left · 5h 83% left · Anthropic API: metered" */
@@ -24,9 +27,12 @@ export function QuotaLine({ quotas, labels }: { quotas: readonly ProviderQuotaLi
         return (
           <span key={line.provider} className="rb-quota-item">
             <span className="rb-quota-provider">
-              {quota.kind === "windows" && quota.accounts !== undefined
-                ? t("routeBoard.quota.accounts", { provider: name, count: quota.accounts })
+              {line.accounts !== undefined && line.accounts.active > 0
+                ? t("routeBoard.quota.accounts", { provider: name, count: line.accounts.active })
                 : name}
+              {line.accounts !== undefined && line.accounts.paused > 0 && (
+                <span className="rb-quota-muted"> {t("routeBoard.quota.paused", { count: line.accounts.paused })}</span>
+              )}
             </span>
             {quota.kind === "windows" && quota.windows.map((window) => (
               <span key={window.id} className={`rb-quota-window rb-tone-${window.tone}`}>

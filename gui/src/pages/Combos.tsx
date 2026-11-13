@@ -25,7 +25,15 @@ import { RouteBoard } from "../components/route-board/RouteBoard";
 import type { EditableChannel } from "../components/route-board/ChannelEditor";
 import { comboDraftErrorText } from "../components/combo-workspace-utils";
 import { putModelVisibility } from "../model-visibility";
-import { channelKey, channelTargetsForPut, type ComboCatalogMeta } from "../route-board-model";
+import {
+  accountCountFromList,
+  channelKey,
+  channelTargetsForPut,
+  parseCapabilitySettings,
+  type AccountCount,
+  type ComboCapabilitySettings,
+  type ComboCatalogMeta,
+} from "../route-board-model";
 import { readCombosView, type CombosView } from "./combos-view";
 
 type ProviderOption = {
@@ -66,6 +74,7 @@ type CachedCombosPage = {
   comboCatalog?: Record<string, ComboCatalogMeta>;
   lastResort?: Record<string, string[]>;
   lastResortActive?: string[];
+  capability?: Record<string, ComboCapabilitySettings>;
 };
 type ProviderQuotasDto = { reports?: unknown };
 
@@ -210,11 +219,15 @@ export default function Combos({
     // parseComboList keeps only what the workspace edits; the overview also shows last-resort marks.
     const lastResort: Record<string, string[]> = {};
     const lastResortActive: string[] = [];
+    const capability: Record<string, ComboCapabilitySettings> = {};
     const rawCombos = (combosJson as { combos?: unknown } | null)?.combos;
     for (const raw of Array.isArray(rawCombos) ? rawCombos : []) {
       if (!raw || typeof raw !== "object") continue;
-      const { id, targets, cooldownWaitPolicy } = raw as { id?: unknown; targets?: unknown; cooldownWaitPolicy?: unknown };
+      const { id, targets, cooldownWaitPolicy, capabilityPolicy, onUnservable } = raw as {
+        id?: unknown; targets?: unknown; cooldownWaitPolicy?: unknown; capabilityPolicy?: unknown; onUnservable?: unknown;
+      };
       if (typeof id !== "string" || !Array.isArray(targets)) continue;
+      capability[id.trim()] = parseCapabilitySettings({ capabilityPolicy, onUnservable });
       lastResort[id.trim()] = targets.flatMap((target: { provider?: unknown; model?: unknown; lastResort?: unknown } | null) =>
         target?.lastResort === true && typeof target.provider === "string" && typeof target.model === "string"
           ? [channelKey(target.provider.trim(), target.model.trim())]
@@ -306,7 +319,7 @@ export default function Combos({
       }
     }
 
-    const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued], comboCatalog, lastResort, lastResortActive } satisfies CachedCombosPage;
+    const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued], comboCatalog, lastResort, lastResortActive, capability } satisfies CachedCombosPage;
     writeSessionListCacheEntry(cacheKey, next);
     // Retain the coherent payload here — one place, on the success path, never during
     // render. See the `retainedData` note below.
@@ -396,6 +409,30 @@ export default function Combos({
   }, [active, apiBase, quotaResource.data, quotaResource.lastAttemptOk, quotaExpiry]);
 
   const data = state.data ?? retainedData ?? undefined;
+
+  /*
+   * Account counts for OAuth providers whose quota report carries no aggregate (Antigravity
+   * pools, Anthropic). One list read per provider while the tab is active; a failure shows no count.
+   */
+  const oauthProviders = (data?.providers ?? []).filter((provider) => provider.authMode === "oauth" && !provider.disabled)
+    .map((provider) => provider.name).sort().join(",");
+  const [accountCounts, setAccountCounts] = useState<Record<string, AccountCount>>({});
+  useEffect(() => {
+    if (!active || !oauthProviders) return;
+    let cancelled = false;
+    void Promise.all(oauthProviders.split(",").map(async (provider) => {
+      try {
+        const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`);
+        const count = res.ok ? accountCountFromList(await res.json()) : null;
+        return count ? [[provider, count] as const] : [];
+      } catch {
+        return [];
+      }
+    })).then((entries) => {
+      if (!cancelled) setAccountCounts(Object.fromEntries(entries.flat()));
+    });
+    return () => { cancelled = true; };
+  }, [active, apiBase, oauthProviders]);
   const combos = data?.combos ?? [];
 
   /*
@@ -416,7 +453,7 @@ export default function Combos({
     item: ComboItem,
     isCreate: boolean,
     renameFrom?: string,
-    overview?: { channels?: readonly EditableChannel[] },
+    overview?: { channels?: readonly EditableChannel[]; capability?: Partial<ComboCapabilitySettings> },
   ) => {
     const channels = overview?.channels;
     try {
@@ -429,8 +466,9 @@ export default function Combos({
           : {}),
       });
       // Only the channel editor sends `lastResort`; every other save omits it and the server keeps it.
+      // Capability fields (T4c) go out only when the operator changed them in the channel editor.
       const wire = channels
-        ? { ...body, combo: { ...body.combo, targets: channelTargetsForPut(body.combo.targets, channels) } }
+        ? { ...body, combo: { ...body.combo, targets: channelTargetsForPut(body.combo.targets, channels), ...overview?.capability } }
         : body;
       const res = await fetch(`${apiBase}/api/combos`, {
         method: "PUT",
@@ -576,7 +614,9 @@ export default function Combos({
             quotaReports={quotaReports}
             validate={validateOverviewEdit}
             errorText={(code, item) => comboDraftErrorText(t, code, item, providerRows)}
-            onSave={(item, channels) => saveCombo(item, false, undefined, { channels })}
+            onSave={(item, channels, capability) => saveCombo(item, false, undefined, { channels, capability })}
+            accountCounts={accountCounts}
+            capability={data?.capability ?? {}}
             onSetEnabled={setComboEnabled}
             onOpenAdvanced={openAdvanced}
             lockedId={draftComboId}

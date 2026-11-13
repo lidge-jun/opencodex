@@ -42,9 +42,15 @@ export interface QuotaWindowView {
 
 /** Subscription windows, a pay-per-use key, or nothing reported. */
 export type ChannelQuota =
-  | { kind: "windows"; windows: QuotaWindowView[]; accounts?: number }
+  | { kind: "windows"; windows: QuotaWindowView[] }
   | { kind: "metered" }
   | { kind: "unknown" };
+
+/** Accounts behind one provider; paused accounts take no traffic. */
+export interface AccountCount {
+  active: number;
+  paused: number;
+}
 
 export interface RouteChannel {
   key: string;
@@ -57,6 +63,7 @@ export interface RouteChannel {
 export interface ProviderQuotaLine {
   provider: string;
   quota: ChannelQuota;
+  accounts?: AccountCount;
 }
 
 export interface RouteRow {
@@ -69,6 +76,44 @@ export interface RouteRow {
   contextWindow?: number;
   enabled: boolean;
   lastResortCount: number;
+}
+
+/** Combo capability policy (T4c). Absent on the wire means the default. */
+export type CapabilityPolicy = "intersection" | "union";
+export type UnservablePolicy = "degrade" | "reject";
+export interface ComboCapabilitySettings {
+  capabilityPolicy: CapabilityPolicy;
+  onUnservable: UnservablePolicy;
+}
+export const DEFAULT_CAPABILITY_SETTINGS: ComboCapabilitySettings = { capabilityPolicy: "intersection", onUnservable: "degrade" };
+
+export function parseCapabilitySettings(raw: { capabilityPolicy?: unknown; onUnservable?: unknown }): ComboCapabilitySettings {
+  return {
+    capabilityPolicy: raw.capabilityPolicy === "union" ? "union" : "intersection",
+    onUnservable: raw.onUnservable === "reject" ? "reject" : "degrade",
+  };
+}
+
+/** Only the fields that changed, so a server without them never sees them unless the operator asked. */
+export function capabilityPatch(before: ComboCapabilitySettings, after: ComboCapabilitySettings): Partial<ComboCapabilitySettings> {
+  return {
+    ...(after.capabilityPolicy !== before.capabilityPolicy ? { capabilityPolicy: after.capabilityPolicy } : {}),
+    ...(after.onUnservable !== before.onUnservable ? { onUnservable: after.onUnservable } : {}),
+  };
+}
+
+/** Antigravity names its quota pools by family; spell them out like the provider does. */
+const QUOTA_FAMILY_NAMES: Readonly<Record<string, string>> = {
+  gem: "Gemini",
+  cla: "Claude & GPT",
+  argon: "Gemini 4 Argon",
+};
+
+/** `Cla (Weekly)` → family "Claude & GPT", weekly window; anything else is left alone. */
+export function quotaFamilyWindow(label: string): { family: string; weekly: boolean } | null {
+  const match = /^([A-Za-z]+)( \(Weekly\))?$/.exec(label.trim());
+  const family = match ? QUOTA_FAMILY_NAMES[match[1]!.toLowerCase()] : undefined;
+  return family ? { family, weekly: match![2] !== undefined } : null;
 }
 
 export const ROUTE_BOARD_STRATEGIES: readonly ComboStrategy[] = COMBO_STRATEGIES;
@@ -117,21 +162,30 @@ function pickWindows(windows: QuotaSummaryWindow[], models: readonly string[]): 
   return [...pool].sort((a, b) => rank(a) - rank(b)).slice(0, 2);
 }
 
-function accountCount(aggregation: unknown): number | undefined {
+function accountCount(aggregation: unknown): AccountCount | undefined {
   if (!aggregation || typeof aggregation !== "object") return undefined;
-  const { includedAccounts, excludedAccounts } = aggregation as Record<string, unknown>;
+  const { includedAccounts, excludedAccounts, pausedAccounts } = aggregation as Record<string, unknown>;
   if (typeof includedAccounts !== "number") return undefined;
   const total = includedAccounts + (typeof excludedAccounts === "number" ? excludedAccounts : 0);
-  return total > 1 ? total : undefined;
+  const paused = typeof pausedAccounts === "number" ? Math.min(pausedAccounts, total) : 0;
+  return { active: total - paused, paused };
+}
+
+/** `GET /api/oauth/accounts` → active and paused counts; null when the body is not an account list. */
+export function accountCountFromList(body: unknown): AccountCount | null {
+  const accounts = body && typeof body === "object" ? (body as { accounts?: unknown }).accounts : undefined;
+  if (!Array.isArray(accounts)) return null;
+  const paused = accounts.filter((account) => (account as { paused?: unknown } | null)?.paused === true).length;
+  return { active: accounts.length - paused, paused };
 }
 
 /** Parse `/api/provider-quotas` `reports` once per render into provider → windows. */
 export function quotaWindowsByProvider(
   reports: unknown,
   now = Date.now(),
-): Map<string, { windows: QuotaSummaryWindow[]; accounts?: number }> {
+): Map<string, { windows: QuotaSummaryWindow[]; accounts?: AccountCount }> {
   const fresh = freshQuotaReportsFromResponse(reports, now);
-  const out = new Map<string, { windows: QuotaSummaryWindow[]; accounts?: number }>();
+  const out = new Map<string, { windows: QuotaSummaryWindow[]; accounts?: AccountCount }>();
   for (const row of buildQuotaSummary(fresh, (provider) => provider)) {
     if (row.passive) continue;
     const accounts = accountCount(fresh[row.provider]?.aggregation);
@@ -142,7 +196,7 @@ export function quotaWindowsByProvider(
 
 export function channelQuota(
   provider: RouteBoardProvider | undefined,
-  reported: { windows: QuotaSummaryWindow[]; accounts?: number } | undefined,
+  reported: { windows: QuotaSummaryWindow[]; accounts?: AccountCount } | undefined,
   models: readonly string[],
 ): ChannelQuota {
   const windows = reported ? pickWindows(reported.windows, models) : [];
@@ -158,7 +212,6 @@ export function channelQuota(
           tone: quotaTone(remainingPercent),
         };
       }),
-      ...(reported?.accounts !== undefined ? { accounts: reported.accounts } : {}),
     };
   }
   if (provider?.authMode === "key") return { kind: "metered" };
@@ -171,11 +224,13 @@ export function buildRouteRows(input: {
   lastResort: Readonly<Record<string, readonly string[]>>;
   providers: readonly RouteBoardProvider[];
   quotaReports: unknown;
+  /** Per-provider account counts read from the account list, for providers whose quota has no aggregate. */
+  accountCounts?: Readonly<Record<string, AccountCount>>;
   now?: number;
 }): RouteRow[] {
   const providers = new Map(input.providers.map((provider) => [provider.name, provider]));
   const reported = quotaWindowsByProvider(input.quotaReports, input.now);
-  return input.combos.map((combo) => {
+  const rows = input.combos.map((combo) => {
     const lastResort = new Set(input.lastResort[combo.id] ?? []);
     const channels = combo.targets.map((target) => {
       const key = channelKey(target.provider, target.model);
@@ -191,9 +246,11 @@ export function buildRouteRows(input: {
     for (const channel of channels) {
       if (quotas.some((line) => line.provider === channel.provider)) continue;
       const models = channels.filter((c) => c.provider === channel.provider).map((c) => c.model);
+      const accounts = reported.get(channel.provider)?.accounts ?? input.accountCounts?.[channel.provider];
       quotas.push({
         provider: channel.provider,
         quota: channelQuota(providers.get(channel.provider), reported.get(channel.provider), models),
+        ...(accounts !== undefined ? { accounts } : {}),
       });
     }
     const meta = input.catalog[combo.id];
@@ -209,6 +266,8 @@ export function buildRouteRows(input: {
       lastResortCount: channels.filter((channel) => channel.lastResort).length,
     };
   });
+  // Switched-off combos go last so the live ones lead; the sort is stable within each group.
+  return [...rows.filter((row) => row.enabled), ...rows.filter((row) => !row.enabled)];
 }
 
 /**

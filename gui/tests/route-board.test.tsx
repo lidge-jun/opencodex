@@ -9,7 +9,11 @@ import Combos from "../src/pages/Combos";
 import { readCombosView } from "../src/pages/combos-view";
 import { readModelsTab } from "../src/pages/models-tab";
 import {
+  accountCountFromList,
   buildRouteRows,
+  capabilityPatch,
+  parseCapabilitySettings,
+  quotaFamilyWindow,
   channelKey,
   channelTargetsForPut,
   distinctProviderLabels,
@@ -86,6 +90,7 @@ describe("route board model", () => {
       ["zed", true, true],
     ]);
     const quota = Object.fromEntries(row!.quotas.map(line => [line.provider, line.quota]));
+    expect(row!.quotas.find(line => line.provider === "anthropic")?.accounts).toEqual({ active: 3, paused: 0 });
     // A Claude channel shows the Claude windows, never Antigravity's Gemini window.
     expect(quota["google-antigravity"]).toEqual({
       kind: "windows",
@@ -96,7 +101,6 @@ describe("route board model", () => {
     });
     expect(quota.anthropic).toEqual({
       kind: "windows",
-      accounts: 3,
       windows: [
         expect.objectContaining({ labelKey: "quota.weeklyLimit", remainingPercent: 51, tone: "ok" }),
         expect.objectContaining({ labelKey: "quota.fiveHourLimit", remainingPercent: 83, tone: "ok" }),
@@ -109,6 +113,35 @@ describe("route board model", () => {
   test("a combo missing from the catalog falls back to its id and counts as on", () => {
     const [row] = buildRouteRows({ combos: [combo("x", [["a", "m"]])], catalog: {}, lastResort: {}, providers: [], quotaReports: undefined });
     expect([row!.displayName, row!.enabled, row!.contextWindow]).toEqual(["x", true, undefined]);
+  });
+
+  test("switched-off combos sort after the live ones and listed accounts fill in missing aggregates", () => {
+    const rows = buildRouteRows({
+      combos: [combo("a-off", [["p", "m"]]), combo("b-on", [["p", "m"]]), combo("c-on", [["p", "m"]])],
+      catalog: { "a-off": { disabled: true }, "b-on": { disabled: false }, "c-on": { disabled: false } },
+      lastResort: {},
+      providers: [{ name: "p", authMode: "oauth" }],
+      quotaReports: undefined,
+      accountCounts: { p: { active: 7, paused: 1 } },
+    });
+    expect(rows.map(row => row.combo.id)).toEqual(["b-on", "c-on", "a-off"]);
+    expect(rows[0]!.quotas[0]!.accounts).toEqual({ active: 7, paused: 1 });
+    expect(accountCountFromList({ accounts: [{ id: "1" }, { id: "2", paused: true }, { id: "3" }] })).toEqual({ active: 2, paused: 1 });
+    expect(accountCountFromList({ error: "unknown oauth provider" })).toBeNull();
+  });
+
+  test("Antigravity pool windows read as full family names", () => {
+    expect(quotaFamilyWindow("Cla (Weekly)")).toEqual({ family: "Claude & GPT", weekly: true });
+    expect(quotaFamilyWindow("Gem")).toEqual({ family: "Gemini", weekly: false });
+    expect(quotaFamilyWindow("Argon (Weekly)")).toEqual({ family: "Gemini 4 Argon", weekly: true });
+    expect(quotaFamilyWindow("First-party models")).toBeNull();
+  });
+
+  test("capability settings default when absent and only changed fields are sent", () => {
+    expect(parseCapabilitySettings({})).toEqual({ capabilityPolicy: "intersection", onUnservable: "degrade" });
+    const before = parseCapabilitySettings({ capabilityPolicy: "union" });
+    expect(capabilityPatch(before, before)).toEqual({});
+    expect(capabilityPatch(before, { ...before, onUnservable: "reject" })).toEqual({ onUnservable: "reject" });
   });
 
   test("providers sharing a display name stay distinguishable in one row", () => {
@@ -337,10 +370,25 @@ describe("Combos overview page", () => {
     await flush();
     const body = calls[0]!.body as ReturnType<typeof toPutBody>;
     expect(body.combo.displayName).toBe("Alpha");
+    expect(Object.hasOwn(body.combo, "capabilityPolicy")).toBe(false);
+    expect(Object.hasOwn(body.combo, "onUnservable")).toBe(false);
     expect(body.combo.targets).toEqual([
       { provider: "anthropic", model: "claude", lastResort: false },
       { provider: "openai", model: "gpt-5", modelProfile: "subscription first", lastResort: false },
     ]);
+  });
+
+  test("capability policy: union reveals the unservable choice and only changed fields are sent", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    expect(editor.querySelector('[role=combobox][aria-label="When no channel can serve it"]')).toBeNull();
+    await chooseOption(editor.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Capabilities"]')!, "union");
+    await chooseOption(editor.querySelector<HTMLButtonElement>('[role=combobox][aria-label="When no channel can serve it"]')!, "reject");
+    await act(async () => { button(editor, "Save").click(); });
+    await flush();
+    const body = calls[0]!.body as { combo: Record<string, unknown> };
+    expect([body.combo.capabilityPolicy, body.combo.onUnservable]).toEqual(["union", "reject"]);
   });
 
   test("an unsaved advanced draft survives the overview, locks its own row, and outlives a refresh", async () => {
