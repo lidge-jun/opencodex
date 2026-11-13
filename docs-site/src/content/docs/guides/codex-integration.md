@@ -515,11 +515,11 @@ Retrying only the same ID cannot recover missing state.
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input
 is complete, so it does not silently remove `previous_response_id` or reveal whether matching state
-exists. In `v2-plaintext` mode, local replay requires the same admitted OpenCodex caller and the request's own nonblank
+exists. When `v2-plaintext` mode or the `plaintextV2AgentMessages` flag is enabled, local replay requires the same admitted OpenCodex caller and the request's own nonblank
 `thread-id`; a parent thread, loopback address, upstream credential, or placeholder key is not
 that identity. Clients without an admitted caller principal and requests without their own thread must resend the complete
 conversation without `previous_response_id`. The default loopback Codex and DSH configurations
-do not establish that caller identity. State retained in this mode remains bound after switching modes.
+do not establish that caller identity. State retained while either setting is enabled remains bound after disabling it.
 Default `v1` keeps the existing parent-thread-scoped continuation behavior for unbound state,
 including default loopback callers. This is separate from native upstream-owned Responses IDs.
 

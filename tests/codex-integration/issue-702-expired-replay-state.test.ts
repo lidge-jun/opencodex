@@ -798,13 +798,13 @@ describe("Issue #702 expired forward replay state", () => {
   }, SERVER_BUDGET_MS);
 
   test("a task-scope mismatch refuses the delta before ordinary HTTP upstream I/O", async () => {
-    const scenario = await runForwardScenario("fresh", { "thread-id": "other-task" });
+    const scenario = await runForwardScenario("fresh", { "x-codex-parent-thread-id": "other-task" });
 
     expect(scenario.firstStatus).toBe(200);
     expect(scenario.secondStatus).toBe(400);
     expect(JSON.parse(scenario.secondResponseText)).toEqual({ error: LOCAL_REPLAY_UNAVAILABLE });
     expect(scenario.upstreamRequests).toHaveLength(1);
-  });
+  }, SERVER_BUDGET_MS);
 
   test("missing, corrupt and mismatched local state answer identically on one route", async () => {
     // All three mean the same thing to a client: replay in full. Each is produced for real here

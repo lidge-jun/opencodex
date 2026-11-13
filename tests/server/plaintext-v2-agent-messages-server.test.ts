@@ -874,7 +874,7 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
     });
   });
 
-  test.each([undefined, "websocket"] as const)("stores the client namespace across an option change on %s", async inboundTransport => {
+  test.each([undefined, "websocket"] as const)("stores the client namespace and refuses replay after disabling plaintext on %s", async inboundTransport => {
     takeInheritedSpendHome();
     const sentBodies: string[] = [];
     let requestIndex = 0;
@@ -902,16 +902,23 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
         previousResponseId: "resp-toggle-plaintext-v2",
         input: [{ type: "function_call_output", call_id: "call-spawn", output: "done" }],
       }),
-      config(false),
+      config(true),
       { model: "", provider: "" },
       { inboundWire: "responses", inboundTransport },
     );
     await second.text();
 
-    const replay = JSON.parse(sentBodies[1]!) as { input: Array<Record<string, unknown>> };
+    const replay = expandPreviousResponseInput({ previous_response_id: "resp-toggle-plaintext-v2", input: [] }) as { input: Array<Record<string, unknown>> };
     const replayedCall = replay.input.find(item => item.type === "function_call");
     expect(replayedCall?.namespace).toBe("collaboration");
     expect(JSON.stringify(replay)).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    const disabled = await handleResponses(
+      collaborationRequest({ previousResponseId: "resp-toggle-plaintext-v2" }),
+      config(false), { model: "", provider: "" }, { inboundWire: "responses", inboundTransport },
+    );
+    expect(disabled.status).toBe(400);
+    expect(sentBodies).toHaveLength(2);
+    await disabled.text();
   });
 });
 

@@ -1,4 +1,5 @@
 import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
@@ -439,7 +440,7 @@ export async function prepareResponsesRequest(
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
   const replayPrincipal = options.replayPrincipal
     ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
-  const strictReplay = config.multiAgentMode === "v2-plaintext";
+  const strictReplay = isPlaintextV2AgentMessagesEnabled(config);
   const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId) : undefined;
   const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);

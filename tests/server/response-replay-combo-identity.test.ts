@@ -36,7 +36,7 @@ afterEach(() => {
 for (const padded of [true, false]) {
   test(`combo retains the authorized ${padded ? "padded" : "un-padded"} response ID for provider state`, async () => {
     const config: OcxConfig = {
-      defaultProvider: "primary",
+      defaultProvider: "primary", multiAgentMode: "v2-plaintext",
       providers: { primary: { adapter: "openai-chat", authMode: "key", apiKey: "synthetic-provider",
         baseUrl: "https://fixture.invalid/v1", models: ["model"] } },
       apiKeys: [{ id: "a", key: "synthetic-a" }, { id: "b", key: "synthetic-b" }],
@@ -92,7 +92,7 @@ for (const padded of [true, false]) {
 // refusal test cannot pass by observing nothing at all.
 test("a refused replay owner never reaches the link observer, while the owner does", async () => {
   const config: OcxConfig = {
-    defaultProvider: "primary",
+    defaultProvider: "primary", multiAgentMode: "v2-plaintext",
     providers: { primary: { adapter: "openai-chat", authMode: "key", apiKey: "synthetic-provider",
       baseUrl: "https://fixture.invalid/v1", models: ["model"] } },
     apiKeys: [{ id: "a", key: "synthetic-a" }, { id: "b", key: "synthetic-b" }],

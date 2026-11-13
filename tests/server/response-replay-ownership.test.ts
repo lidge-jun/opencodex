@@ -76,15 +76,18 @@ async function send(cfg: OcxConfig, own: string | undefined, key: string, parent
   await response.text();
   return response;
 }
-for (const combo of [false, true]) for (const mode of ["v2-plaintext"] as const) {
+for (const combo of [false, true]) for (const mode of ["v2-plaintext", "flag"] as const) {
   const label = `${combo ? "combo" : "direct"} ${mode}`;
+  const strictConfig = () => mode === "flag"
+    ? { ...config("v1", combo), plaintextV2AgentMessages: true }
+    : config("v2-plaintext", combo);
   for (const [scenario, secondKey, parent] of [
     ["different callers without parent headers", "synthetic-b", undefined],
     ["sibling own threads under a shared parent", "synthetic-a", "shared-parent"],
     ["different callers supplying the same parent", "synthetic-b", "shared-parent"],
   ] as const) {
     test(`${label}: refuses retained replay across ${scenario} before dispatch`, async () => {
-      const cfg = config(mode, combo);
+      const cfg = strictConfig();
       const sent = upstream();
       expect((await send(cfg, "own-a", "synthetic-a", parent)).status).toBe(200);
       const second = await send(cfg, "own-b", secondKey, parent, "resp-owner-a");
@@ -94,14 +97,14 @@ for (const combo of [false, true]) for (const mode of ["v2-plaintext"] as const)
     });
   }
   test(`${label}: caller ownership is required even when the own thread matches`, async () => {
-    const cfg = config(mode, combo);
+    const cfg = strictConfig();
     const sent = upstream();
     expect((await send(cfg, "own-a", "synthetic-a", "shared-parent")).status).toBe(200);
     expect((await send(cfg, "own-a", "synthetic-b", "shared-parent", "resp-owner-a")).status).toBe(400);
     expect(sent).toHaveLength(1);
   });
   test(`${label}: same caller and own thread can replay without a parent header`, async () => {
-    const cfg = config(mode, combo);
+    const cfg = strictConfig();
     const sent = upstream();
     expect((await send(cfg, "own-a", "synthetic-a")).status).toBe(200);
     expect((await send(cfg, "own-a", "synthetic-a", undefined, "resp-owner-a")).status).toBe(200);
@@ -111,7 +114,7 @@ for (const combo of [false, true]) for (const mode of ["v2-plaintext"] as const)
   });
   for (const missing of ["principal", "own thread"] as const) {
     test(`${label}: missing ${missing} cannot authorize a retained continuation`, async () => {
-      const cfg = config(mode, combo);
+      const cfg = strictConfig();
       const sent = upstream();
       const own = missing === "own thread" ? undefined : "own-a";
       const key = missing === "principal" ? "synthetic-unadmitted" : "synthetic-a";
@@ -124,14 +127,17 @@ for (const combo of [false, true]) for (const mode of ["v2-plaintext"] as const)
 }
 
 for (const combo of [false, true]) {
-  test(`${combo ? "combo" : "direct"}: mode transitions cannot cross replay ownership boundaries`, async () => {
+  for (const strict of ["mode", "flag"] as const) test(`${combo ? "combo" : "direct"}: ${strict} transitions cannot cross replay ownership boundaries`, async () => {
+    const enabled = () => strict === "flag"
+      ? { ...config("v1", combo), plaintextV2AgentMessages: true }
+      : config("v2-plaintext", combo);
     const sent = upstream();
-    expect((await send(config("v2-plaintext", combo), "own-a", "synthetic-a", "shared-parent")).status).toBe(200);
+    expect((await send(enabled(), "own-a", "synthetic-a", "shared-parent")).status).toBe(200);
     expect((await send(config("v1", combo), "own-a", "synthetic-a", "shared-parent", "resp-owner-a")).status).toBe(400);
     expect(sent).toHaveLength(1);
     clearResponseStateForTests();
     expect((await send(config("v1", combo), "own-a", "synthetic-a", "shared-parent")).status).toBe(200);
-    expect((await send(config("v2-plaintext", combo), "own-a", "synthetic-a", "shared-parent", "resp-owner-b")).status).toBe(400);
+    expect((await send(enabled(), "own-a", "synthetic-a", "shared-parent", "resp-owner-b")).status).toBe(400);
     expect(sent).toHaveLength(2);
   });
   test(`${combo ? "combo" : "direct"} v1: parent scope follows legacy behavior`, async () => {

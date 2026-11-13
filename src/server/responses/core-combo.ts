@@ -1,4 +1,5 @@
 import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
@@ -448,7 +449,7 @@ export async function executeComboResponses(
   // imageInput is disabled (and so targets see the full replayed input).
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
-  const strictReplay = config.multiAgentMode === "v2-plaintext";
+  const strictReplay = isPlaintextV2AgentMessagesEnabled(config);
   const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal.clientPrincipalId, inboundOwnThreadId) : undefined;
   const body = expandPreviousResponseInput(rawBody, strictReplay ? inboundOwnThreadId : inboundClientThreadId, replayOwnerKey);
   const replayFailure = previousResponseReplayFailure(body);
