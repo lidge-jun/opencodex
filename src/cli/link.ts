@@ -625,8 +625,9 @@ export function journalledRevokeError(error: unknown, operationId: string, linkI
   const outcome = error.body.operationId === operationId && typeof error.body.outcome === "string" && OPERATION_OUTCOMES.has(error.body.outcome) ? error.body.outcome : undefined;
   // Repeating first resumes a removal if this id still owns one (#8416); resolving first would leave its receipt and record behind. An
   // unknown can also arise before any receipt was claimed (a disconnect timeout or failure, a journal write), so the resume is
-  // conditional, and a repeat that fails again or replays unknown leads to the check and the resolve.
-  const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first (if this id still owns an unfinished removal, the repeat resumes it), and if it fails again or stays unknown (ocx link operations --operation-id " + operationId + " shows its state), check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes" : "";
+  // conditional. A resume reopens the entry, and one that fails and cannot settle leaves it open, which resolve refuses
+  // (operation_not_resolvable), so the next step follows the state the repeat left: resolve only unknown or residual.
+  const resolve = outcome === "unknown" ? "; repeat the revoke with the same operation id first (if this id still owns an unfinished removal, the repeat resumes it). If it does not finish, ocx link operations --operation-id " + operationId + " shows its state: if it reads unknown or residual, check the Child, then run ocx link operations resolve --operation-id " + operationId + " --yes; if it reads open, fix what stopped the revoke (for example the journal's disk) and repeat it with the same operation id" : "";
   const next = Object.hasOwn(NEXT_STEP, code) ? ". " + NEXT_STEP[code] : "";
   return new RuntimeApiError("Link revoke did not complete" + (outcome ? " (operation " + operationId + ": " + outcome + ")" : "") + " (code " + code + ")" + resolve + next, error.status, error.body);
 }

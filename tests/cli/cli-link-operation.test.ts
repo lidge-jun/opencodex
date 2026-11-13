@@ -338,7 +338,10 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
       expect(repeat).toBeGreaterThan(-1);
       expect(resolve).toBeGreaterThan(repeat);
       expect(printed).toContain("if this id still owns an unfinished removal, the repeat resumes it");
-      expect(printed).toContain("if it fails again or stays unknown (ocx link operations --operation-id detach-13 shows its state)");
+      expect(printed).toContain("ocx link operations --operation-id detach-13 shows its state");
+      // A resume that failed and could not settle leaves the entry open, which resolve refuses: only unknown or residual resolve.
+      expect(printed).toContain("if it reads unknown or residual, check the Child, then run ocx link operations resolve --operation-id detach-13 --yes");
+      expect(printed).toContain("if it reads open, fix what stopped the revoke (for example the journal's disk) and repeat it with the same operation id");
       expect(printed).not.toContain("it resumes a removal this id still owns");
     } finally { h.restore(); }
   });
