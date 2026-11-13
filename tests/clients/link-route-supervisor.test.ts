@@ -1,9 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createLinkSupervisor, type LinkSupervisor, type Pidfile } from "../../src/link/supervisor";
 import { createRouteProofRegistry, type RouteProofRegistry } from "../../src/link/route-proof";
 import { SshRunnerError, type SshChild, type SshRunner, type SshRunResult } from "../../src/link/ssh-runner";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import { READY_PROOF_MS, ROUTE_PROBE_MS } from "../../src/link/route-rounds";
+import { HOME_TUNNEL_RETRY_POLICY } from "../../src/link/tunnel-state";
 
 const LINK = "lnk_0123456789abcdef";
 const TUNNEL_PORT = 19002;
@@ -52,6 +56,8 @@ function harness(options: {
   configStdout?: string;
   /** spawnTunnel throws while this returns true (ssh missing). */
   spawnFails?: () => boolean;
+  /** Read pidfiles from this directory with the supervisor's own reader instead of `pidfile`. */
+  pidfileDir?: string;
 } = {}) {
   let now = 0;
   let tick: () => void = () => {};
@@ -121,7 +127,9 @@ function harness(options: {
     now: () => now,
     random: () => 0.5,
     platform: "linux",
-    readPidfile: () => (typeof options.pidfile === "function" ? options.pidfile() : options.pidfile) ?? null, writePidfile: options.writePidfile ?? (() => {}), removePidfile: path => { removed.push(path); },
+    ...(options.pidfileDir !== undefined ? { pidfileDir: options.pidfileDir }
+      : { readPidfile: () => (typeof options.pidfile === "function" ? options.pidfile() : options.pidfile) ?? null }),
+    writePidfile: options.writePidfile ?? (() => {}), removePidfile: path => { removed.push(path); },
     readProcessArgv: options.processArgv ?? (() => null),
     readProcessStartTime: options.processStart ?? (() => null),
     processAlive: options.processAlive ?? (pid => (options.processArgv?.(pid) ?? null) !== null),
@@ -250,6 +258,22 @@ test("a granted candidate that never proves readiness is stopped at its deadline
   await flush();
   expect(h.state().routes?.routes[0]?.lastOutcome?.class).toBe("readiness");
   expect(h.tunnels[1]!.argv.at(-1)).toBe("pen-alpha");
+});
+
+test("a grant seen after the first deadline, before the tick that would stop the candidate, keeps the candidate within 2 x READY_PROOF_MS", async () => {
+  const h = await started({ catalog: () => "hang" });
+  expect(h.tunnels).toHaveLength(1);
+  // The grant line arrives just after spawn + READY_PROOF_MS, before the next tick saw the first deadline.
+  h.skip(READY_PROOF_MS + 500);
+  await h.grant();
+  await h.advance(READY_PROOF_MS - 501);
+  expect(h.tunnels[0]!.signals).toEqual([]);
+  await h.advance(1);
+  expect(h.now()).toBe(2 * READY_PROOF_MS);
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM"]);
+  h.tunnels[0]!.exit(143);
+  await flush();
+  expect(h.state().routes?.routes[0]?.lastOutcome?.class).toBe("readiness");
 });
 
 test("an admitted proof whose catalog request fails, or an admission without the proof id, does not prove", async () => {
@@ -820,9 +844,49 @@ test("a one-route link's orphan flag left by a failed spawn is watched when the 
   await h.advance(1_000);
   await h.tick();
   expect(h.state().orphan).toBeUndefined();
-  // The link is in its failed spawn's backoff; its next due attempt starts the first round.
-  for (let waited = 0; waited < 61_000 && h.runs.every(run => run.kind !== "probe"); waited += 1_000) await h.advance(1_000);
+  // The link is in its failed spawn's backoff (a forward failure at 0). The due attempt starts the first
+  // round with its ssh client check, and the round's first probe goes on the next tick.
+  const retryAt = HOME_TUNNEL_RETRY_POLICY.retryFailedAfterMs.forward!;
+  await h.advance(retryAt - 1 - h.now());
+  expect(h.runs).toEqual([]);
+  await h.advance(1);
+  expect(h.runs.map(run => run.kind)).toEqual(["client"]);
+  await h.tick();
   expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+});
+
+test.each([
+  ["is gone", (path: string) => rmSync(path), undefined],
+  ["is a directory", (path: string) => { rmSync(path); mkdirSync(path); }, "orphan-unverified"],
+  ["holds no pidfile", (path: string) => writeFileSync(path, "not a pidfile\n"), "orphan-unverified"],
+] as const)("a flagged one-route link that gains routes while its pidfile %s", async (_case, spoil, orphan) => {
+  // Only a pidfile that does not exist shows no earlier tunnel is left; one that exists and cannot be
+  // read may still name the ssh holding the port, so the flag stays and no candidate starts.
+  const dir = mkdtempSync(join(tmpdir(), "ocx-link-pid-"));
+  try {
+    const path = join(dir, LINK + ".pid");
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 4545, argv: ["ssh", "old"] }) + "\n");
+    let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record()] };
+    let sshMissing = true;
+    const h = await started({
+      store: () => current, pidfileDir: dir,
+      processArgv: () => ["ssh", "other"], processAlive: () => true,
+      spawnFails: () => sshMissing,
+    });
+    expect(h.state().orphan).toBe("orphan-unverified");
+    spoil(path);
+    sshMissing = false;
+    current = { ...current, links: [record(["alpha-lan", "pen-alpha"])] };
+    await h.supervisor.reload();
+    await h.tick();
+    expect(h.state().orphan).toBe(orphan);
+    await h.advance(HOME_TUNNEL_RETRY_POLICY.retryFailedAfterMs.forward!);
+    await h.tick();
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(orphan === undefined ? 1 : 0);
+    expect(h.kills).toEqual([]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a link on a later route stays there until ocx link reconnect starts a round from the first rested route", async () => {

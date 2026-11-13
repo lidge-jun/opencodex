@@ -28,7 +28,9 @@ export const ROUTE_PROBE_MS = 10_000;
  * A candidate's budget, twice: from its spawn to the grant of its remote listener, and then from that
  * grant to its proven readiness (discovery, health and every trigger). A slow route that spends most
  * of the first budget on the ssh handshake still has the whole second one for its readiness execs.
- * Not measured on a real slow route; the bound for one candidate is 2 x READY_PROOF_MS.
+ * Not measured on a real slow route. A candidate's readiness deadline is at most 2 x READY_PROOF_MS
+ * after its spawn; the supervisor tick after that deadline stops it (SIGTERM, then SIGKILL after
+ * CANDIDATE_KILL_GRACE_MS).
  */
 export const READY_PROOF_MS = 30_000;
 /** One correlated trigger at most. */
@@ -209,7 +211,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     round.phase = phase;
     let argv: string[];
     try {
-      argv = buildRouteProbeArgv({ alias: record.alias, destination: route, knownHostsFile: host.knownHostsFile() });
+      argv = buildRouteProbeArgv({ alias: record.alias, destination: route, knownHostsFile: host.knownHostsFile(), route: record.explicitRoute ?? null });
     } catch {
       fail(link, route, "transient", "probe");
       next(linkId, link, round);
@@ -279,9 +281,13 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     try { phase.child.kill("SIGTERM"); } catch { /* already gone */ }
   };
 
-  /** Until the grant: READY_PROOF_MS from spawn. After it: READY_PROOF_MS from the grant. */
+  /**
+   * Until the grant: READY_PROOF_MS from spawn. After it: READY_PROOF_MS from the grant, and a grant
+   * seen after that first deadline (before the next tick stopped the candidate) counts from it, so the
+   * deadline is never later than spawn + 2 x READY_PROOF_MS.
+   */
   const readinessDeadline = (phase: Extract<Phase, { kind: "candidate" }>): number =>
-    (phase.grantedAt ?? phase.spawnedAt) + READY_PROOF_MS;
+    (phase.grantedAt === undefined ? phase.spawnedAt : Math.min(phase.grantedAt, phase.spawnedAt + READY_PROOF_MS)) + READY_PROOF_MS;
 
   const proven = (linkId: string, link: LinkRoutes, round: Round, phase: Extract<Phase, { kind: "candidate" }>): void => {
     // A child whose exit was already observed is never promoted, however late its proof settles.
@@ -297,7 +303,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
   };
 
   const execOnRoute = (record: LinkRecord, route: string, argv: readonly string[], deadline: number, signal: AbortSignal, maxOutputBytes?: number) =>
-    host.runner.run(buildExecArgv({ alias: record.alias, destination: route, argv, knownHostsFile: host.knownHostsFile() }), {
+    host.runner.run(buildExecArgv({ alias: record.alias, destination: route, argv, knownHostsFile: host.knownHostsFile(), route: record.explicitRoute ?? null }), {
       timeoutMs: Math.max(1, Math.ceil(deadline - host.now())),
       signal,
       ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }),
@@ -313,7 +319,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
     const { proof, abort } = phase;
     try {
       if (!proof.platform) {
-        proof.platform = record.remotePlatform ?? await requireRemotePlatform(host.runner, record.alias, host.knownHostsFile(), {
+        proof.platform = record.remotePlatform ?? await requireRemotePlatform(host.runner, record.alias, record.explicitRoute ?? null, host.knownHostsFile(), {
           destination: phase.route, timeoutMs: Math.max(1, Math.min(10_000, Math.ceil(candidateDeadline - host.now()))), signal: abort.signal,
         });
         if (!live()) return;

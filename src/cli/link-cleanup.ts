@@ -1,6 +1,7 @@
 /** Read-only platform and disconnect guidance for recorded Remote Link Children. */
 import { linkKnownHostsPath, linkStorePath } from "../link/paths";
 import { requireRemotePlatform, type RemotePlatform } from "../link/remote-platform";
+import type { ExplicitRoute } from "../link/explicit-route";
 import { createSshRunner, sshRunnerErrorHint, type SshRunner } from "../link/ssh-runner";
 import { readLinkStore, type LinkStore } from "../link/store";
 import { CliUsageError, printData, rejectArgs, takeJsonFlag, takeOption } from "./runtime-api";
@@ -30,9 +31,9 @@ export function windowsChildRecovery(linkId: string, alias: string): string[] {
   ];
 }
 
-async function checkPlatform(runner: SshRunner, alias: string, knownHostsFile: string): Promise<{ platform: RemotePlatform; reason: string | null }> {
+async function checkPlatform(runner: SshRunner, alias: string, route: ExplicitRoute | null, knownHostsFile: string): Promise<{ platform: RemotePlatform; reason: string | null }> {
   try {
-    const platform = await requireRemotePlatform(runner, alias, knownHostsFile);
+    const platform = await requireRemotePlatform(runner, alias, route, knownHostsFile);
     return { platform, reason: null };
   } catch (error) {
     return { platform: "unknown", reason: sshRunnerErrorHint(error) ?? "ssh could not run" };
@@ -69,7 +70,7 @@ export async function runLinkCleanup(args: string[], deps: LinkCleanupDeps, usag
   // One at a time: each check is a bounded SSH command, and order keeps the report stable.
   for (const record of records) {
     const checked = record.direction === "hub-initiated"
-      ? await checkPlatform(runner, record.alias, knownHostsFile)
+      ? await checkPlatform(runner, record.alias, record.explicitRoute ?? null, knownHostsFile)
       : { platform: "not_checked" as const, reason: null };
     entries.push({
       linkId: record.id, alias: record.alias, direction: record.direction, ...checked,
