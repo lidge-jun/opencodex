@@ -637,13 +637,15 @@ const RETIREMENT_GUIDANCE: Record<string, string> = {
 };
 
 /**
- * Refusals of a journalled revoke that come before it changes anything (a closed list; any other code, including ones
- * a newer Home adds, keeps the generic text and makes no such claim).
+ * Closed texts for refusals of a journalled revoke. Each claims only what holds on every path that answers the code, on a
+ * first and on a resumed attempt (the table in structure/remote-link.md, "Operation journal"); any other code, including ones
+ * a newer Home adds, keeps the generic text.
  */
 const REVOKE_REFUSALS: Record<string, string> = {
   operation_mismatch: "This operation id was already used with other parameters. Nothing was changed; repeat it with the flags of its first attempt, or use a new operation id.",
   link_operation_open: "An unfinished revoke holds this link; repeat it with its own operation id to settle it first. Nothing was changed.",
   // A resumed revoke can re-own its retirement receipt before this 409 (#8416), so it claims only what holds for every path.
   link_operation_in_progress: "Another link operation for this alias or link is running. This attempt did not touch the link, its key or the Child; retry when it ends.",
-  operation_journal_unreadable: "The link operation journal (<configDir>/link/operations.json) is damaged. Nothing was changed; keep a copy, move it aside and retry. ocx link revoke --force without --operation-id still runs.",
+  // A replay that follows a resumed removal can meet an unreadable journal after that removal finished (#8416): no state claim.
+  operation_journal_unreadable: "The link operation journal (<configDir>/link/operations.json) is damaged or could not be read. Keep a copy, move it aside and repeat the revoke with the same operation id; if that answers link_not_found, the link is already gone (a resumed removal can finish before the read fails). ocx link revoke --force without --operation-id also runs.",
 };

@@ -222,7 +222,6 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
   test.each([
     ["operation_mismatch", 409, 5, "used with other parameters"],
     ["link_operation_open", 409, 5, "unfinished revoke holds this link"],
-    ["operation_journal_unreadable", 500, 1, "journal"],
   ])("%s prints local text that nothing was changed, with the code", async (code, status, exit, text) => {
     const h = harness([{ status, body: { error: { code, message: "server-chosen text" } } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-5"], h.deps)).toBe(exit);
@@ -268,6 +267,19 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
       expect(printed).not.toContain("if it reads failed_clean");
       expect(printed).not.toContain("Nothing was changed");
       expect(printed).toContain("(code tombstone_limit)");
+      expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  // A replay that follows a resumed removal can read a damaged journal after the removal finished (#8416), so no state claim.
+  test("operation_journal_unreadable names the way out, claims nothing about state, and says what link_not_found then means", async () => {
+    const h = harness([{ status: 500, body: { error: { code: "operation_journal_unreadable", message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-11"], h.deps)).toBe(1);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("Keep a copy, move it aside");
+      expect(printed).toContain("link_not_found");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).toContain("(code operation_journal_unreadable)");
       expect(printed).not.toContain("server-chosen text");
     } finally { h.restore(); }
   });
