@@ -446,6 +446,11 @@ function readRemovalTarget(ctx: ManagementContext, id: string):
 }
 
 
+// A forced revoke of an ephemeral Child refused for its tombstone. Either answer comes before this attempt revoked a key or
+// removed a record, and a forced revoke never contacts the Child; an earlier attempt of a resumed revoke may have done more.
+const tombstoneLimit = (): Response => fail("tombstone_limit", "Too many forced revokes are waiting for cleanup, so this attempt revoked no key and removed no record. Recover them (ocx link recover --list), or have a person on this Home run ocx link recover --forget for a machine that is gone or whose cleanup cannot be proven.", 409);
+const tombstoneWriteFailed = (): Response => fail("tombstone_write_failed", "The tombstone a forced revoke of an ephemeral Child needs could not be written, so this attempt revoked no key and removed no record.", 503);
+
 async function removeReserved(
   ctx: ManagementContext,
   state: LinkRouteState,
@@ -511,13 +516,13 @@ async function removeReserved(
     // and this attempt owns none: it then has nothing to drop if it does not commit.
     try { if (withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())) === "recorded") written = tombstone; } catch (error) {
       if (error instanceof LinkTombstoneLimitError) {
-        return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
+        return tombstoneLimit();
       }
       // The file may already be written (a chmod or the lock's COMMIT failed after it); the link stays, so this
       // attempt's tombstone, if any, goes too. Its random attempt token makes that removal touch nothing else.
       written = tombstone;
       dropOwnTombstone();
-      return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
+      return tombstoneWriteFailed();
     }
   }
   // The first intent (cleanup, or the key for a force revoke) is written before stopLink: a failed write leaves the
@@ -649,7 +654,11 @@ async function removeReserved(
           if (!present) {
             // A write that throws after the file landed (its chmod) still leaves this attempt's tombstone: own it, so the
             // non-ok path drops it by its token.
-            try { if (recordTombstone(own, tombstonesPath()) === "recorded") written = own; } catch { written = own; return "tombstone_failed" as const; }
+            try { if (recordTombstone(own, tombstonesPath()) === "recorded") written = own; } catch (error) {
+              if (error instanceof LinkTombstoneLimitError) return "tombstone_limit" as const;
+              written = own;
+              return "tombstone_failed" as const;
+            }
           }
         }
         if (active && (ctx.config.apiKeys ?? []).some(key => key.id === record.apiKeyId) && !revokeKeyIdempotent(ctx, record.apiKeyId)) return "revoke_failed" as const;
@@ -664,7 +673,8 @@ async function removeReserved(
       if (result !== "ok") dropOwnTombstone();
       if (result === "journal_failed") return journalFailed();
       if (result === "changed") return fail("link_changed", "The link changed during removal.", 409);
-      if (result === "tombstone_failed") return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
+      if (result === "tombstone_failed") return tombstoneWriteFailed();
+      if (result === "tombstone_limit") return tombstoneLimit();
       if (result === "revoke_failed") return fail("key_revoke_failed", "The link key could not be revoked.", 502);
       committed = true;
       // Same task as the commit: an open link WebSocket must not outlive its link (design T4 2.4).

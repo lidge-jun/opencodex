@@ -616,6 +616,18 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     expect(tombstones()).toEqual([]);
   });
 
+  test("a commit-time tombstone the cap refuses answers tombstone_limit, with no key revoked and no record removed", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    for (let i = 0; i < MAX_TOMBSTONES - 1; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
+    recordTombstone(t0);
+    // While this revoke stops the tunnel, T0's owner drops it and another forced revoke fills the last slot.
+    const h = harness([link()], { keyRevokeFails: true, duringStop: () => { removeTombstone(ID); recordTombstone(tombstone("lnk_" + "f".repeat(16))); } });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect([res.status, (await errorOf(res)).code]).toEqual([409, "tombstone_limit"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones().some(t => t.linkId === ID)).toBe(false);
+  });
+
   test("a forced revoke that commits beside an existing tombstone for its link keeps that one", async () => {
     const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
     recordTombstone(t0);
