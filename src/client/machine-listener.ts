@@ -163,8 +163,10 @@ export function startMachineListener(
   // Link mode only. Everything is resolved once here, so a relayed request reads no file and
   // builds no policy: the key is cached, the loopback policy is fixed at bind like the listener.
   const inboundBodyLimit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
-  // Link mode only: Codex's upgrade is carried over the link only once the Child's release gate is
-  // open and the Home advertised the feature; until then every upgrade keeps today's 426.
+  // Link mode only: Codex's upgrade tries the link only when the relay's wanted() lets it (the Child's
+  // release gate is open, no opt-out, and the Home's last applied answer is not off; a cached off still tries while
+  // the relay drains for a restart); otherwise it keeps today's 426. A tried upgrade can still end in 426 or the
+  // transient 503 (link-websocket.ts).
   const linkWebsocket = linkMode
     ? createLinkWebsocketRelay({
       tunnel: deps.linkTunnel, diagnostic: recordLinkDiagnostic,

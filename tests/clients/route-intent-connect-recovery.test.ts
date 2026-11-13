@@ -30,7 +30,9 @@ const cliSetup = `
   import { mkdirSync, writeFileSync } from 'node:fs';
   import { join } from 'node:path';
   const calls = [], lines = [], errors = [];
-  mock.module('./src/client/connect', () => ({ connectClient: async options => {
+  // Spread the real module: src/cli/connect imports more than these overrides (#8662's assertDisconnectExpectation).
+  const realConnect = await import('./src/client/connect');
+  mock.module('./src/client/connect', () => ({ ...realConnect, connectClient: async options => {
     calls.push({ selected: options.selectedClients, explicit: options.selectedClientsExplicit });
     return { serverUrl:'http://127.0.0.1:22001', apiKeyId:'fixture', selectedClients:[] };
   }, disconnectClient:async()=>{}, revokeConnectedClientKey:async()=>{}, rotateConnectedClientKey:async()=>{} }));

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -7,13 +7,13 @@ import type { ManagementContext } from "../../src/server/management/context";
 import { ownsRetirement, resumedRevokeJournal, revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
 import { claimLinkRetirement, disownLinkRetirement, readLinkRetirement } from "../../src/link/retirement";
-import { linkSuspendedByRevoke, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, resolveLinkOperation, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { linkSuspendedByRevoke, OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, resolveLinkOperation, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { readTombstones, removeTombstone, tombstonesPath } from "../../src/link/tombstones";
+import { MAX_TOMBSTONES, readTombstones, recordTombstone, removeTombstone, tombstonesPath } from "../../src/link/tombstones";
 
 /**
  * O1: ocx link revoke --operation-id. Every Home-initiated revoke takes the alias lock, so a force revoke waits for a
@@ -295,6 +295,7 @@ test("a new journalled revoke past the bound of unsettled entries is refused and
     state: "unknown" as const, finishedAt: at, effects: [] })) });
   const refused = await h.revoke({ purge: true, operationId: OP });
   expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_journal_full" });
+  expect(refused.body.bound).toBe("unsettled");
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   expect(h.ssh).toEqual([]);
 });
@@ -500,8 +501,11 @@ test("a recorded purge does not finish another removal's receipt and is not cred
 test("a resumed retirement settles its entry before clearing the receipt, so a failed settle is resumed again", async () => {
   // The journal becomes unwritable after the commit and its cleanup (at the tunnel reload), before the settle.
   let broken = false;
-  writeFileSync(join(root, "not-a-dir"), "");
-  const h = harness({ operationsPath: () => broken ? join(root, "not-a-dir", "operations.json") : undefined, onReload: () => { broken = true; } });
+  // A directory where the journal file belongs fails both its read (EISDIR) and its write on every
+  // platform. A path under a file did not: Windows reports ENOENT there, which the journal rightly
+  // reads as "no journal" (dev batch 43451726885).
+  mkdirSync(join(root, "journal-is-a-directory"));
+  const h = harness({ operationsPath: () => broken ? join(root, "journal-is-a-directory") : undefined, onReload: () => { broken = true; } });
   claimLinkRetirement(record(), root, () => h.store, "force", OP);
   h.store = { ...h.store, links: [] };
   const at = new Date(NOW).toISOString();
@@ -756,6 +760,17 @@ describe("reconnect of a suspended link", () => {
   });
 });
 
+test("a new journalled revoke after a burst of recently settled operations is refused naming the recent bound", async () => {
+  const h = harness();
+  const at = new Date(NOW - 60_000).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: Array.from({ length: OPERATION_JOURNAL_MAX_RECENT_SETTLED }, (_, i) => ({
+    operationId: "done-" + i, kind: "revoke" as const, alias: "pen-done-" + i, linkId: "lnk_00000000000000aa", digest: "d".repeat(64), createdAt: at, updatedAt: at,
+    state: "committed" as const, finishedAt: at, effects: [] })) });
+  const refused = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: refused.status, code: code(refused), bound: refused.body.bound }).toEqual({ status: 409, code: "operation_journal_full", bound: "recent" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+});
+
 test("a resolved owner whose resumed cleanup ends uncertain is unresolved again and keeps its link suspended", async () => {
   const h = harness({ purgeReport: '{"restored":true,"outcome":"Restored","daemonRunning":false}\n' });
   claimLinkRetirement(record(), root, () => h.store, "purge", OP);
@@ -962,8 +977,11 @@ test.skipIf(process.platform !== "darwin")("a plain --force that cannot disown t
 test("a plain --force settles the owner it took over before clearing the receipt, so a crash after the clear cannot credit the owner", async () => {
   // The owner wrote its record_removed intent and died before the store write.
   let broken = false;
-  writeFileSync(join(root, "not-a-dir"), "");
-  const h = harness({ operationsPath: () => broken ? join(root, "not-a-dir", "operations.json") : undefined, onReload: () => { broken = true; } });
+  // A directory where the journal file belongs fails both its read (EISDIR) and its write on every
+  // platform. A path under a file did not: Windows reports ENOENT there, which the journal rightly
+  // reads as "no journal" (dev batch 43451726885).
+  mkdirSync(join(root, "journal-is-a-directory"));
+  const h = harness({ operationsPath: () => broken ? join(root, "journal-is-a-directory") : undefined, onReload: () => { broken = true; } });
   claimLinkRetirement(record(), root, () => h.store, "force", OP);
   writeOperationsJournal(h.journalPath, { version: 1, operations: [{
     operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
@@ -1089,4 +1107,32 @@ test("recover waits for an unfinished removal, and a resumed forced revoke does 
   expect((await h.revoke({ force: true })).status).toBe(200);
   expect(readLinkRetirement(LINK, root)).toBeNull();
   expect(readTombstones(tombstonesPath()).tombstones).toEqual([]);
+});
+
+test("a failed_clean receipt owner refused at the tombstone limit finishes with its own id once capacity is freed; a new id is refused", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "failed_clean", finishedAt: at, error: { code: "operation_journal_failed", status: 500 }, effects: [],
+  } as LinkOperation] });
+  for (let i = 0; i < MAX_TOMBSTONES; i++) {
+    recordTombstone({ linkId: "lnk_" + i.toString(16).padStart(16, "0"), alias: "other-" + i, hostKeyFingerprint: "SHA256:abcdefghijklmnop", revokedAt: at }, tombstonesPath());
+  }
+  const refused = await h.revoke({ force: true, operationId: OP });
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "tombstone_limit" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  // Repeated while capacity is still full, the resumed revoke meets the live limit again: a second refusal proves nothing.
+  const again = await h.revoke({ force: true, operationId: OP });
+  expect({ status: again.status, code: code(again) }).toEqual({ status: 409, code: "tombstone_limit" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  // A new id cannot take the removal over while this operation owns its receipt.
+  const other = await h.revoke({ force: true, operationId: "detach-other" });
+  expect({ status: other.status, code: code(other) }).toEqual({ status: 409, code: "link_retirement_owned" });
+  // Once capacity is freed, the original id resumes and finishes (the CLI's guidance: repeat the same id first).
+  removeTombstone("lnk_" + (0).toString(16).padStart(16, "0"), tombstonesPath());
+  const resumed = await h.revoke({ force: true, operationId: OP });
+  expect({ status: resumed.status, outcome: resumed.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  expect(h.store.links).toEqual([]);
 });
