@@ -245,9 +245,11 @@ describe("POST /api/link/recover", () => {
     expect(res.status).toBe(409);
     const error = await errorOf(res);
     expect(error.code).toBe("child_recover_unsupported");
-    // A way out that runs as printed: check first, detach by hand only for this link, otherwise leave it; then a person forgets.
-    expect(error.message).toContain("Check the machine with that ocx-child's connect status --json: only if it shows this link's id");
-    expect(error.message).toContain("if it shows another link or nothing, or cannot be read or reached, leave it");
+    // No plain detach on the strength of a status check: status cannot show an interrupted attach of another link, which a
+    // plain detach would restore and remove (#8691 review). The machine is left, and a person forgets the tombstone.
+    expect(error.message).toContain("Do not run its plain detach on that machine");
+    expect(error.message).toContain("Leave the machine");
+    expect(error.message).not.toContain("only if it shows this link's id");
     expect(error.message).toContain("ocx link recover --forget --link-id " + ID + " --yes");
     expect(error.message).not.toContain("<id>");
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
