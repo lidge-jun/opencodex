@@ -24,12 +24,16 @@ const PROBE_TTL_MS = 5 * 60_000;
 const MIN_REMOTE_OCX = [2, 66, 0] as const;
 const REMOTE_OCX_VERSION = /^opencodex (\d{1,9})\.(\d{1,9})\.(\d{1,9})(-[0-9A-Za-z.-]{1,64})?(\+[0-9A-Za-z.-]{1,64})?(?=\s|$)/;
 
-/** Same-alias operations refuse overlap rather than overwrite a confirmed generation. */
+/**
+ * Same-alias operations refuse overlap rather than overwrite a confirmed generation. Keyed without case, as OpenSSH
+ * matches known_hosts names and as the alias lock and the operation journal match aliases.
+ */
 export async function serialized(state: LinkRouteState, alias: string, action: () => Promise<Response>): Promise<Response> {
   const operations = state.operations ??= new Set();
-  if (operations.has(alias)) return fail("link_operation_in_progress", "A link operation for this alias is already running.", 409);
-  operations.add(alias);
-  try { return await action(); } finally { operations.delete(alias); }
+  const key = alias.toLowerCase();
+  if (operations.has(key)) return fail("link_operation_in_progress", "A link operation for this alias is already running.", 409);
+  operations.add(key);
+  try { return await action(); } finally { operations.delete(key); }
 }
 
 function remoteFailure(result: SshRunResult, code: string, message: string): Response | null {

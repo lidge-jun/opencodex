@@ -16,7 +16,9 @@ import type { RouteRequest } from "./link-route-request";
 
 /** Compensation that could not finish: whether anything this operation created remains is unknown. */
 const UNKNOWN_CODES = new Set(["compensation_failed", "key_cleanup_failed", "link_cleanup_uncertain", "key_issue_uncertain"]);
-const RESIDUAL_RECOVERY = "The Child may still be enrolled; run ocx-child detach --purge (or ocx disconnect) on the Child before retrying.";
+const RESIDUAL_RECOVERY = "The Child may still be enrolled; run ocx disconnect and ocx restart on the Child (ocx-child detach for an ocx-child) before retrying.";
+// Only the managed binary's purge removes a plant; a disconnect would leave it in place.
+const PLANT_RECOVERY = "The Child may still hold the planted ocx-child; run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying.";
 
 export interface OperationRequest { id: string; digest: string }
 
@@ -94,7 +96,7 @@ export function replayResponse(op: LinkOperation): Response {
   return Response.json({
     error: { code: error.code, message: "The operation ended " + op.state + "; this is its recorded outcome." },
     ...outcomeBody(op),
-    ...(op.state === "residual" || op.childResidual ? { residual: true, recovery: RESIDUAL_RECOVERY } : {}),
+    ...(op.state === "residual" || op.childResidual ? { residual: true, recovery: hasEffect(op, "plant", "intent") ? PLANT_RECOVERY : RESIDUAL_RECOVERY } : {}),
   }, { status: error.status, headers: { "cache-control": "no-store" } });
 }
 

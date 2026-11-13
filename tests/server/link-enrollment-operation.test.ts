@@ -450,8 +450,28 @@ describe("review round 3", () => {
     const applied = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
     expect({ outcome: applied.body.outcome, residual: applied.body.residual }).toEqual({ outcome: "unknown", residual: true });
     const replay = await h.call("apply", { alias: ALIAS, fingerprint, plant: true, operationId: OP });
-    expect({ code: code(replay), outcome: replay.body.outcome, residual: replay.body.residual, recovery: typeof replay.body.recovery }).toEqual({ code: "key_issue_uncertain", outcome: "unknown", residual: true, recovery: "string" });
+    expect({ code: code(replay), outcome: replay.body.outcome, residual: replay.body.residual }).toEqual({ code: "key_issue_uncertain", outcome: "unknown", residual: true });
+    // A plant is removed only by the managed binary's purge; a disconnect would leave it.
+    expect(replay.body.recovery).toContain("ocx-child detach --purge");
+    expect(replay.body.recovery).not.toContain("ocx disconnect");
   });
+
+  test("a first journalled apply of a case variant of an alias waits on, or is refused by, a plain apply already enrolling it", async () => {
+    let open!: () => void;
+    let reached!: () => void;
+    const connecting = new Promise<void>(resolve => { reached = resolve; });
+    const h = harness();
+    h.gateStep("connect", new Promise<void>(resolve => { open = resolve; }), () => reached());
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+    const applying = h.call("apply", { alias: ALIAS, fingerprint });
+    await connecting;
+    const variant = await h.call("apply", { alias: ALIAS.toUpperCase(), fingerprint, operationId: OP });
+    expect({ status: variant.status, code: code(variant) }).toEqual({ status: 409, code: "link_operation_in_progress" });
+    open();
+    expect((await applying).status).toBe(202);
+  });
+
 });
 
 describe("retention", () => {
