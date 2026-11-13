@@ -199,12 +199,14 @@ Cada registro de `link/ssh-capture/ssh-<start time>.jsonl` indica hora, túnel `
 
 ```text
 ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
-ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
+ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]
-ocx link revoke --link-id <id> [--json]
+ocx link revoke --link-id <id> [--operation-id <id>] [--json]
+ocx link operations [--operation-id <id>] [--json]
+ocx link operations resolve --operation-id <id> --yes [--json]
 ocx link reconnect --link-id <id> [--json]
 ocx link routes --link-id <id> [--json]
 ocx link routes add --link-id <id> --route <alias> [--position <n>] [--json]
@@ -222,6 +224,8 @@ ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|man
 ```
 
 Una ruta explícita y exclusiva está destinada a quienes configuran por sí mismos la ruta SSH, por ejemplo un hub que aprovisiona un equipo desechable. `ocx link add <alias> --proxy-command <command> --ssh-user <user> --ssh-port <port> --exclusive` pasa ese ProxyCommand, usuario y puerto a ssh en la línea de comandos para cada comando y túnel del enlace, de modo que una edición posterior de `~/.ssh/config` no puede cambiar la ruta del enlace; el enlace también rechaza las modificaciones de `ocx link routes`. El comando debe comenzar con una ruta absoluta y usar solo letras, dígitos y `. _ / : @ + , = -` en palabras separadas por espacios individuales; se rechazan tokens `%`, comillas y caracteres de shell. `--exclusive` por sí solo limita el enlace a su único alias sin cambiar cómo ssh llega a él.
+
+El aprovisionamiento puede registrar una operación: `ocx link add <alias> --expect-fingerprint <fp> --operation-id <id>` registra los identificadores antes de cambiar nada; repetirlo devuelve el resultado (`committed`, `failed_clean`, `residual` o `unknown`). `--require-ephemeral` rechaza un Child con instalación completa antes de realizar cambios. `ocx link revoke --operation-id <id>` registra la revocación, `ocx link operations` lista las operaciones y `ocx link operations resolve --operation-id <id> --yes` registra que una operación residual o desconocida se limpió o aceptó.
 
 <a id="related-guides"></a>
 
