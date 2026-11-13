@@ -212,7 +212,8 @@ async function runLoad(options: { transport: "websocket" | "http"; hold: boolean
 describe.skipIf(!ENABLED)("link WebSocket transport-only RSS acceptance"
   + (ENABLED ? "" : " [skipped: opt-in with OCX_LINK_WS_RSS_ACCEPTANCE=1; it runs two Homes of several GiB each and is not part of the ordinary suite]"), () => {
   // Design T4 6.3, as decided after the T5g measurements: the reservation bounds what the link WebSocket transport
-  // itself adds. Both transports run the same stalled load against a held upstream (identical synchronization), and
+  // itself adds. Both transports run the same stalled load against a held upstream, each synchronized on the stall it
+  // can observe (the WebSocket on its pumps, the HTTP relay on the upstream's hold; #8600 gives the relay its own), and
   // the WebSocket's peak minus the HTTP relay's peak must stay within the sockets' reservations.
   test.skipIf(!CANONICAL)("acceptance: the WebSocket's peak RSS over the HTTP relay's, under the same held load, stays within the link socket reservations"
     + (CANONICAL ? "" : " [skipped: diagnostic settings present (" + DIAGNOSTIC_SETTINGS.join(", ") + "); only the canonical load reports an acceptance]"), async () => {
