@@ -764,10 +764,11 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         for (const record of nextStore.links) {
           if (recordInstances.get(record.id) !== undefined && recordInstances.get(record.id) !== nextInstances.get(record.id)) {
             changed.add(record.id);
-            // A changed record that also goes from one route to several with no child never reaches the
-            // gained-routes check below; it settles from its pidfile with the flagged changed links.
+            // A changed record that also goes from one route to several never reaches the gained-routes
+            // check below; it settles from its pidfile with the flagged changed links, after the reload
+            // stopped its child (whose pidfile may not name it: a failed write keeps an older one).
             const before = store.links.find(link => link.id === record.id);
-            if (before && !rounds.isMultiRoute(before) && rounds.isMultiRoute(record) && !children.has(record.id)) gainedOnChange.push(record.id);
+            if (before && !rounds.isMultiRoute(before) && rounds.isMultiRoute(record)) gainedOnChange.push(record.id);
             continue;
           }
           const before = store.links.find(link => link.id === record.id);
@@ -784,7 +785,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           } else if (!wasMulti && isMulti) {
             const child = children.get(record.id);
             const state = states.get(record.id);
-            if (child && state?.kind !== "connected") { changed.add(record.id); continue; }
+            // An unproven child is stopped by this reload; its link then settles from its pidfile as above.
+            if (child && state?.kind !== "connected") { changed.add(record.id); gainedOnChange.push(record.id); continue; }
             if (child && state?.kind === "connected") rounds.adopt(record, child.child, state.since);
             gainedRoutes.push(record);
           }

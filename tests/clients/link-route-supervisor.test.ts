@@ -1322,3 +1322,52 @@ test("a reload that stops a one-route link whose pidfile cannot be removed still
   expect(h.warns).toContain(`[link] stale pidfile could not be removed link=${LINK}`);
 });
 
+
+test.each(["changes its record in the same reload", "keeps its record"] as const)("a one-route link whose pidfile write failed and that gains routes while it %s settles from the older pidfile once its tunnel is stopped", async variant => {
+  // The earlier tunnel could not be identified at start, so the one-route spawn went ahead (and cleared the flag),
+  // but its pidfile write failed: the older pidfile, naming a live earlier ssh, is still there.
+  let current = oneRouteStore();
+  // Started without a tick: the next tick would stop the unrecorded tunnel (a failed state with a running child).
+  const h = start({
+    store: () => current,
+    pidfile: { version: 1, linkId: LINK, pid: 7070, argv: ["ssh", "older"] },
+    writePidfile: () => { throw Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" }); },
+    processArgv: pid => pid === 7070 ? ["ssh", "other"] : null, processAlive: pid => pid === 7070,
+  });
+  await flush();
+  expect(h.tunnels).toHaveLength(1);
+  expect(h.tunnels[0]!.signals).toEqual([]);
+  current = { ...current, ...(variant === "keeps its record" ? {} : { listenerPort: LISTENER_PORT + 10 }), links: [record(["alpha-lan", "pen-alpha"])] };
+  await h.supervisor.reload();
+  await h.tick();
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM"]);
+  expect(h.state().orphan).toBe("orphan-unverified");
+  await h.advance(HOME_TUNNEL_RETRY_POLICY.retryFailedAfterMs.forward!);
+  await h.tick();
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+  expect(h.kills).toEqual([]);
+});
+
+
+test("a one-route tunnel stopped by the tick after its pidfile write failed survives a pidfile that cannot be removed", async () => {
+  // The write landed the file and then failed (a directory sync after the rename, say): the link is failed with a
+  // running child, so the next tick stops that child and removes the pidfile naming it.
+  let written: Pidfile | null = null;
+  let removeFails = false;
+  const h = start({
+    store: oneRouteStore,
+    pidfile: () => written,
+    writePidfile: (_path, pidfile) => { written = pidfile; throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" }); },
+    removeFails: () => removeFails,
+  });
+  await flush();
+  expect(h.tunnels).toHaveLength(1);
+  removeFails = true;
+  await h.tick();
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM"]);
+  expect(h.warns).toContain(`[link] stale pidfile could not be removed link=${LINK}`);
+  // The tick went on: the failed link's due retry still spawns.
+  await h.advance(HOME_TUNNEL_RETRY_POLICY.retryFailedAfterMs.forward!);
+  expect(h.tunnels).toHaveLength(2);
+});
+
