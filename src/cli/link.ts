@@ -23,6 +23,7 @@ import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
 import { parseExplicitRoute } from "../link/explicit-route";
+import { isOperationId } from "../link/operations-journal";
 import type { LinkChildKind } from "../link/store";
 import { findAvailablePort } from "../server/ports";
 import { viaLocalControlSocket, type LocalControlDeps } from "./link-local-control";
@@ -299,7 +300,7 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
 
 const OPERATION_OUTCOMES = new Set(["committed", "failed_clean", "residual", "unknown"]);
 
-function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string; operationState?: "open" | "unknown" } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
   if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
@@ -313,8 +314,10 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string; c
   const operationId = typeof body.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.operationId) ? body.operationId : undefined;
   const outcome = typeof body.outcome === "string" && OPERATION_OUTCOMES.has(body.outcome) ? body.outcome : undefined;
   const residualKind = body.residualKind === "plant" || body.residualKind === "enrollment" ? body.residualKind : undefined;
+  // link_suspended names whether the revoke that keeps the link down is open (the Home stopped during it) or unknown.
+  const operationState = body.operationState === "open" || body.operationState === "unknown" ? body.operationState : undefined;
   return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}),
-    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}) };
+    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}), ...(operationState ? { operationState } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -417,6 +420,8 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
       if (force && !(error instanceof RuntimeApiError)) throw new Error("Forced link revoke failed; inspect link status before retrying.");
       throw error;
     }
+    // A journalled revoke must not read as done when nothing was journalled: the caller settles a vanished link itself.
+    if (operationId !== undefined) throw new RuntimeApiError("Link " + linkId + " is not on this Home; no revoke was journalled (code link_not_found).", 404, error instanceof RuntimeApiError ? error.body : null);
     remoteCleanup = "unverified";
   }
   if (force) {
@@ -437,11 +442,33 @@ async function runReconnect(args: string[], deps: LinkCliDeps): Promise<void> {
   const linkId = takeOption(args, "--link-id");
   if (!linkId || !LINK_ID.test(linkId)) throw new CliUsageError("reconnect requires a valid --link-id", LINK_USAGE);
   rejectArgs(args, LINK_USAGE);
-  const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}/reconnect`, { method: "POST" }, deps);
+  let response: unknown;
+  try {
+    response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}/reconnect`, { method: "POST" }, deps);
+  } catch (error) {
+    throw suspendedReconnect(error, linkId) ?? error;
+  }
   if (!isRecord(response)) throw new Error("invalid link API response: reconnect object");
   assertExactKeys(response, ["linkId"], "reconnect");
   if (response.linkId !== linkId) throw new Error("invalid link API response: reconnect link id");
   console.log(JSON.stringify({ linkId }));
+}
+
+/**
+ * 409 link_suspended: an unsettled revoke keeps the link down. The next step is built here from the validated operation id,
+ * never from the server's text; a 409 keeps the CLI's exit 5.
+ */
+function suspendedReconnect(error: unknown, linkId: string): RuntimeApiError | null {
+  if (!(error instanceof RuntimeApiError) || error.status !== 409 || errorCodeBody(error.body)?.error.code !== "link_suspended") return null;
+  const body = isRecord(error.body) ? error.body : {};
+  const op = isOperationId(body.operationId) ? body.operationId : null;
+  const resolve = op ? "ocx link operations resolve --operation-id " + op + " --yes" : null;
+  const message = !op
+    ? "Link " + linkId + " is kept down by an unsettled revoke; find it with ocx link operations, then resolve it."
+    : body.operationState === "open"
+      ? "Link " + linkId + " is kept down: revoke operation " + op + " did not finish (the Home stopped during it). Repeat it with the same flags: ocx link revoke --link-id " + linkId + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve
+      : "Link " + linkId + " is kept down: revoke operation " + op + " ended unknown and may have disconnected or purged the Child. Check the Child, then run: " + resolve;
+  return new RuntimeApiError(message, 409, error.body);
 }
 
 export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}): Promise<number> {

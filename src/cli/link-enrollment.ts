@@ -7,7 +7,7 @@ import type { LinkCliDeps } from "./link";
 
 const FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{16,88}={0,2}$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]{1,128})?$/;
-const ENROLLMENT_DEADLINE_MS = 360_000;
+export const ENROLLMENT_DEADLINE_MS = 360_000;
 const PHASES: Record<string, string> = {
   remote_port_failed: "remote port selection", remote_port_timeout: "remote port selection",
   remote_plant_failed: "remote ocx-child planting", remote_plant_timeout: "remote ocx-child planting",
@@ -41,7 +41,8 @@ const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const OPERATION_REFUSALS: Record<string, string> = {
   operation_mismatch: "This operation id was already used with other parameters; use a new operation id.",
   link_operation_open: "An unfinished enrollment holds this alias; repeat it with its own operation id to settle it first.",
-  link_operation_in_progress: "Another enrollment or revoke of this alias is running; retry when it ends.",
+  // The same 409 answers a concurrent probe, confirmation, route edit, enrollment or revoke of the alias.
+  link_operation_in_progress: "Another link operation for this alias is running; retry when it ends.",
   full_install_present: "A full OpenCodex install is on the Child; --require-ephemeral refused it before any change.",
   full_install_census_failed: "The Child could not be checked for a full OpenCodex install; nothing was changed.",
   require_ephemeral_unsupported: "--require-ephemeral is not supported for a Windows Child.",
@@ -221,7 +222,10 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
   const applied = (result: unknown, planted: boolean): void => {
     const keys = record(result) ? Object.keys(result).sort().join(",") : "";
     const shaped = operationId === undefined ? keys === "linkId"
-      : keys === "linkId,operationId,outcome" && record(result) && result.operationId === operationId && result.outcome === "committed";
+      : (keys === "linkId,operationId,outcome" || (keys === "linkId,operationId,outcome,planted" && record(result) && result.planted === true))
+        && record(result) && result.operationId === operationId && result.outcome === "committed";
+    // A replay never probed, so only the journalled answer can say the Child was planted.
+    planted = planted || (record(result) && result.planted === true);
     if (!shaped || !record(result) || typeof result.linkId !== "string" || !/^lnk_[0-9a-f]{16}$/.test(result.linkId)) throw new Error("Invalid link apply response");
     printData({ linkId: result.linkId, alias, state: "connected", childRole: "client", ...(planted ? { planted: true } : {}), ...(routeBody.exclusive ? { exclusive: true } : {}),
       ...(operationId !== undefined ? { operationId, outcome: "committed" } : {}) }, wantsJson, ["Connected " + alias + " as a Child (" + result.linkId + ")."]);

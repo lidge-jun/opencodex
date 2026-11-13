@@ -1547,3 +1547,44 @@ test("a stopped one-route child whose exit is never seen after SIGKILL is warned
   h.tunnels[0]!.exit(137);
   await flush();
 });
+
+test("a reload whose drained child survives SIGKILL warns once while it holds the lifecycle queue", async () => {
+  let current = oneRouteStore();
+  const opts: Parameters<typeof harness>[0] = { store: () => current, stubborn: true };
+  const h = start(opts);
+  await flush();
+  current = { ...current, links: [] };
+  const reload = h.supervisor.reload();
+  await flush();
+  await h.advance(2_000);
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  await h.advance(1_999);
+  expect(h.warns.filter(line => line.includes("exit unconfirmed"))).toEqual([]);
+  await h.advance(1);
+  expect(h.warns.filter(line => line.includes("exit unconfirmed"))).toEqual([`[link] tunnel exit unconfirmed link=${LINK}`]);
+  await h.advance(1_000);
+  expect(h.warns.filter(line => line.includes("exit unconfirmed"))).toHaveLength(1);
+  opts.stubborn = false;
+  h.tunnels[0]!.exit(137);
+  await reload;
+});
+
+test("a drained child the tick already warned about is not warned again by the drain", async () => {
+  let current = oneRouteStore();
+  const opts: Parameters<typeof harness>[0] = { store: () => current, stubborn: true, writePidfile: readOnlyPidfile };
+  const h = start(opts);
+  await flush();
+  await h.tick();
+  await h.advance(2_000);
+  await h.advance(2_000);
+  expect(h.warns.filter(line => line.includes("exit unconfirmed"))).toHaveLength(1);
+  current = { ...current, links: [] };
+  const reload = h.supervisor.reload();
+  await flush();
+  await h.advance(2_000);
+  await h.advance(2_000);
+  expect(h.warns.filter(line => line.includes("exit unconfirmed"))).toHaveLength(1);
+  opts.stubborn = false;
+  h.tunnels[0]!.exit(137);
+  await reload;
+});

@@ -26,8 +26,8 @@ import { readManagementJsonBodyOr } from "./body";
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
-import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
+import { journalInUse, journalOpenFailure, journalPathFor, journalUnreadable, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { findOperation, isOperationId, readOperationsJournal, revokeSuspendingLink } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const isLinkPath = (path: string): boolean => path === "/api/link" || path.startsWith("/api/link/");
@@ -196,11 +196,28 @@ async function reconnect(ctx: ManagementContext, state: LinkRouteState, id: stri
     await state.listener.ensureStarted();
     if (state.listener.status().state !== "listening") return fail("listener_unavailable", "The link listener is unavailable.", 503);
     await state.supervisor.ensureStarted();
-    if (!await state.supervisor.reconnect(id)) return fail("link_unavailable", "The link tunnel could not be restarted.", 503);
+    const restarted = await state.supervisor.reconnect(id);
+    if (restarted === "suspended") return suspendedRefusal(ctx, id);
+    if (!restarted) return fail("link_unavailable", "The link tunnel could not be restarted.", 503);
   } catch {
     return fail("link_unavailable", "The link tunnel could not be restarted.", 503);
   }
   return Response.json({ linkId: id });
+}
+
+/** 409 link_suspended: an unsettled revoke keeps the tunnel down (revokeSuspendsLink); the answer names it and the way out. */
+function suspendedRefusal(ctx: ManagementContext, id: string): Response {
+  const suspension = revokeSuspendingLink(journalPathFor(ctx), id);
+  const headers = { "cache-control": "no-store" };
+  if (!suspension) {
+    return Response.json({ error: { code: "link_suspended", message: "An unsettled revoke keeps this link's tunnel down; see ocx link operations." } }, { status: 409, headers });
+  }
+  const op = suspension.operationId;
+  const resolve = "ocx link operations resolve --operation-id " + op + " --yes";
+  const message = suspension.state === "unknown"
+    ? "Revoke operation " + op + " ended unknown and may have disconnected or purged the Child, so this link's tunnel stays down. Check the Child, then run: " + resolve
+    : "Revoke operation " + op + " did not finish (the Home stopped during it), so this link's tunnel stays down. Repeat it with the same flags: ocx link revoke --link-id " + id + " --operation-id " + op + " (add --purge if it was a purge); if it then ends unknown, run: " + resolve;
+  return Response.json({ error: { code: "link_suspended", message }, operationId: op, operationState: suspension.state }, { status: 409, headers });
 }
 
 function validRemoveBody(payload: unknown): payload is Record<string, unknown> {
@@ -224,20 +241,27 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   if (operation) {
     let recordedAlias: string | undefined;
     try { recordedAlias = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id)?.alias; } catch {
-      return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+      return journalUnreadable();
     }
-    if (recordedAlias !== undefined) return underAliasLock(ctx, recordedAlias, true, async () => (await replayOperation(ctx, state, operation, "revoke"))!);
+    if (recordedAlias !== undefined) {
+      // Another write may prune the entry between that read and the replay: then this is a first revoke after all,
+      // run below once the replay has released the alias lock.
+      const notRecorded = new Response(null, { status: 204 });
+      const replayed = await underAliasLock(ctx, recordedAlias, true, async () => (await replayOperation(ctx, state, operation, "revoke")) ?? notRecorded);
+      if (replayed !== notRecorded) return replayed;
+    }
   }
   const current = readStoreFor(ctx);
   const record = current.links.find(link => link.id === id);
   if (!record) return fail("link_not_found", "The link was not found.", 404);
-  if (!valid) return fail("invalid_body", "force and purge must be booleans and cannot both be true.", 400);
   // A queued or running job would keep opening SSH sessions to a Child this removal disconnects, so removal takes the
   // link's job admission lock before its first teardown await and holds it to the end: a job submitted meanwhile gets
   // 409 (single link) or a busy item, and a link a job already holds is refused here, before anything is stopped.
   const { childOpsEngineFor } = await import("./link-child-ops-routes");
   const releaseLink = childOpsEngineFor(state).reserve(id);
   if (!releaseLink) return fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409);
+  // The body is judged after the reservation, as it was before revokes were journalled (404, then 409, then 400).
+  if (!valid) { releaseLink(); return fail("invalid_body", "force and purge must be booleans and cannot both be true.", 400); }
   try {
     // Enrollment and revoke of one alias are serialized: a force revoke cannot run between a purge and its receipt.
     // Also whenever a tombstone names this alias: recover may run against that machine under the alias lock.
@@ -250,26 +274,41 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         const replay = await replayOperation(ctx, state, operation, "revoke");
         if (replay) return replay;
       }
-      const open = openRevokeConflict(ctx, id, operation?.id);
+      const open = openRevokeConflict(ctx, id, operation?.id, force && operation === null);
       if (open) return open;
       const fresh = readStoreFor(ctx).links.find(link => link.id === id);
       if (!fresh) return fail("link_not_found", "The link was not found.", 404);
       let journal: RevokeJournal = NO_REVOKE_JOURNAL;
       if (operation) {
-        try { journal = openRevokeJournal(ctx, operation, fresh.alias, id); } catch {
-          return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+        try { journal = openRevokeJournal(ctx, operation, fresh.alias, id); } catch (error) {
+          return journalOpenFailure(error);
         }
       }
-      return journal.finish(await removeReserved(ctx, state, id, fresh, force, purge, journal));
+      try { return await journal.finish(await removeReserved(ctx, state, id, fresh, force, purge, journal)); } finally { journal.release(); }
     }));
   } finally { releaseLink(); }
 }
 
 async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id: string, record: LinkStore["links"][number], force: boolean, purge: boolean, journal: RevokeJournal): Promise<Response> {
+  // An intent that cannot be written stops the revoke before its effect, answered with the operation id.
+  const journalFailed = (): Response => Response.json({
+    error: { code: "operation_journal_failed", message: "The link operation journal could not be written; the step after it did not run." },
+    ...(journal.operationId ? { operationId: journal.operationId } : {}),
+  }, { status: 500, headers: { "cache-control": "no-store" } });
+  const intend = (effect: "remote_cleanup" | "key_revoked" | "record_removed"): boolean => {
+    try { journal.intent(effect); return true; } catch { return false; }
+  };
+  const cleanup = !force && record.direction === "hub-initiated";
+  // The first intent (cleanup, or the key for a force revoke) is written before stopLink: a failed write leaves the
+  // tunnel as it was and nothing has been touched.
+  if (!intend(cleanup ? "remote_cleanup" : "key_revoked")) return journalFailed();
   const release = state.supervisor.holdLink?.(id);
+  // Set when this revoke restarts the tunnel itself after a cleanup that never ran; every other way out leaves it down.
+  let restarted = false;
   try {
     await state.supervisor.stopLink(id);
     const restartTunnel = async (): Promise<void> => {
+      restarted = true;
       release?.();
       try {
         await state.supervisor.ensureStarted();
@@ -278,30 +317,40 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         console.warn(`[link] tunnel restart failed linkId=${id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
-    if (!force && record.direction === "hub-initiated") {
-      journal.intent("remote_cleanup");
-      try {
-        const runner = runnerFor(ctx);
-        const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx));
-        if (purge) {
-          const purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind);
-          if (!purged.ok) {
-            await restartTunnel();
-            return fail(purged.code, purged.message, purged.status, purged.hint);
-          }
-          // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route.
-          journal.done("remote_cleanup", { purged: true, linkId: id });
-        } else {
-          const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 });
-          if (result.code !== 0) {
-            await restartTunnel();
-            return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));
-          }
-          journal.done("remote_cleanup");
+    // A cleanup that failed before the Child's disconnect ran changed nothing there: the tunnel restarts (a journalled
+    // revoke settles failed_clean). Any other failure (a timeout, a nonzero exit, no purge report) may have disconnected
+    // or purged the Child, so a journalled revoke leaves the tunnel down, unknown, and the supervisor keeps it down until
+    // the operation is resolved (revokeSuspendsLink). A plain revoke restarts the tunnel either way, as before.
+    const cleanupFailed = async (failure: Response, attempted: boolean): Promise<Response> => {
+      if (attempted && journal.operationId !== undefined) return failure;
+      if (!attempted) journal.cleanupNotRun();
+      await restartTunnel();
+      return failure;
+    };
+    const disconnectFailed = (hint: string | undefined) => fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, hint);
+    if (cleanup) {
+      const runner = runnerFor(ctx);
+      let platform: Awaited<ReturnType<typeof requireRemotePlatform>>;
+      try { platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx)); } catch (error) {
+        return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), false);
+      }
+      if (purge) {
+        let purged: Awaited<ReturnType<typeof purgeDisconnectRemote>>;
+        try { purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind); } catch (error) {
+          return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
         }
-      } catch (error) {
-        await restartTunnel();
-        return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
+        if (!purged.ok) return cleanupFailed(fail(purged.code, purged.message, purged.status, purged.hint), purged.notAttempted !== true);
+        // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route. The
+        // receipt must be durable before the link goes; if it cannot be written, stop here (unknown) and leave the
+        // tunnel down, since the Child it would reach is purged.
+        try { journal.done("remote_cleanup", { purged: true, linkId: id }); } catch { return journalFailed(); }
+      } else {
+        let result: Awaited<ReturnType<typeof runner.run>>;
+        try { result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 }); } catch (error) {
+          return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
+        }
+        if (result.code !== 0) return cleanupFailed(disconnectFailed(sshFailureHint(result.stderr)), true);
+        journal.done("remote_cleanup");
       }
     }
     // A forced revoke leaves an ephemeral Child uncleaned. Its tombstone is durable before the key and
@@ -335,13 +384,13 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
       }
     }
     // A journal write that fails here leaves the link and key in place, so the tombstone written above goes too.
-    try { journal.intent("key_revoked"); } catch (error) { dropOwnTombstone(); throw error; }
+    if (cleanup && !intend("key_revoked")) { dropOwnTombstone(); return journalFailed(); }
     if (!revokeKeyIdempotent(ctx, record.apiKeyId)) {
       dropOwnTombstone();
       return fail("key_revoke_failed", "The link key could not be revoked.", 502);
     }
     journal.done("key_revoked");
-    journal.intent("record_removed");
+    if (!intend("record_removed")) return journalFailed();
     let next: LinkStore;
     try {
       next = withConfigMutationLockSync(() => {
@@ -364,7 +413,12 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     await state.supervisor.reload();
     if (next.links.length === 0) await state.listener.close();
     return Response.json({ linkId: id });
-  } finally { release?.(); }
+  } finally {
+    // The hold goes before finish writes the outcome. A revoke that leaves the tunnel down drops its live mark first, so a
+    // reload in between already finds its open entry suspended (revokeSuspendsLink); this is synchronous, nothing interleaves.
+    if (!restarted) journal.release();
+    release?.();
+  }
 }
 
 export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: LinkRouteState): Promise<Response | null> {

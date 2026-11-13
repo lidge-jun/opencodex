@@ -94,6 +94,30 @@ test.each([
   } finally { h.restore(); }
 });
 
+test("a plain add refused by another operation on the alias names a link operation, not an enrollment or revoke", async () => {
+  const h = harness([{ body: probe }, { body: confirm }, { status: 409, body: { error: { code: "link_operation_in_progress", message: "x" } } }]); try {
+    expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
+    const message = h.err.join("\n");
+    expect(message).toContain("Another link operation for this alias is running");
+    expect(message).not.toContain("enrollment or revoke");
+  } finally { h.restore(); }
+});
+
+test("a journalled revoke of a link the Home no longer has exits 4 instead of reporting success", async () => {
+  const h = harness([{ status: 404, body: { error: { code: "link_not_found", message: "x" } } }]); try {
+    expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-9"], h.deps)).toBe(4);
+    expect(h.out).toEqual([]);
+    expect(h.err.join("\n")).toContain("no revoke was journalled");
+  } finally { h.restore(); }
+});
+
+test("a replayed committed enrollment that planted the Child prints planted: true", async () => {
+  const h = harness([{ body: { operationId: OP, state: "committed" } }, { status: 202, body: { ...committed, planted: true } }]); try {
+    expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP, "--json"], h.deps)).toBe(0);
+    expect(JSON.parse(h.out[0]!)).toMatchObject({ linkId: LINK, planted: true, operationId: OP, outcome: "committed" });
+  } finally { h.restore(); }
+});
+
 test("revoke --operation-id sends it and prints the outcome and the purge receipt", async () => {
   const h = harness([{ body: { linkId: LINK, operationId: "detach-1", outcome: "committed", purged: true } }]); try {
     expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-1", "--json"], h.deps)).toBe(0);
@@ -120,5 +144,26 @@ test("operations lists, reads and resolves; resolve needs --yes", async () => {
     expect(h.calls.map(call => call.method + " " + call.path)).toEqual(["GET /api/link/operations", "GET /api/link/operations/" + OP, "POST /api/link/operations/" + OP + "/resolve"]);
     expect(JSON.parse(h.out[0]!)).toEqual({ operations: [entry] });
     expect(JSON.parse(h.out[2]!)).toMatchObject({ resolvedAt: "2026-11-13T00:00:00.000Z" });
+  } finally { h.restore(); }
+});
+
+test.each([
+  ["unknown", "ocx link operations resolve --operation-id " + OP + " --yes"],
+  ["open", "ocx link revoke --link-id " + LINK + " --operation-id " + OP],
+])("a reconnect refused because an %s revoke keeps the link down prints the local next step and exits 5", async (operationState, step) => {
+  const h = harness([{ status: 409, body: { error: { code: "link_suspended", message: "server-chosen text" }, operationId: OP, operationState } }]); try {
+    expect(await runLinkCommand(["reconnect", "--link-id", LINK], h.deps)).toBe(5);
+    const printed = [...h.out, ...h.err].join("\n");
+    expect(printed).toContain(step);
+    expect(printed).not.toContain("server-chosen text");
+  } finally { h.restore(); }
+});
+
+test("a link_suspended answer with a malformed operation id prints no command built from it", async () => {
+  const h = harness([{ status: 409, body: { error: { code: "link_suspended", message: "x" }, operationId: "-rm -rf", operationState: "unknown" } }]); try {
+    expect(await runLinkCommand(["reconnect", "--link-id", LINK], h.deps)).toBe(5);
+    const printed = [...h.out, ...h.err].join("\n");
+    expect(printed).not.toContain("-rm -rf");
+    expect(printed).toContain("ocx link operations");
   } finally { h.restore(); }
 });

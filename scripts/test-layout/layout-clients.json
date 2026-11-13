@@ -244,5 +244,6 @@
   "link-revoke-operation.test.ts": "server",
   "link-operations-routes.test.ts": "server",
   "cli-link-operation.test.ts": "cli",
-  "link-operations-journal.test.ts": "clients"
+  "link-operations-journal.test.ts": "clients",
+  "link-revoke-suspend.test.ts": "clients"
 }

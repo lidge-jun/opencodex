@@ -16,7 +16,7 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
-import { enrollOperationDigest, journalInUse, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { enrollOperationDigest, journalInUse, journalOpenFailure, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
 import { tombstoneNamesAlias } from "../../link/tombstones";
 import { isOperationId } from "../../link/operations-journal";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
@@ -259,6 +259,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     return fail("invalid_body", "alias and optional fingerprint/plant are required.", 400);
   }
   const alias = body.alias;
+  // A repeat replays without probing, so the fingerprint is what names the operation (the CLI requires it too).
+  if (body.operationId !== undefined && typeof body.fingerprint !== "string") return fail("invalid_body", "operationId requires fingerprint.", 400);
   const resolveBinary = ctx.deps.resolveChildBinarySource ?? resolveChildBinarySource;
   // ocx link add --operation-id (structure/remote-link.md, "Operation journal"): replay, recovery and the reserved ids.
   const operation = typeof body.operationId === "string" ? { id: body.operationId, digest: enrollOperationDigest({ alias,
@@ -284,8 +286,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     }
     let journal: EnrollJournal = NO_ENROLL_JOURNAL;
     if (operation) {
-      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch {
-        return fail("operation_journal_failed", "The link operation journal could not be written; nothing was changed.", 500);
+      try { journal = openEnrollJournal(ctx, operation, alias, routeFields(routeOf(confirmed))); } catch (error) {
+        return journalOpenFailure(error);
       }
     }
     return journal.finish(await (async (): Promise<Response> => {
