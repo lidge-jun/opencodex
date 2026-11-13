@@ -29,8 +29,8 @@ export const ROUTE_PROBE_MS = 10_000;
  * grant to its proven readiness (discovery, health and every trigger). A slow route that spends most
  * of the first budget on the ssh handshake still has the whole second one for its readiness execs.
  * Not measured on a real slow route. A candidate's readiness deadline is at most 2 x READY_PROOF_MS
- * after its spawn; the supervisor tick after that deadline stops it (SIGTERM, then SIGKILL after
- * CANDIDATE_KILL_GRACE_MS).
+ * after its spawn; the first supervisor tick at or after that deadline stops it (SIGTERM, then SIGKILL
+ * after CANDIDATE_KILL_GRACE_MS).
  */
 export const READY_PROOF_MS = 30_000;
 /** One correlated trigger at most. */
