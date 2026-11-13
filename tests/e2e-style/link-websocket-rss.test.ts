@@ -17,9 +17,9 @@ import { repoPath } from "../helpers/repo-root";
 // relay. Accepted when both Homes reported their own stall and the WebSocket run's peak-over-idle RSS minus the HTTP
 // run's stays within n reservations (768 MiB at n = 24). Both Homes report their own stall: every link pump waiting
 // for a drain, or every relayed HTTP response waiting for its reader after handing it a chunk (#8600). What both share
-// (fetch read-ahead and request copies under a stalled reader) is a separate, pre-existing cost of the pipeline and
+// (the pipeline's parsed and serialized request under a stalled reader, #8601) is a cost of the pipeline and
 // is not part of this bound.
-// The definition, the measured numbers (R1 to R5) and how they were taken are in structure/remote-link.md.
+// The definition, the measured numbers and how they were taken are in structure/remote-link.md.
 // The peak is the kernel's high-water mark (VmHWM, reset after the idle reading) on Linux 4.0 or later;
 // elsewhere the Home samples RSS on its own event loop, may miss a short peak, reports "sampled", and cannot pass.
 // Any other OCX_LINK_WS_RSS_* setting turns the run into a diagnostic: it prints its numbers and never reports an
