@@ -98,7 +98,31 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 
 ### 從 Home 操作 Child
 
-`ocx link sync`、`ocx link restart-codex` 和 `ocx link update` 會透過連結的 SSH 連線在由 Home 新增的 Child 上執行，並以 JSON 輸出工作。`sync` 執行固定的 `ocx sync --expect-link`（Child 需為 2.93.0 或更新版本）。`restart-codex` 會先同步，再重新啟動 Child 上的 Codex app-server，讓執行中的 Codex 載入目前的目錄；`--scope codex` 也會重新啟動桌面應用程式。重新啟動只能指定一個連結；`restart-codex` 和 `--restart-codex` 需要 `--yes`，而 `ocx link sync --link-id <id> --restart-app-server-only` 不需確認即可重新啟動 app-server。當 Home 正在為該 Child 中繼模型請求時，會略過重新啟動（`restart-skipped:link-active`）。對於早於 2.69 的 Child，非串流請求要到回應開始後才看得到。`update --yes` 會使用 Child 自己的更新程式，把 Child 的 OpenCodex 更新到這個 Home 的版本，絕不會更新到其他版本（Child 需為 2.97.0 或更新版本；npm 和 pnpm 安裝透過其 Node 啟動器套用更新，因此 `ocx link check` 也會在那裡以唯讀方式執行 `node --version`）。一次更新一台 Child，套用成功、失敗或回復後會再次同步；結果未知的套用不會重試也不會同步，請用 `ocx link check` 檢查。正在為該 Child 中繼的請求會中斷。Windows Child 只支援 `sync`，`ocx-child` Child 會將重新啟動和更新回報為不支援。CLI 需要繫結到 loopback 的 Home；在其他 Home 上無法執行這些操作，儀表板也不提供這些操作。詳情與結束代碼請見 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英文）。 此保護僅為盡力而為：在檢查與重新啟動之間開始的請求仍可能被結束，因此需要保留回合時，請先暫停該 Child 上的新請求。 `ocx sync --restart-children`（或 `--restart-children=codex --yes`）在 Home 同步向外傳播時，對所有 Child 或以 `--child <linkId>` 指定的 Child 套用同一規則：每台 Child 都會同步，只有在有中繼請求進行時才略過其重新啟動（`restart-skipped:link-active`）。
+`ocx link sync`、`ocx link restart-codex` 和 `ocx link update` 會透過連結的 SSH 連線在由 Home 新增的 Child 上執行，並以 JSON 輸出工作。`sync` 執行固定的 `ocx sync --expect-link`（Child 需為 2.93.0 或更新版本）。`restart-codex` 會先同步，再重新啟動 Child 上的 Codex app-server，讓執行中的 Codex 載入目前的目錄；`--scope codex` 也會重新啟動桌面應用程式。重新啟動只能指定一個連結；`restart-codex` 和 `--restart-codex` 需要 `--yes`，而 `ocx link sync --link-id <id> --restart-app-server-only` 不需確認即可重新啟動 app-server。當 Home 正在為該 Child 中繼模型請求時，會略過重新啟動（`restart-skipped:link-active`）。對於早於 2.69 的 Child，非串流請求要到回應開始後才看得到。`update --yes` 會使用 Child 自己的更新程式，把 Child 的 OpenCodex 更新到這個 Home 的版本，絕不會更新到其他版本（Child 需為 2.97.0 或更新版本；npm 和 pnpm 安裝透過其 Node 啟動器套用更新，因此 `ocx link check` 也會在那裡以唯讀方式執行 `node --version`）。一次更新一台 Child，套用成功、失敗或回復後會再次同步；結果未知的套用不會重試也不會同步，請用 `ocx link check` 檢查。正在為該 Child 中繼的請求會中斷。Windows Child 只支援 `sync`，`ocx-child` Child 會將重新啟動和更新回報為不支援。CLI 需要繫結到 loopback 的 Home；在其他 Home 上無法執行這些操作，儀表板的 Remote Link 頁面會為由 Home 新增的 Child 提供相同的操作。詳情與結束代碼請見 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英文）。 此保護僅為盡力而為：在檢查與重新啟動之間開始的請求仍可能被結束，因此需要保留回合時，請先暫停該 Child 上的新請求。 Home 也無法判斷 Codex 是否正處在執行工具而非模型請求的回合中，因此在重新啟動該 Child 上的 Codex 或更新其 OpenCodex 之前，請等待進行中的 Codex 回合結束。手動更新會重新啟動該 Child 的 OpenCodex，並結束仍為其轉送的任何回合；自動更新會等到 Child 閒置。 `ocx sync --restart-children`（或 `--restart-children=codex --yes`）在 Home 同步向外傳播時，對所有 Child 或以 `--child <linkId>` 指定的 Child 套用同一規則：每台 Child 都會同步，只有在有中繼請求進行時才略過其重新啟動（`restart-skipped:link-active`）。
+
+### Child 版本與操作
+
+在 Home 上，每個 Remote Link 列都會顯示 Home 最後得知的該 Child 資訊，由 Home 新增的列還帶有控制該 Child 的按鈕。徽章代表：
+
+- Child 的版本，以及旁邊的 `Behind Home (<home version>)`、`Same version as Home` 或 `Newer than Home`；可以套用更新時還會顯示 `Update available: <home version>`。從 Child 自身儀表板開始的連結只顯示版本，沒有版本差異徽章；`ocx-child` Child 一律顯示 `unknown`。
+- 安裝類型（`Desktop app`、`GOAT`、`Source checkout`），本版本未命名的類型以等寬字型顯示原始權杖。
+- `Catalog current` 或 `Catalog out of date`。`Codex restart needed (<n>)` 與 `Codex not running` 徽章只有在 Child 回報其 Codex 狀態後才會出現，該回報將由後續版本加入；目前還沒有 Child 版本會傳送它，因此這兩個徽章現在還不會顯示。
+- 上一次操作，顯示為 `Last <operation>: <state>`，原因以等寬字型顯示；工作佔用該連結期間則顯示正在執行的操作。
+
+當 Home 無法自行更新該 Child 時，該列會說明應該改做什麼：在該 Child 的 OpenCodex Desktop 中使用 Check for Updates、手動更新、透過 `mise` 更新，或交給 GOAT 處理。未知原因會以權杖顯示，而不是猜測的句子。
+
+這四個操作會啟動與 CLI 相同的工作，因此 Child 也需要相同的版本：
+
+- **Check** 像 `ocx link check` 一樣讀取 Child 的安裝資訊。
+- **Sync now** 在該處像 `ocx link sync` 一樣執行固定版本的 `ocx sync --expect-link`。
+- **Restart Codex** 會開啟範圍選擇。`Codex app-servers` 重新啟動 Child 的背景 app-server，使其載入目前目錄；它不會重新整理 Codex 桌面應用程式本身的 app-server，因此這種情況請重新啟動桌面應用程式。`Codex desktop app` 也會結束並重新啟動桌面應用程式，其中開啟的對話會結束。
+- **Update** 像 `ocx link update` 一樣，用 Child 自身的更新程式把 Child 的 OpenCodex 更新到本 Home 的版本。確認文字會說明 Child 的 OpenCodex 會重新啟動、仍為該 Child 轉送的任何回合會結束，且自動更新會等到 Child 閒置。
+
+**Check all** 和 **Update all** 作用於所有符合條件的 Home 新增連結；Update all 仍然一次只處理一台 Child，且絕不針對其他版本。執行中的工作會為每台 Child 顯示一列，包含狀態、更新前後的版本、目錄同步結果與重新啟動結果。工作結束後面板消失，各列重新整理；Home 已不再知道的工作（因為 Home 重新啟動過）會如此說明，並以各列自身的狀態作為答案。工作佔用連結期間，該列的動作與 Disconnect 會停用；伺服器本來也會拒絕該請求。
+
+列表下方的 **Child automation** 面板顯示並編輯與 `ocx link policy` 相同的原則檔案：目錄分發（預設自動）、Codex 重新啟動（預設從不）、更新（預設閒置時自動，本版本尚未啟用）以及閒置時間。儲存時只寫入你變更過的值。如果原則檔案已損毀，面板會說明自動目錄分發與自動更新已關閉，此時儲存會寫入全部設定，使你選擇的模式得以保留。這些控制項不會繞過伺服器：伺服器會在每個工作中重新檢查原則、連結狀態與 Child 活動。
+
+不要連結你不擁有的機器：Home 會用你的 SSH 金鑰在那裡執行命令。
 
 ### 目錄自動分發與 Child 政策
 

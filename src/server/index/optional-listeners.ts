@@ -1,6 +1,9 @@
 import { serviceApiTokenFingerprint } from "../../lib/service-secrets";
-import type { Server } from "bun";
+import type { Server, WebSocketHandler } from "bun";
 import type { OcxConfig } from "../../types";
+import type { RequestPolicyView } from "../auth-cors";
+import type { WsData } from "../ws-bridge";
+import { linkResponsesWebsocketEnabled } from "../../config/feature-flags";
 import {
   createClaudeInterceptLifecycle,
   type ClaudeInterceptLifecycle,
@@ -25,8 +28,10 @@ import { createCatalogPullRecorder, type CatalogPull, type CatalogPullRecorder }
 import type { LinkActivitySnapshot } from "../../link/child-activity";
 import type { CatalogRevisionMonitor } from "../../link/child-catalog-freshness";
 import type { ChildOpsHostBinding } from "../../link/child-ops-host";
+import { createRouteProofRegistry } from "../../link/route-proof";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
+import { linkHomeFeatures } from "../../remote/features";
 
 export interface OptionalListenerStartContext<T> {
   startProxy?: typeof import("../../claude/intercept/connect-proxy").startConnectProxy;
@@ -35,6 +40,9 @@ export interface OptionalListenerStartContext<T> {
   requestedPort?: number;
   maxRequestBodySize: number;
   dispatch: (req: Request, server: Server<T>) => Promise<Response>;
+  /** The shared Responses WebSocket handler and the hub-link policy, for the link WebSocket. */
+  websocket?: WebSocketHandler<WsData>;
+  linkPolicy?: () => RequestPolicyView;
 }
 
 export interface OptionalListenerSet<T> {
@@ -43,10 +51,19 @@ export interface OptionalListenerSet<T> {
   ingressOf(server: Server<T>): ServerIngress | undefined;
   linkRouteAllowed(url: URL, req: Request): boolean;
   linkAdmissionKeyIds(): ReadonlySet<string>;
-  onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
-  notifyAuthenticatedCatalog(apiKeyId: string): void;
+  onAuthenticatedCatalog(listener: (apiKeyId: string, routeProofId?: string) => void): () => void;
+  notifyAuthenticatedCatalog(apiKeyId: string, routeProofId?: string): void;
   peerObservation(linkId: string): import("../../link/peer-report").LinkPeerEntry;
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
+  /** Close one link's Responses WebSockets with 4401; the revoke route calls it after its commit. */
+  closeLinkSockets(linkId: string): number;
+  /** The link's WebSocket activity holds and their reasons; null when nothing holds it (D8). */
+  linkHolds(linkId: string): import("../../link/ws-activity-holds").LinkHoldsSummary | null;
+  /** The operator's clear of one link's activity holds (D8). */
+  clearLinkHolds(linkId: string): import("../../link/ws-activity-holds").ClearHoldsResult;
+  /** The link's live WebSocket counters (design 9.3). */
+  linkTransport(linkId: string): import("../../link/status-projection").LinkWsCounters;
+  linkTraffic(linkId: string): import("../../link/traffic").LinkTrafficCounters;
   /** The last relayed catalog pull of a link in this process; null before start or before any pull. */
   catalogPull(linkId: string): CatalogPull | null;
   /** Write every catalog pull still held in memory; a failed write is logged and kept for the next attempt. */
@@ -86,10 +103,14 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
   const localControl = createLocalControlListener<T>();
   let activeConfig: OcxConfig | undefined;
   let stopJevQuotaActivation: (() => void) | undefined;
+  // Readiness proofs of multi-route candidates: registered by the supervisor, admitted by the
+  // hub-link catalog admission below, valid only under the link's current tunnel generation.
+  const routeProofs = createRouteProofRegistry({ generationOf: linkId => supervisor.connectionGeneration?.(linkId) });
   const supervisor = createLinkSupervisor({
     // Tunnel state changes and their causes reach <configDir>/link/diagnostics.jsonl (bounded).
     diagnostic: recordLinkDiagnostic,
     flushDiagnostics: flushLinkDiagnostics,
+    routeProof: routeProofs,
     apiKeys: () => activeConfig?.apiKeys ?? [],
     revokeApiKey: id => {
       if (!activeConfig) return false;
@@ -107,6 +128,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
     },
   });
   let unregisterSupervisorAdmission: (() => void) | undefined;
+  let unregisterRouteProofs: (() => void) | undefined;
   let supervisorStop: (() => Promise<void>) | undefined;
   let catalogPulls: CatalogPullRecorder | undefined;
   let unregisterCatalogPulls: (() => void) | undefined;
@@ -160,9 +182,14 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
       || linkChildParityRouteAllowed(url, req),
     linkAdmissionKeyIds: () => linkListener.linkAdmissionKeyIds(),
     onAuthenticatedCatalog: listener => linkListener.onAuthenticatedCatalog(listener),
-    notifyAuthenticatedCatalog: apiKeyId => linkListener.notifyAuthenticatedCatalog(apiKeyId),
+    notifyAuthenticatedCatalog: (apiKeyId, routeProofId) => linkListener.notifyAuthenticatedCatalog(apiKeyId, routeProofId),
     peerObservation: linkId => linkListener.peerObservation(linkId),
     linkActivity: (linkId, now) => linkListener.linkActivity(linkId, now),
+    closeLinkSockets: linkId => linkListener.closeLinkSockets(linkId),
+    linkHolds: linkId => linkListener.linkHolds(linkId),
+    clearLinkHolds: linkId => linkListener.clearLinkHolds(linkId),
+    linkTransport: linkId => linkListener.linkTransport(linkId),
+    linkTraffic: linkId => linkListener.linkTraffic(linkId),
     catalogPull: linkId => catalogPulls?.pulled(linkId) ?? null,
     flushCatalogPulls: () => { catalogPulls?.flush(); },
     status: () => linkListener.status(),
@@ -173,6 +200,12 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
       localControl.start({ config: ctx.config, publicPort: ctx.publicPort, dispatch: ctx.dispatch });
       linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize,
         connectionGeneration: linkId => supervisor.connectionGeneration?.(linkId),
+        homeFeatures: () => linkHomeFeatures(activeConfig),
+        ...(ctx.websocket && ctx.linkPolicy ? { responsesWebsocket: {
+          handler: ctx.websocket,
+          enabled: () => activeConfig !== undefined && linkResponsesWebsocketEnabled(activeConfig),
+          policy: ctx.linkPolicy,
+        } } : {}),
         keyFingerprints: apiKeyId => {
           const entry = activeConfig?.apiKeys?.find(candidate => candidate.id === apiKeyId);
           if (!entry?.key) return [];
@@ -183,6 +216,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
         },
       });
       unregisterSupervisorAdmission ??= linkListener.onAuthenticatedCatalog(apiKeyId => supervisor.notifyAuthenticatedRequest?.(apiKeyId));
+      unregisterRouteProofs ??= linkListener.onAuthenticatedCatalog((apiKeyId, routeProofId) => {
+        if (routeProofId !== undefined) routeProofs.admit(apiKeyId, routeProofId);
+      });
       // Only the hub-link relay fires this, so a Home without links records nothing.
       catalogPulls ??= createCatalogPullRecorder({ storePath: linkDeps.storePath });
       unregisterCatalogPulls ??= linkListener.onCatalogServed(served => catalogPulls!.record(served));
@@ -233,6 +269,8 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
       try { await claudeIntercept.stop(); } catch (error) { failure ??= error; }
       unregisterSupervisorAdmission?.();
       unregisterSupervisorAdmission = undefined;
+      unregisterRouteProofs?.();
+      unregisterRouteProofs = undefined;
       unregisterCatalogPulls?.();
       unregisterCatalogPulls = undefined;
       catalogPulls?.flush();
