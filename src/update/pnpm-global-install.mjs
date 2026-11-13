@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, parse, relative, resolve, win32 } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep, win32 } from "node:path";
 import { pnpmInvocationForPath } from "./pnpm-invocation.mjs";
 import { pnpmPackageUsesGlobalStoreLinks, verifyPnpmInstallTree } from "./transactional-install.mjs";
 
@@ -479,8 +479,11 @@ function isPackageInGlobalStore(packagePath, store) {
 /**
  * A legacy group is either inside the listed global group or in a pnpm `.pnpm` virtual store (pnpm
  * 9-11, including an external virtual-store directory). A package outside both whose realpath passes
- * through a versioned `v<N>` directory looks like a store layout whose markers may be missing, so it
- * gets the store proof instead of the marker-based legacy verifier. Unreadable paths also get the proof.
+ * through a pnpm store version directory (`v<N>` directly under a directory named `store` or
+ * `.pnpm-store`, or a `v<N>` directory holding pnpm store content) looks like a store layout whose
+ * markers may be missing, so it gets the store proof instead of the marker-based legacy verifier. An
+ * unrelated `v<N>` ancestor is not store evidence, and such legacy groups keep the released verifier.
+ * Unreadable paths also get the proof.
  */
 function looksLikeUnmarkedStoreLayout(packagePath, globalRoot) {
   let real, group;
@@ -490,7 +493,12 @@ function looksLikeUnmarkedStoreLayout(packagePath, globalRoot) {
   if (rel === "" || (rel !== ".." && !rel.startsWith("../") && !rel.startsWith("..\\") && !isAbsolute(rel))) return false;
   const parts = real.split(/[\\/]+/);
   if (parts.includes(".pnpm")) return false;
-  return parts.some(part => /^v\d+$/i.test(part));
+  return parts.some((part, index) => {
+    if (index === 0 || !/^v\d+$/i.test(part)) return false;
+    if (/^(?:store|\.pnpm-store)$/i.test(parts[index - 1])) return true;
+    const dir = parts.slice(0, index + 1).join(sep) || sep;
+    return ["files", "index", "index.db", "links"].some(name => existsSync(join(dir, name)));
+  });
 }
 
 /**

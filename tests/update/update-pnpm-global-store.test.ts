@@ -373,6 +373,40 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(storeCalls(layout)).toHaveLength(1);
   });
 
+  test("a legacy external group under an unrelated v<N> directory keeps the released verifier with no store query", () => {
+    // <root>/v1/external/g/node_modules: a versioned name that is not a pnpm store. origin/dev accepts it.
+    const globalDir = join(root, "global"), globalRoot = join(globalDir, "v11"), bin = join(root, "bin");
+    const group = join(root, "v1", "external", "g", "node_modules"), pkg = join(group, ...PKG.split("/"));
+    const exposed = join(globalRoot, "node_modules", ...PKG.split("/"));
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: PKG, version: "2.0.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(pkg, "bin", "ocx.mjs"), "x".repeat(2048));
+    for (const name of ["bun", "zod"]) {
+      mkdirSync(join(group, name), { recursive: true });
+      writeFileSync(join(group, name, "package.json"), JSON.stringify({ name }));
+    }
+    writeFileSync(join(group, "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
+    writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
+    link(pkg, exposed);
+    const calls: Call[] = [];
+    const result = resolvePnpmGlobalOwner({
+      packageName: PKG, packagePath: exposed, commandPaths: [join(root, "pnpm")], env: { PNPM_HOME: join(root, "missing-home") },
+      runPnpm: (_command, args) => {
+        calls.push([...args]);
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: exposed } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "config" && args[2] === "global-dir") return { status: 0, stdout: globalDir };
+        if (args[0] === "config" && args[2] === "global-bin-dir") return { status: 0, stdout: bin };
+        if (args[0] === "config") return { status: 0, stdout: "undefined" };
+        return { status: 1 };
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) expect(result.owner.globalStore).toBeUndefined();
+    expect(calls.some(args => args[0] === "store" || args[0] === "--version")).toBe(false);
+  });
+
   test("a pnpm home containing a control character refuses before pnpm runs a store query", () => {
     const layout = globalStoreLayout(root);
     layout.env = { PNPM_HOME: layout.home + "\nrm" };
