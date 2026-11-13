@@ -36,7 +36,7 @@ export function linkPeerReportHeaders(version: string, features: readonly string
   return headers;
 }
 
-function parseFeatureList(value: string | null): string[] | null {
+export function parseFeatureList(value: string | null): string[] | null {
   if (value === null || value === "") return null;
   const ids = value.split(",");
   if (ids.length > MAX_FEATURES || new Set(ids).size !== ids.length || ids.some(id => !FEATURE_ID.test(id))) return null;

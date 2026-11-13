@@ -5,12 +5,20 @@ export const DEFAULT_IDLE_AFTER_MS = 600_000;
 
 export interface LinkActivitySnapshot { inFlight: number; lastDataEndAt: number | null; observedSince: number }
 
+/** One Remote Link WebSocket in the book: it counts in flight while busy (design T4 section 5). */
+export interface LinkSocketActivity {
+  busy(value: boolean): void;
+  end(): void;
+}
+
 export interface LinkActivity {
   /**
    * Start one relayed model request. null = a legacy key admission without a relay session; it counts against every
    * link. The returned end is idempotent and stamps lastDataEndAt.
    */
   begin(linkId: string | null): () => void;
+  /** A link WebSocket; busy while a turn runs or client work is pending. Idempotent end. */
+  beginSocket(linkId: string): LinkSocketActivity;
   snapshot(linkId: string, now: number): LinkActivitySnapshot;
 }
 
@@ -26,7 +34,8 @@ export function isLinkIdle(snapshot: LinkActivitySnapshot, now: number, idleAfte
 interface ActivityEntry { inFlight: number; lastDataEndAt: number | null }
 
 /** In memory, no timers. One small entry per link id that ever relayed; links are bounded by links.json. */
-export function createLinkActivity(deps: { now?: () => number } = {}): LinkActivity {
+/** held: durable link WebSocket holds (src/link/ws-activity-holds.ts), counted as in flight. */
+export function createLinkActivity(deps: { now?: () => number; held?: (linkId: string) => number } = {}): LinkActivity {
   const now = deps.now ?? Date.now;
   const observedSince = now();
   const perLink = new Map<string, ActivityEntry>();
@@ -48,10 +57,27 @@ export function createLinkActivity(deps: { now?: () => number } = {}): LinkActiv
         entry.lastDataEndAt = now();
       };
     },
+    beginSocket(linkId) {
+      const entry = entryFor(linkId);
+      let counted = false;
+      let ended = false;
+      const set = (value: boolean): void => {
+        if (ended || value === counted) return;
+        counted = value;
+        entry.inFlight += value ? 1 : -1;
+        if (!value) entry.lastDataEndAt = now();
+      };
+      return {
+        busy: set,
+        end() { set(false); ended = true; },
+      };
+    },
     snapshot(linkId) {
       const entry = perLink.get(linkId);
       const ends = [entry?.lastDataEndAt ?? null, legacy.lastDataEndAt].filter((value): value is number => value !== null);
-      return { inFlight: (entry?.inFlight ?? 0) + legacy.inFlight, lastDataEndAt: ends.length ? Math.max(...ends) : null, observedSince };
+      let held = 0;
+      try { held = deps.held?.(linkId) ?? 0; } catch { held = 1; }
+      return { inFlight: (entry?.inFlight ?? 0) + legacy.inFlight + held, lastDataEndAt: ends.length ? Math.max(...ends) : null, observedSince };
     },
   };
 }

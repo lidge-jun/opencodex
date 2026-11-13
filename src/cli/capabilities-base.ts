@@ -777,8 +777,8 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["sync"],
-    summary: "Synchronize client catalogs, including Aside profiles through the running server's mutation owner.",
-    routes: [{ method: "POST", path: "/api/client-integrations/aside/sync" }],
+    summary: "Synchronize client catalogs, including Aside profiles and Pi through the running server's mutation owner.",
+    routes: [{ method: "POST", path: "/api/client-integrations/aside/sync" }, { method: "POST", path: "/api/client-integrations/pi/sync" }],
     flags: [
       { name: "--local-only", value: "boolean", summary: "Do not fan out the Home sync to linked Children." },
       { name: "--json", value: "boolean", summary: "Emit the sync fan-out result as JSON." },
