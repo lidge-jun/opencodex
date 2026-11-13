@@ -64,7 +64,7 @@ export function journalFullGuidance(body: unknown): string {
   const text = bound === "unsettled"
     ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " open or unresolved operations. Check the Child of each residual or unknown one, then run ocx link operations resolve --operation-id <id> --yes; repeat an open one with its operation id first. ocx link operations lists them."
     : bound === "recent"
-      ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " operations that settled within the last day and three minutes; retry once the oldest of them is older than that."
+      ? "The link operation journal holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " operations that settled within the last 2 hours and three minutes; retry once the oldest of them is older than that."
       : "The link operation journal is full; ocx link operations lists its entries.";
   return text + " Nothing was changed. (code operation_journal_full)" + (bound ? " (bound " + bound + ")" : "");
 }

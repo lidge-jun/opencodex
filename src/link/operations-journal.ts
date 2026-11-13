@@ -84,24 +84,26 @@ export const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const OPERATION_JOURNAL_MAX_UNSETTLED = 256;
 /**
  * Settled entries (committed, failed_clean, and resolved residual or unknown ones) past this many are pruned before their
- * 30 days, oldest first (by when they finished or were resolved), but only once they are OPERATION_REPLAY_MIN_MS old: a
- * caller that lost an answer can replay it by its operation id for at least a day, whatever else ran meanwhile.
+ * 30 days, oldest first (by when they finished or were resolved), but only once they are past OPERATION_PRUNE_FLOOR_MS:
+ * a repeat with the same operation id within 2 hours of the answer always gets that answer, whatever else ran meanwhile;
+ * later it may be treated as a new operation (an enrollment whose link is there then meets link_exists, a revoke whose
+ * link is gone link_not_found). Unsettled entries are never pruned and the 30-day retention does not depend on this.
  */
 export const OPERATION_JOURNAL_MAX_SETTLED = 256;
-/** How long a settled entry is kept for replay however many operations follow it: far past any retry or lock wait. */
-export const OPERATION_REPLAY_MIN_MS = 24 * 60 * 60 * 1000;
+/** The replay guarantee, however many operations follow an entry: 2 hours, far past any caller's retry of a lost answer. */
+export const OPERATION_REPLAY_MIN_MS = 2 * 60 * 60 * 1000;
 /**
- * The age before which a settled entry is never pruned early: the replay day, plus the longest alias-lock wait and a
- * minute, so a retry that started within the day and then waited on the lock still finds its entry.
+ * The age before which a settled entry is never pruned early: the 2-hour replay window, plus the longest alias-lock wait
+ * and a minute, so a retry that started within the window and then waited on the lock still finds its entry.
  */
 export const OPERATION_PRUNE_FLOOR_MS = OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAIT_MS + 60_000;
 /**
- * At this many entries settled within OPERATION_PRUNE_FLOOR_MS (a day and three minutes) a new operation is refused until
- * the oldest is older. That is a throughput limit as much as a runaway guard: a burst of 1024, and about 42 journalled
- * operations per hour sustained (1024 / 24.05 h). Churn, not machine count, decides whether it is reached: ten disposable
- * machines that each live ten minutes make about 120 add and revoke operations per hour and reach it in about 8.5 hours,
- * then wait for entries to age out. A runaway loop that retries with a fresh id after each failure is held for at most
- * that window instead of locking the Home out for 30 days. With the three bounds the file holds about 256 unsettled plus
+ * At this many entries settled within OPERATION_PRUNE_FLOOR_MS (2 hours and three minutes) a new operation is refused
+ * until the oldest is older. That is a throughput limit as much as a runaway guard: a burst of 1024, and about 500
+ * journalled operations per hour sustained (1024 / 2.05 h). Churn, not machine count, decides whether it is reached: ten
+ * disposable machines that each live ten minutes make about 120 add and revoke operations per hour, about 246 inside the
+ * window, a quarter of the bound. A runaway loop that retries with a fresh id after each failure is held for at most that
+ * window instead of locking the Home out for 30 days. With the three bounds the file holds about 256 unsettled plus
  * 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at most about 1.5 MiB at the limit, so every
  * whole-file rewrite under the config mutation lock stays small.
  */
@@ -297,11 +299,11 @@ export function updateOperationsJournal<T>(path: string, nowMs: number, change: 
 }
 
 export class OperationsJournalFullError extends Error {
-  /** unsettled: too many open or unresolved entries; recent: too many settled within a day. */
+  /** unsettled: too many open or unresolved entries; recent: too many settled within OPERATION_PRUNE_FLOOR_MS. */
   constructor(readonly bound: "unsettled" | "recent") {
     super(bound === "unsettled"
       ? "operations.json holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " unsettled entries"
-      : "operations.json holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " entries settled within a day");
+      : "operations.json holds " + OPERATION_JOURNAL_MAX_RECENT_SETTLED + " entries settled within 2 hours and three minutes");
     this.name = "OperationsJournalFullError";
   }
 }
