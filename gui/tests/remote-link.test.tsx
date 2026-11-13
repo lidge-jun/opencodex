@@ -1304,6 +1304,9 @@ test("a forced removal of a full Child leaves a notice that checks the Child's l
   const notice = host.querySelector(".remote-link-force-removed");
   expect(notice?.textContent).toContain("Link: " + id);
   expect(notice?.textContent).toContain("leave it as it is");
+  // The check and the disconnect are two commands: the notice names the window and keeps the machine of another link untouched.
+  expect(notice?.textContent).toContain("an enrollment that lands between them would be removed");
+  expect(notice?.textContent).toContain("do not disconnect a machine that shows another link");
   expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(["ocx connect status", "ocx disconnect"]);
   await act(async () => { ([...notice!.querySelectorAll("button")].find(item => item.textContent === "Dismiss") as HTMLButtonElement).click(); });
   expect(host.querySelector(".remote-link-force-removed")).toBeNull();
@@ -1355,6 +1358,8 @@ test("a forced removal of a Child of unknown type names no command up front and 
   expect(notice?.textContent).toContain("keeps nothing to recover it from");
   expect(notice?.textContent).toContain("names link " + id);
   expect(notice?.textContent).toContain("leave it as it is");
+  expect(notice?.textContent).toContain("an enrollment that lands between them would be removed");
+  expect(notice?.textContent).toContain("do not disconnect a machine that shows another link");
   // Every location the product plants or finds an ocx-child, with the planted copy kept as the example path.
   for (const where of ["~/.local/bin", "PATH", "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where ocx-child"]) {
     expect(notice?.textContent, where).toContain(where);
