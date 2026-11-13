@@ -241,9 +241,12 @@ function markSubstringSpans(text: string, index: SecretIndex, initial: Uint8Arra
     for (const secret of group) {
       if (secret.length > n - at) break;
       if (scanned.has(secret)) continue;
-      budget.steps -= secret.length;
+      // Charged by the characters actually compared, so a prefix shared by absent secrets costs
+      // little while near-copies of a long secret at every position still exhaust the budget.
+      const matched = matchedLength(text, at, secret);
+      budget.steps -= matched + 1;
       if (budget.steps < 0) return (covered ?? new Uint8Array(n)).fill(1);
-      if (!text.startsWith(secret, at)) continue;
+      if (matched < secret.length) continue;
       covered ??= new Uint8Array(n);
       let selfOverlapping = index.bordered.get(secret);
       if (selfOverlapping === undefined) {
@@ -288,12 +291,24 @@ export function containsIndexedSecret(text: string, index: SecretIndex): boolean
     if (group === undefined) continue;
     for (const secret of group) {
       if (secret.length > n - at) break;
-      budget -= secret.length;
+      const matched = matchedLength(text, at, secret);
+      budget -= matched + 1;
       if (budget < 0) return true;
-      if (text.startsWith(secret, at)) return true;
+      if (matched === secret.length) return true;
     }
   }
   return false;
+}
+
+/**
+ * How many leading characters of secret match text at at (the index already matched the first 8):
+ * secret.length exactly when the whole secret occurs there. A candidate is charged this plus one,
+ * the comparison work it actually cost.
+ */
+function matchedLength(text: string, at: number, secret: string): number {
+  let i = CREDENTIAL_SUBSTRING_MIN_LENGTH;
+  while (i < secret.length && text.charCodeAt(at + i) === secret.charCodeAt(i)) i++;
+  return i;
 }
 
 /** Whether a proper prefix of the secret is also its suffix, so two occurrences can overlap. */
