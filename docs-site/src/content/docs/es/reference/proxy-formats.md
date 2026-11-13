@@ -601,8 +601,16 @@ La historia también se maneja, y de manera diferente, porque perder un mensaje 
 
 Un elemento de razonamiento repetido lleva `encrypted_content` que solo el proveedor y la credencial que lo produjo pueden leer. Cuando opencodex sabe que la conversación fue atendida por última vez por un proveedor diferente, elimina esa mancha antes de enviarla y guarda el resumen del artículo. Si ese proveedor también usó un punto final o una credencial diferente, el identificador `rs_…` del elemento también se elimina, porque nombra un elemento que el nuevo destino no puede buscar. Cuando no puede saber, por ejemplo después de un reinicio proxy, el nuevo destino rechaza el blob en su lugar: OpenAI y Azure OpenAI responden `400 invalid_encrypted_content`. opencodex luego reenvía la solicitud una vez sin el estado de razonamiento del proveedor anterior. El blob se va, y también lo hace el id `rs_…` del elemento de razonamiento, porque ese id nombra un elemento que el proveedor anterior almacenó y el nuevo destino respondería `Item with id 'rs_…' not found`.
 
-Esta recuperación se aplica a todos los adaptadores que hablan el cable Responses, así `openai-responses` y
-El adaptador `azure-openai` se comporta de la misma manera. Después de una recuperación exitosa, los giros posteriores de esa conversación en el mismo destino, deje caer el estado extranjero antes del primer envío para los próximos cinco minutos, sin otro viaje rechazado. El reenvío cuenta con el presupuesto de envío normal de la solicitud. Un ordinario 400 y un 429 nunca se vuelven a intentar de esta manera, y tampoco lo es un 5xx, con una estrecha. excepción: un 502 cuyo cuerpo es la herramienta encriptada exacta descifra el rechazo, enviado para una solicitud que lleva la salida de la herramienta cifrada, obtiene el mismo reenvío único. Un segundo rechazo llega a cliente sin cambios. Si eso sucede, inicie una nueva conversación en el proveedor de destino.
+Esta recuperación se aplica a todos los adaptadores que usan el protocolo Responses,
+incluidos `openai-responses` y `azure-openai`. Si la recuperación funciona, durante los
+siguientes cinco minutos el proxy elimina el estado del proveedor anterior antes del
+primer envío de cada turno de esa conversación al mismo destino. Así evita otro rechazo.
+El reenvío cuenta dentro del límite habitual de envíos de la solicitud. Las respuestas
+400 comunes, 429 y 5xx no se reintentan de esta manera, salvo un caso: si una solicitud
+lleva una salida de herramienta cifrada y recibe un 502 cuyo cuerpo coincide exactamente
+con el rechazo de descifrado de esa salida, se hace el mismo reenvío único. Un segundo
+rechazo se entrega al cliente sin cambios. Si ocurre, inicia una nueva conversación en
+el proveedor de destino.
 
 <a id="malformed-tool-call-history"></a>
 

@@ -1199,12 +1199,24 @@ Para un selector nativo-primero, incluya los identificadores nativos en `modelPi
 
 ## Mensajes de agentes enrutados
 
-Con el [`openai-responses` adaptador](/es/reference/adapters/#openai-responses), Codex
-Los elementos `agent_message` que contienen listas no vacías de partes de texto claro admitidas se convierten en mensajes de usuario cuando `authMode` no es `"forward"`
-(Por ejemplo, `"key"`) Proveedores que utilizan `authMode: "forward"` mantener estos elementos sin cambios.
-`agent_message` es privado al backend ChatGPT Codex, y los destinos enrutados reportado hasta el momento responder a toda la solicitud con
-`422 unknown item type "agent_message"`; Codex reproduce el historial de subagentes en cada giro posterior, por lo que el hilo sigue fallando hasta que se convierte el elemento. El autor y el destinatario siguen siendo metadatos de texto explícito, y se conservan las partes del contenido. Para HTTPS `api.x.ai` y `cli-chat-proxy.grok.com` en el puerto estándar, no hacia adelante El despacho Responses también acepta un resultado hijo de cadena no en blanco y lo convierte en uno
-`input_text` parte. La cadena original, incluyendo el espacio en blanco y las líneas nuevas, se conserva. Otros destinos mantienen sin cambios los mensajes de agente con valor de cadena. Vacío o Las cadenas de solo espacio en blanco permanecen sin cambios, al igual que las formas incompletas y mezcladas cifradas/desconocidas. El contenido encriptado y desconocido no está normalizado; las tareas encriptadas nativas aún requieren el opt-in separado [recuperación de tareas](/es/reference/configuration/agents/#encrypted-v2-task-recovery).
+Con el [adaptador `openai-responses`](/es/reference/adapters/#openai-responses), los elementos
+`agent_message` de Codex se convierten en mensajes de usuario si contienen una lista no vacía
+de partes de texto sin formato admitidas y `authMode` no es `"forward"` (por ejemplo, `"key"`).
+Los proveedores que usan `authMode: "forward"` conservan estos elementos sin cambios.
+`agent_message` es un tipo privado del backend de ChatGPT Codex. Los destinos enrutados
+observados hasta ahora rechazan toda la solicitud con `422 unknown item type "agent_message"`.
+Como Codex reproduce el historial de subagentes en cada turno, el hilo sigue fallando hasta
+que se convierte el elemento. Se conservan las partes del contenido, y el autor y el
+destinatario siguen siendo metadatos de texto explícitos.
+
+Para `api.x.ai` y `cli-chat-proxy.grok.com` por HTTPS en el puerto estándar, el envío de
+Responses sin reenvío de autenticación también convierte un resultado de subagente que sea
+una cadena con contenido en una sola parte `input_text`. La cadena original conserva sus
+espacios y saltos de línea. Los demás destinos mantienen los mensajes con valor de cadena
+sin cambios. Las cadenas vacías o con solo espacios en blanco, las estructuras incompletas
+y las que mezclan contenido cifrado o desconocido se conservan tal como llegan. El contenido
+cifrado o desconocido no se normaliza; las tareas cifradas nativas siguen requiriendo activar
+por separado la [recuperación de tareas](/es/reference/configuration/agents/#encrypted-v2-task-recovery).
 
 Con la recuperación de tareas habilitada, los elementos `NEW_TASK`, `MESSAGE`, `FOLLOWUP_TASK` y `FINAL_ANSWER` reutilizan una asignación en caché solo después de validar el llamador y coincidir con el alcance del subproceso principal. La restauración de reproducción no realiza una nueva solicitud de recuperación ni extiende la caducidad de la caché. El texto cifrado caducado o no visto no se reemplaza. Los nuevos elementos cifrados `NEW_TASK`, `MESSAGE`, `FOLLOWUP_TASK` y `FINAL_ANSWER` utilizan la misma ruta de recuperación opt-in, incluida la entrega `send_message` de padres nativos. El tipo de mensaje, el remitente, el destinatario, el alcance principal y las credenciales del llamante siguen siendo parte de la validación o la identidad de caché. Un `FINAL_ANSWER` sin una línea `Task name` no tiene ninguna dirección de cabecera para verificar, pero su destinatario todavía explora la caché.
 
