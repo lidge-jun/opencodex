@@ -59,13 +59,20 @@ const CONTROL_CHARS = 64;
 /** Marks are newline-delimited on stderr behind a sentinel, since stderr also carries diagnostics. */
 const MARK_PREFIX = "OCXPROBE ";
 /**
+ * Whether the parent's large write to the stdin of a child that never reads it is held by the runtime
+ * (the write returns `false`). On the Windows batch (run 43369456647) it returned `true` at once, and
+ * what a later kill does to such a write was not observed there, so the EPIPE case that depends on a
+ * held write asserts nothing on Windows. The early-exit EPIPE case runs everywhere and passed there.
+ */
+const PARENT_STDIN_WRITE_HELD = process.platform !== "win32";
+/**
  * Where a stdout write to a pipe is asynchronous, which is the precondition of the defect above.
  * Node documents pipe writes from `process.stdout` as asynchronous on POSIX and synchronous on
  * Windows, and Bun behaves the same way: on the Windows batch (run 43369456647) the observe child
  * never returned from its multi-megabyte write while nothing read stdout, the pre-fix early exit
- * delivered every frame intact, and the parent's large stdin write was accepted at once. So the
- * cases that measure a write the runtime is still holding cannot arise there; Windows instead gets
- * the case below that pins the opposite outcome, so the platform is covered rather than skipped.
+ * delivered the frames without a protocol error. So the cases that measure a stdout write the runtime
+ * is still holding cannot arise there; Windows instead gets the case below that pins the opposite
+ * outcome, and the reader-release case runs there with its reader started first.
  */
 const ASYNC_STDOUT_PIPES = process.platform !== "win32";
 
@@ -320,18 +327,24 @@ test("a small payload settles with no reader, which is the buffering and size co
  * assertion on the mark against the reader, because the reader is the one draining the buffer that
  * keeps the write alive.
  */
-test.skipIf(!ASYNC_STDOUT_PIPES)("releasing the reader delivers the whole replay frame and the callback orders the exit", async () => {
+test("releasing the reader delivers the whole replay frame and the callback orders the exit", async () => {
   const content = replayContent(REPLAY_CHARS);
   const expectedText = JSON.stringify(content);
   const probe = spawnProbe("observe", content);
   try {
-    const returned = await probe.waitForMark("replay-returned");
-    expect(returned.accepted).toBe(false);
-
-    // The reader starts here, so the write that was queued now has somewhere to go. Its completion
-    // callback runs only after every earlier byte has left the process, which is what lets the
-    // fixture's `process.exit` follow without cutting the frame.
-    const drained = drain(probe.child);
+    let drained: ReturnType<typeof drain>;
+    if (ASYNC_STDOUT_PIPES) {
+      const returned = await probe.waitForMark("replay-returned");
+      expect(returned.accepted).toBe(false);
+      // The reader starts here, so the write that was queued now has somewhere to go. Its completion
+      // callback runs only after every earlier byte has left the process, which is what lets the
+      // fixture's `process.exit` follow without cutting the frame.
+      drained = drain(probe.child);
+    } else {
+      // A synchronous pipe write returns only once a reader takes the bytes, so the reader has to
+      // start first; the callback, the frames and the exit ordering are then the same claims.
+      drained = drain(probe.child);
+    }
     const settled = await probe.waitForMark("replay-settled");
     const { frames, readError } = await drained;
     const exitCode = await exitCodeOf(probe);
@@ -406,7 +419,7 @@ test("a malformed frame from a child that never exits surfaces the error and is 
   }
 }, 60_000);
 
-test.skipIf(!ASYNC_STDOUT_PIPES)("a child that never reads stdin fails the parent's write with EPIPE instead of aborting an unrelated test", async () => {
+test.skipIf(!PARENT_STDIN_WRITE_HELD)("a child that never reads stdin fails the parent's write with EPIPE instead of aborting an unrelated test", async () => {
   const probe = spawnProbe("no-read", replayContent(REPLAY_CHARS));
   const streamErrors: NodeJS.ErrnoException[] = [];
   try {
