@@ -34,10 +34,11 @@ const invalid = (what: string): never => { throw new Error("invalid link API res
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 /**
- * alias_linked's step, check first: the machine may run that other link now (enrolled again under this alias while the tombstone
- * waited), so it is revoked only when the machine shows it does not; a machine the check cannot read counts as running it.
+ * alias_linked's step: the machine may run that other link now (enrolled again under this alias while the tombstone waited),
+ * and no status check proves it does not (ocx-child's status reads only state.json, so an attach in progress can show no link
+ * or an earlier one; unreadable state shows none). So the other link is left; ending it is the operator's own decision.
  */
-const aliasLinked = (link: string): string => "another Home-initiated link still uses this machine's alias, so the Child there may belong to that link. Do not run ocx-child detach on the machine. Check which link it runs (ocx connect status --json, or the planted ocx-child's connect status --json). Only if it shows neither that link nor a connect or key rotation in progress (that link is stale too), settle any open operation on that link (ocx link operations), revoke it (ocx link revoke), then recover. If it shows that link or a connect or key rotation in progress, if its state cannot be read, or if the machine cannot be reached, treat it as running that link and leave it: this tombstone waits until that link is removed, and recover runs then. A person on this Home can instead forget this tombstone (ocx link recover --forget --link-id " + link + " --yes) once the machine is confirmed clean or gone.";
+const aliasLinked = (link: string): string => "another Home-initiated link still uses this machine's alias, so the Child there may belong to that link. Do not run ocx-child detach on the machine. Leave that link: no status check on the machine can show it is stale, since an attach of it still in progress can show no link or an earlier one, and state that cannot be read shows none. This tombstone waits until that link is removed, and recover runs then. Revoking that link (ocx link revoke, after settling any open operation on it: ocx link operations) ends it and disconnects the machine if the machine runs it, so do that only if you mean to end that link. A person on this Home can instead forget this tombstone (ocx link recover --forget --link-id " + link + " --yes) once the machine is confirmed clean or gone.";
 
 /** The CLI's own words for recover's refusals; any other code is shown as the code itself. */
 const RECOVER_REFUSALS: Record<string, string> = {
