@@ -47,7 +47,7 @@ function link(over: Partial<LinkRecord> = {}): LinkRecord {
   };
 }
 
-function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string } = {}) {
+function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string; holdThrows?: boolean } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: (opts.keyRevokeFails ? [{ id: "fixture-key" }] : []) as OcxConfig["apiKeys"] };
   const knownHosts = join(root, "known_hosts");
@@ -68,7 +68,7 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
       onAuthenticatedCatalog: () => () => {},
     },
     supervisor: {
-      start() {}, ensureStarted: async () => {}, reload: async () => {}, holdLink: () => () => {},
+      start() {}, ensureStarted: async () => {}, reload: async () => {}, holdLink: () => { if (opts.holdThrows) throw new Error("hold failed"); return () => {}; },
       stopLink: async () => { opts.duringStop?.(); }, reconnect: async () => true, status: () => [], stop: async () => {},
     },
   };
@@ -607,6 +607,13 @@ describe("final review follow-ups", () => {
   test("a throw after the early tombstone write (stopLink rejecting) drops that tombstone and keeps the link", async () => {
     const h = harness([link()], { duringStop: () => { throw new Error("tunnel kill failed"); } });
     await expect(h.request("DELETE", "/api/link/" + ID, { force: true })).rejects.toThrow("tunnel kill failed");
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
+  test("a throw while taking the tunnel hold drops the tombstone and keeps the link", async () => {
+    const h = harness([link()], { holdThrows: true });
+    await expect(h.request("DELETE", "/api/link/" + ID, { force: true })).rejects.toThrow("hold failed");
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
     expect(tombstones()).toEqual([]);
   });

@@ -334,10 +334,12 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
   // The first intent (cleanup, or the key for a force revoke) is written before stopLink: a failed write leaves the
   // tunnel as it was and nothing has been touched.
   if (!intend(cleanup ? "remote_cleanup" : "key_revoked")) { dropOwnTombstone(); return journalFailed(); }
-  const release = state.supervisor.holdLink?.(id);
+  // Taken inside the try, so a hold that throws is covered by the finally (the tombstone drop) like any later step.
+  let release: (() => void) | undefined;
   // Set when this revoke restarts the tunnel itself after a cleanup that never ran; every other way out leaves it down.
   let restarted = false;
   try {
+    release = state.supervisor.holdLink?.(id);
     await state.supervisor.stopLink(id);
     const restartTunnel = async (): Promise<void> => {
       restarted = true;
