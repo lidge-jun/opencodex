@@ -158,3 +158,29 @@ export function removeTombstone(linkId: string, path: string = tombstonesPath())
   writeTombstones(path, { version: 1, tombstones: next });
   return true;
 }
+
+/**
+ * Remove exactly `written`, the tombstone this revoke attempt wrote, and only while its link still
+ * exists (the revoke did not commit). A tombstone another process's committed forced revoke wrote
+ * for the same link is left alone. Callers hold the config mutation lock.
+ */
+export function removeOwnTombstone(written: LinkTombstone, linkExists: boolean, path: string = tombstonesPath()): boolean {
+  if (!linkExists) return false;
+  const current = readTombstones(path);
+  const found = current.tombstones.find(t => t.linkId === written.linkId);
+  if (!found || JSON.stringify(found) !== JSON.stringify(parseTombstones(JSON.stringify({ version: 1, tombstones: [written] })).tombstones[0])) return false;
+  return removeTombstone(written.linkId, path);
+}
+
+export type ForgetTombstoneOutcome = "forgotten" | "not_found" | "link_present";
+
+/**
+ * Drop a tombstone without contacting its machine (ocx link recover --forget, run by a person on the
+ * Home). Refused while the link exists, so a forced revoke that wrote its tombstone but has not yet
+ * removed the link cannot lose it. Callers hold the config mutation lock, which that revoke's link
+ * removal also takes.
+ */
+export function forgetTombstone(linkId: string, linkExists: boolean, path: string = tombstonesPath()): ForgetTombstoneOutcome {
+  if (linkExists) return "link_present";
+  return removeTombstone(linkId, path) ? "forgotten" : "not_found";
+}

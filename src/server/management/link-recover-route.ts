@@ -24,19 +24,6 @@ export function handleLinkRecoverList(): Response {
 }
 
 /**
- * {linkId, forget: true}: drop a tombstone without contacting the machine, for one that is gone for
- * good (a destroyed disposable VM). The CLI offers it to a person only (ocx link recover --forget --yes).
- */
-function forgetTombstone(linkId: string): Response {
-  let removed: boolean;
-  try { removed = withConfigMutationLockSync(() => removeTombstone(linkId, tombstonesPath())); } catch {
-    return fail("tombstone_store_unreadable", "The link tombstone file cannot be read or written; it was left as it is.", 503);
-  }
-  if (!removed) return fail("tombstone_not_found", "No forced revoke of this link is waiting for cleanup.", 404);
-  return Response.json({ linkId, outcome: "forgotten" }, noStore);
-}
-
-/**
  * POST /api/link/recover {linkId} | {operationId}: clean an ephemeral Child a forced revoke (a
  * tombstone) or an interrupted enrollment (the O1 journal) left behind. The tombstone or journal
  * entry is settled only on the Child's receipt bound to that link.
@@ -51,9 +38,6 @@ export async function handleLinkRecover(ctx: ManagementContext, state: LinkRoute
   };
   const linkId = only("linkId", LINK_ID);
   const operationId = only("operationId", OPERATION_ID);
-  if (keys.length === 2 && fields.forget === true && typeof fields.linkId === "string" && LINK_ID.test(fields.linkId)) {
-    return forgetTombstone(fields.linkId);
-  }
   if (!linkId && !operationId) return fail("invalid_body", "Send exactly one of linkId (lnk_ and 16 hex digits) or operationId.", 400);
 
   let target: LinkRecoveryTarget;

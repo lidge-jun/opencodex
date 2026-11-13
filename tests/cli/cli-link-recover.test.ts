@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { runLinkCommand, type LinkCliDeps } from "../../src/cli/link";
+import type { LinkStore } from "../../src/link/store";
+import { readTombstones, recordTombstone } from "../../src/link/tombstones";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 // ocx link recover (lane O5): the CLI half of POST /api/link/recover.
@@ -103,16 +105,25 @@ describe("ocx link recover contract", () => {
     expect(await runLinkCommand(["recover", "--list", "--link-id", ID], fixture(waiting).deps)).toBe(2);
   });
 
-  test("--forget is for a person: it needs --yes and refuses an agent or a runner before any request", async () => {
-    const answer = { linkId: ID, outcome: "forgotten" };
-    const noYes = fixture(answer);
-    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID], { ...noYes.deps, agentDriven: () => false })).toBe(2);
-    const agent = fixture(answer);
-    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID, "--yes"], { ...agent.deps, agentDriven: () => true })).toBe(2);
-    expect([noYes.calls, agent.calls]).toEqual([[], []]);
-    const person = fixture(answer);
-    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID, "--yes", "--json"], { ...person.deps, agentDriven: () => false })).toBe(0);
-    expect(JSON.parse(String(person.calls[0]?.init?.body))).toEqual({ linkId: ID, forget: true });
+  test("--forget is for a person on the Home: it needs --yes, refuses an agent or a runner, and never calls the API", async () => {
+    recordTombstone({ linkId: ID, alias: "gone-vm", hostKeyFingerprint: "SHA256:" + "A".repeat(43), revokedAt: "2026-11-01T00:00:00.000Z" });
+    const noLinks = (): LinkStore => ({ version: 1, listenerPort: 18181, links: [] });
+    const noYes = fixture();
+    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID], { ...noYes.deps, readStore: noLinks, agentDriven: () => false })).toBe(2);
+    const agent = fixture();
+    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID, "--yes"], { ...agent.deps, readStore: noLinks, agentDriven: () => true })).toBe(2);
+    expect(readTombstones().tombstones.map(t => t.linkId)).toEqual([ID]);
+    // While the link exists (a forced revoke not yet committed), forget refuses.
+    const present = fixture();
+    const withLink = (): LinkStore => ({ version: 1, listenerPort: 18181, links: [{ id: ID, alias: "gone-vm", direction: "hub-initiated", hostKeyFingerprint: "SHA256:x", tunnelPort: 24500, apiKeyId: "k", createdAt: "2026-11-01T00:00:00.000Z" }] as LinkStore["links"] });
+    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID, "--yes"], { ...present.deps, readStore: withLink, agentDriven: () => false })).not.toBe(0);
+    expect(readTombstones().tombstones.map(t => t.linkId)).toEqual([ID]);
+    const person = fixture();
+    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID, "--yes", "--json"], { ...person.deps, readStore: noLinks, agentDriven: () => false })).toBe(0);
+    expect(readTombstones().tombstones).toEqual([]);
+    expect(JSON.parse(output.mock.calls.flat().join("\n"))).toEqual({ linkId: ID, outcome: "forgotten" });
+    expect([noYes.calls, agent.calls, present.calls, person.calls]).toEqual([[], [], [], []]);
+    expect(await runLinkCommand(["recover", "--forget", "--link-id", ID, "--yes"], { ...fixture().deps, readStore: noLinks, agentDriven: () => false })).not.toBe(0);
     expect(await runLinkCommand(["recover", "--link-id", ID, "--yes"], fixture().deps)).toBe(2);
   });
 });

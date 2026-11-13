@@ -47,7 +47,7 @@ function link(over: Partial<LinkRecord> = {}): LinkRecord {
   };
 }
 
-function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean } = {}) {
+function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: (opts.keyRevokeFails ? [{ id: "fixture-key" }] : []) as OcxConfig["apiKeys"] };
   const knownHosts = join(root, "known_hosts");
@@ -92,7 +92,7 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
     readLinkStore: () => store,
     writeLinkStore: next => { if (opts.storeWriteFails) throw new Error("disk full"); store = next; },
     linkKnownHostsPath: () => knownHosts,
-    revokeApiKey: (cfg, id) => { if (opts.keyRevokeFails) return false; cfg.apiKeys = (cfg.apiKeys ?? []).filter(k => k.id !== id); return true; },
+    revokeApiKey: (cfg, id) => { opts.duringKeyRevoke?.({ dropLink: () => { store = { ...store, links: store.links.filter(l => l.id !== ID) }; } }); if (opts.keyRevokeFails) return false; cfg.apiKeys = (cfg.apiKeys ?? []).filter(k => k.id !== id); return true; },
   };
   async function request(method: string, path: string, body?: unknown) {
     const url = new URL("http://127.0.0.1:10100" + path);
@@ -529,20 +529,28 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     expect(tombstones().map(t => [t.linkId, t.ext])).toEqual([[OTHER_ID, { attachId: "op-7", journal: { state: "residual" } }], [ID, undefined]]);
   });
 
-  test("GET lists what waits without fingerprints; forget drops one without contacting the machine", async () => {
+  test("GET lists what waits without fingerprints; the management API offers no way to forget one", async () => {
     const h = harness([]);
     recordTombstone({ ...tombstone(OTHER_ID), remotePlatform: "windows" });
     const listed = await h.request("GET", "/api/link/recover");
     expect(listed.status).toBe(200);
     expect(await listed.json()).toEqual({ tombstones: [{ linkId: OTHER_ID, alias: "gone-vm", revokedAt: "2026-11-01T00:00:00.000Z", remotePlatform: "windows" }] });
+    // Forgetting is the CLI's, run by a person on the Home; an admin-token caller cannot reach it.
     const forgot = await h.request("POST", "/api/link/recover", { linkId: OTHER_ID, forget: true });
-    expect([forgot.status, await forgot.json()]).toEqual([200, { linkId: OTHER_ID, outcome: "forgotten" }]);
-    expect(tombstones()).toEqual([]);
+    expect([forgot.status, (await errorOf(forgot)).code]).toEqual([400, "invalid_body"]);
+    expect(tombstones().map(t => t.linkId)).toEqual([OTHER_ID]);
     expect(h.commands).toEqual([]);
-    const again = await h.request("POST", "/api/link/recover", { linkId: OTHER_ID, forget: true });
-    expect([again.status, (await errorOf(again)).code]).toEqual([404, "tombstone_not_found"]);
-    const notTrue = await h.request("POST", "/api/link/recover", { linkId: OTHER_ID, forget: "yes" });
-    expect(notTrue.status).toBe(400);
+  });
+
+  test.each([
+    ["another process committed its own forced revoke of the link", true],
+    ["another process replaced the tombstone while the link stays", false],
+  ])("a failed revoke never removes a tombstone it did not write: %s", async (_name, linkGone) => {
+    const theirs = { ...tombstone(ID, "devbox"), revokedAt: "2026-11-02T00:00:00.000Z" };
+    const h = harness([link()], { keyRevokeFails: true, duringKeyRevoke: other => { recordTombstone(theirs); if (linkGone) other.dropLink(); } });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect([res.status, (await errorOf(res)).code]).toEqual([502, "key_revoke_failed"]);
+    expect(tombstones()).toEqual([theirs]);
   });
 
   test("operations on one alias are serialized whatever its case", async () => {

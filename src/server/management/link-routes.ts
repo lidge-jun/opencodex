@@ -5,7 +5,7 @@ import { requireRemotePlatform } from "../../link/remote-platform";
 import { purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
-import { LinkTombstoneLimitError, recordTombstone, removeTombstone, tombstonesPath } from "../../link/tombstones";
+import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, removeTombstone, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
@@ -264,10 +264,16 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     // record go, so ocx link recover can still reach and clean that machine; without it, refuse.
     const tombstoned = force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
     // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: a later
-    // ordinary revoke would otherwise leave one no recover can settle.
-    const dropTombstone = (): void => { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* the link remains; recover refuses link_present */ } };
+    // ordinary revoke would otherwise leave one no recover can settle. Only that exact tombstone, and
+    // only while the link still exists: another process may have committed its own forced revoke.
+    let written: LinkTombstone | null = null;
+    const dropOwnTombstone = (): void => {
+      if (!written) return;
+      const own = written;
+      try { withConfigMutationLockSync(() => { removeOwnTombstone(own, readStoreFor(ctx).links.some(link => link.id === id), tombstonesPath()); }); } catch { /* the link remains; recover refuses link_present */ }
+    };
     if (tombstoned && record.hostKeyFingerprint) {
-      const tombstone = {
+      const tombstone: LinkTombstone = {
         linkId: id, alias: record.alias, hostKeyFingerprint: record.hostKeyFingerprint,
         ...(record.remotePlatform ? { remotePlatform: record.remotePlatform } : {}),
         ...(record.routes ? { routes: [...record.routes] } : {}),
@@ -275,16 +281,16 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         ...(record.exclusive ? { exclusive: true as const } : {}),
         revokedAt: new Date((ctx.deps.now ?? Date.now)()).toISOString(),
       };
-      try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); } catch (error) {
+      try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); written = tombstone; } catch (error) {
         await restartTunnel();
         if (error instanceof LinkTombstoneLimitError) {
-          return fail("tombstone_limit", "The link was kept: too many forced revokes are waiting for cleanup. Recover them, or forget ones whose machine is gone with ocx link recover --forget.", 409);
+          return fail("tombstone_limit", "The link was kept: too many forced revokes are waiting for cleanup. Recover them, or forget ones whose machine is gone with ocx link recover --forget on this Home.", 409);
         }
         return fail("tombstone_write_failed", "The link was kept: the tombstone a forced revoke of an ephemeral Child needs could not be written.", 503);
       }
     }
     if (!revokeKeyIdempotent(ctx, record.apiKeyId)) {
-      if (tombstoned) dropTombstone();
+      dropOwnTombstone();
       return fail("key_revoke_failed", "The link key could not be revoked.", 502);
     }
     let next: LinkStore;
@@ -296,11 +302,11 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         return filtered;
       });
     } catch {
-      if (tombstoned) dropTombstone();
+      dropOwnTombstone();
       return fail("link_remove_failed", "The link record could not be removed.", 503);
     }
-    // A revoke that cleaned the Child itself settles any tombstone an earlier uncommitted forced revoke left.
-    if (!force) dropTombstone();
+    // A revoke that cleaned the Child itself settles any tombstone an earlier forced revoke of this link left.
+    if (!force) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
     // Same task as the commit, before any fallible cleanup: an open link WebSocket must not outlive its link (design T4 2.4).
     state.listener.closeLinkSockets?.(id);
     try { clearCompensationFailed(id, compensationPath()); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }

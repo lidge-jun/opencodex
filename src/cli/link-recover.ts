@@ -2,8 +2,14 @@
  * ocx link recover: clean an ephemeral Child that a forced revoke (a Home tombstone) or an
  * interrupted enrollment (--operation-id, the link operation journal) left behind, through
  * POST /api/link/recover (structure/remote-link.md, "Recover"). --list shows the tombstones still
- * waiting; --forget drops one whose machine is gone for good, for a person only.
+ * waiting; --forget drops one whose machine is gone for good. Forget has no management API: it runs
+ * here, on the Home, for a person only, under the config mutation lock that a forced revoke's link
+ * removal also takes, and is refused while the link still exists.
  */
+import { withConfigMutationLockSync } from "../config/mutation-lock";
+import { linkStorePath } from "../link/paths";
+import { readLinkStore } from "../link/store";
+import { forgetTombstone, tombstonesPath } from "../link/tombstones";
 import { isAgentDriven } from "./agent-driven";
 import { CliUsageError, printData, rejectArgs, takeFlag, takeJsonFlag, takeOption } from "./runtime-api";
 import type { LinkCliDeps } from "./link";
@@ -64,10 +70,15 @@ export async function runLinkRecover(args: string[], deps: LinkCliDeps, linkRequ
     if (!yes) throw new CliUsageError("recover --forget drops the only record that this machine still needs cleanup; confirm with --yes", usage);
     // Forgetting gives up on cleaning a machine: a person decides that, never an agent or a runner.
     if ((deps.agentDriven ?? isAgentDriven)()) throw new CliUsageError("recover --forget must be run by a person at a terminal, not by an agent or a CI runner", usage);
-    const response = await linkRequest<unknown>("/api/link/recover", {
-      method: "POST", redirect: "error", headers: { "content-type": "application/json" }, body: JSON.stringify({ linkId, forget: true }),
-    }, deps);
-    if (!isObject(response) || Object.keys(response).sort().join(",") !== "linkId,outcome" || response.linkId !== linkId || response.outcome !== "forgotten") invalid("recover forget");
+    const readStore = deps.readStore ?? (() => readLinkStore(linkStorePath()));
+    let outcome;
+    try {
+      outcome = withConfigMutationLockSync(() => forgetTombstone(linkId, readStore().links.some(link => link.id === linkId), tombstonesPath()));
+    } catch {
+      throw new Error("The link tombstone file could not be read or updated, or another change holds the configuration lock; it was left as it is. Try again.");
+    }
+    if (outcome === "link_present") throw new Error("This link still exists: revoke it first (ocx link revoke), then forget it if its machine is gone.");
+    if (outcome === "not_found") throw new Error("No forced revoke of this link is waiting for cleanup.");
     printData({ linkId, outcome: "forgotten" }, wantsJson, [`Forgot ${linkId}: its machine will not be cleaned by ocx link recover.`]);
     return;
   }
