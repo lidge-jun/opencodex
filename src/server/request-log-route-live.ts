@@ -1,4 +1,6 @@
+import { vendorContextWindow } from "../codex/catalog/vendor-context";
 import { OAUTH_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
+import type { ContextBreakdownV1 } from "./context-breakdown";
 
 /**
  * Per-account state of a multi-account OAuth pool, captured once when the final request row is
@@ -79,5 +81,37 @@ export function routeLiveTimingField(logCtx: RouteLiveTimingContext, start: numb
   return {
     ...(upstreamSendMs !== undefined ? { upstreamSendMs } : {}),
     ...(redaction !== undefined && Number.isFinite(redaction) && redaction >= 0 ? { privacyRedactionMs: redaction } : {}),
+  };
+}
+
+/** The client body's context-window breakdown, set once at the inbound entry (context-breakdown.ts). */
+export interface ContextBreakdownContext {
+  contextBreakdown?: ContextBreakdownV1;
+}
+
+export interface ContextBreakdownEntryField {
+  contextBreakdown?: ContextBreakdownV1;
+  /** The serving model's context window in tokens, when the route's adapter knows it. */
+  contextWindow?: number;
+}
+
+/**
+ * Carries the breakdown to the final row, with the window of the model that served it. The window
+ * lookup is the caller's own (request-log.ts owns it) and runs only when a breakdown exists.
+ */
+export function contextBreakdownField(
+  logCtx: ContextBreakdownContext,
+  served: { adapter: string; model?: string } | undefined,
+  windowOf: (adapter: string, model: string | undefined) => number | undefined,
+): ContextBreakdownEntryField {
+  const contextBreakdown = logCtx.contextBreakdown;
+  if (!contextBreakdown) return {};
+  // The adapter-specific window wins; otherwise the bundled vendor table names most hosted models.
+  const contextWindow = served
+    ? windowOf(served.adapter, served.model) ?? (served.model ? vendorContextWindow(served.model) : undefined)
+    : undefined;
+  return {
+    contextBreakdown,
+    ...(contextWindow !== undefined && Number.isFinite(contextWindow) && contextWindow > 0 ? { contextWindow } : {}),
   };
 }
