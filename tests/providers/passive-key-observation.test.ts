@@ -18,6 +18,10 @@ import * as decision from "../../src/providers/quota-decision-snapshot";
 import { storeProviderKeyInKeychain } from "../../src/providers/key-store";
 import { providerKeychainEntry } from "../../src/providers/api-key-resolve";
 import { MistralBudgetPacer, resolveMistralTransport } from "../../src/providers/mistral-transport";
+import { getConfigDir } from "../../src/config/paths";
+import { createHash } from "node:crypto";
+
+const quotaId = (name: string, id: string) => createHash("sha256").update(JSON.stringify([getConfigDir(), name, id])).digest("hex");
 
 function fixture(name: string): OcxConfig {
   return { port: 0, defaultProvider: name, providers: { [name]: { adapter: "openai-chat", authMode: "key",
@@ -175,7 +179,7 @@ test("keychain write ABA fences the affected account but preserves its sibling",
     const afterMutation = reads;
     release();
     await Promise.all(pending);
-    expect(listPassiveKeyLimits(config).map(row => `${row.keyId}/${row.model}`).sort()).toEqual(["sibling/cached", "sibling/pending"]);
+    expect(listPassiveKeyLimits(config).map(row => `${row.keyId}/${row.model}`).sort()).toEqual([`${quotaId(name, "sibling")}/cached`, `${quotaId(name, "sibling")}/pending`]);
     expect(reads).toBe(afterMutation);
   } finally { release(); setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
 });
@@ -310,7 +314,7 @@ test("an attempted keychain write that mutates then throws revokes only its own 
     expect(listPassiveKeyLimits(config)).toHaveLength(2);
     expect(() => providerKeychainEntry(`${name}/first`).setPassword("synthetic-replacement")).toThrow();
     const afterWrite = reads;
-    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual(["sibling"]);
+    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual([quotaId(name, "sibling")]);
     expect(reads).toBe(afterWrite);
   } finally { setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
 });
@@ -356,7 +360,7 @@ test("a malformed keychain credential cannot break another account's passive pro
   try {
     const send = passiveKeyPhysicalFetch(trusted(async () => response()), config, "malformed-passive", routedProviderConfig("malformed-passive", provider));
     await send("https://api.groq.com/openai/v1/chat/completions", init);
-    expect(listPassiveKeyLimits(config)).toMatchObject([{ keyId: "good", model: "model" }]);
+    expect(listPassiveKeyLimits(config)).toMatchObject([{ keyId: quotaId("malformed-passive", "good"), model: "model" }]);
   } finally { setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
 });
 
@@ -421,12 +425,12 @@ test("a polled env A to B to A transition revokes cached and in-flight observati
     await sibling("https://api.groq.com/openai/v1/chat/completions", { ...init, headers: { authorization: "Bearer synthetic-sibling" } });
     const pending = send("https://api.groq.com/openai/v1/chat/completions", { ...init, body: JSON.stringify({ model: "pending" }) });
     process.env.OCX_TEST_PASSIVE_ABA = "replacement-synthetic-key";
-    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual(["sibling"]);
+    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual([quotaId(name, "sibling")]);
     process.env.OCX_TEST_PASSIVE_ABA = "synthetic-key";
-    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual(["sibling"]);
+    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual([quotaId(name, "sibling")]);
     release();
     await pending;
-    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual(["sibling"]);
+    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual([quotaId(name, "sibling")]);
     expect(sends).toBe(3);
   } finally { release(); delete process.env.OCX_TEST_PASSIVE_ABA; observations.clearPassiveKeyLimits(); }
 });
@@ -449,8 +453,8 @@ test("incarnation eviction revokes an outstanding response without affecting new
     await pending;
     const rows = listPassiveKeyLimits(config);
     expect(rows).toHaveLength(512);
-    expect(rows.some(row => row.keyId === "id-0")).toBe(false);
-    expect(rows.some(row => row.keyId === "id-512")).toBe(true);
+    expect(rows.some(row => row.keyId === quotaId("bounded-incarnations", "id-0"))).toBe(false);
+    expect(rows.some(row => row.keyId === quotaId("bounded-incarnations", "id-512"))).toBe(true);
   } finally { release(); observations.clearPassiveKeyLimits(); }
 });
 
@@ -689,8 +693,8 @@ test.each(["pause", "add", "add-new", "remove-readd"] as const)("%s retires only
   release();
   await Promise.all(pending);
   const rows = listPassiveKeyLimits(config).map(({ provider, keyId, model }) => `${provider}/${keyId}/${model}`).sort();
-  const expected = [`${name}/${siblingId}/cached`, `${name}/${siblingId}/pending`, `other/${firstId}/cached`, `other/${firstId}/pending`];
-  if (operation === "add-new") expected.push(`${name}/${firstId}/cached`, `${name}/${firstId}/pending`);
+  const expected = [`${name}/${quotaId(name, siblingId)}/cached`, `${name}/${quotaId(name, siblingId)}/pending`, `other/${quotaId("other", firstId)}/cached`, `other/${quotaId("other", firstId)}/pending`];
+  if (operation === "add-new") expected.push(`${name}/${quotaId(name, firstId)}/cached`, `${name}/${quotaId(name, firstId)}/pending`);
   expect(rows).toEqual(expected.sort());
   observations.clearPassiveKeyLimits();
 });

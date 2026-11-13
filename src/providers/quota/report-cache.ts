@@ -22,6 +22,26 @@ import type { ProviderQuota, ProviderRoutingQuota } from "../quota-types";
 export const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
 export const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boolean>();
+export const reportObservationIdentity = new WeakMap<ProviderQuotaReport, string>();
+const reportOwners = new WeakMap<ProviderQuotaReport, { name: string; signature: string; credentialBound: boolean }>();
+function ownerSignature(provider: OcxProviderConfig, credentialBound = false): string {
+  return createHash("sha256").update(JSON.stringify([provider.adapter, provider.baseUrl, provider.authMode ?? "key", credentialBound ? undefined : provider.apiKey, provider.disabled])).digest("hex");
+}
+export function captureReportOwner(name: string, provider: OcxProviderConfig): (report: ProviderQuotaReport) => void {
+  const owner = { name, signature: ownerSignature(provider), credentialBound: false };
+  return report => { if (!reportOwners.has(report)) reportOwners.set(report, owner); };
+}
+export async function collectOwnedReport(name: string, provider: OcxProviderConfig, probe: () => Promise<ProviderQuotaProbeResult>): Promise<ProviderQuotaProbeResult> {
+  const bind = captureReportOwner(name, provider);
+  const result = await probe();
+  if (result && typeof result !== "symbol") bind(result);
+  return result;
+}
+function reportOwnerCurrent(report: ProviderQuotaReport, provider: OcxProviderConfig | undefined, passive = false): boolean {
+  const owner = reportOwners.get(report);
+  return !!owner && !!provider && !provider.disabled && owner.name === report.provider
+    && !(passive && isKeychainReference(provider.apiKey)) && owner.signature === ownerSignature(provider, owner.credentialBound);
+}
 /** The measured quota a reset detector should observe when the shown quota is an estimate (pooled rows). */
 export const observedQuotaFor = new WeakMap<ProviderQuotaReport, ProviderQuota>();
 export const routingEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
@@ -54,13 +74,17 @@ export function keyReportCredentialCurrent(value: ProviderQuotaReport, provider:
 export function validateJoinedReports(response: ProviderQuotaResponse, config: OcxConfig): ProviderQuotaResponse {
   return { ...response, reports: response.reports.filter(item => {
     const provider = config.providers[item.provider];
-    return !!provider && !provider.disabled && isProviderQuotaReportCurrent(item)
+    return reportOwnerCurrent(item, provider) && isProviderQuotaReportCurrent(item)
       && keyReportCredentialCurrent(item, provider);
   }) };
 }
 /** Only the live Antigravity probe binds this projection; display/last-good rows cannot create it. */
 export const antigravityEvidence = new WeakMap<ProviderQuotaReport, { receipt: AntigravityQuotaReceipt; windows: readonly DecisionQuotaWindow[] }>();
 export let providerQuotaBeforePublishForTests: (() => void | Promise<void>) | null = null;
+export let providerQuotaBeforeObservationForTests: (() => void | Promise<void>) | null = null;
+export function setProviderQuotaBeforeObservationForTests(hook: (() => void | Promise<void>) | null): void {
+  providerQuotaBeforeObservationForTests = hook;
+}
 
 /** Test-only seam for identity/config invalidation after probes but before publication. */
 export function setProviderQuotaBeforePublishForTests(
@@ -368,6 +392,7 @@ export function keyReport(
   if (options?.bindCredential === true) {
     keyReportCredentialIds.set(result, createHash("sha256").update(probedCredential).digest("hex"));
     keyReportDestinations.set(result, { adapter: config.adapter, baseUrl: config.baseUrl });
+    reportOwners.set(result, { name: provider, signature: ownerSignature(config, true), credentialBound: true });
   }
   if (!inferenceQuota) return result;
   const binding = providerQuotaRoutingBinding(provider, config, probedCredential);
@@ -438,7 +463,7 @@ export function heldProviderQuotaReports(config: OcxConfig): ProviderQuotaRespon
     generatedAt: held?.generatedAt ?? Date.now(),
     reports: (held?.reports ?? []).filter(item => {
       const provider = config.providers[item.provider];
-      return !!provider && isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, provider, true);
+      return reportOwnerCurrent(item, provider, true) && isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, provider, true);
     }),
   };
 }

@@ -51,6 +51,10 @@ export function clearPassiveKeyLimits(name?: string, home: string = getConfigDir
 function accountScope(home: string, name: string, id: string): string {
   return new Bun.CryptoHasher("sha256").update(JSON.stringify([home, name, id])).digest("hex");
 }
+/** Stable opaque identifier for quota presentation, scoped to this installation and provider. */
+export function passiveKeyQuotaId(name: string, id: string, home: string = getConfigDir()): string {
+  return accountScope(home, name, id);
+}
 
 /** Retire all models and outstanding reservations for one account incarnation. */
 export function clearPassiveKeyAccount(name: string, id: string, home: string = getConfigDir()): void {
@@ -239,7 +243,7 @@ export function listPassiveKeyLimits(config: OcxConfig) {
         const owner = currentOwner(home, name, provider, entry.id, entry.key);
         if (!owner) continue;
         for (const reading of passiveKeyLimits.list(home, owner, vendor, Date.now())) {
-          result.push({ provider: name, keyId: entry.id, ...reading });
+          result.push({ provider: name, keyId: passiveKeyQuotaId(name, entry.id, home), ...reading });
         }
       } catch { /* One invalid account cannot reject the whole projection. */ }
     }

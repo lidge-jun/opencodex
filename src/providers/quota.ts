@@ -18,10 +18,10 @@ import {
 import { mapQuotaRoster, readProviderApiKeyQuotas, type ProviderApiKeyQuota } from "./quota-key-accounts";
 import { mistralUnknownBudgetWindows } from "./quota-mistral-budget";
 import type { OcxConfig, OcxProviderConfig } from "../types";
-import { isPassiveRead } from "../lib/passive-read";
+import { isPassiveRead, runPassiveReadSync } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent, observedQuotaFor,
+  accountReportCurrent, observedQuotaFor, collectOwnedReport, providerQuotaBeforeObservationForTests, reportObservationIdentity,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -183,6 +183,7 @@ let pendingProviderObservation: Promise<void> = Promise.resolve();
  * that binding keep the legacy id byte for byte, so their persisted baselines survive.
  */
 function providerObservationAccountKey(provider: string, config: OcxConfig, report?: ProviderQuotaReport): string {
+  if (report && reportObservationIdentity.has(report)) return `${provider}\u0000owner:${reportObservationIdentity.get(report)}`;
   const oauthAccountId = getAccountSet(provider)?.activeAccountId;
   if (oauthAccountId !== undefined) return `${provider}\u0000${oauthAccountId}`;
   const probed = report && keyReportCredentialIds.get(report);
@@ -209,6 +210,7 @@ function notifyProviderQuotaSnapshot(
   // reports.
   // Claude CLI rows are display-only: one reset key would span every account that signs in.
   const observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
+    report,
     scope: report.provider,
     accountKey: providerObservationAccountKey(report.provider, config, report),
     quota: observedQuotaFor.get(report) ?? report.quota,
@@ -217,10 +219,10 @@ function notifyProviderQuotaSnapshot(
   if (observations.length === 0) return;
   pendingProviderObservation = pendingProviderObservation
     .then(async () => {
-      const observer = await import("../quota/reset-observer");
+      await providerQuotaBeforeObservationForTests?.(); const observer = await import("../quota/reset-observer");
       if (!observer.hasQuotaResetSink()) return;
       const { providerWindowObservations } = await import("../quota/window-mapping");
-      for (const observation of observations) observer.observeQuotaSnapshot({ scope: observation.scope, accountKey: observation.accountKey, windows: providerWindowObservations(observation.quota), ...(observation.retainUnknownWindows ? { retainUnknownWindows: observation.retainUnknownWindows } : {}) });
+      for (const observation of observations) if (runPassiveReadSync(() => isProviderQuotaReportCurrent(observation.report))) observer.observeQuotaSnapshot({ scope: observation.scope, accountKey: observation.accountKey, windows: providerWindowObservations(observation.quota), ...(observation.retainUnknownWindows ? { retainUnknownWindows: observation.retainUnknownWindows } : {}) });
     })
     .catch(() => {
       // Detection is best-effort: a quota refresh must never fail because of it. Swallowing
@@ -276,9 +278,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     const previousCache = getProviderQuotaReportCache();
     const previous = previousCache && previousCache.key === key ? previousCache.response.reports : [];
     const probeResults = await Promise.all(
-      Object.entries(config.providers).map(([name, provider]) => (
-        maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
-      )),
+      Object.entries(config.providers).map(([name, provider]) => collectOwnedReport(name, provider, () => maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot))),
     );
     await providerQuotaBeforePublishForTests?.();
     let commitKey: string | null = null;
@@ -418,12 +418,12 @@ async function fetchExplicitAccountQuota(provider: string, accountId: string, fo
   return flight;
 }
 async function fetchExplicitCurrentQuota(provider: string, config: OcxProviderConfig, liveConfig: OcxConfig): Promise<ProviderQuotaProbeResult> {
-  const id = getAccountSet(provider)?.activeAccountId;
+  const selection = getAccountSet(provider), id = selection?.activeAccountId;
   if (!id) return null;
   const read = await readExplicitAccountQuota(provider, id, config);
   if (!read) return null;
-  const isCurrent = () => liveConfig.providers[provider] === config
-    && read.isCurrent() && getAccountSet(provider)?.activeAccountId === id;
+  // A switch away and back keeps the same active id, so the revision is what proves this caller's selection survived.
+  const isCurrent = () => liveConfig.providers[provider] === config && read.isCurrent() && getAccountSet(provider)?.activeAccountId === id && getAccountSet(provider)?.selectionRevision === selection.selectionRevision;
   if (!isCurrent()) return TERMINAL_QUOTA_FAILURE;
   if (read.result && typeof read.result !== "symbol") accountReportCurrent.set(read.result, isCurrent);
   return read.result;

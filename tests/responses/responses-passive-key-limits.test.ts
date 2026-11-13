@@ -19,9 +19,29 @@ import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { MistralBudgetPacer } from "../../src/providers/mistral-transport";
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
+import { runPassiveRead } from "../../src/lib/passive-read";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+test("local and passive quota responses hide credential-shaped account ids", async () => {
+  const secretId = ["sk", "synthetic-credential-shaped-account-id"].join("-");
+  const config = getDefaultConfig();
+  config.providers = { fixture: { adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authMode: "key",
+    apiKey: "synthetic-key", apiKeyPool: [{ id: secretId, key: "synthetic-key" }], models: ["model"], liveModels: false } };
+  const physical = markPassiveKeyTransparent((async () => new Response(null, { headers: { "x-ratelimit-remaining-requests": "5" } })) as typeof fetch);
+  try {
+    await observations.passiveKeyPhysicalFetch(physical, config, "fixture", routedProviderConfig("fixture", config.providers.fixture!))(
+      "https://api.groq.com/openai/v1/chat/completions", { method: "POST", headers: { authorization: "Bearer synthetic-key" }, body: JSON.stringify({ model: "model" }) });
+    const url = new URL("http://localhost/api/provider-quotas");
+    const read = async () => (await handleManagementAPI(new ManagementRequest(url), url, config))!.json();
+    const local = await read(), passive = await runPassiveRead(read);
+    expect(local.passiveKeyLimits).toHaveLength(1);
+    expect(passive.passiveKeyLimits).toEqual(local.passiveKeyLimits);
+    expect(JSON.stringify(local)).not.toContain(secretId);
+    expect(JSON.stringify(passive)).not.toContain(secretId);
+  } finally { observations.clearPassiveKeyLimits(); }
+});
 
 test("keychain-backed Responses account reports its wire limits without additional OS reads", async () => {
   const config = getDefaultConfig();
@@ -72,7 +92,7 @@ test("provider quotas isolate a malformed unobserved keychain account", async ()
     const url = new URL("http://localhost/api/provider-quotas");
     const report = await handleManagementAPI(new ManagementRequest(url), url, config);
     expect(report!.status).toBe(200);
-    expect((await report!.json()).passiveKeyLimits).toMatchObject([{ provider: "fixture", keyId: "good", model: "model" }]);
+    expect((await report!.json()).passiveKeyLimits).toMatchObject([{ provider: "fixture", keyId: observations.passiveKeyQuotaId("fixture", "good"), model: "model" }]);
     expect(reads).toBe(0);
     expect(sends).toBe(1);
   } finally { setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
@@ -242,7 +262,7 @@ test("an in-flight response stays attributed to its key after another key become
   config.providers["rotating-fixture"]!.apiKey = "second-synthetic-key";
   finish();
   await (await pending).text();
-  expect(observations.listPassiveKeyLimits(config)).toMatchObject([{ provider: "rotating-fixture", keyId: "first", model: "wire-model", windows: [{ remaining: 42 }, { dimension: "tokens", window: "minute" }] }]);
+  expect(observations.listPassiveKeyLimits(config)).toMatchObject([{ provider: "rotating-fixture", keyId: observations.passiveKeyQuotaId("rotating-fixture", "first"), model: "wire-model", windows: [{ remaining: 42 }, { dimension: "tokens", window: "minute" }] }]);
 });
 
 for (const scenario of [
