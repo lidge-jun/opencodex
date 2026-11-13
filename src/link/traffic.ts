@@ -45,21 +45,23 @@ export interface LinkTrafficCounters {
   epoch: string;
   /** Changes every time this link's counters start from zero within one epoch; compare two reads only when epoch and generation match. */
   generation: number;
-  /** Relayed requests on this link. */
+  /** Relayed requests on this link, a link socket counting as one. */
   requests: number;
   /**
    * Of those, requests that ended before their response body did (abort, cancel, error, refusal),
-   * and on a Child also requests whose request-body upload did not finish.
+   * and on a Child also requests whose request-body upload did not finish; a link socket counts when
+   * it ended without a close frame (and on a Child also after its own overload, binary or protocol close).
    */
   incomplete: number;
   /**
-   * Request-body bytes toward the Home. Child: bytes whose socket write completed, a lower bound
-   * while `incomplete` > 0. Home: the declared Content-Length of each request.
+   * Request-body bytes toward the Home, or a link socket's message payloads toward it. Child: bytes
+   * whose socket write completed, a lower bound while `incomplete` > 0. Home: the declared
+   * Content-Length of each relayed request, or the payload of each message a link socket received.
    */
   toHomeBytes: number;
-  /** Response-body bytes from the Home. */
+  /** Response-body bytes from the Home, or a link socket's message payloads from it. */
   fromHomeBytes: number;
-  /** How toHomeBytes was measured: socket writes completed (Child) or declared Content-Length (Home). */
+  /** How toHomeBytes was measured for relayed HTTP: socket writes completed (Child) or declared Content-Length (Home); a link socket's message payloads count the same on both. */
   toHomeSource: "relayed" | "content-length";
   /** Requests whose body bytes toHomeBytes could not include (a Home request without Content-Length). */
   toHomeUncounted: number;
