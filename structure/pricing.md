@@ -85,7 +85,7 @@ older build or served by an older proxy, where the marker and reasons were alrea
 credit-priced row whose count or price cannot produce a representable amount is unavailable with
 `credit_cost_unrepresentable` rather than falling back to a token estimate. A missing credit reading
 with no output is also unavailable because the charge is unknown. Combined attempts retain incomplete
-credit evidence when any attempt lacks a reading and another has one, including a retry HTTP failure.
+credit evidence when any attempt lacks a reading and another has one, including a retry HTTP failure. The empty-completion and terminal guards count sent attempts even when the whole usage object is absent; their initial accumulator is not an attempt.
 A token-priced row whose
 normalized token count exceeds the bound is `invalid_usage`.
 `tests/usage/usage-provider-credit-price.test.ts`, `tests/server/management-api-logs-metrics.test.ts`

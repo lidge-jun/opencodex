@@ -160,9 +160,13 @@ export function emptyCompletionRetryFailedEvent(
 export function mergeUsage(
   first: OcxUsage | undefined,
   second: OcxUsage | undefined,
+  firstIsAttempt = false,
 ): OcxUsage | undefined {
-  if (!first) return second;
-  if (!second) return first;
+  if (!first || !second) {
+    const usage = first ?? second;
+    const providerCredits = firstIsAttempt ? sumCreditReadings([first?.providerCredits, second?.providerCredits]) : usage?.providerCredits;
+    return usage && { ...usage, ...(providerCredits !== undefined ? { providerCredits } : {}) };
+  }
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
     const left = first[key];
     const right = second[key];
@@ -237,7 +241,7 @@ export async function* guardEmptyCompletionEventStream(
   let usage: OcxUsage | undefined;
 
   const withUsage = (event: AdapterEvent & { usage?: OcxUsage }): AdapterEvent => {
-    const merged = mergeUsage(usage, event.usage);
+    const merged = mergeUsage(usage, event.usage, retries > 0);
     return merged ? { ...event, ...(merged ? { usage: merged } : {}) } : event;
   };
   const releaseHeld = (): AdapterEvent[] => {
@@ -276,7 +280,7 @@ export async function* guardEmptyCompletionEventStream(
         continue;
       }
       if (event.type === "done") {
-        usage = mergeUsage(usage, event.usage);
+        usage = mergeUsage(usage, event.usage, retries > 0);
         if (event.stopReason !== undefined && VISIBLE_INCOMPLETE_STOP_REASONS.has(event.stopReason)) {
           // Rendered as response.incomplete: a stated failure, not the silent
           // empty success this guard exists to catch.
@@ -308,7 +312,7 @@ export async function* guardEmptyCompletionEventStream(
           // The upstream failed the turn before any text or tool call (#6876: Vertex dropped a
           // malformed function call). Nothing actionable reached the client, so this is the same
           // replay-safe shape as an empty completion: retry the identical turn once.
-          usage = mergeUsage(usage, event.usage);
+          usage = mergeUsage(usage, event.usage, retries > 0);
           markRetryBoundary();
           retries += 1;
           try {
@@ -327,7 +331,7 @@ export async function* guardEmptyCompletionEventStream(
           // the stream's own error framing — same move as the router's
           // empty_completion_retry_failed. Client cancels (499) pass through, and a
           // replay-safe failure that repeats keeps its own, more specific message.
-          yield emptyCompletionRetryFailedEvent(mergeUsage(usage, event.usage), true);
+          yield emptyCompletionRetryFailedEvent(mergeUsage(usage, event.usage, retries > 0), true);
           return;
         }
         yield* releaseHeld();
