@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import { enrollOperationDigest, openEnrollJournal } from "../../src/server/management/link-operation";
 import { acquireAliasLock, type AliasLockDeps } from "../../src/link/alias-lock";
-import { OPERATION_JOURNAL_MAX_ENTRIES, readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { OPERATION_JOURNAL_MAX_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -491,28 +491,42 @@ describe("review round 3", () => {
 });
 
 describe("journal size limit", () => {
-  const filled = (count: number): LinkOperation[] => Array.from({ length: count }, (_, i) => entry({
-    operationId: "old-" + i, alias: "pen-old-" + i, state: "committed", finishedAt: new Date(NOW).toISOString(), digest: "d".repeat(64) }));
+  // Distinct, increasing finish times, so "oldest first" is well defined.
+  const filled = (count: number, shape: Partial<LinkOperation> = {}): LinkOperation[] => Array.from({ length: count }, (_, i) => entry({
+    operationId: "old-" + i, alias: "pen-old-" + i, state: "committed", finishedAt: new Date(NOW - (count - i) * 1000).toISOString(), digest: "d".repeat(64), ...shape }));
 
-  test("a new journalled apply past the limit is refused before any effect; a plain apply is not affected", async () => {
+  test("settled entries never block a new operation: past the bound the oldest are pruned instead", async () => {
     const h = harness();
-    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_ENTRIES) });
+    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_SETTLED) });
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+    expect((await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP })).status).toBe(202);
+    const kept = h.journal().operations;
+    expect(kept).toHaveLength(OPERATION_JOURNAL_MAX_SETTLED);
+    expect(kept.map(op => op.operationId)).not.toContain("old-0");
+    expect(kept.find(op => op.operationId === OP)!.state).toBe("committed");
+  });
+
+  test("past the bound of open and unresolved residual or unknown entries a new journalled apply is refused before any effect, naming resolve; a plain apply is not affected", async () => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_UNSETTLED, { state: "unknown" }) });
     expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
     expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
     const before = h.ssh.length;
     const refused = await h.call("apply", { alias: ALIAS, fingerprint, operationId: OP });
     expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_journal_full" });
+    expect((refused.body.error as { message: string }).message).toContain("ocx link operations resolve");
     expect(h.ssh.length).toBe(before);
     expect(h.config.apiKeys).toEqual([]);
     expect((await h.call("apply", { alias: ALIAS, fingerprint })).status).toBe(202);
   });
 
-  test("marks on an operation already in the journal are never refused at the limit", () => {
+  test("marks on an operation already in the journal are never refused at the bound", () => {
     const h = harness();
-    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_ENTRIES - 1) });
+    writeOperationsJournal(h.journalPath, { version: 1, operations: filled(OPERATION_JOURNAL_MAX_UNSETTLED - 1, { state: "unknown" }) });
     const ctx = { deps: { now: () => NOW, linkOperationsPath: () => h.journalPath } } as unknown as ManagementContext;
     const journal = openEnrollJournal(ctx, { id: OP, digest: digest() }, ALIAS, {});
-    expect(h.journal().operations).toHaveLength(OPERATION_JOURNAL_MAX_ENTRIES);
+    expect(h.journal().operations).toHaveLength(OPERATION_JOURNAL_MAX_UNSETTLED);
     journal.intent("key_issued");
     expect(h.journal().operations.find(op => op.operationId === OP)!.effects.map(mark => mark.effect)).toEqual(["key_issued"]);
   });

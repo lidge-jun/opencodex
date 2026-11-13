@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { operationDigest, parseOperationsJournal, pruneOperations, readOperationsJournal, writeOperationsJournal, OPERATION_RETENTION_MS,
+import { operationDigest, parseOperationsJournal, pruneOperations, readOperationsJournal, writeOperationsJournal, OPERATION_JOURNAL_MAX_SETTLED, OPERATION_RETENTION_MS,
   OperationsJournalError, type LinkOperation } from "../../src/link/operations-journal";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -63,4 +63,20 @@ test("retention keeps open and unresolved entries, and drops finished ones 30 da
 test("the digest ignores key order and undefined values", () => {
   expect(operationDigest({ b: 1, a: { d: 2, c: undefined } })).toBe(operationDigest({ a: { d: 2 }, b: 1 }));
   expect(operationDigest({ a: 1 })).not.toBe(operationDigest({ a: 2 }));
+});
+
+test("past OPERATION_JOURNAL_MAX_SETTLED settled entries the oldest settled ones go first; open and unresolved entries always stay", () => {
+  const now = Date.parse(AT) + 60_000;
+  const settled = Array.from({ length: OPERATION_JOURNAL_MAX_SETTLED + 3 }, (_, i) => entry({ operationId: "done-" + i, state: i % 2 ? "committed" : "failed_clean", finishedAt: new Date(Date.parse(AT) + i).toISOString() }));
+  const resolvedOld = entry({ operationId: "resolved-old", state: "unknown", finishedAt: AT, resolvedAt: new Date(Date.parse(AT) - 1).toISOString() });
+  const kept = pruneOperations({ version: 1, operations: [entry({ operationId: "open" }), entry({ operationId: "unresolved", state: "residual", finishedAt: AT }), resolvedOld, ...settled] }, now);
+  const ids = kept.operations.map(op => op.operationId);
+  expect(ids).toContain("open");
+  expect(ids).toContain("unresolved");
+  // The four oldest settled entries (a resolved unknown counts by when it was resolved) are dropped.
+  expect(ids.filter(id => id !== "open" && id !== "unresolved")).toHaveLength(OPERATION_JOURNAL_MAX_SETTLED);
+  expect(ids).not.toContain("resolved-old");
+  expect(ids).not.toContain("done-0");
+  expect(ids).not.toContain("done-2");
+  expect(ids).toContain("done-3");
 });

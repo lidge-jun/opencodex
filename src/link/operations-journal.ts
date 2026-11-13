@@ -75,13 +75,19 @@ export class OperationsJournalError extends Error {
 /** Committed and failed_clean entries, and resolved residual or unknown ones, stay this long. */
 export const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /**
- * At most this many entries after pruning. A provisioning hub caps disposable machines at 10 by default and each machine's
- * life is a handful of operations (attach, a reissue, detach) kept 30 days, so 256 leaves about ten times the room it
- * needs while every whole-file rewrite under the config mutation lock stays small (an entry is about 1 KiB). Only a new
- * operation is refused past it; marks on existing entries are always written, and residual or unknown entries are
- * never pruned to make room.
+ * At most this many unsettled entries: open ones and residual or unknown ones nobody resolved yet. Only these need a
+ * person (or O5) and only these refuse a new operation once the bound is reached; marks on existing entries are always
+ * written. A provisioning hub caps disposable machines at 10 by default, each with a handful of operations, so 256 is far
+ * past what a working fleet leaves unsettled.
  */
-export const OPERATION_JOURNAL_MAX_ENTRIES = 256;
+export const OPERATION_JOURNAL_MAX_UNSETTLED = 256;
+/**
+ * At most this many settled entries (committed, failed_clean, and resolved residual or unknown ones). They never block:
+ * past the bound the oldest (by when they finished or were resolved) are pruned before their 30 days, so a loop that
+ * retries with a fresh id after each failure cannot lock the Home out. With both bounds the file holds at most 512 entries,
+ * about 0.5 MiB at roughly 1 KiB each, so every whole-file rewrite under the config mutation lock stays small.
+ */
+export const OPERATION_JOURNAL_MAX_SETTLED = 256;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
@@ -228,14 +234,27 @@ export function writeOperationsJournal(path: string, journal: OperationsJournal)
 /**
  * Drop what has outlived retention: a committed or failed_clean entry 30 days after it finished, a residual or
  * unknown one only 30 days after it was resolved. An open entry, and an unresolved residual or unknown one, stays.
+ * Past OPERATION_JOURNAL_MAX_SETTLED settled entries, the oldest settled ones go too.
  */
 export function pruneOperations(journal: OperationsJournal, nowMs: number): OperationsJournal {
   const expired = (at: string | undefined) => at !== undefined && nowMs - Date.parse(at) > OPERATION_RETENTION_MS;
-  return { version: 1, operations: journal.operations.filter(op => {
+  const retained = journal.operations.filter(op => {
     if (op.state === "committed" || op.state === "failed_clean") return !expired(op.finishedAt);
     if (op.state === "residual" || op.state === "unknown") return !expired(op.resolvedAt);
     return true;
-  }) };
+  });
+  const settled = retained.filter(isSettled);
+  if (settled.length <= OPERATION_JOURNAL_MAX_SETTLED) return { version: 1, operations: retained };
+  const at = (op: LinkOperation) => Date.parse(op.resolvedAt ?? op.finishedAt ?? op.updatedAt);
+  // A stable sort: entries settled at the same moment go in journal order.
+  const dropped = new Set(settled.map((op, index) => ({ op, index })).sort((a, b) => at(a.op) - at(b.op) || a.index - b.index)
+    .slice(0, settled.length - OPERATION_JOURNAL_MAX_SETTLED).map(item => item.op));
+  return { version: 1, operations: retained.filter(op => !dropped.has(op)) };
+}
+
+/** Committed, failed_clean, or residual or unknown and resolved: nothing about it waits on anyone. */
+function isSettled(op: LinkOperation): boolean {
+  return op.state === "committed" || op.state === "failed_clean" || ((op.state === "residual" || op.state === "unknown") && op.resolvedAt !== undefined);
 }
 
 /**
@@ -257,14 +276,14 @@ export function updateOperationsJournal<T>(path: string, nowMs: number, change: 
 
 export class OperationsJournalFullError extends Error {
   constructor() {
-    super("operations.json holds " + OPERATION_JOURNAL_MAX_ENTRIES + " entries");
+    super("operations.json holds " + OPERATION_JOURNAL_MAX_UNSETTLED + " unsettled entries");
     this.name = "OperationsJournalFullError";
   }
 }
 
-/** Throws before a new entry is added once the journal, pruned, already holds OPERATION_JOURNAL_MAX_ENTRIES. */
+/** Throws before a new entry is added once the journal holds OPERATION_JOURNAL_MAX_UNSETTLED unsettled entries. */
 export function assertRoomForNewOperation(journal: OperationsJournal, nowMs: number): void {
-  if (pruneOperations(journal, nowMs).operations.length >= OPERATION_JOURNAL_MAX_ENTRIES) throw new OperationsJournalFullError();
+  if (pruneOperations(journal, nowMs).operations.filter(op => !isSettled(op)).length >= OPERATION_JOURNAL_MAX_UNSETTLED) throw new OperationsJournalFullError();
 }
 
 export function findOperation(journal: OperationsJournal, operationId: string): LinkOperation | undefined {
