@@ -287,47 +287,53 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         const replay = await replayOperation(ctx, state, operation, "revoke");
         if (replay) return replay;
       }
-      // A plain --force may finish any receipt (foreignRetirement). Its owner, if open or unknown, is fenced for the whole
-      // takeover (fenceRetirementOwnerForForce) and the receipt is disowned before anything changes, so the owner is never
-      // credited with this removal and a link the force could not remove stays suspended. A damaged journal does not stop
-      // a plain force (as on dev): its owner cannot be fenced, but the receipt is still disowned. A readable journal whose
-      // owner cannot be fenced refuses here instead, before the receipt changes hands.
+      // A plain --force may finish any receipt (foreignRetirement). Its refusals run first, before anything changes. Then its
+      // owner, if open or unknown, is fenced for the whole takeover (fenceRetirementOwnerForForce) and the receipt is disowned,
+      // so the owner is never credited with this removal and a link the force could not remove stays suspended; a takeover
+      // that stops before its removal begins restores the owner as it was. A damaged journal does not stop a plain force
+      // (as on dev): its owner cannot be fenced, but the receipt is still disowned. A readable journal whose owner cannot
+      // be fenced refuses before the receipt changes hands.
+      const plainForce = !operation && force;
+      let forceReceipt: ReturnType<typeof readLinkRetirement> = null;
+      let ownerId: string | undefined;
+      let journalReadable = true;
+      if (plainForce) {
+        try { forceReceipt = readLinkRetirement(id); } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
+        if (forceReceipt) {
+          try { ownerId = retirementOwner(readOperationsJournal(journalPathFor(ctx)), forceReceipt)?.operationId; } catch { journalReadable = false; }
+        }
+      }
+      const open = openRevokeConflict(ctx, id, operation?.id ?? ownerId, plainForce);
+      if (open) return open;
+      let fresh = readRemovalTarget(ctx, id);
+      if ("response" in fresh) return fresh.response;
+      const owned = foreignRetirement(ctx, fresh.receipt, operation?.id, force);
+      if (owned) return owned;
       let takeover: ForceTakeover | null = null;
-      if (!operation && force) {
-        let receipt: ReturnType<typeof readLinkRetirement>;
-        try { receipt = readLinkRetirement(id); } catch { return fail("link_remove_failed", "The link retirement could not be read.", 503); }
-        if (receipt) {
-          let journalReadable = true;
-          try { readOperationsJournal(journalPathFor(ctx)); } catch { journalReadable = false; }
+      let began = false;
+      try {
+        if (plainForce && forceReceipt) {
           if (journalReadable) {
-            try { takeover = fenceRetirementOwnerForForce(ctx, receipt); } catch {
+            try { takeover = fenceRetirementOwnerForForce(ctx, forceReceipt); } catch {
               return fail("operation_journal_failed", "The unfinished revoke that owns this link's removal could not be settled; nothing was changed. Retry the request.", 500);
             }
           }
           let disowned: boolean;
-          try { disowned = receipt.operationId === undefined || disownLinkRetirement(receipt) !== null; } catch { disowned = false; }
-          if (!disowned) {
-            try { takeover?.settle(); } catch { /* the owner stays open: suspended, and replayed on repeat */ }
-            return fail("link_changed", "The link changed during removal.", 409);
-          }
+          try { disowned = forceReceipt.operationId === undefined || disownLinkRetirement(forceReceipt) !== null; } catch { disowned = false; }
+          if (!disowned) return fail("link_changed", "The link changed during removal.", 409);
+          fresh = readRemovalTarget(ctx, id);
+          if ("response" in fresh) return fresh.response;
         }
-      }
-      try {
-        const open = openRevokeConflict(ctx, id, operation?.id ?? takeover?.operationId, force && operation === null);
-        if (open) return open;
-        const fresh = readRemovalTarget(ctx, id);
-        if ("response" in fresh) return fresh.response;
-        const owned = foreignRetirement(ctx, fresh.receipt, operation?.id, force);
-        if (owned) return owned;
         let journal: RevokeJournal = takeover?.journal ?? NO_REVOKE_JOURNAL;
         if (operation) {
           try { journal = openRevokeJournal(ctx, operation, fresh.record.alias, id); } catch (error) {
             return journalOpenFailure(error);
           }
         }
+        began = true;
         try { return await journal.finish(await removeReserved(ctx, state, id, fresh.record, fresh.receipt, force, purge, journal)); } finally { journal.release(); }
       } finally {
-        try { takeover?.settle(); } catch { /* the owner stays open: suspended, and replayed on repeat */ }
+        try { if (began) takeover?.settle(); else takeover?.abandon(); } catch { /* the owner stays open: suspended, and replayed on repeat */ }
       }
     }));
   } finally { releaseLink(); }

@@ -913,3 +913,41 @@ test("a journalled purge whose link record changes during the Child cleanup keep
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
 });
+
+test("a plain --force refused by another open revoke changes neither the receipt's owner nor its receipt", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, resolvedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 },
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }],
+  } as LinkOperation, {
+    operationId: "other-op", kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "open", effects: [],
+  } as LinkOperation] });
+  const forced = await h.revoke({ force: true });
+  expect({ status: forced.status, code: code(forced) }).toEqual({ status: 409, code: "link_operation_open" });
+  const owner = h.journal().operations.find(op => op.operationId === OP)!;
+  expect({ state: owner.state, resolvedAt: owner.resolvedAt }).toEqual({ state: "unknown", resolvedAt: AT_ISO });
+  expect(readLinkRetirement(LINK, root)?.operationId).toBe(OP);
+});
+
+test.skipIf(process.platform !== "darwin")("a plain --force that cannot disown the receipt restores the fenced owner exactly as it was", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "purge", OP);
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: AT_ISO, updatedAt: AT_ISO, state: "unknown", finishedAt: AT_ISO, resolvedAt: AT_ISO, error: { code: "operation_interrupted", status: 409 },
+    effects: [{ effect: "remote_cleanup", phase: "intent", at: AT_ISO }],
+  } as LinkOperation] });
+  // The receipt stays readable but cannot be rewritten (the user immutable flag), so the takeover stops before it begins.
+  const receiptFile = join(root, "link", "retirement-" + LINK + ".json");
+  Bun.spawnSync(["chflags", "uchg", receiptFile]);
+  let forced: Awaited<ReturnType<typeof h.revoke>>;
+  try { forced = await h.revoke({ force: true }); } finally { Bun.spawnSync(["chflags", "nouchg", receiptFile]); }
+  expect({ status: forced.status, code: code(forced) }).toEqual({ status: 409, code: "link_changed" });
+  const owner = h.journal().operations[0]!;
+  expect({ state: owner.state, resolvedAt: owner.resolvedAt, finishedAt: owner.finishedAt }).toEqual({ state: "unknown", resolvedAt: AT_ISO, finishedAt: AT_ISO });
+  expect(readLinkRetirement(LINK, root)?.operationId).toBe(OP);
+  expect(h.stops).toEqual([]);
+});

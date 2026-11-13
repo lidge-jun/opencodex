@@ -243,6 +243,8 @@ export interface ForceTakeover {
   readonly journal: RevokeJournal;
   /** Drop the live mark and settle the owner unknown and unresolved: it is never credited with the force's removal. */
   settle(): void;
+  /** The takeover never began its removal: drop the live mark and restore the owner exactly as it was. */
+  abandon(): void;
 }
 
 /**
@@ -257,6 +259,7 @@ export function fenceRetirementOwnerForForce(ctx: ManagementContext, receipt: Li
   const owner = retirementOwner(readOperationsJournal(path), receipt);
   if (!owner || (owner.state !== "open" && owner.state !== "unknown")) return null;
   const operationId = owner.operationId;
+  const prior = { state: owner.state, finishedAt: owner.finishedAt, resolvedAt: owner.resolvedAt, error: owner.error, updatedAt: owner.updatedAt };
   updateJournalPinned(path, nowOf(ctx), journal => {
     const op = findOperation(journal, operationId);
     if (!op) throw new Error("the revoke operation is no longer journalled");
@@ -278,6 +281,19 @@ export function fenceRetirementOwnerForForce(ctx: ManagementContext, receipt: Li
       drop();
       const op = findOperation(readOperationsJournal(path), operationId);
       if (op?.state === "open") settle(ctx, operationId, "unknown", { code: "operation_interrupted", status: 409 });
+    },
+    abandon() {
+      drop();
+      if (prior.state === "open") return;
+      updateJournalPinned(path, nowOf(ctx), journal => {
+        const op = findOperation(journal, operationId);
+        if (!op || op.state !== "open") return;
+        op.state = prior.state;
+        op.updatedAt = prior.updatedAt;
+        if (prior.finishedAt !== undefined) op.finishedAt = prior.finishedAt;
+        if (prior.resolvedAt !== undefined) op.resolvedAt = prior.resolvedAt;
+        if (prior.error !== undefined) op.error = prior.error;
+      });
     },
   };
 }
