@@ -61,7 +61,7 @@ export function childReleaseAssetUrl(version, file) {
   return "https://github.com/" + CHILD_RELEASE_REPOSITORY + "/releases/download/v" + encodeURIComponent(version) + "/" + encodeURIComponent(file);
 }
 
-/** The fill's own directory under OPENCODEX_HOME, an owned config path (never cache/, which is the operator's). */
+/** The fill's own directory under OPENCODEX_HOME, listed as owned once created (never cache/, which is the operator's). */
 export const CHILD_FILL_DIR = "ocx-child-builds";
 
 export function childBinaryCacheDir(opencodexHome, version) {

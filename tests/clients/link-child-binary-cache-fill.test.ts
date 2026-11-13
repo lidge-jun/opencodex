@@ -526,13 +526,42 @@ describe("final review: uninstall, startup gates and download edges", () => {
     writeFileSync(manifestPath, JSON.stringify({ ...manifest, paths: manifest.paths.filter(path => path !== "ocx-child-builds") }, null, 2) + "\n", { mode: 0o600 });
   }
 
-  test("a new Home owns ocx-child-builds from the start, and uninstall removes what the fill created", async () => {
+  test("a new Home lists ocx-child-builds only once the fill has created it, and uninstall removes it", async () => {
+    expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
+    expect(ownedPaths()).not.toContain("ocx-child-builds");
     expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(readdirSync(versionsDir())).toEqual([VERSION + ".baseline"]);
     expect(ownedPaths()).toContain("ocx-child-builds");
     expect(ownedPaths().filter(path => path.startsWith("cache"))).toEqual([]);
     expect(removeOwnedConfigState(home).status).toBe("removed");
     expect(existsSync(fillDir())).toBe(false);
+  });
+
+  test("an empty Home gets its ownership metadata before the fill creates its directory", async () => {
+    expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
+    expect(ownedPaths()).toContain("ocx-child-builds");
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an existing empty directory others can write is not claimed", async () => {
+    olderOwnedHome();
+    mkdirSync(fillDir(), { mode: 0o700 });
+    chmodSync(fillDir(), 0o775);
+    bothDigests();
+    expect(await start()).toEqual({ kind: "skipped", reason: "foreign_directory" });
+    expect([ownedPaths().includes("ocx-child-builds"), readdirSync(fillDir())]).toEqual([false, []]);
+  });
+
+  test("a registration the manifest has no room for removes the directory it just created", async () => {
+    olderOwnedHome();
+    const manifestPath = join(home, CONFIG_UNINSTALL_MANIFEST);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] };
+    const filler = Array.from({ length: 1024 - manifest.paths.length }, (_, index) => "filler-" + String(index).padStart(4, "0"));
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, paths: [...manifest.paths, ...filler].sort() }, null, 2) + "\n", { mode: 0o600 });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await start()).toEqual({ kind: "skipped", reason: "ownership_unavailable" });
+    } finally { warn.mockRestore(); }
+    expect([ownedPaths().includes("ocx-child-builds"), existsSync(fillDir())]).toEqual([false, false]);
   });
 
   test.each([["absent", false], ["empty", true]])("an older Home registers an %s ocx-child-builds before the fill writes it", async (_name, precreate) => {
