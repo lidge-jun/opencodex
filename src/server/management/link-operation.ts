@@ -124,9 +124,11 @@ export async function replayOperation(ctx: ManagementContext, state: LinkRouteSt
   return replayResponse(op);
 }
 
-function settle(ctx: ManagementContext, operationId: string, outcome: OperationState, error?: { code: string; status: number }, childResidual = false): LinkOperation {
+function settle(ctx: ManagementContext, operationId: string, outcome: OperationState, error?: { code: string; status: number }, childResidual = false,
+  edit?: (op: LinkOperation) => void): LinkOperation {
   return updateOperationsJournal(journalPathFor(ctx), nowOf(ctx), journal => {
     const op = findOperation(journal, operationId)!;
+    edit?.(op);
     op.state = outcome;
     if (childResidual && op.kind === "enroll") op.childResidual = true;
     op.updatedAt = iso(ctx);
@@ -237,8 +239,14 @@ export function revokeOperationDigest(params: { linkId: string; purge: boolean; 
 }
 
 export interface RevokeJournal {
+  readonly operationId?: string;
+  /** Strict: a failed write throws before its effect runs. */
   intent(effect: RevokeEffect): void;
-  /** remote_cleanup done with the Child's purged:true for this link id records the receipt. */
+  /**
+   * remote_cleanup done with the Child's purged:true for this link id records the receipt. Best effort: the effect has
+   * already happened, recovery reads an intent without its completion as "may have happened", and a receipt whose mark
+   * could not be written is written with the outcome instead.
+   */
   done(effect: RevokeEffect, receipt?: { purged: true; linkId: string }): void;
   finish(response: Response): Promise<Response>;
 }
@@ -256,9 +264,19 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
     edit(op);
     op.updatedAt = iso(ctx);
   });
+  let heldReceipt: { purged: true; linkId: string } | undefined;
   return {
-    intent: effect => change(op => { op.effects.push({ effect, phase: "intent", at: iso(ctx) }); }),
-    done: (effect, receipt) => change(op => { op.effects.push({ effect, phase: "done", at: iso(ctx) }); if (receipt) op.receipt = receipt; }),
+    operationId: request.id,
+    intent: effect => { ctx.deps.linkOperationMarkHook?.(effect, "intent"); change(op => { op.effects.push({ effect, phase: "intent", at: iso(ctx) }); }); },
+    done: (effect, receipt) => {
+      if (receipt) heldReceipt = receipt;
+      try {
+        ctx.deps.linkOperationMarkHook?.(effect, "done");
+        change(op => { op.effects.push({ effect, phase: "done", at: iso(ctx) }); if (receipt) op.receipt = receipt; });
+      } catch {
+        console.warn("[link] revoke journal mark not written operation=" + request.id + " mark=" + effect + ":done");
+      }
+    },
     async finish(response) {
       let body: Record<string, unknown> = {};
       try { body = await response.clone().json() as Record<string, unknown>; } catch { /* keeps its status */ }
@@ -270,7 +288,10 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
       const touched = !current || hasEffect(current, "remote_cleanup", "intent") || hasEffect(current, "key_revoked", "intent") || hasEffect(current, "record_removed", "intent");
       const outcome: OperationState = response.status === 200 ? "committed" : touched ? "unknown" : "failed_clean";
       let op: LinkOperation;
-      try { op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "revoke_failed", status: response.status }); } catch { return response; }
+      try {
+        op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "revoke_failed", status: response.status }, false,
+          entry => { if (heldReceipt && !entry.receipt) entry.receipt = heldReceipt; });
+      } catch { return response; }
       return Response.json({ ...body, ...outcomeBody(op), ...(op.state === "committed" && op.receipt ? { purged: true } : {}) }, { status: response.status, headers: response.headers });
     },
   };

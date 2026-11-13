@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,7 +39,11 @@ function record(): LinkRecord {
     createdAt: "2026-11-13T00:00:00.000Z", remotePlatform: "posix", childKind: "ephemeral", explicitRoute: ROUTE, exclusive: true };
 }
 
-function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void } = {}) {
+function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void;
+  markHook?: (effect: string, phase: "intent" | "done") => void } = {}) {
+  const stops: string[] = [];
+  const closedSockets: string[] = [];
+  let restarts = 0;
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: [{ id: "link-key", name: "link:" + ALIAS, key: "k", createdAt: "2026-11-13T00:00:00Z" }] };
   const journalPath = join(root, "operations.json");
@@ -47,8 +51,9 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   const ssh: string[][] = [];
   const state: LinkRouteState = {
     pendingHosts: new Map(), confirmedHosts: new Map(), operations: new Set(),
-    listener: { ensureStarted: async () => {}, status: () => ({ state: "listening", port: 18181, reason: null }), close: async () => {}, onAuthenticatedCatalog: () => () => {} },
-    supervisor: { start() {}, ensureStarted: async () => {}, reload: async () => {}, stopLink: async () => {}, reconnect: async () => true, status: () => [], stop: async () => {} },
+    listener: { ensureStarted: async () => {}, status: () => ({ state: "listening", port: 18181, reason: null }), close: async () => {}, onAuthenticatedCatalog: () => () => {},
+      closeLinkSockets: id => { closedSockets.push(id); return 0; } },
+    supervisor: { start() {}, ensureStarted: async () => { restarts += 1; }, reload: async () => {}, stopLink: async id => { stops.push(id); }, reconnect: async () => true, status: () => [], stop: async () => {} },
   };
   const runner: SshRunner = {
     async run(argv) {
@@ -65,6 +70,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
     linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => journalPath,
     linkAliasLock: { lockDir: join(root, "locks"), waitMs: options.lockWaitMs ?? 0, pollMs: 250, now: () => NOW, ...(options.sleep ? { sleep: options.sleep } : {}) },
+    ...(options.markHook ? { linkOperationMarkHook: options.markHook } : {}),
     revokeApiKey: (cfg, id) => { const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
   };
   async function revoke(body: Record<string, unknown>) {
@@ -78,7 +84,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     const response = await handleLinkRoutes(context, state);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   }
-  return { revoke, ssh, config, journalPath, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
+  return { revoke, ssh, config, journalPath, stops, closedSockets, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
@@ -188,6 +194,40 @@ test("before this Home ever journalled, a plain revoke takes no lock", async () 
   try {
     expect((await h.revoke({ force: true })).status).toBe(200);
   } finally { held.release(); }
+});
+
+describe("journal write failures during a revoke", () => {
+  test("a failed remote_cleanup intent leaves the tunnel running and answers with the operation id", async () => {
+    const h = harness({ markHook: (effect, phase) => { if (effect === "remote_cleanup" && phase === "intent") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ purge: true, operationId: OP });
+    expect({ status: revoked.status, code: code(revoked), operationId: revoked.body.operationId }).toEqual({ status: 500, code: "operation_journal_failed", operationId: OP });
+    expect(h.stops).toEqual([]);
+    expect(h.ssh).toEqual([]);
+    expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  });
+
+  test("a failed remote_cleanup completion after a good purge still removes the link and keeps the receipt, with no tunnel restart", async () => {
+    const h = harness({ markHook: (effect, phase) => { if (effect === "remote_cleanup" && phase === "done") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ purge: true, operationId: OP });
+    expect(revoked).toEqual({ status: 200, body: { linkId: LINK, operationId: OP, outcome: "committed", purged: true } });
+    expect(h.store.links).toEqual([]);
+    expect(h.restarts).toBe(0);
+    expect(h.journal().operations[0]!.receipt).toEqual({ purged: true, linkId: LINK });
+  });
+
+  test("a failed record_removed completion still closes the link's sockets", async () => {
+    const h = harness({ markHook: (effect, phase) => { if (effect === "record_removed" && phase === "done") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ purge: true, operationId: OP });
+    expect(revoked.status).toBe(200);
+    expect(h.closedSockets).toEqual([LINK]);
+  });
+
+  test("a failed key_revoked intent keeps the key, answers with the operation id and settles unknown", async () => {
+    const h = harness({ markHook: (effect, phase) => { if (effect === "key_revoked" && phase === "intent") throw new Error("disk full"); } });
+    const revoked = await h.revoke({ purge: true, operationId: OP });
+    expect({ status: revoked.status, code: code(revoked), operationId: revoked.body.operationId, outcome: revoked.body.outcome }).toEqual({ status: 500, code: "operation_journal_failed", operationId: OP, outcome: "unknown" });
+    expect(h.config.apiKeys!.map(key => key.id)).toEqual(["link-key"]);
+  });
 });
 
 test("a revoke without an operation id writes no journal and answers as before", async () => {

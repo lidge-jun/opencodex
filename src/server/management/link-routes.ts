@@ -263,6 +263,17 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
 }
 
 async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id: string, record: LinkStore["links"][number], force: boolean, purge: boolean, journal: RevokeJournal): Promise<Response> {
+  // An intent that cannot be written stops the revoke before its effect, answered with the operation id.
+  const journalFailed = (): Response => Response.json({
+    error: { code: "operation_journal_failed", message: "The link operation journal could not be written; the step after it did not run." },
+    ...(journal.operationId ? { operationId: journal.operationId } : {}),
+  }, { status: 500, headers: { "cache-control": "no-store" } });
+  const intend = (effect: "remote_cleanup" | "key_revoked" | "record_removed"): boolean => {
+    try { journal.intent(effect); return true; } catch { return false; }
+  };
+  const cleanup = !force && record.direction === "hub-initiated";
+  // Before stopLink: a failed write leaves the tunnel as it was.
+  if (cleanup && !intend("remote_cleanup")) return journalFailed();
   const release = state.supervisor.holdLink?.(id);
   try {
     await state.supervisor.stopLink(id);
@@ -275,8 +286,7 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         console.warn(`[link] tunnel restart failed linkId=${id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
-    if (!force && record.direction === "hub-initiated") {
-      journal.intent("remote_cleanup");
+    if (cleanup) {
       try {
         const runner = runnerFor(ctx);
         const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx));
@@ -301,10 +311,10 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
       }
     }
-    journal.intent("key_revoked");
+    if (!intend("key_revoked")) return journalFailed();
     if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
     journal.done("key_revoked");
-    journal.intent("record_removed");
+    if (!intend("record_removed")) return journalFailed();
     let next: LinkStore;
     try {
       next = withConfigMutationLockSync(() => {
