@@ -247,9 +247,12 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   let lifecycleRevision = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   const states = new Map<string, TunnelState>();
-  /** stopAt/killed: a failed link's child the tick stopped, kept until its exit is seen. */
-  const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number; stopAt?: number; killed?: boolean }>();
-  /** One-route children a stop sent SIGTERM and is awaiting; the tick sends SIGKILL after the grace. */
+  /** stopAt/killed/warned: a failed link's child the tick stopped, kept until its exit is seen. */
+  const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number; stopAt?: number; killed?: boolean; warned?: boolean }>();
+  /**
+   * Tunnel children (one-route tunnels, multi-route candidates and proven tunnels) a stop sent SIGTERM
+   * and is awaiting; the tick sends SIGKILL after the grace.
+   */
   const draining = new Set<{ child: SshChild; stopAt: number; killed: boolean }>();
   /** Per-link generation, advanced by spawns and explicit stop/removal reservations. */
   const generations = new Map<string, number>();
@@ -631,8 +634,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   const tick = (): void => {
-    // The SIGKILL for a one-route child a stop is draining runs even while lifecycle work is pending or the
-    // supervisor shuts down: no reload, reconnect or shutdown waits on an ssh that ignores SIGTERM.
+    // The SIGKILL for any tunnel child a stop is draining runs even while lifecycle work is pending or the
+    // supervisor shuts down: no reload, removal, reconnect or shutdown waits on an ssh that ignores SIGTERM.
+    // (A candidate route-rounds already halted with SIGKILL gets a fresh stop time here, so a second SIGKILL
+    // on the same unreaped process: harmless.)
     for (const drain of draining) {
       if (drain.killed || now() - drain.stopAt < CANDIDATE_KILL_GRACE_MS) continue;
       drain.killed = true;
@@ -686,6 +691,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         } else if (!child.killed && current - child.stopAt >= CANDIDATE_KILL_GRACE_MS) {
           child.killed = true;
           try { child.child.kill("SIGKILL"); } catch { /* already gone */ }
+        } else if (child.killed && !child.warned && current - child.stopAt >= 2 * CANDIDATE_KILL_GRACE_MS) {
+          // Its exit was never seen: the link stays failed and owned, as a halted candidate does, and says so once.
+          child.warned = true;
+          warn(`[link] tunnel exit unconfirmed link=${record.id}`);
         }
       } else if (dueForSpawn(next, current)) {
         spawnFor(record);
