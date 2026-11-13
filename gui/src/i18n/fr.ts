@@ -3434,7 +3434,7 @@ export const fr: Record<TKey, string> = {
   "cws.jev.decisionServicesTitle": "Services de décision JEV",
   "cws.jev.sessionPin": "Maintenir la session sur la cible choisie",
   "cws.jev.sessionPinTtl": "Délai d’inactivité (ms)",
-  "cws.jev.sessionPinHint": "Réutiliser la cible et l’effort choisis tant que la session reste active. Chaque tour terminé renouvelle le délai. Plage : {min}–{max} ms (1 minute–24 heures).",
+  "cws.jev.sessionPinHint": "OpenAI Decisions épingle la session par défaut, sans expiration. Pour les autres méthodes JEV, l’épinglage reste facultatif et nécessite un délai de 1 minute à 24 heures.",
   "cws.err.invalidSessionPin": "Le délai d’inactivité de la session épinglée doit être un entier de {min} à {max} ms.",
   "cws.jev.decisionTimeout": "Délai de décision (ms)",
   "cws.jev.decisionTimeoutHint": "Laissez vide pour la valeur par défaut ({default} ms) ; plage autorisée {min}–{max} ms. À l'expiration, JEV se rabat sur la première cible éligible. Augmentez-le pour des modèles auto-hébergés lents ou à froid.",

@@ -1569,11 +1569,11 @@ export interface OcxComboConfig {
   /** Partial 0..100 tier overrides; defaults limited 70/nearlyExhausted 90. null clears. */
   decisionQuotaTiers?: import("../combos/jev-quota-config").JevQuotaTiers | null;
   /**
-   * `strategy: "jev"` only, default off: keep an explicit client session on the target JEV chose
-   * for it while the session stays active, so the provider prompt cache stays warm (#7525).
-   * `ttlMs` is the idle window after the last successful turn (60000..86400000). null clears.
+   * `strategy: "jev"` only: native OpenAI Decisions pins by default with no idle expiry;
+   * `false` opts out and `{ ttlMs }` sets an explicit 60000..86400000 ms expiry. Other JEV
+   * methods remain opt-in and require `{ ttlMs }`; their pins stay in memory.
    */
-  sessionPin?: import("../combos/jev-session-pin-config").JevSessionPinConfig | null;
+  sessionPin?: import("../combos/jev-session-pin-config").JevSessionPinConfig | false | null;
 }
 
 export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";

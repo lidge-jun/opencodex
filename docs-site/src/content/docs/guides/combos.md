@@ -297,16 +297,18 @@ quota settings. No new editor controls or background quota work are enabled.
 
 ### Session pin for JEV
 
-A JEV Combo decides a target for every request, so consecutive turns of one conversation can move
-between providers, and each move starts with a cold provider prompt cache. `sessionPin` is an
-opt-in setting per JEV Combo, off by default, that keeps a client session on the target JEV chose
-for it while the session stays active:
+A JEV Combo using the native OpenAI Decisions service pins the first successfully decided target
+and effort for the rest of that conversation by default. Later turns reuse the pin instead of
+making another OpenAI Decisions call. This applies only to a configured `jev-decision` provider
+using `https://api.openai.com/v1/decisions`; TypeSafe, other decision services and model-routed JEV
+remain unchanged and pin only when explicitly configured with a timeout.
 
-In the dashboard, open the JEV Combo editor's **Decision method** section and enable
-**Keep a session on its decided target**, then set **Idle window (ms)** and save. The range is
-60000–86400000 ms (1 minute–24 hours); newly enabled pins start at 60000 ms. Disable the checkbox
-and save to turn pinning off. Invalid or empty enabled windows block saving; failed saves keep
-your edits for retry. Older responses without this setting leave it omitted until you change it.
+In the dashboard, open the JEV Combo editor's **Decision method** section. With native OpenAI
+Decisions selected, **Keep a session on its decided target** is enabled by default and a blank
+timeout means no expiry. Set 60000–86400000 ms (1 minute–24 hours) for an inactivity timeout, or
+disable the checkbox to opt out. For other JEV methods, the checkbox stays off by default; enabling
+it starts with a one-minute timeout, which can be changed within that range. Failed saves keep your
+edits for retry.
 
 ```bash
 ocx combo set jev-auto --session-pin 20m --json
@@ -318,9 +320,15 @@ ocx combo set jev-auto --session-pin 20m --json
 
 The first request of a session is decided normally. Once the target JEV applied for it completes a
 response, later requests of the same session reuse that target and effort without another decision
-call. `ttlMs` (1 minute to 24 hours) is an idle window: every completed turn on the pinned target,
-tool-call continuations included, starts it again, and a session that stays quiet longer is decided
-afresh.
+call. `{ "ttlMs": 1200000 }` opts any JEV method into a 20-minute inactivity timeout. Each
+completed turn on the pinned target, tool-call continuations included, restarts that timer. For
+native OpenAI Decisions, `false` disables its default pin and an explicit timeout overrides the
+no-expiry default. Other JEV methods remain unpinned when `sessionPin` is omitted; explicitly timed
+pins stay in memory and do not survive a proxy restart.
+
+`--session-pin on` resets a native OpenAI Decisions Combo to its no-expiry default and is rejected
+for other decision methods. `--session-pin -` disables pinning, and a duration such as `20m` sets
+an inactivity timeout.
 
 A session is identified by the client's own session headers (`thread-id`, `session_id` or
 `session-id`, `x-codex-parent-thread-id`, or a promoted `x-session-id`) together with the API key
@@ -337,8 +345,9 @@ JEV decides again, and the new decision replaces the pin, when:
 - the configuration has changed since the pin was written.
 
 A cancelled request keeps the pin. A fail-open decision (timeout, missing key, invalid answer)
-never creates one. Pins live in the proxy's memory, at most 512 sessions, and do not survive a
-restart.
+never creates one. Only native OpenAI Decisions loopback pins are stored privately and restored
+after a clean proxy restart. Authenticated OpenAI callers and all other JEV pins stay in memory.
+Requests without a session header are never pinned, and two API keys never share a pin.
 
 Usage records mark a reused turn with `jevDecision.pinned: true` and `pinReason: "session"`. A
 decision that replaced a released pin records why in `pinReason` (`expired`, `config_changed`,
@@ -347,8 +356,9 @@ counts pinned requests apart from decisions; they still count toward successful 
 fallbacks and per-model tokens.
 
 A pin makes provider cache reuse possible; whether the provider actually serves cached tokens still
-depends on the provider, the account and a stable prompt prefix. `--session-pin -` (API `null`)
-turns it off, switching away from JEV removes it, and saves from the dashboard editor keep it.
+depends on the provider, the account and a stable prompt prefix. `--session-pin -` (API or config
+`false`) turns it off; API/config omission or `null` uses each method's default. Switching away
+from JEV removes the setting.
 
 ### OpenAI Decisions
 
@@ -665,13 +675,14 @@ are ignored. Operator notes are evidence for the decision, not commands, and can
 target allowlist or reasoning-effort limits. Only put information there that may be disclosed to
 the selected decision backend.
 
-By default, each logical model call is decided on its own. Unless you enable the opt-in
-[session pin](#session-pin-for-jev), consecutive turns of one session can therefore land on
-different targets, and every switch starts a cold provider prompt
-cache, so a mix of very different targets can cost more input tokens than it saves. Keep the
-allowlist to targets you are content to alternate between. Targets marked `lastResort` are withheld
-from JEV under `cooldownWaitPolicy: "before-last-resort"` while any normal target is offered, and
-offered only when nothing else is reachable.
+TypeSafe, generic decision services and model-routed JEV decide each logical model call on their
+own by default. Native OpenAI Decisions keeps a successful session decision pinned by default;
+other methods can opt into the [session pin](#session-pin-for-jev). Without a pin, consecutive
+turns can land on different targets, and every switch starts a cold provider prompt cache, so a
+mix of very different targets can cost more input tokens than it saves. Keep the allowlist to
+targets you are content to alternate between. Targets marked `lastResort` are withheld from JEV
+under `cooldownWaitPolicy: "before-last-resort"` while any normal target is offered, and offered
+only when nothing else is reachable.
 
 The decision boundary fails open when the key is missing, no safe task/tool/image decision state is
 available, the configured decision deadline expires, the service redirects or returns an error, or

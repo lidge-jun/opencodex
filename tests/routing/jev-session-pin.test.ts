@@ -7,6 +7,8 @@ import {
   parseJevSessionPinDuration,
 } from "../../src/combos/jev-session-pin-config";
 import { comboConfigIssues, normalizeComboConfig } from "../../src/combos/types";
+import { isOpenAIDecisionProvider } from "../../src/combos/jev-decision-contract";
+import { acquireSpendLedgerOwner } from "../../src/lib/spend-ledger-owner";
 import { captureConfigGeneration, reconcileStateGeneration } from "../../src/lib/state-store-sweeper";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import {
@@ -18,6 +20,7 @@ import {
 import { createJevStatsAccumulator, normalizePersistedJevDecision } from "../../src/usage/jev-stats";
 import type { PersistedUsageEntry } from "../../src/usage/log";
 import type { OcxProviderConfig } from "../../src/types";
+import { createTempHome } from "../helpers/temp-home";
 
 const TTL = 120_000;
 const combo = { strategy: "jev" as const, sessionPin: { ttlMs: TTL } };
@@ -30,7 +33,7 @@ let clock = 1_000_000;
 const now = () => clock;
 
 function scope(overrides: Partial<Parameters<typeof jevSessionPinScope>[0]> = {}) {
-  return jevSessionPinScope({ combo, comboId: "auto", admission: LOOPBACK, lane: "lane-a", now, ...overrides })!;
+  return jevSessionPinScope({ combo, openAIDecisions: false, comboId: "auto", admission: LOOPBACK, lane: "lane-a", now, ...overrides })!;
 }
 
 function bumpConfigGeneration(): void {
@@ -53,9 +56,21 @@ beforeEach(() => {
 afterEach(() => clearJevSessionPinsForTests());
 
 describe("JEV session pin settings", () => {
-  test("accept exactly { ttlMs } inside the documented range", () => {
+  test("native OpenAI Decisions is matched by its exact provider endpoint", () => {
+    expect(isOpenAIDecisionProvider({ name: "native", adapter: "jev-decision", baseUrl: "https://api.openai.com/v1/decisions" })).toBe(true);
+    for (const row of [
+      { name: "jev", adapter: "jev-decision", baseUrl: "https://api.openai.com/v1/decisions" },
+      { name: "generic", adapter: "jev-decision", baseUrl: "https://decision.example/v1/systemone" },
+      { name: "gateway", adapter: "jev-decision", baseUrl: "https://ai-gateway.vercel.sh/v1/decisions" },
+      { name: "native", adapter: "openai-chat", baseUrl: "https://api.openai.com/v1/decisions" },
+      { name: "native", adapter: "jev-decision", baseUrl: "https://api.openai.com/v1/decisions?mode=other" },
+    ]) expect(isOpenAIDecisionProvider(row)).toBe(false);
+  });
+
+  test("accept no expiry or an explicit idle window inside the documented range", () => {
     expect(normalizeJevSessionPin({ ttlMs: 1_200_000 })).toEqual({ ttlMs: 1_200_000 });
-    for (const value of [null, [], {}, { ttlMs: JEV_SESSION_PIN_TTL_MIN_MS - 1 }, { ttlMs: JEV_SESSION_PIN_TTL_MAX_MS + 1 },
+    expect(normalizeJevSessionPin({})).toEqual({});
+    for (const value of [null, [], { ttlMs: JEV_SESSION_PIN_TTL_MIN_MS - 1 }, { ttlMs: JEV_SESSION_PIN_TTL_MAX_MS + 1 },
       { ttlMs: 90_000.5 }, { ttlMs: "20m" }, { ttlMs: 90_000, turns: 3 }]) {
       expect(normalizeJevSessionPin(value)).toBeUndefined();
     }
@@ -69,23 +84,39 @@ describe("JEV session pin settings", () => {
     for (const raw of ["59s", "25h", "20 m", "-1m", "1.5h", "m", ""]) expect(parseJevSessionPinDuration(raw)).toBeUndefined();
   });
 
-  test("only a JEV Combo may carry the pin, null clears it and the default stays off", () => {
-    const providers: Record<string, OcxProviderConfig> = { fixture: { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", models: ["m"] } };
+  test("only native OpenAI Decisions accepts the default no-expiry pin", () => {
+    const providers: Record<string, OcxProviderConfig> = {
+      fixture: { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", models: ["m"] },
+      native: { adapter: "jev-decision", baseUrl: "https://api.openai.com/v1/decisions", defaultModel: "gpt-5.5" },
+      generic: { adapter: "jev-decision", baseUrl: "https://decision.example/v1/systemone", defaultModel: "tev1" },
+    };
     const targets = [{ provider: "fixture", model: "m" }];
     expect(comboConfigIssues("auto", { strategy: "jev", targets, sessionPin: { ttlMs: TTL } }, providers)).toEqual([]);
     expect(comboConfigIssues("auto", { strategy: "jev", targets, sessionPin: null }, providers)).toEqual([]);
+    expect(comboConfigIssues("auto", { strategy: "jev", targets, sessionPin: false }, providers)).toEqual([]);
+    expect(comboConfigIssues("auto", { strategy: "jev", targets, decisionProvider: "native", sessionPin: {} }, providers)).toEqual([]);
+    expect(comboConfigIssues("auto", { strategy: "jev", targets, decisionProvider: "generic", sessionPin: {} }, providers)[0]?.path).toEqual(["sessionPin"]);
+    expect(comboConfigIssues("auto", { strategy: "jev", targets, decisionModel: "fixture/m", sessionPin: {} }, providers)[0]?.path).toEqual(["sessionPin"]);
     expect(comboConfigIssues("auto", { strategy: "failover", targets, sessionPin: { ttlMs: TTL } }, providers)[0]?.path).toEqual(["sessionPin"]);
+    expect(comboConfigIssues("auto", { strategy: "failover", targets, sessionPin: false }, providers)[0]?.path).toEqual(["sessionPin"]);
     expect(comboConfigIssues("auto", { strategy: "jev", targets, sessionPin: { ttlMs: 10 } }, providers)[0]?.path).toEqual(["sessionPin"]);
-    expect(normalizeComboConfig({ strategy: "jev", targets })).not.toHaveProperty("sessionPin");
+    expect(normalizeComboConfig({ strategy: "jev", targets }).sessionPin).toBeUndefined();
+    expect(normalizeComboConfig({ strategy: "jev", targets, sessionPin: null }).sessionPin).toBeUndefined();
+    expect(normalizeComboConfig({ strategy: "jev", targets, sessionPin: false }).sessionPin).toBe(false);
     expect(normalizeComboConfig({ strategy: "jev", targets, sessionPin: { ttlMs: TTL } }).sessionPin).toEqual({ ttlMs: TTL });
   });
 });
 
 describe("JEV session pin scope", () => {
-  test("never exists without the opt-in, a JEV strategy or an explicit session lane", () => {
-    expect(jevSessionPinScope({ combo: { strategy: "jev" }, comboId: "auto", admission: LOOPBACK, lane: "lane-a" })).toBeUndefined();
-    expect(jevSessionPinScope({ combo: { ...combo, strategy: "failover" }, comboId: "auto", admission: LOOPBACK, lane: "lane-a" })).toBeUndefined();
-    expect(jevSessionPinScope({ combo, comboId: "auto", admission: LOOPBACK, lane: undefined })).toBeUndefined();
+  test("only native OpenAI Decisions defaults on; other backends need an explicit timed pin", () => {
+    const args = { comboId: "auto", admission: LOOPBACK, lane: "lane-a" };
+    expect(jevSessionPinScope({ ...args, combo: { strategy: "jev" }, openAIDecisions: true })).toBeDefined();
+    expect(jevSessionPinScope({ ...args, combo: { strategy: "jev" }, openAIDecisions: false })).toBeUndefined();
+    expect(jevSessionPinScope({ ...args, combo: { strategy: "jev", sessionPin: {} }, openAIDecisions: false })).toBeUndefined();
+    expect(jevSessionPinScope({ ...args, combo: { strategy: "jev", sessionPin: { ttlMs: TTL } }, openAIDecisions: false })).toBeDefined();
+    expect(jevSessionPinScope({ ...args, combo: { strategy: "jev", sessionPin: false }, openAIDecisions: true })).toBeUndefined();
+    expect(jevSessionPinScope({ combo: { ...combo, strategy: "failover" }, openAIDecisions: false, comboId: "auto", admission: LOOPBACK, lane: "lane-a" })).toBeUndefined();
+    expect(jevSessionPinScope({ combo, openAIDecisions: false, comboId: "auto", admission: LOOPBACK, lane: undefined })).toBeUndefined();
   });
 
   test("an applied decision pins after it completes, and the pin replays its target and effort", () => {
@@ -119,7 +150,7 @@ describe("JEV session pin scope", () => {
     expect(scope().reuse([sol]).decision?.pinned).toBe(true);
   });
 
-  test("the idle window expires the pin and each completion on the pinned target renews it", () => {
+  test("an explicit idle window expires the pin and each completion on the pinned target renews it", () => {
     const pin = scope();
     pin.complete(sol.key, applied, captureConfigGeneration());
     clock += TTL - 1;
@@ -130,6 +161,48 @@ describe("JEV session pin scope", () => {
     clock += TTL;
     expect(pin.reuse([sol])).toEqual({ released: "expired" });
     expect(pin.reuse([sol])).toEqual({});
+  });
+
+  test("the OpenAI Decisions default pin survives a long pause and a proxy restart", () => {
+    const home = createTempHome("ocx-jev-session-pin-restart-");
+    const settings = { strategy: "jev" as const };
+    const openAIDecisions = true;
+    let lease: ReturnType<typeof acquireSpendLedgerOwner> | undefined;
+    try {
+      lease = acquireSpendLedgerOwner();
+      scope({ combo: settings, openAIDecisions }).complete(sol.key, applied, captureConfigGeneration());
+      clock += 30 * 24 * 60 * 60_000;
+      expect(scope({ combo: settings, openAIDecisions }).reuse([luna, sol]).decision?.targetKey).toBe(sol.key);
+      lease.release();
+      clearJevSessionPinsForTests();
+      lease = acquireSpendLedgerOwner();
+      expect(scope({ combo: settings, openAIDecisions }).reuse([luna, sol]).decision?.targetKey).toBe(sol.key);
+      expect(scope({ combo: settings, openAIDecisions, lane: "new-conversation" }).reuse([luna, sol])).toEqual({});
+      scope({ combo: settings, openAIDecisions }).forget();
+      lease.release();
+      clearJevSessionPinsForTests();
+      lease = acquireSpendLedgerOwner();
+      expect(scope({ combo: settings, openAIDecisions }).reuse([luna, sol])).toEqual({});
+    } finally {
+      try { lease?.release(); } finally { home.remove(); }
+    }
+  });
+
+  test("an explicitly timed non-OpenAI pin stays in memory across restart only", () => {
+    const home = createTempHome("ocx-jev-session-pin-memory-only-");
+    const timedCombo = { strategy: "jev" as const, sessionPin: { ttlMs: TTL } };
+    let lease: ReturnType<typeof acquireSpendLedgerOwner> | undefined;
+    try {
+      lease = acquireSpendLedgerOwner();
+      scope({ combo: timedCombo, openAIDecisions: false }).complete(sol.key, applied, captureConfigGeneration());
+      expect(scope({ combo: timedCombo, openAIDecisions: false }).reuse([sol]).decision?.targetKey).toBe(sol.key);
+      lease.release();
+      clearJevSessionPinsForTests();
+      lease = acquireSpendLedgerOwner();
+      expect(scope({ combo: timedCombo, openAIDecisions: false }).reuse([sol])).toEqual({});
+    } finally {
+      try { lease?.release(); } finally { home.remove(); }
+    }
   });
 
   test("a target that left the current choices, or lost the pinned effort, releases the pin", () => {

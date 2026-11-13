@@ -20,7 +20,10 @@ beforeEach(() => {
   config = {
     port: 10100,
     defaultProvider: "fixture",
-    providers: { fixture: { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", models: ["m"] } },
+    providers: {
+      fixture: { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", models: ["m"] },
+      native: { adapter: "jev-decision", baseUrl: "https://api.openai.com/v1/decisions", defaultModel: "gpt-5.5" },
+    },
     combos: { saved: { strategy: "jev", targets } },
   };
   saveConfig(config);
@@ -42,18 +45,42 @@ const put = (combo: unknown, id = "saved", renameFrom?: string) => api("PUT", { 
 const stored = () => JSON.parse(readFileSync(getConfigPath(), "utf8")).combos as Record<string, Record<string, unknown>>;
 
 describe("JEV session pin management (#7525)", () => {
-  test("the API stores the pin sparsely, keeps it across omitted saves and renames, and drops it on clear or switch", async () => {
+  test("other JEV methods remain unpinned by default; explicit false can be stored", async () => {
+    expect((await put({ strategy: "jev", targets }, "default")).status).toBe(200);
+    expect(stored().default).not.toHaveProperty("sessionPin");
+    expect((await (await api("GET")).json()).combos.find((row: { id: string }) => row.id === "default"))
+      .not.toHaveProperty("sessionPin");
+    expect((await put({ strategy: "jev", targets, sessionPin: false }, "default")).status).toBe(200);
+    expect(stored().default.sessionPin).toBe(false);
+    expect((await put({ strategy: "jev", targets, sessionPin: null }, "default")).status).toBe(200);
+    expect(stored().default).not.toHaveProperty("sessionPin");
+  });
+
+  test("the API keeps timed pins across omitted saves and renames, and drops them on strategy switch", async () => {
     expect((await put({ strategy: "jev", targets, sessionPin: { ttlMs: 1_200_000 } })).status).toBe(200);
     expect(stored().saved).toMatchObject({ sessionPin: { ttlMs: 1_200_000 } });
     expect((await (await api("GET")).json()).combos[0]).toMatchObject({ sessionPin: { ttlMs: 1_200_000 } });
-    // The dashboard does not send the field; its save must not turn the pin off.
+    // An older client may omit the field; its save must not change the custom pin.
     expect((await put({ strategy: "jev", targets }, "renamed", "saved")).status).toBe(200);
     expect(loadConfig().combos?.renamed?.sessionPin).toEqual({ ttlMs: 1_200_000 });
     expect((await put({ strategy: "jev", targets, sessionPin: null }, "renamed")).status).toBe(200);
     expect(stored().renamed).not.toHaveProperty("sessionPin");
     expect((await put({ strategy: "jev", targets, sessionPin: { ttlMs: 60_000 } }, "renamed")).status).toBe(200);
+    expect((await put({ strategy: "jev", targets, sessionPin: {} }, "renamed")).status).toBe(400);
+    expect(stored().renamed.sessionPin).toEqual({ ttlMs: 60_000 });
+    expect((await put({ strategy: "jev", targets, sessionPin: false }, "renamed")).status).toBe(200);
+    expect(stored().renamed.sessionPin).toBe(false);
+    expect((await put({ strategy: "jev", targets, sessionPin: { ttlMs: 60_000 } }, "renamed")).status).toBe(200);
     expect((await put({ strategy: "failover", targets }, "renamed")).status).toBe(200);
     expect(stored().renamed).not.toHaveProperty("sessionPin");
+  });
+
+  test("only native OpenAI Decisions accepts an empty pin to restore its default", async () => {
+    expect((await put({ strategy: "jev", targets, decisionProvider: "native", sessionPin: { ttlMs: 60_000 } }, "native-combo")).status).toBe(200);
+    expect(stored()["native-combo"].sessionPin).toEqual({ ttlMs: 60_000 });
+    expect((await put({ strategy: "jev", targets, decisionProvider: "native", sessionPin: {} }, "native-combo")).status).toBe(200);
+    expect(stored()["native-combo"]).not.toHaveProperty("sessionPin");
+    expect((await put({ strategy: "jev", targets, decisionProvider: "native", decisionModel: "fixture/m", sessionPin: {} }, "bad-native")).status).toBe(400);
   });
 
   test("the API refuses an out-of-range or non-JEV pin without writing", async () => {
@@ -63,17 +90,21 @@ describe("JEV session pin management (#7525)", () => {
     expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
   });
 
-  test("the CLI sets, keeps, clears and rejects the pin", async () => {
+  test("the CLI sets, keeps, disables and rejects the pin", async () => {
     expect(await handleComboCommand(["set", "saved", "--session-pin", "20m", "--json"], deps)).toBe(0);
     expect(config.combos?.saved?.sessionPin).toEqual({ ttlMs: 1_200_000 });
     expect(await handleComboCommand(["set", "saved", "--decision-timeout", "5000", "--json"], deps)).toBe(0);
     expect(config.combos?.saved?.sessionPin).toEqual({ ttlMs: 1_200_000 });
     expect(await handleComboCommand(["set", "saved", "--session-pin", "-", "--json"], deps)).toBe(0);
-    expect(config.combos?.saved).not.toHaveProperty("sessionPin");
+    expect(config.combos?.saved?.sessionPin).toBe(false);
     for (const value of ["30s", "2d", "soon"]) {
       expect(await handleComboCommand(["set", "saved", "--session-pin", value, "--json"], deps)).not.toBe(0);
     }
     expect(await handleComboCommand(["set", "saved", "--strategy", "failover", "--session-pin", "20m", "--json"], deps)).not.toBe(0);
+    expect(await handleComboCommand(["set", "saved", "--session-pin", "on", "--json"], deps)).not.toBe(0);
+    expect(await handleComboCommand(["set", "saved", "--decision-provider", "native", "--session-pin", "on", "--json"], deps)).toBe(0);
+    expect(config.combos?.saved?.decisionProvider).toBe("native");
+    expect(config.combos?.saved?.sessionPin).toBeUndefined();
     expect(await handleComboCommand(["set", "saved", "--session-pin", "1h", "--json"], deps)).toBe(0);
     expect(await handleComboCommand(["set", "saved", "--strategy", "failover", "--json"], deps)).toBe(0);
     expect(config.combos?.saved).not.toHaveProperty("sessionPin");

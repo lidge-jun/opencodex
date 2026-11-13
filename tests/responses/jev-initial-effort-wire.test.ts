@@ -75,7 +75,8 @@ function fixture(lane: Lane, backend: Backend, effort: "low" | "high" | null, fa
   const config: OcxConfig = {
     port: 0, defaultProvider: "a",
     providers: { a: provider(inference.baseUrl, effort === null ? { reasoningEfforts: [] } : {}) },
-    combos: { auto: { strategy: "jev", targets: [{ provider: "a", model: "m" }] } },
+    // This file verifies per-request decision and effort wiring, not session reuse.
+    combos: { auto: { strategy: "jev", sessionPin: false, targets: [{ provider: "a", model: "m" }] } },
     ...(lane === "native" ? { protocols: { rollout: { nativeChatCombos: true } } } : {}),
   };
   if (backend === "model") {

@@ -1,5 +1,5 @@
 /**
- * Opt-in JEV session pin settings (#7525). Dependency-free so combo validation, the management
+ * JEV session pin settings (#7525). Dependency-free so combo validation, the management
  * API and the CLI share one grammar and one range.
  */
 
@@ -9,8 +9,8 @@ export const JEV_SESSION_PIN_TTL_MIN_MS = 60_000;
 export const JEV_SESSION_PIN_TTL_MAX_MS = 86_400_000;
 
 export interface JevSessionPinConfig {
-  /** Idle window after the last successful pinned turn; a quieter session is decided afresh. */
-  ttlMs: number;
+  /** Explicit idle expiry. An absent value means no expiry only for native OpenAI Decisions. */
+  ttlMs?: number;
 }
 
 /**
@@ -28,10 +28,11 @@ export const JEV_SESSION_PIN_REASONS = [
 export type JevSessionPinReason = (typeof JEV_SESSION_PIN_REASONS)[number];
 export type JevSessionPinRelease = Exclude<JevSessionPinReason, "session">;
 
-/** The canonical pin setting, or undefined for anything that is not exactly `{ ttlMs }` in range. */
+/** The canonical setting: `{}` for native OpenAI's default, or an explicit in-range idle window. */
 export function normalizeJevSessionPin(value: unknown): JevSessionPinConfig | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const keys = Object.keys(value);
+  if (keys.length === 0) return {};
   if (keys.length !== 1 || keys[0] !== "ttlMs") return undefined;
   const ttlMs = (value as { ttlMs?: unknown }).ttlMs;
   return typeof ttlMs === "number" && Number.isSafeInteger(ttlMs)

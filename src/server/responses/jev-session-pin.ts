@@ -1,9 +1,9 @@
 /**
- * Opt-in JEV session pin (#7525).
+ * Native OpenAI Decisions defaults to a JEV session pin (#7525); other decision methods retain
+ * their opt-in timed pins. `sessionPin: false` opts the native OpenAI route out.
  *
- * A JEV Combo decides a target per request, so consecutive turns of one conversation can land on
- * different providers and each switch starts with a cold provider prompt cache. With
- * `sessionPin` set, a session keeps the target JEV chose for it while the session stays active.
+ * Keep the chosen target for an explicit client conversation. Native OpenAI Decisions has no idle
+ * expiry by default; other methods require an explicit `sessionPin.ttlMs` and remain in memory.
  *
  * Identity. A pin is keyed by the admitted caller (the salted context principal of the matched
  * data-plane key, or `loopback`), the Combo id and the explicit session lane from
@@ -12,23 +12,27 @@
  * identity on its own.
  *
  * Lifetime. A pin is written only after the target JEV applied for this session completes a
- * response, and it is refreshed by every later completion on that same target, including tool-loop
- * continuations. It is released when the session stays idle past `ttlMs`, when any config
+ * response. An explicitly timed pin is refreshed by later completions on that same target.
+ * It is released when a configured `ttlMs` elapses, when any live config
  * generation change happens after it was written, when its target is not among the request's
  * current JEV choices (disabled, removed, cooling down, quota exhausted, metered or otherwise
  * ineligible), when its effort is no longer offered, when opted-in quota evidence reads
  * `nearly_exhausted`, and when any target of a pinned session fails; a request that was already in
  * flight when that failure was recorded cannot write the pin back. A cancelled send writes and
- * releases nothing. Storage is process-local and bounded by `JEV_SESSION_PIN_CAPACITY`.
+ * releases nothing. Loopback pins are backed by private local storage across clean restarts.
+ * Authenticated callers retain process-local pins, as their principals are process-local.
  */
+import { createHash } from "node:crypto";
 import type { JevCandidate, JevDecision, JevDecisionBackend } from "../../combos/jev";
 import { jevQuotaSignalForTarget } from "../../combos/jev-quota";
 import { JEV_QUOTA_DEFAULT_TIERS, normalizeJevQuotaTiers, type JevQuotaTiers } from "../../combos/jev-quota-config";
 import type { JevSessionPinRelease } from "../../combos/jev-session-pin-config";
 import type { NormalizedComboConfig } from "../../combos/types";
+import { onSpendLedgerOwnerReleased } from "../../lib/spend-ledger-owner";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import type { OcxComboDefaultEffort, OcxConfig } from "../../types";
 import type { DataPlaneAdmission } from "../auth-cors";
+import { deleteStoredJevSessionPin, readStoredJevSessionPin, saveJevSessionPin } from "./jev-session-pin-store";
 
 export const JEV_SESSION_PIN_ROUTE_REASON = "jev-session-pin";
 export const JEV_SESSION_PIN_CAPACITY = 512;
@@ -39,6 +43,7 @@ interface PinEntry {
   backend: JevDecisionBackend;
   at: number;
   generation: number;
+  comboFingerprint?: string;
 }
 
 const pins = new Map<string, PinEntry>();
@@ -61,8 +66,8 @@ function callerNamespace(admission: DataPlaneAdmission | undefined): string {
   return admission.kind === "configured" ? `key:${admission.keyId}` : admission.kind;
 }
 
-function write(key: string, entry: PinEntry): void {
-  // Insertion order is recency order; evicting from the front drops the least recent session.
+function cache(key: string, entry: PinEntry): void {
+  // Evict only the memory copy of a durable pin; it can be read back from disk.
   pins.delete(key);
   pins.set(key, entry);
   while (pins.size > JEV_SESSION_PIN_CAPACITY) {
@@ -113,28 +118,54 @@ export interface JevSessionPinScope {
 /** The pin scope for one Combo request, or undefined when this request can never pin. */
 export function jevSessionPinScope(args: {
   combo: Pick<NormalizedComboConfig, "strategy" | "sessionPin">;
+  openAIDecisions: boolean;
   comboId: string;
   admission: DataPlaneAdmission | undefined;
   lane: string | undefined;
   now?: () => number;
 }): JevSessionPinScope | undefined {
-  const ttlMs = args.combo.sessionPin?.ttlMs;
-  if (args.combo.strategy !== "jev" || ttlMs === undefined || !args.lane) return undefined;
+  const ttlMs = args.combo.sessionPin === false ? undefined : args.combo.sessionPin?.ttlMs;
+  if (args.combo.strategy !== "jev" || args.combo.sessionPin === false || !args.lane
+    || !args.openAIDecisions && ttlMs === undefined) return undefined;
   const key = `${callerNamespace(args.admission)}\u0000${args.comboId}\u0000${args.lane}`;
+  // The process-local generation cannot be compared across restarts. The normalized Combo
+  // fingerprint detects edits while the proxy was down without persisting config or credentials.
+  const comboFingerprint = args.openAIDecisions && args.admission?.kind === "loopback"
+    ? createHash("sha256").update(JSON.stringify(args.combo)).digest("hex")
+    : undefined;
   const now = args.now ?? Date.now;
   const fence = failureFences.get(key) ?? 0;
   const startedAtSequence = failureSequence;
-  const release = (reason: JevSessionPinRelease): JevSessionPinReuse => {
+  const remove = (): void => {
     pins.delete(key);
+    if (comboFingerprint) deleteStoredJevSessionPin(key);
+  };
+  const read = (): PinEntry | undefined => {
+    const live = pins.get(key);
+    if (live || !comboFingerprint) return live;
+    const stored = readStoredJevSessionPin(key);
+    if (!stored) return undefined;
+    const entry = { ...stored, generation: captureConfigGeneration() };
+    cache(key, entry);
+    return entry;
+  };
+  const write = (entry: PinEntry): void => {
+    cache(key, entry);
+    if (comboFingerprint) saveJevSessionPin(key, { ...entry, comboFingerprint });
+  };
+  const release = (reason: JevSessionPinRelease): JevSessionPinReuse => {
+    remove();
     return { released: reason };
   };
   return {
     reuse(choices, quota) {
-      const entry = pins.get(key);
+      const entry = read();
       if (!entry) return {};
-      if (entry.generation !== captureConfigGeneration()) return release("config_changed");
+      if (entry.generation !== captureConfigGeneration() || entry.comboFingerprint !== comboFingerprint) {
+        return release("config_changed");
+      }
       const at = now();
-      if (at < entry.at || at - entry.at >= ttlMs) return release("expired");
+      if (ttlMs !== undefined && (at < entry.at || at - entry.at >= ttlMs)) return release("expired");
       const candidate = choices.find(choice => choice.key === entry.targetKey);
       if (!candidate) return release("target_unavailable");
       if (entry.effort !== null && !candidate.reasoningEfforts.includes(entry.effort)) {
@@ -146,6 +177,7 @@ export function jevSessionPinScope(args: {
         const signal = jevQuotaSignalForTarget(quota.config, identity.provider, identity.model, at, tiers);
         if (signal.tier === "nearly_exhausted") return release("quota_nearly_exhausted");
       }
+      cache(key, entry);
       return {
         decision: {
           backend: entry.backend,
@@ -166,36 +198,43 @@ export function jevSessionPinScope(args: {
       if ((currentFence ?? 0) !== fence) return;
       if (currentFence === undefined && fenceEvictedAt > startedAtSequence) return;
       if (!decision) {
-        const entry = pins.get(key);
-        if (entry && entry.targetKey === completedTargetKey && entry.generation === writerGeneration) {
-          write(key, { ...entry, at: now() });
+        if (ttlMs === undefined) return;
+        const entry = read();
+        if (entry && entry.targetKey === completedTargetKey && entry.generation === writerGeneration
+          && entry.comboFingerprint === comboFingerprint) {
+          write({ ...entry, at: now() });
         }
         return;
       }
       // Only an applied decision pins; a fail-open fallback leaves the next turn to decide again.
       if (decision.gate !== "apply" || decision.targetKey !== completedTargetKey) return;
-      write(key, {
+      if (decision.pinned && ttlMs === undefined) return;
+      write({
         targetKey: decision.targetKey,
         effort: decision.effort,
         backend: decision.backend,
         at: now(),
         generation: writerGeneration,
+        comboFingerprint,
       });
     },
     forget() {
-      pins.delete(key);
+      remove();
       fenceFailure(key);
     },
   };
 }
 
-/** Test-only reset, alongside the Combo recall and rotation resets. */
-export function clearJevSessionPinsForTests(): void {
+function clearLivePins(): void {
   pins.clear();
   failureFences.clear();
   failureSequence = 0;
   fenceEvictedAt = 0;
 }
+onSpendLedgerOwnerReleased(clearLivePins);
+
+/** Test-only reset, alongside the Combo recall and rotation resets. */
+export const clearJevSessionPinsForTests = clearLivePins;
 
 /** Test-only view of the retained pin count. */
 export function jevSessionPinCountForTests(): number {

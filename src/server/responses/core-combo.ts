@@ -119,6 +119,7 @@ import { beginRequestAttempt, sealRequestAttemptIdentity, finishRequestAttempt }
 import { rememberComboForLane } from "./combo-session-recall";
 import { COMBO_TOOL_LOOP_PIN_REASON, toolLoopPinnedPick } from "./combo-tool-loop-pin";
 import { JEV_SESSION_PIN_ROUTE_REASON, jevSessionPinScope } from "./jev-session-pin";
+import { isOpenAIDecisionProvider } from "../../combos/jev-decision-contract";
 import { runTurnAdapterSseResponses } from "./core-lifetime";
 import { normalizePersistedJevDecision } from "../../usage/jev-stats";
 import {
@@ -701,10 +702,20 @@ export async function executeComboResponses(
     eligible: targetEligible,
     now: initialNow,
   });
-  // Opt-in JEV session pin (#7525); override routes neither read nor write it, like the lane recall.
+  // Native OpenAI Decisions defaults on; other JEV backends need an explicit timed pin.
   const jevPin = options.compactionRoutingOverride || options.mainHardLockFallbackOverride
     ? undefined
-    : jevSessionPinScope({ combo, comboId, admission: options.admission, lane: sessionLaneIdFromRequest(req.headers) });
+    : jevSessionPinScope({
+        combo,
+        openAIDecisions: !combo.decisionModel && isOpenAIDecisionProvider({
+          name: combo.decisionProvider,
+          adapter: config.providers[combo.decisionProvider ?? ""]?.adapter,
+          baseUrl: config.providers[combo.decisionProvider ?? ""]?.baseUrl,
+        }),
+        comboId,
+        admission: options.admission,
+        lane: sessionLaneIdFromRequest(req.headers),
+      });
 
   if (unreadableEncryptedAgentTask && !pick) {
     pick = await pickWithWait({

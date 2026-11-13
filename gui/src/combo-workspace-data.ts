@@ -16,6 +16,7 @@ import {
   jevDecisionRowIssue,
   jevDecisionMethod,
   jevDecisionModelForbidden,
+  isOpenAIDecisionProvider,
 } from "./jev-decision-service";
 
 export { SUPPORTED_NATIVE_OPENAI_SLUGS };
@@ -172,8 +173,8 @@ export interface ComboItem {
   decisionModel?: string | null;
   /** `jev` only: decision deadline in ms; null/omitted = the server default. */
   decisionTimeoutMs?: number | null;
-  /** `jev` only: undefined preserves an omitted setting; null explicitly turns the pin off. */
-  sessionPin?: JevSessionPinConfig | null;
+  /** Native OpenAI Decisions defaults on; other JEV methods only pin when a TTL is set. */
+  sessionPin?: JevSessionPinConfig | false | null;
   targets: ComboTarget[];
 }
 
@@ -303,7 +304,12 @@ export function parseComboList(payload: unknown): ComboItem[] {
     const decisionProvider = normalizeDecisionProvider(r.decisionProvider);
     const decisionModel = normalizeAlias(r.decisionModel);
     const decisionTimeoutMs = normalizeDecisionTimeoutMs(r.decisionTimeoutMs);
-    const sessionPin = r.sessionPin === null ? null : normalizeJevSessionPin(r.sessionPin);
+    const strategy = normalizeStrategy(r.strategy);
+    const sessionPin = strategy !== "jev"
+      ? undefined
+      : r.sessionPin === false
+        ? false
+        : r.sessionPin == null ? undefined : normalizeJevSessionPin(r.sessionPin);
     out.push({
       id,
       model: typeof r.model === "string" && r.model.trim()
@@ -312,7 +318,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
       alias: normalizeAlias(r.alias),
       nativeAlias: r.nativeAlias === true,
       displayName: normalizeAlias(r.displayName),
-      strategy: normalizeStrategy(r.strategy),
+      strategy,
       stickyLimit: normalizeStickyLimit(r.stickyLimit),
       defaultEffort: normalizeDefaultEffort(r.defaultEffort),
       imageInput: normalizeImageInput(r.imageInput),
@@ -496,8 +502,7 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
       (a.decisionProvider ?? null) !== (b.decisionProvider ?? null)
       || (a.decisionModel ?? null) !== (b.decisionModel ?? null)
       || (a.decisionTimeoutMs ?? null) !== (b.decisionTimeoutMs ?? null)
-      || (a.sessionPin === undefined) !== (b.sessionPin === undefined)
-      || (a.sessionPin?.ttlMs ?? null) !== (b.sessionPin?.ttlMs ?? null)
+      || sessionPinDraftKey(a.sessionPin) !== sessionPinDraftKey(b.sessionPin)
     ))
   ) return false;
   if (a.targets.length !== b.targets.length) return false;
@@ -509,6 +514,10 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
       && targetReasoningEffortsEqual(t, o)
       && (t.modelProfile ?? "") === (o.modelProfile ?? "");
   });
+}
+
+function sessionPinDraftKey(value: ComboItem["sessionPin"]): number | false | null {
+  return value === false ? false : value?.ttlMs ?? null;
 }
 
 export function toPutBody(
@@ -531,7 +540,7 @@ export function toPutBody(
     decisionProvider?: string | null;
     decisionModel?: string | null;
     decisionTimeoutMs?: number | null;
-    sessionPin?: JevSessionPinConfig | null;
+    sessionPin?: JevSessionPinConfig | false | null;
   };
 } {
   const weighted = item.strategy === "round-robin" || item.strategy === "random";
@@ -562,8 +571,9 @@ export function toPutBody(
       ...(item.alias && item.alias.trim() ? { alias: item.alias.trim() } : {}),
       ...(item.nativeAlias ? { nativeAlias: true } : {}),
       ...(item.displayName && item.displayName.trim() ? { displayName: item.displayName.trim() } : {}),
-      // JEV only: explicit null selects the default, since the server keeps an omitted field.
-      // Other strategies omit both; the server drops stored values and rejects sent ones.
+      // JEV only: omission lets the selected method apply its own default; explicit false/TTL
+      // overrides are sent, while an explicit empty object restores the native OpenAI default.
+      // Other strategies omit these; the server drops stored values and rejects sent ones.
       // One normalized model value drives both selectors, so a blank model input cannot send
       // provider null and model null together and silently select TypeSafe.
       ...(item.strategy === "jev"
@@ -571,7 +581,11 @@ export function toPutBody(
             decisionProvider: item.decisionModel?.trim() ? null : normalizeDecisionProvider(item.decisionProvider),
             decisionModel: item.decisionModel?.trim() || null,
             decisionTimeoutMs: item.decisionTimeoutMs ?? null,
-            ...(item.sessionPin !== undefined ? { sessionPin: item.sessionPin } : {}),
+            ...(item.sessionPin === false
+              ? { sessionPin: false }
+              : item.sessionPin?.ttlMs !== undefined
+                ? { sessionPin: { ttlMs: item.sessionPin.ttlMs } }
+                : item.sessionPin != null ? { sessionPin: {} } : {}),
           }
         : {}),
     },
@@ -684,8 +698,13 @@ export function validateComboDraft(
     }
   }
 
-  if (item.strategy === "jev" && item.sessionPin != null && !normalizeJevSessionPin(item.sessionPin)) {
-    return "invalidSessionPin";
+  if (item.strategy === "jev" && item.sessionPin !== false && item.sessionPin != null) {
+    const pin = normalizeJevSessionPin(item.sessionPin);
+    const providerId = normalizeDecisionProvider(item.decisionProvider);
+    const provider = providerId && Object.hasOwn(options.providers, providerId) ? options.providers[providerId] : undefined;
+    const nativeOpenAI = !item.decisionModel?.trim()
+      && isOpenAIDecisionProvider({ name: providerId ?? undefined, adapter: provider?.adapter, baseUrl: provider?.baseUrl });
+    if (!pin || pin.ttlMs === undefined && !nativeOpenAI) return "invalidSessionPin";
   }
   if (item.strategy === "jev" && item.decisionTimeoutMs != null
     && (!Number.isInteger(item.decisionTimeoutMs)
@@ -737,7 +756,7 @@ export const OPENAI_AUTO_MODEL_PROFILES: Readonly<Record<typeof OPENAI_AUTO_MODE
   "gpt-6-luna": "Lowest-resource option for clear, bounded tasks with an obvious result: short replies, extraction, classification, formatting, transformations, and structured summaries. Prefer when deeper reasoning or visual interaction is unnecessary.",
 };
 
-/** Build the opt-in JEV Combo template from models that are available right now. */
+/** Build the default-on, no-expiry JEV Combo template from models that are available right now. */
 export function jevAutoDraft(
   models: readonly { provider: string; id: string }[],
   eligibleProviders?: ReadonlySet<string>,

@@ -92,10 +92,19 @@ describe("ocx combo set --targets keeps the stored strategy (#7579)", () => {
 
   test("JEV-only flags with replaced targets are checked against the stored strategy", async () => {
     expect(await handleComboCommand(["set", "auto", "--targets", "fixture/n", "--session-pin", "1h", "--json"], deps)).toBe(0);
-    expect(stored().auto).toMatchObject({ ...jevPolicy, sessionPin: { ttlMs: 3_600_000 }, targets: [{ provider: "fixture", model: "n" }] });
+    expect(stored().auto).toMatchObject({
+      strategy: "jev",
+      decisionProvider: "tev",
+      decisionTimeoutMs: 6000,
+      decisionQuotaSignals: true,
+      decisionQuotaTiers: { moderate: 40 },
+      targets: [{ provider: "fixture", model: "n" }],
+    });
+    expect(stored().auto).toMatchObject({ sessionPin: { ttlMs: 3_600_000 } });
     config.combos!.plain = { strategy: "failover", targets: [{ provider: "fixture", model: "m" }] };
     saveConfig(config);
     expect(await handleComboCommand(["set", "plain", "--targets", "fixture/n", "--session-pin", "1h", "--json"], deps)).toBe(2);
+    expect(await handleComboCommand(["set", "plain", "--targets", "fixture/n", "--session-pin", "-", "--json"], deps)).toBe(2);
     expect(stored().plain).toMatchObject({ strategy: "failover", targets: [{ provider: "fixture", model: "m" }] });
   });
 

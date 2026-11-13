@@ -66,3 +66,12 @@ export function isDecisionsEndpoint(url: string): boolean {
     return false;
   }
 }
+
+/** Native OpenAI Decisions only; hosted and self-hosted System One endpoints are not this service. */
+export function isOpenAIDecisionProvider(row: { adapter?: string; baseUrl?: string; name?: string } | undefined): boolean {
+  const baseUrl = row?.baseUrl ?? "";
+  return row?.name !== CANONICAL_JEV_DECISION_PROVIDER
+    && row?.adapter === "jev-decision"
+    && isDecisionsEndpoint(baseUrl)
+    && new URL(baseUrl).hostname === "api.openai.com";
+}

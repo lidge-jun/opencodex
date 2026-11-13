@@ -246,19 +246,25 @@ or an opencodex model route, with the timeout and a Test probe; there is no sepa
 
 ## Session pin
 
-`sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
-owns its 60000..86400000 ms range, the CLI duration grammar and the closed `pinReason` vocabulary.
-The shared JEV Decision method editor exposes a pin checkbox and an exact millisecond idle window.
-GUI drafts preserve omission from older responses; enable saves `{ ttlMs }`, disable saves `null`,
-and invalid or blank enabled windows block saving. Failed saves retain the draft for retry.
+`sessionPin` defaults to an enabled, no-expiry pin only when the selected service is the native
+OpenAI Decisions endpoint (`https://api.openai.com/v1/decisions`) on a configured
+`adapter: "jev-decision"` row (#7525). `false` opts out; `{ ttlMs }` overrides the default with
+an idle window. TypeSafe, other System One-compatible services and model-routed JEV remain
+opt-in: omission leaves their existing per-request decision behavior unchanged, and `{ ttlMs }`
+enables a process-local pin. `src/combos/jev-session-pin-config.ts` owns the 60000..86400000 ms
+range, CLI duration grammar and closed `pinReason` vocabulary. The shared editor defaults the
+checkbox on only for native OpenAI Decisions; other methods require an explicit timed pin. It
+blocks invalid and unsupported empty pin settings. Failed saves retain the draft for retry.
 Fresh Combo rows supersede the optimistic saved baseline, including same-ID pin changes.
-Validation, sparse storage, omitted-field preservation on JEV saves and removal on a strategy switch follow
-the quota fields above. Absent, `src/server/responses/core-combo.ts` asks JEV on every request exactly as before.
-`src/server/responses/jev-session-pin.ts` keys a process-local pin by the admitted caller (context principal,
+Validation accepts `false` for JEV and `{}` only for native OpenAI Decisions; sparse storage omits
+default-on settings, omitted-field preservation supports older clients, and switching strategies
+removes the setting. Without a session lane, or when the selected method has no explicit timed pin,
+`src/server/responses/core-combo.ts` asks the chosen JEV method on each request.
+`src/server/responses/jev-session-pin.ts` keys a pin by the admitted caller (context principal,
 key id, or `loopback`), the Combo id and the explicit session lane from `sessionLaneIdFromRequest`; a request
 without a lane never pins and no body field is an identity. A pin is written only when the target of an applied
 (`gate: "apply"`) decision completes through the Combo callback gate, and every completion on that target
-(tool-loop continuations included) renews its idle window. Reuse runs after current eligibility: the pinned
+(tool-loop continuations included) refreshes an explicitly configured idle timeout. Reuse runs after current eligibility: the pinned
 key must be among this request's JEV choices with its effort still offered, and opted-in quota evidence must
 not read `nearly_exhausted`; otherwise the pin is released and JEV decides. Any recorded target failure in the
 request forgets the pin, cancellation does not, and a config generation change invalidates both stored pins and
@@ -269,7 +275,14 @@ attempts count every JEV-routed request, pinned or decided. The CLI projection r
 Besides a classified failure response, a non-cancellation dispatch, preflight or failure-read exception and a
 committed stream that ends `failed` also forget the pin; `incomplete` is an answer and keeps it. Each forget stamps a
 per-session failure fence, so a request already in flight on that session cannot write the pin back.
-The store holds at most 512 pins with least-recently-written eviction. Coverage:
+Only native OpenAI Decisions loopback pins are stored in the private, single-writer-owned SQLite file
+`jev-session-pins.sqlite`. It stores a keyed digest of the caller/session/Combo key rather than raw
+identity, plus the selected target, effort, decision backend and a normalized-Combo fingerprint;
+it stores no prompts, API keys or raw session identifiers. Pins restore only after clean shutdown,
+which marks the file clean; interrupted shutdown clears the old pins at next open. Authenticated
+OpenAI pins and all other JEV pins remain process-local. Persistent
+storage is capped at 16384 rows; the 512-entry in-memory cache evicts only its local copy, and a new
+pin is memory-only if persistent storage is full. Coverage:
 `tests/routing/jev-session-pin.test.ts`, `tests/server/server-jev-session-pin.test.ts` and
 `tests/cli/cli-combo-session-pin.test.ts`.
 

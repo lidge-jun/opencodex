@@ -33,7 +33,7 @@ const USAGE = `Usage:
       [--jev-effort-mode <decide|client>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->]
-      [--session-pin <duration|->] (e.g. 20m; keeps a session on JEV's target while active)
+      [--session-pin <on|duration|->] (native OpenAI default; other methods need a duration; - disables)
       (jev only; the provider must be a configured jev-decision row)
       [--rename-from <id>] [--json]
   ocx combo stats <id> [--range <7d|30d|all>] [--json]
@@ -147,9 +147,11 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   try { parsedQuotaTiers = quotaTiers === undefined || quotaTiers === "-" ? null : normalizeJevQuotaTiers(JSON.parse(quotaTiers)); } catch { throw new CliUsageError("invalid --decision-quota-tiers JSON", USAGE); }
   if (quotaTiers !== undefined && quotaTiers !== "-" && !parsedQuotaTiers) throw new CliUsageError("quota tiers must be finite 0..100 and strictly ascending", USAGE);
   const sessionPinRaw = takeOption(args, "--session-pin");
-  const sessionPinMs = sessionPinRaw === undefined || sessionPinRaw === "-" ? undefined : parseJevSessionPinDuration(sessionPinRaw);
-  if (sessionPinRaw !== undefined && sessionPinRaw !== "-" && sessionPinMs === undefined) {
-    throw new CliUsageError("--session-pin must be a duration from 1m to 24h (for example 90s, 20m, 1h, or milliseconds), or -", USAGE);
+  const sessionPinMs = sessionPinRaw === undefined || sessionPinRaw === "-" || sessionPinRaw === "on"
+    ? undefined
+    : parseJevSessionPinDuration(sessionPinRaw);
+  if (sessionPinRaw !== undefined && sessionPinRaw !== "-" && sessionPinRaw !== "on" && sessionPinMs === undefined) {
+    throw new CliUsageError("--session-pin must be on, a duration from 1m to 24h (for example 90s, 20m, 1h, or milliseconds), or -", USAGE);
   }
   const decisionTimeout = takeOption(args, "--decision-timeout");
   let decisionTimeoutMs: number | null | undefined;
@@ -174,7 +176,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
     if (decisionModel !== undefined && decisionModel !== "-") throw new CliUsageError("--decision-model applies only to the jev strategy", USAGE);
     if (decisionProvider !== undefined && decisionProvider !== "-") throw new CliUsageError("--decision-provider applies only to the jev strategy", USAGE);
     if (quotaSignals !== undefined && quotaSignals !== "-" || quotaTiers !== undefined && quotaTiers !== "-") throw new CliUsageError("quota settings apply only to jev", USAGE);
-    if (sessionPinMs !== undefined) throw new CliUsageError("--session-pin applies only to the jev strategy", USAGE);
+    if (sessionPinRaw !== undefined) throw new CliUsageError("--session-pin applies only to the jev strategy", USAGE);
     if (decisionTimeoutMs != null) throw new CliUsageError("--decision-timeout applies only to the jev strategy", USAGE);
     if (additional.jevEffortMode === "client") throw new CliUsageError("--jev-effort-mode client applies only to the jev strategy", USAGE);
   };
@@ -222,7 +224,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (decisionTimeoutMs !== undefined) combo.decisionTimeoutMs = decisionTimeoutMs;
   if (quotaSignals !== undefined) combo.decisionQuotaSignals = quotaSignals === "-" ? null : quotaSignals === "on";
   if (quotaTiers !== undefined) combo.decisionQuotaTiers = parsedQuotaTiers;
-  if (sessionPinRaw !== undefined) combo.sessionPin = sessionPinMs === undefined ? null : { ttlMs: sessionPinMs };
+  if (sessionPinRaw !== undefined) combo.sessionPin = sessionPinRaw === "-" ? false : sessionPinRaw === "on" ? {} : { ttlMs: sessionPinMs! };
   if (strategy !== "jev") {
     delete combo.decisionProvider;
     delete combo.decisionModel;

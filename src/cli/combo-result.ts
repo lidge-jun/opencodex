@@ -48,9 +48,12 @@ function publicCombo(value: unknown): Record<string, unknown> {
       result[key] = { enabled: child.enabled, ...(child.intervalMs !== undefined ? { intervalMs: child.intervalMs } : {}) };
       continue;
     } else if (key === "sessionPin") {
-      const pin = normalizeJevSessionPin(child);
-      if (!pin) invalid();
-      result[key] = pin;
+      if (child === false) result[key] = false;
+      else {
+        const pin = normalizeJevSessionPin(child);
+        if (!pin) invalid();
+        result[key] = pin;
+      }
       continue;
     } else if (key === "nativeAlias" || key === "allowMeteredTargets" || key === "decisionQuotaSignals") {
       if (typeof child !== "boolean") invalid();
