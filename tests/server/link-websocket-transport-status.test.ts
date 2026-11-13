@@ -169,7 +169,7 @@ describe("through a real Home's management routes (T5e2-R1-01, -02)", () => {
     expect(after.ws?.holds).toBe(0);
   });
 
-  test("the traffic book counts relayed HTTP requests and none of a link WebSocket's turn (#3023 counters unchanged)", async () => {
+  test("the traffic book counts a link WebSocket as one request of payload bytes, and relayed HTTP requests as before", async () => {
     dir = mkdtempSync(join(tmpdir(), "ocx-link-ws-traffic-home-"));
     process.env.OPENCODEX_HOME = dir;
     codexHome = installIsolatedCodexHome("ocx-link-ws-traffic-codex-");
@@ -192,21 +192,24 @@ describe("through a real Home's management routes (T5e2-R1-01, -02)", () => {
     clients.push(ws);
     const session = await ws.challenge({ keyId: KEY_ID, linkId: LINK, fingerprint });
     expect((await ws.upgrade({ nonce: session.nonce, bearer: SECRET })).status).toBe(101);
-    ws.sendJson({ type: "response.create", model: "fixture/fixture", input: [{ role: "user", content: [{ type: "input_text", text: "count me not" }] }] });
+    const create = JSON.stringify({ type: "response.create", model: "fixture/fixture", input: [{ role: "user", content: [{ type: "input_text", text: "count me" }] }] });
+    ws.sendText(create);
     const seen = await ws.until(message => message.type === "text" && ["error", "response.failed", "response.completed", "response.incomplete"].includes(String((JSON.parse(message.data) as { type?: unknown }).type)));
     expect(seen.at(-1)?.type).toBe("text");
     const afterSocket = await row();
     expect(afterSocket.ws?.upgrades).toBe(1);
-    expect(afterSocket.traffic).toMatchObject({ requests: 0, toHomeBytes: 0, fromHomeBytes: 0, toHomeUncounted: 0 });
+    // The socket's create toward the Home, and the payload of every message the Child read back, without framing.
+    const received = seen.reduce((sum, message) => sum + (message.type === "text" ? Buffer.byteLength(message.data) : 0), 0);
+    expect(afterSocket.traffic).toMatchObject({ requests: 1, toHomeBytes: Buffer.byteLength(create), fromHomeBytes: received, toHomeUncounted: 0 });
 
-    // Control: a relayed HTTP request on the same link is counted, so the zero above is not an unwired book.
+    // A relayed HTTP request on the same link is counted as before, on top of the socket.
     const http = await LinkWireClient.open(port);
     clients.push(http);
     const relay = await http.challenge({ keyId: KEY_ID, linkId: LINK, fingerprint });
     const body = JSON.stringify({ model: "fixture/fixture", input: "count me", stream: false });
     http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", authorization: "Bearer " + SECRET, "x-opencodex-link-session": relay.nonce }, body);
     await http.readHead();
-    expect((await row()).traffic).toMatchObject({ requests: 1, toHomeBytes: Buffer.byteLength(body) });
+    expect((await row()).traffic).toMatchObject({ requests: 2, toHomeBytes: Buffer.byteLength(create) + Buffer.byteLength(body) });
   });
 
 });
