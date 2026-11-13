@@ -213,8 +213,8 @@ export function windowsRecoverReceiptArgv(linkId: string): string[] {
   if (!/^lnk_[0-9a-f]{16}$/.test(linkId)) throw new Error("invalid link id");
   return packedPowerShellArgv(NATIVE_PROCESS + String.raw`
 $r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$f="$h\link-receipts\${linkId}.json"
-$b=if($env:LOCALAPPDATA){"$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"}else{"$env:USERPROFILE\.cache\opencodex\bin\ocx-child.exe"};$bd=Split-Path $b
-try{if([IO.Directory]::Exists($bd)){$null=[IO.Directory]::GetFiles($bd)};if([IO.File]::Exists($b)-or[IO.Directory]::Exists($b)){exit 4}}catch{exit 4}
+$b=if($env:LOCALAPPDATA){"$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"}else{"$env:USERPROFILE\.cache\opencodex\bin\ocx-child.exe"}
+$found=$true;try{$null=Get-Item -LiteralPath $b -Force -ErrorAction Stop}catch [System.Management.Automation.ItemNotFoundException]{$found=$false}catch{exit 4};if($found){exit 4}
 try{if(-not[IO.File]::Exists($f)){exit 4};if(((Get-Item -LiteralPath $f -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){exit 4};[Console]::Out.Write([IO.File]::ReadAllText($f))}catch{exit 4};exit 0
 `);
 }

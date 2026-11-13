@@ -394,6 +394,15 @@ describe.skipIf(process.platform === "win32")("POSIX plant scripts keep a binary
     if (process.getuid?.() !== 0) {
       chmodSync(bin, 0o000);
       try { expect(read()).toBe(4); } finally { chmodSync(bin, 0o700); }
+      // An unsearchable ancestor hides a binary that is still there.
+      writeFileSync(join(bin, "ocx-child"), "#!/bin/sh\n", { mode: 0o755 });
+      const ancestor = join(home, ".cache", "opencodex");
+      chmodSync(ancestor, 0o000);
+      try { expect(read()).toBe(4); } finally { chmodSync(ancestor, 0o700); }
+      rmSync(join(bin, "ocx-child"));
+      chmodSync(home, 0o600);
+      try { expect(read()).toBe(4); } finally { chmodSync(home, 0o700); }
+      expect(read()).toBe(0);
     }
   });
 });

@@ -252,11 +252,17 @@ const LINK_ID = /^lnk_[0-9a-f]{16}$/;
  */
 export const POSIX_RECOVER_RECEIPT_SCRIPT = [
   "case \"$(uname -s 2>/dev/null)\" in Windows*|MSYS*|MINGW*|CYGWIN*) exit 125;; esac",
-  // The receipt proves the restore; the purge is proven only by a binary confirmed absent (an
-  // existing but non-executable file, or a directory that cannot be searched, proves nothing).
-  "bin=\"$HOME/.cache/opencodex/bin\"",
-  "if [ -e \"$bin\" ] && { [ ! -d \"$bin\" ] || [ ! -x \"$bin\" ]; }; then exit 4; fi",
-  "if [ -e \"$bin/ocx-child\" ] || [ -L \"$bin/ocx-child\" ]; then exit 4; fi",
+  // The receipt proves the restore; the purge is proven only by a binary confirmed absent. A test
+  // for a path reads false both when it is absent and when an ancestor cannot be searched, so each
+  // step is trusted only after its parent was shown to be a searchable directory. An existing but
+  // non-executable file, or any directory on the way that cannot be searched, proves nothing.
+  "prev=\"$HOME\"",
+  "for p in \"$HOME/.cache\" \"$HOME/.cache/opencodex\" \"$HOME/.cache/opencodex/bin\" \"$HOME/.cache/opencodex/bin/ocx-child\"; do",
+  "  if [ ! -d \"$prev\" ] || [ ! -x \"$prev\" ]; then exit 4; fi",
+  "  if [ ! -e \"$p\" ] && [ ! -L \"$p\" ]; then break; fi",
+  "  if [ \"$p\" = \"$HOME/.cache/opencodex/bin/ocx-child\" ]; then exit 4; fi",
+  "  prev=\"$p\"",
+  "done",
   "f=\"${OPENCODEX_HOME:-$HOME/.opencodex}/link-receipts/$1.json\"",
   "if [ -L \"$f\" ] || [ ! -f \"$f\" ] || [ ! -r \"$f\" ]; then exit 4; fi",
   "cat -- \"$f\"",
