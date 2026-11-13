@@ -196,8 +196,14 @@ on Linux). The updater accepts such an install only when pnpm itself names the s
 `pnpm store path` for your pnpm home and checks that the installed package lies inside that store.
 A store-like path, marker files or `.modules.yaml` are never enough on their own.
 
-If that check cannot be made, the update stops before it changes anything and the message ends with
-`this install's path looks like a pnpm global store`. Common causes:
+If that check cannot be made when the updater first identifies your install, the update stops before
+it changes anything. The message includes `this install's path looks like a pnpm global store`
+and then the command to run instead. The updater repeats the store check after `pnpm add`; if pnpm's
+store answer no longer passes at that point, the update stops without a rollback, because the updater
+can no longer confirm which store a rollback would write to. Check `ocx --version`, then use the
+pnpm command below.
+
+Common causes:
 
 - pnpm is older or newer than the versions whose store behavior was checked (11 and 12). Run
   `pnpm --version`.
