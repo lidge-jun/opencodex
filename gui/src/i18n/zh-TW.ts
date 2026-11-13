@@ -4216,7 +4216,7 @@ export const zhTW: Record<TKey, string> = {
   "remoteLink.forceRemove.body": "只在此電腦刪除連線？之後在 {alias} 上執行 {cmd}：僅當 {alias} 連線到此連線時才會中斷，屬於其他連線、Hub 或其他 Home 的機器會保持原狀。",
   "remoteLink.forceRemove.ephemeralBody": "只在此電腦刪除連線？之後在 {alias} 有回應時於此處執行 {cmd}：僅當 {alias} 的記錄指向此連線或沒有任何連線時才會執行，並拒絕屬於其他連線的機器。",
   "remoteLink.forceRemove.confirm": "僅在此處刪除",
-  "remoteLink.forceRemoved.unknownFallback": "每個命令僅在機器仍屬於此連線時才會執行。早於此選項的版本會在觸及連線之前拒絕它；此時請先執行 {cmd}（輕量子裝置上為 ocx-child 的 connect status --json）。",
+  "remoteLink.forceRemoved.unknownFallback": "每個命令僅在機器仍屬於此連線時才會執行。早於此選項的版本會在觸及連線之前拒絕它。此時，在完整安裝上請先執行 {cmd}。輕量子裝置請保持原樣：它的狀態無法顯示另一個連線中斷的接入，而一般的 detach 會先還原再刪除它。",
   "remoteLink.forceRemoved.fullBound": "{alias} 只在此電腦上被刪除（連線 {linkId}）。{alias} 有回應後，在其上執行 {cmd}：僅當 {alias} 連線到此連線時才會中斷。",
   "remoteLink.forceRemove.refusal.expect_link_unsupported": "它執行的版本早於連線檢查，且此 Home 的另一個連線可能到達同一台機器。",
   "remoteLink.forceRemove.refusal.child_disconnect_pending": "它有一個無法與此連線對應的未完成中斷。",

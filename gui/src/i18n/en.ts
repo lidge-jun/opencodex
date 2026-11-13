@@ -4264,7 +4264,7 @@ export const en = {
   "remoteLink.forceRemove.body": "Remove the link only on this machine? Afterwards run {cmd} on {alias}: it disconnects only while {alias} is connected to this link, and leaves a machine that another link, a hub or another Home owns.",
   "remoteLink.forceRemove.ephemeralBody": "Remove the link only on this machine? Afterwards run {cmd} here once {alias} answers: it acts only when {alias}'s records name this link or nothing at all, and refuses a machine another link owns.",
   "remoteLink.forceRemove.confirm": "Remove here only",
-  "remoteLink.forceRemoved.unknownFallback": "Each acts only while the machine still belongs to this link. A build older than that flag refuses it before it acts on the link; then run {cmd} first (the ocx-child's connect status --json on a lightweight Child).",
+  "remoteLink.forceRemoved.unknownFallback": "Each acts only while the machine still belongs to this link. A build older than that flag refuses it before it acts on the link. Then, on a full install, run {cmd} first. On a lightweight Child, leave it as it is: its status cannot show an interrupted attach of another link, which its plain detach would restore and then remove.",
   "remoteLink.forceRemoved.fullBound": "{alias} was removed on this machine only (link {linkId}). When {alias} answers, run {cmd} on it: it disconnects only while {alias} is connected to this link.",
   "remoteLink.forceRemove.refusal.expect_link_unsupported": "It runs a version older than the link check, and another link of this Home may reach the same machine.",
   "remoteLink.forceRemove.refusal.child_disconnect_pending": "It has an unfinished disconnect it could not tie to this link.",

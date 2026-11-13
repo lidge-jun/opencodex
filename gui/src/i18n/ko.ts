@@ -4252,7 +4252,7 @@ export const ko: Record<TKey, string> = {
   "remoteLink.forceRemove.body": "이 컴퓨터에서만 링크를 지울까요? 그 후 {alias}에서 {cmd}를 실행하세요. {alias}가 이 링크에 연결되어 있는 동안에만 연결을 해제하며, 다른 링크, 허브 또는 다른 Home이 소유한 컴퓨터는 그대로 둡니다.",
   "remoteLink.forceRemove.ephemeralBody": "이 컴퓨터에서만 링크를 지울까요? 그 후 {alias}가 응답하면 여기에서 {cmd}를 실행하세요. {alias}의 기록이 이 링크를 가리키거나 아무것도 가리키지 않을 때만 동작하며, 다른 링크가 소유한 컴퓨터는 거부합니다.",
   "remoteLink.forceRemove.confirm": "여기에서만 삭제",
-  "remoteLink.forceRemoved.unknownFallback": "두 명령 모두 컴퓨터가 아직 이 링크에 속해 있는 동안에만 동작합니다. 이 옵션보다 오래된 빌드는 링크를 건드리기 전에 이를 거부합니다. 그러면 먼저 {cmd}를 실행하세요(경량 Child에서는 ocx-child의 connect status --json).",
+  "remoteLink.forceRemoved.unknownFallback": "두 명령 모두 컴퓨터가 아직 이 링크에 속해 있는 동안에만 동작합니다. 이 옵션보다 오래된 빌드는 링크를 건드리기 전에 이를 거부합니다. 그러면 전체 설치에서는 먼저 {cmd}를 실행하세요. 경량 Child는 그대로 두세요. 그 상태 확인으로는 다른 링크의 중단된 연결을 볼 수 없고, 일반 detach는 그것을 복원한 뒤 지워 버립니다.",
   "remoteLink.forceRemoved.fullBound": "{alias}는 이 컴퓨터에서만 지워졌습니다(링크 {linkId}). {alias}가 응답하면 그곳에서 {cmd}를 실행하세요. {alias}가 이 링크에 연결되어 있는 동안에만 연결을 해제합니다.",
   "remoteLink.forceRemove.refusal.expect_link_unsupported": "링크 확인보다 오래된 버전을 실행하고 있으며, 이 Home의 다른 링크가 같은 컴퓨터에 닿을 수 있습니다.",
   "remoteLink.forceRemove.refusal.child_disconnect_pending": "이 링크와 연결할 수 없는 끝나지 않은 연결 해제가 있습니다.",

@@ -4251,7 +4251,7 @@ export const zh: Record<TKey, string> = {
   "remoteLink.forceRemove.body": "只在此电脑删除连接？之后在 {alias} 上运行 {cmd}：仅当 {alias} 连接到此连接时才会断开，属于其他连接、Hub 或其他 Home 的机器会保持原样。",
   "remoteLink.forceRemove.ephemeralBody": "只在此电脑删除连接？之后在 {alias} 有响应时于此处运行 {cmd}：仅当 {alias} 的记录指向此连接或没有任何连接时才会执行，并拒绝属于其他连接的机器。",
   "remoteLink.forceRemove.confirm": "仅在此处删除",
-  "remoteLink.forceRemoved.unknownFallback": "每个命令仅在机器仍属于此连接时才会执行。早于此选项的版本会在触及连接之前拒绝它；此时请先运行 {cmd}（轻量子设备上为 ocx-child 的 connect status --json）。",
+  "remoteLink.forceRemoved.unknownFallback": "每个命令仅在机器仍属于此连接时才会执行。早于此选项的版本会在触及连接之前拒绝它。此时，在完整安装上请先运行 {cmd}。轻量子设备请保持原样：它的状态无法显示另一个连接中断的接入，而普通的 detach 会先恢复再删除它。",
   "remoteLink.forceRemoved.fullBound": "{alias} 只在此电脑上被删除（连接 {linkId}）。{alias} 有响应后，在其上运行 {cmd}：仅当 {alias} 连接到此连接时才会断开。",
   "remoteLink.forceRemove.refusal.expect_link_unsupported": "它运行的版本早于连接检查，且此 Home 的另一个连接可能到达同一台机器。",
   "remoteLink.forceRemove.refusal.child_disconnect_pending": "它有一个无法与此连接对应的未完成断开。",

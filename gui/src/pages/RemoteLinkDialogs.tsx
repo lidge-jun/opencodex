@@ -38,15 +38,15 @@ export function RemoteLinkForceRemovedNotice({ removed, onDismiss }: { removed: 
         ? <span className="block"><Trans k="remoteLink.forceRemoved.ephemeral" cmd={`ocx link recover --link-id ${removed.id}`} vars={vars} /></span>
         : removed.kind === "unknown"
           // Both installs' link-bound commands first: every released ocx-child parses detach's arguments strictly (since v2.100.0),
-          // so --expect-link never detaches a link it does not name, and a build older than the flag refuses it. The check, and
-          // the plain commands after it, only for such a build.
+          // so --expect-link never detaches a link it does not name, and a build older than the flag refuses it. The check and the
+          // plain disconnect after it only for an older full install: an older lightweight Child is left, since its status cannot
+          // show an interrupted attach of another link that a plain detach would restore and then remove.
           ? <>
             <span className="block"><Trans k="remoteLink.forceRemoved.unknownCheck" cmd={`ocx disconnect --expect-link ${removed.id}`} vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLocate" cmd="command -v ocx-child" vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLightweight" cmd={`${PLANTED_CHILD} detach --expect-link ${removed.id}`} vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownFallback" cmd="ocx connect status --json" vars={vars} /></span>
             <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownDisconnect" cmd="ocx disconnect" vars={vars} /></span>
-            <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.unknownLightweight" cmd={`${PLANTED_CHILD} detach`} vars={vars} /></span>
           </>
           // The link-bound disconnect (#8662) first; the check-then-disconnect order only for an OpenCodex older than the flag.
           : <>

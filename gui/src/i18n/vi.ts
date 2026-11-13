@@ -4181,7 +4181,7 @@ export const vi: Record<TKey, string> = {
   "remoteLink.forceRemove.body": "Chỉ xóa liên kết trên máy này? Sau đó, chạy {cmd} trên {alias}: lệnh chỉ ngắt kết nối khi {alias} còn kết nối với liên kết này, và để nguyên một máy thuộc về liên kết khác, một hub hoặc Home khác.",
   "remoteLink.forceRemove.ephemeralBody": "Chỉ xóa liên kết trên máy này? Sau đó, khi {alias} phản hồi, hãy chạy {cmd} tại đây: lệnh chỉ hoạt động khi bản ghi của {alias} nêu liên kết này hoặc không nêu liên kết nào, và từ chối một máy thuộc về liên kết khác.",
   "remoteLink.forceRemove.confirm": "Chỉ xóa tại đây",
-  "remoteLink.forceRemoved.unknownFallback": "Mỗi lệnh chỉ hoạt động khi máy vẫn thuộc liên kết này. Một bản dựng cũ hơn tùy chọn này sẽ từ chối nó trước khi động tới liên kết; khi đó hãy chạy {cmd} trước (trên máy con nhẹ là connect status --json của ocx-child).",
+  "remoteLink.forceRemoved.unknownFallback": "Mỗi lệnh chỉ hoạt động khi máy vẫn thuộc liên kết này. Một bản dựng cũ hơn tùy chọn này sẽ từ chối nó trước khi động tới liên kết. Khi đó, trên bản cài đặt đầy đủ, hãy chạy {cmd} trước. Trên máy con nhẹ, hãy để nguyên: trạng thái của nó không thể cho thấy một lần kết nối bị gián đoạn của liên kết khác, mà lệnh detach thông thường sẽ khôi phục rồi xóa đi.",
   "remoteLink.forceRemoved.fullBound": "{alias} chỉ bị xóa trên máy này (liên kết {linkId}). Khi {alias} phản hồi, hãy chạy {cmd} trên đó: lệnh chỉ ngắt kết nối khi {alias} còn kết nối với liên kết này.",
   "remoteLink.forceRemove.refusal.expect_link_unsupported": "Nó chạy phiên bản cũ hơn bước kiểm tra liên kết, và một liên kết khác của Home này có thể tới cùng máy đó.",
   "remoteLink.forceRemove.refusal.child_disconnect_pending": "Nó có một lần ngắt kết nối dở dang không gắn được với liên kết này.",

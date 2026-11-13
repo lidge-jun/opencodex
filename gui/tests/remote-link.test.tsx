@@ -1430,11 +1430,46 @@ test("a forced removal of a Child of unknown type names no command up front and 
   for (const where of ["~/.local/bin", "PATH", "%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe", "%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe", "where.exe ocx-child"]) {
     expect(notice?.textContent, where).toContain(where);
   }
-  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual([
-    "ocx disconnect --expect-link " + id, "command -v ocx-child", "~/.cache/opencodex/bin/ocx-child detach --expect-link " + id,
-    "ocx connect status --json", "ocx disconnect", "~/.cache/opencodex/bin/ocx-child detach",
-  ]);
+  // No unbound ocx-child detach: its status cannot show an interrupted attach of another link, which a plain detach would
+  // restore and then remove, so an older lightweight Child is left as it is (#8691 review).
+  expect(notice?.textContent).toContain("On a lightweight Child, leave it as it is");
+  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(UNKNOWN_CHIPS(id));
   expect(notice?.textContent).not.toContain("ocx link recover");
+});
+
+const UNKNOWN_CHIPS = (id: string) => [
+  "ocx disconnect --expect-link " + id, "command -v ocx-child", "~/.cache/opencodex/bin/ocx-child detach --expect-link " + id,
+  "ocx connect status --json", "ocx disconnect",
+];
+
+test("in every locale the unknown-type notice offers no unbound ocx-child detach", async () => {
+  const id = "lnk_00000000000000d4";
+  for (const { code } of LOCALES) {
+    if (root) await act(async () => { root?.unmount(); });
+    root = null;
+    win.document.body.innerHTML = "";
+    win.localStorage.setItem("ocx-lang", code);
+    let listed = true;
+    globalThis.fetch = (async (_input, init) => {
+      if (init?.method === "DELETE") {
+        const body = init.body ? JSON.parse(String(init.body)) as { force?: boolean } : undefined;
+        if (body?.force !== true) return response({ error: { code: "remote_disconnect_failed" } }, 502);
+        listed = false;
+        return response({ linkId: id });
+      }
+      return response({ ...baseStatus, links: listed ? [{ id, alias: "devbox-old", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 24504 }] : [] });
+    }) as typeof fetch;
+    const host = await mount();
+    await act(async () => { (host.querySelector(".remote-link-row button:last-of-type") as HTMLButtonElement).click(); });
+    await flush();
+    const dialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
+    await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+    await flush();
+    await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+    await flush();
+    const notice = host.querySelector(".remote-link-force-removed");
+    expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent), code).toEqual(UNKNOWN_CHIPS(id));
+  }
 });
 
 test("a refused --purge on a full install explains why instead of a generic failure", async () => {

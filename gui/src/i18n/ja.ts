@@ -4252,7 +4252,7 @@ export const ja: Record<TKey, string> = {
   "remoteLink.forceRemove.body": "このコンピューターだけでリンクを削除しますか？その後、{alias} で {cmd} を実行してください。{alias} がこのリンクに接続されている間だけ切断し、別のリンク、ハブ、または別の Home が所有するマシンはそのままにします。",
   "remoteLink.forceRemove.ephemeralBody": "このコンピューターだけでリンクを削除しますか？その後、{alias} が応答したらここで {cmd} を実行してください。{alias} の記録がこのリンクを示すか何も示さない場合にだけ動作し、別のリンクが所有するマシンは拒否します。",
   "remoteLink.forceRemove.confirm": "ここだけ削除",
-  "remoteLink.forceRemoved.unknownFallback": "どちらのコマンドも、マシンがまだこのリンクに属している間だけ動作します。このオプションより古いビルドはリンクに触れる前にそれを拒否します。その場合は、まず {cmd} を実行してください（軽量な Child では ocx-child の connect status --json）。",
+  "remoteLink.forceRemoved.unknownFallback": "どちらのコマンドも、マシンがまだこのリンクに属している間だけ動作します。このオプションより古いビルドはリンクに触れる前にそれを拒否します。その場合、完全インストールではまず {cmd} を実行してください。軽量な Child はそのままにしてください。その状態表示には別のリンクの中断された接続が表示されず、通常の detach はそれを復元してから削除してしまいます。",
   "remoteLink.forceRemoved.fullBound": "{alias} はこのコンピューターでのみ削除されました（リンク {linkId}）。{alias} が応答したら、そこで {cmd} を実行してください。{alias} がこのリンクに接続されている間だけ切断します。",
   "remoteLink.forceRemove.refusal.expect_link_unsupported": "リンク確認より古いバージョンを実行しており、この Home の別のリンクが同じマシンに届く可能性があります。",
   "remoteLink.forceRemove.refusal.child_disconnect_pending": "このリンクに結び付けられない未完了の切断があります。",
