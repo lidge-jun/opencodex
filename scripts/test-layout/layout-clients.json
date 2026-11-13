@@ -249,5 +249,6 @@
   "cli-link-operation.test.ts": "cli",
   "link-operations-journal.test.ts": "clients",
   "link-revoke-suspend.test.ts": "clients",
-  "link-ws-relay-edges.test.ts": "clients"
+  "link-ws-relay-edges.test.ts": "clients",
+  "link-ws-autobahn.test.ts": "clients"
 }
