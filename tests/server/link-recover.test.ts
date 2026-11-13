@@ -741,6 +741,56 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     expect(h.store.links.map(l => l.id)).toEqual([ID, OTHER]);
   });
 
+  // Which outcome a journalled revoke settles as for each bound answer: only a refusal the Home recognises as one that
+  // changed nothing (the full ocx JSON line with a closed reason, or ocx-child naming this link) is failed_clean; any
+  // other exit 5 or 6 (an unknown reason, garbled or extra output) may have followed a change, so it settles unknown.
+  const conflictLine = "detach --expect-link " + ID + " refused (conflict): the Child is linked to another link; record /x; nothing was restored.";
+  const residualLine = "detach --expect-link " + ID + " refused (residual): the ownership record names no link; record /x; nothing was restored.";
+  test.each([
+    ["full ocx: another link", 5, '{"phase":"child_link_mismatch","reason":"other_link"}', "child_link_mismatch", "failed_clean"],
+    ["full ocx: a client-initiated link", 5, '{"phase":"child_link_mismatch","reason":"client_initiated_link"}', "child_link_mismatch", "failed_clean"],
+    ["full ocx: an unfinished disconnect", 5, '{"phase":"child_link_mismatch","reason":"disconnect_pending"}', "child_disconnect_pending", "unknown"],
+    ["full ocx: an unknown reason", 5, '{"phase":"child_link_mismatch","reason":"brand_new"}', undefined, "unknown"],
+    ["exit 5 with garbled output", 5, "something went wrong", undefined, "unknown"],
+    ["ocx-child: conflict naming this link", 5, conflictLine, "child_link_mismatch", "failed_clean"],
+    ["ocx-child: residual naming this link", 6, residualLine, "child_residual", "failed_clean"],
+    ["exit 6 with extra output after the refusal", 6, residualLine + "\nextra", undefined, "unknown"],
+  ] as const)("a journalled ordinary revoke whose Child answers %s settles as expected", async (_name, code, stderr, hint, outcome) => {
+    const operationsPath = join(root, "operations.json");
+    const h = harness([link()], { operationsPath, ordinary: () => ok("", code, stderr) });
+    const res = await h.request("DELETE", "/api/link/" + ID, { operationId: "revoke-1" });
+    const body = await res.json() as { error?: { code?: string; hint?: string }; outcome?: string };
+    expect(res.status).toBe(502);
+    expect(body.error?.code).toBe("remote_disconnect_failed");
+    if (hint) expect(body.error?.hint).toBe(hint);
+    else expect(["child_link_mismatch", "child_residual", "child_disconnect_pending"]).not.toContain(body.error?.hint);
+    expect(body.outcome).toBe(outcome);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+  });
+
+  test.each([
+    ["ocx-child: conflict naming this link", 5, conflictLine, "child_link_mismatch", "failed_clean"],
+    ["exit 5 with garbled output", 5, "something went wrong", undefined, "unknown"],
+  ] as const)("a journalled --purge revoke whose Child answers %s settles as expected", async (_name, code, stderr, hint, outcome) => {
+    const operationsPath = join(root, "operations.json");
+    const h = harness([link()], { operationsPath });
+    h.answer(() => ok("", code, stderr));
+    const res = await h.request("DELETE", "/api/link/" + ID, { purge: true, operationId: "revoke-1" });
+    const body = await res.json() as { error?: { code?: string; hint?: string }; outcome?: string };
+    expect(res.status).toBe(502);
+    if (hint) expect(body.error?.hint).toBe(hint);
+    else expect(["child_link_mismatch", "child_residual"]).not.toContain(body.error?.hint);
+    expect(body.outcome).toBe(outcome);
+  });
+
+  test("a journalled revoke refused the unbound fallback (expect_link_unsupported) settles failed_clean", async () => {
+    const operationsPath = join(root, "operations.json");
+    const h = harness([link(), link({ id: OTHER, alias: "devbox-ip" })], { operationsPath, ordinary: () => ok("", 2, "Error: Unexpected argument(s)") });
+    const res = await h.request("DELETE", "/api/link/" + ID, { operationId: "revoke-1" });
+    const body = await res.json() as { error?: { hint?: string }; outcome?: string };
+    expect([res.status, body.error?.hint, body.outcome]).toEqual([502, "expect_link_unsupported", "failed_clean"]);
+  });
+
   test("an unfinished disconnect the Child cannot bind to the link counts as cleanup attempted", async () => {
     const h = harness([link()], { ordinary: () => ok("", 5, 'Disconnect refused\n{"phase":"child_link_mismatch","reason":"disconnect_pending"}') });
     const res = await h.request("DELETE", "/api/link/" + ID, {});

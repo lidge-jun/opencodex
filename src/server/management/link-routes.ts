@@ -5,7 +5,7 @@ import { probe, confirmHost, apply, serialized } from "./link-enrollment";
 import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, reconcileLinkListener, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
 import { requireRemotePlatform } from "../../link/remote-platform";
-import { CHILD_EXPECT_CONFLICT_EXIT, CHILD_EXPECT_RESIDUAL_EXIT, CHILD_USAGE_EXIT, purgeDisconnectRemote } from "../../link/remote-plant";
+import { CHILD_USAGE_EXIT, classifyBoundRefusal, purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
@@ -352,16 +352,6 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   } finally { releaseLink(); }
 }
 
-/** The reason in the Child's final stderr JSON line ({"phase","reason"}), when it printed one. */
-function lastStderrReason(stderr: string): string | undefined {
-  const line = stderr.trim().split(/\r?\n/).at(-1) ?? "";
-  if (!line.startsWith("{")) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(line);
-    return parsed && typeof parsed === "object" && typeof (parsed as { reason?: unknown }).reason === "string" ? (parsed as { reason: string }).reason : undefined;
-  } catch { return undefined; }
-}
-
 const removalMode = (force: boolean, purge: boolean): LinkRetirementMode => force ? "force" : purge ? "purge" : "disconnect";
 
 /**
@@ -589,7 +579,6 @@ async function removeReserved(
         // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route. The
         // receipt must be durable before the link goes; if it cannot be written, stop here (unknown) and leave the
         // tunnel down, since the Child it would reach is purged.
-        linkBound = purged.bound;
         try { journal.done("remote_cleanup", { purged: true, linkId: id }); } catch { return journalFailed(); }
       } else {
         const disconnectArgv = (bound: boolean) => buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(bound ? ["disconnect", "--expect-link", id] : ["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null });
@@ -609,16 +598,13 @@ async function removeReserved(
             return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
           }
         }
-        // A link-bound refusal changed nothing on the Child: another link (or a hub, or no connection) owns it now (5),
-        // or an ocx-child keeps state it cannot restore (6). The tunnel restarts and the link stays.
-        if (linkBound && (result.code === CHILD_EXPECT_CONFLICT_EXIT || result.code === CHILD_EXPECT_RESIDUAL_EXIT)) {
-          // Except an unfinished disconnect the Child could not prove is this link's: an earlier attempt may have
-          // cleaned part of it, so that is a cleanup attempted, never failed_clean.
-          if (result.code === CHILD_EXPECT_CONFLICT_EXIT && lastStderrReason(result.stderr) === "disconnect_pending") {
-            return cleanupFailed(disconnectFailed("child_disconnect_pending"), true);
-          }
-          return cleanupFailed(disconnectFailed(result.code === CHILD_EXPECT_CONFLICT_EXIT ? "child_link_mismatch" : "child_residual"), false);
-        }
+        // A link-bound refusal recognised as one changed nothing on the Child: another link (or a hub, or no connection)
+        // owns it now (5), or an ocx-child keeps state it cannot restore (6). The tunnel restarts and the link stays. An
+        // unfinished disconnect the Child could not prove is this link's may have been partly cleaned by an earlier
+        // attempt: a cleanup attempted, never failed_clean. Any other exit 5 or 6 falls through as attempted.
+        const refusal = linkBound ? classifyBoundRefusal(result.code, result.stderr, id) : null;
+        if (refusal === "pending") return cleanupFailed(disconnectFailed("child_disconnect_pending"), true);
+        if (refusal === "mismatch" || refusal === "residual") return cleanupFailed(disconnectFailed(refusal === "mismatch" ? "child_link_mismatch" : "child_residual"), false);
         if (result.code !== 0) return cleanupFailed(disconnectFailed(sshFailureHint(result.stderr)), true);
         journal.done("remote_cleanup");
       }

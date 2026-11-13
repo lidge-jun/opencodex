@@ -301,8 +301,7 @@ export function parsePurgeDisconnectReport(stdout: string): boolean | null {
 export const PURGE_KEPT_IN_USE_MARKER = "ocx-purge-kept:binary_in_use";
 
 export type PurgeDisconnectOutcome =
-  /** bound: the managed binary checked --expect-link (false for one older than that flag, which ran unbound). */
-  | { readonly ok: true; readonly bound: boolean }
+  | { readonly ok: true }
   /** notAttempted: the Child's disconnect never ran (inspection failed, a full install, or no planted binary to run). */
   | { readonly ok: false; readonly status: number; readonly code: string; readonly message: string; readonly hint?: string; readonly notAttempted?: true };
 
@@ -343,9 +342,11 @@ export async function purgeDisconnectRemote(
     bound = false;
     try { result = await runner.run(purgeArgv(), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
   }
-  // detach --expect-link refused without changing anything: another link owns this Child (5), or it keeps state it cannot restore (6).
-  if (bound && (result.code === CHILD_EXPECT_CONFLICT_EXIT || result.code === CHILD_EXPECT_RESIDUAL_EXIT)) {
-    return notAttempted("The Child is not attached to this link, so it was not disconnected.", result.code === CHILD_EXPECT_CONFLICT_EXIT ? "child_link_mismatch" : "child_residual");
+  // detach --expect-link refused without changing anything: another link owns this Child (5), or it keeps state it
+  // cannot restore (6). Only a refusal recognised as such; anything else below counts as a cleanup attempted.
+  const refusal = bound ? classifyBoundRefusal(result.code, result.stderr, expectLink!) : null;
+  if (refusal === "mismatch" || refusal === "residual") {
+    return notAttempted("The Child is not attached to this link, so it was not disconnected.", refusal === "mismatch" ? "child_link_mismatch" : "child_residual");
   }
   if (result.code !== 0) {
     // The script prints the marker and exits before it runs the binary.
@@ -356,13 +357,39 @@ export async function purgeDisconnectRemote(
     if (result.stderr.includes(PURGE_KEPT_IN_USE_MARKER)) return failed("The Child disconnected, but kept the planted ocx-child because another ocx-child relay runs from it; the link was kept.", "binary_in_use");
     return failed("The Child disconnected but did not report removing the planted ocx-child binary.", "purge_incomplete");
   }
-  return { ok: true, bound };
+  return { ok: true };
 }
 
 /** Exit codes of a Child refusing a link-bound command (ocx-child detach, ocx disconnect --expect-link). */
 export const CHILD_USAGE_EXIT = 2;
 export const CHILD_EXPECT_CONFLICT_EXIT = 5;
 export const CHILD_EXPECT_RESIDUAL_EXIT = 6;
+
+/** Reasons full ocx gives for a link-bound refusal that changed nothing (ClientSyncMismatchReason without disconnect_pending). */
+const NO_WRITE_MISMATCH_REASONS = new Set(["disconnected", "invalid_state", "pending_operation", "hub_client", "link_client", "other_link", "other_key", "client_initiated_link"]);
+
+/**
+ * What a link-bound refusal (exit 5 or 6) proves, read from the last stderr line only and from a closed set:
+ * "mismatch" or "residual" changed nothing on the Child (full ocx's {"phase":"child_link_mismatch","reason"} with a
+ * no-write reason, or ocx-child's "detach --expect-link <this link> refused (conflict|residual)"); "pending" is an
+ * unfinished disconnect the Child could not bind to this link, so an earlier attempt may have cleaned part of it. Any
+ * other answer (an unknown reason, garbled or extra output) is null: the caller treats it as a cleanup attempted.
+ */
+export function classifyBoundRefusal(code: number, stderr: string, linkId: string): "mismatch" | "residual" | "pending" | null {
+  if (code !== CHILD_EXPECT_CONFLICT_EXIT && code !== CHILD_EXPECT_RESIDUAL_EXIT) return null;
+  const line = stderr.trim().split(/\r?\n/).at(-1) ?? "";
+  const childLine = (outcome: "conflict" | "residual") => line.startsWith("detach --expect-link " + linkId + " refused (" + outcome + "): ");
+  if (code === CHILD_EXPECT_RESIDUAL_EXIT) return childLine("residual") ? "residual" : null;
+  if (childLine("conflict")) return "mismatch";
+  if (!line.startsWith("{")) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const { phase, reason } = parsed as { phase?: unknown; reason?: unknown };
+  if (phase !== "child_link_mismatch" || typeof reason !== "string") return null;
+  if (reason === "disconnect_pending") return "pending";
+  return NO_WRITE_MISMATCH_REASONS.has(reason) ? "mismatch" : null;
+}
 
 /** The distinct reason a plant failed on the Child, when the plant script reported one. */
 export function classifyPlantFailure(stderr: string): "hash_tool_unavailable" | null {
