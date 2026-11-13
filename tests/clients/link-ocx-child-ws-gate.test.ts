@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { repoPath } from "../helpers/repo-root";
+import { fixturePath, repoPath } from "../helpers/repo-root";
 import { rustToolchainEnv } from "../helpers/rust-toolchain-env";
+import { linkWebsocketStateProof } from "../../src/link/relay-auth";
 
 // Lane T6-4: ocx-child's link WebSocket gate opens only in a build with the link-ws-test-gate Cargo
 // feature. These checks keep that true for the builds operators make and keep both test runs wired.
@@ -10,6 +11,14 @@ const pkg = JSON.parse(readFileSync(repoPath("package.json"), "utf8")) as { scri
 const cargo = readFileSync(repoPath("native/ocx-child/Cargo.toml"), "utf8");
 
 describe("ocx-child link WebSocket test gate", () => {
+  test("the Home's link WebSocket state proof matches the vectors ocx-child's unit test checks", () => {
+    const vectors = JSON.parse(readFileSync(fixturePath("link", "link-ws-state-proof.json"), "utf8")) as {
+      cases: Array<{ fingerprint: string; keyId: string; linkId: string; nonce: string; value: "on"; proof: string }>;
+    };
+    expect(vectors.cases.length).toBeGreaterThanOrEqual(2);
+    for (const c of vectors.cases) expect(linkWebsocketStateProof(c.fingerprint, c.keyId, c.linkId, c.nonce, c.value)).toBe(c.proof);
+  });
+
   test("the distribution build passes no Cargo features", () => {
     expect(pkg.scripts["build:ocx-child"]).toBe("cargo build --release --locked --manifest-path native/ocx-child/Cargo.toml");
   });

@@ -182,11 +182,30 @@ mod tests {
 
     #[test]
     fn proof_matches_the_typescript_home() {
-        // linkWebsocketStateProof("a" x 64, "key-1", "lnk_0123456789abcdef", "b" x 64, "on") in src/link/relay-auth.ts.
-        assert_eq!(
-            ws_state_proof(FP, "key-1", LINK, NONCE).as_deref(),
-            Some("1a770bf50e23218071ca4f04df9b05b550f9f31b5ea65e75aef9eee805ed7218")
-        );
+        // One shared vector file: tests/clients/link-ocx-child-ws-gate.test.ts checks the same cases against
+        // linkWebsocketStateProof in src/link/relay-auth.ts.
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/link/link-ws-state-proof.json"
+        ))
+        .unwrap();
+        let cases = vectors["cases"].as_array().unwrap();
+        assert!(cases.len() >= 2);
+        for case in cases {
+            let field = |name: &str| case[name].as_str().unwrap().to_owned();
+            assert_eq!(field("value"), "on");
+            assert_eq!(
+                ws_state_proof(
+                    &field("fingerprint"),
+                    &field("keyId"),
+                    &field("linkId"),
+                    &field("nonce")
+                ),
+                Some(field("proof"))
+            );
+        }
+        assert!(cases.iter().any(|case| case["fingerprint"] == FP
+            && case["linkId"] == LINK
+            && case["nonce"] == NONCE));
     }
 
     #[test]
