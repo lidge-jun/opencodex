@@ -860,7 +860,8 @@ describe("OAuth code-display login", () => {
           }
           return fetch(input, init);
         };
-        const result = await handleAccountAuthCommand("login", ["xai", "--device", "--json"], { baseUrl: String(server.url), fetchImpl: cliFetch });
+        // A waiting JSON device login is refused before any flow starts, so the waiting human path carries this check.
+        const result = await handleAccountAuthCommand("login", ["xai", "--device"], { baseUrl: String(server.url), fetchImpl: cliFetch });
         expect(result).not.toBe(0);
         expect(firstId).toBeTruthy(); expect(secondId).toBeTruthy(); expect(firstId).not.toBe(secondId);
         expect(new URL(statusUrl).searchParams.get("flowId")).toBe(firstId);
