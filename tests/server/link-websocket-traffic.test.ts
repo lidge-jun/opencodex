@@ -86,16 +86,19 @@ describe("the Home's traffic book counts a link socket", () => {
 
   test("a refused or failed upgrade counts nothing", () => {
     const traffic = createLinkTrafficBook("content-length");
-    const cases = [{ authorized: false, upgraded: true, status: 401 }, { authorized: true, upgraded: false, status: 426 }];
-    for (const { authorized, upgraded, status } of cases) {
+    // calls: how often the gate reached server.upgrade (0 for the refusal, 1 for the failed upgrade).
+    const cases = [{ authorized: false, upgraded: true, status: 401, calls: 0 }, { authorized: true, upgraded: false, status: 426, calls: 1 }];
+    for (const { authorized, upgraded, status, calls } of cases) {
+      let reached = 0;
       const gate = createLinkWebsocketGate({
         enabled: () => true, policy, authorized: () => authorized, draining: () => false, traffic,
         timers: { setInterval: () => 0, clearInterval() {} },
         reserveSocket: () => ({ bind() {}, release() {} }),
       });
-      const outcome = gate.upgrade(upgradeRequest(), { upgrade: () => upgraded } as unknown as Server<unknown>,
+      const outcome = gate.upgrade(upgradeRequest(), { upgrade: () => { reached += 1; return upgraded; } } as unknown as Server<unknown>,
         { keyId: KEY.id, linkId: KEY.linkId, fingerprint: serviceApiTokenFingerprint(KEY.key), release() {} });
       expect(outcome.handled && outcome.response?.status).toBe(status);
+      expect(reached).toBe(calls);
     }
     expect(traffic.snapshot(KEY.linkId)).toMatchObject({ requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0 });
   });
