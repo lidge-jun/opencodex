@@ -4212,7 +4212,7 @@ export const de: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "Das Child ist möglicherweise noch verbunden. Führen Sie auf dem Child {cmd} aus, bevor Sie es erneut versuchen.",
   "remoteLink.residual.full": "Das Child ist möglicherweise noch verbunden. Führen Sie auf dem Child ocx disconnect und ocx restart aus, bevor Sie es erneut versuchen.",
   "remoteLink.residual.unknown": "Das Child ist möglicherweise noch verbunden. Prüfen Sie das Child und trennen Sie es dort, bevor Sie es erneut versuchen.",
-  "remoteLink.residual.ownership": "Prüfen Sie zuerst das Child: Ist es inzwischen einem anderen Link, einem Hub oder einem anderen Home beigetreten, lassen Sie es unverändert.",
+  "remoteLink.residual.ownership": "Prüfen Sie vor dem folgenden Schritt das Child mit {cmd} (ocx-child connect status --json auf einem leichtgewichtigen Child). Die Link-ID dieses Versuchs wird hier nicht angezeigt; behandeln Sie daher jeden Link, den Sie nicht erkennen, als fremd: Zeigt das Child einen solchen Link, einen Hub oder ein anderes Home, lassen Sie es unverändert und überspringen Sie den Schritt.",
   "remoteLink.error.generic": "Die Remote-Link-Anfrage konnte nicht abgeschlossen werden.",
   "remoteLink.reason.auth": "Die Authentifizierung ist fehlgeschlagen.",
   "remoteLink.reason.hostkey": "Der Hostschlüssel konnte nicht verifiziert werden.",

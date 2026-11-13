@@ -29,7 +29,7 @@ export interface LinkChildStep {
 
 export function LinkErrorNotice({ error }: { error: LinkActionErrorView }): ReactElement {
   const t = useT();
-  return <Banner tone="err"><span className="remote-link-error">{t(error.key)}</span>{error.childStep && <span className="remote-link-child-step mt-1 block">{error.childStep.cmd === undefined ? t(error.childStep.key) : <Trans k={error.childStep.key} cmd={error.childStep.cmd} />}{error.childStep.more?.map(line => <span key={line.key} className="mt-1 block"><Trans k={line.key} cmd={line.cmd} /></span>)}<span className="mt-1 block">{t("remoteLink.residual.ownership")}</span></span>}{error.hint && <span className="remote-link-hint mt-1 block text-[12px] text-fg-muted [overflow-wrap:anywhere]">{t("remoteLink.reason.generic")} <code className="font-mono">{error.hint}</code></span>}</Banner>;
+  return <Banner tone="err"><span className="remote-link-error">{t(error.key)}</span>{error.childStep && <span className="remote-link-child-ownership mt-1 block"><Trans k="remoteLink.residual.ownership" cmd="ocx connect status" /></span>}{error.childStep && <span className="remote-link-child-step mt-1 block">{error.childStep.cmd === undefined ? t(error.childStep.key) : <Trans k={error.childStep.key} cmd={error.childStep.cmd} />}{error.childStep.more?.map(line => <span key={line.key} className="mt-1 block"><Trans k={line.key} cmd={line.cmd} /></span>)}</span>}{error.hint && <span className="remote-link-hint mt-1 block text-[12px] text-fg-muted [overflow-wrap:anywhere]">{t("remoteLink.reason.generic")} <code className="font-mono">{error.hint}</code></span>}</Banner>;
 }
 
 export interface RemoteLinkSheetProps {

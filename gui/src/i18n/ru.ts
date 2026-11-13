@@ -4235,7 +4235,7 @@ export const ru: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "Child, возможно, всё ещё подключён. Перед повтором выполните на Child {cmd}.",
   "remoteLink.residual.full": "Child, возможно, всё ещё подключён. Перед повтором выполните на Child ocx disconnect и ocx restart.",
   "remoteLink.residual.unknown": "Child, возможно, всё ещё подключён. Перед повтором проверьте Child и отключите его там.",
-  "remoteLink.residual.ownership": "Сначала проверьте Child: если с тех пор он присоединился к другой связи, хабу или другому Home, оставьте его как есть.",
+  "remoteLink.residual.ownership": "Перед шагом ниже проверьте Child командой {cmd} (на лёгком Child — ocx-child connect status --json). Идентификатор связи этой попытки здесь не показан, поэтому считайте любую связь, которую вы не узнаёте, чужой: если Child показывает такую связь, хаб или другой Home, оставьте его как есть и пропустите шаг.",
   "remoteLink.error.generic": "Не удалось завершить запрос удалённой связи.",
   "remoteLink.reason.auth": "Ошибка аутентификации.",
   "remoteLink.reason.hostkey": "Не удалось проверить ключ хоста.",

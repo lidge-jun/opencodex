@@ -4201,7 +4201,7 @@ export const fr: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "L’Enfant est peut-être encore connecté. Exécutez {cmd} sur l’Enfant avant de réessayer.",
   "remoteLink.residual.full": "L’Enfant est peut-être encore connecté. Exécutez ocx disconnect puis ocx restart sur l’Enfant avant de réessayer.",
   "remoteLink.residual.unknown": "L’Enfant est peut-être encore connecté. Vérifiez-le et déconnectez-le sur l’Enfant avant de réessayer.",
-  "remoteLink.residual.ownership": "Vérifiez d'abord l’Enfant : s'il a rejoint depuis un autre lien, un hub ou un autre Home, laissez-le tel quel.",
+  "remoteLink.residual.ownership": "Avant l'étape ci-dessous, vérifiez l’Enfant avec {cmd} (ocx-child connect status --json sur un Enfant léger). L'identifiant de lien de cette tentative n'est pas affiché ici : traitez donc tout lien que vous ne reconnaissez pas comme celui d'un autre. Si l’Enfant affiche un tel lien, un hub ou un autre Home, laissez-le tel quel et sautez l'étape.",
   "remoteLink.error.generic": "La demande de lien distant n’a pas pu aboutir.",
   "remoteLink.reason.auth": "L’authentification a échoué.",
   "remoteLink.reason.hostkey": "La clé d’hôte n’a pas pu être vérifiée.",

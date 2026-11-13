@@ -7,7 +7,8 @@ const probe = { alias: "child-a", fingerprint, keyType: "ED25519", ocxVersion: "
 const confirm = { alias: probe.alias, fingerprint, ocxVersion: probe.ocxVersion };
 const linkId = "lnk_0123456789abcdef";
 // Written out here, not imported: the test pins the sentence an operator reads.
-const CHILD_OWNERSHIP_CHECK = "Check the Child first: if it has since joined another link, a hub or another Home, leave it as it is.";
+const CHILD_OWNERSHIP_CHECK = "Before the next step, check the Child with ocx connect status (ocx-child connect status --json on a lightweight Child). "
+  + "This attempt's link id is not shown, so treat any link you do not recognise as another's: if the Child shows such a link, a hub or another Home, leave it as it is and skip the next step.";
 function harness(bodies: unknown[] = [probe, confirm, { linkId }], status = 200) {
   const calls: { url: string; init?: RequestInit }[] = [], out: string[] = [], err: string[] = [];
   const log = console.log, error = console.error;
@@ -104,6 +105,8 @@ describe("CLI Remote Link enrollment", () => {
       expect(h.err.join("\n")).toContain("Run ocx disconnect and ocx restart on the Child before retrying.");
       // The step can be read long after the attempt, when the Child may belong to another link it would remove.
       expect(h.err.join("\n")).toContain(CHILD_OWNERSHIP_CHECK);
+      // The check comes before the step it guards.
+      expect(h.err.join("\n").indexOf(CHILD_OWNERSHIP_CHECK)).toBeLessThan(h.err.join("\n").indexOf("Run ocx disconnect and ocx restart"));
       expect(h.err.join("\n")).not.toContain("ocx_data_secret"); expect(h.out).toEqual([]);
     } finally { h.restore(); }
   });

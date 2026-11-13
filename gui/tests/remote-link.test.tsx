@@ -1482,7 +1482,7 @@ test("every locale translates the enrollment refusals and the Child steps instea
       expect(typeof text, locale + " " + step).toBe("string");
       if (locale !== "en") expect(text, locale + " " + step).not.toBe((DICTS.en as Record<string, string>)["remoteLink.residual." + step]);
       // A single command is a chip in the {cmd} slot, never written into the translated prose.
-      const chip = step !== "full" && step !== "unknown" && step !== "ownership";
+      const chip = step !== "full" && step !== "unknown";
       expect(text.includes("{cmd}"), locale + " " + step).toBe(chip);
     }
   }
@@ -1497,8 +1497,14 @@ test.each([
   const host = await applyRefusal({ error: { code, message: "fixture" }, residual: true, ...fields });
   const step = host.querySelector(".remote-link-child-step");
   expect(step?.textContent).toContain("The Child may still be connected.");
-  // The step can be acted on long after the attempt, when the Child may belong to another link it would remove.
-  expect(step?.textContent).toContain("Check the Child first: if it has since joined another link, a hub or another Home, leave it as it is.");
+  // The step can be acted on long after the attempt, when the Child may belong to another link it would remove: the check
+  // comes before the step, names its command, and says the attempt's link id is not shown.
+  const ownership = host.querySelector(".remote-link-child-ownership");
+  expect(ownership?.textContent).toContain("Before the step below, check the Child with");
+  expect(ownership?.textContent).toContain("ocx-child connect status --json on a lightweight Child");
+  expect(ownership?.textContent).toContain("This attempt's link id is not shown here, so treat any link you do not recognise as another's");
+  expect(ownership?.querySelector("code.chip")?.textContent).toBe("ocx connect status");
+  expect(ownership!.compareDocumentPosition(step!) & win.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(step?.querySelector("code.chip")?.textContent).toBe(cmd);
   if ("remotePlatform" in fields && fields.remotePlatform === "windows") {
     // The plant's location on a Windows Child without LOCALAPPDATA is named too.

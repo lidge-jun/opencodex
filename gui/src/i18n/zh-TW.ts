@@ -4198,7 +4198,7 @@ export const zhTW: Record<TKey, string> = {
   "remoteLink.residual.ephemeral": "子裝置可能仍處於連線狀態。重試前，請在子裝置上執行 {cmd}。",
   "remoteLink.residual.full": "子裝置可能仍處於連線狀態。重試前，請在子裝置上執行 ocx disconnect 和 ocx restart。",
   "remoteLink.residual.unknown": "子裝置可能仍處於連線狀態。重試前，請檢查子裝置並在其上中斷連線。",
-  "remoteLink.residual.ownership": "請先檢查子裝置：如果它此後已加入其他連線、Hub 或其他 Home，請保持原狀。",
+  "remoteLink.residual.ownership": "在執行下面的步驟之前，先用 {cmd} 檢查子裝置（輕量子裝置上為 ocx-child connect status --json）。此處不顯示本次嘗試的連線 ID，因此請把任何你不認識的連線視為別處的：如果子裝置顯示這樣的連線、Hub 或其他 Home，請保持原狀並跳過該步驟。",
   "remoteLink.error.generic": "無法完成遠端連線要求。",
   "remoteLink.reason.auth": "驗證失敗。",
   "remoteLink.reason.hostkey": "無法驗證主機金鑰。",

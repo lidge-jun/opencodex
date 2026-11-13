@@ -4246,7 +4246,7 @@ export const en = {
   "remoteLink.residual.ephemeral": "The Child may still be connected. Run {cmd} on the Child before retrying.",
   "remoteLink.residual.full": "The Child may still be connected. Run ocx disconnect and ocx restart on the Child before retrying.",
   "remoteLink.residual.unknown": "The Child may still be connected. Check the Child and disconnect it there before retrying.",
-  "remoteLink.residual.ownership": "Check the Child first: if it has since joined another link, a hub or another Home, leave it as it is.",
+  "remoteLink.residual.ownership": "Before the step below, check the Child with {cmd} (ocx-child connect status --json on a lightweight Child). This attempt's link id is not shown here, so treat any link you do not recognise as another's: if the Child shows such a link, a hub or another Home, leave it as it is and skip the step.",
   "remoteLink.error.generic": "Remote link request could not be completed.",
   "remoteLink.reason.auth": "Authentication failed.",
   "remoteLink.reason.hostkey": "The host key could not be verified.",
