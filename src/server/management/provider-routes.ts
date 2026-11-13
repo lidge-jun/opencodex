@@ -76,8 +76,10 @@ import {
   collectVertexPublisherModelPages,
   countDiscoveryResponseBytes,
   extractGoogleNativeModelItems,
-  resolveVertexDiscoveryToken,
+  resolveVertexDiscoveryAuth,
+  vertexDiscoveryAuthIsCurrent,
   vertexDiscoveryDeadline,
+  type VertexDiscoveryAuth,
 } from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
@@ -1656,10 +1658,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       ? await getModelsOAuthAccessSnapshot(name, prov).catch(() => undefined)
       : undefined;
     const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline(req.signal) : undefined;
+    let vertexAuth: VertexDiscoveryAuth | undefined;
     const apiKey = prov.authMode === "oauth"
       ? snapshot?.accessToken
       : vertexDeadline
-        ? await resolveVertexDiscoveryToken(prov, vertexDeadline)
+        ? (vertexAuth = await resolveVertexDiscoveryAuth(prov, vertexDeadline))?.token
         : await resolveModelsAuthToken(name, prov);
     if ((prov.authMode === "oauth" || effectiveGoogleMode(name, prov) === "vertex") && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
@@ -1726,9 +1729,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // own fixed discovery URL survives purely-benchmark (Clash/Surge/Mihomo
       // fake-IP) DNS without proxy env.
       const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
-        beforeSend: () => prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
+        beforeSend: () => (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers))
+          && (prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
           && modelsOAuthTargetMatches(name, config.providers[name], authorizedTarget)
-          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget)) };
+          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget))) };
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,

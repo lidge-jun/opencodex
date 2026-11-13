@@ -148,26 +148,78 @@ export function resolveObservedVertexDiscoveryToken(provider: OcxProviderConfig)
 }
 
 /**
- * Resolve the Vertex model-discovery credential (API key or GCP ADC access token).
+ * A resolved discovery credential bound to the selection that produced it. The token alone cannot
+ * say where it belongs: an ADC bearer placed in `x-goog-api-key` would leak to the wrong scheme.
+ */
+export interface VertexDiscoveryAuth {
+  token: string;
+  kind: "api-key" | "adc";
+  marker?: string;
+}
+
+function sameVertexSelection(left: VertexDiscoveryCredential, right: VertexDiscoveryCredential): boolean {
+  if (left.kind === "api-key") return right.kind === "api-key" && left.key === right.key;
+  return right.kind === "adc" && left.marker === right.marker;
+}
+
+/**
+ * Resolve the Vertex model-discovery credential (API key or GCP ADC access token) with its kind.
  *
  * `signal` bounds the ADC exchange by the discovery time budget; without it a stalled token
  * endpoint would hold discovery through every token retry. Paused key pools, unreadable explicit
  * references and malformed `gcp-sa:` markers return `undefined` and never reach ambient credentials.
+ * The selection is taken again after the exchange: if it changed meanwhile (an ambient key appeared,
+ * a reference now resolves elsewhere) the token is discarded rather than sent under the new selection.
  */
-export async function resolveVertexDiscoveryToken(
+export async function resolveVertexDiscoveryAuth(
   provider: OcxProviderConfig,
   signal: AbortSignal = vertexDiscoveryDeadline(),
-): Promise<string | undefined> {
+): Promise<VertexDiscoveryAuth | undefined> {
   if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
-  const credential = selectVertexDiscoveryCredential(provider);
-  if (credential.kind === "api-key") return credential.key;
+  const selection = selectVertexDiscoveryCredential(provider);
+  if (selection.kind === "api-key") return selection.key ? { token: selection.key, kind: "api-key" } : undefined;
+  let token: string;
   try {
-    const markerAccount = gcpCredentialMarkerAccount(credential.marker);
-    const { token } = await getVertexAccessTokenWithAuthority({ signal, ...(markerAccount ? { markerAccount } : {}) });
-    return token;
+    const markerAccount = gcpCredentialMarkerAccount(selection.marker);
+    ({ token } = await getVertexAccessTokenWithAuthority({ signal, ...(markerAccount ? { markerAccount } : {}) }));
   } catch {
     return undefined;
   }
+  if (!sameVertexSelection(selection, selectVertexDiscoveryCredential(provider))) return undefined;
+  return { token, kind: "adc", ...(selection.marker ? { marker: selection.marker } : {}) };
+}
+
+/** The token from `resolveVertexDiscoveryAuth`, for callers that only need to know one exists. */
+export async function resolveVertexDiscoveryToken(
+  provider: OcxProviderConfig,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  return (await resolveVertexDiscoveryAuth(provider, signal))?.token;
+}
+
+/**
+ * Send-time check, run before every discovery request (`beforeSend`): the row still selects the
+ * credential this token came from, and the outgoing headers carry it in that scheme's header and
+ * not the other one. A selection that changed after resolution, or headers built for a different
+ * selection, cancel the send so a token never reaches a scheme it was not issued for.
+ */
+export function vertexDiscoveryAuthIsCurrent(
+  provider: OcxProviderConfig,
+  auth: VertexDiscoveryAuth,
+  headers: Record<string, string>,
+): boolean {
+  if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return false;
+  const current = selectVertexDiscoveryCredential(provider);
+  const issued: VertexDiscoveryCredential = auth.kind === "api-key"
+    ? { kind: "api-key", key: auth.token }
+    : { kind: "adc", ...(auth.marker ? { marker: auth.marker } : {}) };
+  if (!sameVertexSelection(issued, current)) return false;
+  const header = (name: string): string | undefined =>
+    Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
+  const bearer = `Bearer ${auth.token}`;
+  return auth.kind === "api-key"
+    ? header("x-goog-api-key") === auth.token && header("authorization") !== bearer
+    : header("authorization") === bearer && header("x-goog-api-key") !== auth.token;
 }
 
 /**

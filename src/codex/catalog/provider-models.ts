@@ -105,8 +105,10 @@ import {
   countDiscoveryResponseBytes,
   extractGoogleNativeModelItems,
   resolveObservedVertexDiscoveryToken,
-  resolveVertexDiscoveryToken,
+  resolveVertexDiscoveryAuth,
+  vertexDiscoveryAuthIsCurrent,
   vertexDiscoveryDeadline,
+  type VertexDiscoveryAuth,
 } from "../../providers/google-vertex-model-discovery";
 import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
@@ -289,6 +291,7 @@ export async function fetchProviderModelsWithAuth(
   }
   // One Vertex deadline covers ADC, the first request and every follow-up page.
   const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline() : undefined;
+  let vertexAuth: VertexDiscoveryAuth | undefined;
   const auth: ModelsAuthResolution = prov.authMode === "oauth" && !mayResolveModelsOAuth(name, prov)
     ? { apiKey: undefined, observed: resolveAuth.kind === "observed" }
     : captured.observedAuth ?? (resolveAuth.kind === "refreshing"
@@ -307,12 +310,14 @@ export async function fetchProviderModelsWithAuth(
         .catch(() => ({ apiKey: undefined, observed: false }))
       : {
         apiKey: effectiveGoogleMode(name, prov) === "vertex"
-          ? await resolveVertexDiscoveryToken(prov, vertexDeadline)
+          ? (vertexAuth = await resolveVertexDiscoveryAuth(prov, vertexDeadline))?.token
           : await resolveModelsAuthToken(name, prov),
         observed: false,
       }
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
+  // A passive gather's Vertex credential is always an API key (ADC needs an async exchange).
+  if (vertexDeadline && !vertexAuth && apiKey && prov.authMode !== "oauth") vertexAuth = { token: apiKey, kind: "api-key" };
   if ((prov.authMode === "oauth" && !apiKey) || isProviderApiKeyPaused(prov)) {
     return observed(configured, "degraded");
   }
@@ -759,7 +764,8 @@ export async function fetchProviderModelsWithAuth(
     // name matches any baseUrl by design. Retargeted or renamed custom rows
     // fetch a different URL and keep the rejection.
     if (!maySendAnthropicDiscovery()) return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
-    const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl, beforeSend: maySendAnthropicDiscovery };
+    const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
+      beforeSend: () => maySendAnthropicDiscovery() && (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers)) };
     const antigravityObservation = cloudCodeAssist ? captureAntigravityModelObservation() : undefined;
     const res = request.method === "POST"
       ? await providerOutboundPost(name, prov, url, {

@@ -59,7 +59,11 @@ discovery credential the way inference does: a `gcp-sa:` marker uses that servic
 explicit `keychain:` or `$ENV` reference uses that key alone, and when it cannot be read
 discovery sends nothing and the catalog degrades, matching the routed-config rejection of the same
 reference, so `GOOGLE_CLOUD_API_KEY` and host ADC never stand in for it; otherwise a literal key,
-then `GOOGLE_CLOUD_API_KEY`, then host ADC. One deadline (`vertexDiscoveryDeadline`, 8 s, also
+then `GOOGLE_CLOUD_API_KEY`, then host ADC. The selector follows inference's steps on the same
+untrimmed bytes, and a parity test compares it with the credential the adapter sends. A resolved
+credential keeps its kind and marker (`VertexDiscoveryAuth`): a selection that changes during the
+ADC exchange discards the token, and `beforeSend` cancels any request whose row no longer selects
+that credential or whose headers place it in the other scheme's header. One deadline (`vertexDiscoveryDeadline`, 8 s, also
 tied to the request for the management probe) covers ADC token resolution, the first request and
 every follow-up page. `nextPageToken` is followed with three ceilings across all pages: five
 requests, the discovery row limit and the discovery byte limit, counted from the bytes actually
