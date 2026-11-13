@@ -34,6 +34,12 @@ export interface LinkStatusDto {
     tunnel?: LinkTunnelDiagnostics;
     /** Home rows on request (`?children=1`): versions, update route, catalog freshness, activity and operations. */
     child?: LinkChildOpsStatus;
+    /** Links with several routes, on request (`?routes=1`): each route's rest and last outcome. */
+    routes?: LinkRouteWire[];
+    /** The route the proven tunnel uses and when it was proven; null while none is proven. */
+    route?: { name: string; index: number; since: string } | null;
+    /** Why the link cannot run its routes right now, or null. */
+    routeBlocked?: "ssh_client_unsupported" | "stop_unconfirmed" | null;
     /** Rows on request (`?transport=1`): the live link WebSocket counters (design T4 section 9.3). */
     ws?: LinkWsStatus;
     /** On request (`?traffic=1`): body bytes this machine relayed or served for the link since `since`. */
@@ -63,6 +69,35 @@ export interface LinkTunnelDiagnostics {
 
 function iso(at: number): string {
   return new Date(at).toISOString();
+}
+
+/** One route of a multi-route link on the wire. The class is a fixed word, never ssh output. */
+export interface LinkRouteWire {
+  name: string;
+  eligibleAt: string | null;
+  lastOutcome: { class: "transient" | "readiness" | "grant_unobserved" | "forward" | "auth" | "hostkey"; at: string } | null;
+}
+
+/**
+ * Add route fields to each link the supervisor runs with several routes. Opt-in like `tunnel`:
+ * an older `ocx link status` validates rows key by key. Route names are SSH host aliases; this
+ * document is served only to the Home's admin token or dashboard session, never over the relay.
+ */
+export function attachLinkRoutes(dto: LinkStatusDto, supervisorStates: readonly LinkTunnelStatus[]): LinkStatusDto {
+  const byId = new Map(supervisorStates.map(status => [status.linkId, status]));
+  for (const link of dto.links) {
+    const status = byId.get(link.id);
+    if (!status || status.direction !== "hub-initiated" || !status.routes) continue;
+    const { routes, route, blocked } = status.routes;
+    link.routes = routes.map(entry => ({
+      name: entry.name,
+      eligibleAt: entry.eligibleAt === null ? null : iso(entry.eligibleAt),
+      lastOutcome: entry.lastOutcome ? { class: entry.lastOutcome.class, at: iso(entry.lastOutcome.at) } : null,
+    }));
+    link.route = route ? { name: route.name, index: route.index, since: iso(route.since) } : null;
+    link.routeBlocked = blocked;
+  }
+  return dto;
 }
 
 /** Why the Home refused a link WebSocket upgrade, as counted (design T4 section 9.3). */
@@ -227,6 +262,9 @@ function stateDetails(
     return { state: "failed", since: record.createdAt, reason: "stale tunnel may hold the port" };
   }
   const tunnel = status.state;
+  if (status.routes?.blocked === "ssh_client_unsupported" && !status.routes.route) {
+    return { state: "failed", since: new Date(tunnel.kind === "idle" ? Date.parse(record.createdAt) : tunnel.since).toISOString(), reason: "ssh_client_unsupported" };
+  }
   const reason = tunnel.kind === "failed" ? tunnel.reason : null;
   const since = tunnel.kind === "idle" ? record.createdAt : new Date(tunnel.since).toISOString();
   return { state: asWireState(tunnel), since, reason };

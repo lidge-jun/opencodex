@@ -1046,7 +1046,7 @@ jobs:
   # Windows shards run only on a full manual dispatch. Pull requests retain
   # fast Ubuntu checks, including when the Windows-sensitive filter is set.
   platform-windows:
-    name: windows ${{ matrix.shard }}/11
+    name: windows ${{ matrix.shard }}/14
     needs: [changes, select-windows-runner]
     if: >-
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
@@ -1084,11 +1084,21 @@ jobs:
     # maximum setup, eleven projects ~22.4 minutes; 25% test variance makes ~27.3.
     # Pay for two extra setups (~3.3 runner-minutes at the older run's mean), keep
     # the 30-minute job bound and all tests, and leave batch deadlines independent.
+    #
+    # Eleven shards then reached it too: run 43257334898 cancelled 8/11 at batch 44/52
+    # while the other ten finished in 19.4-29.9 minutes. Total Windows test work had
+    # grown from the table's 14,874 s to 16,496 s, and new or grown files carried
+    # default weights, so 8/11 drew far more than 5/11. Refreshing the weights from
+    # that run balances the shards to within a second of each other, but at eleven
+    # each still holds ~25.0 minutes of tests: with 25% variance and the 2.4-minute
+    # setup that projects ~33.6 against the 30-minute bound. Fourteen shards put test
+    # work at ~19.6 minutes and the same projection at ~26.9, the margin chosen for
+    # eleven. Pay for three extra setups, keep the 30-minute job bound and all tests.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     steps:
       - name: Show selected runner
         shell: bash
@@ -1168,7 +1178,7 @@ jobs:
         # and service-manager guard before the lock boundary.
         shell: bash
         env:
-          TEST_SHARD: ${{ matrix.shard }}/11
+          TEST_SHARD: ${{ matrix.shard }}/14
           BUN_TEST_FILE_SCOPE: all
           BUN_TEST_BATCH_SIZE: "6"
           BUN_TEST_BATCH_TIMEOUT_SECONDS: "480"
@@ -1932,10 +1942,10 @@ jobs:
           # started: five successes and one skipped leg roll up to `success`. No matrix here
           # carries a per-leg `if:`, so a leg can only be skipped when its whole job is, which
           # the expectation table above already catches. What that table cannot catch is a
-          # matrix that produced FEWER legs than the eleven a dispatch is run to read, so count
-          # them by name. The eleven Windows legs are the entire output of that dispatch.
+          # matrix that produced FEWER legs than the fourteen a dispatch is run to read, so count
+          # them by name. The fourteen Windows legs are the entire output of that dispatch.
           if [ "$windows" = requested ]; then
-            shards=11
+            shards=14
             # `filter=latest` (the default) is the latest execution of each job in the run,
             # which is what a human reading the run sees. Asking for one ATTEMPT instead would
             # fail every partial re-run: "Re-run failed jobs" puts only the repaired shard in
