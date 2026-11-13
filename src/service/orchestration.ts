@@ -699,24 +699,32 @@ export function uninstallServiceDetailed(): ServiceUninstallOutcome {
     if (scheduler.status === "unknown") {
       throw new Error(`Could not determine Task Scheduler state: ${scheduler.detail}`);
     }
-    if (scheduler.status === "present") {
-      (hooks?.uninstallWindowsTask ?? uninstallWindows)();
-      removed = true;
+    // Every probe runs before the first destructive step. The task used to be deleted first,
+    // so an unreadable `sc qc` left a half-removed install: no scheduler task to retry from,
+    // native registration still on disk, and no way back (#7771 round 9).
+    const nativeStatus = (hooks?.nativeStatus ?? statusWinswRaw)();
+    if (nativeStatus === "unknown") {
+      throw new Error("Native service status could not be verified.");
     }
-    if ((hooks?.nativeStatus ?? statusWinswRaw)() !== "nonexistent") {
+    let ownership: "owned" | "foreign" | "unknown" | null = null;
+    if (nativeStatus !== "nonexistent") {
       // Re-prove ownership right before the destructive step: `sc qc` may have changed
       // since the install-state read, and a foreign registration must survive an uninstall
       // of this home. Unreadable is not a licence to delete — fail closed and keep state.
-      const ownership = (hooks?.nativeOwnership ?? winswOwnershipOfThisHome)();
+      ownership = (hooks?.nativeOwnership ?? winswOwnershipOfThisHome)();
       if (ownership === "unknown") {
         throw new Error(
           `The native service registration's ownership could not be verified (sc qc ${WINSW_SERVICE_ID}); refusing to remove it. Check 'sc query ${WINSW_SERVICE_ID}' and retry.`,
         );
       }
-      if (ownership === "owned") {
-        (hooks?.uninstallNative ?? uninstallWinswService)();
-        removed = true;
-      }
+    }
+    if (scheduler.status === "present") {
+      (hooks?.uninstallWindowsTask ?? uninstallWindows)();
+      removed = true;
+    }
+    if (ownership === "owned") {
+      (hooks?.uninstallNative ?? uninstallWinswService)();
+      removed = true;
     }
     if (removed) { (hooks?.removeInstallState ?? removeServiceInstallState)(); return "removed"; }
   } else if (platform === "linux" && existsSync(unitPath())) {

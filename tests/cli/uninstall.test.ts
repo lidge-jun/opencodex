@@ -137,6 +137,58 @@ describe("full uninstall command", () => {
     expect(stateRemovals).toBe(1);
   });
 
+  test("an unreadable WinSW ownership removes nothing, scheduler task included", () => {
+    // #7771 round 9: the scheduler task was deleted before the ownership probe ran, so an
+    // `sc qc` that could not be read left a half-removed install: task gone, native
+    // registration still there, no retry that can put the task back. Every probe now runs
+    // before the first destructive step.
+    const calls: string[] = [];
+    let stateRemovals = 0;
+    setUninstallServiceHooksForTests({
+      platform: "win32",
+      assertEnvironment: () => {},
+      probeWindowsTask: () => ({ status: "present" }),
+      uninstallWindowsTask: () => { calls.push("uninstall:task"); },
+      nativeStatus: () => "stopped",
+      nativeOwnership: () => "unknown",
+      uninstallNative: () => { calls.push("uninstall:native"); },
+      removeInstallState: () => { stateRemovals++; },
+    });
+    expect(() => uninstallServiceDetailed()).toThrow("could not be verified");
+    expect(calls).toEqual([]);
+    expect(stateRemovals).toBe(0);
+
+    // An unreadable native status is the same refusal, and it also precedes the task delete.
+    calls.length = 0;
+    setUninstallServiceHooksForTests({
+      platform: "win32",
+      assertEnvironment: () => {},
+      probeWindowsTask: () => ({ status: "present" }),
+      uninstallWindowsTask: () => { calls.push("uninstall:task"); },
+      nativeStatus: () => "unknown",
+      nativeOwnership: () => "owned",
+      uninstallNative: () => { calls.push("uninstall:native"); },
+      removeInstallState: () => {},
+    });
+    expect(() => uninstallServiceDetailed()).toThrow("could not be verified");
+    expect(calls).toEqual([]);
+
+    // Both probes answer: the task and the owned service are removed.
+    calls.length = 0;
+    setUninstallServiceHooksForTests({
+      platform: "win32",
+      assertEnvironment: () => {},
+      probeWindowsTask: () => ({ status: "present" }),
+      uninstallWindowsTask: () => { calls.push("uninstall:task"); },
+      nativeStatus: () => "started",
+      nativeOwnership: () => "owned",
+      uninstallNative: () => { calls.push("uninstall:native"); },
+      removeInstallState: () => { calls.push("state"); },
+    });
+    expect(uninstallServiceDetailed()).toBe("removed");
+    expect(calls).toEqual(["uninstall:task", "uninstall:native", "state"]);
+  });
+
   test("scheduler removal failure propagates without deleting install state", () => {
     let stateRemovals = 0;
     setUninstallServiceHooksForTests({
