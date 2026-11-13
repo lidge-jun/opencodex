@@ -178,7 +178,7 @@ except the native Responses passthrough. The passthrough forwards the id and kee
 upstream-owned state. A task-scope mismatch uses the same generic refusal even when the supplied
 input appears complete, because the proxy cannot prove that it contains the full conversation.
 The internal mismatch reason, stored scope and state contents never enter the client response;
-the caller retries explicitly with complete history and no `previous_response_id`. Production local replay requires the same admitted caller principal and nonblank own `thread-id`; unbound requests cannot use legacy internal ownership.
+the caller retries explicitly with complete history and no `previous_response_id`. When `v2-plaintext` or `plaintextV2AgentMessages` is enabled, local replay requires the same admitted caller principal and nonblank own `thread-id`; bound state remains bound after disabling. Default `v1` retains parent-thread-scoped continuation for unbound state, including default loopback callers. See the [retention contract](responses.md#responses-httpsse).
 Combo history and provider continuation use the same exact opaque response ID throughout ownership validation and lookup.
 `PROVIDER_OWNED_CONTINUATION_WIRES` in
 `src/responses/continuation-ownership.ts` is deliberately empty and records why the three
