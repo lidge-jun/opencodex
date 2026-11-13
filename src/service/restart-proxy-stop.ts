@@ -1,8 +1,11 @@
-import { claimPendingTeardown, clearPendingTeardown, pendingTeardownPathFor } from "../config/pending-teardown";
+import { claimPendingTeardown, clearPendingTeardown } from "../config/pending-teardown";
 import { readRuntimePort } from "../config/process-state";
-import { stopProxy } from "../lib/process-control";
+import { ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 
 export type RestartStopEndpoint = { hostname: string; port: number };
+
+/** A deferred-teardown receipt a restart keeps until its replacement serves. */
+export type HeldRestartReceipt = { nonce: string; pid: number };
 
 export interface RestartProxyStopDeps {
   readRuntime?: (pid: number) => { port: number; hostname?: string } | null;
@@ -10,7 +13,6 @@ export interface RestartProxyStopDeps {
   claim?: (endpoint: RestartStopEndpoint) => string;
   clear?: (nonce: string) => boolean;
   stop?: typeof stopProxy;
-  warn?: (message: string) => void;
 }
 
 /**
@@ -23,16 +25,18 @@ export interface RestartProxyStopDeps {
  * request, the route skips that refusal, defers its shared teardown, and the proxy exits keeping
  * client routing for the replacement, as a service-managed crash and respawn already does.
  *
- * The receipt is written before the request, so a restart that dies mid-stop leaves a durable
- * obligation the next `ocx stop` finishes. Once the request is answered the restart releases it:
- * the proxy either exited keeping routing for the replacement this restart is about to start, or
- * refused and still owns its own teardown. A refusal is never forced; stopProxy throws it. Without
- * an exact endpoint no request is sent, so no receipt is written and the verified-pid stop runs as
- * before.
+ * The receipt is written before the request and is an obligation: client routing still points at
+ * the stopped proxy's endpoint. Only a refusal proves nothing was deferred, so only a refusal
+ * releases it here (and is never forced; stopProxy throws it). Every other outcome, an accepted
+ * stop, an unanswered request that fell back to the kill ladder, or a failure on the way, hands
+ * the receipt to `hold`. The caller releases it once a replacement serves; until then, a restart
+ * that fails or dies leaves it for the next `ocx stop` to finish. Without an exact endpoint no
+ * request is sent, so no receipt is written and the verified-pid stop runs as before.
  */
 export async function stopProxyForServiceRestart(
   pid: number,
-  discovered: RestartStopEndpoint | null = null,
+  discovered: RestartStopEndpoint | null,
+  hold: (receipt: HeldRestartReceipt) => void,
   deps: RestartProxyStopDeps = {},
 ): Promise<boolean> {
   const stop = deps.stop ?? stopProxy;
@@ -41,10 +45,12 @@ export async function stopProxyForServiceRestart(
   if (!endpoint) return stop(pid);
   const nonce = (deps.claim ?? (target => claimPendingTeardown(target, "exact").nonce))(endpoint);
   try {
-    return await stop(pid, { deferSharedTeardownNonce: nonce, runtimeEndpoint: endpoint });
-  } finally {
-    if (!(deps.clear ?? clearPendingTeardown)(nonce)) {
-      (deps.warn ?? console.warn)(`⚠️  Could not remove the restart's teardown receipt ${pendingTeardownPathFor(nonce)}; the next 'ocx stop' finishes it.`);
-    }
+    const stopped = await stop(pid, { deferSharedTeardownNonce: nonce, runtimeEndpoint: endpoint });
+    hold({ nonce, pid });
+    return stopped;
+  } catch (error) {
+    if (error instanceof ProxyOwnershipRefusedError) (deps.clear ?? clearPendingTeardown)(nonce);
+    else hold({ nonce, pid });
+    throw error;
   }
 }

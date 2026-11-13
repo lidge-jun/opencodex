@@ -109,6 +109,7 @@ test("a scheduler restart stops the surviving tracked proxy instead of aborting 
   home = createTempHome("ocx-scheduler-restart-8416-");
   const proxy = await startProxy(home);
   const effects: string[] = [];
+  let confirmed: readonly number[] = [];
   try {
     await repairService({
       platform: "win32",
@@ -138,6 +139,9 @@ test("a scheduler restart stops the surviving tracked proxy instead of aborting 
         throw new Error("the fixture registration is healthy; no re-register expected");
       },
       settleSchedulerRead: () => {},
+      // No scheduler starts a replacement here; confirming one stands in for that, so the restart
+      // releases the receipt it kept.
+      confirmSchedulerReplacement: async pids => { confirmed = pids; return true; },
       // stopTrackedProxy and schedulerProxyStillLive stay ABSENT on purpose: the real
       // stopTrackedProxyIfRunning and proxyStillLiveAfterStop run against the child.
     });
@@ -156,8 +160,9 @@ test("a scheduler restart stops the surviving tracked proxy instead of aborting 
   expect(stop.status).toBe(200);
   expect(stop.query).toMatch(/^\?deferSharedTeardown=1&teardownNonce=[0-9a-f]{32}$/);
   expect(stop.response.sharedTeardown).toBe("deferred");
-  // The restart released its own receipt once the stop was answered; nothing is left for a later
-  // `ocx stop` or the updater to trip over.
+  // The restart kept its receipt until a replacement other than the stopped proxy served, then
+  // released it; nothing is left for a later `ocx stop` or the updater to trip over.
+  expect(confirmed).toEqual([proxy.pid]);
   expect(readdirSync(home.configDir).filter(name => name.startsWith("pending-teardown"))).toEqual([]);
   // The child accepted the stop and exited on its own; nothing was killed past a refusal.
   expect(existsSync(home.path("accepted-stop.json"))).toBe(true);
@@ -261,6 +266,59 @@ test("a survivor this home cannot verify is refused before the wrappers that sup
   }
 }, RESTART_TIMEOUT_MS);
 
+test.each(["no replacement answers", "wrapper cleanup fails"] as const)("the restart keeps its teardown receipt when %s after the proxy accepted its stop", async mode => {
+  home = createTempHome("ocx-scheduler-restart-8416-receipt-");
+  const proxy = await startProxy(home);
+  const effects: string[] = [];
+  try {
+    const restart = repairService({
+      platform: "win32",
+      verb: "restart",
+      configDir: () => home!.configDir,
+      inspectSupervision: () => ({ kind: "none" }),
+      diagnose: () => ({
+        supported: true, installed: true, enabled: true, running: true, viable: true,
+        startable: true, stale: false, conflict: false, backend: "scheduler", summary: "fixture",
+      }),
+      readOwnership: () => ({ kind: "none", revision: 0 }),
+      assertEnv: () => {},
+      assertAuth: () => {},
+      selectRuntime: () => ({ path: process.execPath, source: "override", overrideEnv: "OPENCODEX_BUN_PATH" }),
+      assertRuntimeWritable: () => {},
+      launcherPathDiagnostic: () => null,
+      readSchedulerXml: () => healthy,
+      resolveExpectedUserId: () => sid,
+      schedulerLauncher: launcher,
+      prepareDisconnectedClientRestart: async () => {},
+      stopScheduler: () => { effects.push("stop-scheduler"); },
+      killServiceWrappers: () => {
+        effects.push("kill-wrappers");
+        if (mode === "wrapper cleanup fails") throw new Error("fixture wrapper cleanup refused");
+      },
+      writeSchedulerAssets: () => { effects.push("write-assets"); },
+      startScheduler: () => { effects.push("start-scheduler"); },
+      writeSchedulerState: () => { effects.push("write-state"); },
+      reregisterScheduler: async () => { throw new Error("no re-register expected"); },
+      settleSchedulerRead: () => {},
+      confirmSchedulerReplacement: async () => false,
+    });
+    if (mode === "wrapper cleanup fails") await expect(restart).rejects.toThrow("fixture wrapper cleanup refused");
+    else await restart;
+  } finally {
+    await proxy.stop();
+  }
+  // The proxy accepted the deferred stop and exited keeping client routing, so the obligation to
+  // restore it is still owed: a valid receipt for that exact endpoint stays for `ocx stop`.
+  expect(existsSync(home.path("accepted-stop.json"))).toBe(true);
+  const receipts = readdirSync(home.configDir).filter(name => name.startsWith("pending-teardown-"));
+  expect(receipts).toHaveLength(1);
+  const receipt = JSON.parse(readFileSync(join(home.configDir, receipts[0]!), "utf8"));
+  expect(receipt).toMatchObject({ endpoint: { hostname: "127.0.0.1", port: proxy.port }, endpointSource: "exact", ownerPid: process.pid });
+  expect(effects).toEqual(mode === "wrapper cleanup fails"
+    ? ["stop-scheduler", "kill-wrappers"]
+    : ["stop-scheduler", "kill-wrappers", "write-assets", "start-scheduler", "write-state"]);
+}, RESTART_TIMEOUT_MS);
+
 test("a direct stop still reaches the proxy while a service mutation owns the lock", async () => {
   home = createTempHome("ocx-scheduler-restart-lock-8416-");
   const proxy = await startProxy(home);
@@ -283,4 +341,3 @@ test("a direct stop still reaches the proxy while a service mutation owns the lo
     await proxy.stop();
   }
 });
-

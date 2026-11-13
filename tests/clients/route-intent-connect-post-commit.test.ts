@@ -87,4 +87,3 @@ test("lifecycle lock contention after the commit keeps the enrollment and leaves
   expect(result.journal).toBe(true);
   expect(result.stderr).toContain("local route intent needs reconciliation");
 }, SPAWN_BUDGET_MS);
-

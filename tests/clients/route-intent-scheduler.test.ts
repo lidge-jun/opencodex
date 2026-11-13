@@ -56,4 +56,3 @@ test("machine clients reports the saved selection a scheduled sync changed, only
   expect(await read({ kind: "connected", value: { ...state, connectedAt: "2026-11-10T00:00:00.000Z", selectedClients: ["pi"] } })).toEqual(["codex"]);
   expect(await read({ kind: "disconnected" })).toEqual(["codex"]);
 });
-

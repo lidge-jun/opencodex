@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,6 +8,9 @@ import { snapshotWindowsSchedulerAssets } from "../../src/service/windows-ops";
 import { windowsLauncherVbsPath, windowsServiceScriptPath, windowsTaskXmlPath } from "../../src/service/state";
 import * as disconnectedCleanup from "../../src/service/disconnected-client-restart";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { stopProxyForServiceRestart, type HeldRestartReceipt } from "../../src/service/restart-proxy-stop";
+import { schedulerReplacementServing } from "../../src/service/orchestration";
+import { ProxyOwnershipRefusedError } from "../../src/lib/process-control";
 
 const sid = "S-1-5-21-111-222-333-1001", launcher = "C:\\fixture\\launcher.vbs";
 const healthy = buildWindowsTaskXml("fixture.cmd", launcher, undefined, sid);
@@ -205,4 +208,59 @@ test.each([
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
     removeTreeWithRetry(configHome);
   }
+});
+
+test("a refused second stop after wrapper cleanup says the proxy is unsupervised and starts nothing", async () => {
+  await scenario(async (deps, effects) => {
+    let stops = 0;
+    deps.stopTrackedProxy = async () => { effects.push("tracked"); if (++stops === 2) throw new Error("proxy refused the stop"); };
+    deps.schedulerProxyStillLive = async () => { effects.push("verify-stopped"); return { port: 10100 }; };
+    await expect(repairService(deps)).rejects.toThrow("wrappers that supervised it were already removed");
+    expect(effects).toEqual(["stop", "tracked", "wrappers", "verify-stopped", "tracked"]);
+  });
+});
+
+describe("the restart's deferred-teardown receipt", () => {
+  const endpoint = { hostname: "127.0.0.1", port: 10100 };
+  const run = async (stop: () => Promise<boolean>) => {
+    const events: string[] = [];
+    const held: HeldRestartReceipt[] = [];
+    const outcome = await stopProxyForServiceRestart(4242, endpoint, receipt => { held.push(receipt); }, {
+      readRuntime: () => null,
+      claim: () => { events.push("claim"); return "a".repeat(32); },
+      clear: nonce => { events.push("clear:" + nonce.length); return true; },
+      stop: async (_pid, io) => { events.push("stop:" + String(io?.deferSharedTeardownNonce?.length)); return stop(); },
+    }).then(value => String(value), (error: Error) => "throw:" + error.constructor.name);
+    return { outcome, events, held };
+  };
+
+  test("an accepted stop keeps the receipt for the caller to release once a replacement serves", async () => {
+    expect(await run(async () => true)).toEqual({ outcome: "true", events: ["claim", "stop:32"], held: [{ nonce: "a".repeat(32), pid: 4242 }] });
+  });
+
+  test("a refusal deferred nothing, so it releases the receipt and propagates", async () => {
+    expect(await run(async () => { throw new ProxyOwnershipRefusedError("refused", "respawnable_service"); }))
+      .toEqual({ outcome: "throw:ProxyOwnershipRefusedError", events: ["claim", "stop:32", "clear:32"], held: [] });
+  });
+
+  test("an ambiguous failure keeps the receipt: the proxy may already have exited keeping routing", async () => {
+    expect(await run(async () => { throw new Error("process 4242 did not exit"); }))
+      .toEqual({ outcome: "throw:Error", events: ["claim", "stop:32"], held: [{ nonce: "a".repeat(32), pid: 4242 }] });
+  });
+
+  test("the replacement check ignores the stopped proxy and gives up at its deadline", async () => {
+    let clock = 0;
+    const answers: Array<number | null> = [4242, 4242, 5151];
+    const found = await schedulerReplacementServing([4242], {
+      findProxy: async () => ({ pid: answers.shift() ?? null }), verify: pid => pid ?? null,
+      now: () => clock, sleep: async ms => { clock += ms; }, windowMs: 10_000,
+    });
+    expect(found).toBe(true);
+    clock = 0;
+    const never = await schedulerReplacementServing([4242], {
+      findProxy: async () => ({ pid: 4242 }), verify: pid => pid ?? null,
+      now: () => clock, sleep: async ms => { clock += ms; }, windowMs: 3_000,
+    });
+    expect(never).toBe(false);
+  });
 });

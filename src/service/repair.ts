@@ -21,6 +21,40 @@ import type { ExpectedWindowsTaskUserId } from "./windows-taskxml";
 import { win32 } from "node:path";
 import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
 import { prepareDisconnectedClientServiceRestart } from "./disconnected-client-restart";
+import type { HeldRestartReceipt } from "./restart-proxy-stop";
+import { clearPendingTeardown, pendingTeardownPathFor } from "../config/pending-teardown";
+
+/** Append what the caller's state means to an error, keeping the error itself (its class and code). */
+function withContext(error: unknown, context: string): unknown {
+  if (error instanceof Error) { error.message = `${error.message} ${context}`; return error; }
+  return new Error(`${String(error)} ${context}`);
+}
+
+/**
+ * Release the deferred-teardown receipts a scheduler restart kept, once a replacement serves. A
+ * replacement that does not answer in time keeps them: client routing still names the stopped
+ * endpoint, and `ocx stop` finishes an abandoned receipt by restoring native client routing.
+ */
+async function releaseRestartReceipts(
+  held: readonly HeldRestartReceipt[],
+  confirm?: (stoppedPids: readonly number[]) => Promise<boolean>,
+): Promise<void> {
+  if (held.length === 0) return;
+  const serving = await (confirm ?? (async (pids: readonly number[]) => {
+    const { schedulerReplacementServing } = await import("./orchestration");
+    return schedulerReplacementServing(pids);
+  }))(held.map(receipt => receipt.pid));
+  if (!serving) {
+    console.warn("⚠️  The restarted proxy did not answer yet, so the restart kept its teardown receipt: client routing still points at the proxy's port.");
+    console.warn("   Once it serves, run 'ocx stop' and then 'ocx service start'; if it does not start, 'ocx stop' restores native client routing.");
+    return;
+  }
+  for (const receipt of held) {
+    if (!clearPendingTeardown(receipt.nonce)) {
+      console.warn(`⚠️  Could not remove the restart's teardown receipt ${pendingTeardownPathFor(receipt.nonce)}; the next 'ocx stop' finishes it.`);
+    }
+  }
+}
 
 /**
  * The two CLI verbs `repairService` serves. They differ on ONE platform and ONE case: a
@@ -48,6 +82,11 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
    * that still answers but cannot be verified (stopTrackedProxyForServiceRestart); failures propagate.
    */
   stopTrackedProxy?: () => Promise<unknown>;
+  /**
+   * After the scheduler start, whether a replacement other than the stopped pids serves; only then
+   * does the restart release the deferred-teardown receipts its stops kept (schedulerReplacementServing).
+   */
+  confirmSchedulerReplacement?: (stoppedPids: readonly number[]) => Promise<boolean>;
   startScheduler?: () => void;
   writeSchedulerState?: (runtime: DurableBunRuntime) => void;
   writeNativeState?: (runtime: DurableBunRuntime) => void;
@@ -216,6 +255,10 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
   // are cleaned up after that proxy accepted its stop (below): removing them first left a survivor
   // whose stop was refused or unverifiable with nothing to restart it (#8416).
   let schedulerStopped = false;
+  // Deferred-teardown receipts the scheduler restart's stops kept: client routing still names the
+  // stopped endpoints, so they are released only once a replacement serves (end of the scheduler path).
+  const heldRestartReceipts: HeldRestartReceipt[] = [];
+  const holdRestartReceipt = (receipt: HeldRestartReceipt) => { heldRestartReceipts.push(receipt); };
   const stopSchedulerForRestart = (beforeStop: () => void) => {
     if (schedulerStopped) return;
     beforeStop();
@@ -227,8 +270,13 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     if (deps.verb !== "restart") return;
     const beforeStop = () => { assertRestartOwnership(); verifyRegistration?.(); };
     beforeStop();
+    const schedulerBackend = platform === "win32" && diag.backend !== "native";
     await (deps.prepareDisconnectedClientRestart ?? (() => prepareDisconnectedClientServiceRestart({
       beforeStop,
+      ...(schedulerBackend ? { stop: async (pid: number) => {
+        const { stopProxyForServiceRestart } = await import("./restart-proxy-stop");
+        return stopProxyForServiceRestart(pid, null, holdRestartReceipt);
+      } } : {}),
       stopManager: async () => {
         const { platformOps } = await import("./orchestration");
         const ops = platformOps(diag.backend === "native" ? "native" : "scheduler", { platform });
@@ -331,7 +379,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       // verifies the respawn window below. A refused stop propagates with the wrappers untouched.
       const stopTracked = deps.stopTrackedProxy ?? (async () => {
         const { stopTrackedProxyForServiceRestart } = await import("./orchestration");
-        return stopTrackedProxyForServiceRestart();
+        return stopTrackedProxyForServiceRestart(holdRestartReceipt);
       });
       const stillLive = deps.schedulerProxyStillLive ?? (async () => {
         const { proxyStillLiveAfterStop } = await import("./orchestration");
@@ -339,7 +387,11 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       });
       assertRestartOwnership();
       verifyRegistrationBeforeStop();
-      await stopTracked();
+      try {
+        await stopTracked();
+      } catch (error) {
+        throw withContext(error, "The scheduler wrappers that supervise it were left in place.");
+      }
       assertRestartOwnership();
       verifyRegistrationBeforeStop();
       (deps.killServiceWrappers ?? killWindowsServiceWrapperProcesses)();
@@ -347,12 +399,20 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       if (live) {
         // A wrapper can respawn its child between the proxy's exit and the cleanup above. Nothing
         // brings it back once the wrappers are gone, so stop that one the same way and look again.
+        // The wrappers are already gone here: a stop that fails now leaves that proxy unsupervised,
+        // and the restart says so instead of implying anything still watches it.
+        const unsupervised = "A proxy a scheduler wrapper restarted before the wrapper cleanup is still running, and the wrappers that supervised it were already removed, so nothing restarts it if it exits. "
+          + "Stop it with 'ocx stop', then run 'ocx service restart' again.";
         assertRestartOwnership();
         verifyRegistrationBeforeStop();
-        await stopTracked();
-        live = await stillLive();
+        try {
+          await stopTracked();
+          live = await stillLive();
+        } catch (error) {
+          throw withContext(error, unsupervised);
+        }
+        if (live) throw new Error(unsupervised);
       }
-      if (live) throw new Error("The scheduler proxy is still running after wrapper cleanup; restart stopped.");
       assertRestartOwnership();
       verifyRegistrationBeforeStop();
     } else {
@@ -505,6 +565,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     assertNoDesktopSupervision(deps.inspectSupervision, latch);
     (deps.startScheduler ?? startWindows)();
     (deps.writeSchedulerState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("scheduler", undefined, {}, selected)))(runtime);
+    await releaseRestartReceipts(heldRestartReceipts, deps.confirmSchedulerReplacement);
     return;
   }
   if (deps.verb === "restart") await prepareDisconnectedRestart();

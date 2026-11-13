@@ -24,6 +24,7 @@ import { win32 } from "node:path";
 import { launchdGuiDomain } from "./launchd";
 import { LABEL } from "./state";
 import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
+import type { HeldRestartReceipt } from "./restart-proxy-stop";
 
 type ServiceOps = {
   install: (runtime: DurableBunRuntime) => void | Promise<void>; start: () => void; stop: () => void;
@@ -229,8 +230,7 @@ export async function stopTrackedProxyIfRunning(options: TrackedProxyStopOptions
     removeRuntimePort(liveKillPid);
     stopped = true;
   } else if (live && options.refuseUnverifiedLive) {
-    throw new Error("A proxy still answers for this home, but its process could not be verified as this home's proxy, so it was not stopped. "
-      + "Restart stopped before the scheduler wrappers were cleaned up, so whatever supervises it stays in place. Stop it with 'ocx stop', then run 'ocx service restart' again.");
+    throw new Error("A proxy still answers for this home, but its process could not be verified as this home's proxy, so it was not stopped.");
   }
   if (stopped) return "stopped";
   if (pid) return "stale";
@@ -242,9 +242,39 @@ export async function stopTrackedProxyIfRunning(options: TrackedProxyStopOptions
  * refusal does not apply to the restart that verifies the window, and refusing an unverifiable
  * survivor so the caller can stop before it removes the wrappers that supervise it.
  */
-export async function stopTrackedProxyForServiceRestart(): Promise<TrackedProxyCleanupResult> {
+export async function stopTrackedProxyForServiceRestart(hold: (receipt: HeldRestartReceipt) => void): Promise<TrackedProxyCleanupResult> {
   const { stopProxyForServiceRestart } = await import("./restart-proxy-stop");
-  return stopTrackedProxyIfRunning({ stop: (pid, endpoint) => stopProxyForServiceRestart(pid, endpoint), refuseUnverifiedLive: true });
+  return stopTrackedProxyIfRunning({ stop: (pid, endpoint) => stopProxyForServiceRestart(pid, endpoint, hold), refuseUnverifiedLive: true });
+}
+
+/**
+ * Whether a replacement serves after a scheduler restart started it: a live proxy this home can
+ * verify, other than the ones the restart stopped. Bounded; false is not proof of failure, only
+ * that the restart cannot release its receipts on the replacement's behalf.
+ */
+export async function schedulerReplacementServing(stoppedPids: readonly number[], deps: {
+  findProxy?: () => Promise<{ pid: number | null } | null>;
+  verify?: (pid: number | null | undefined) => number | null;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  windowMs?: number;
+} = {}): Promise<boolean> {
+  const now = deps.now ?? Date.now;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const deadline = now() + (deps.windowMs ?? 30_000);
+  const findProxy = deps.findProxy ?? (() => findLiveProxy({ ...SERVICE_STOP_LIVENESS, deadlineAt: deadline, acceptPackageTreeFenced: true }));
+  const verify = deps.verify ?? verifiedKillTarget;
+  for (;;) {
+    try {
+      const live = await findProxy();
+      const pid = verify(live?.pid);
+      if (pid !== null && !stoppedPids.includes(pid)) return true;
+    } catch {
+      // A probe failure is not proof either way; keep looking until the deadline.
+    }
+    if (now() >= deadline) return false;
+    await sleep(1000);
+  }
 }
 
 export async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult> {

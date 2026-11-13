@@ -305,4 +305,3 @@ test("the CLI accepts an unresolved Aside row and prints the warning without fai
       fetchImpl: (async () => Response.json(piUnresolved)) as unknown as typeof fetch })).not.toBe(0);
   } finally { out.mockRestore(); err.mockRestore(); }
 });
-
