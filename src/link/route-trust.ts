@@ -82,8 +82,9 @@ export type ConfirmedLineTrust = "trusted" | "trust_file_unexpected" | "key_chan
  * Does the file still trust exactly the key a confirmation wrote for alias? It must pass the same
  * whole-file check as a route edit (`trust_file_unexpected` otherwise: OpenCodex writes this file
  * only with plain one-alias lines, so another shape is a hand edit this check cannot rule out), and
- * its one line for the alias must carry the confirmed key (`key_changed` otherwise). The probe
- * computed the confirmed fingerprint from that very line (ssh-keygen -l), so the line carries it.
+ * every line for the alias, which may be several (a legacy hashed line beside a later plain one),
+ * must carry the confirmed key type and key (`key_changed` otherwise). The probe computed the
+ * confirmed fingerprint from the line it wrote (ssh-keygen -l), so that line carries it.
  */
 export function confirmedLineTrust(text: string, alias: string, confirmedLine: string): ConfirmedLineTrust {
   const found = aliasTrustLine(text, alias);
