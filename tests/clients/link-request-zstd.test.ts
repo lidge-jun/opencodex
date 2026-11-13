@@ -16,6 +16,7 @@ import { createLinkListenerLifecycle } from "../../src/server/index/link-listene
 import type { LinkStore } from "../../src/link/store";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { getDefaultConfig } from "../../src/config";
+import { holdLargeSocketWrites, restoreSocketWrites } from "../helpers/held-socket-writes";
 
 const key = `ocx_data_${"a".repeat(40)}`;
 const keyId = "test-link-key", linkId = "lnk_0123456789abcdef";
@@ -24,7 +25,7 @@ const target = (port: number) => ({ tunnelPort: port, admissionKey: key, apiKeyI
 const encoder = new TextEncoder();
 let servers: Server<unknown>[] = [];
 beforeEach(() => { forgetLinkHomeFeaturesForTests(); });
-afterEach(async () => { for (const server of servers) await server.stop(true); servers = []; forgetLinkHomeFeaturesForTests(); });
+afterEach(async () => { restoreSocketWrites(); for (const server of servers) await server.stop(true); servers = []; forgetLinkHomeFeaturesForTests(); });
 
 interface Seen { encoding: string | null; length: string | null; wire: Uint8Array; decoded: unknown }
 
@@ -144,15 +145,19 @@ describe("per-body zstd from Child to Home (#3023)", () => {
     }) });
     servers.push(server);
     await relay(post("/v1/responses", big), server.port!);
-    // About 1.3:1 like screenshots: large enough that the unread upload cannot fit the socket buffers.
+    // About 1.3:1 like screenshots. The Home never reads the upload, so its write stays pending, held
+    // the way a full send buffer holds it (Windows would otherwise accept the whole body at once).
+    holdLargeSocketWrites(1024 * 1024);
     const noise = JSON.stringify({ input: randomBytes(11 * 1024 * 1024).toString("base64") });
     const budget = createInboundBodyBudget(64 * 1024 * 1024, 0);
     const response = await relay(post("/v1/responses", noise), server.port!, { requestCompression: { budget } });
     const reader = response.body!.getReader();
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("early");
     expect(budget.snapshot().reservedBytes).toBe(2 * encoder.encode(noise).byteLength);
-    // The relay's cancel tears the request down synchronously, which settles the body.
+    // The relay cancels its upstream without awaiting the teardown, and a pending write fails once its
+    // connection closes: within the cancel on Linux, on the socket's close event where the OS had taken it.
     await reader.cancel();
+    for (const deadline = performance.now() + 2_000; budget.snapshot().activeLeases > 0 && performance.now() < deadline;) await Bun.sleep(5);
     expect(budget.snapshot()).toEqual({ reservedBytes: 0, activeLeases: 0, queuedRequests: 0 });
   });
 

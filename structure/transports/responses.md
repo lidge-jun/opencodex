@@ -234,13 +234,11 @@ within their route; neither route falls through to the other. See
 
 ### Pre-dispatch API-key pool pick
 
-Key-auth routes with a configured `apiKeyPoolStrategy` and two or more pool entries pick a
-warm key before the first send (`selectProactiveApiKeyTransport` in
-`src/providers/key-failover.ts`). The pick is inert unless that strategy is set and the
-committed key is already cooling or missing from the pool: a healthy committed key, including
-a manual selection, is left alone and the common path returns null without a config write.
-`forgetApiKeyRotationCursor` drops the process-local round-robin cursor when the operator
-edits the pool, so a later pick cannot second-guess that choice.
+Key-auth routes with a configured `apiKeyPoolStrategy` and two or more pool entries use
+`selectProactiveApiKeyTransport` in `src/providers/key-failover.ts`. Strategy selection
+only replaces a cooling or missing committed key; healthy keys need no config write.
+`forgetApiKeyRotationCursor` resets the strategy cursor after operator pool edits.
+Before strategies, [request-local cache affinity](./inventory.md) may retain the lane's serving entry without changing the committed selection.
 
 On the shared Responses path the assignment lands in `src/server/responses/core.ts`
 immediately before `resolveProviderTransport`. `route.provider` is copied into

@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { openLinkWebsocket, type LinkWebsocketSetup } from "../../src/client/link-ws-transport";
+import { setLinkWebsocketChildReadyForTests } from "../../src/client/link-websocket-limits";
+import { manualTimers } from "../helpers/link-ws-child";
 import { forgetLinkWebsocketAdvertisementsForTests, linkWebsocketAdvertised } from "../../src/client/link-ws-advertisement";
 import { encodeClientText, LinkWsFrameReader } from "../../src/client/link-ws-framer";
 import { startStandinHome, standinIdentity, type StandinHome, type StandinHomeOptions, type StandinUpgrade } from "../fixtures/link-ws-standin-home";
@@ -9,7 +11,9 @@ import { startStandinHome, standinIdentity, type StandinHome, type StandinHomeOp
 
 const homes: StandinHome[] = [];
 const opened: LinkWebsocketSetup[] = [];
+beforeEach(() => setLinkWebsocketChildReadyForTests(true));
 afterEach(async () => {
+  setLinkWebsocketChildReadyForTests(false);
   for (const setup of opened.splice(0)) if (setup.ok) setup.socket.destroy();
   forgetLinkWebsocketAdvertisementsForTests();
   for (const home of homes.splice(0)) await home.stop();
@@ -26,8 +30,8 @@ function forwarded(secret: string, extra: Record<string, string> = {}): Headers 
   return new Headers({ authorization: "Bearer " + secret, "thread-id": "thread-1", ...extra });
 }
 
-async function open(target: Parameters<typeof openLinkWebsocket>[0], headers: Headers, signal = new AbortController().signal) {
-  const setup = await openLinkWebsocket(target, headers, { signal });
+async function open(target: Parameters<typeof openLinkWebsocket>[0], headers: Headers, signal = new AbortController().signal, extra: Partial<Parameters<typeof openLinkWebsocket>[2]> = {}) {
+  const setup = await openLinkWebsocket(target, headers, { signal, ...extra });
   opened.push(setup);
   return setup;
 }
@@ -135,5 +139,31 @@ describe("openLinkWebsocket", () => {
     const { home: standin, identity } = await home();
     expect(await open({ tunnelPort: standin.port, admissionKey: identity.secret }, forwarded(identity.secret))).toEqual({ ok: false, reason: "credential" });
     expect(standin.connections()).toBe(0);
+  });
+
+  test("the Child's closed release gate refuses before any I/O, whatever the caller does", async () => {
+    setLinkWebsocketChildReadyForTests(false);
+    const { home: standin, target, identity } = await home();
+    expect(await open(target, forwarded(identity.secret))).toEqual({ ok: false, reason: "disabled" });
+    expect(standin.connections()).toBe(0);
+  });
+
+  test("an upgrade the Home never answers ends at the setup budget and closes the connection", async () => {
+    const clock = manualTimers();
+    let arrived!: () => void;
+    const seen = new Promise<void>(resolve => { arrived = resolve; });
+    const { home: standin, target, identity } = await home({ upgrade: () => { arrived(); return { kind: "hang" }; } });
+    const pending = open(target, forwarded(identity.secret), undefined, { timers: clock.timers });
+    await seen;
+    expect(clock.fire(8_000)).toBe(1);
+    expect(await pending).toEqual({ ok: false, reason: "timeout" });
+    await standin.whenClosed(1);
+  });
+
+  test("an error on the handed-off socket before its owner listens is recorded, never unhandled", async () => {
+    const { target, identity } = await home();
+    const setup = await open(target, forwarded(identity.secret));
+    if (!setup.ok) throw new Error(setup.reason);
+    expect(() => setup.socket.emit("error", new Error("reset"))).not.toThrow();
   });
 });

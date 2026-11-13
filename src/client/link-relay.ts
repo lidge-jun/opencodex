@@ -196,6 +196,24 @@ export function forwardLinkRequestHeaders(source: Headers, admissionKey: string,
   return linkRequestHeaders(source, admissionKey, pathname, validation.connectionNamed);
 }
 
+/** The handshake headers of Codex's own upgrade, which the Home leg replaces with its own (link-ws-transport.ts). */
+const UPGRADE_HANDSHAKE_HEADERS = ["connection", "upgrade", "origin", "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-protocol"];
+
+/**
+ * The headers a link WebSocket's upgrade sends to the Home: Codex's headers without its handshake, then
+ * the same filter an HTTP request gets (hop-by-hop, Connection-nominated and caller credentials dropped)
+ * and the link key as a Bearer. Null when the rest would be refused as malformed or too large.
+ */
+export function forwardLinkUpgradeHeaders(source: Headers, admissionKey: string): Headers | null {
+  const connectionNamed = new Set((source.get("connection") ?? "").split(",").map(token => token.trim().toLowerCase()).filter(Boolean));
+  const rest = new Headers(source);
+  for (const name of UPGRADE_HANDSHAKE_HEADERS) rest.delete(name);
+  const validation = validateHubRelayRequestHeaders(linkFramingHeaders(rest));
+  if (!validation.ok) return null;
+  const headers = linkRequestHeaders(rest, admissionKey, "/v1/responses", new Set([...validation.connectionNamed, ...connectionNamed]));
+  return headersWithinLimit(headers) ? headers : null;
+}
+
 function linkRequestHeaders(
   source: Headers,
   admissionKey: string,

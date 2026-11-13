@@ -1,5 +1,6 @@
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE, KEY_ACCOUNT_LOG_LABEL_RE, apiKeyAccountLogLabel, oauthAccountLogLabel } from "../codex/account-label";
 import type { OcxProviderConfig } from "../types";
+import { captureCacheAffinityIdentity } from "./cache-affinity-identity";
 import { isAnthropicInstanceId } from "./anthropic-instance-id";
 
 export function canonicalUsageProviderLabel(provider: string): string {
@@ -15,14 +16,19 @@ export function usesApiKeyAccount(provider: Pick<OcxProviderConfig, "authMode" |
 
 /** Key identity comes from the captured selection, before env/keychain resolution. */
 export function stampApiKeyAccountLabel(
-  logCtx: { accountLogLabel?: string },
+  logCtx: { accountLogLabel?: string; affinityKeyEntryId?: string; affinityProviderName?: string },
   providerName: string,
-  provider: Pick<OcxProviderConfig, "authMode" | "_apiKeyAttempt">,
+  provider: OcxProviderConfig,
 ): void {
+  captureCacheAffinityIdentity(logCtx, providerName, provider);
   if (usesApiKeyAccount(provider)) {
     logCtx.accountLogLabel = apiKeyAccountLogLabel(providerName, provider._apiKeyAttempt);
-  } else if (KEY_ACCOUNT_LOG_LABEL_RE.test(logCtx.accountLogLabel ?? "")) {
-    delete logCtx.accountLogLabel;
+    logCtx.affinityKeyEntryId = provider._apiKeyAttempt?.entryId;
+    logCtx.affinityProviderName = providerName;
+  } else {
+    if (KEY_ACCOUNT_LOG_LABEL_RE.test(logCtx.accountLogLabel ?? "")) delete logCtx.accountLogLabel;
+    delete logCtx.affinityKeyEntryId;
+    delete logCtx.affinityProviderName;
   }
 }
 
