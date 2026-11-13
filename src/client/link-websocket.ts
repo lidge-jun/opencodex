@@ -29,7 +29,7 @@ import { openLinkWebsocket, type LinkWebsocketSetupFailure } from "./link-ws-tra
  */
 
 export type LinkWsFallbackReason =
-  | "origin" | "credential" | "cap" | "memory" | "tunnel_failed" | "tunnel_connecting_timeout"
+  | "local_optout" | "origin" | "credential" | "cap" | "memory" | "tunnel_failed" | "tunnel_connecting_timeout"
   | "preflight" | "not_advertised" | "home_refused" | "handshake" | "timeout" | "aborted";
 
 export type LinkWsCloseReason = "client" | "home" | "home_dropped" | "binary" | "protocol" | "overload" | "stopped";
@@ -59,11 +59,26 @@ export interface LinkWebsocketRelayDeps {
   ready?: () => boolean;
   /** advertisedSeen; linkWebsocketAdvertised by default. */
   advertised?: (linkId: string | undefined) => boolean;
+  /** The Child-local opt-out (D4): true keeps this Child on HTTP whatever its Home advertises. */
+  optOut?: () => boolean;
   /** Test seam: told when a socket stops (true) or resumes (false) reading the Home leg. */
   onDownlinkPause?: (paused: boolean) => void;
 }
 
 export interface LinkWebsocketData { leg: HomeLeg }
+
+/** Design 9.3, Child side: display-only, in memory, reset at restart; reasons are closed sets. */
+export interface LinkWebsocketCounters {
+  open: number;
+  settingUp: number;
+  upgrades: number;
+  fallbacks: Partial<Record<LinkWsFallbackReason, number>>;
+  closes: Partial<Record<LinkWsCloseReason, number>>;
+  /** Message payload bytes Codex sent on link sockets (L2), counted on arrival, forwarded or not. */
+  fromCodexBytes: number;
+  /** Message payload bytes sent to Codex on link sockets. */
+  toCodexBytes: number;
+}
 
 const defaultTimers: LinkWebsocketTimers = {
   setTimeout(callback, ms) {
@@ -116,6 +131,7 @@ export class HomeLeg {
     private readonly onEnd: (reason: LinkWsCloseReason) => void,
     private readonly onReleased: () => void,
     private readonly onPause?: (paused: boolean) => void,
+    private readonly onBytes?: (direction: "fromCodex" | "toCodex", bytes: number) => void,
   ) {
     this.reader = new LinkWsFrameReader({ maxMessageBytes: limits.homeMessageBytes, maxFragments: limits.maxFragments });
     socket.pause();
@@ -154,6 +170,7 @@ export class HomeLeg {
         this.flow.fromHome(event.bytes);
         const sent = this.local?.send(event.data) ?? 0;
         if (sent === 0) { this.closeBoth(1013, "link websocket overloaded", 1001, "overload"); return; }
+        this.onBytes?.("toCodex", event.bytes);
         if (!this.paused && (this.local?.getBufferedAmount() ?? 0) > this.limits.downlinkPauseBytes) {
           this.paused = true;
           this.socket.pause();
@@ -195,10 +212,11 @@ export class HomeLeg {
   fromCodex(message: string | Buffer): void {
     if (this.ended || this.homeClosed) return;
     if (typeof message !== "string") { this.closeBoth(1003, "binary messages are not relayed", 1003, "binary"); return; }
+    const bytes = Buffer.byteLength(message);
+    this.onBytes?.("fromCodex", bytes);
     // One unflushed message at most: Bun cannot pause delivery, so a second one while the first is still
     // queued toward the Home is an overload, never a buffer that grows.
     if (this.socket.writableLength > 0) { this.closeBoth(1013, "link websocket overloaded", 1001, "overload"); return; }
-    const bytes = Buffer.byteLength(message);
     this.socket.write(encodeClientText(message), error => { if (!error) this.flow.toHome(bytes); });
   }
 
@@ -284,6 +302,7 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
   const advertised = deps.advertised ?? linkWebsocketAdvertised;
   const open = deps.open ?? openLinkWebsocket;
   const traffic = deps.traffic ?? childLinkTraffic;
+  const optOut = deps.optOut ?? (() => false);
   let openSockets = 0;
   let settingUp = 0;
   let reservedBytes = 0;
@@ -291,19 +310,33 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
   // Upgrades still in setup: a stop aborts them, and nothing set up after a stop is kept.
   const setups = new Set<AbortController>();
   let stopping = false;
+  const counted = { upgrades: 0, fallbacks: {} as LinkWebsocketCounters["fallbacks"], closes: {} as LinkWebsocketCounters["closes"], fromCodexBytes: 0, toCodexBytes: 0 };
+  const countBytes = (direction: "fromCodex" | "toCodex", bytes: number): void => {
+    if (direction === "fromCodex") counted.fromCodexBytes += bytes; else counted.toCodexBytes += bytes;
+  };
 
   const diagnostic = (event: LinkDiagnosticRecord["event"], outcome: LinkDiagnosticRecord["outcome"]): void => {
     try { deps.diagnostic?.({ event, outcome }); } catch { /* diagnostics never alter the relay */ }
   };
   const fallback = (reason: LinkWsFallbackReason): Response => {
+    counted.fallbacks[reason] = (counted.fallbacks[reason] ?? 0) + 1;
     diagnostic("link_ws_fallback", reason);
     return upgradeRequiredResponse();
   };
 
   return {
-    /** Design 3.2 step 2: whether an upgrade may try the Home at all. False keeps today's 426 with no network I/O. */
+    /**
+     * Design 3.2 step 2: whether an upgrade may try the Home at all. False keeps today's 426 with no network
+     * I/O. With the release gate closed nothing is counted or written; with it open, the Child-local opt-out
+     * and an unadvertised Home are counted in memory (never in the diagnostics file).
+     */
     wanted(linkId: string | undefined): boolean {
-      try { return ready() && advertised(linkId); } catch { return false; }
+      try {
+        if (!ready()) return false;
+        const why: LinkWsFallbackReason | null = optOut() ? "local_optout" : advertised(linkId) ? null : "not_advertised";
+        if (why) counted.fallbacks[why] = (counted.fallbacks[why] ?? 0) + 1;
+        return why === null;
+      } catch { return false; }
     },
 
     /** Steps 1 and 3 to 11. Resolves undefined once the local socket is upgraded. */
@@ -377,9 +410,9 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
         const flow = traffic.begin(target.linkId);
         // The reservation is held until the Home connection has actually closed.
         const leg = new HomeLeg(setup.socket, setup.head, limits, timers, flow,
-          reason => diagnostic("link_ws_close", reason),
+          reason => { counted.closes[reason] = (counted.closes[reason] ?? 0) + 1; diagnostic("link_ws_close", reason); },
           () => { legs.delete(leg); release(); },
-          deps.onDownlinkPause);
+          deps.onDownlinkPause, countBytes);
         legs.add(leg);
         settingUp -= 1;
         openSockets += 1;
@@ -390,6 +423,7 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
           leg.stop();
           return fallback("handshake");
         }
+        counted.upgrades += 1;
         diagnostic("link_ws_open", "connected");
         return undefined;
       } catch {
@@ -423,6 +457,12 @@ export function createLinkWebsocketRelay(deps: LinkWebsocketRelayDeps = {}) {
 
     snapshot(): { open: number; settingUp: number; reservedBytes: number } {
       return { open: openSockets, settingUp, reservedBytes };
+    },
+
+    /** Design 9.3: this Child's counters (display only). */
+    counters(): LinkWebsocketCounters {
+      return { open: openSockets, settingUp, upgrades: counted.upgrades, fallbacks: { ...counted.fallbacks }, closes: { ...counted.closes },
+        fromCodexBytes: counted.fromCodexBytes, toCodexBytes: counted.toCodexBytes };
     },
   };
 }
