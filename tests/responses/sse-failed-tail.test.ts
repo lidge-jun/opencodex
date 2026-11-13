@@ -1491,6 +1491,19 @@ describe("one bare-error precedence rule across client, account and row", () => 
     }
   });
 
+  test("a genuine terminal that shares the verdict's fields is not mistaken for the relay tail", async () => {
+    const copy = "flagged for possible cybersecurity risk";
+    const genuine = `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed",
+      response: { status: "failed", error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: copy } } })}\n\n`;
+    for (const mode of ["tee", "eager"] as const) {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const { text, outcomes } = await relayMixed(mode, [frame({ code: "rate_limit_exceeded", message: copy }, "untyped"), genuine], log);
+      const rows: Array<{ status: number; errorCode?: string }> = [];
+      addFinalRequestLog("genuine-tail", 0, log, httpStatusForRequestLogTerminal("failed", log), { terminalStatus: "failed" }, entry => rows.push(entry));
+      expect([mode, failedCode(text), outcomes, rows.map(row => [row.status, row.errorCode])]).toEqual([mode, "cyber_policy", [400], [[400, "cyber_policy"]]]);
+    }
+  });
+
   test.each([
     ["an unrecognized untyped error", frame(untyped("unknown"), "untyped"), true],
     ["an unrecognized typed error", frame(typed("unknown"), "typed"), true],
@@ -1761,6 +1774,20 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     addFinalRequestLog("ws-bare-row", 0, log, httpStatusForRequestLogTerminal("failed", log), { terminalStatus: "failed" }, entry => rows.push(entry));
     expect(rows.map(row => [row.status, row.errorCode])).toEqual([[429, "rate_limit_exceeded"]]);
     expect(log.activeAttempt?.errorCode).toBe("rate_limit_exceeded");
+  });
+
+  test.each(["tee", "eager"] as const)("%s WS row treats a genuine terminal with the verdict's fields as genuine", async mode => {
+    const copy = "flagged for possible cybersecurity risk";
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const src = sourceStream([
+      `event: error\ndata: ${JSON.stringify({ error: { code: "rate_limit_exceeded", message: copy } })}\n\n`,
+      `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed",
+        response: { status: "failed", error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: copy } } })}\n\n`,
+    ]);
+    const relayed = mode === "tee" ? relaySseWithFailedTail(src, new AbortController()) : relaySseEagerBounded(src, new AbortController(), parityHooks);
+    const { frames, terminals } = await wsPump(relayed, log);
+    expect(frames.find(frame => frame.type === "response.failed")?.response?.error?.code).toBe("cyber_policy");
+    expect([terminals, httpStatusForRequestLogTerminal("failed", log)]).toEqual([[["failed", 400]], 400]);
   });
 
   test("a raw WS upstream body keeps an untyped envelope as the protocol error, off the row", async () => {

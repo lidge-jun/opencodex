@@ -119,6 +119,32 @@ export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: He
   noteBoundedDiagnostic(logCtx, "upstreamRequestId", headers.get("openai-request-id") ?? headers.get("x-request-id"));
 }
 
+/**
+ * Whether a response.failed is the relay's own rendering of this verdict (upstreamErrorFailedPayload
+ * in src/server/relay.ts), not a genuine upstream terminal that happens to share its fields. The
+ * synthesized tail has an exact shape: only type and response at the root; only status, error, an
+ * identical last_error and (for a refusal) retryable:false in response; exactly type, code and
+ * message in the error, all equal to the verdict. A provider terminal carries its own response
+ * fields (id, output, model, ...) or lacks the duplicated last_error, so it is classified normally.
+ */
+function isRelayRenderedTail(json: UpstreamErrorPayload, verdict: BareUpstreamEvidence["verdict"]): boolean {
+  const root = json as Record<string, unknown>;
+  const response = root.response;
+  if (root.type !== "response.failed" || Object.keys(root).length !== 2 || !response || typeof response !== "object") return false;
+  const fields = response as Record<string, unknown>;
+  const refusal = verdict.refusalCode !== undefined;
+  const expectedKeys = refusal ? ["error", "last_error", "retryable", "status"] : ["error", "last_error", "status"];
+  if (Object.keys(fields).sort().join() !== expectedKeys.join() || fields.status !== "failed") return false;
+  if (refusal && fields.retryable !== false) return false;
+  const sameError = (value: unknown): boolean => {
+    if (!value || typeof value !== "object") return false;
+    const error = value as Record<string, unknown>;
+    return Object.keys(error).sort().join() === "code,message,type" && error.type === verdict.terminalType
+      && error.code === verdict.terminalCode && error.message === verdict.message;
+  };
+  return sameError(fields.error) && sameError(fields.last_error);
+}
+
 export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext, json: UpstreamErrorPayload, untypedSse = false): void {
   const type = json.type;
   const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
@@ -132,11 +158,8 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     // A reader of the client stream (the WebSocket log) also sees the relay's own synthesized
     // response.failed. It renders the winning bare verdict, so the row keeps that verdict, and the
     // evidence stays for the final row's code, instead of inferring a different class from the
-    // provider copy it carries. A genuine upstream terminal can carry the same generic type and
-    // code, so the copy must be the verdict's too.
-    const tail = json.response?.error;
-    if (prior !== undefined && type === "response.failed" && tail?.code === prior.verdict.terminalCode
-      && tail?.type === prior.verdict.terminalType && tail?.message === prior.verdict.message) return;
+    // provider copy it carries.
+    if (prior !== undefined && isRelayRenderedTail(json, prior.verdict)) return;
     bareEvidence.delete(logCtx);
     // Untyped evidence wrote the diagnostics; the terminal that retires it owns them now.
     if (prior !== undefined && !prior.typed) {
