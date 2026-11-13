@@ -132,7 +132,13 @@ export function untilOrExit<T>(event: Promise<T>, run: Promise<CodexRun>, what: 
       if (done) return;
       done = true;
       reject(new Error("codex exited " + result.code + " before " + what + ": " + result.stderr.slice(-1500)));
-    }, () => { /* the run's own failure surfaces where it is awaited */ });
+    }, error => {
+      // The run itself failed (its output could not be read): that ends the wait too. After the event it is left to the
+      // caller's own await of the run; handling it here leaves no rejection unobserved either way.
+      if (done) return;
+      done = true;
+      reject(error);
+    });
   });
 }
 
