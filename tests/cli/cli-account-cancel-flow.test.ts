@@ -38,6 +38,11 @@ describe("account cancel flow selection", () => {
     }
   });
 
+  test("xAI cancel forwards the selected flow", async () => {
+    const result = await runCancel(["xai", "--flow", "old-flow"]);
+    expect(result.requests).toEqual([{ path: "/api/oauth/login/cancel", body: { provider: "xai", flowId: "old-flow" } }]);
+  });
+
   test("Codex sends its flow ID and generic OAuth keeps provider cancellation", async () => {
     const codex = await runCancel(["openai", "--flow", "flow-owned"]);
     expect(codex.code).toBe(0);

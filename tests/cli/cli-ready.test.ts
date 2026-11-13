@@ -872,13 +872,15 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
     expect(nonService, "non-service refusal keeps the exit 1 conflict error").not.toBeNull();
   });
 
-  test("service.ts teardown kills surviving wrapper processes on stop", () => {
+  test("service.ts teardown ends surviving wrapper processes on stop through the checked stop", () => {
     const serviceSource = readFileSync(repoPath("src/service/orchestration.ts"), "utf8");
-    expect(serviceSource).toMatch(/killWindowsServiceWrapperProcesses/);
     // The boolean `stopServiceIfInstalled` is gone — it collapsed a live manager into the
     // same false as "not installed" (#3008). The stop itself is the detailed function.
-    const callSite = serviceSource.match(/stopServiceIfInstalledDetailed[\s\S]{0,1600}?killWindowsServiceWrapperProcesses\(\)/);
-    expect(callSite, "wrapper kill must run during stopServiceIfInstalledDetailed").not.toBeNull();
+    // #7771: on Windows it is Part A of the checked stop, which ends the bound wrappers and
+    // waits for them instead of the best-effort path-token sweep.
+    const callSite = serviceSource.match(/stopServiceIfInstalledReport[\s\S]{0,2400}?runWindowsServiceStopPartA\(request\)/);
+    expect(callSite, "Part A must run during the service stop on Windows").not.toBeNull();
+    expect(serviceSource).not.toMatch(/killWindowsServiceWrapperProcesses/);
   });
 
   test("wrapper kill matches the canonical paths of THIS installation, not bare filenames", () => {
@@ -886,15 +888,15 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
     // wrapper from another OpenCodex home (or any process whose command line
     // merely contains the name). The kill must target the exact canonical
     // paths windowsServiceScriptPath()/windowsLauncherVbsPath() produce.
-    const serviceSource = readFileSync(repoPath("src/service/windows-ops.ts"), "utf8");
-    expect(serviceSource).toMatch(/windowsServiceScriptPath\(\)/);
-    expect(serviceSource).toMatch(/windowsLauncherVbsPath\(\)/);
-    const killBody = serviceSource.match(/function killWindowsServiceWrapperProcesses\(\)[\s\S]*?\n}/);
-    expect(killBody, "killWindowsServiceWrapperProcesses body must exist").not.toBeNull();
-    expect(killBody![0]).toContain("windowsServiceScriptPath()");
-    expect(killBody![0]).toContain("windowsLauncherVbsPath()");
+    // Since #7771 the stop binds wrappers through the checked stop's binding rule, whose
+    // path set is exactly these canonical paths (tests/windows/windows-stop-binding.test.ts
+    // covers other homes, substrings and image names).
+    const live = readFileSync(repoPath("src/service/windows-checked-stop-live.ts"), "utf8");
+    const paths = live.match(/export function windowsStopCanonicalPaths\(\)[\s\S]*?\n}/);
+    expect(paths, "windowsStopCanonicalPaths body must exist").not.toBeNull();
+    expect(paths![0]).toContain("return [windowsLauncherVbsPath(), windowsServiceScriptPath()];");
     // Bare wrapper filenames must NOT be the match target.
-    expect(killBody![0]).not.toMatch(/\$pats = @\('opencodex-service\.cmd'\)/);
+    expect(live).not.toMatch(/\$pats = @\('opencodex-service\.cmd'\)/);
   });
 
   test("wrapper kill requires the canonical path as a complete command-line token", () => {

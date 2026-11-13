@@ -13,6 +13,7 @@ import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
 import { LINK_CHILD_OPS_USAGE, runLinkActivity, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
 import { LINK_ROUTES_USAGE, runLinkRoutes } from "./link-routes";
+import { LINK_OPERATIONS_USAGE, runLinkOperations } from "./link-operations";
 import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
 import { validateChildOps, validateLinkWs, type LinkChildOpsView, type LinkWsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
@@ -42,14 +43,15 @@ import {
 
 export const LINK_USAGE = `Usage:
   ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
-  ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
+  ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]
   ocx link port [--json]
   ocx link issue --alias <alias> --tunnel-port <port> [--json]
   ocx link status [--json]
   ${LINK_DIAGNOSTICS_USAGE}
-  ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
+  ocx link revoke --link-id <id> [--purge] [--force --yes] [--operation-id <id>] [--json]
   ocx link reconnect --link-id <id> [--json]
 ${LINK_ROUTES_USAGE.join("\n")}
+${LINK_OPERATIONS_USAGE.join("\n")}
   ocx link cleanup [--link-id <id>] [--json]
   ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ${LINK_CHILD_OPS_USAGE.join("\n")}
@@ -252,10 +254,15 @@ function validateIssue(value: unknown): LinkIssuePayload {
   };
 }
 
-function validateRevoke(value: unknown, expectedLinkId: string): void {
+function validateRevoke(value: unknown, expectedLinkId: string, operationId?: string): void {
   if (value === null) return;
   if (!isRecord(value)) throw new Error("invalid link API response: revoke object");
-  assertExactKeys(value, ["linkId"], "revoke");
+  if (operationId === undefined) assertExactKeys(value, ["linkId"], "revoke");
+  else {
+    // A journalled revoke (structure/remote-link.md, "Operation journal") answers its outcome and, for a purge, the receipt.
+    assertKeys(value, ["linkId", "operationId", "outcome"], ["purged"], "revoke");
+    if (value.operationId !== operationId || value.outcome !== "committed" || (value.purged !== undefined && value.purged !== true)) throw new Error("invalid link API response: revoke operation");
+  }
   if (value.linkId !== expectedLinkId) throw new Error("invalid link API response: revoke link id");
 }
 
@@ -285,7 +292,9 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true } | null {
+const OPERATION_OUTCOMES = new Set(["committed", "failed_clean", "residual", "unknown"]);
+
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
   if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
@@ -295,7 +304,12 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string; c
   const hint = typeof body.error.hint === "string" ? boundHint(body.error.hint) : undefined;
   // A cause is a class word (an unproven route's `hostkey`, `auth`, ...): kept only in that shape.
   const cause = typeof body.error.cause === "string" && /^[a-z_]{1,32}$/.test(body.error.cause) ? body.error.cause : undefined;
-  return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
+  // An operation's id and outcome (structure/remote-link.md, "Operation journal") are closed forms, kept as such.
+  const operationId = typeof body.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.operationId) ? body.operationId : undefined;
+  const outcome = typeof body.outcome === "string" && OPERATION_OUTCOMES.has(body.outcome) ? body.outcome : undefined;
+  const residualKind = body.residualKind === "plant" || body.residualKind === "enrollment" ? body.residualKind : undefined;
+  return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}),
+    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -351,8 +365,11 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
   const force = takeFlag(args, "--force");
   const confirmed = takeFlag(args, "--yes");
   const linkId = takeOption(args, "--link-id");
+  const operationId = takeOption(args, "--operation-id");
   if (!linkId || !LINK_ID.test(linkId)) throw new CliUsageError("revoke requires a valid --link-id", LINK_USAGE);
   rejectArgs(args, LINK_USAGE);
+  if (operationId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(operationId)) throw new CliUsageError("--operation-id is not a valid operation id", LINK_USAGE);
+  const operationBody = operationId !== undefined ? { operationId } : {};
   if (purge && force) throw new CliUsageError("--purge cannot be combined with --force", LINK_USAGE);
   if (force && !confirmed) throw new CliUsageError("forced revoke skips remote cleanup; pass --yes to confirm", LINK_USAGE);
   if (confirmed && !force) throw new CliUsageError("--yes requires --force", LINK_USAGE);
@@ -364,21 +381,28 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     } catch { /* fallback to standard recovery message when store is unavailable */ }
   }
   let remoteCleanup: "skipped" | "unverified" = "skipped";
+  let recordedOutcome: unknown;
   try {
     const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}`, force ? {
       method: "DELETE",
       redirect: "error",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ force: true }),
-    } : purge ? {
+      body: JSON.stringify({ force: true, ...operationBody }),
+    } : purge || operationId !== undefined ? {
       method: "DELETE",
       redirect: "error",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ purge: true }),
+      body: JSON.stringify({ ...(purge ? { purge: true } : {}), ...operationBody }),
     } : { method: "DELETE" }, deps);
-    // Legacy revoke accepts an empty response; a forced receipt needs observed identity.
-    if (force && response === null) throw new Error("invalid link API response: revoke object");
-    validateRevoke(response, linkId);
+    // Legacy revoke accepts an empty response; a forced receipt needs observed identity, and so does an operation.
+    if ((force || operationId !== undefined) && response === null) throw new Error("invalid link API response: revoke object");
+    validateRevoke(response, linkId, operationId);
+    if (isRecord(response)) recordedOutcome = response.outcome;
+    if (operationId !== undefined && !force) {
+      const receipt = response as Record<string, unknown>;
+      console.log(JSON.stringify({ linkId, operationId, outcome: receipt.outcome, ...(receipt.purged === true ? { purged: true } : {}) }));
+      return;
+    }
   } catch (error) {
     // Revoke is idempotent: a link the Home no longer has is already revoked, and a Child retrying
     // a join rollback depends on that answer being success. A 404 without this code comes from a
@@ -394,7 +418,7 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     const recovery = wasEphemeral
       ? "Run ~/.cache/opencodex/bin/ocx-child detach on the remote client."
       : "Run ocx disconnect on the remote client.";
-    printData({ linkId, remoteCleanup, recovery }, wantsJson, [
+    printData({ linkId, remoteCleanup, recovery, ...(operationId !== undefined && recordedOutcome !== undefined ? { operationId, outcome: recordedOutcome } : {}) }, wantsJson, [
       remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,
       recovery,
     ]);
@@ -435,8 +459,9 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "capture") await runLinkCapture(args, deps, LINK_USAGE);
     else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);
     else if (command === "routes") await runLinkRoutes(args, deps, linkRequest, LINK_USAGE);
+    else if (command === "operations") await runLinkOperations(args, deps, linkRequest, LINK_USAGE);
     else if (command === "activity") await runLinkActivity(args, deps, linkRequest, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, routes, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, routes, operations, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
   });
   return code === 0 ? verdictExit : code;
 }

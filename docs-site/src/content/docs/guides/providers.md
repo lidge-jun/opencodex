@@ -273,15 +273,12 @@ default), and high thinking levels. Google offers it on the paid Gemini API tier
 tier. On `google-antigravity`, Argon is listed with the same three levels, which map to the
 `gemini-4-argon-low`, `-medium`, and `-high` wire models. Google limits it there to AI Ultra and
 eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigravity CLI client, so
-OpenCodex sends Argon requests and model discovery with the CLI User-Agent
-(`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
+OpenCodex sends every Gemini 4 model request and model discovery with the CLI User-Agent
+(`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model. Gemini 4 Hydrogen (low, medium, high by default, and xhigh; verified on Vertex AI on 2026-11-13, not yet seen
+on Antigravity) appears on `google-antigravity` only when your account's model list includes it, each level mapping to its `gemini-4-hydrogen-*` wire model.
 
-On Vertex AI, `gemini-4-argon` receives images returned by tools, such as screenshots, inside
-the matching function response. This avoids the upstream 400 error "Requests ending with a
-model turn are not supported" after an image-producing tool call while preserving the images.
-Images from duplicate results or results without a matching call are preserved in a separate
-message after the tool responses, with a marker explaining that they could not be paired.
-No configuration change is needed; this handling is specific to Vertex Argon.
+Vertex AI model discovery, its credential rules and how Gemini 4 Argon, Carbon and Hydrogen
+receive tool images are described in [Google Vertex AI](/guides/google-vertex/).
 
 For Gemini on Antigravity, including Argon, provider-marked thought summaries stay separate
 from the answer: Responses uses reasoning summary items, Chat Completions uses
@@ -838,7 +835,6 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Umans AI · Neuralwatt | `https://api.code.umans.ai` · `https://api.neuralwatt.com/v1` |
 | Mistral | `https://api.mistral.ai/v1` |
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
-
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
 | Chutes | `https://llm.chutes.ai/v1` |

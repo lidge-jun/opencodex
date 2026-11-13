@@ -61,6 +61,34 @@ export interface GracefulStopIo {
    * endpoint the stop never contacted — and recovery probes exactly that endpoint.
    */
   runtimeEndpoint?: { hostname: string; port: number };
+  /**
+   * Windows checked stop (#7771): Part B confirms the port after this stop returns and
+   * owns the wait, so the 15 s waitForStoppedPort here is skipped (030 "Time budget").
+   */
+  skipPortWait?: boolean;
+  /**
+   * Whether a graceful stop that did not confirm may fall back to the platform kill ladder.
+   *
+   * `ocx uninstall` sets this false when its Part A did not end stopped/absent: a manager
+   * that would not stop can respawn the proxy, and `taskkill /T /F` under it is exactly the
+   * forced stop the checked Windows stop exists to prevent. A 409 refusal never reaches the
+   * fallback either way. Defaults to true, which is every other caller's behaviour.
+   */
+  allowForcedFallback?: boolean;
+  /**
+   * The forced ladder, injectable so the rule above can be proven without signalling a
+   * process. Production callers omit it and get {@link killProxy}.
+   */
+  forceKill?: (pid: number) => void;
+  /**
+   * The post-stop port wait, injectable so a test can present a verified listener without
+   * starting one. Production callers omit it and get `reclaimListenPort`.
+   */
+  reclaimPort?: (
+    port: number,
+    hostname: string,
+    opts: { timeoutMs?: number; intervalMs?: number; scanIntervalMs?: number; killOcxHolders?: boolean; onlyKillPids?: number[] },
+  ) => Promise<boolean>;
 }
 
 /**
@@ -319,7 +347,7 @@ function drainDeadlineMs(): number {
 /** Graceful-first stop: management-API drain, then the platform kill ladder. */
 export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<boolean> {
   if (!isProcessAlive(pid)) return false;
-  const runtime = io.runtimeEndpoint ?? readRuntimePort(pid);
+  const runtime = io.skipPortWait ? null : io.runtimeEndpoint ?? readRuntimePort(pid);
   const { result: graceful, refusal } = await stopProxyGracefullyDetailed(pid, io);
   if (graceful === "refused") {
     // The proxy refused on purpose. Forcing would strip shared config while whatever owns
@@ -334,38 +362,61 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<b
   if (graceful === "teardown-unconfirmed") {
     // Exit was observed, so do not enter the forced-stop fallback. Returning false keeps
     // shared restoration with `ocx stop` instead of claiming that the proxy completed it.
-    await waitForStoppedPort(runtime, pid);
+    await waitForStoppedPort(runtime, pid, io);
     return false;
   }
   if (graceful) {
-    await waitForStoppedPort(runtime, pid);
+    await waitForStoppedPort(runtime, pid, io);
     return true;
   }
-  killProxy(pid);
-  await waitForStoppedPort(runtime, pid);
+  if (io.allowForcedFallback === false) {
+    // The caller forbade the forced ladder (a manager that would not stop may respawn the
+    // proxy). Report the unconfirmed stop; the caller keeps its failure recorded.
+    await waitForStoppedPort(runtime, pid, io);
+    return false;
+  }
+  // Written as a literal killProxy(pid) call so the refusal-before-kill ordering stays
+  // checkable in source (tests/providers/xai/grok-lifecycle.test.ts); the seam only swaps it.
+  if (io.forceKill) io.forceKill(pid);
+  else killProxy(pid);
+  await waitForStoppedPort(runtime, pid, io);
   return false;
 }
 
-/** After stop/kill, wait for the former listen port to become bindable (Windows drain). */
+/**
+ * After stop/kill, wait for the former listen port to become bindable (Windows drain).
+ *
+ * The wait is OBSERVATIONAL whenever the caller forbade the forced ladder
+ * (`allowForcedFallback === false`). Reclaiming with `killOcxHolders` would terminate a
+ * verified listener through `killProxy`, which is the forced stop that refusal exists to
+ * prevent: a manager that would not stop may respawn the proxy, so a survivor must be
+ * reported rather than killed. The wait still runs and still returns; it only stops being
+ * allowed to change anything.
+ */
 async function waitForStoppedPort(
   runtime: { port: number; hostname?: string } | null | undefined,
   stoppedPid?: number,
+  io: GracefulStopIo = {},
 ): Promise<void> {
   if (!runtime?.port) return;
+  const mayKill = io.allowForcedFallback !== false;
   try {
-    const { reclaimListenPort } = await import("../server/port-reclaim");
-    await reclaimListenPort(runtime.port, runtime.hostname ?? "127.0.0.1", {
+    const reclaim = io.reclaimPort ?? (await import("../server/port-reclaim")).reclaimListenPort;
+    await reclaim(runtime.port, runtime.hostname ?? "127.0.0.1", {
       timeoutMs: 15_000,
       intervalMs: 100,
       scanIntervalMs: 500,
       // Only the process we just stopped — never kill a newly started twin proxy.
-      killOcxHolders: !!(stoppedPid && stoppedPid > 0),
-      onlyKillPids: stoppedPid && stoppedPid > 0 ? [stoppedPid] : [],
+      killOcxHolders: mayKill && !!(stoppedPid && stoppedPid > 0),
+      onlyKillPids: mayKill && stoppedPid && stoppedPid > 0 ? [stoppedPid] : [],
     });
   } catch {
     /* best-effort — callers that need a hard guarantee reclaim again before bind */
   }
 }
+
+/** taskkill in the forced fallback; it had no timeout before #7771. */
+export const FORCED_TASKKILL_TIMEOUT_MS = 5_000;
 
 export function killProxy(pid: number, mayTerminate?: () => boolean): void {
   if (!isProcessAlive(pid)) return;
@@ -381,7 +432,8 @@ export function killProxy(pid: number, mayTerminate?: () => boolean): void {
     const args = ["/PID", String(pid), "/T", "/F"];
     authorize();
     try {
-      execFileSync(taskkill, args, { stdio: "pipe", windowsHide: true });
+      // Capped (#7771): the checked stop's budget counts the forced kill at 5 s.
+      execFileSync(taskkill, args, { stdio: "pipe", windowsHide: true, timeout: FORCED_TASKKILL_TIMEOUT_MS });
     } catch (err) {
       if (isProcessAlive(pid)) throw err;
     }

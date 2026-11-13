@@ -11,6 +11,7 @@ import { installFreshWindowsSchedulerSafely, installServiceSafely } from "../../
 import { repairService } from "../../src/service/repair";
 import { buildWindowsTaskXml } from "../../src/service/windows-taskxml";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { partAResult, partBResult } from "../helpers/windows-stop-caller-fixtures";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
@@ -57,9 +58,8 @@ function fixture(supervised: boolean, passes: boolean) {
   const run = (action: string) => {
     if (action === "install") return installServiceSafely("scheduler", consume("install"), {
       ...admission, inspectSupervision,
-      diagnose: () => { order.push("diagnose"); return diagnostic; },
-      managerOps: () => ({ status: () => "present", stop: () => { order.push("stop"); } }),
-      killServiceWrappers: () => { order.push("wrappers"); },
+      windowsPartA: async () => { order.push("stop"); return partAResult("stopped"); },
+      windowsPartB: async () => { order.push("confirm"); return partBResult("freed"); },
       stopTrackedProxy: async () => { order.push("proxy"); },
     });
     if (action === "fresh install") return installFreshWindowsSchedulerSafely({
