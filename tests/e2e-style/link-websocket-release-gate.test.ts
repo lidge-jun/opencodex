@@ -10,7 +10,7 @@ import { writeLinkStore, type LinkStore } from "../../src/link/store";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { STANDIN_MAX_MESSAGE_BYTES, startRelayStandin, type RelayStandin } from "../fixtures/link-child-relay-standin";
-import { completed, expectCompleted, gate, GATE_PIN as PIN, runGateCodex, toolCall } from "../helpers/link-gate-codex";
+import { completed, expectCompleted, gate, GATE_PIN as PIN, runGateCodex, toolCall, untilOrExit } from "../helpers/link-gate-codex";
 import { startChild } from "../helpers/link-ws-child";
 import { probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
 import { forgetLinkWebsocketAdvertisementsForTests } from "../../src/client/link-ws-advertisement";
@@ -207,7 +207,7 @@ describe("link WebSocket release gate (design 11.1 item 13)", () => {
     });
     standin = startRelayStandin({ linkPort: h.linkPort, identity, bearer: SECRET });
     const result = runCodex(standin.port, { argument: "say gate-ok" });
-    await first;
+    await untilOrExit(first, result, "the first request reached the Home");
     await server!.stop(true);
     standin.events.push("restart");
     await h.start();
