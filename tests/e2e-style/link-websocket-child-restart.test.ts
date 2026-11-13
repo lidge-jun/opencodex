@@ -135,6 +135,8 @@ async function measureRestart(variant: Variant, retries: number, restartMs: numb
   const run = runGateCodex({ dir, port, prompt: { argument: "say gate-ok" }, children, streamMaxRetries: retries, onStderrLine: line => {
     if (/Reconnecting|Falling back|waiting for network/.test(line)) mark("codex " + line.replace(/^.*?(Reconnecting|warning: Falling back)/, "$1").slice(0, 90));
   } });
+  // Marked when Codex actually exits, which can be during the restart: it bounds the first session's counts.
+  void run.then(result => mark("codex exit " + result.code));
   await restarted;
   t0.at = Date.now();
   mark("restart: drain starts (onStopping)");
@@ -155,7 +157,6 @@ async function measureRestart(variant: Variant, retries: number, restartMs: numb
   });
   mark("new listener bound");
   const result = await run;
-  mark("codex exit " + result.code);
   expectCompleted(result);
   const completedOn = rows.filter(row => row.endsWith(":200")).at(-1) ?? "none";
   const firstSession = timeline.slice(0, timeline.findIndex(([, what]) => what.startsWith("codex exit")));
