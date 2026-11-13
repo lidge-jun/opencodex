@@ -27,7 +27,8 @@ because it records its own database through `recordOwnedConfigPath`.
   of its ancestors, lists neither, or the home has no ownership metadata, writes nothing, and throws
   `ConfigUninstallInProgressError` under a tombstone like a registration. A writer that must not adopt
   existing data (the ocx-child cache fill, `src/link/child-binary-cache-start.ts`) creates its directory
-  first and registers it only then (removing it again if the registration fails), adopts an unlisted
+  first and registers it only then (removing it again, only if it created it, when the registration
+  fails, and stopping when the home's metadata vanished meanwhile), adopts an unlisted
   one only when it is empty, owned by this user and writable by nobody else, and leaves any other alone.
 - A registration that would push the manifest past 1,024 paths, or past the 64 KiB metadata limit
   less room for the tombstone, records nothing and warns once, so the manifest always stays one

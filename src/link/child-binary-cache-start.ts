@@ -21,10 +21,11 @@ function inspect(path: string): "absent" | "ours" | "other" {
  * Claims the fill's own directory, <OPENCODEX_HOME>/ocx-child-builds, for uninstall. The manifest lists
  * it only once OpenCodex has created it: an absent directory is created here (exclusively, 0700) and
  * then registered, and removed again if the registration does not succeed, so a listing always names a
- * directory OpenCodex made. An unlisted directory is adopted only when it is empty, a real directory,
+ * directory OpenCodex made or adopted. An unlisted directory is adopted only when it is empty, a real directory,
  * owned by this user and writable by nobody else (what an interruption between creation and
  * registration leaves); any other one was not created by OpenCodex, and the fill leaves it alone
- * (foreign_directory). The operator's cache/ is never claimed or written. A Home without ownership
+ * (foreign_directory). A failed registration removes only a directory this call created, and a Home whose
+ * metadata disappeared between the check and the registration (an uninstall) stops the fill. The operator's cache/ is never claimed or written. A Home without ownership
  * metadata fills as before (its uninstall removes nothing). An uninstall in progress, a full manifest or
  * a busy ownership lock stops this start before any write.
  */
@@ -37,13 +38,17 @@ export function claimChildBinaryCache(configDir: string): ChildCacheClaimRefusal
     if (ownership !== "unlisted") return null;
     const found = inspect(dir);
     if (found === "other") return "foreign_directory";
-    if (found === "absent") {
+    const created = found === "absent";
+    if (created) {
       try { mkdirSync(dir, { mode: 0o700 }); } catch { return "foreign_directory"; }
     }
+    // The Home was owned a moment ago, so "unowned" now means an uninstall removed its metadata in between.
     let registered: ReturnType<typeof registerOwnedConfigPath> | "failed" = "failed";
     try { registered = registerOwnedConfigPath(configDir, dir); } finally {
-      if (registered !== "recorded" && registered !== "unowned") { try { rmdirSync(dir); } catch { /* an empty directory left; the next start adopts it */ } }
+      // Only a directory this call created is removed; an adopted one stays as it was found.
+      if (registered !== "recorded" && created) { try { rmdirSync(dir); } catch { /* an empty directory left; the next start adopts it */ } }
     }
+    if (registered === "unowned") return "uninstall_in_progress";
     return registered === "full" ? "ownership_unavailable" : null;
   } catch (error) {
     return error instanceof ConfigUninstallInProgressError ? "uninstall_in_progress" : "ownership_unavailable";

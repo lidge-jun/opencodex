@@ -12,6 +12,7 @@ import { compareStrictSemver, parseStrictSemver } from "../../src/lib/strict-sem
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startChildBinaryCacheFill } from "../../src/link/child-binary-cache-start";
 import { CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
+import * as ownershipModule from "../../src/lib/config-ownership";
 
 // Lane O2: an updated Home of version V fills ocx-child-builds/V/ from the GitHub release of V, trusting
 // only the digests inside its own installed package, so a packaged Home can plant ocx-child after an update.
@@ -562,6 +563,34 @@ describe("final review: uninstall, startup gates and download edges", () => {
       expect(await start()).toEqual({ kind: "skipped", reason: "ownership_unavailable" });
     } finally { warn.mockRestore(); }
     expect([ownedPaths().includes("ocx-child-builds"), existsSync(fillDir())]).toEqual([false, false]);
+  });
+
+  test("a failed registration keeps an empty private directory it adopted rather than created", async () => {
+    olderOwnedHome();
+    mkdirSync(fillDir(), { mode: 0o700 });
+    const manifestPath = join(home, CONFIG_UNINSTALL_MANIFEST);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] };
+    const filler = Array.from({ length: 1024 - manifest.paths.length }, (_, index) => "filler-" + String(index).padStart(4, "0"));
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, paths: [...manifest.paths, ...filler].sort() }, null, 2) + "\n", { mode: 0o600 });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await start()).toEqual({ kind: "skipped", reason: "ownership_unavailable" });
+    } finally { warn.mockRestore(); }
+    expect([ownedPaths().includes("ocx-child-builds"), existsSync(fillDir())]).toEqual([false, true]);
+  });
+
+  test("an uninstall that finishes between creating the directory and registering it stops the fill", async () => {
+    olderOwnedHome();
+    bothDigests();
+    const register = ownershipModule.registerOwnedConfigPath;
+    const racing = spyOn(ownershipModule, "registerOwnedConfigPath").mockImplementation((configDir: string, candidate: string) => {
+      expect(removeOwnedConfigState(home).status).toBe("partial");
+      return register(configDir, candidate);
+    });
+    try {
+      expect(await start()).toEqual({ kind: "skipped", reason: "uninstall_in_progress" });
+    } finally { racing.mockRestore(); }
+    expect(existsSync(fillDir())).toBe(false);
   });
 
   test.each([["absent", false], ["empty", true]])("an older Home registers an %s ocx-child-builds before the fill writes it", async (_name, precreate) => {
