@@ -10,6 +10,7 @@ import type { ExplicitRoute } from "../../link/explicit-route";
 import { assertRoomForNewOperation, findOperation, hasEffect, isOperationId, markRevokeLive, OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED, OperationsJournalFullError, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
   type EnrollEffect, type LinkOperation, type OperationsJournal, type OperationState, type RevokeEffect } from "../../link/operations-journal";
 import { readLinkRetirement, type LinkRetirement } from "../../link/retirement";
+import { residualRecovery } from "../../link/residual-recovery";
 import { newLinkId } from "../../link/store";
 import type { ManagementContext } from "./context";
 import { compensateNewLink, fail, readStoreFor, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
@@ -22,11 +23,10 @@ export function journalUnreadable(): Response {
 
 /** Compensation that could not finish: whether anything this operation created remains is unknown. */
 const UNKNOWN_CODES = new Set(["compensation_failed", "key_cleanup_failed", "link_cleanup_uncertain", "key_issue_uncertain"]);
-const RESIDUAL_RECOVERY = "The Child may still be enrolled; run ocx disconnect and ocx restart on the Child (ocx-child detach for an ocx-child) before retrying.";
-// Only the managed binary's purge removes a plant; a disconnect would leave it in place. Both managed locations.
-const PLANT_RECOVERY = "The Child may still hold the planted ocx-child; run its managed copy with detach --purge before retrying: "
-  + "~/.cache/opencodex/bin/ocx-child detach --purge on macOS or Linux; on Windows, in Command Prompt, \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge, "
-  + "or \"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge where LOCALAPPDATA is not set.";
+/** The link a residual's Child step is bound to: an enrollment's reserved id, a revoke's own link. */
+function residualLinkId(op: LinkOperation): string | undefined {
+  return op.kind === "enroll" ? op.reserved?.linkId : op.linkId;
+}
 
 /** The Child's side of a residual, as a closed word a client maps to its own guidance. */
 function residualKind(op: LinkOperation): "plant" | "enrollment" | undefined {
@@ -169,7 +169,9 @@ export function replayResponse(op: LinkOperation): Response {
   return Response.json({
     error: { code: error.code, message: "The operation ended " + op.state + "; this is its recorded outcome." },
     ...outcomeBody(op),
-    ...(residualKind(op) ? { residual: true, residualKind: residualKind(op), recovery: residualKind(op) === "plant" ? PLANT_RECOVERY : RESIDUAL_RECOVERY } : {}),
+    // The Child's step is bound to the link id the journal recorded before anything changed (src/link/residual-recovery.ts).
+    ...(residualKind(op) ? { residual: true, residualKind: residualKind(op), ...(residualLinkId(op) ? { linkId: residualLinkId(op) } : {}),
+      recovery: residualRecovery(residualKind(op) === "plant" ? "plant" : "enrollment", residualLinkId(op)) } : {}),
   }, { status: error.status, headers: { "cache-control": "no-store" } });
 }
 

@@ -468,9 +468,12 @@ describe("review round 3", () => {
     expect({ code: code(replay), outcome: replay.body.outcome, residual: replay.body.residual }).toEqual({ code: "key_issue_uncertain", outcome: "unknown", residual: true });
     // A plant is removed only by the managed binary's purge; a disconnect would leave it.
     expect(replay.body.residualKind).toBe("plant");
-    expect(replay.body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
-    expect(replay.body.recovery).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge');
-    expect(replay.body.recovery).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge');
+    // Bound to the reserved link id the journal recorded before anything changed (#8691 final review).
+    const linkId = replay.body.linkId as string;
+    expect(linkId).toMatch(/^lnk_[0-9a-f]{16}$/);
+    expect(replay.body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + linkId);
+    expect(replay.body.recovery).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + linkId);
+    expect(replay.body.recovery).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + linkId);
     expect(replay.body.recovery).not.toContain("ocx disconnect");
   });
 
