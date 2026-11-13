@@ -418,6 +418,9 @@ export function createSseTerminalOutputBoundary(
       }
       if (isDone) {
         done = true;
+        // The sentinel is protocol: a [DONE] block carrying extra upstream lines (comments, fields)
+        // is emitted as the bare sentinel, so nothing provider-written rides along with it.
+        if (!/^data:[ \t]*\[DONE\][ \t]*$/.test(decoder.decode(outboundBlock).trim())) outboundBlock = encoder.encode("data: [DONE]");
         if (responsesTerminal) {
           if (!doneEmitted) appendOutput(outboundBlock, frame.delimiter);
           doneEmitted = true;

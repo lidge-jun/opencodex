@@ -503,6 +503,27 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     });
   });
 
+  test.each(["tee", "eager"] as const)("%s emits the held [DONE] as the bare sentinel, without its upstream lines", async mode => {
+    const credential = "secretABC123456";
+    const headers = { authorization: `Bearer ${credential}` };
+    await withRegistry(headers, async () => {
+      const out = await deliver(mode, headers, [`: ${credential}\ndata: [DONE]`, { error: { code: "cyber_policy", message: "blocked" } }], true);
+      expect([out.includes(credential), out.split("[DONE]").length - 1, terminalTypes(out)]).toEqual([false, 1, ["response.failed"]]);
+    });
+  });
+
+  test.each(["tee", "eager"] as const)("%s masks credential excerpts in a genuine terminal and keeps it whole otherwise", async mode => {
+    const credential = "secretABC123456";
+    const headers = { authorization: `Bearer ${credential}`, "content-type": "application/json" };
+    await withRegistry(headers, async () => {
+      const longText = "x".repeat(10_000) + "END-OF-OUTPUT";
+      const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message: "echo ABC12345 in application/json" },
+        output: [{ type: "message", content: [{ type: "output_text", text: longText }] }] } };
+      const out = await deliver(mode, headers, [`event: response.failed\ndata: ${JSON.stringify(failed)}`]);
+      expect([out.includes("ABC12345"), out.includes("application/json"), out.includes("END-OF-OUTPUT")]).toEqual([false, true, true]);
+    });
+  });
+
   test("a sensitive key keeps its redaction when the selected credential is a substring of it", () => {
     const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: "Bearer auth" });
     const failed = { type: "response.failed", response: { status: "failed", error: { message: "fixture", authorization: "fixture-unpatterned-value-8415" } } };

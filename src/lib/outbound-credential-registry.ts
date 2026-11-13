@@ -93,7 +93,7 @@ interface SentValueIndex {
   overflow: boolean;
 }
 
-function indexSentValues(headers: Record<string, string>): SentValueIndex {
+function indexSentValues(headers: Record<string, string>, credentialOnly = false): SentValueIndex {
   const wholeCredential = new Set<string>();
   const credentialWindows = new Set<string>();
   const contained: string[] = [];
@@ -104,7 +104,7 @@ function indexSentValues(headers: Record<string, string>): SentValueIndex {
     if (!credentialNamed && CORRELATION_HEADER_NAME.test(name)) continue;
     for (const part of credentialComponents(value)) {
       if (!credentialNamed) {
-        if (part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) contained.push(...spellings(part));
+        if (!credentialOnly && part.length >= CREDENTIAL_SUBSTRING_MIN_LENGTH) contained.push(...spellings(part));
         continue;
       }
       for (const spelling of spellings(part)) {
@@ -144,11 +144,19 @@ export function createSentValueGuard(headers: Record<string, string>): (text: st
  * wording a reader classifies, survives. The whole head is replaced when it equals a credential, and
  * everything is replaced past the window cap.
  */
-export function createSentValueMask(headers: Record<string, string>, replacement: string): (text: string) => string {
-  const { wholeCredential, credentialWindows, contained, overflow } = indexSentValues(headers);
+export function createSentValueMask(
+  headers: Record<string, string>,
+  replacement: string,
+  options: { credentialOnly?: boolean; wholeText?: boolean } = {},
+): (text: string) => string {
+  // `credentialOnly`: only credential-named values (whole and by excerpt), for copy where other
+  // header values (a content type, a user agent) are ordinary text that must stay readable.
+  // `wholeText`: read and return all of the text (linear work), for genuine Responses terminals whose
+  // output must not be cut; the default reads and returns only the guard's scan window.
+  const { wholeCredential, credentialWindows, contained, overflow } = indexSentValues(headers, options.credentialOnly);
   return (text) => {
     if (overflow) return replacement;
-    const head = scanHead(text);
+    const head = options.wholeText ? text : scanHead(text);
     if (wholeCredential.has(head)) return replacement;
     const windows: string[] = [];
     for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= head.length; at++) {

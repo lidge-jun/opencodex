@@ -1,4 +1,4 @@
-import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib/redact";
+import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecretString, redactSecrets } from "../../lib/redact";
 import {
   CREDENTIAL_SUBSTRING_MIN_LENGTH,
   SENT_VALUE_GUARD_SCAN_CHARS,
@@ -132,22 +132,29 @@ function createRedactionTools(outboundHeaders: Record<string, string>, maskCrede
   // Upstream copy that is not a Responses terminal has every sent value masked in place (only the
   // scanned head is emitted), so refusal wording a reader classifies survives.
   const maskSentValues = createSentValueMask(outboundHeaders, REDACTED_SECRET);
-  const guardedText = (text: string): string => maskCredential(maskSentValues(text));
+  // Whole credentials first, then the pattern rules, then excerpts: an excerpt window shared with
+  // another credential, or one inside a "Bearer <token>" the pattern rules recognize, would otherwise
+  // split it and leave a remainder neither the exact mask nor the pattern rules can find.
+  const guardedText = (text: string): string => maskSentValues(redactSecretString(maskCredential(text)));
+  // A genuine terminal is masked for every excerpt of a sent credential too, never for other header
+  // values (ordinary text there), and never cut: its output must reach the client whole.
+  const maskCredentialExcerpts = createSentValueMask(outboundHeaders, REDACTED_SECRET, { credentialOnly: true, wholeText: true });
+  const credentialText = (text: string): string => maskCredentialExcerpts(redactSecretString(maskCredential(text)));
   // `refuseSentValues`: a payload that is upstream copy throughout masks every sent value in its
   // strings and non-protocol keys, not only the selected credentials.
   const redactDiagnostic = (value: unknown, refuseSentValues = false): unknown => {
     // A number is upstream text too once serialized: one that repeats a sent value is dropped from
     // an object (keeping every field's type valid) and replaced inside an array.
-    const repeatsSentNumber = (entry: unknown): boolean => refuseSentValues && typeof entry === "number"
-      && maskSentValues(String(entry)) !== String(entry);
+    const numberMask = refuseSentValues ? maskSentValues : maskCredentialExcerpts;
+    const repeatsSentNumber = (entry: unknown): boolean => typeof entry === "number" && numberMask(String(entry)) !== String(entry);
     const maskKnown = (entry: unknown, root = false): unknown => {
-      if (typeof entry === "string") return refuseSentValues ? guardedText(entry) : maskCredential(entry);
+      if (typeof entry === "string") return refuseSentValues ? guardedText(entry) : credentialText(entry);
       if (Array.isArray(entry)) return entry.map(item => repeatsSentNumber(item) ? REDACTED_SECRET : maskKnown(item));
       if (entry && typeof entry === "object") {
         // A key is upstream text too: a rewritten terminal copies extra root fields verbatim. Its
         // sensitivity is decided before masking, which could rename a key such as authorization.
         return Object.fromEntries(Object.entries(entry).filter(([, item]) => !repeatsSentNumber(item)).map(([key, item]) => [
-          PROTOCOL_KEYS.has(key) ? key : refuseSentValues ? guardedText(key) : maskCredential(key),
+          PROTOCOL_KEYS.has(key) ? key : refuseSentValues ? guardedText(key) : credentialText(key),
           SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_SECRET
             : (root && key === "type") || isPublicClassValue(key, item) ? item : maskKnown(item),
         ]));
