@@ -248,12 +248,14 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
 
   // Only --force can meet the tombstone limit (#8612). A fresh revoke is refused before anything and settles failed_clean, but a
   // resumed one may re-own its retirement receipt first and stay open or unknown (#8416), so the text claims neither.
-  test("a forced revoke refused at the tombstone limit says the link and key stay, and to repeat the same id before using a new one", async () => {
+  test("a forced revoke refused at the tombstone limit claims only that this attempt touched nothing, and to repeat the same id before using a new one", async () => {
     const h = harness([{ status: 409, body: { error: { code: "tombstone_limit", message: "server-chosen text" } } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--force", "--yes", "--operation-id", "detach-8"], h.deps)).toBe(5);
       const printed = [...h.out, ...h.err].join("\n");
       expect(printed).toContain("waiting for cleanup");
       expect(printed).toContain("did not touch the link, its key or the Child");
+      // An earlier attempt of a resumed revoke may already have revoked the key and stopped the tunnel (#8416).
+      expect(printed).not.toContain("stay active");
       expect(printed).toContain("repeat this revoke with the same operation id");
       expect(printed).toContain("although capacity is free");
       expect(printed).toContain("link_retirement_owned");
