@@ -380,6 +380,30 @@ const STORE_PROOF_HINT = "; this install's path looks like a pnpm global store (
   + "so the updater accepts it only when pnpm 11 or 12 names that store. Update with pnpm itself: "
   + "pnpm add -g @bitkyc08/opencodex@latest";
 
+/** Filesystem identity of a directory (device and inode), or null when it is not a readable directory. */
+function directoryIdentity(path) {
+  try {
+    const stat = statSync(path);
+    return stat.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
+  } catch { return null; }
+}
+
+/**
+ * A store owner's store and global group are pinned by filesystem identity for one update transaction, so a
+ * directory replaced at the same canonical path between the proof and a pnpm mutation (install or rollback)
+ * stops the transaction instead of receiving the mutation.
+ */
+function pinStoreOwnerIdentity(owner) {
+  const group = directoryIdentity(owner.globalRoot), store = directoryIdentity(owner.store);
+  return {
+    refusal() {
+      if (!group || directoryIdentity(owner.globalRoot) !== group) return "pnpm global group was replaced or could not be read";
+      if (!store || directoryIdentity(owner.store) !== store) return "pnpm configured store was replaced or could not be read";
+      return null;
+    },
+  };
+}
+
 /** Store-proof failures are configuration facts, not package-tree failures. */
 function isStoreProofFailure(reason) {
   return typeof reason === "string" && (reason.startsWith("pnpm configured store")
@@ -761,6 +785,9 @@ export function runPnpmGlobalUpdate({
   if (currentVersion && before.version !== currentVersion) {
     return { ok: false, phase: "preflight", error: storeOwnerRefusal("pnpm's active package does not match the running package") };
   }
+  const identity = owner.globalStore ? pinStoreOwnerIdentity(owner) : null;
+  const identityRefusal = identity?.refusal();
+  if (identityRefusal) return { ok: false, phase: "preflight", error: storeOwnerRefusal(identityRefusal) };
 
   const requested = targetVersion || tag;
   const spec = packageSpec(packageName, requested);
@@ -829,6 +856,8 @@ export function runPnpmGlobalUpdate({
     try { groupRefusal = spellingRefusal(owner.globalRoot, "pnpm global group"); }
     catch { groupRefusal = "pnpm global group could not be resolved"; }
     if (groupRefusal) return { ok: false, phase: "rollback", rolledBack: false, error: storeOwnerRefusal(groupRefusal) };
+    const replaced = identity?.refusal();
+    if (replaced) return { ok: false, phase: "rollback", rolledBack: false, error: storeOwnerRefusal(replaced) };
   }
   log(`Restoring ${packageName}@${before.version} with pnpm…`);
   let rollback;

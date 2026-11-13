@@ -632,6 +632,58 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(layout.calls.filter(args => args[0] === "add")).toHaveLength(1);
   });
 
+  test("a listed v<N>/links spelling whose package link leaves that directory still demands the store proof", () => {
+    // v7/links/group/node_modules/<pkg> is itself a link to a self-contained package elsewhere.
+    const layout = globalStoreLayout(root);
+    const outsideGroup = join(root, "elsewhere", "node_modules"), outside = join(outsideGroup, ...PKG.split("/"));
+    mkdirSync(join(outside, "bin"), { recursive: true });
+    writeFileSync(join(outside, "package.json"), JSON.stringify({ name: PKG, version: "1.0.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(outside, "bin", "ocx.mjs"), "x".repeat(2048));
+    for (const name of ["bun", "zod"]) {
+      mkdirSync(join(outside, "node_modules", name), { recursive: true });
+      writeFileSync(join(outside, "node_modules", name, "package.json"), JSON.stringify({ name }));
+    }
+    writeFileSync(join(outside, "node_modules", "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
+    const slot = join(root, "v7", "links", "group", "node_modules", ...PKG.split("/"));
+    link(outside, slot);
+    unlinkSync(layout.exposed);
+    link(slot, layout.exposed);
+    expect(verifyPnpmInstallTree(outside, "1.0.0")).toMatchObject({ ok: true });
+    expect(pnpmPackageUsesGlobalStoreLinks(slot)).toBe(true);
+    expect(pnpmPackageUsesGlobalStoreLinks(layout.exposed)).toBe(true);
+    const result = resolveOwner(layout);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.endsWith(STORE_HINT)).toBe(true);
+  });
+
+  test("a global group replaced by another directory before rollback is never rolled back through", () => {
+    const layout = globalStoreLayout(root);
+    const resolved = resolveOwner(layout);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    const run = layout.run;
+    let lists = 0;
+    layout.run = args => {
+      // Post-install listing fails, so the updater would roll back; the add swapped the group for a copy.
+      if (args[0] === "list" && ++lists === 2) return { status: 1 };
+      const result = run(args);
+      if (args[0] === "add" && lists === 1) {
+        const { renameSync, cpSync } = require("node:fs") as typeof import("node:fs");
+        const old = join(root, "old-global-v11");
+        renameSync(layout.globalRoot, old);
+        cpSync(old, layout.globalRoot, { recursive: true, verbatimSymlinks: true });
+      }
+      return result;
+    };
+    layout.calls.length = 0;
+    const result = runPnpmGlobalUpdate({
+      packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest",
+      owner: resolved.owner, runPnpm: args => layout.run(args), verifyShims: okShims,
+    });
+    expect(result).toMatchObject({ ok: false, phase: "rollback", rolledBack: false,
+      error: "pnpm global group was replaced or could not be read" + STORE_HINT });
+    expect(layout.calls.filter(args => args[0] === "add")).toHaveLength(1);
+  });
+
   test("a store spelling that gains a symbolic link after discovery refuses before pnpm add", () => {
     const layout = globalStoreLayout(root);
     const resolved = resolveOwner(layout);

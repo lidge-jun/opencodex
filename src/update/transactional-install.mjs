@@ -27,7 +27,7 @@ import { randomBytes } from "node:crypto";
 import { globalPaths } from "node:module";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
-import { isInMarkedPnpmCustomStore, isInPnpmGlobalStoreLinks } from "./pnpm-store-layout.mjs";
+import { isInMarkedPnpmCustomStore } from "./pnpm-store-layout.mjs";
 
 /**
  * Dependency lookup confined to the candidate's OWN tree. This is the npm contract and it
@@ -134,15 +134,6 @@ function resolveStoreLinkChain(path, store, alias, alternateRoot, alternateAlias
   }
 }
 
-/**
- * Whether a spelling has a v<N>/links component outside an isolated install. A pnpm global-store link
- * instance never contains node_modules/.pnpm, so only a .pnpm virtual store BELOW the last v<N>/links
- * component marks the location as an isolated install; a .pnpm segment above it hides nothing.
- */
-function hasGlobalLinksComponent(path) {
-  return linksComponentState(path) === "links";
-}
-
 /** "none" without a v<N>/links component, "isolated" when a .pnpm store sits below the last one, else "links". */
 function linksComponentState(path) {
   const parts = String(path).split(/[\\/]+/);
@@ -157,18 +148,34 @@ function linksComponentState(path) {
   return "links";
 }
 
+/** The spelling up to and including its last v<N>/links component, or null without one. */
+function linksRoot(path) {
+  const parts = String(path).split(/[\\/]+/);
+  let links = -1;
+  for (let i = 1; i < parts.length; i += 1) {
+    if (/^links$/i.test(parts[i]) && /^v\d+$/i.test(parts[i - 1])) links = i;
+  }
+  return links < 0 ? null : parts.slice(0, links + 1).join(sep) || sep;
+}
+
 /** Retain intermediate spellings: realpath alone hides a links directory behind another symlink. */
 function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
   let path = resolve(packageDir);
   let found = false;
+  // Spellings with a v<N>/links component. Each classifies unless the package finally lands in an isolated
+  // install (a node_modules/.pnpm store) inside that same links directory: an isolated group's top-level link
+  // into its own .pnpm store is not a global-store link, while a link that leaves for anywhere else is.
+  const linkRoots = [];
   for (let hop = 0; hop < 64; hop += 1) {
     if (store && (inside(path, store) || (storeAlias && inside(path, storeAlias)))) {
       resolveStoreLinkChain(path, store, storeAlias);
     }
-    // The isolated-install exception covers the default store/v<N>/links spelling too: a global-store link
-    // instance never contains node_modules/.pnpm below its links directory.
-    found ||= linksComponentState(path) !== "isolated"
-      && (isInPnpmGlobalStoreLinks(path, existsSync) || Boolean(store && inside(path, join(store, "links"))));
+    // Every effective spelling, the listed one first, is judged. The isolated-install exception covers the
+    // default store/v<N>/links spelling too: a global-store link instance never contains node_modules/.pnpm
+    // below its links directory.
+    const state = linksComponentState(path);
+    if (state === "links") linkRoots.push(linksRoot(path));
+    found ||= state === "none" && Boolean(store && inside(path, join(store, "links")));
     // Store markers classify on every effective spelling, not only the final realpath, so a listed path below a
     // marked store whose package link points elsewhere still demands the store proof.
     found ||= isInMarkedPnpmCustomStore(path.replaceAll("\\", "/"), existsSync);
@@ -183,15 +190,16 @@ function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
         // Judge the effective spelling (target plus the rest of the path), so a package reached through a
         // group link classifies exactly as the same location reached directly.
         path = resolve(target, ...remaining);
-        found ||= hasGlobalLinksComponent(path);
         changed = true;
         break;
       }
     }
-    // The package's final location classifies by the same v<N>/links rule as a symlink target, so a package
-    // pnpm lists directly inside such a directory must earn the store proof too (owner decision B). An isolated
-    // install inside pnpm's node_modules/.pnpm virtual store below that component is not a global-store link.
-    if (!changed) return found || hasGlobalLinksComponent(path);
+    // The joined spelling after a hop is judged at the top of the next iteration; the final location was
+    // judged in this one (owner decision B: a package listed directly inside v<N>/links needs the proof).
+    if (!changed) {
+      const isolated = linksComponentState(path) === "isolated";
+      return found || linkRoots.some(root => !(isolated && inside(path, root)));
+    }
   }
   throw new Error("pnpm package symlink chain is too long");
 }
