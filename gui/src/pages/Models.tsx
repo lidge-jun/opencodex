@@ -32,6 +32,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import ErrorBoundary from "../components/ErrorBoundary";
 import Combos from "./Combos";
 import RoutingProfiles from "./RoutingProfiles";
+import RouteLive from "./route-live/RouteLive";
 import CompatibilityMatrix from "./CompatibilityMatrix";
 import { ModelsTabStrip } from "./models-tab-strip";
 import { ProviderFastRow } from "./models-fast-row";
@@ -115,6 +116,7 @@ type CachedModelsPage = {
 /** One plain lead line per tab; a longer description (if any) opens from the "?" beside it. */
 const SUBTITLE_TKEY: Record<ModelsTab, [lede: TKey, about?: TKey]> = {
   catalog: ["modelsV2.ledeCatalog", "models.subtitle"],
+  live: ["routeLive.subtitle"],
   combos: ["modelsV2.ledeCombos", "models.subtitle.combos"],
   routing: ["models.subtitle.routing"],
   compatibility: ["models.subtitle.compatibility"],
@@ -2674,6 +2676,26 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             reloadLabel={t("errorBoundary.reload")}
           >
             <RoutingProfiles apiBase={apiBase} active={tab === "routing"} onCountChange={setRoutingCount} />
+          </ErrorBoundary>
+        )}
+      </div>
+
+      <div
+        className="models-tab-panel"
+        role="tabpanel"
+        id={modelsPanelDomId("live")}
+        aria-labelledby={modelsTabDomId("live")}
+        hidden={tab !== "live"}
+      >
+        {mounted.has("live") && (
+          <ErrorBoundary
+            pageName={t("routeLive.tab")}
+            title={t("errorBoundary.title")}
+            message={t("errorBoundary.message")}
+            detailsLabel={t("errorBoundary.details")}
+            reloadLabel={t("errorBoundary.reload")}
+          >
+            <RouteLive apiBase={apiBase} active={tab === "live"} />
           </ErrorBoundary>
         )}
       </div>
