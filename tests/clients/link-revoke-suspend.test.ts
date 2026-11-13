@@ -11,8 +11,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 /**
  * O1b: a revoke that reached the Child's cleanup and then stopped unknown (its purge receipt could not be written, or the
  * process died) suspends that link's tunnel until the operation is resolved, across reloads and restarts.
- * A cleanup that failed, after which the revoke restarted the tunnel itself, suspends nothing, and neither does a revoke
- * still running in this process.
+ * A cleanup that provably never ran settles failed_clean and suspends nothing, and neither does a revoke still running
+ * in this process. A cleanup that failed ambiguously (a timeout, no purge report) is unknown and suspends.
  */
 const LINK = "lnk_0123456789abcdef";
 const AT = "2026-11-13T00:00:00.000Z";
@@ -34,8 +34,8 @@ test.each([
   ["an unknown revoke settled by recovery", revoke({ error: { code: "operation_interrupted", status: 409 } }), true],
   ["an unknown revoke whose key revoke failed after the cleanup", revoke({ effects: [{ effect: "remote_cleanup", phase: "intent", at: AT }, { effect: "remote_cleanup", phase: "done", at: AT }], error: { code: "key_revoke_failed", status: 502 } }), true],
   ["an open revoke no process runs (it died)", revoke({ state: "open", finishedAt: undefined, error: undefined }), true],
-  ["a failed disconnect the revoke restarted the tunnel after", revoke({ error: { code: "remote_disconnect_failed", status: 502 } }), false],
-  ["an unsupported purge the revoke restarted the tunnel after", revoke({ error: { code: "purge_unsupported", status: 409 } }), false],
+  ["an ambiguous cleanup failure (timeout, no purge report)", revoke({ error: { code: "remote_disconnect_failed", status: 502 } }), true],
+  ["a cleanup that provably never ran", revoke({ state: "failed_clean", error: { code: "purge_unsupported", status: 409 } }), false],
   ["a resolved one", revoke({ resolvedAt: AT }), false],
   ["one that never reached the Child", revoke({ effects: [] }), false],
   ["a committed one", revoke({ state: "committed", error: undefined }), false],

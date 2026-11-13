@@ -264,7 +264,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
           return journalOpenFailure(error);
         }
       }
-      return journal.finish(await removeReserved(ctx, state, id, fresh, force, purge, journal));
+      try { return await journal.finish(await removeReserved(ctx, state, id, fresh, force, purge, journal)); } finally { journal.release(); }
     }));
   } finally { releaseLink(); }
 }
@@ -294,31 +294,40 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         console.warn(`[link] tunnel restart failed linkId=${id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
+    // A cleanup that failed before the Child's disconnect ran changed nothing there: the tunnel restarts (a journalled
+    // revoke settles failed_clean). Any other failure (a timeout, a nonzero exit, no purge report) may have disconnected
+    // or purged the Child, so a journalled revoke leaves the tunnel down, unknown, and the supervisor keeps it down until
+    // the operation is resolved (revokeSuspendsLink). A plain revoke restarts the tunnel either way, as before.
+    const cleanupFailed = async (failure: Response, attempted: boolean): Promise<Response> => {
+      if (attempted && journal.operationId !== undefined) return failure;
+      if (!attempted) journal.cleanupNotRun();
+      await restartTunnel();
+      return failure;
+    };
+    const disconnectFailed = (hint: string | undefined) => fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, hint);
     if (cleanup) {
-      try {
-        const runner = runnerFor(ctx);
-        const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx));
-        if (purge) {
-          const purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind);
-          if (!purged.ok) {
-            await restartTunnel();
-            return fail(purged.code, purged.message, purged.status, purged.hint);
-          }
-          // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route. The
-          // receipt must be durable before the link goes; if it cannot be written, stop here (unknown) and leave the
-          // tunnel down, since the Child it would reach is purged.
-          try { journal.done("remote_cleanup", { purged: true, linkId: id }); } catch { return journalFailed(); }
-        } else {
-          const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 });
-          if (result.code !== 0) {
-            await restartTunnel();
-            return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));
-          }
-          journal.done("remote_cleanup");
+      const runner = runnerFor(ctx);
+      let platform: Awaited<ReturnType<typeof requireRemotePlatform>>;
+      try { platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx)); } catch (error) {
+        return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), false);
+      }
+      if (purge) {
+        let purged: Awaited<ReturnType<typeof purgeDisconnectRemote>>;
+        try { purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind); } catch (error) {
+          return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
         }
-      } catch (error) {
-        await restartTunnel();
-        return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
+        if (!purged.ok) return cleanupFailed(fail(purged.code, purged.message, purged.status, purged.hint), purged.notAttempted !== true);
+        // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route. The
+        // receipt must be durable before the link goes; if it cannot be written, stop here (unknown) and leave the
+        // tunnel down, since the Child it would reach is purged.
+        try { journal.done("remote_cleanup", { purged: true, linkId: id }); } catch { return journalFailed(); }
+      } else {
+        let result: Awaited<ReturnType<typeof runner.run>>;
+        try { result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 }); } catch (error) {
+          return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
+        }
+        if (result.code !== 0) return cleanupFailed(disconnectFailed(sshFailureHint(result.stderr)), true);
+        journal.done("remote_cleanup");
       }
     }
     if (cleanup && !intend("key_revoked")) return journalFailed();

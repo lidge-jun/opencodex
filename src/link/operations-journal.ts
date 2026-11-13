@@ -305,19 +305,17 @@ export function markRevokeLive(path: string, operationId: string, live: boolean)
   else liveRevokes.delete(path + "\0" + operationId);
 }
 
-/** The codes of a cleanup that failed, after which the revoke restarted the link's tunnel itself (removeReserved). */
-const CLEANUP_FAILED_TUNNEL_RESTARTED: ReadonlySet<string> = new Set(["remote_disconnect_failed", "purge_unsupported"]);
-
 /**
  * A revoke that reached the Child's cleanup and has not settled suspends its link's tunnel: the Child may be purged or
  * disconnected, so the supervisor must not reconnect to it on a reload or after a restart. That is an unresolved unknown
- * entry past its `remote_cleanup` intent, unless the cleanup failed and the revoke restarted the tunnel, and an open one
- * no process in this Home runs (it died). Resolving the entry, or a revoke that removes the link, lifts it.
+ * entry past its `remote_cleanup` intent (a cleanup that provably never ran settles failed_clean instead, and its revoke
+ * restarts the tunnel), and an open one no process in this Home runs (it died). Resolving the entry, or a revoke that
+ * removes the link, lifts it.
  */
 export function revokeSuspendsLink(journal: OperationsJournal, linkId: string, isLive: (operationId: string) => boolean): boolean {
   return journal.operations.some(op => op.kind === "revoke" && op.linkId === linkId && op.resolvedAt === undefined
     && hasEffect(op, "remote_cleanup", "intent")
-    && (op.state === "open" ? !isLive(op.operationId) : op.state === "unknown" && !CLEANUP_FAILED_TUNNEL_RESTARTED.has(op.error?.code ?? "")));
+    && (op.state === "open" ? !isLive(op.operationId) : op.state === "unknown"));
 }
 
 /**

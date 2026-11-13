@@ -105,14 +105,39 @@ test("a purge with an operation id records the Child's purged:true as its receip
   expect(h.ssh.length).toBe(calls);
 });
 
-test("a purge without the Child's report keeps the link; the Child may have changed, so the outcome is unknown, and the tunnel it restarts is not suspended", async () => {
+test("a purge without the Child's report keeps the link; the Child may have changed, so the outcome is unknown and the tunnel stays down until it is resolved", async () => {
   const h = harness({ purgeReport: '{"restored":true,"purged":false}\n' });
   const revoked = await h.revoke({ purge: true, operationId: OP });
   expect({ status: revoked.status, code: code(revoked), outcome: revoked.body.outcome }).toEqual({ status: 502, code: "remote_disconnect_failed", outcome: "unknown" });
   expect(h.store.links.map(link => link.id)).toEqual([LINK]);
   expect(h.journal().operations[0]!.receipt).toBeUndefined();
+  expect(h.restarts).toBe(0);
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+});
+
+test("a journalled purge refused before it ran (a full install) changed nothing: failed_clean, and the tunnel restarts unsuspended", async () => {
+  const h = harness();
+  h.store = { ...h.store, links: h.store.links.map(link => ({ ...link, childKind: "full" as const })) };
+  const revoked = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: revoked.status, code: code(revoked), outcome: revoked.body.outcome }).toEqual({ status: 409, code: "purge_unsupported", outcome: "failed_clean" });
   expect(h.suspendedAtRestart).toEqual([false]);
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(false);
+});
+
+test("a plain purge without the Child's report restarts the tunnel as before: no journal, nothing suspended", async () => {
+  const h = harness({ purgeReport: '{"restored":true,"purged":false}\n' });
+  const revoked = await h.revoke({ purge: true });
+  expect({ status: revoked.status, code: code(revoked) }).toEqual({ status: 502, code: "remote_disconnect_failed" });
+  expect(h.restarts).toBe(1);
+});
+
+test("a journalled revoke that throws before its outcome is written does not stay registered as running", async () => {
+  const h = harness();
+  h.state.supervisor.stopLink = async () => { throw new Error("stop failed"); };
+  try { await h.revoke({ purge: true, operationId: OP }); } catch { /* the route may rethrow */ }
+  expect(h.journal().operations[0]!.state).toBe("open");
+  // The entry is abandoned, so the supervisor must treat it as a revoke that died.
+  expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
 });
 
 test("the same id with another mode is refused", async () => {

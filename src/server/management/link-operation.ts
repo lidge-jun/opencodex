@@ -267,10 +267,14 @@ export interface RevokeJournal {
    * the link must not be removed on evidence that a crash would lose.
    */
   done(effect: RevokeEffect, receipt?: { purged: true; linkId: string }): void;
+  /** The Child's cleanup failed before it ran (removeReserved): the outcome can be failed_clean despite its intent. */
+  cleanupNotRun(): void;
+  /** Drop this revoke's live registration; finish does too, this covers a revoke that threw before it. */
+  release(): void;
   finish(response: Response): Promise<Response>;
 }
 
-export const NO_REVOKE_JOURNAL: RevokeJournal = { intent() {}, done() {}, finish: async response => response };
+export const NO_REVOKE_JOURNAL: RevokeJournal = { intent() {}, done() {}, cleanupNotRun() {}, release() {}, finish: async response => response };
 
 /** Write the open revoke entry; a write failure throws before the revoke changes anything. */
 export function openRevokeJournal(ctx: ManagementContext, request: OperationRequest, alias: string, linkId: string): RevokeJournal {
@@ -281,6 +285,7 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
   });
   // Until finish, this entry is the running revoke's: the supervisor does not suspend its link for it (revokeSuspendsLink).
   markRevokeLive(path, request.id, true);
+  let cleanupRan = true;
   const change = (edit: (op: LinkOperation) => void) => updateOperationsJournal(path, nowOf(ctx), journal => {
     const op = findOperation(journal, request.id)!;
     edit(op);
@@ -298,6 +303,8 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
         console.warn("[link] revoke journal mark not written operation=" + request.id + " mark=" + effect + ":done");
       }
     },
+    cleanupNotRun: () => { cleanupRan = false; },
+    release: () => { markRevokeLive(path, request.id, false); },
     async finish(response) {
       try { return await settleRevoke(response); } finally { markRevokeLive(path, request.id, false); }
     },
@@ -310,7 +317,7 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
     try { current = findOperation(readOperationsJournal(path), request.id); } catch { current = undefined; }
     // Clean only when nothing was touched: a cleanup on the Child, a key revoke or a record removal that started
     // (finished or not) may have changed something the failed response does not describe.
-    const touched = !current || hasEffect(current, "remote_cleanup", "intent") || hasEffect(current, "key_revoked", "intent") || hasEffect(current, "record_removed", "intent");
+    const touched = !current || (cleanupRan && hasEffect(current, "remote_cleanup", "intent")) || hasEffect(current, "key_revoked", "intent") || hasEffect(current, "record_removed", "intent");
     const outcome: OperationState = response.status === 200 ? "committed" : touched ? "unknown" : "failed_clean";
     let op: LinkOperation;
     try { op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "revoke_failed", status: response.status }); } catch { return response; }
