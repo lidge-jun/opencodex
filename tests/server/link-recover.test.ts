@@ -636,6 +636,20 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });
 
+  // The settle follows the Child's bound answer itself, so a commit that fails afterwards (and the retirement a retry
+  // resumes without running the cleanup again) leaves no tombstone that only the lost answer could have settled.
+  test.each([
+    ["an ordinary revoke", {}],
+    ["a --purge revoke", { purge: true }],
+  ] as const)("%s whose Child confirmed the link settles the tombstone even when the commit then fails", async (_name, body) => {
+    const h = harness([link()], { keyRevokeFails: true, ordinary: command => (command.includes("--expect-link") ? ok() : undefined) });
+    leftTombstone();
+    const res = await h.request("DELETE", "/api/link/" + ID, body);
+    expect([res.status, (await errorOf(res)).code]).toEqual([502, "key_revoke_failed"]);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
   test("a Child attached to another link refuses (exit 5): nothing is disconnected and the link stays", async () => {
     const h = harness([link()], { ordinary: () => ok("", 5, '{"phase":"child_link_mismatch","reason":"other_link"}') });
     const res = await h.request("DELETE", "/api/link/" + ID, {});

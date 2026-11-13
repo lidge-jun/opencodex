@@ -552,6 +552,13 @@ async function removeReserved(
     // True once the Child confirmed this link before cleaning (--expect-link); only then may the commit settle a
     // tombstone an earlier forced revoke of this link left. An older Child runs the command unbound.
     let linkBound = false;
+    // A Child that confirmed this link (--expect-link) and cleaned itself settles any tombstone an earlier forced revoke
+    // of this link left, as soon as it answers: the commit may still fail, and a retry resumes the retirement without
+    // running the cleanup again, so only this answer can settle it. An unbound answer (an older Child) leaves it for
+    // ocx link recover. A removal that fails leaves it listed (recover --list).
+    const settleBoundTombstone = (): void => {
+      try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ }
+    };
     const unboundStillSafe = (): boolean => {
       const links = readStoreFor(ctx).links;
       const wanted = record.alias.toLowerCase();
@@ -575,6 +582,7 @@ async function removeReserved(
         // tunnel down, since the Child it would reach is purged.
         linkBound = purged.bound;
         try { journal.done("remote_cleanup", { purged: true, linkId: id }); } catch { return journalFailed(); }
+        if (linkBound) settleBoundTombstone();
       } else {
         const disconnectArgv = (bound: boolean) => buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(bound ? ["disconnect", "--expect-link", id] : ["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null });
         let result: Awaited<ReturnType<typeof runner.run>>;
@@ -604,6 +612,7 @@ async function removeReserved(
         }
         if (result.code !== 0) return cleanupFailed(disconnectFailed(sshFailureHint(result.stderr)), true);
         journal.done("remote_cleanup");
+        if (linkBound) settleBoundTombstone();
       }
     }
     if (cleanup && !intend("key_revoked")) return journalFailed();
@@ -646,9 +655,6 @@ async function removeReserved(
       if (result === "journal_failed") return journalFailed();
       if (result === "changed") return fail("link_changed", "The link changed during removal.", 409);
       if (result === "revoke_failed") return fail("key_revoke_failed", "The link key could not be revoked.", 502);
-      // A revoke whose Child confirmed this link (--expect-link) and cleaned itself settles any tombstone an earlier forced
-      // revoke of this link left; an unbound answer (an older Child) leaves it for ocx link recover.
-      if (!force && linkBound) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
       // Same task as the commit: an open link WebSocket must not outlive its link (design T4 2.4).
       state.listener.closeLinkSockets?.(id);
       clearCompensationFailed(id, compensationPath());
