@@ -9,7 +9,7 @@ import { clearRequestLogsForTests, getRequestLogEntries, type RequestLogEntry } 
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 const CONVERSATION = "thread-raw-id-7f3a";
 const DIGEST = normalizeLogConversationId(CONVERSATION)!;
@@ -176,8 +176,8 @@ describe("running server", () => {
     clearRequestLogsForTests();
     for (const k of envKeys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     codex.restore();
-    removeTreeWithRetry(home);
-  });
+    await removeTreeAfterBackgroundWork(home);
+  }, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
   test("the route, its preflight and the rest of the data plane behave as specified for app://-", async () => {
     server = startServer(0);
