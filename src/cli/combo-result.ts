@@ -8,6 +8,7 @@ const ENUMS: Readonly<Record<string, readonly (string | null)[]>> = {
   defaultEffort: [null, "low", "medium", "high", "xhigh", "max", "ultra"],
   defaultEffortMode: ["fallback", "force"], reasoningEffortMode: ["strict", "adaptive"], jevEffortMode: ["decide", "client"],
   imageInput: ["auto", "disabled"], cooldownWaitPolicy: ["before-last-resort"],
+  capabilityPolicy: ["intersection", "union"], onUnservable: ["degrade", "reject"],
 };
 const STRINGS = new Set(["alias", "displayName", "description", "decisionProvider", "decisionModel"]);
 const RANGES: Readonly<Record<string, readonly [number, number]>> = {

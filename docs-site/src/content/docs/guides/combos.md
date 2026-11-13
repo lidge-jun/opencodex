@@ -938,6 +938,59 @@ already covers are skipped, and a save refused before publication restores the c
 Removing a member from the combo does not remove its text-only declaration; clear it in the
 provider editor if you no longer want it.
 
+## Union capabilities (`capabilityPolicy`)
+
+The intersection rule exists because the picker sees one row while the combo used to route without
+looking at the request. Set `capabilityPolicy: "union"` to advertise what **any** target can serve
+and have the combo pick per request instead:
+
+- **Catalog.** `inputModalities` is the union of the targets' modalities, so one text-only backup no
+  longer hides image input. With `reasoningEffortMode: "adaptive"` the effort ladder is the union of
+  the non-empty target ladders, ordered by rank; `"strict"` keeps the intersection, because strict
+  promises every target serves the advertised rung as is. `contextWindow`, `maxInputTokens` and
+  `autoCompactTokenLimit` are the **largest** target's, so the client keeps the conversation going
+  until the biggest window is full. `maxOutputTokens` stays the minimum, because it bounds every
+  response and a request rarely says how much output it needs. `imageInput: "disabled"` still
+  removes image.
+- **Images.** For an image-bearing request each target is native (accepts images), degraded
+  (proven text-only, and the [Vision Sidecar](/guides/sidecars/) is enabled, so it describes the
+  image) or unable (proven text-only with the sidecar disabled). Native and degraded targets stay in
+  their configured order, so a degraded subscription target still serves before a later native
+  one; only unable targets are skipped. A target whose image capability is unknown counts as native,
+  the same pass-through the target applies on its own.
+- **Context.** Before picking, the proxy estimates the request's input tokens with the same estimator
+  its context admission uses (it overcounts slightly on purpose) and skips a target whose input limit
+  cannot hold them. A target with no known window is never skipped. Compaction turns are never
+  filtered.
+- **Effort.** Under `"adaptive"`, a caller effort that a target's known ladder lacks is lowered to
+  that target's highest rung at or below it (`xhigh` on a low/medium/high target is sent as `high`).
+- **Order of degradation.** A text-only target first gets the sidecar's description of the image. Images are dropped only when no description is possible, and that is logged as a warning. Effort drops to the target's nearest supported rung, logged at debug level with the requested and sent rungs.
+- **Nothing can serve.** When no target's window can hold the input, `onUnservable: "degrade"` (the
+  default) sends it to the target with the largest window, under the same loose admission a direct
+  request gets, and logs a warning. When targets can hold it but every one is unable to take its
+  image, `"degrade"` dispatches anyway: the target replaces each image with an omission note and the
+  proxy logs a warning. `onUnservable: "reject"` answers HTTP 400 before any target is called in
+  both cases.
+
+```json
+{
+  "combos": {
+    "claude": {
+      "targets": [
+        { "provider": "anthropic", "model": "claude-opus-5-5" },
+        { "provider": "relay", "model": "deepseek-v4.1-flash" }
+      ],
+      "reasoningEffortMode": "adaptive",
+      "capabilityPolicy": "union"
+    }
+  }
+}
+```
+
+The default is `"intersection"`, which keeps the behavior described above. Both fields are stored
+only when they differ from their defaults, and a `PUT /api/combos` that omits them keeps the stored
+values.
+
 ## Encrypted v2 sub-agent tasks
 
 There is one important limitation for Codex v2 sub-agents ([issue #92](https://github.com/lidge-jun/opencodex/issues/92)).
@@ -1071,6 +1124,8 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
 | `jevEffortMode` | No | `"decide"` | JEV combos only. `"decide"` applies the decision effort and lets it override the caller. `"client"` keeps the decision target choice but leaves effort to the caller and the target ladder, so a provider that swaps its upstream model id per tier is not re-tiered by JEV. `defaultEffortMode: "force"` still overrides caller effort in client mode. Cache reuse still needs a stable caller effort, target and prompt prefix, and depends on the provider and account. |
+| `capabilityPolicy` | No | `"intersection"` | `"intersection"` advertises only what every target serves. `"union"` advertises what any target serves (image input, and with `"adaptive"` the effort ladder), advertises the largest context window and input limit, skips targets that cannot take the request's image or hold its input, and lowers an unsupported caller effort per target. Max output stays the minimum. See [Union capabilities](#union-capabilities-capabilitypolicy). |
+| `onUnservable` | No | `"degrade"` | `"union"` combos only. When no target's window can hold the input, `"degrade"` sends to the largest window with a warning; when no enabled target can take the image, it dispatches and omits the images with a warning. `"reject"` answers HTTP 400 in both cases. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |

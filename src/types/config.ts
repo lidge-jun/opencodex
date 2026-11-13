@@ -1526,6 +1526,8 @@ export interface OcxComboConfig {
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
   jevEffortMode?: import("./combo-jev-effort-mode").OcxComboJevEffortMode; // wire-effort owner on a `jev` combo; omitted = "decide"
+  capabilityPolicy?: import("./combo-capability-policy").OcxComboCapabilityPolicy; // omitted = "intersection"
+  onUnservable?: import("./combo-capability-policy").OcxComboOnUnservable; // `union` only; omitted = "degrade"
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when

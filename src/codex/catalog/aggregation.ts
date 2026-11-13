@@ -29,6 +29,7 @@ import {
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
+import { comboAdvertisesEffortUnion, unionEfforts, unionStrings } from "../../combos/capability-policy";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
@@ -113,11 +114,15 @@ export function comboCatalogOmissionReason(
     return "incomplete_metadata";
   }
 
-  const inputModalities = intersectStrings(
-    members.map(member => member.inputModalities ?? ["text"]),
-  );
+  const inputModalities = comboInputModalities(combo, members);
   if (inputModalities.length === 0) return "incompatible_modalities";
   return null;
+}
+
+/** `union` advertises what any member serves (natively or through the vision sidecar). */
+function comboInputModalities(combo: NormalizedComboConfig, members: readonly CatalogModel[]): string[] {
+  const lists = members.map(member => member.inputModalities ?? ["text"]);
+  return combo.capabilityPolicy === "union" ? unionStrings(lists) : intersectStrings(lists);
 }
 
 export function deriveComboCatalogModel(
@@ -127,9 +132,7 @@ export function deriveComboCatalogModel(
 ): CatalogModel | null {
   if (comboCatalogOmissionReason(combo, members) !== null) return null;
 
-  const derivedInputModalities = intersectStrings(
-    members.map(member => member.inputModalities ?? ["text"]),
-  );
+  const derivedInputModalities = comboInputModalities(combo, members);
   const inputModalities = combo.imageInput === "disabled"
     ? derivedInputModalities.filter(modality => modality !== "image")
     : derivedInputModalities;
@@ -149,8 +152,14 @@ export function deriveComboCatalogModel(
     : knownLadders;
   const reasoningEfforts = advertisedLadders.length === 0
     ? []
-    : intersectStrings(advertisedLadders);
-  const contextWindow = Math.min(...members.map(member => member.contextWindow!));
+    : comboAdvertisesEffortUnion(combo.capabilityPolicy, combo.reasoningEffortMode)
+      ? unionEfforts(advertisedLadders)
+      : intersectStrings(advertisedLadders);
+  // `union` advertises the largest window: dispatch skips a member that cannot hold the input
+  // (`comboCapabilityGate`). Max output stays the minimum under both policies, because it bounds
+  // every response and a caller rarely declares the output it needs, so it cannot be filtered on.
+  const pickWindow = combo.capabilityPolicy === "union" ? Math.max : Math.min;
+  const contextWindow = pickWindow(...members.map(member => member.contextWindow!));
   const limitingMembers = members.filter(member => member.contextWindow === contextWindow);
   const hasLimitingContextCapMetadata = limitingMembers.some(
     member => typeof member.contextCapped === "boolean",
@@ -161,7 +170,7 @@ export function deriveComboCatalogModel(
   const contextCapped = limitingMembers.every(member => member.contextCapped === true);
   const maxInputTokens = Math.min(
     contextWindow,
-    ...members.map(member => member.maxInputTokens ?? member.contextWindow!),
+    pickWindow(...members.map(member => member.maxInputTokens ?? member.contextWindow!)),
   );
   const knownMaxOutputTokens = members
     .map(member => member.maxOutputTokens)
@@ -169,7 +178,7 @@ export function deriveComboCatalogModel(
   const maxOutputTokens = knownMaxOutputTokens.length === members.length
     ? Math.min(...knownMaxOutputTokens)
     : undefined;
-  const autoCompactTokenLimit = Math.min(
+  const autoCompactTokenLimit = pickWindow(
     ...members.map(member => clampAutoCompactTokenLimit(
       member.contextWindow!,
       member.maxInputTokens,
