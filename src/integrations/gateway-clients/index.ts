@@ -58,3 +58,13 @@ export function disconnectGatewayClient(id: GatewayClientId, ctx: GatewayClientC
   const result = GATEWAY_CLIENTS[id].disconnect(ctx);
   return { ...result, id, action: "disconnect", status: GATEWAY_CLIENTS[id].status(ctx, target) };
 }
+
+/** The JSON both the management route and `ocx connect agy` return for an action. */
+export function gatewayActionBody(outcome: GatewayActionOutcome): Record<string, unknown> {
+  if (!outcome.ok) {
+    const files = "changedFiles" in outcome ? outcome.changedFiles : [];
+    return { ok: false, code: outcome.code, message: outcome.message, ...(files.length ? { changedFiles: files } : {}) };
+  }
+  const { ok, id, action, changed, changedFiles, restore, message, notes, status } = outcome;
+  return { ok, id, action, changed, changedFiles, ...(restore ? { restore } : {}), message, notes, status };
+}

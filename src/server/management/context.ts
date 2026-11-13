@@ -175,6 +175,8 @@ export interface ManagementApiDeps {
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
   resolveChildBinarySource?: typeof import("../../link/child-binary-source").resolveChildBinarySource;
+  /** Home, platform and state dir for the Antigravity gateway connectors; route tests point it at temp homes. */
+  gatewayClientContext?: () => import("../../integrations/gateway-clients").GatewayClientContext;
   /** Bound public inference port, not the ingress receiving this management request. */
   liveListenPort?: () => number | undefined;
   now?: () => number;
