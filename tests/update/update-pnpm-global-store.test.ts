@@ -346,6 +346,33 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(resolveOwner(layout, dotted)).toEqual({ ok: false, reason: "pnpm package path is not canonical" });
   });
 
+  test("an unmarked alternate layout under a versioned store directory gets the store proof, not the legacy verifier", () => {
+    // store/v11/alternate/<hash>/node_modules with .modules.yaml and no files/index markers: on the legacy
+    // verifier this would pass without any pnpm version or store query.
+    const layout = globalStoreLayout(root);
+    const group = join(layout.store, "alternate", "h1", "node_modules");
+    const pkg = join(group, "@bitkyc08", "opencodex");
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: PKG, version: "1.0.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(pkg, "bin", "ocx.mjs"), "x".repeat(2048));
+    for (const name of ["bun", "zod"]) {
+      mkdirSync(join(group, name), { recursive: true });
+      writeFileSync(join(group, name, "package.json"), JSON.stringify({ name }));
+    }
+    writeFileSync(join(group, "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
+    writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
+    unlinkSync(layout.exposed);
+    link(pkg, layout.exposed);
+
+    // With a store proof that does not contain it, the update is refused.
+    const elsewhere = join(root, "elsewhere-store", "v11");
+    mkdirSync(elsewhere, { recursive: true });
+    layout.storeOutput = () => elsewhere;
+    expect(resolveOwner(layout)).toEqual({ ok: false, reason: "pnpm global-store package is outside the selected store" });
+    expect(layout.calls.some(args => args[0] === "--version")).toBe(true);
+    expect(storeCalls(layout)).toHaveLength(1);
+  });
+
   test("a pnpm home containing a control character refuses before pnpm runs a store query", () => {
     const layout = globalStoreLayout(root);
     layout.env = { PNPM_HOME: layout.home + "\nrm" };

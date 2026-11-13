@@ -477,6 +477,23 @@ function isPackageInGlobalStore(packagePath, store) {
 }
 
 /**
+ * A legacy group is either inside the listed global group or in a pnpm `.pnpm` virtual store (pnpm
+ * 9-11, including an external virtual-store directory). A package outside both whose realpath passes
+ * through a versioned `v<N>` directory looks like a store layout whose markers may be missing, so it
+ * gets the store proof instead of the marker-based legacy verifier. Unreadable paths also get the proof.
+ */
+function looksLikeUnmarkedStoreLayout(packagePath, globalRoot) {
+  let real, group;
+  try { real = realpathSync.native(packagePath); } catch { return true; }
+  try { group = realpathSync.native(globalRoot); } catch { group = resolve(globalRoot); }
+  const rel = relative(group, real);
+  if (rel === "" || (rel !== ".." && !rel.startsWith("../") && !rel.startsWith("..\\") && !isAbsolute(rel))) return false;
+  const parts = real.split(/[\\/]+/);
+  if (parts.includes(".pnpm")) return false;
+  return parts.some(part => /^v\d+$/i.test(part));
+}
+
+/**
  * Read and verify the package manager's active global link. `owner` constraints
  * make the listing a proof of the group selected during preflight, not merely a
  * successful listing from whichever pnpm happens to be first on PATH.
@@ -651,7 +668,8 @@ export function resolvePnpmGlobalOwner({
     // that passes through pnpm store links demands the store proof; nothing here accepts a package.
     let globalStore;
     try {
-      globalStore = pnpmPackageUsesGlobalStoreLinks(listedPath) || pnpmPackageUsesGlobalStoreLinks(packagePath);
+      globalStore = pnpmPackageUsesGlobalStoreLinks(listedPath) || pnpmPackageUsesGlobalStoreLinks(packagePath)
+        || looksLikeUnmarkedStoreLayout(listedPath, globalRoot);
     } catch { globalStore = true; }
     const owner = { commandPath, packagePath: listedPath, globalDir, globalRoot, globalBinDir, ...(globalStore ? { globalStore: true } : {}) };
     const active = readPnpmGlobalPackage(
