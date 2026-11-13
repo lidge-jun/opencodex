@@ -326,6 +326,7 @@ describe("CI review lanes", () => {
     results["privacy-gate"] = { result: "skipped" };
     results["setup-action"] = { result: "skipped" };
     results["remote-helper"] = { result: "skipped" };
+    results["ocx-child"] = { result: "skipped" };
     const run = async (value: typeof results, packaging = "true") => {
       const result = await spawnTestChild(["bash", "-c", step!.run!], {
         cwd: repoPath(),
@@ -334,7 +335,7 @@ describe("CI review lanes", () => {
           EVENT_NAME: "workflow_dispatch", LANE: "release-gates",
           CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: packaging,
           CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
-          CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false",
+          CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false", CHANGES_OCX_CHILD: "false",
           CHANGES_DOCKER: "true", CHANGES_KEYRING: "true",
         },
         deadlineMs: 5_000,
@@ -420,7 +421,7 @@ describe("Windows and nightly CI contracts", () => {
         checkouts += 1;
       }
     }
-    expect(checkouts).toBe(18);
+    expect(checkouts).toBe(19);
     expect(diagnosticCheckouts).toBe(1);
   });
 
@@ -457,7 +458,7 @@ describe("Windows and nightly CI contracts", () => {
         PATH: process.env.PATH ?? "/usr/bin:/bin", EVENT_NAME: event, LANE: lane, RESULTS: "{}",
         CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: "true",
         CHANGES_DESKTOP: "false", CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
-        CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false",
+        CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false", CHANGES_OCX_CHILD: "false",
         CHANGES_DOCKER: "false", CHANGES_KEYRING: "false",
         ...(windows === undefined ? {} : { CHANGES_WINDOWS: windows }),
       };

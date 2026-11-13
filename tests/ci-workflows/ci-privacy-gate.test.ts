@@ -119,7 +119,7 @@ describe.skipIf(cannotRunAggregate)("the aggregate ci gate, executed", () => {
         CHANGES_DOCS: "false",
         CHANGES_STRUCTURE: "false",
         CHANGES_SETUP_ACTION: "false",
-        CHANGES_REMOTE_HELPER: "false",
+        CHANGES_REMOTE_HELPER: "false", CHANGES_OCX_CHILD: "false",
         CHANGES_DOCKER: "false",
         CHANGES_KEYRING: "false",
         ...scope,
