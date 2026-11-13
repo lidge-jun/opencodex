@@ -108,6 +108,20 @@ describe("ocx link recover", () => {
     }
   });
 
+  // The CLI prints its own text, never the server's, so child_recover_unsupported needs one: no plain detach (its status cannot
+  // show an interrupted attach of another link), and the forget way out with this link's id (#8691 review).
+  test("child_recover_unsupported says to leave the machine and how a person forgets, in text and --json", async () => {
+    for (const json of [false, true]) {
+      errors.mockClear();
+      const f = fixture({ error: { code: "child_recover_unsupported", message: "server text" } }, 409);
+      expect(await runLinkCommand(["recover", "--link-id", ID, ...(json ? ["--json"] : [])], f.deps)).toBe(5);
+      expect(stderr()).toContain("child_recover_unsupported: the planted ocx-child predates detach --expect-link");
+      expect(stderr()).toContain("Do not run its plain detach on the machine");
+      expect(stderr()).toContain("ocx link recover --forget --link-id " + ID + " --yes");
+      expect(stderr()).not.toContain("server text");
+    }
+  });
+
   // A full install refuses --purge (purge_unsupported), so link_present names --purge only for a lightweight Child.
   test("link_present says to revoke the link, with --purge only for a lightweight Child", async () => {
     const f = fixture({ error: { code: "link_present", message: "server text" } }, 409);
