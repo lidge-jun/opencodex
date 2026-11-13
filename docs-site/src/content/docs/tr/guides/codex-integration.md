@@ -253,7 +253,7 @@ opencodex:
    (`provider/model`) olarak **birleştirir**.
 4. `config.disabledModels` ve her sağlayıcının boş olmayan `selectedModels` izin
    listesini **filtreler**.
-5. Öne çıkan modellerin ilk önce sıralanması için **yeniden derecelendirir**
+5. Sabitlenmiş modellerin ilk önce sıralanması için **yeniden derecelendirir**
    (aşağıya bakın), ardından birleştirilmiş kataloğu geri yazar.
 
 Yönlendirilen katalog girdileri ayrıca GPT-5 kimliklerinin gerçek yukarı akış

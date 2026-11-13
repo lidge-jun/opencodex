@@ -474,7 +474,7 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 
 `reasoningEfforts` 목록은 `--json`에서만 표시됩니다. `null`은 목록을 알 수 없거나 조회하지 않았다는 뜻이며, 확인하려면 OS 키체인을 열어야 하는 경우도 포함합니다. 빈 배열 `[]`은 명시적으로 비어 있는 목록이거나 `noReasoningModels` 등으로 해당 모델의 reasoning effort가 비활성화됐다는 뜻입니다. 실행 중인 프록시의 카탈로그는 `ocx models live`로 확인합니다.
 
-`add`·`remove`는 기본적으로 로컬 저장이며 `--live`를 주면 실행 중인 프록시를 바꿉니다. 로컬 `--json` 저장은 프록시가 없으면 `sync.status: "not-attempted"`, `needsSync: true`, 종료 코드 0을 반환합니다. 실제 동기화 시도가 실패하면 저장은 유지하고 0이 아닌 코드로 끝납니다. `list-custom`은 로컬 목록입니다. 발견된 모델의 표시 이름은 raw upstream ID를 받는 `display-name`으로 바꾸고, picker 순서는 public ID를 받는 `order`로 바꿉니다. [영문 절차](/reference/cli/providers-accounts/#display-names-and-picker-identities)에서 전체 목록·featured 접두부·native 순서 초기화 제약을 확인하세요.
+`add`·`remove`는 기본적으로 로컬 저장이며 `--live`를 주면 실행 중인 프록시를 바꿉니다. 로컬 `--json` 저장은 프록시가 없으면 `sync.status: "not-attempted"`, `needsSync: true`, 종료 코드 0을 반환합니다. 실제 동기화 시도가 실패하면 저장은 유지하고 0이 아닌 코드로 끝납니다. `list-custom`은 로컬 목록입니다. 발견된 모델의 표시 이름은 raw upstream ID를 받는 `display-name`으로 바꾸고, picker 순서는 public ID를 받는 `order`로 바꿉니다. [영문 절차](/reference/cli/providers-accounts/#display-names-and-picker-identities)에서 전체 목록·고정 접두부·native 순서 초기화 제약을 확인하세요.
 
 | 하위 명령 | 지원 플래그 | 동작 |
 | --- | --- | --- |

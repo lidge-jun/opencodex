@@ -47,7 +47,7 @@ still depends on upstream support for your account.
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. `v2-plaintext` also enables experimental plaintext task delivery and disables the global override. Catalog pins apply to new sessions; enabled compilation also affects subsequent eligible requests from existing V2 sessions. |
 | `keepNativeChatGptOnV1?` | `boolean` | `false` | When `multiAgentMode` is `"v2"`, disable the global V2 override, stamp ChatGPT-native rows as v1, and keep routed rows on v2. Codex resolves the global override before catalog pins, so both parts are required for a ChatGPT parent to spawn routed children without backend-encrypted tasks ([#92](https://github.com/lidge-jun/opencodex/issues/92)). Ignored in `v1` and `default`. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers bare native and routed ids as new choices and preserves already-configured exact account-qualified ids when saving, including ids unavailable in the current catalog. To add a new exact account-qualified id, use `ocx agent subagents set` or edit the configuration. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids pinned first in the sub-agent picker. The dashboard offers bare native and routed ids as new choices and preserves already-configured exact account-qualified ids when saving, including ids unavailable in the current catalog. To add a new exact account-qualified id, use `ocx agent subagents set` or edit the configuration. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
@@ -395,7 +395,7 @@ after a compaction model switch or combo failover.
 `GET /api/effort-caps` includes the map. `PUT /api/effort-caps` accepts `modelPinnedEfforts`
 alongside the existing caps: omitted fields stay unchanged, `null` clears the map, and a map
 entry set to `null` or `""` deletes only that key. Invalid combined updates leave both caps
-and pins unchanged. Saving a pin does not alter the featured subagent roster.
+and pins unchanged. Saving a pin does not alter the pinned subagent roster.
 
 ## CLI updates during v1 synchronization
 

@@ -351,7 +351,7 @@ noktalar şunları içerir:
 | `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | Geçerli hesabı okuyun (`pinned` ve hangi hesabın `pinnedAccountId` olduğu dahil) ve bir hesabın seçim sırasını ayarlayın. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | Tarayıcı girişi aracılığıyla bir havuz hesabı ekleyin. |
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | İsteğe bağlı kuyruk, sağlayıcı ve tam/sınıf durum filtreleriyle son istek meta verilerini okuyun. `limit`/`offset` ile sayfalama en yeni satırdan geriye doğru ilerler (`offset=0` en son sayfayı döndürür). Yanıt şekli: `{ timeZone, generatedAt, total, logs }` burada `total`, sayfalamadan önceki filtrelenmiş satır sayısıdır. |
-| `GET` / `PUT /api/subagent-models` | Öne çıkan beş `spawn_agent` geçersiz kılma modelini okuyun veya ayarlayın. |
+| `GET` / `PUT /api/subagent-models` | Sabitlenmiş beş `spawn_agent` geçersiz kılma modelini okuyun veya ayarlayın. |
 | `POST /api/stop` | Proxy'yi/servisi durdurun, yerel Codex'i geri yükleyin ve çıkın. Windows Görev Zamanlayıcı arka ucunda `respawnable_service`, bu durum okunamadığında `service_state_unknown` ile reddedilir; her iki durumda da hiçbir şey değiştirilmez. |
 
 :::tip

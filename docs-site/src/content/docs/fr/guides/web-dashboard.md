@@ -281,7 +281,7 @@ L'interface graphique est un client léger de l'API JSON de gestion du proxy. Pa
 | `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | Lire le compte effectif — notamment `pinned` et le compte désigné par `pinnedAccountId` — et définir l'ordre de sélection d'un compte. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | Ajouter un compte au groupe au moyen d’une connexion dans le navigateur. |
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Lire les métadonnées des requêtes récentes avec des filtres facultatifs de fin de journal, de fournisseur et d'état exact ou par classe. Avec `limit`/`offset`, la pagination remonte depuis la ligne la plus récente (`offset=0` renvoie la dernière page). Forme de la réponse : `{ timeZone, generatedAt, total, logs }`, où `total` est le nombre de lignes filtrées avant pagination. |
-| `GET` / `PUT /api/subagent-models` | Lire ou définir les cinq modèles de remplacement `spawn_agent` mis en avant. |
+| `GET` / `PUT /api/subagent-models` | Lire ou définir les cinq modèles de remplacement `spawn_agent` épinglé. |
 | `POST /api/stop` | Arrêter le proxy et le service, restaurer Codex natif et quitter. Refusé avec `respawnable_service` sur le backend Planificateur de tâches Windows, et avec `service_state_unknown` lorsque cet état ne peut pas être lu ; rien n'est modifié dans les deux cas. |
 
 :::tip

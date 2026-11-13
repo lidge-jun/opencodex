@@ -18,10 +18,10 @@ Codex 的 models-manager 按 `priority` 升序排列選擇器中可見的目錄�
 
 | 目錄條目 | Priority | 來源 |
 | --- | ---: | --- |
-| `subagentModels[i]` | `i`（`0` 至 `4`） | `src/codex/catalog/sync.ts` 中的 featured rank map |
+| `subagentModels[i]` | `i`（`0` 至 `4`） | `src/codex/catalog/sync.ts` 中的選擇器置頂 rank map |
 | 其他路由模型 | `5` | `src/codex/catalog/sync.ts` 中建立路由條目的邏輯 |
 | 預設原生 GPT slug | `sourcePriority` | `src/codex/catalog/sync.ts` 中建立原生條目的邏輯 |
-| 存在 featured 列表時未選中的原生模型 | 至少為 `featured.length + 100` | `src/codex/catalog/sync.ts` 中合併原生目錄的邏輯 |
+| 存在選擇器置頂列表時未選中的原生模型 | 至少為 `featured.length + 100` | `src/codex/catalog/sync.ts` 中合併原生目錄的邏輯 |
 
 管理 API 在 `src/server/management/agent-settings-routes.ts` 中使用 `slice(0, 5)`，把
 `subagentModels` 限制為最多五項。這與 Codex `spawn_agent` 介面只公佈前五個模型 override 的行為
@@ -38,9 +38,9 @@ Codex 的 models-manager 按 `priority` 升序排列選擇器中可見的目錄�
 - `providers` 物件中各 key 的宣告順序；
 - 每個 provider 的 `models` 陣列中各 id 的排列順序。
 
-隨後，`orderForSubagents()` 使用穩定排序，把 featured 模型按 `subagentModels` 中的順序移到最前。
-非 featured 模型會保持之前確定的 provider/id 字母相對順序
-（`src/codex/catalog/sync.ts`）。建立條目時，featured rank 還會轉換為 `0` 至 `4` 的
+隨後，`orderForSubagents()` 使用穩定排序，把選擇器置頂模型按 `subagentModels` 中的順序移到最前。
+非選擇器置頂模型會保持之前確定的 provider/id 字母相對順序
+（`src/codex/catalog/sync.ts`）。建立條目時，選擇器置頂 rank 還會轉換為 `0` 至 `4` 的
 priority，因此 Codex 的 priority 排序會保留這個開頭序列。
 
 ## 可見性與排序彼此獨立
@@ -54,11 +54,11 @@ priority，因此 Codex 的 priority 排序會保留這個開頭序列。
 
 ## 最終選擇器順序
 
-featured 列表非空時，最終順序為：
+選擇器置頂列表非空時，最終順序為：
 
 1. 嚴格按照設定的 `subagentModels` 順序排列，priority 為 `0` 至 `4`；
 2. 所有剩餘路由模型，先按 provider、再按模型 id 的字母順序排列，priority 為 `5`；
-3. 在目錄合併過程中被移到 featured 區塊之後的未選中原生模型。
+3. 在目錄合併過程中被移到選擇器置頂區塊之後的未選中原生模型。
 
 如果沒有 `subagentModels`，路由模型保持 priority `5`，原生 GPT 條目使用正常 priority
 （sourcePriority，缺少來源時回退至 `9`），路由組內部仍按 provider/id 字母排序。
@@ -88,7 +88,7 @@ subagentModels = [
 | 5 | `gpt-5.6-terra` | `4` | 第五個選擇 |
 | 6 | `anthropic/claude-fable-5` | `5` | 剩餘路由模型中按 provider/id 字母排序的第一項 |
 | 第 7 項起 | 其餘路由模型 | `5` | 先按 provider 字母排序，再按模型 id 字母排序 |
-| 路由模型之後 | 其餘原生模型 | `featured.length + 100` 或更高 | 未選中的原生模型移到 featured 區塊之後 |
+| 路由模型之後 | 其餘原生模型 | `featured.length + 100` 或更高 | 未選中的原生模型移到選擇器置頂區塊之後 |
 
 前五個條目是向 `spawn_agent` 公佈的 override，其餘模型繼續按普通選擇器順序排列。
 
@@ -141,4 +141,4 @@ V2 在用戶端目錄狀態允許時，可以額外接收基於原有優先級�
 
 `GET/PUT /api/subagent-models` 的 `chosen`、`available` 保留停用或缺少的已存 roster；`pickerAvailable` 僅包含可選路由 ID。Models 只傳送 `pickerOrder`、`pickerOrderMode`，不傳送 `models`。只儲存 roster 不影響排序；無效輸入或儲存失敗會保留原狀態。
 
-預設保留精選與原生優先級區間，套用於 Codex 目錄和 Claude 探索清單的路由群組。Claude 原生前綴、明確的 Desktop 設定及 alias 歸屬不變。OpenCodex 指引排序和 fallback 設定不變，但原生 Codex 工具顯示的前五個候選與建議預設模型可能改變。儲存不會重新啟動用戶端；目錄更新可能尚未完成，舊清單可能需要重新開啟用戶端。
+預設保留選擇器置頂與原生優先級區間，套用於 Codex 目錄和 Claude 探索清單的路由群組。Claude 原生前綴、明確的 Desktop 設定及 alias 歸屬不變。OpenCodex 指引排序和 fallback 設定不變，但原生 Codex 工具顯示的前五個候選與建議預設模型可能改變。儲存不會重新啟動用戶端；目錄更新可能尚未完成，舊清單可能需要重新開啟用戶端。

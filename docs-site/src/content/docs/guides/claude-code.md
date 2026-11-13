@@ -893,8 +893,8 @@ When both `tierModels.haiku` and `smallFastModel` are absent, OpenCodex leaves b
 
 ## Roster agents (injectAgents)
 
-Proxy startup/ensure, `ocx claude`, and relevant dashboard saves sync your featured subagent roster
-(Subagents tab, up to 5 models) plus `ocx-self` into `~/.claude/agents/ocx-*.md`.
+Proxy startup/ensure, `ocx claude`, and relevant dashboard saves sync your pinned subagent roster
+(Models → Client model picker, up to 5 models) plus `ocx-self` into `~/.claude/agents/ocx-*.md`.
 
 - **`ocx-self`** pins your `/model` picker default (falling back to `claudeCode.model`); omitted
   when neither exists. It does NOT use model inheritance.

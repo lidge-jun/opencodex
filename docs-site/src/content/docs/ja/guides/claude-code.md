@@ -393,7 +393,7 @@ ocx claude config set --context-accounting 200k
 
 ## ロスターエージェント(injectAgents)
 
-プロキシの起動/ensure、`ocx claude`、関連するダッシュボード保存は推奨サブエージェントロスター(Subagents タブ、最大 5 モデル)と
+プロキシの起動/ensure、`ocx claude`、関連するダッシュボード保存は推奨サブエージェントロスター(Models の「クライアントのモデルピッカー」、最大 5 モデル)と
 `ocx-self` を `~/.claude/agents/ocx-*.md` に同期します。
 
 - **`ocx-self`** は `/model` ピッカーのデフォルトを固定し、値がない場合は `claudeCode.model` を使います。

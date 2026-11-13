@@ -227,7 +227,7 @@ catalogue basses dans l'ordre choisi. Lorsque les lignes qualifiées par compte 
 natives non qualifiées s'étendent en groupes qualifiés par sélecteur. Les autres modèles restent accessibles
 par leur identifiant exact.
 
-La liste des modèles mis en avant est distincte de la sélection **Délégation de sous-agent** du tableau de
+La liste des modèles épinglé est distincte de la sélection **Délégation de sous-agent** du tableau de
 bord. Elle détermine les remplacements que Codex propose en premier ; elle ne sélectionne aucun modèle et ne
 déclenche aucune délégation à elle seule.
 

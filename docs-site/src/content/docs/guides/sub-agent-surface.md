@@ -83,7 +83,7 @@ that the model belongs to the other collaboration surface.
 
 Codex lists at most five models in the `spawn_agent` tool description, and it chooses them
 itself: it sorts the picker-visible catalog rows by `priority`, lowest first, and takes the first
-five. The roster on the **Subagents** page (`subagentModels`) shapes that list only by giving its
+five. The pinned roster in **Models → Client model picker** (`subagentModels`) shapes that list only by giving its
 models the lowest priorities in roster order (`0` through `4` without account selectors). It
 does not limit the list to the roster.
 
@@ -93,8 +93,8 @@ depend on the catalog:
 
 | Catalog | Rows that fill the remaining slots |
 | --- | --- |
-| No Codex account selectors | Other routed `provider/model` rows. They all share priority `5`, so they appear by provider name and then model id, alphabetically. Unfeatured native GPT rows use `featured.length + 100 + sourcePriority`, preserving native source order behind those routed rows. |
-| Codex account selectors | Account-qualified native rows (`<selector>/<native-model>`), which directly follow the featured rows. Unfeatured routed rows move to priority `1005` and come after them. |
+| No Codex account selectors | Other routed `provider/model` rows. They all share priority `5`, so they appear by provider name and then model id, alphabetically. Unpinned native GPT rows use `featured.length + 100 + sourcePriority`, preserving native source order behind those routed rows. |
+| Codex account selectors | Account-qualified native rows (`<selector>/<native-model>`), which directly follow the pinned rows. Unpinned routed rows move to priority `1005` and come after them. |
 
 For example, with no account selectors and this roster:
 
@@ -127,8 +127,8 @@ agent names it exactly. To control what Codex advertises:
 - Disable a model you never want offered, or leave it out of its provider's `selectedModels`.
   A disabled or unselected model leaves the picker and cannot fill a slot.
 - `modelPickerOrder` changes the priorities Codex sorts by. A routed-only list moves the listed
-  unfeatured rows to `1000` and up, so the unlisted routed rows fill the slots first. A list that
-  contains a bare native id orders the complete picker, featured rows included: listed rows come
+  unpinned rows to `1000` and up, so the unlisted routed rows fill the slots first. A list that
+  contains a bare native id orders the complete picker, pinned rows included: listed rows come
   first and take the advertised slots before any unlisted row. See
   [Model ordering](/guides/model-ordering/).
 
@@ -299,7 +299,7 @@ recovery does not change the encrypted v2 task-delivery restrictions described a
 - **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
 - **Models** → top-row segmented control: choose the same global mode.
 - **Dashboard** → **Sub-agent delegation**: set guidance model/effort and the native-default opt-in.
-- **Subagents**: choose and order the roster and configure the global fallback chain.
+- **Subagents**: configure the global fallback chain. The pinned roster is chosen under **Models → Client model picker**.
 
 ### CLI
 
@@ -373,7 +373,7 @@ to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin 
 ### Why does `spawn_agent` list models I did not feature?
 
 Codex fills up to five advertised slots from the catalog by priority. With fewer than five
-featured models, the next rows take the remaining slots; see
+pinned models, the next rows take the remaining slots; see
 [Which models `spawn_agent` advertises](#which-models-spawn_agent-advertises).
 
 ### Do mode changes affect running sessions?

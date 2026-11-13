@@ -286,7 +286,7 @@ Codex는 디스크의 카탈로그(`$CODEX_HOME/opencodex-catalog.json`이 기�
 2. 적격한 provider의 live model catalog를 **가져옵니다**(약 5분 캐시, `modelCacheTtlMs` 기본값 `300000`; 마지막 정상 목록, 그다음 설정된 `models[]`로 fallback). Forward auth에는 model endpoint가 없고, Cursor는 `/models` 대신 `GetUsableModels` RPC를 사용합니다.
 3. 라우팅된 모델을 네임스페이스 항목(`provider/model`)으로 **병합**합니다. Codex의 엄격한 parser가 받아들이도록 네이티브 Codex catalog template에서 복제합니다.
 4. `config.disabledModels`와 각 provider의 비어 있지 않은 `selectedModels` allowlist를 **필터링**합니다.
-5. featured 모델이 먼저 정렬되도록 **다시 순서화**한 뒤(아래 참고), 병합된 catalog를 다시 씁니다.
+5. 고정 모델이 먼저 정렬되도록 **다시 순서화**한 뒤(아래 참고), 병합된 catalog를 다시 씁니다.
 
 라우팅된 카탈로그 항목의 GPT-5 정체성 문구도 실제 업스트림 모델 이름에 맞게 바꿉니다. reasoning 선택지는
 프로바이더와 모델 메타데이터에 따라 Codex의 `low | medium | high | xhigh | max | ultra` 단계를 사용하며,

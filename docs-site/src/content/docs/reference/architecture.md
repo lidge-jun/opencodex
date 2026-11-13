@@ -208,7 +208,7 @@ history, while `responses/parser.ts` and `bridge/sse.ts` handle remote compactio
 - `codex/model-cache.ts` keeps a per-provider, in-memory TTL cache of live `/models` results (default 5 min,
   matching Codex's own cache), with a stale-fallback when a fetch fails.
 - `codex/catalog/sync.ts`, exported through the `codex/catalog.ts` facade, merges routed models into
-  Codex's catalog as namespaced entries, ranks featured
+  Codex's catalog as namespaced entries, ranks pinned
   [subagent models](/guides/codex-integration/#the-subagent-picker) first, filters
   `disabledModels`, and can fully restore the pristine catalog from a one-time backup.
 

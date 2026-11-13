@@ -525,7 +525,7 @@ Lorsque `tierModels.haiku` et `smallFastModel` sont absents, OpenCodex laisse le
 
 ## Agents de la liste (injectAgents)
 
-`ocx claude` (ainsi que le démon d'environnement système) synchronise la liste des sous-agents exposés (onglet Sous-agents,
+`ocx claude` (ainsi que le démon d'environnement système) synchronise la liste des sous-agents exposés (Modèles → Sélecteur de modèles client,
 jusqu'à 5 modèles) ainsi que `ocx-self` dans `~/.claude/agents/ocx-*.md`.
 
 - **`ocx-self`** épingle le modèle par défaut de votre sélecteur `/model` (avec repli sur `claudeCode.model`) ; il est omis

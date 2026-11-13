@@ -259,7 +259,7 @@ yapılandırılan `subagentModels` ayrıca hesap nitelikli
 yerel seçimler seçici nitelikli gruplara genişler. Diğer modeller tam kimlikle
 çağrılabilir durumda kalır.
 
-Öne çıkan model listesi, Kontrol Panelinin **Alt ajan yetkilendirmesi**
+Sabitlenmiş model listesi, Kontrol Panelinin **Alt ajan yetkilendirmesi**
 seçiminden ayrıdır. Codex'in önce hangi geçersiz kılmaları sunacağını denetler;
 tek başına bir model seçmez veya yetkilendirmeyi tetiklemez.
 

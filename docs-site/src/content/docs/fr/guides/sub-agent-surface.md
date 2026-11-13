@@ -55,7 +55,7 @@ Si vous mettez en avant un à quatre modèles, Codex complète les emplacements 
 
 | Catalogue | Lignes qui complètent les emplacements restants |
 | --- | --- |
-| Sans sélecteurs de compte Codex | Les autres lignes routées `provider/model`. Elles partagent toutes la priorité `5` et apparaissent donc par nom de fournisseur, puis par identifiant de modèle, dans l'ordre alphabétique. Les lignes GPT natives non mises en avant ont une priorité d'au moins `100` plus le nombre d'identifiants mis en avant ; elles viennent donc après. |
+| Sans sélecteurs de compte Codex | Les autres lignes routées `provider/model`. Elles partagent toutes la priorité `5` et apparaissent donc par nom de fournisseur, puis par identifiant de modèle, dans l'ordre alphabétique. Les lignes GPT natives non mises en avant ont une priorité d'au moins `100` plus le nombre d'identifiants épinglé ; elles viennent donc après. |
 | Avec sélecteurs de compte Codex | Les lignes natives qualifiées par compte (`<selector>/<native-model>`), placées juste après les lignes mises en avant. Les lignes routées non mises en avant passent à la priorité `1005` et viennent après elles. |
 
 Par exemple, sans sélecteurs de compte et avec cette liste :
@@ -281,9 +281,9 @@ un décompte partiel positif avant de passer un dépassement de modèle ou d'eff
 Il peut être masqué par le sélecteur, en dehors de la limite d'affichage de cinq modèles, absent du catalogue ou épinglé
 à la v1. Une valeur de surface `"v2"`, `null` ou absente est admissible ; une valeur explicite `"v1"` ne l’est pas.
 
-### Pourquoi `spawn_agent` liste-t-il des modèles que je n'ai pas mis en avant ?
+### Pourquoi `spawn_agent` liste-t-il des modèles que je n'ai pas épinglé ?
 
-Codex remplit jusqu'à cinq emplacements annoncés à partir du catalogue, par priorité. Avec moins de cinq modèles mis en avant, les lignes suivantes occupent les emplacements restants ; voir la section « Modèles annoncés par `spawn_agent` » ci-dessus.
+Codex remplit jusqu'à cinq emplacements annoncés à partir du catalogue, par priorité. Avec moins de cinq modèles épinglé, les lignes suivantes occupent les emplacements restants ; voir la section « Modèles annoncés par `spawn_agent` » ci-dessus.
 
 ### Les changements de mode affectent-ils les sessions en cours ?
 
