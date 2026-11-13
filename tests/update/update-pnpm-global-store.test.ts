@@ -433,6 +433,21 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     });
   }
 
+  test("owner refusals before the store proof also carry the remedy for a store-like install", () => {
+    // pnpm reports a different global root than its listing: the group and bin directory cannot be bound.
+    const unbound = globalStoreLayout(join(root, "unbound"));
+    const run = unbound.run;
+    unbound.run = args => args[0] === "root" ? { status: 0, stdout: join(unbound.root, "elsewhere", "v11") + "\n" } : run(args);
+    expect(resolveOwner(unbound)).toEqual(storeRefusal("pnpm owns the running package but did not report its global group and bin directory"));
+    // The process was entered through a command shim outside the global bin directory.
+    const shim = globalStoreLayout(join(root, "shim"));
+    expect(resolvePnpmGlobalOwner({
+      packageName: PKG, packagePath: shim.exposed, commandPaths: [join(shim.root, "pnpm")], runningShimPath: join(shim.root, "other-bin", "ocx"),
+      runPnpm: (_command, args) => shim.run(args), env: shim.env,
+    })).toEqual(storeRefusal("pnpm package owner did not match the running global shim"));
+    expect([...storeCalls(unbound), ...storeCalls(shim)]).toEqual([]);
+  });
+
   test("re-resolving a store-pinned owner runs the store proof even for a tree its spelling would not classify", () => {
     // store/v11/alternate/<hash>/node_modules: unmarked, so plain discovery keeps the released verifier. The
     // orchestrated post-update check re-resolves a store-pinned owner with requireStoreProof and must re-prove it.

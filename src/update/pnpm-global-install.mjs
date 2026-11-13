@@ -634,9 +634,22 @@ export function resolvePnpmGlobalOwner({
     const listedPath = typeof inspected?.entry?.path === "string" ? inspected.entry.path : "";
     if (!listedPath || !isAbsolutePath(listedPath, platform) || !samePath(listedPath, packagePath, platform)) continue;
 
+    // Classification only decides which proof is required. Either spelling of the running package
+    // that passes through pnpm store links demands the store proof; nothing here accepts a package.
+    // It runs before any refusal below so every refusal of a store-like install carries the remedy.
+    let globalStore;
+    try {
+      globalStore = requireStoreProof === true
+        || pnpmPackageUsesGlobalStoreLinks(listedPath) || pnpmPackageUsesGlobalStoreLinks(packagePath);
+    } catch { globalStore = true; }
+    // A path that looks like a pnpm global store is accepted only on pnpm's own store answer. Every refusal of
+    // such an install says so, so a user whose group merely sits under a store-like directory, or whose pnpm
+    // home cannot be passed safely, knows why and what to run instead. The original reason stays the prefix.
+    const refusal = reason => globalStore && typeof reason === "string" ? reason + STORE_PROOF_HINT : reason;
+
     const paths = resolveGlobalPaths(commandPath, runPnpm, inspected?.root?.path, platform);
     if (!paths) {
-      lastReason = "pnpm owns the running package but did not report its global group and bin directory";
+      lastReason = refusal("pnpm owns the running package but did not report its global group and bin directory");
       continue;
     }
     const { globalDir, globalRoot, globalBinDir } = paths;
@@ -650,18 +663,11 @@ export function resolvePnpmGlobalOwner({
       const shimName = String(runningShimPath).replaceAll("\\", "/").split("/").at(-1)?.toLowerCase();
       const isCommandShim = ["ocx", "opencodex", "ocx.cmd", "opencodex.cmd", "ocx.ps1", "opencodex.ps1"].includes(shimName ?? "");
       if (isCommandShim && !samePath(dirname(runningShimPath), globalBinDir, platform)) {
-        lastReason = "pnpm package owner did not match the running global shim";
+        lastReason = refusal("pnpm package owner did not match the running global shim");
         continue;
       }
     }
 
-    // Classification only decides which proof is required. Either spelling of the running package
-    // that passes through pnpm store links demands the store proof; nothing here accepts a package.
-    let globalStore;
-    try {
-      globalStore = requireStoreProof === true
-        || pnpmPackageUsesGlobalStoreLinks(listedPath) || pnpmPackageUsesGlobalStoreLinks(packagePath);
-    } catch { globalStore = true; }
     const owner = { commandPath, packagePath: listedPath, globalDir, globalRoot, globalBinDir, ...(globalStore ? { globalStore: true } : {}) };
     const active = readPnpmGlobalPackage(
       packageName,
@@ -684,10 +690,7 @@ export function resolvePnpmGlobalOwner({
       return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version,
         ...(globalStore ? { store: active.store, storePath: active.storePath, virtualStoreDirs: active.virtualStoreDirs, homeAnchor: active.homeAnchor } : {}) } };
     }
-    // A path that looks like a pnpm global store is accepted only on pnpm's own store answer. Every refusal of
-    // such an install says so, so a user whose group merely sits under a store-like directory, or whose pnpm
-    // home cannot be passed safely, knows why and what to run instead. The original reason stays the prefix.
-    lastReason = globalStore && typeof active.reason === "string" ? active.reason + STORE_PROOF_HINT : active.reason;
+    lastReason = refusal(active.reason);
   }
   return { ok: false, reason: lastReason };
 }
