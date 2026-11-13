@@ -233,6 +233,34 @@ test("the supervisor starts a link without an explicit route exactly as before",
   expect(options(argv, "User")).toEqual([]);
 });
 
+test("a links.json edit of the explicit route on a running Home restarts the tunnel on the new route", async () => {
+  const spawned: string[][] = [];
+  let killed = 0;
+  const runner: SshRunner = {
+    async run() { return { code: 0, stdout: "", stderr: "" }; },
+    spawnTunnel(argv) {
+      spawned.push([...argv]);
+      let exit!: (code: number) => void;
+      const exited = new Promise<number>(resolve => { exit = resolve; });
+      return { pid: 4200 + spawned.length, argv: [...argv], exited, stderr: Promise.resolve(""), kill: () => { killed += 1; exit(143); } } as unknown as SshChild;
+    },
+  };
+  let value: LinkStore = { version: 1, listenerPort: 19001, links: [record({ explicitRoute: ROUTE, exclusive: true })] };
+  const supervisor = createLinkSupervisor({
+    readStore: () => structuredClone(value), runner, now: () => 0, random: () => 0.5,
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: () => 1 as unknown as ReturnType<typeof setInterval>, clearTimer: () => {},
+  });
+  supervisor.start();
+  expect(options(spawned[0]!, "Port")).toEqual(["22"]);
+  value = { ...value, links: [record({ explicitRoute: { ...ROUTE, port: 2222 }, exclusive: true })] };
+  await supervisor.reload();
+  expect(killed).toBe(1);
+  expect(spawned.length).toBe(2);
+  expect(options(spawned[1]!, "Port")).toEqual(["2222"]);
+  await supervisor.stop();
+});
+
 function effective(argv: readonly string[], config: string): Map<string, string> {
   const tail = argv.slice(argv.indexOf("-o"));
   const result = Bun.spawnSync([SSH!, "-G", "-F", config, ...tail], { stdin: "ignore" });
