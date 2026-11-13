@@ -5,7 +5,7 @@ import {
   getVertexAccessTokenWithAuthority,
 } from "../lib/gcp-adc";
 import type { OcxProviderConfig } from "../types";
-import { isKeychainReference, resolveProviderApiKey } from "./api-key-resolve";
+import { resolveProviderApiKey } from "./api-key-resolve";
 import { extractGoogleAiStudioModelItems } from "./google-ai-studio-model-discovery";
 import {
   extractModelEnvelopeRows,
@@ -82,26 +82,26 @@ function isVertexApiKeyPoolPaused(provider: OcxProviderConfig | undefined): bool
     && !pool.some(entry => !entry.disabled && entry.key === ref);
 }
 
-function usableVertexKey(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed && trimmed !== "N/A" && !trimmed.startsWith("<") ? trimmed : undefined;
-}
-
 /** A `keychain:` or `$ENV` reference names one credential; it never widens to ambient ones. */
 function isExplicitKeyReference(value: string | undefined): value is string {
   return typeof value === "string" && (value.startsWith("keychain:") || value.startsWith("$"));
 }
 
 /**
- * The credential a Vertex discovery request uses, chosen the way inference chooses it
- * (`snapshotVertexEnvironment` in routed-config and `resolveVertexApiKey` in the Google adapter).
+ * The credential a Vertex discovery request uses, chosen in the same order and on the same bytes
+ * as inference, so discovery can never publish another account's roster under this provider:
  *
- * - `gcp-sa:<account>` selects that stored service account and never `GOOGLE_CLOUD_API_KEY`.
- * - An explicit `keychain:` / `$ENV` reference selects that key alone. When it cannot be read,
- *   `key` is undefined and discovery fails closed: falling through to `GOOGLE_CLOUD_API_KEY` or
- *   host ADC would publish another account's roster under this provider, and inference rejects
- *   the same unresolved reference.
- * - Otherwise a literal key, then `GOOGLE_CLOUD_API_KEY`, then host ADC.
+ * 1. `usableResolvedApiKey` (routed-config): a `gcp-sa:` marker passes through verbatim; anything
+ *    else is resolved (`keychain:` / `$ENV`) and a blank result counts as no key. No trimming.
+ * 2. `snapshotVertexEnvironment` (routed-config): an explicit `keychain:` / `$ENV` reference that
+ *    resolved to nothing usable fails closed (`key` undefined), never reaching
+ *    `GOOGLE_CLOUD_API_KEY` or host ADC. A value that is a `gcp-sa:` marker, configured directly
+ *    or reached through a reference, selects ADC for that stored service account.
+ * 3. `resolveVertexApiKey` (Google adapter): `N/A` and `<...>` placeholders are not keys; then
+ *    `GOOGLE_CLOUD_API_KEY`, then host ADC.
+ *
+ * `tests/adapters/google/vertex-model-discovery.test.ts` checks this against the credential the
+ * inference adapter actually sends for the same rows.
  */
 export type VertexDiscoveryCredential =
   | { kind: "api-key"; key: string | undefined }
@@ -109,18 +109,24 @@ export type VertexDiscoveryCredential =
 
 export function selectVertexDiscoveryCredential(provider: OcxProviderConfig): VertexDiscoveryCredential {
   const configured = provider.apiKey;
-  if (typeof configured === "string" && configured.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) {
-    return { kind: "adc", marker: configured };
+  const reference = provider._apiKeyAttempt?.reference ?? configured;
+  // A routed row already carries the resolved value beside its reference; never resolve it twice.
+  const alreadyResolved = provider._apiKeyAttempt !== undefined && reference !== configured;
+  let value: string | undefined;
+  if (alreadyResolved || (typeof configured === "string" && configured.startsWith(GCP_CREDENTIAL_MARKER_PREFIX))) {
+    value = configured;
+  } else {
+    const resolved = resolveProviderApiKey(configured);
+    value = typeof resolved === "string" && resolved.trim().length > 0 ? resolved : undefined;
   }
-  const reference = provider._apiKeyAttempt?.reference;
-  if (isExplicitKeyReference(configured) || isExplicitKeyReference(reference)) {
-    if (!isExplicitKeyReference(configured)) return { kind: "api-key", key: usableVertexKey(configured) };
-    const readable = !configured.startsWith("keychain:") || isKeychainReference(configured);
-    return { kind: "api-key", key: readable ? usableVertexKey(resolveProviderApiKey(configured)) : undefined };
+  if (isExplicitKeyReference(reference)
+    && (!value?.trim() || value === "N/A" || value.startsWith("<") || reference === "keychain:")) {
+    return { kind: "api-key", key: undefined };
   }
-  const literal = usableVertexKey(configured);
-  if (literal) return { kind: "api-key", key: literal };
-  const ambientKey = usableVertexKey(process.env.GOOGLE_CLOUD_API_KEY);
+  if (value?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) return { kind: "adc", marker: value };
+  const key = value && !value.startsWith("<") && value !== "N/A" ? value : undefined;
+  if (key) return { kind: "api-key", key };
+  const ambientKey = process.env.GOOGLE_CLOUD_API_KEY;
   return ambientKey ? { kind: "api-key", key: ambientKey } : { kind: "adc" };
 }
 

@@ -27,9 +27,10 @@ to, such as `gemini-3-pro`, shows none, because requests to it carry no thinking
 ## Tool images on Gemini 4
 
 On Vertex AI, `gemini-4-argon`, `gemini-4-carbon` and `gemini-4-hydrogen` receive images
-returned by tools, such as screenshots, inside the matching function response. This avoids the
-upstream 400 error "Requests ending with a model turn are not supported" after an
-image-producing tool call while preserving the images. Images from duplicate results or results
+returned by tools, such as screenshots, inside the matching function response. On Argon this
+avoids the upstream 400 error "Requests ending with a model turn are not supported" after an
+image-producing tool call; Carbon and Hydrogen use the same documented function-response form,
+though that error was not reproduced on them. Images from duplicate results or results
 without a matching call are preserved in a separate message after the tool responses, with a
 marker explaining that they could not be paired. No configuration change is needed; this handling
 is specific to these Gemini 4 models on Vertex.

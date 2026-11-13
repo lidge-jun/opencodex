@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGoogleAdapter } from "../../../src/adapters/google";
@@ -243,5 +243,72 @@ describe("Vertex publisherModels pagination", () => {
     const bytes = await collectVertexPublisherModelPages(firstUrl, { publisherModels: [], nextPageToken: "t1" },
       { ...limits, maxResponseBytes: 600 }, pages({ t1: big }));
     expect(bytes.ok).toBe(false);
+  });
+});
+
+describe("Vertex discovery credential parity with inference", () => {
+  const parsedRequest = { modelId: "gemini-4-hydrogen", stream: false,
+    context: { messages: [{ role: "user", content: "hi" }], systemPrompt: [], tools: [] }, options: {} } as unknown as OcxParsedRequest;
+
+  /** The credential an inference request for this row actually carries, or undefined when it refuses. */
+  async function inferenceCredential(provider: OcxProviderConfig): Promise<string | undefined> {
+    try {
+      const request = await createGoogleAdapter(routedProviderConfig("parity-vertex", provider)).buildRequest(parsedRequest);
+      const headers = Object.fromEntries(Object.entries(request.headers).map(([name, value]) => [name.toLowerCase(), String(value)]));
+      return headers["x-goog-api-key"] ?? headers.authorization?.replace(/^Bearer /, "");
+    } catch {
+      return undefined;
+    }
+  }
+
+  test("discovery sends exactly the credential inference sends, or nothing when inference refuses", async () => {
+    const markerCredential = JSON.parse(readFileSync(saPath, "utf8")) as Record<string, unknown>;
+    const keychain: Record<string, string> = {
+      padded: "  keychain-padded-key  ",
+      "marker-ref": "gcp-sa:svc-account",
+      "svc-account": JSON.stringify({ ...markerCredential, client_email: "marker@example.test" }),
+    };
+    setProviderKeychainEntryFactoryForTests((_service, account) => ({
+      getPassword: () => keychain[account] ?? null, setPassword: () => {}, deletePassword: () => true,
+    }));
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = saPath;
+    process.env.CLOUDSDK_CONFIG = join(tmp, "no-gcloud");
+    process.env.VERTEX_PARITY_MARKER = "gcp-sa:svc-account";
+    process.env.VERTEX_PARITY_PADDED = " env-reference-key ";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      if (url !== OAUTH_TOKEN_URL) return new Response("unexpected", { status: 404 });
+      const assertion = new URLSearchParams(String(init?.body ?? "")).get("assertion") ?? "";
+      const issuer = JSON.parse(Buffer.from(assertion.split(".")[1] ?? "", "base64url").toString("utf8")).iss;
+      return Response.json({ access_token: `token-for-${issuer}`, expires_in: 3600, token_type: "Bearer" });
+    }) as typeof fetch;
+
+    const keys: Array<string | undefined> = [
+      "literal-key", " padded-literal ", " N/A ", "N/A", "<your key>", undefined, "",
+      "keychain:padded", "keychain:missing", "keychain:", "keychain:marker-ref",
+      "$VERTEX_PARITY_MARKER", "${VERTEX_PARITY_PADDED}", "$VERTEX_PARITY_UNSET",
+      "gcp-sa:svc-account", "gcp-sa:",
+    ];
+    try {
+      for (const ambient of ["ambient-env-key", undefined]) {
+        if (ambient) process.env.GOOGLE_CLOUD_API_KEY = ambient; else delete process.env.GOOGLE_CLOUD_API_KEY;
+        for (const apiKey of keys) {
+          const provider = vertex({ project: "parity-project", location: "global", ...(apiKey === undefined ? {} : { apiKey }) });
+          __resetVertexTokenCache();
+          const expected = await inferenceCredential(provider);
+          __resetVertexTokenCache();
+          expect({ apiKey, ambient, credential: await resolveVertexDiscoveryToken(provider) })
+            .toEqual({ apiKey, ambient, credential: expected });
+        }
+      }
+      // The matrix reaches every outcome: a key, both ADC identities, and a refusal.
+      expect(await resolveVertexDiscoveryToken(vertex({ apiKey: "$VERTEX_PARITY_MARKER" }))).toBe("token-for-marker@example.test");
+      expect(await resolveVertexDiscoveryToken(vertex())).toBe("token-for-svc@example.test");
+      expect(await resolveVertexDiscoveryToken(vertex({ apiKey: " N/A " }))).toBe(" N/A ");
+      expect(await resolveVertexDiscoveryToken(vertex({ apiKey: "keychain:missing" }))).toBeUndefined();
+    } finally {
+      delete process.env.VERTEX_PARITY_MARKER;
+      delete process.env.VERTEX_PARITY_PADDED;
+    }
   });
 });
