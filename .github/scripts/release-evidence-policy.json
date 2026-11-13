@@ -406,7 +406,7 @@
     "version": 1,
     "windowsShards": 14,
     "files": {
-      ".github/workflows/ci.yml": "1c9db137dd42138aa3b6d366dd39ef6afb2192a0",
+      ".github/workflows/ci.yml": "be82a93ca2986f38cb1bd88c30c947e359ebb025",
       ".github/actions/setup-project-bun/action.yml": "cf28f6f9d4385d69784f4e3610914f6952ce789d",
       ".github/scripts/release-evidence.cjs": "ace2b9006b2d58ef84ed0996b4e179ff4be15900",
       ".github/scripts/release-evidence.test.cjs": "9cc686390e5c37d8e693b98d049e8b505d0273cf",

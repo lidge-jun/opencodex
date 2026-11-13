@@ -240,37 +240,25 @@ describe("an edit to the remote-workspace helper alone", () => {
   });
 });
 
-describe("an edit to ocx-child alone", () => {
-  test("selects a job that formats, lints and tests the crate", () => {
-    const selected = jobsSelectedBy(filtersMatching("native/ocx-child/src/cli.rs"))
-      .filter(([, job]) => scriptOf(job).includes("native/ocx-child/Cargo.toml"));
-    expect(selected.map(([name]) => name)).toEqual(["ocx-child"]);
-    const script = scriptOf(selected[0]![1]);
-    expect(script).toContain("cargo fmt --manifest-path native/ocx-child/Cargo.toml --check");
-    expect(script).toContain("cargo clippy --locked");
-    expect(script).toContain("cargo test --locked");
-  });
-
-  test("an edit to the conformance fixture the crate's tests read selects it", () => {
-    expect(jobsSelectedBy(filtersMatching("tests/fixtures/link/ocx-child-conformance.json")).map(([name]) => name)).toContain("ocx-child");
-  });
-
-  test("runs on the GitHub-hosted Ubuntu runner, which has cargo, with a pinned toolchain", () => {
-    expect(jobs["ocx-child"]?.["runs-on"]).toBe("ubuntu-latest");
-    const setup = (jobs["ocx-child"]?.steps ?? []).find(step => String(step.uses ?? "").startsWith("dtolnay/rust-toolchain@"));
-    expect(String(setup?.with?.toolchain)).toMatch(/^\d+\.\d+\.\d+$/);
-  });
-
-  test("an ordinary source change does not select it", () => {
-    for (const path of ["src/router.ts", "native/remote-workspace-helper/src/main.rs", "package.json"]) {
-      expect(`${path}:${filtersMatching(path).includes("ocx_child")}`).toBe(`${path}:false`);
+describe("an edit to ocx-child or its conformance fixture alone", () => {
+  test("selects the remote-helper job, whose Linux-only step formats, lints and tests the crate", () => {
+    for (const path of ["native/ocx-child/src/cli.rs", "tests/fixtures/link/ocx-child-conformance.json"]) {
+      expect(`${path}:${filtersMatching(path).includes("remote_helper")}`).toBe(`${path}:true`);
     }
+    // The crate alone starts no full suite (the fixture, under tests/, already selects it, as on dev).
+    expect(matches(filters.ci, "native/ocx-child/src/cli.rs")).toBe(false);
+    const step = (jobs["remote-helper"]?.steps ?? []).find(s => (s.run ?? "").includes("native/ocx-child/Cargo.toml"));
+    expect(step?.if).toBe("runner.os == 'Linux'");
+    expect(step?.run).toContain("cargo fmt --manifest-path native/ocx-child/Cargo.toml --check");
+    expect(step?.run).toContain("cargo clippy --locked --manifest-path native/ocx-child/Cargo.toml --all-targets -- -D warnings");
+    expect(step?.run).toContain("cargo test --locked --manifest-path native/ocx-child/Cargo.toml");
+    expect(Object.entries(jobs).filter(([, job]) => scriptOf(job).includes("native/ocx-child/Cargo.toml")).map(([name]) => name)).toEqual(["remote-helper"]);
   });
 });
 
 describe("the narrow checks stay narrow", () => {
-  test("no narrow path starts the full suite or the native macOS jobs", () => {
-    for (const path of [ACTION_PATH, HELPER_PATH, "native/ocx-child/src/cli.rs"]) {
+  test("neither path starts the full suite or the native macOS jobs", () => {
+    for (const path of [ACTION_PATH, HELPER_PATH]) {
       expect(`${path}:ci=${matches(filters.ci, path)}`).toBe(`${path}:ci=false`);
       expect(`${path}:native=${matches(filters.native, path)}`).toBe(`${path}:native=false`);
     }
@@ -278,7 +266,7 @@ describe("the narrow checks stay narrow", () => {
 
   test("an ordinary source change selects neither job", () => {
     for (const path of ["src/router.ts", "tests/lab/core-lab-boundary.test.ts", "package.json"]) {
-      expect(`${path}:${filtersMatching(path).filter(name => name === "setup_action" || name === "remote_helper" || name === "ocx_child")}`).toBe(`${path}:`);
+      expect(`${path}:${filtersMatching(path).filter(name => name === "setup_action" || name === "remote_helper")}`).toBe(`${path}:`);
     }
   });
 
@@ -286,8 +274,6 @@ describe("the narrow checks stay narrow", () => {
     const narrow = (changes?.steps ?? []).find(step => step.id === "narrow");
     expect(changes?.outputs?.setup_action).toBe("${{ steps.narrow.outputs.setup_action }}");
     expect(changes?.outputs?.remote_helper).toBe("${{ steps.narrow.outputs.remote_helper }}");
-    expect(changes?.outputs?.ocx_child).toBe("${{ steps.narrow.outputs.ocx_child }}");
-    expect(narrow?.env?.OCX_CHILD).toBe("${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.ocx_child }}");
     expect(narrow?.env?.SETUP_ACTION).toBe("${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.setup_action }}");
     expect(narrow?.env?.REMOTE_HELPER).toBe("${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.remote_helper }}");
     expect(narrow?.run).toContain("exit 1");
@@ -308,7 +294,7 @@ function gateExpectation(job: string, env: Record<string, string>): string {
 describe.skipIf(process.platform === "win32")("the aggregate gate", () => {
   test("requires each narrow job exactly when its filter selected it", () => {
     const needs = Array.isArray(jobs.ci?.needs) ? jobs.ci!.needs : [];
-    for (const [job, variable] of [["setup-action", "CHANGES_SETUP_ACTION"], ["remote-helper", "CHANGES_REMOTE_HELPER"], ["ocx-child", "CHANGES_OCX_CHILD"]] as const) {
+    for (const [job, variable] of [["setup-action", "CHANGES_SETUP_ACTION"], ["remote-helper", "CHANGES_REMOTE_HELPER"]] as const) {
       expect(needs).toContain(job);
       expect(gateExpectation(job, { [variable]: "true" })).toStartWith("requested\n");
       expect(gateExpectation(job, { [variable]: "false" })).toStartWith("not-requested\n");
@@ -317,6 +303,5 @@ describe.skipIf(process.platform === "win32")("the aggregate gate", () => {
     const step = (jobs.ci?.steps ?? []).find(candidate => (candidate.run ?? "").includes("scoped=requested"));
     expect(step?.env?.CHANGES_SETUP_ACTION).toBe("${{ needs.changes.outputs.setup_action }}");
     expect(step?.env?.CHANGES_REMOTE_HELPER).toBe("${{ needs.changes.outputs.remote_helper }}");
-    expect(step?.env?.CHANGES_OCX_CHILD).toBe("${{ needs.changes.outputs.ocx_child }}");
   });
 });
