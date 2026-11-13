@@ -183,7 +183,7 @@ görünürlüğü denetler. Ayrı bir `modelOrder`, `providerOrder` veya önceli
 
 ## Kontrol paneli sıra önayarları
 
-**Models** sayfasında Varsayılan, Model adına göre A–Z, Sağlayıcıya göre veya Kullanım anlık görüntüsünü seçip sırayı uygulayın. Kullanılabilir yönlendirilmiş kimlikler ve `modelPickerOrderMode` (`alphabetical`, `provider`, `most-used`) kaydedilir. Saklanan tüm kullanım yalnızca uygulamada bir kez okunur; yeniden yükleme veya model değişiklikleri yeniden hesaplamaz. Özel ve tam yerel sıra açıkça değiştirilene kadar korunur. Varsayılan, kullanılabilir model yokken bile iki alanı temizler.
+**Models** sayfasında Varsayılan, Model adına göre A–Z, Sağlayıcıya göre, Aileye göre veya Kullanım anlık görüntüsünü seçip sırayı uygulayın. Kullanılabilir yönlendirilmiş kimlikler ve `modelPickerOrderMode` (`alphabetical`, `provider`, `family`, `most-used`) kaydedilir. Saklanan tüm kullanım yalnızca uygulamada bir kez okunur; yeniden yükleme veya model değişiklikleri yeniden hesaplamaz. Özel ve tam yerel sıra açıkça değiştirilene kadar korunur. Varsayılan, kullanılabilir model yokken bile iki alanı temizler.
 
 `GET/PUT /api/subagent-models`, devre dışı veya eksik kayıtlı seçimleri `chosen` ve `available` içinde korur; `pickerAvailable` uygun yönlendirilmiş kimliklerdir. Models yalnızca `pickerOrder` ve `pickerOrderMode` gönderir, `models` göndermez. Yalnız kadroyu kaydetmek sırayı değiştirmez. Geçersiz giriş veya kayıt hatası önceki durumu korur.
 

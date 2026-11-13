@@ -148,7 +148,7 @@ V2 在客户端目录状态允许时，可以额外接收基于原有优先级�
 
 ## 仪表盘排序预设
 
-在 **Models** 中选择默认、按模型名 A–Z、按提供商或使用量快照，再应用顺序。保存当前可用的路由 ID 和 `modelPickerOrderMode`（`alphabetical`、`provider`、`most-used`）。使用量排序仅在应用时读取一次保留的全部历史；重新打开或模型增减不会重新计算。已有自定义、原生完整顺序会保留，直到明确应用替换。即使没有可用模型，默认也能清除两个字段。
+在 **Models** 中选择默认、按模型名 A–Z、按提供商、按家族或使用量快照，再应用顺序。保存当前可用的路由 ID 和 `modelPickerOrderMode`（`alphabetical`、`provider`、`family`、`most-used`）。按家族会让每个模型家族（GPT、Gemini、Claude、Grok、DeepSeek，其后是 Qwen、Kimi、GLM、MiniMax、Llama、Mistral，其他排最后）各自连续排列，家族内再按提供商排序；Codex 与 Claude Code 的选择器是平铺的，所以显示的就是这些连续的家族段。Models 页也会把每个提供商的模型放在可折叠的家族标题下。使用量排序仅在应用时读取一次保留的全部历史；重新打开或模型增减不会重新计算。已有自定义、原生完整顺序会保留，直到明确应用替换。即使没有可用模型，默认也能清除两个字段。
 
 `GET/PUT /api/subagent-models` 的 `chosen`、`available` 保留禁用或缺失的已存 roster；`pickerAvailable` 只包含可选路由 ID。Models 只发送 `pickerOrder`、`pickerOrderMode`，不发送 `models`。只保存 roster 不影响排序，非法输入或保存失败会保留原状态。
 

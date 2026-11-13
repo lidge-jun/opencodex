@@ -181,7 +181,7 @@ restent des champs de visibilité, pas des contrôles d’ordre. Il n’existe a
 
 ## Préréglages du sélecteur
 
-Dans **Models**, choisissez Par défaut, A–Z par modèle, Par fournisseur ou Instantané des usages, puis appliquez l’ordre. Les identifiants routés actuellement disponibles et `modelPickerOrderMode` (`alphabetical`, `provider`, `most-used`) sont enregistrés. Les usages conservés sont lus une seule fois lors de l’application ; un rechargement ou un changement de modèles ne recalcule rien. Un ordre personnalisé ou natif complet reste intact jusqu’à une application explicite. Par défaut efface les deux champs même sans modèle disponible.
+Dans **Models**, choisissez Par défaut, A–Z par modèle, Par fournisseur, Par famille ou Instantané des usages, puis appliquez l’ordre. Les identifiants routés actuellement disponibles et `modelPickerOrderMode` (`alphabetical`, `provider`, `family`, `most-used`) sont enregistrés. Les usages conservés sont lus une seule fois lors de l’application ; un rechargement ou un changement de modèles ne recalcule rien. Un ordre personnalisé ou natif complet reste intact jusqu’à une application explicite. Par défaut efface les deux champs même sans modèle disponible.
 
 `GET/PUT /api/subagent-models` conserve les choix enregistrés désactivés ou absents dans `chosen` et `available` ; `pickerAvailable` contient les identifiants routés admissibles. Models envoie `pickerOrder` et `pickerOrderMode`, jamais `models`. Une sauvegarde du roster seul conserve l’ordre. Entrée invalide ou échec de sauvegarde préserve l’état précédent.
 

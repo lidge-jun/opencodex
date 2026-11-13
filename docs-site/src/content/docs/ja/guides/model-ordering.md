@@ -157,7 +157,7 @@ V1 には OpenCodex の推奨候補リストを注入しません。V2 にはク
 
 ## ダッシュボードの並び順プリセット
 
-**Models**でデフォルト、モデル名A–Z、プロバイダー別、使用量スナップショットを選び、順序を適用します。現在選択可能なルーティングIDと `modelPickerOrderMode`（`alphabetical`、`provider`、`most-used`）を保存します。使用量は適用時に保持された全履歴を一度だけ読み、再読込やモデルの増減では再計算しません。既存のカスタム・ネイティブ全体順は明示的な適用まで保持されます。デフォルトは候補が空でも両フィールドを削除できます。
+**Models**でデフォルト、モデル名A–Z、プロバイダー別、ファミリー別、使用量スナップショットを選び、順序を適用します。現在選択可能なルーティングIDと `modelPickerOrderMode`（`alphabetical`、`provider`、`family`、`most-used`）を保存します。使用量は適用時に保持された全履歴を一度だけ読み、再読込やモデルの増減では再計算しません。既存のカスタム・ネイティブ全体順は明示的な適用まで保持されます。デフォルトは候補が空でも両フィールドを削除できます。
 
 `GET/PUT /api/subagent-models` の `chosen` と `available` は無効・欠落した保存済みrosterも保持します。`pickerAvailable` は選択可能なルーティングIDのみです。Modelsは `pickerOrder` と `pickerOrderMode` を送り、`models` は送りません。Rosterだけの保存は順序設定を維持し、不正入力・保存失敗は以前の状態を保ちます。
 
