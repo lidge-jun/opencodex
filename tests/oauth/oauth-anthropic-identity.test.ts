@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { getLoginStatus, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock } from "../../src/oauth";
 import { AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "../../src/oauth/anthropic";
 import { resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-identity";
-import { captureOAuthAccountSelection, loadAuthStore, mutateStore, removeAccount, saveAccountCredential, setAccountPaused } from "../../src/oauth/store";
+import { captureOAuthAccountSelection, loadAuthStore, mutateStore, oauthMutationTailSnapshot, removeAccount, saveAccountCredential, setAccountPaused } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
@@ -752,6 +752,62 @@ test("reauth cannot turn a legacy row into a second copy of an organization anot
       .rejects.toBeInstanceOf(OAuthReauthIdentityMismatchError);
     expect(getAccountCredential("anthropic", legacy.id)).toEqual(legacy.credential);
   } finally { OAUTH_PROVIDERS.anthropic!.login = original; }
+});
+
+/**
+ * A login for organization B and a reauth of a legacy row both pass their checks while another
+ * writer holds the queue, and the login commits first. The reauth must decide again on the rows its
+ * writer loads, not on the snapshot it read before queueing.
+ */
+async function reauthQueuedBehindLogin(reauthOrganization?: string) {
+  await saveCredential("anthropic", orgCredential("synthetic-legacy"));
+  const legacy = anthropicRows()[0]!;
+  orgProfiles({ "synthetic-legacy": ORG_A });
+  const original = OAUTH_PROVIDERS.anthropic!.login;
+  const config = (): OcxConfig => ({ port: 10100, defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {} });
+  const queued = async (count: number) => {
+    while (oauthMutationTailSnapshot().active < count) await new Promise(resolve => setTimeout(resolve, 1));
+  };
+  let release!: () => void;
+  const held = mutateStore(() => new Promise<void>(resolve => { release = resolve; }));
+  try {
+    await queued(1);
+    const login = saveCredential("anthropic", orgCredential("synthetic-org-b", ORG_B));
+    await queued(2);
+    OAUTH_PROVIDERS.anthropic!.login = async () => orgCredential("synthetic-reauth", reauthOrganization);
+    const reauth = runLogin("anthropic", {} as OAuthController, { reauthAccountId: legacy.id },
+      { loadConfig: config, saveConfig: () => {} }).then(() => undefined, (error: unknown) => error);
+    await queued(3);
+    while (!release) await new Promise(resolve => setTimeout(resolve, 1));
+    release();
+    await login;
+    return { legacy, outcome: await reauth };
+  } finally {
+    release?.();
+    await held;
+    OAUTH_PROVIDERS.anthropic!.login = original;
+  }
+}
+
+test("a reauth queued behind a login for the same organization is refused by the writer", async () => {
+  const { legacy, outcome } = await reauthQueuedBehindLogin(ORG_B);
+  expect(outcome).toBeInstanceOf(OAuthReauthIdentityMismatchError);
+  const rows = anthropicRows();
+  expect(rows).toHaveLength(2);
+  expect(rows.filter(row => row.credential.anthropicIdentity?.organizationUuid === ORG_B)).toHaveLength(1);
+  const kept = rows.find(row => row.id === legacy.id)!;
+  expect(kept.credential).toEqual(legacy.credential);
+  expect(kept.loginId).toBe(legacy.loginId);
+});
+
+test("the queued reauth still writes its own or an unreported organization", async () => {
+  for (const organization of [ORG_A, undefined]) {
+    const { legacy, outcome } = await reauthQueuedBehindLogin(organization);
+    expect(outcome).toBeUndefined();
+    expect(anthropicRows()).toHaveLength(2);
+    expect(getAccountCredential("anthropic", legacy.id)!.access).toBe("synthetic-reauth");
+    await mutateStore(store => { delete store.anthropic; });
+  }
 });
 
 test("a stored proof without an organization asks its own bearer before adopting another organization", async () => {

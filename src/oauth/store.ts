@@ -1358,8 +1358,13 @@ export async function saveAccountCredential(
   /**
    * `clearAutomaticPause`: only an operator's explicit reauthentication of this account may clear a
    * pause auto-pause recorded (#8398); other writers (Kiro's pre-login identity binding) leave it.
+   * `assertAccounts`: re-checks a caller's decision against the rows this writer loaded, under the
+   * lock and before the row changes; throwing aborts the write.
    */
-  opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean; clearAutomaticPause?: boolean } = {},
+  opts: {
+    assertBeforePersist?: () => void; rotateLoginId?: boolean; clearAutomaticPause?: boolean;
+    assertAccounts?: (accounts: readonly ProviderAccount[]) => void;
+  } = {},
 ): Promise<boolean> {
   provider = oauthCredentialSlot(provider);
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
@@ -1375,6 +1380,7 @@ export async function saveAccountCredential(
     const set = store[provider];
     const account = set?.accounts.find(a => a.id === accountId);
     if (!set || !account) return;
+    opts.assertAccounts?.(set.accounts);
     account.credential = safe;
     written = true;
     if (opts.rotateLoginId) account.loginId = randomUUID();
