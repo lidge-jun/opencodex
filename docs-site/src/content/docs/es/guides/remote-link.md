@@ -227,8 +227,6 @@ Una ruta explícita y exclusiva está destinada a quienes configuran por sí mis
 
 Quien aprovisiona también puede registrar una inscripción: `ocx link add <alias> --expect-fingerprint <fp> --operation-id <id>` registra los identificadores de enlace y clave que creará antes de cambiar nada; repetir el mismo comando devuelve el resultado registrado (`committed`, `failed_clean`, `residual` o `unknown`) en vez de volver a inscribir. `--require-ephemeral` rechaza un Child con cualquier instalación completa de OpenCodex antes de instalar o cambiar nada. `ocx link revoke --operation-id <id>` registra la revocación de igual manera y `ocx link operations` muestra el registro; `ocx link operations resolve --operation-id <id> --yes` deja constancia de que se limpió o aceptó una operación residual o desconocida.
 
-El aprovisionamiento puede registrar una operación: `ocx link add <alias> --expect-fingerprint <fp> --operation-id <id>` registra los identificadores antes de cambiar nada; repetirlo devuelve el resultado (`committed`, `failed_clean`, `residual` o `unknown`). `--require-ephemeral` rechaza un Child con instalación completa antes de realizar cambios. `ocx link revoke --operation-id <id>` registra la revocación, `ocx link operations` lista las operaciones y `ocx link operations resolve --operation-id <id> --yes` registra que una operación residual o desconocida se limpió o aceptó.
-
 <a id="related-guides"></a>
 
 ## Guías relacionadas

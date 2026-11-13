@@ -19,5 +19,3 @@ El contador es de proceso local, serializado por cuenta, y se restablece en una 
 En el umbral, OpenCodex excluye la cuenta utilizando su mecanismo de pausa existente e intenta un hermano elegible para la solicitud actual dentro del presupuesto de reintento/envío existente. Corregidos los selectores de cuenta Codex y los archivos cargados vinculados a la cuenta conservan sus restricciones. Una pausa nunca cancela el trabajo ya enviado ni cambia las credenciales. Emite una línea de registro genérica sin identificadores de cuenta o texto de error ascendente.
 
 `ocx account list <provider>` muestra la razón de pausa. La insignia Paused del panel expone la razón y el tiempo. Utilice `ocx account resume <provider> <account-id-or-alias>` para aclarar la razón y permitir la selección de nuevo. En una fila de API teclas, al hacer clic en Reanudar también se activa la clave. Esta política nunca reanuda una cuenta automáticamente; un inicio de sesión explícito limpia la pausa que registró, y [`resume --if-healthy`](/es/reference/cli/providers-accounts/#resume-if-healthy) reanuda tras una comprobación de salud.
-
-
