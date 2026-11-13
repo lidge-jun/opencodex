@@ -176,19 +176,36 @@ function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation
 
 /**
  * A recorded revoke whose interrupted retirement was just finished (#8416): its own removal intent preceded the
- * record's disappearance, so it committed, whatever its live response or an earlier recovery recorded.
+ * record's disappearance, so it committed, whatever its live response, an earlier recovery or a resolve recorded.
+ * The check and the write run in one journal section, so a concurrent resolve cannot leave a committed entry that
+ * still carries resolvedAt (which the journal refuses to parse).
  */
 export function settleRevokeAfterRetirement(ctx: ManagementContext, operationId: string): void {
-  const op = findOperation(readOperationsJournal(journalPathFor(ctx)), operationId);
-  if (!op || op.kind !== "revoke" || (op.state !== "open" && op.state !== "unknown")) return;
-  if (!hasEffect(op, "record_removed", "intent") || readStoreFor(ctx).links.some(link => link.id === op.linkId)) return;
   updateOperationsJournal(journalPathFor(ctx), nowOf(ctx), journal => {
-    const current = findOperation(journal, operationId)!;
+    const current = findOperation(journal, operationId);
+    if (!current || current.kind !== "revoke" || (current.state !== "open" && current.state !== "unknown")) return;
+    if (!hasEffect(current, "record_removed", "intent") || readStoreFor(ctx).links.some(link => link.id === current.linkId)) return;
     current.state = "committed";
     delete current.error;
+    delete current.resolvedAt;
     current.updatedAt = iso(ctx);
     current.finishedAt = current.updatedAt;
   });
+}
+
+/**
+ * The journal of a recorded revoke resuming its interrupted retirement (#8416): the resumed key revoke and record
+ * removal are marked on that same entry, so a crash after the resumed removal still settles it as committed.
+ * Used only while the link record is present, so a record another removal already took is never credited here.
+ */
+export function resumedRevokeJournal(ctx: ManagementContext, operationId: string): RevokeJournal {
+  const mark = (effect: RevokeEffect, phase: "intent" | "done") => updateOperationsJournal(journalPathFor(ctx), nowOf(ctx), journal => {
+    const op = findOperation(journal, operationId);
+    if (!op) throw new Error("the revoke operation is no longer journalled");
+    op.effects.push({ effect, phase, at: iso(ctx) });
+    op.updatedAt = iso(ctx);
+  });
+  return { intent: effect => mark(effect, "intent"), done: effect => mark(effect, "done"), finish: async response => response };
 }
 
 export interface EnrollJournal {

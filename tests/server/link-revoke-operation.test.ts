@@ -7,7 +7,7 @@ import type { ManagementContext } from "../../src/server/management/context";
 import { revokeOperationDigest } from "../../src/server/management/link-operation";
 import { acquireAliasLock } from "../../src/link/alias-lock";
 import { claimLinkRetirement, readLinkRetirement } from "../../src/link/retirement";
-import { readOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
+import { readOperationsJournal, resolveLinkOperation, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
@@ -259,4 +259,55 @@ test("a retry of an interrupted removal with another cleanup mode is refused bef
   expect(readLinkRetirement(LINK, root)?.mode).toBe("force");
   expect((await h.revoke({ force: true })).status).toBe(200);
   expect(readLinkRetirement(LINK, root)).toBeNull();
+});
+
+test("a journalled revoke that died after claiming its receipt, with the link still listed, finishes and settles committed", async () => {
+  const h = harness();
+  // The process died between the receipt claim and the key revoke: the record, the key and the receipt remain.
+  claimLinkRetirement(record(), root, () => h.store, "force");
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "open", effects: [],
+  } as LinkOperation] });
+  const replayed = await h.revoke({ force: true, operationId: OP });
+  expect({ status: replayed.status, outcome: replayed.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  expect(h.store.links).toEqual([]);
+  expect(h.config.apiKeys).toEqual([]);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+  expect(h.journal().operations[0]!.state).toBe("committed");
+  expect(h.ssh).toEqual([]);
+});
+
+test("a resolved unknown revoke whose cleanup then finishes on repeat settles committed without its resolution", async () => {
+  const h = harness();
+  const intent = join(root, "route-intent.json");
+  writeFileSync(intent, "invalid");
+  expect((await h.revoke({ force: true, operationId: OP })).body.outcome).toBe("unknown");
+  expect(resolveLinkOperation(h.journalPath, OP, NOW)).not.toBe("not_resolvable");
+  unlinkSync(intent);
+  const again = await h.revoke({ force: true, operationId: OP });
+  expect({ status: again.status, outcome: again.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  const settled = h.journal().operations[0]!;
+  expect({ state: settled.state, resolvedAt: settled.resolvedAt }).toEqual({ state: "committed", resolvedAt: undefined });
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+});
+
+test("a recorded revoke does not resume its retirement while a Child job holds the link", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "force");
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "unknown", finishedAt: at, error: { code: "operation_interrupted", status: 409 }, effects: [],
+  } as LinkOperation] });
+  const releaseJob = sharedChildOpsEngine().reserve(LINK)!;
+  const held = await h.revoke({ force: true, operationId: OP });
+  expect({ status: held.status, code: code(held) }).toEqual({ status: 409, code: "link_operation_in_progress" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  expect(h.config.apiKeys?.map(key => key.id)).toEqual(["link-key"]);
+  releaseJob();
+  const after = await h.revoke({ force: true, operationId: OP });
+  expect({ status: after.status, outcome: after.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  expect(h.store.links).toEqual([]);
 });
