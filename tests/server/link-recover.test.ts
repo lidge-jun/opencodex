@@ -912,8 +912,10 @@ describe("recover while another link names the alias", () => {
     const error = await errorOf(res);
     expect([res.status, error.code]).toEqual([409, "alias_linked"]);
     // That link may be the one the machine runs now: the remedy revokes it only if it is stale too.
-    expect(error.message).toContain("Only if that link is stale too");
-    expect(error.message).toContain("If the machine runs that link, leave it");
+    expect(error.message).toContain("Check which link the machine runs (ocx connect status --json");
+    expect(error.message).toContain("Only if it shows neither that link nor a connect or key rotation in progress");
+    expect(error.message).toContain("treat it as running that link and leave it");
+    expect(error.message).toContain("A person on this Home can instead forget this tombstone once the machine is confirmed clean or gone.");
     expect(error.message).not.toContain("settle any open operation on that link (ocx link operations), revoke the link, then recover");
     expect(h.commands.filter(c => c.includes("ocx-managed-purge"))).toEqual([]);
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);

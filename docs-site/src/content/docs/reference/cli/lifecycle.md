@@ -1574,9 +1574,12 @@ can run `ocx link recover --forget --link-id <id> --yes`.
 `child_conflict` (exit 5) means the Child belongs to another link or OpenCodex
 home, and nothing was changed. `alias_linked` (exit 5) means another Home-initiated link still uses that
 alias, as its alias or one of its routes, so the machine may belong to that link: do not run
-`ocx-child detach` there. Only if that other link is stale too (the machine does not run it), settle any
-open operation on it, revoke it, then recover; if the machine runs that link, leave it: the tombstone
-waits until that link is removed, then recover, or a person forgets it once the machine is confirmed clean.
+`ocx-child detach` there. Check which link it runs (`ocx connect status --json`, or the planted
+`ocx-child`'s): only if it shows neither that link nor a connect or key rotation in progress, settle any
+open operation on that link, revoke it, then recover. If it shows that link or a connect or key rotation in
+progress, if its state cannot be read, or if the machine cannot be reached, treat it as running that link
+and leave it: the tombstone waits until that link is removed, then recover. A person on the Home can instead
+forget the tombstone once the machine is confirmed clean or gone.
 `link_present` (exit 5) means the link itself still exists; revoke it instead (with `--purge` for a lightweight Child).
 `--operation-id` recovers a Child that an
 interrupted enrollment left behind; it needs the link operation journal and
