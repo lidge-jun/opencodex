@@ -12,8 +12,8 @@ import { expect, test } from "bun:test";
 import { antigravityUserAgentForWireModel, ANTIGRAVITY_CLI_REQUEST_UA, ANTIGRAVITY_REQUEST_UA } from "../../../src/adapters/google-antigravity-wire";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels, resolveAntigravityEffortWireModel } from "../../../src/providers/antigravity-models";
 
-// Vertex evidence 2026-11-13 from #8583's author; CCA listing shape is assumed
-// from the Argon/Carbon per-tier pattern and has not been live-verified.
+// Vertex evidence 2026-11-13 from #8583's author; on CCA an entitled account listed exactly these
+// four tiers on 2026-11-12.
 test("discovered Hydrogen retains its four wire tiers", () => {
   const ids = ["low", "medium", "high", "xhigh"].map(tier => `gemini-4-hydrogen-${tier}`);
   const rows = parseAntigravityAvailableModels({ models: Object.fromEntries(ids.map(id => [id, {}])), agentModelSorts: [{ groups: [{ modelIds: ids }] }] })!;
@@ -21,6 +21,9 @@ test("discovered Hydrogen retains its four wire tiers", () => {
   expect(rows[0]?.effortWireModelIds).toEqual({ low: ids[0], medium: ids[1], high: ids[2], xhigh: ids[3] });
   registerAntigravityDiscoveredWireModels("https://hydrogen.test", rows);
   expect(resolveAntigravityEffortWireModel("gemini-4-hydrogen", "xhigh", "https://hydrogen.test").wireModelId).toBe(ids[3]!);
+  for (const effort of ["max", "ultra"]) {
+    expect(resolveAntigravityEffortWireModel("gemini-4-hydrogen", effort, "https://hydrogen.test").wireModelId).toBe(ids[3]!);
+  }
   expect(resolveAntigravityEffortWireModel("gemini-4-hydrogen", "high", "https://hydrogen.test").wireModelId).toBe(ids[2]!);
   expect(resolveAntigravityEffortWireModel("gemini-4-hydrogen", undefined, "https://hydrogen.test").wireModelId).toBe(ids[2]!);
 });
@@ -47,7 +50,9 @@ test("incomplete families stay separate and three-tier families clamp xhigh", ()
     const ids = ["low", "medium", "high"].map(t => `${base}-${t}`);
     const rows = parseAntigravityAvailableModels({ models: Object.fromEntries(ids.map(id => [id, {}])), agentModelSorts: [{ groups: [{ modelIds: ids }] }] })!;
     registerAntigravityDiscoveredWireModels("https://three.example.test", rows);
-    expect(resolveAntigravityEffortWireModel(base, "xhigh", "https://three.example.test").wireModelId).toBe(`${base}-high`);
+    for (const effort of ["xhigh", "max", "ultra"]) {
+      expect(resolveAntigravityEffortWireModel(base, effort, "https://three.example.test").wireModelId).toBe(`${base}-high`);
+    }
   }
 });
 
