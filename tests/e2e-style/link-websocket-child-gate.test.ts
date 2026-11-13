@@ -12,7 +12,6 @@ import { writeLinkStore, type LinkStore } from "../../src/link/store";
 import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
 import { probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
 import { forgetLinkWebsocketAdvertisementsForTests } from "../../src/client/link-ws-advertisement";
-import { LINK_CHILD_WS_LIMITS } from "../../src/client/link-websocket-limits";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startChild } from "../helpers/link-ws-child";
@@ -29,6 +28,9 @@ import { completed, expectCompleted, gate, removePinnedCodexCopy, runGateCodex, 
 // Home's are opened for these tests only.
 // Codex is an external process with no clock to inject: the bound is this file's default, not a per-test timeout.
 setDefaultTimeout(180_000);
+
+// Design T4 6.1: the Child advertises 8 MiB to Codex on its 101 (C7). Fixed here, independently of the Child's constant.
+const DESIGN_MESSAGE_LIMIT = 8 * 1024 * 1024;
 
 const KEY_ID = "gate-key"; const SECRET = "gate-secret-0123456789abcdef"; const LINK = "lnk_9b9b9b9b9b9b9b9b";
 
@@ -187,19 +189,20 @@ describe("link WebSocket release gate through the real Child (design 11.1 item 1
     const sizes: number[] = [];
     const pair = await linkPair((body, index) => { sizes.push(body.length); return sseResponse(completed("resp_" + index)); });
     const tapped = await tapChild(childListener!.port!);
-    expectCompleted(await pair.run({ instructionsBytes: LINK_CHILD_WS_LIMITS.localMessageBytes + 1024, port: tapped.port }));
-    expect(Math.max(...sizes)).toBeGreaterThan(LINK_CHILD_WS_LIMITS.localMessageBytes);
+    expectCompleted(await pair.run({ instructionsBytes: DESIGN_MESSAGE_LIMIT + 1024, port: tapped.port }));
+    expect(Math.max(...sizes)).toBeGreaterThan(DESIGN_MESSAGE_LIMIT);
     // The Child answered Codex's upgrade with its own 101 carrying the 8 MiB limit (C7).
     const upgraded = tapped.connections.filter(connection => connection.answer.startsWith("HTTP/1.1 101"));
     expect(upgraded.length).toBeGreaterThanOrEqual(1);
     for (const connection of upgraded) {
-      expect(connection.answer.toLowerCase()).toContain("x-codex-websocket-max-message-bytes: " + LINK_CHILD_WS_LIMITS.localMessageBytes);
+      const advertised = connection.answer.split("\r\n").filter(line => line.toLowerCase().startsWith("x-codex-websocket-max-message-bytes:"));
+      expect(advertised.map(line => line.slice(line.indexOf(":") + 1).trim())).toEqual(["8388608"]);
       // Everything Codex wrote on the upgraded connection is smaller than the limit: the request never went on the socket.
-      expect(connection.sentAfterHead).toBeLessThan(LINK_CHILD_WS_LIMITS.localMessageBytes);
+      expect(connection.sentAfterHead).toBeLessThan(DESIGN_MESSAGE_LIMIT);
     }
     // It went over HTTP on a connection of its own, which carried the whole body.
     const posts = tapped.connections.filter(connection => connection.request.startsWith("POST /v1/responses"));
-    expect(posts.map(connection => connection.sentAfterHead > LINK_CHILD_WS_LIMITS.localMessageBytes)).toEqual([true]);
+    expect(posts.map(connection => connection.sentAfterHead > DESIGN_MESSAGE_LIMIT)).toEqual([true]);
     expect(pair.records[0]).toBe("link_ws_open:connected");
     expect(pair.records.some(record => record.startsWith("link_ws_fallback:"))).toBe(false);
     expect(pair.rows).toEqual(["http:200"]);
