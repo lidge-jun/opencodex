@@ -620,7 +620,8 @@ export function journalledRevokeError(error: unknown, operationId: string): unkn
 const REVOKE_REFUSALS: Record<string, string> = {
   operation_mismatch: "This operation id was already used with other parameters. Nothing was changed; repeat it with the flags of its first attempt, or use a new operation id.",
   link_operation_open: "An unfinished revoke holds this link; repeat it with its own operation id to settle it first. Nothing was changed.",
-  link_operation_in_progress: "Another link operation for this alias or link is running. Nothing was changed; retry when it ends.",
+  // A resumed revoke can re-own its retirement receipt before this 409 (#8416), so it claims only what holds for every path.
+  link_operation_in_progress: "Another link operation for this alias or link is running. This attempt did not touch the link, its key or the Child; retry when it ends.",
   operation_journal_unreadable: "The link operation journal (<configDir>/link/operations.json) is damaged. Nothing was changed; keep a copy, move it aside and retry. ocx link revoke --force without --operation-id still runs.",
   // Refused before the tombstone is written, before the first intent and before the tunnel stops (removeReserved).
   // tombstone_write_failed stays generic: the file may have been written before its permissions step failed.

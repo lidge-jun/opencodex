@@ -222,7 +222,6 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
   test.each([
     ["operation_mismatch", 409, 5, "used with other parameters"],
     ["link_operation_open", 409, 5, "unfinished revoke holds this link"],
-    ["link_operation_in_progress", 409, 5, "Another link operation"],
     ["operation_journal_unreadable", 500, 1, "journal"],
   ])("%s prints local text that nothing was changed, with the code", async (code, status, exit, text) => {
     const h = harness([{ status, body: { error: { code, message: "server-chosen text" } } }]); try {
@@ -232,6 +231,18 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
       expect(printed).toContain("Nothing was changed");
       expect(printed).toContain("(code " + code + ")");
       expect(printed).not.toContain("server-chosen text");
+    } finally { h.restore(); }
+  });
+
+  // #8416: a resumed revoke can re-own its retirement receipt before this 409, so the CLI claims only what holds for it.
+  test("link_operation_in_progress says the link, its key and the Child were not touched, with the code", async () => {
+    const h = harness([{ status: 409, body: { error: { code: "link_operation_in_progress", message: "server-chosen text" } } }]); try {
+      expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-9"], h.deps)).toBe(5);
+      const printed = [...h.out, ...h.err].join("\n");
+      expect(printed).toContain("Another link operation");
+      expect(printed).toContain("did not touch the link, its key or the Child");
+      expect(printed).not.toContain("Nothing was changed");
+      expect(printed).toContain("(code link_operation_in_progress)");
     } finally { h.restore(); }
   });
 
