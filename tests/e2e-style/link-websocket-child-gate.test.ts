@@ -114,7 +114,7 @@ async function tapChild(childPort: number): Promise<{ port: number; connections:
     connections.push(entry);
     const upstream = connect({ host: "127.0.0.1", port: childPort });
     let requestHead = Buffer.alloc(0); let answerHead = Buffer.alloc(0);
-    client.on("data", chunk => {
+    client.on("data", (chunk: Buffer) => {
       if (!entry.request) {
         requestHead = Buffer.concat([requestHead, chunk]);
         const end = requestHead.indexOf("\r\n\r\n");
@@ -122,7 +122,7 @@ async function tapChild(childPort: number): Promise<{ port: number; connections:
       } else entry.sentAfterHead += chunk.length;
       upstream.write(chunk);
     });
-    upstream.on("data", chunk => {
+    upstream.on("data", (chunk: Buffer) => {
       if (!entry.answer) {
         answerHead = Buffer.concat([answerHead, chunk]);
         const end = answerHead.indexOf("\r\n\r\n");
