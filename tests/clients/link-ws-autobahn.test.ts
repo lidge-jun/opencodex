@@ -55,7 +55,8 @@ function control(path: string): Promise<string> {
 function runCase(index: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const url = new URL(BASE);
-    const socket: Socket = connect({ host: url.hostname, port: Number(url.port) });
+    // URL.hostname keeps an IPv6 literal in brackets ([::1]); node:net wants it bare.
+    const socket: Socket = connect({ host: url.hostname.replace(/^\[(.*)\]$/, "$1"), port: Number(url.port) });
     const key = randomBytes(16).toString("base64");
     socket.once("error", error => reject(error));
     socket.write("GET /runCase?case=" + index + "&agent=" + AGENT + " HTTP/1.1\r\nHost: " + url.host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
