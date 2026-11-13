@@ -35,7 +35,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--method` | string | Kiro only: builder-id, google or github; add-only and incompatible with --reauth, --id, --device or --code. |
 | `--code` | string | Use - to read authorization material from stdin. |
 | `--no-wait` | boolean | Return after flow start. |
-| `--json` | boolean | Emit the command result as JSON. |
+| `--json` | boolean | Emit the command result as JSON; xAI --device requires --no-wait. |
 | `--open-browser` | string | on or off for browser-capable login; rejected for explicit/native device flows. |
 | `--add-account` | string | Fresh generic OAuth login only: on forces a fresh flow, off permits existing import preference. Not supported with reauth/Codex/Kiro method. |
 
@@ -601,7 +601,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--device` | boolean | Codex device login or xAI device authorization; a no-op for already-device-native kimi, nous and github-copilot. |
 | `--code` | string | Use - to read the short-lived authorization code from stdin. |
 | `--no-wait` | boolean | Return after starting the flow. |
-| `--json` | boolean | Emit login instructions or completion state. |
+| `--json` | boolean | Emit login instructions or completion state; xAI --device requires --no-wait. |
 | `--open-browser` | string | on or off for browser-capable login; rejected for explicit/native device flows. |
 
 - Alias of account login with --reauth. openai, codex and chatgpt address the pool; native main uses account main reauth. Human completes authorization; keep returned login material out of transcripts. Kiro --method cannot be combined with reauth.
