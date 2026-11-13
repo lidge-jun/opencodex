@@ -65,6 +65,7 @@ function harness(options: {
   const tunnels: Tunnel[] = [];
   const kills: Array<{ pid: number; signal: string }> = [];
   const removed: string[] = [];
+  const warns: string[] = [];
   const probes = new Map<string, number>();
   let supervisor!: LinkSupervisor;
   const proofs: RouteProofRegistry = createRouteProofRegistry({ now: () => now, generationOf: id => supervisor.connectionGeneration?.(id) });
@@ -138,9 +139,10 @@ function harness(options: {
     clearTimer: () => {},
     sshCapture: () => null,
     routeProof: proofs,
+    warn: message => { warns.push(message); },
   });
   return {
-    supervisor, runs, tunnels, kills, proofs, removed,
+    supervisor, runs, tunnels, kills, proofs, removed, warns,
     advance: async (ms: number) => { now += ms; tick(); await flush(); },
     /** Move the clock without a tick (a delayed timer). */
     skip: (ms: number) => { now += ms; },
@@ -884,9 +886,249 @@ test.each([
     await h.tick();
     expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(orphan === undefined ? 1 : 0);
     expect(h.kills).toEqual([]);
+    if (orphan === undefined) return;
+    // The blocked link's pidfile is read again on every tick: once it is gone, the block lifts without a restart.
+    rmSync(path, { recursive: true, force: true });
+    await h.advance(1_000);
+    expect(h.state().orphan).toBeUndefined();
+    await h.tick();
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+const unreadablePidfiles = [
+  ["is a directory", (path: string) => { mkdirSync(path); }],
+  ["holds no pidfile", (path: string) => { writeFileSync(path, "not a pidfile\n"); }],
+] as const;
+
+/** A multi-route harness on a temporary pidfile directory, read with the supervisor's own reader. */
+async function withPidfileDir(run: (dir: string, path: string) => Promise<void>): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-link-pid-"));
+  try { await run(dir, join(dir, LINK + ".pid")); } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test.each(unreadablePidfiles)("a multi-route link whose pidfile %s at start is blocked, warned once, and starts once the file is gone", async (_case, spoil) => {
+  await withPidfileDir(async (dir, path) => {
+    spoil(path);
+    const h = await started({ pidfileDir: dir });
+    // An existing pidfile that cannot be read may name the ssh still holding the port.
+    expect(h.state().orphan).toBe("orphan-unverified");
+    for (let i = 0; i < 3; i += 1) await h.advance(60_000);
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+    expect(h.kills).toEqual([]);
+    expect(h.warns.filter(line => line.includes("pidfile unreadable"))).toEqual([`[link] pidfile unreadable; link stays blocked link=${LINK}`]);
+    rmSync(path, { recursive: true, force: true });
+    await h.advance(1_000);
+    expect(h.state().orphan).toBeUndefined();
+    await h.tick();
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+  });
+});
+
+test("an unreadable pidfile that becomes readable is watched like any earlier tunnel until its process is gone", async () => {
+  await withPidfileDir(async (dir, path) => {
+    mkdirSync(path);
+    let alive = true;
+    const h = await started({ pidfileDir: dir, processArgv: () => alive ? ["ssh"] : null, processAlive: () => alive });
+    expect(h.state().orphan).toBe("orphan-unverified");
+    rmSync(path, { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 4646, argv: ["ssh"] }) + "\n");
+    await h.advance(5_000);
+    // A legacy pidfile without a start time: watched without signals, still blocking.
+    expect(h.state().orphan).toBe("orphan-unverified");
+    expect(h.kills).toEqual([]);
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+    alive = false;
+    await h.advance(1_000);
+    expect(h.state().orphan).toBeUndefined();
+    await h.tick();
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+  });
+});
+
+test("a reload that changes a flagged link's record keeps it blocked while the earlier tunnel may live", async () => {
+  // A new listener port changes every record instance but not the Child's tunnel port the earlier ssh holds.
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+  let alive = true;
+  const h = await started({
+    store: () => current,
+    pidfile: { version: 1, linkId: LINK, pid: 4747, argv: ["ssh"] },
+    processArgv: () => alive ? ["ssh"] : null, processAlive: () => alive,
+  });
+  expect(h.state().orphan).toBe("orphan-unverified");
+  current = { ...current, listenerPort: LISTENER_PORT + 10 };
+  await h.supervisor.reload();
+  await h.tick();
+  expect(h.state().orphan).toBe("orphan-unverified");
+  await h.advance(5_000);
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+  expect(h.kills).toEqual([]);
+  alive = false;
+  await h.advance(1_000);
+  expect(h.state().orphan).toBeUndefined();
+  await h.tick();
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+});
+
+
+test("a reload that changes a watched link's record keeps watching the earlier process after its pidfile is gone", async () => {
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+  let alive = true;
+  let file: Pidfile | null = { version: 1, linkId: LINK, pid: 4848, argv: ["ssh"] };
+  const h = await started({ store: () => current, pidfile: () => file, processArgv: () => alive ? ["ssh"] : null, processAlive: () => alive });
+  expect(h.state().orphan).toBe("orphan-unverified");
+  // The pidfile goes while its ssh still runs; the watch already holds that process.
+  file = null;
+  current = { ...current, listenerPort: LISTENER_PORT + 10 };
+  await h.supervisor.reload();
+  await h.advance(5_000);
+  expect(h.state().orphan).toBe("orphan-unverified");
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+  alive = false;
+  await h.advance(1_000);
+  expect(h.state().orphan).toBeUndefined();
+  await h.tick();
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+});
+
+test("after a reload that replaced its record, a watch only observes: no signal, and no pidfile removal when the process ends", async () => {
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+  let alive = true;
+  const argv = ["ssh", "-N", "old"];
+  const h = await started({
+    store: () => current, stubborn: true,
+    pidfile: { version: 1, linkId: LINK, pid: 4949, argv, startTime: 888 },
+    processArgv: () => alive ? argv : null, processStart: () => alive ? 888 : null, processAlive: () => alive,
+  });
+  expect(h.kills).toEqual([{ pid: 4949, signal: "SIGTERM" }]);
+  current = { ...current, listenerPort: LISTENER_PORT + 10 };
+  await h.supervisor.reload();
+  for (let i = 0; i < 5; i += 1) await h.advance(1_000);
+  expect(h.kills).toEqual([{ pid: 4949, signal: "SIGTERM" }]);
+  alive = false;
+  await h.advance(1_000);
+  expect(h.state().orphan).toBeUndefined();
+  expect(h.removed).toEqual([]);
+});
+
+test("a pidfile unreadable at a reload that replaced the record is never acted on once it becomes readable", async () => {
+  await withPidfileDir(async (dir, path) => {
+    mkdirSync(path);
+    let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+    let alive = true;
+    const argv = ["ssh", "-N", "old"];
+    const h = await started({
+      store: () => current, pidfileDir: dir,
+      processArgv: () => alive ? argv : null, processStart: () => alive ? 999 : null, processAlive: () => alive,
+    });
+    current = { ...current, listenerPort: LISTENER_PORT + 10 };
+    await h.supervisor.reload();
+    await h.tick();
+    rmSync(path, { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 5050, argv, startTime: 999 }) + "\n");
+    await h.advance(1_000);
+    await h.advance(3_000);
+    expect(h.state().orphan).toBe("orphan-unverified");
+    expect(h.kills).toEqual([]);
+    alive = false;
+    await h.advance(1_000);
+    expect(h.state().orphan).toBeUndefined();
+    expect(h.removed).toEqual([]);
+  });
+});
+
+
+test("a watch whose pidfile turns unreadable does not lift the block when its process ends", async () => {
+  await withPidfileDir(async (dir, path) => {
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 5151, argv: ["ssh"] }) + "\n");
+    let alive = true;
+    const h = await started({ pidfileDir: dir, processArgv: () => alive ? ["ssh"] : null, processAlive: () => alive });
+    expect(h.state().orphan).toBe("orphan-unverified");
+    // The file is replaced by something unreadable: it may name another tunnel now.
+    rmSync(path);
+    mkdirSync(path);
+    alive = false;
+    await h.advance(1_000);
+    await h.advance(60_000);
+    expect(h.state().orphan).toBe("orphan-unverified");
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+    expect(h.warns.filter(line => line.includes("pidfile unreadable"))).toHaveLength(1);
+    rmSync(path, { recursive: true });
+    await h.advance(1_000);
+    expect(h.state().orphan).toBeUndefined();
+    await h.tick();
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+  });
+});
+
+test("a blocked link that is removed and added again with the same id is settled from its pidfile, not left blocked", async () => {
+  await withPidfileDir(async (dir, path) => {
+    mkdirSync(path);
+    const other = record(["beta-lan", "pen-alpha"], "lnk_fedcba9876543210", 19004);
+    const blocked = record(["alpha-lan", "pen-alpha"]);
+    let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [blocked, other] };
+    const h = await started({ store: () => current, pidfileDir: dir });
+    expect(h.state().orphan).toBe("orphan-unverified");
+    current = { ...current, links: [other] };
+    await h.supervisor.reload();
+    await h.advance(1_000);
+    rmSync(path, { recursive: true });
+    current = { ...current, links: [blocked, other] };
+    await h.supervisor.reload();
+    await h.tick();
+    expect(h.state().orphan).toBeUndefined();
+    expect(h.runs.filter(run => run.kind === "probe" && run.destination === "alpha-lan")).toHaveLength(1);
+  });
+});
+
+
+test("a pidfile replaced while unreadable, after the watched process ended, is only observed once readable", async () => {
+  await withPidfileDir(async (dir, path) => {
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 5252, argv: ["ssh"] }) + "\n");
+    let oldAlive = true;
+    let newAlive = true;
+    const newArgv = ["ssh", "-N", "new"];
+    const h = await started({
+      pidfileDir: dir,
+      processArgv: pid => pid === 5252 ? (oldAlive ? ["ssh"] : null) : (newAlive ? newArgv : null),
+      processStart: pid => pid === 5353 && newAlive ? 1234 : null,
+      processAlive: pid => pid === 5252 ? oldAlive : newAlive,
+    });
+    expect(h.state().orphan).toBe("orphan-unverified");
+    rmSync(path);
+    mkdirSync(path);
+    oldAlive = false;
+    await h.advance(1_000);
+    // Another owner's tunnel, with a provable identity, now holds the pidfile.
+    rmSync(path, { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 5353, argv: newArgv, startTime: 1234 }) + "\n");
+    await h.advance(1_000);
+    await h.advance(3_000);
+    expect(h.kills).toEqual([]);
+    expect(h.state().orphan).toBe("orphan-unverified");
+    newAlive = false;
+    await h.advance(1_000);
+    expect(h.state().orphan).toBeUndefined();
+    expect(h.removed).toEqual([]);
+  });
+});
+
+test("a reload that changes the record of a link blocked by an unreadable pidfile keeps it blocked", async () => {
+  await withPidfileDir(async (dir, path) => {
+    mkdirSync(path);
+    let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+    const h = await started({ store: () => current, pidfileDir: dir });
+    expect(h.state().orphan).toBe("orphan-unverified");
+    current = { ...current, listenerPort: LISTENER_PORT + 10 };
+    await h.supervisor.reload();
+    await h.tick();
+    await h.advance(60_000);
+    expect(h.state().orphan).toBe("orphan-unverified");
+    expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+    expect(h.warns.filter(line => line.includes("pidfile unreadable"))).toHaveLength(1);
+  });
 });
 
 test("a link on a later route stays there until ocx link reconnect starts a round from the first rested route", async () => {
