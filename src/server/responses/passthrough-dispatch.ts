@@ -430,7 +430,7 @@ export async function preparePassthroughExchange(
     // `{model, input, stream}` with no tools and Copilot answers with a `custom_tool_call` for
     // `apply_patch`. Policing an absent catalog truncates that turn. An unreadable body lands there
     // too because the proxy cannot establish the caller's declared authorization boundary.
-    let outboundRequestBody: Record<string, unknown> | undefined;
+    let outboundRequestText: string | undefined; // #8601: the parsed copy is rebuilt for each reader, never kept while the turn streams
     const declaredWireToolNames = new Set<string>();
     const declaredBareWireToolNames = new Set<string>();
     const declaredNamelessClientCallTypes = new Set<string>();
@@ -456,7 +456,7 @@ export async function preparePassthroughExchange(
       restoreRoutedNamespaceCalls(value, authorizedBareNamespaceToolAliases).value;
     const normalizeFunctionCompletionJson = (text: string): string => {
       const snapshot = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
-        ? repairResponsesSnapshotJson(text, outboundRequestBody)
+        ? repairResponsesSnapshotJson(text, outboundRequestText === undefined ? undefined : parseOutboundRequestBody(outboundRequestText))
         : text;
       // Sparse gateways need completion status inferred before schema repair can
       // distinguish completed arguments from in-progress placeholders.
@@ -464,7 +464,7 @@ export async function preparePassthroughExchange(
     };
     let undeclaredToolGuardActive = false;
     const refreshUndeclaredToolGuard = (builtRequest: AdapterRequest): void => {
-      outboundRequestBody = parseOutboundRequestBody(builtRequest.body);
+      outboundRequestText = builtRequest.body; const outboundRequestBody = parseOutboundRequestBody(outboundRequestText);
       providerExecutedCallTypes.clear();
       if (isXaiResponsesDestination(route.provider)) {
         // Preserve the caller-declared authorization recognized by the original classifier, then
@@ -1969,10 +1969,10 @@ export async function preparePassthroughExchange(
     },
     functionRepairSchemas,
     get outboundRequestBody(): Record<string, unknown> | undefined {
-      return outboundRequestBody;
+      return outboundRequestText === undefined ? undefined : parseOutboundRequestBody(outboundRequestText);
     },
     set outboundRequestBody(value: Record<string, unknown> | undefined) {
-      outboundRequestBody = value;
+      outboundRequestText = value === undefined ? undefined : JSON.stringify(value);
     },
     declaredWireToolNames,
     declaredBareWireToolNames,

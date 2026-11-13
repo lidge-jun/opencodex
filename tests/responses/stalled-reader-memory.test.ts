@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as passthroughCompletion from "../../src/server/responses/passthrough-completion";
 import { handleResponses } from "../../src/server/responses";
 import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import { LINK_TURN_HEADER, registerLinkTurnToken, type LinkTurnObserver } from "../../src/server/link-turn";
@@ -109,6 +110,33 @@ describe("the eager relay under a stalled reader (#8601)", () => {
     const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }, { linkTurn: observer(true) }));
     run.pulls.forEach((pulls, reads) => expect(pulls).toBeLessThanOrEqual(reads + 1));
     expect(run.text).toBe(delivered);
+  });
+});
+
+
+describe("request copies under a stalled reader (#8601)", () => {
+  test("a streaming passthrough turn keeps no parsed copy of its outbound body while it streams", async () => {
+    // Every parse of the outbound body is watched; once the stream is under way, none may still be reachable.
+    const copies: Array<WeakRef<object>> = [];
+    const parseOutboundRequestBody = passthroughCompletion.parseOutboundRequestBody;
+    const parse = spyOn(passthroughCompletion, "parseOutboundRequestBody").mockImplementation(text => {
+      const body = parseOutboundRequestBody(text);
+      if (body) copies.push(new WeakRef(body));
+      return body;
+    });
+    releaseSpendHome = acquireOwnedSpendHome();
+    upstream();
+    try {
+      const response = await handleResponses(request(), config, { model: "", provider: "" });
+      const reader = response.body!.getReader();
+      await reader.read();
+      await settle();
+      parse.mockClear(); // the spy records every result; only the pipeline may keep one
+      Bun.gc(true);
+      expect(copies.length).toBeGreaterThan(0);
+      expect(copies.filter(copy => copy.deref() !== undefined)).toHaveLength(0);
+      await reader.cancel();
+    } finally { parse.mockRestore(); }
   });
 });
 
