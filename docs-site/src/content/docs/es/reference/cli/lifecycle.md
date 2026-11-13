@@ -402,7 +402,7 @@ El valor se envía como un token de portador, pero nunca se acepta como un valor
 La URL debe nombrar `/v1/catalog` en la raíz del host. Este comando no admite un proxy inverso que sirva el punto final bajo un prefijo de ruta.
 
 El comando descarga el catálogo completo y compara bytes localmente en lugar de emitir un `ETag` /
-`If-None-Match` Solicitud condicional. Los bytes idénticos se tratan como un no-op completo, por lo que Codex casa cuyo catálogo es correcto, pero cuya `models_cache.json` falta o es rancio no reparado por este comando; usar `ocx sync-cache` Por eso.
+Se envía una solicitud condicional con `If-None-Match`. Si el catálogo contiene los mismos bytes, el comando no cambia nada. Si el catálogo es correcto pero falta `models_cache.json` o está desactualizado, usa `ocx sync-cache` para repararlo.
 
 `--json` emite un sobre estable en stdout. `schemaVersion`, `ok`, `status`, `catalogWritten`, `cacheSynced` y `codexRestarted` están siempre presentes. `codexRestarted` todavía significa solo servidores de aplicaciones. `desktopAppRestarted` está presente solo cuando se solicitó un reinicio del escritorio, y es `true` solo cuando se inició el relanzamiento; un traspaso no es un éxito. `status` es `updated`, `unchanged`, o `failed`. Un tirón exitoso agrega `modelCount`; un fallo agrega `code`, que es el campo en el que se ramifica un script:
 
@@ -630,7 +630,7 @@ ocx codex-shim uninstall
 Después de desinstalar Unix, elimine la línea de origen del archivo de inicio de shell y reinicie el shell o elimine la entrada de bin privado de su PATH. La desinstalación elimina el envoltorio, el archivo de entorno de shell y el estado propios; deja intacto el lanzador del administrador de paquetes. Se libera una shim Unix más antigua en el lugar utilizando sus datos de restauración registrados.
 
 :::note[Entorno del token en Windows]
-Windows CMD y las shims PowerShell recientemente generadas restauran el número de la persona que llama `OPENCODEX_API_AUTH_TOKEN` Después de la ejecución. Codex y sus procesos secundarios aún pueden heredar el token.
+Los shims nuevos de CMD y PowerShell en Windows restauran al terminar el valor de `OPENCODEX_API_AUTH_TOKEN` que tenía el proceso que los llamó. Codex y sus procesos secundarios aún pueden heredar el token.
 
 Después de actualizar OpenCodex, vuelva a crear una shim Windows existente con `ocx codex-shim uninstall` seguido por `ocx codex-shim install` para obtener este comportamiento. Una actualización ordinaria no reescribe una shim Windows saludable.
 :::
