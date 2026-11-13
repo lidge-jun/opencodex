@@ -315,10 +315,16 @@ function acquireFillLock(root, rootIdentity, now) {
     if (!sameDirectory(root, rootIdentity)) throw new Error("cache directory changed");
     const temp = join(root, ".ocx-child-cache." + token + ".lock.tmp");
     const fd = openSync(temp, "wx", 0o600);
-    try { writeSync(fd, token + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
-    try { linkSync(temp, path); return { path, token }; }
-    catch (error) { if (error?.code !== "EEXIST") throw error; }
-    finally { removeQuietly(temp); }
+    try {
+      // As in publish: the whole record or nothing, and the temp never outlives a failed write or fsync.
+      const record = Buffer.from(token + "\n");
+      try {
+        if (writeSync(fd, record) !== record.length) throw new Error("short write to the cache fill lock");
+        fsyncSync(fd);
+      } finally { closeSync(fd); }
+      try { linkSync(temp, path); return { path, token }; }
+      catch (error) { if (error?.code !== "EEXIST") throw error; }
+    } finally { removeQuietly(temp); }
     const holder = readLock(path);
     if (holder && processAlive(holder.pid) && now() - holder.mtimeMs < STALE_LOCK_MS) return null;
     // Move the leftover aside, and put it back if a live fill took the lock in the meantime.

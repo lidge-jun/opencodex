@@ -14,6 +14,7 @@ import { startChildBinaryCacheFill } from "../../src/link/child-binary-cache-sta
 import { CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 import * as ownershipModule from "../../src/lib/config-ownership";
 import * as pathsModule from "../../src/config/paths";
+import * as fsModule from "node:fs";
 
 // Lane O2: an updated Home of version V fills ocx-child-builds/V/ from the GitHub release of V, trusting
 // only the digests inside its own installed package, so a packaged Home can plant ocx-child after an update.
@@ -789,5 +790,17 @@ describe("the reader and the fill resolve the same Home", () => {
       configDir.mockRestore();
       if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
     }
+  });
+});
+
+describe("the fill lock's temp file", () => {
+  test("a lock write that fails leaves no .lock.tmp behind", async () => {
+    bothDigests();
+    ranBefore();
+    const fsync = spyOn(fsModule, "fsyncSync").mockImplementationOnce(() => { throw Object.assign(new Error("no space"), { code: "ENOSPC" }); });
+    try {
+      await expect(fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl)).rejects.toThrow("no space");
+    } finally { fsync.mockRestore(); }
+    expect(readdirSync(join(home, "ocx-child-builds")).filter(name => name.endsWith(".tmp"))).toEqual([]);
   });
 });
