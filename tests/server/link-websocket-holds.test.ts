@@ -351,7 +351,7 @@ describe("release over HTTP through the real listener", () => {
       http.destroy();
       return head.status;
     };
-    return { lifecycle, postZstd };
+    return { lifecycle, postZstd, port, identity };
   }
 
   test("a relayed POST that the inbound body budget refuses never decodes the copy (#8608)", async () => {
@@ -385,6 +385,40 @@ describe("release over HTTP through the real listener", () => {
     // Under the limit, the same accepted request releases the hold.
     expect(await postZstd(Bun.zstdCompressSync(new TextEncoder().encode(JSON.stringify({ model: "m", input: result("call_l") }))))).toBe(200);
     expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(0);
+  });
+
+  test("a relayed POST aborted before its headers never decodes its copy, and the copy is cancelled (#8613 review)", async () => {
+    let bodyRead!: () => void;
+    const read = new Promise<void>(resolve => { bodyRead = resolve; });
+    let abortSeen!: () => void;
+    const aborted = new Promise<void>(resolve => { abortSeen = resolve; });
+    const { lifecycle, port, identity } = await heldLink("thread-x", "call_x", 1 << 20, async req => {
+      await req.arrayBuffer();
+      bodyRead();
+      // The Child goes away before the handler answers.
+      await new Promise<void>(resolve => { if (req.signal.aborted) resolve(); else req.signal.addEventListener("abort", () => resolve(), { once: true }); });
+      abortSeen();
+      return new Response("{}", { status: 200 });
+    });
+    const originalClone = Request.prototype.clone;
+    const copies: Request[] = [];
+    const clone = spyOn(Request.prototype, "clone").mockImplementation(function (this: Request) { const copy = originalClone.call(this); copies.push(copy); return copy; });
+    const decode = spyOn(requestDecompress, "decodeRequestBody");
+    try {
+      const http = await LinkWireClient.open(port);
+      const session = await http.challenge(identity);
+      http.sendRequest("POST /v1/responses HTTP/1.1", { host: "127.0.0.1", "content-type": "application/json", "content-encoding": "zstd", authorization: "Bearer " + KEY.key, "x-opencodex-link-session": session.nonce, "thread-id": "thread-x" },
+        Bun.zstdCompressSync(new TextEncoder().encode(JSON.stringify({ model: "m", input: result("call_x") }))));
+      await read;
+      http.destroy();
+      await aborted;
+      await lifecycle.activityHoldsSettled();
+      expect(decode).not.toHaveBeenCalled();
+      expect(copies).toHaveLength(1);
+      // The copy was consumed without a decode: the refusal cancelled it, so it holds no bytes for anyone to read.
+      expect(copies[0]!.bodyUsed).toBe(true);
+    } finally { clone.mockRestore(); decode.mockRestore(); }
+    expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(1);
   });
 });
 
