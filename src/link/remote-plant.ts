@@ -301,7 +301,8 @@ export function parsePurgeDisconnectReport(stdout: string): boolean | null {
 export const PURGE_KEPT_IN_USE_MARKER = "ocx-purge-kept:binary_in_use";
 
 export type PurgeDisconnectOutcome =
-  | { readonly ok: true }
+  /** bound: the managed binary checked --expect-link (false for one older than that flag, which ran unbound). */
+  | { readonly ok: true; readonly bound: boolean }
   /** notAttempted: the Child's disconnect never ran (inspection failed, a full install, or no planted binary to run). */
   | { readonly ok: false; readonly status: number; readonly code: string; readonly message: string; readonly hint?: string; readonly notAttempted?: true };
 
@@ -316,6 +317,7 @@ export async function purgeDisconnectRemote(
   knownHostsFile: string,
   platform: "posix" | "windows",
   childKind: "ephemeral" | "full" | undefined,
+  expectLink?: string,
 ): Promise<PurgeDisconnectOutcome> {
   const failed = (message: string, hint?: string): PurgeDisconnectOutcome => ({ ok: false, status: 502, code: "remote_disconnect_failed", message, ...(hint ? { hint } : {}) });
   const notAttempted = (message: string, hint?: string): PurgeDisconnectOutcome => ({ ok: false, status: 502, code: "remote_disconnect_failed", message, ...(hint ? { hint } : {}), notAttempted: true });
@@ -329,8 +331,19 @@ export async function purgeDisconnectRemote(
   if (kind !== "ephemeral") {
     return { ok: false, status: 409, code: "purge_unsupported", message: "This Child runs a full OpenCodex install; --purge removes only a planted ocx-child. Disconnect without --purge.", notAttempted: true };
   }
+  const purgeArgv = (link?: string) => buildExecArgv({ alias, argv: remoteManagedPurgeDisconnectArgv(platform, link), knownHostsFile, route });
   let result;
-  try { result = await runner.run(buildExecArgv({ alias, argv: remoteManagedPurgeDisconnectArgv(platform), knownHostsFile, route }), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
+  let bound = expectLink !== undefined;
+  try { result = await runner.run(purgeArgv(expectLink), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
+  // A planted binary older than --expect-link rejects it as a usage error (exit 2) before doing anything: run unbound.
+  if (bound && result.code === CHILD_USAGE_EXIT) {
+    bound = false;
+    try { result = await runner.run(purgeArgv(), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
+  }
+  // detach --expect-link refused without changing anything: another link owns this Child (5), or it keeps state it cannot restore (6).
+  if (bound && (result.code === CHILD_EXPECT_CONFLICT_EXIT || result.code === CHILD_EXPECT_RESIDUAL_EXIT)) {
+    return notAttempted("The Child is not attached to this link, so it was not disconnected.", result.code === CHILD_EXPECT_CONFLICT_EXIT ? "child_link_mismatch" : "child_residual");
+  }
   if (result.code !== 0) {
     // The script prints the marker and exits before it runs the binary.
     if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) return notAttempted("No planted ocx-child was found in the managed directory, so nothing was purged.", "managed_child_missing");
@@ -340,8 +353,13 @@ export async function purgeDisconnectRemote(
     if (result.stderr.includes(PURGE_KEPT_IN_USE_MARKER)) return failed("The Child disconnected, but kept the planted ocx-child because another ocx-child relay runs from it; the link was kept.", "binary_in_use");
     return failed("The Child disconnected but did not report removing the planted ocx-child binary.", "purge_incomplete");
   }
-  return { ok: true };
+  return { ok: true, bound };
 }
+
+/** Exit codes of a Child refusing a link-bound command (ocx-child detach, ocx disconnect --expect-link). */
+export const CHILD_USAGE_EXIT = 2;
+export const CHILD_EXPECT_CONFLICT_EXIT = 5;
+export const CHILD_EXPECT_RESIDUAL_EXIT = 6;
 
 /** The distinct reason a plant failed on the Child, when the plant script reported one. */
 export function classifyPlantFailure(stderr: string): "hash_tool_unavailable" | null {

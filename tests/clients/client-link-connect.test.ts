@@ -664,6 +664,12 @@ describe("client link connection contracts", () => {
     expect(skipsCodexShimAutoRestore("disconnect", ["disconnect", "--orphaned-token"])).toBe(true);
   });
 
+  test("a Home's link-bound disconnect bypasses automatic shim repair, so a refusal changes nothing", () => {
+    expect(skipsCodexShimAutoRestore("disconnect", ["disconnect", "--expect-link", linkId])).toBe(true);
+    expect(skipsCodexShimAutoRestore("disconnect", ["disconnect", "--expect-link=" + linkId])).toBe(true);
+    expect(skipsCodexShimAutoRestore("disconnect", ["disconnect"])).toBe(false);
+  });
+
   test("orphan token refusal and link enrollment name the explicit recovery command", async () => {
     await withLinkHome(async home => {
       writeFileSync(join(home, "service-api-token"), `${key}\n`, { mode: 0o600 });

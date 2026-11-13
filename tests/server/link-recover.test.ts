@@ -47,7 +47,7 @@ function link(over: Partial<LinkRecord> = {}): LinkRecord {
   };
 }
 
-function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string } = {}) {
+function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWriteFails?: boolean; duringKeyRevoke?: (other: { dropLink(): void }) => void; duringStop?: () => void; operationsPath?: string; ordinary?: (command: string) => SshRunResult | undefined } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: (opts.keyRevokeFails ? [{ id: "fixture-key" }] : []) as OcxConfig["apiKeys"] };
   const knownHosts = join(root, "known_hosts");
@@ -78,6 +78,8 @@ function harness(links: LinkRecord[], opts: { keyRevokeFails?: boolean; storeWri
       commands.push(argv.join(" "));
       if (command.includes("ocx-recover-receipt")) return absent();
       if (!command.includes("ocx-managed-purge")) {
+        const plain = command.includes("disconnect") ? opts.ordinary?.(command) : undefined;
+        if (plain) return plain;
         // Platform discovery for a tombstone without a recorded platform: not Windows, then uname.
         if (probes) { probes.push(argv.join(" ")); return probes.length === 1 ? ok("", 1) : ok("Linux\n"); }
         throw new Error("Unexpected SSH command: " + command);
@@ -609,5 +611,47 @@ describe("final review follow-ups", () => {
     expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([500, "operation_journal_failed"]);
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
     expect(tombstones()).toEqual([]);
+  });
+});
+
+describe("ordinary and --purge revokes are bound to their link (--expect-link)", () => {
+  const leftTombstone = () => recordTombstone({ linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-01T00:00:00.000Z" });
+
+  test("an ordinary revoke whose Child confirms the link settles a tombstone left for it", async () => {
+    const h = harness([link()], { ordinary: command => (command.includes("--expect-link") ? ok() : undefined) });
+    leftTombstone();
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect(res.status).toBe(200);
+    expect(h.commands.filter(c => c.includes("disconnect")).map(c => c.includes("--expect-link"))).toEqual([true]);
+    expect(tombstones()).toEqual([]);
+  });
+
+  test("an older Child that rejects --expect-link (exit 2) is disconnected unbound, and the tombstone stays for recover", async () => {
+    const h = harness([link()], { ordinary: command => (command.includes("--expect-link") ? ok("", 2, "Error: Unexpected argument(s)") : ok()) });
+    leftTombstone();
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect(res.status).toBe(200);
+    expect(h.commands.filter(c => c.includes("disconnect")).map(c => c.includes("--expect-link"))).toEqual([true, false]);
+    expect(h.store.links).toEqual([]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
+  });
+
+  test("a Child attached to another link refuses (exit 5): nothing is disconnected and the link stays", async () => {
+    const h = harness([link()], { ordinary: () => ok("", 5, '{"phase":"child_link_mismatch","reason":"other_link"}') });
+    const res = await h.request("DELETE", "/api/link/" + ID, {});
+    expect([res.status, (await errorOf(res)).hint]).toEqual([502, "child_link_mismatch"]);
+    expect(h.commands.filter(c => c.includes("disconnect"))).toHaveLength(1);
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+  });
+
+  test("a --purge revoke on a planted binary older than --expect-link runs unbound and keeps the tombstone", async () => {
+    const h = harness([link()]);
+    let calls = 0;
+    h.answer(() => (calls++ === 0 ? ok("", 2, "Usage: ocx-child detach [--keep-catalog] [--purge] [--json]\n") : report({ restored: true, outcome: "ExactRestore", daemonRunning: false, purged: true })));
+    leftTombstone();
+    const res = await h.request("DELETE", "/api/link/" + ID, { purge: true });
+    expect(res.status).toBe(200);
+    expect(h.commands.filter(c => c.includes("ocx-managed-purge")).map(c => c.includes("--expect-link"))).toEqual([true, false]);
+    expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });
 });

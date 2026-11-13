@@ -3,7 +3,7 @@ import { probe, confirmHost, apply, serialized } from "./link-enrollment";
 import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
 import { requireRemotePlatform } from "../../link/remote-platform";
-import { purgeDisconnectRemote } from "../../link/remote-plant";
+import { CHILD_EXPECT_CONFLICT_EXIT, CHILD_EXPECT_RESIDUAL_EXIT, CHILD_USAGE_EXIT, purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { LinkTombstoneLimitError, recordTombstone, removeOwnTombstone, removeTombstone, tombstoneNamesAlias, tombstonesPath, type LinkTombstone } from "../../link/tombstones";
@@ -358,6 +358,9 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
       return failure;
     };
     const disconnectFailed = (hint: string | undefined) => fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, hint);
+    // True once the Child confirmed this link before cleaning (--expect-link); only then may the commit settle a
+    // tombstone an earlier forced revoke of this link left. An older Child runs the command unbound.
+    let linkBound = false;
     if (cleanup) {
       const runner = runnerFor(ctx);
       let platform: Awaited<ReturnType<typeof requireRemotePlatform>>;
@@ -366,18 +369,33 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
       }
       if (purge) {
         let purged: Awaited<ReturnType<typeof purgeDisconnectRemote>>;
-        try { purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind); } catch (error) {
+        try { purged = await purgeDisconnectRemote(runner, record.alias, record.explicitRoute ?? null, knownHostsFile(ctx), platform, record.childKind, id); } catch (error) {
           return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
         }
         if (!purged.ok) return cleanupFailed(fail(purged.code, purged.message, purged.status, purged.hint), purged.notAttempted !== true);
         // purgeDisconnectRemote is ok only when the managed ocx-child reported purged:true over this link's route. The
         // receipt must be durable before the link goes; if it cannot be written, stop here (unknown) and leave the
         // tunnel down, since the Child it would reach is purged.
+        linkBound = purged.bound;
         try { journal.done("remote_cleanup", { purged: true, linkId: id }); } catch { return journalFailed(); }
       } else {
+        const disconnectArgv = (bound: boolean) => buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(bound ? ["disconnect", "--expect-link", id] : ["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null });
         let result: Awaited<ReturnType<typeof runner.run>>;
-        try { result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx), route: record.explicitRoute ?? null }), { timeoutMs: 30_000 }); } catch (error) {
+        linkBound = true;
+        try { result = await runner.run(disconnectArgv(true), { timeoutMs: 30_000 }); } catch (error) {
           return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
+        }
+        // An ocx or ocx-child older than --expect-link rejects it as a usage error (exit 2) before doing anything.
+        if (result.code === CHILD_USAGE_EXIT) {
+          linkBound = false;
+          try { result = await runner.run(disconnectArgv(false), { timeoutMs: 30_000 }); } catch (error) {
+            return cleanupFailed(disconnectFailed(sshRunnerErrorHint(error)), true);
+          }
+        }
+        // A link-bound refusal changed nothing on the Child: another link (or a hub, or no connection) owns it now (5),
+        // or an ocx-child keeps state it cannot restore (6). The tunnel restarts and the link stays.
+        if (linkBound && (result.code === CHILD_EXPECT_CONFLICT_EXIT || result.code === CHILD_EXPECT_RESIDUAL_EXIT)) {
+          return cleanupFailed(disconnectFailed(result.code === CHILD_EXPECT_CONFLICT_EXIT ? "child_link_mismatch" : "child_residual"), false);
         }
         if (result.code !== 0) return cleanupFailed(disconnectFailed(sshFailureHint(result.stderr)), true);
         journal.done("remote_cleanup");
@@ -404,8 +422,9 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
       return fail("link_remove_failed", "The link record could not be removed.", 503);
     }
     journal.done("record_removed");
-    // A revoke that cleaned the Child itself settles any tombstone an earlier forced revoke of this link left.
-    if (!force) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
+    // A revoke whose Child confirmed this link (--expect-link) and cleaned itself settles any tombstone an earlier forced
+    // revoke of this link left; an unbound answer (an older Child) leaves it for ocx link recover.
+    if (!force && linkBound) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
     // Same task as the commit, before any fallible cleanup: an open link WebSocket must not outlive its link (design T4 2.4).
     state.listener.closeLinkSockets?.(id);
     try { clearCompensationFailed(id, compensationPath()); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
