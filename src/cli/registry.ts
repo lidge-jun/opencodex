@@ -263,10 +263,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "logout", usage: "ocx logout <provider>", summary: "Remove a stored provider login." },
   {
     name: "gui",
-    usage: "ocx gui [pair --origin <browser-origin> [--json]]",
+    usage: "ocx gui [pair [--desktop] --origin <browser-origin> [--json]]",
     summary: "Open the opencodex dashboard or create a secret single-use remote pairing grant.",
     details: [
       "Pairing requires an explicit allowed --origin; there is no localhost or config-derived default.",
+        "--desktop authorizes only Desktop compatibility actions in an existing standalone local dashboard session, for at most five minutes; it does not authorize Remote Link or key disclosure.",
       "The printed grant is secret, single-use, short-lived, and must not be persisted.",
     ],
   },

@@ -65,6 +65,12 @@ The agents/routing leaf declares local `message sessions` and `message send`, th
 
 The stop declaration in `src/cli/capabilities-observe-system.ts` covers the read-only preservation preflight and shutdown methods at `/api/stop`, both declared in `src/server/management/route-registry.ts`. Discovery and generated help describe the existing `ocx stop [--json]` envelope and ownership exceptions; the declaration grants no shutdown authority. [Runtime](runtime.md) owns refusal, absence and teardown semantics.
 
+`ocx gui pair --desktop --origin <dashboard-origin>` creates a Desktop-purpose one-use grant
+through the signed Desktop path and a private-home intent. It accepts the actual standalone
+loopback dashboard's `localhost` or matching literal origin and exact configured/listening port;
+the ordinary pairing-origin resolver and Hub pairing remain unchanged. The browser consumes
+the code for its current session's bounded [Desktop scope](clients/codex-desktop.md#certificate-setup-api).
+
 `scripts/generate-ocx-skill-surface.ts` renders the compact `skills/ocx/references/01_management_surface.md` index and eight flat domain chapters from the same capability data. The index retains canonical fragment forwarders and links to complete chapter entries. Counts derive from declarations; grouping does not choose runtime dispatch or grant authority. Unknown roots and duplicate anchors are rejected rather than silently omitted.
 
 Generated flag-table cells escape literal pipes, backslashes and line breaks, and absent value types render as empty cells. Rendered Markdown regressions verify that enum choices stay in the meaning cell.
