@@ -144,6 +144,8 @@ export function withRequestLogId(response: Response, requestId: string): Respons
 }
 
 export interface StartServerDeps {
+  /** Test-only observer of what the hub-link admission reports to the link listener (route proofs). */
+  observeAuthenticatedCatalog?: (apiKeyId: string, routeProofId?: string) => void;
   /** Test-only CONNECT binder; permits kernel-assigned ports without probe-and-release races. */
   startClaudeInterceptProxy?: typeof import("../../claude/intercept/connect-proxy").startConnectProxy;
   /** Test-only seam; production always initializes its own management credential state. */

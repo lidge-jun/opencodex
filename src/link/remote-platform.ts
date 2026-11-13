@@ -56,11 +56,19 @@ export async function detectRemotePlatform(runner: SshRunner, alias: string, kno
 }
 
 /** Windows when the fixed %OS% probe answers Windows_NT, otherwise POSIX from uname; never a guess. */
-export async function requireRemotePlatform(runner: Pick<SshRunner, "run">, alias: string, knownHostsFile: string): Promise<"posix" | "windows"> {
-  const windows = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile }), { timeoutMs: 10_000 });
+export async function requireRemotePlatform(
+  runner: Pick<SshRunner, "run">,
+  alias: string,
+  knownHostsFile: string,
+  /** A route to the same machine (HostKeyAlias stays alias), a tighter deadline, and an abort. */
+  over: { destination?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<"posix" | "windows"> {
+  const timeoutMs = over.timeoutMs ?? 10_000;
+  const runOptions = over.signal ? { timeoutMs, signal: over.signal } : { timeoutMs };
+  const windows = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile, destination: over.destination }), runOptions);
   if (windows.code === 255) throw new Error("SSH platform discovery failed");
   if (windows.code === 0 && windows.stdout.trim() === "Windows_NT") return "windows";
-  const result = await runner.run(buildExecArgv({ alias, knownHostsFile, argv: REMOTE_UNAME_ARGV }), { timeoutMs: 10_000 });
+  const result = await runner.run(buildExecArgv({ alias, knownHostsFile, destination: over.destination, argv: REMOTE_UNAME_ARGV }), runOptions);
   const platform = classifyRemotePlatform(result);
   if (platform === "unknown") throw new Error("Remote platform could not be determined");
   return platform;

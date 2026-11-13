@@ -262,14 +262,17 @@ export function windowsPinnedSyncArgv(linkId: string): string[] {
 }
 
 /** Credential-free loopback probe of the Child; no proxy, no redirect, bounded body and deadline. */
-export function windowsChildHttpArgv(port: number, path: "healthz" | "v1/catalog", timeoutMs: number): string[] {
+export function windowsChildHttpArgv(port: number, path: "healthz" | "v1/catalog", timeoutMs: number, routeProofId?: string): string[] {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("invalid Child port");
   if (path !== "healthz" && path !== "v1/catalog") throw new Error("invalid Child HTTP path");
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("invalid Child HTTP deadline");
+  // 32 lowercase hex characters only, so it is a plain literal inside the script.
+  if (routeProofId !== undefined && !/^[0-9a-f]{32}$/.test(routeProofId)) throw new Error("invalid route proof");
+  const proofHeader = routeProofId === undefined ? "" : `;$q.Headers.Add('x-opencodex-link-route-proof','${routeProofId}')`;
   const budget = Math.max(1, Math.min(15_000, Math.ceil(timeoutMs)));
   return powershellArgv(`$ErrorActionPreference='Stop';$r=$null
 try{$w=[Diagnostics.Stopwatch]::StartNew()
-$q=[Net.HttpWebRequest]::Create('http://127.0.0.1:${port}/${path}');$q.Proxy=$null;$q.AllowAutoRedirect=$false;$q.Timeout=${budget};$q.ReadWriteTimeout=${budget}
+$q=[Net.HttpWebRequest]::Create('http://127.0.0.1:${port}/${path}');$q.Proxy=$null;$q.AllowAutoRedirect=$false;$q.Timeout=${budget};$q.ReadWriteTimeout=${budget}${proofHeader}
 $r=$q.GetResponse();if([int]$r.StatusCode -ne 200){throw 'status'}
 $t=$r.GetResponseStream();$o=New-Object IO.MemoryStream;$b=New-Object byte[] 8192
 while($true){$left=${budget}-[int]$w.ElapsedMilliseconds;if($left -le 0){throw 'deadline'}

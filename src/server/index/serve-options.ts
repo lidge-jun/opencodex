@@ -7,6 +7,7 @@ import {
 } from "./serve-contract";
 import { modelAliasIdPromoter } from "./model-alias-id";
 import { isLinkManagementPath } from "../../link/management-routes";
+import { takeRouteProof } from "../../link/route-proof";
 import {
   GUI_PAIRING_EXCHANGE_BODY_LIMIT,
   REMOTE_WORKSPACE_PAIRING_BODY_LIMIT,
@@ -327,9 +328,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (ingress === "hub-link") {
         const admission = resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
-        if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === ""
-          && (req.method === "GET" || req.method === "HEAD")
-          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId);
+        if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === "" && (req.method === "GET" || req.method === "HEAD")
+          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId, takeRouteProof(req));
         // #6957: the Child's read-only view of this Home. Admitted by the link key above and by
         // the shared table in src/link/management-routes.ts; never reachable on another ingress.
         if (isLinkManagementPath(requestUrl.pathname)) {
