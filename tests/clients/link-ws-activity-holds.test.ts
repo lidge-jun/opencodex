@@ -171,11 +171,12 @@ describe("crash points (abrupt termination)", () => {
   ] as const)("killed %s, the Home comes back as the design requires", async (_label, point, expected) => {
     writeFileSync(join(dir, "activity-holds.json"), JSON.stringify({ version: 1, keyId: null, links: {} }));
     const child = Bun.spawn(["bun", repoPath("tests/fixtures/link-ws-holds-crash.ts")], { cwd: repoPath(), stdin: "pipe", stdout: "pipe", stderr: "inherit" });
-    child.stdin.write(JSON.stringify({ dir, point, links: LINKS, windows: process.platform === "win32" }));
+    child.stdin.write(JSON.stringify({ dir, point, links: LINKS }));
     child.stdin.end();
     const [exitCode, reached] = await Promise.all([child.exited, new Response(child.stdout).text()]);
     expect(reached).toBe(point);
-    if (process.platform === "win32") expect(exitCode).toBe(137);
+    // Windows has no signals: the same kill is TerminateProcess, reported as a nonzero exit code.
+    if (process.platform === "win32") { expect(child.signalCode).toBeNull(); expect(exitCode).not.toBe(0); }
     else expect(child.signalCode).toBe("SIGKILL");
     const holds = store();
     // Killed before the fence landed, no link upgrade could have been admitted, so nothing was in flight.

@@ -6,11 +6,12 @@ import { readFileSync, writeSync } from "node:fs";
 import { createActivityHolds } from "../../src/link/ws-activity-holds";
 import { LINK_WS_LIMITS } from "../../src/server/index/link-websocket-limits";
 
-const options = JSON.parse(readFileSync(0, "utf8")) as { dir: string; point: string; links: string[]; windows: boolean };
+const options = JSON.parse(readFileSync(0, "utf8")) as { dir: string; point: string; links: string[] };
 const kill = (point: string): never => {
+  // Name the point first: the parent then knows which crash point the child actually reached.
   writeSync(1, point);
-  // Windows reports process termination as an exit code, not a POSIX signal.
-  if (options.windows) process.exit(137);
+  // An abrupt kill everywhere (TerminateProcess on Windows), never an orderly exit that would run
+  // exit handlers a real crash skips.
   process.kill(process.pid, "SIGKILL");
   throw new Error("SIGKILL returned");
 };
