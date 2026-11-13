@@ -495,7 +495,9 @@ export async function handleManagementAPI(
       }
       let serviceStop: import("../service").ServiceStopOutcome;
       try {
-        serviceStop = sibling ? "absent" : stopServiceIfInstalledDetailed();
+        // #7771: on Windows the route skips Part A for a receipt that records it, caps it at
+        // 6 s for one that does not, and sweeps a deleted task's stray wrapper in 4 s.
+        serviceStop = sibling ? "absent" : await (await import("./stop-service-route")).routeServiceStop(url, holdsReceipt);
       } catch (err) {
         if (isServiceOwnershipError(err)) {
           // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn

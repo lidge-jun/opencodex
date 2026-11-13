@@ -3,6 +3,7 @@ import type { CodexAccount } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
+import type { MultiAgentMode } from "./multi-agent";
 import type { OcxTelemetryConfig } from "./telemetry";
 import type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
 import type { OcxLinkHomeConfig, OcxLinkTransportConfig } from "./link";
@@ -940,13 +941,8 @@ export interface OcxConfig extends OcxLinkHomeConfig {
    * Unset or omitted by default.
    */
   blockedModelRedirects?: Record<string, string>;
-  /**
-   * 3-state multi-agent surface override:
-   * - "v1": force ALL models to v1 surface (override upstream pins)
-   * - "default" | undefined: respect upstream model pins (sol/terra=v2, luna=v1, rest=codex flag)
-   * - "v2": force ALL models to v2 surface (override upstream pins)
-   */
-  multiAgentMode?: "v1" | "default" | "v2";
+  /** Multi-agent surface override; mode selection and consent follow MultiAgentMode. */
+  multiAgentMode?: MultiAgentMode;
   /**
    * Which revision of the sub-agent surface advisory this install has answered.
    * Absent means it has answered none. Written by the dashboard, never by a mode change.
@@ -955,6 +951,7 @@ export interface OcxConfig extends OcxLinkHomeConfig {
   /**
    * When `multiAgentMode` is `"v2"`, keep ChatGPT-native catalog rows on v1.
    * Routed parents get v2 tools; Sol/Terra can still spawn Grok/Claude (issue #92).
+   * Stored but inactive under `"v2-plaintext"`, which pins ChatGPT-native rows on v2.
    */
   keepNativeChatGptOnV1?: boolean;
   /** Experimental plaintext delivery for native v2 collaboration messages; disabled unless true. */
@@ -1075,6 +1072,7 @@ export interface OcxConfig extends OcxLinkHomeConfig {
   shutdownTimeoutMs?: number;
   /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */ websockets?: boolean;
   /** Accept the Responses WebSocket from linked Children over the Remote Link. Default false; needs websockets too. */ linkResponsesWebsocket?: boolean;
+  /** On a Remote Link Child: true keeps Codex on HTTP over the link even when the Home offers the link WebSocket. Default: follow the Home. */ linkResponsesWebsocketOptOut?: boolean;
   /** Experimental single-lane native OpenAI WebSocket steering; default off. */
   codexNativeSteering?: boolean;
   /** Experimental, default-off saved function-result injection on native multi-agent WebSockets. */

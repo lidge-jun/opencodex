@@ -9,6 +9,7 @@ import { gzipSync } from "node:zlib";
 import { PassThrough } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { fetchBoundLinkRelay, linkResponseOnConnectionForTests } from "../../src/client/link-relay-transport";
+import { holdLargeSocketWrites, restoreSocketWrites } from "../helpers/held-socket-writes";
 
 const key = `ocx_data_${"a".repeat(40)}`;
 const keyId = "test-link-key", linkId = "lnk_0123456789abcdef";
@@ -16,7 +17,7 @@ const fp = serviceApiTokenFingerprint(key);
 const target = (port: number) => ({ tunnelPort: port, admissionKey: key, apiKeyId: keyId, linkId });
 const encoder = new TextEncoder();
 let servers: Server<unknown>[] = [];
-afterEach(async () => { for (const server of servers) await server.stop(true); servers = []; });
+afterEach(async () => { restoreSocketWrites(); for (const server of servers) await server.stop(true); servers = []; });
 
 function gate<T = void>() {
   let resolve!: (value: T) => void;
@@ -252,7 +253,8 @@ describe("traffic book eviction and buffered bodies (#3023 final review)", () =>
     });
     const child = createLinkTrafficBook("relayed");
     const caller = new AbortController();
-    // Larger than any socket buffer, and the Home never reads it, so its single write cannot complete.
+    // The Home never reads it, and its single write is held the way a full send buffer holds it.
+    holdLargeSocketWrites(1024 * 1024);
     const body = "x".repeat(48 * 1024 * 1024);
     const response = await fetchBoundLinkRelay(target(h.port), `http://127.0.0.1:${h.port}/v1/responses`,
       { method: "POST", body, headers: { "content-type": "application/json" }, signal: caller.signal }, { traffic: child });
@@ -275,6 +277,8 @@ describe("traffic book eviction and buffered bodies (#3023 final review)", () =>
       return new Response(new ReadableStream<Uint8Array>({ start(c) { c.enqueue(encoder.encode("data: early\n\n")); } }), { headers: { "content-type": "text/event-stream" } });
     });
     const child = createLinkTrafficBook("relayed");
+    // The Home reads only a prefix: the write stays pending, as a send buffer holds it on any platform.
+    holdLargeSocketWrites(1024 * 1024);
     const body = "x".repeat(48 * 1024 * 1024);
     const response = await fetchBoundLinkRelay(target(h.port), `http://127.0.0.1:${h.port}/v1/responses`,
       { method: "POST", body, headers: { "content-type": "application/json" } }, { traffic: child });
@@ -311,6 +315,8 @@ describe("traffic identity across restarts and cut uploads (#3023 review round 8
       return new Response("data: done\n\n", { headers: { "content-type": "text/event-stream" } });
     });
     const child = createLinkTrafficBook("relayed");
+    // The Home reads only a prefix: the write stays pending, as a send buffer holds it on any platform.
+    holdLargeSocketWrites(1024 * 1024);
     const body = "x".repeat(48 * 1024 * 1024);
     const response = await fetchBoundLinkRelay(target(h.port), `http://127.0.0.1:${h.port}/v1/responses`,
       { method: "POST", body, headers: { "content-type": "application/json" } }, { traffic: child });
@@ -341,6 +347,8 @@ describe("traffic identity across restarts and cut uploads (#3023 review round 8
       return new Response("data: done\n\n", { headers: { "content-type": "text/event-stream" } });
     });
     const child = createLinkTrafficBook("relayed");
+    // The Home reads only a prefix: the write stays pending, as a send buffer holds it on any platform.
+    holdLargeSocketWrites(1024 * 1024);
     const body = "x".repeat(48 * 1024 * 1024);
     const pending = fetchBoundLinkRelay(target(h.port), `http://127.0.0.1:${h.port}/v1/responses`,
       { method: "POST", body, headers: { "content-type": "application/json" } }, { traffic: child });

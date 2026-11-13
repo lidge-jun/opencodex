@@ -354,7 +354,8 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `apiKey?` | `string` | API key, an `${ENV_VAR}` / `$ENV_VAR` reference, or a `keychain:<provider>` reference written by `ocx provider keychain <name> store`. References resolve at request time. See [Storing keys in the OS keychain](/reference/configuration/keychain/). |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
-| `apiKeyPoolStrategy?` | `"round-robin" \| "fill-first" \| "quota"` | How a warm key is chosen **before** the first attempt when the committed key is already cooling. Omitted keeps rotation reactive-only: the pool moves after a 429 or 401 and not before. `round-robin` takes the next key in the pool, `fill-first` keeps the first eligible one, and `quota` prefers the key with the most remaining headroom, falling back to `fill-first` order for a provider whose per-key quota is unknown. A healthy committed key is never overridden, so a manual key selection stands. |
+| `apiKeyPoolStrategy?` | `"round-robin" \| "fill-first" \| "quota"` | How a warm key is chosen **before** the first attempt when the committed key is already cooling. Omitted keeps rotation reactive-only: the pool moves after a 429 or 401 and not before. `round-robin` takes the next key in the pool, `fill-first` keeps the first eligible one, and `quota` prefers the key with the most remaining headroom, falling back to `fill-first` order for a provider whose per-key quota is unknown. Quota ordering uses fresh, credential-bound inference evidence already in the local cache; display-only windows such as Synthetic search and Mistral budgets do not rank keys. Missing or unavailable inference evidence is unknown, and selection does not probe. A healthy committed key is never overridden, so a manual key selection stands. |
+| `cacheAffinity?` | `"auto" \| "session" \| "turn" \| "off"` | Prefers the key-pool entry that served a conversation's last successful turn, to reuse its upstream prompt cache. Applies with 2+ key-pool entries, with `apiKeyPoolStrategy`; OAuth/forward routes are excluded. With `quota`, a bound key measured as spent yields to an eligible key with measured headroom; unknown quota or remaining headroom preserves affinity. Bindings match the exact provider and routed model: a different model does not inherit the binding. Disabled, removed, cooling, or pacing-saturated entries are not preferred, and 429/401 rotation still proceeds. With round-robin request pacing, recovery stays request-local and does not change the saved active key. Logs report `released` only when the matching binding was removed. Proxy-generated refusals preserve a healthy binding; an upstream refusal releases only the binding matching the serving provider and pool entry. `auto` (default) keeps a warm binding with ≥1024 tokens read or written, **or a detected tool-result continuation even below that threshold**. Warmth lasts 5 minutes, or 1 hour after a reported long-retention write. Reading the same still-warm long prefix preserves its original deadline, even alongside a short write; a read does not renew the hour. A later turn still has its own 5-minute window. When no cache-write counter is reported, the sent prompt counts as written; an explicit zero is respected. This also pins providers that do not cache, so use `off` where load spreading matters more. `session` ignores warmth and token thresholds while the entry stays eligible; `turn` prefers only warm tool-result continuations. **Every binding expires 24 hours after its last recorded success**, and restart forgets all bindings. Changing the active key manually does not supersede a live binding; use `off` or disable its pool entry to override affinity. Unrelated dashboard provider saves preserve an omitted mode, including `off`. Log rows expose `cacheAffinity`/`cacheAffinityReason`. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
 | `models?` | `string[]` | Seed/fallback model list. With `liveModels: false`, a nonempty `models` list is followed by `retainModels`; an empty or omitted `models` list instead seeds `defaultModel` (if configured), then `retainModels`, removing duplicate ids in first-seen order. |
 | `liveModels?` | `boolean` | Fetch the live catalog on start/sync (default `true`). Custom providers use `${baseUrl}/models`; built-ins may use a registry URL and filter. |
@@ -522,13 +523,13 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 | New destination, field omitted | Not kept; registry defaults for the new destination may apply | Not kept |
 | Field sent in the request | The request's value | The request's value |
 
-The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the fourteen settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one. The provider-level `modelDiscovery` block follows the same destination rule: a same-destination save that omits it keeps it, and a move drops it.
+The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops these settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one. The provider-level `modelDiscovery` block follows the same destination rule: a same-destination save that omits it keeps it, and a move drops it.
 
 `hideRawReasoning` is an operator display policy, so a save of the same provider name keeps its stored value whenever the request omits it, including after a destination move. A value sent in the request wins, including `false`.
 
 The optional `inferContextWindow` setting also survives same-name saves that omit it, including destination moves. Its read, update, and clear behavior is described under [Context windows on custom providers](#context-windows-on-custom-providers).
 
-`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all fourteen settings; `null` clears one. It also accepts `modelDiscovery`, where `null` or `{}` clears it. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
+`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all these settings; `null` clears one. It also accepts `modelDiscovery`, where `null` or `{}` clears it. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
 
 With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that served the first request. Changing the selected key, its reference or resolved value, authentication
 mode, or base URL during search or provider pacing ends the turn with a bridge error before another
@@ -1954,42 +1955,6 @@ from the tool-call cache for those turns. Preserve their supplied reasoning for 
 
 ## Auto-pause permanently refused accounts
 
-`providers.<provider>.accountAutoPause` is opt-in and defaults to off. It applies to that
-provider's OAuth accounts, Codex pool accounts (including the main account in pool mode),
-and configured API-key pool entries. For example:
-
-```sh
-ocx config set providers.anthropic.accountAutoPause.enabled true
-ocx config set providers.anthropic.accountAutoPause.consecutiveFailures 2
-```
-
-`consecutiveFailures` is an integer from 1 to 100; omitting it uses 2. Only exact,
-account-scoped HTTP 401/403 refusals qualify: an organization forbidding OAuth, an inactive
-or expired subscription, an account denied API/Claude Code access or disabled by Google for a Terms of Service violation, or a downgrade to a free
-plan with no credits. A model permission error, expired access token, quota window, 429,
-5xx, malformed response or network failure never pauses an account.
-
-The counter is process-local, serialized per account, and resets on a successful HTTP
-response, explicit resume or a new login. Token refresh alone does not reset an OAuth
-account's streak. Transient errors leave the counter unchanged. Restarting the proxy clears
-counters; completed pauses, their fixed reason codes and timestamps persist. Independent
-proxy processes maintain independent counters. Changing, disabling or re-enabling the policy, disabling the provider,
-or changing its endpoint discards in-flight refusal observations, so a refusal from a request
-sent under the earlier policy can never pause an account afterwards. A refusal counts only for the credential that actually
-reached the upstream: when a local plugin rewrites the credential or destination of a send, that
-send never counts toward a pause. For Codex pool accounts this includes the workspace
-(`chatgpt-account-id`) the request was sent for.
-
-At the threshold, OpenCodex excludes the account using its existing pause mechanism and
-attempts an eligible sibling for the current request within the existing retry/send budget.
-Fixed Codex account selectors and account-bound uploaded files retain their restrictions.
-A pause never cancels already dispatched work or changes credentials. It emits one generic
-log line without account identifiers or upstream error text.
-
-`ocx account list <provider>` shows the pause reason. The dashboard's Paused badge exposes
-the reason and time. Use `ocx account resume <provider> <account-id-or-alias>` to clear the
-reason and allow selection again. On an API-key row, clicking Resume also activates the key.
-This policy never resumes an account automatically; an explicit login clears a pause it recorded, and
-[`resume --if-healthy`](/reference/cli/providers-accounts/#resume-if-healthy) resumes after a health read.
+See [Account auto-pause](/reference/configuration/account-auto-pause/) for configuration, qualifying refusals, and recovery.
 
 For a custom Ark Kimi Responses provider, set `arkKimiResponsesModels` to an array of exact upstream model or endpoint IDs that reject encrypted-output includes and orphan reasoning replay. It is unset by default; use the upstream ID, not the display alias.

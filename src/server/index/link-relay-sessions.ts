@@ -10,6 +10,7 @@ import { linkActivityCounts, type LinkActivity } from "../../link/child-activity
 import type { LinkSessionGrant, LinkUpgradeOutcome } from "./link-websocket";
 import type { LinkTrafficBook } from "../../link/traffic";
 import { LINK_HOME_FEATURES_HEADER } from "../../link/request-compression";
+import { linkRelayWaitObserver } from "./link-websocket-limits";
 
 /** A 200 `GET /v1/catalog` whose body the Child read to the end (wp2 catalog freshness). */
 export interface LinkCatalogServed { linkId: string | null; keyId: string | null; etag: string }
@@ -189,11 +190,19 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
       if (sessionLink !== null && req.method === "POST" && url.pathname === "/v1/responses") {
         try { decideObservation = options.observeResponsesRequest?.(sessionLink, req) ?? undefined; } catch { /* observation never blocks the request */ }
       }
-      const flow = sessionLink !== null ? options.traffic?.begin(sessionLink) : undefined;
-      if (flow) {
-        const declared = req.headers.get("content-length");
-        if (declared !== null && /^\d+$/.test(declared.trim())) flow.toHome(Number(declared.trim()));
-        else if (req.body !== null) flow.uncounted();
+      let flow: ReturnType<LinkTrafficBook["begin"]> | undefined;
+      try {
+        flow = sessionLink !== null ? options.traffic?.begin(sessionLink) : undefined;
+        if (flow) {
+          const declared = req.headers.get("content-length");
+          if (declared !== null && /^\d+$/.test(declared.trim())) flow.toHome(Number(declared.trim()));
+          else if (req.body !== null) flow.uncounted();
+        }
+      } catch (error) {
+        // Accounting that fails before dispatch still decides a pending body observation and returns the lease.
+        decideObservation?.(false);
+        try { flow?.end(false); } catch { /* the original failure is the one reported */ } finally { release(); }
+        throw error;
       }
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
@@ -222,9 +231,14 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         let ended = false;
         // A cancel resolves a pending read as done; that end is not a completed body.
         let cancelled = false;
+        // Test-only stall signal (link-websocket-limits.ts): set from each chunk handed over until the reader asks again.
+        const waitObserver = sessionLink !== null ? linkRelayWaitObserver() : null;
+        let waiting = false;
+        const stopWaiting = (): void => { if (waiting) { waiting = false; waitObserver?.(false); } };
         const finish = () => {
           if (ended) return;
           ended = true;
+          stopWaiting();
           req.signal.removeEventListener("abort", aborted);
           release();
         };
@@ -238,16 +252,24 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         if (req.signal.aborted) aborted();
         const body = new ReadableStream<Uint8Array>({
           async pull(controller) {
+            stopWaiting();
             try {
               const next = await reader.read();
               if (next.done) { flow?.end(!cancelled); finish(); controller.close(); if (!cancelled) reportCatalog(); }
-              else { catalogHash?.update(next.value); flow?.fromHome(next.value.byteLength); controller.enqueue(next.value); }
+              else {
+                catalogHash?.update(next.value); flow?.fromHome(next.value.byteLength); controller.enqueue(next.value);
+                if (waitObserver && !ended) { waiting = true; waitObserver(true); }
+              }
             } catch (error) { flow?.end(false); finish(); controller.error(error); }
           },
           cancel,
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-      } catch (error) { decideObservation?.(false); req.signal.removeEventListener("abort", beforeHeadersAbort); flow?.end(false); release(); throw error; }
+      } catch (error) {
+        decideObservation?.(false); req.signal.removeEventListener("abort", beforeHeadersAbort);
+        try { flow?.end(false); } catch { /* the original failure is the one reported */ } finally { release(); }
+        throw error;
+      }
     },
   };
 }

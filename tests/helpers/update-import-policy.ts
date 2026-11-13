@@ -11,6 +11,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     'import { acquireSyncGuard, staleUpdateMarkerHint } from "../src/update/sync-update-mutex.mjs";',
     'import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../src/update/orchestrated-arguments.mjs";',
     'import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";',
+    'import { matchesOrchestratedPnpmOwner } from "../src/update/orchestrated-pnpm.mjs";',
     'import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";',
     // The orchestration driver starts an independently admitted update child.
     'import { applyNodeOrchestratedUpdate } from "../src/update/orchestrated-node-driver.mjs";',
@@ -87,8 +88,8 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { removePid, removeRuntimePort } from \"../config/process-state\";",
     "import { dropWindowsTcpRowsForLocalPort } from \"../server/windows-tcp-drop\";",
     "import { stopWinswService } from \"../lib/winsw\";",
-    "import { stopWindows } from \"../service\";",
-    "import { killWindowsSchedulerWrappers } from \"../lib/windows-service-wrappers\";",
+    // #7771: Part A of the checked Windows stop; its authorizer is the service mutation gate.
+    "import { runWindowsServiceStopPartA } from \"../service/windows-service-stop\";",
     "import { guardedRun, guardedKill, guardedExecFileSync, materializeMutationData, UpdateMutationRefusedError, type UpdateMutationAuthorizer } from \"./mutation-guard.mjs\";"
   ],
   "src/update/guarded-tray-ops.ts": [
@@ -114,7 +115,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { decidePostStopUpdate } from \"./stop-decision.mjs\";",
     "import { existsSync, readFileSync, readdirSync } from \"node:fs\";",
     "import { fileURLToPath } from \"node:url\";",
-    "import { dirname, join, resolve } from \"node:path\";",
+    "import { dirname, isAbsolute, join, resolve } from \"node:path\";",
     "import { getConfigDir, getConfigPath, loadConfig } from \"../config\";",
     'import { runConfigPreflight } from "./config-preflight";',
     "import { readPid, readRuntimePort, getRuntimePortPath } from \"../config/process-state\";",
@@ -126,7 +127,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { npmInvocation } from \"./npm-invocation.mjs\";",
     "import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from \"./pnpm-invocation.mjs\";",
     "import { detectInstallOwnershipFromPath } from \"./install-detection.mjs\";",
-    "import { pnpmOwnerInvocation, readPnpmGlobalPackage, resolvePnpmGlobalOwner, runPnpmGlobalUpdate, } from \"./pnpm-global-install.mjs\";",
+    "import { pnpmOwnerInvocation, pnpmOwnerEnvironment, readPnpmGlobalPackage, resolvePnpmGlobalOwner, runPnpmGlobalUpdate, } from \"./pnpm-global-install.mjs\";",
     "import { checkRegistryPackageIntegrity } from \"./registry-integrity.mjs\";",
     "import { npmCachePreflightFailureMessage, runNpmCachePreflight, } from \"./npm-cache-preflight.mjs\";",
     "import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from \"./tray-update-plan.mjs\";",
@@ -139,7 +140,9 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob, supervisionVerdict, unsettledManagerWarning, unsupervisedRuntimeWarning, } from \"./supervised-recovery.mjs\";"
   ],
   "src/update/install-detection.mjs": [
-    "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";"
+    "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
+    // Dependency-free pnpm store-layout spelling shared with the tree verifier (#8183).
+    "import { isInMarkedPnpmCustomStore, isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/job-pinned-start.ts": [
     "import { guardedSpawn } from \"./mutation-guard.mjs\";",
@@ -166,9 +169,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from \"./tray-update-plan.mjs\";"
   ],
   "src/update/job-windows-restart.ts": [
-    "import { join } from \"node:path\";",
-    "import { getConfigDir } from \"../config\";",
-    "import { guardedStopWinsw, guardedStopWindows, guardedKillWindowsWrappers } from \"./guarded-runtime-ops\";",
+    "import { guardedStopWinsw, guardedStopWindowsChecked } from \"./guarded-runtime-ops\";",
     "import { readServiceBackend } from \"../service\";"
   ],
   "src/update/job.ts": [
@@ -187,7 +188,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { guardedKillProxy, guardedRemovePid, guardedRemoveRuntimePort, guardedDropWindowsTcp, guardedPublishJob, type KillProxy } from \"./guarded-runtime-ops\";",
     "import { isHealthzVersion, isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity, } from \"../server/proxy-liveness\";",
     "import { isServiceInstalled, isServiceViable } from \"../service\";",
-    "import { stopWindowsServiceWrappersBestEffort } from \"./job-windows-restart\";",
+    "import { stopWindowsServiceForRestart, WINDOWS_SERVICE_STOP_ABORT } from \"./job-windows-restart\";",
     "import { createUpdateServiceHomePolicy, inspectUpdateServiceHome, type UpdateServiceHomeInspector } from \"./service-home-authority\";",
     "import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from \"./restart-ownership\";",
     "import { restartServiceManagerAfterUpdate, unsettledManagerRestartFailure, unsupervisedRestartFailure, type ManagerRestartFn } from \"./job-supervised-restart\";",
@@ -299,10 +300,10 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { acquireOwnershipMutationLease, ownershipMutationLeaseChildEnvironment, unprivilegedOwnershipMutationEnvironment, } from \"../service/ownership-mutation-lease.mjs\";"
   ],
   "src/update/pnpm-global-install.mjs": [
-    "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
-    "import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from \"node:path\";",
+    "import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
+    "import { basename, dirname, isAbsolute, join, parse, relative, resolve, win32 } from \"node:path\";",
     "import { pnpmInvocationForPath } from \"./pnpm-invocation.mjs\";",
-    "import { verifyPnpmInstallTree } from \"./transactional-install.mjs\";"
+    "import { pnpmPackageUsesGlobalStoreLinks, verifyPnpmInstallTree } from \"./transactional-install.mjs\";"
   ],
   "src/update/pnpm-invocation.mjs": [
     "import { existsSync } from \"node:fs\";",
@@ -372,8 +373,9 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { guardedRenameSync, ownedArtifactRm } from \"./mutation-guard.mjs\";",
     "import { probeSpawnSync } from \"./mutation-guard.mjs\";",
     "import { randomBytes } from \"node:crypto\";",
-    "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
-    "import { basename, dirname, join } from \"node:path\";"
+    "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
+    "import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from \"node:path\";",
+    "import { isInMarkedPnpmCustomStore } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/tray-update-plan.mjs": [],
   "src/update/update-failure-guidance.mjs": [

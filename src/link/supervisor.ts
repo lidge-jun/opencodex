@@ -19,7 +19,7 @@ import {
   type TunnelState,
 } from "./tunnel-state";
 import { effectiveLinkRoutes, emptyLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
-import { createRouteRounds, type LinkRouteStatus } from "./route-rounds";
+import { CANDIDATE_KILL_GRACE_MS, createRouteRounds, type LinkRouteStatus } from "./route-rounds";
 import type { RouteProofRegistry } from "./route-proof";
 
 export type LinkTunnelStatus =
@@ -69,12 +69,17 @@ interface WatchedProcess {
 }
 
 interface OrphanWatch {
-  /** The link record instance it belongs to; a removed, replaced or one-route record retires it. */
+  /**
+   * The link record instance it belongs to; a removed or one-route record retires it. A reload that
+   * replaces a flagged multi-route record re-keys it to the new instance as observe-only.
+   */
   instance: string;
   /** The pidfile content the watch last saw; only this file is ever removed by it. */
   file: { pid: number; argv: readonly string[]; startTime?: number };
   /** Every process this pidfile has named since the watch began; the link stays blocked until all are gone. */
   processes: WatchedProcess[];
+  /** Set once its record was replaced: it never signals or removes the pidfile, also when it ends. */
+  observeOnly?: true;
 }
 
 interface Pidfile {
@@ -242,7 +247,13 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   let lifecycleRevision = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   const states = new Map<string, TunnelState>();
-  const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number }>();
+  /** stopAt/killed/warned: a failed link's child the tick stopped, kept until its exit is seen. */
+  const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number; stopAt?: number; killed?: boolean; warned?: boolean }>();
+  /**
+   * Tunnel children (one-route tunnels, multi-route candidates and proven tunnels) a stop sent SIGTERM
+   * and is awaiting; the tick sends SIGKILL after the grace.
+   */
+  const draining = new Set<{ child: SshChild; stopAt: number; killed: boolean }>();
   /** Per-link generation, advanced by spawns and explicit stop/removal reservations. */
   const generations = new Map<string, number>();
   /** The process-unique connection name of each link's current ssh child, minted at spawn. */
@@ -257,6 +268,11 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const recordInstances = new Map<string, string>();
   /** Multi-route links blocked by an earlier tunnel, watched until it is gone (src/link/route-rounds.ts relies on it). */
   const orphanWatches = new Map<string, OrphanWatch>();
+  /**
+   * Multi-route links blocked by a pidfile that exists but cannot be read or parsed, read again every
+   * tick; false once a reload replaced the record, so the watch that file may become only observes.
+   */
+  const unreadablePidfiles = new Map<string, boolean>();
   const history = createTunnelHistoryBook({
     diagnostic: deps.diagnostic,
     tunnelPort: linkId => store.links.find(link => link.id === linkId)?.tunnelPort,
@@ -287,22 +303,25 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     record.apiKeyId,
     record.createdAt,
     listenerPort,
+    // How ssh reaches the alias: an edit of either restarts the tunnel on the new route instead of keeping the old one.
+    record.explicitRoute ?? null,
+    record.exclusive ?? false,
   ]);
 
   const conditionalRemovePidfile = (linkId: string, pid: number): void => {
     const path = pidfilePath(linkId);
     const current = readPidfile(path);
-    if (current?.linkId === linkId && current.pid === pid) removePidfile(path);
+    if (current?.linkId === linkId && current.pid === pid) dropStalePidfile(linkId);
   };
 
   const reapOrphans = (): void => {
     for (const record of store.links) {
-      const pidfile = readPidfile(pidfilePath(record.id));
-      if (!pidfile || pidfile.linkId !== record.id) continue;
       if (rounds.isMultiRoute(record)) {
-        reapMultiRouteOrphan(record, pidfile);
+        recheckPidfile(record);
         continue;
       }
+      const pidfile = readPidfile(pidfilePath(record.id));
+      if (!pidfile || pidfile.linkId !== record.id) continue;
       // macOS deliberately has no exact argv source here. A ps rendering is not an identity proof.
       if (platform !== "linux") {
         orphanUnverified.add(record.id);
@@ -310,7 +329,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       }
       const actualArgv = readProcessArgv(pidfile.pid);
       if (actualArgv && sameArgv(actualArgv, pidfile.argv)) {
-        try { killProcess(pidfile.pid); } finally { removePidfile(pidfilePath(record.id)); }
+        try { killProcess(pidfile.pid); } finally { dropStalePidfile(record.id); }
       } else {
         orphanUnverified.add(record.id);
       }
@@ -330,23 +349,58 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   /**
+   * Remove a link's pidfile once its process is gone, or has been sent SIGTERM (an earlier one-route
+   * ssh matched at startup), or once this process's own child has exited or been stopped. A removal
+   * that fails (a read-only directory, a sharing lock) is warned and never stops the caller: a tick goes on
+   * to every other link, an exit is still classified, a stop or reload completes, and the block it
+   * was lifting stays lifted. The file left behind is mostly harmless: on Linux with a start time the
+   * next start sees its process gone; without a start time, a pid reused by another process blocks a
+   * multi-route link at the next start until that process exits.
+   */
+  const dropStalePidfile = (linkId: string): void => {
+    try { removePidfile(pidfilePath(linkId)); } catch { warn(`[link] stale pidfile could not be removed link=${linkId}`); }
+  };
+
+  /**
    * A multi-route link never starts a candidate while an earlier tunnel of it may live: the readiness
    * proof's attribution relies on that. Only a process proven to be the pidfile's own (pid, argv and
    * the start time written at spawn) is signalled, and its identity is re-read before every signal.
    * Every blocked pidfile stays watched without signals, and the block lifts once the process is shown
    * gone (or its pid now names another process); the link's first round then starts.
+   * With act false (a reload that replaced the record) nothing is signalled or removed: the new
+   * instance's watch only observes, as no watch acts for a replaced instance.
    */
-  const reapMultiRouteOrphan = (record: LinkRecord, pidfile: Pidfile): void => {
-    const path = pidfilePath(record.id);
+  const reapMultiRouteOrphan = (record: LinkRecord, pidfile: Pidfile, act = true): void => {
     const watched: WatchedProcess = { pid: pidfile.pid, argv: pidfile.argv, ...(pidfile.startTime === undefined ? {} : { startTime: pidfile.startTime }) };
-    if (processGone(watched)) { removePidfile(path); return; }
+    if (processGone(watched)) { if (act) dropStalePidfile(record.id); return; }
     orphanUnverified.add(record.id);
     const identity = platform === "linux" && pidfile.startTime !== undefined ? processIdentity(pidfile.pid, pidfile.argv, pidfile.startTime) : "unreadable";
-    if (identity === "same") {
+    if (act && identity === "same") {
       killProcess(pidfile.pid, "SIGTERM");
       watched.signal = { at: now(), killed: false };
     }
-    orphanWatches.set(record.id, { instance: recordInstance(record, store.listenerPort), file: fileIdentity(pidfile), processes: [watched] });
+    orphanWatches.set(record.id, {
+      instance: recordInstance(record, store.listenerPort), file: fileIdentity(pidfile), processes: [watched], ...(act ? {} : { observeOnly: true as const }),
+    });
+  };
+
+  /**
+   * A multi-route link's block, settled from its pidfile: the earlier tunnel it names is watched, no
+   * pidfile (ENOENT) lifts the block, and one that exists but cannot be read or parsed keeps it, since
+   * it may name the ssh still holding the port. That file is read again every tick, so making it
+   * readable or deleting it settles the block without a restart.
+   */
+  const recheckPidfile = (record: LinkRecord, act = true): void => {
+    let file: Pidfile | null;
+    try { file = loadPidfile(pidfilePath(record.id)); } catch {
+      if (!unreadablePidfiles.has(record.id)) warn(`[link] pidfile unreadable; link stays blocked link=${record.id}`);
+      unreadablePidfiles.set(record.id, (unreadablePidfiles.get(record.id) ?? true) && act);
+      orphanUnverified.add(record.id);
+      return;
+    }
+    unreadablePidfiles.delete(record.id);
+    if (file !== null && file.linkId === record.id) reapMultiRouteOrphan(record, file, act);
+    if (!orphanWatches.has(record.id)) orphanUnverified.delete(record.id);
   };
 
   const fileIdentity = (pidfile: Pidfile): OrphanWatch["file"] => ({ pid: pidfile.pid, argv: pidfile.argv, ...(pidfile.startTime === undefined ? {} : { startTime: pidfile.startTime }) });
@@ -372,7 +426,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const tickOrphanWatches = (current: number): void => {
     for (const [linkId, watch] of [...orphanWatches]) {
       if (!watchCurrent(linkId, watch)) { orphanWatches.delete(linkId); continue; }
-      const file = readPidfile(pidfilePath(linkId));
+      // A pidfile that exists but cannot be read may name another tunnel now: it never ends the watch.
+      let file: Pidfile | null = null;
+      let unreadable = false;
+      try { file = loadPidfile(pidfilePath(linkId)); } catch { unreadable = true; }
       if (file !== null && file.linkId === linkId && !sameFile(file, watch.file)) {
         // Another owner replaced the pidfile: nothing is signalled any more, and the replacement joins
         // the watched processes; the link stays blocked until every one of them is gone.
@@ -386,8 +443,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       watch.processes = watch.processes.filter(watched => !processGone(watched));
       if (watch.processes.length === 0) {
         orphanWatches.delete(linkId);
+        if (unreadable) {
+          // Every watched process is gone, but the file cannot say what it names: stay blocked and read
+          // it again every tick. Whatever it names once readable is a replacement to this watch, so it
+          // is only observed: no signal, no removal.
+          if (!unreadablePidfiles.has(linkId)) warn(`[link] pidfile unreadable; link stays blocked link=${linkId}`);
+          unreadablePidfiles.set(linkId, false);
+          continue;
+        }
         orphanUnverified.delete(linkId);
-        if (file !== null && file.linkId === linkId && sameFile(file, watch.file)) removePidfile(pidfilePath(linkId));
+        if (!watch.observeOnly && file !== null && file.linkId === linkId && sameFile(file, watch.file)) dropStalePidfile(linkId);
         // The link was waiting for this: start its first round now.
         const record = store.links.find(link => link.id === linkId);
         if (record && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
@@ -395,7 +460,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       }
       for (const watched of watch.processes) {
         const signal = watched.signal;
-        if (!signal || watched.startTime === undefined) continue;
+        if (!signal || watched.startTime === undefined || watch.observeOnly) continue;
         if (file === null || processIdentity(watched.pid, watched.argv, watched.startTime) !== "same") {
           // Cannot tell it is ours any more: no further signal; the watch goes on.
           delete watched.signal;
@@ -407,6 +472,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           delete watched.signal;
         }
       }
+    }
+    for (const [linkId, act] of [...unreadablePidfiles]) {
+      const record = store.links.find(link => link.id === linkId);
+      if (!record || !rounds.isMultiRoute(record) || !orphanUnverified.has(linkId) || orphanWatches.has(linkId)) {
+        unreadablePidfiles.delete(linkId);
+        continue;
+      }
+      recheckPidfile(record, act);
+      // Nothing is left to wait for: start the link's first round now, as a watch that ends does.
+      if (!orphanUnverified.has(linkId) && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
     }
   };
 
@@ -477,7 +552,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         knownHostsFile: linkKnownHostsPath(),
         // OpenSSH confirms the granted remote listener at DEBUG1; the tap keeps today's classifier lines only.
         logLevel: "DEBUG1",
-        // A record with a route list cannot carry an explicit route (store.ts), so this is null here.
+        // A record with a route list cannot carry an explicit route (store.ts rejects it). If one ever arrives here,
+        // buildTunnelArgv refuses an explicit route for any destination but the alias instead of ignoring it.
         route: record.explicitRoute ?? null,
       });
       const child = runner.spawnTunnel(argv, { stderrLine });
@@ -549,14 +625,24 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       orphanUnverified.delete(record.id);
       history.spawned(record.id);
       setEvent(record.id, { type: "spawn", now: now() });
-      writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv });
+      // Watched before the pidfile write can fail, so a child whose write failed still has its exit seen.
       watchExit(record.id, child, generation);
+      writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv });
     } catch {
       failAttempt(record.id, prior, "forward", "spawn_failed");
     }
   };
 
   const tick = (): void => {
+    // The SIGKILL for any tunnel child a stop is draining runs even while lifecycle work is pending or the
+    // supervisor shuts down: no reload, removal, reconnect or shutdown waits on an ssh that ignores SIGTERM.
+    // (A candidate route-rounds already halted with SIGKILL gets a fresh stop time here, so a second SIGKILL
+    // on the same unreaped process: harmless.)
+    for (const drain of draining) {
+      if (drain.killed || now() - drain.stopAt < CANDIDATE_KILL_GRACE_MS) continue;
+      drain.killed = true;
+      try { drain.child.kill("SIGKILL"); } catch { /* already gone */ }
+    }
     if (stopping) return;
     // Route deadlines run even while lifecycle work is pending, so a stuck reload cannot stretch a probe.
     for (const record of store.links) if (rounds.isMultiRoute(record) && !holds.has(record.id)) rounds.tick(record.id);
@@ -596,9 +682,20 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         // the failed state's retry instead of being killed with a link that may already be back.
         states.set(record.id, { ...next, inFlight: true });
       } else if (next.kind === "failed" && !next.inFlight && child) {
-        child.child.kill("SIGTERM");
-        children.delete(record.id);
-        conditionalRemovePidfile(record.id, child.child.pid);
+        // A failed link with a running child (its pidfile write failed): stop it, SIGKILL after the grace,
+        // and keep it until its exit is seen, as a stopped candidate is. watchExit then forgets it and
+        // removes the pidfile naming it; until then no retry and no round starts past it.
+        if (child.stopAt === undefined) {
+          child.stopAt = current;
+          try { child.child.kill("SIGTERM"); } catch { /* already gone */ }
+        } else if (!child.killed && current - child.stopAt >= CANDIDATE_KILL_GRACE_MS) {
+          child.killed = true;
+          try { child.child.kill("SIGKILL"); } catch { /* already gone */ }
+        } else if (child.killed && !child.warned && current - child.stopAt >= 2 * CANDIDATE_KILL_GRACE_MS) {
+          // Its exit was never seen: the link stays failed and owned, as a halted candidate does, and says so once.
+          child.warned = true;
+          warn(`[link] tunnel exit unconfirmed link=${record.id}`);
+        }
       } else if (dueForSpawn(next, current)) {
         spawnFor(record);
       }
@@ -646,7 +743,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     const generation = generations.get(linkId);
     children.delete(linkId);
     current.child.kill("SIGTERM");
-    await current.child.exited;
+    // A child the tick already stopped keeps its stop time and its SIGKILL.
+    const drain = { child: current.child, stopAt: current.stopAt ?? now(), killed: current.killed === true };
+    draining.add(drain);
+    try { await current.child.exited; } finally { draining.delete(drain); }
     conditionalRemovePidfile(linkId, current.child.pid);
     // A stop or removal reservation made while this child exited owns the next state.
     if (generations.get(linkId) === generation) put(linkId, IDLE);
@@ -691,12 +791,19 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         }
         const nextStore = readStore();
         const nextInstances = new Map(nextStore.links.map(record => [record.id, recordInstance(record, nextStore.listenerPort)]));
+        const knownBefore = new Set(recordInstances.keys());
         const changed = new Set<string>();
         const routesEdited: LinkRecord[] = [];
         const gainedRoutes: LinkRecord[] = [];
+        const gainedOnChange: string[] = [];
         for (const record of nextStore.links) {
           if (recordInstances.get(record.id) !== undefined && recordInstances.get(record.id) !== nextInstances.get(record.id)) {
             changed.add(record.id);
+            // A changed record that also goes from one route to several never reaches the gained-routes
+            // check below; it settles from its pidfile with the flagged changed links, after the reload
+            // stopped its child (whose pidfile may not name it: a failed write keeps an older one).
+            const before = store.links.find(link => link.id === record.id);
+            if (before && !rounds.isMultiRoute(before) && rounds.isMultiRoute(record)) gainedOnChange.push(record.id);
             continue;
           }
           const before = store.links.find(link => link.id === record.id);
@@ -713,7 +820,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           } else if (!wasMulti && isMulti) {
             const child = children.get(record.id);
             const state = states.get(record.id);
-            if (child && state?.kind !== "connected") { changed.add(record.id); continue; }
+            // An unproven child is stopped by this reload; its link then settles from its pidfile as above.
+            if (child && state?.kind !== "connected") { changed.add(record.id); gainedOnChange.push(record.id); continue; }
             if (child && state?.kind === "connected") rounds.adopt(record, child.child, state.since);
             gainedRoutes.push(record);
           }
@@ -721,23 +829,40 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         }
         // Nothing of a changed or removed link's old round may advance while the stops below await,
         // and no orphan watch acts for a record instance that is gone or no longer has several routes.
-        for (const linkId of changed) { rounds.cancel(linkId); orphanWatches.delete(linkId); }
-        for (const linkId of recordInstances.keys()) if (!nextInstances.has(linkId)) { rounds.cancel(linkId); orphanWatches.delete(linkId); }
+        // A changed record does not end an earlier tunnel that may still hold the Child's port (a new
+        // listener port changes every instance and keeps every tunnel port). A flagged link that stays
+        // multi-route keeps its watch, re-keyed to the new instance and observe-only (it never acts for
+        // a replaced instance); one with nothing watched is settled again from its pidfile below.
+        const flaggedChanged = [...changed].filter(linkId => orphanUnverified.has(linkId));
+        for (const linkId of changed) {
+          rounds.cancel(linkId);
+          const watch = orphanWatches.get(linkId);
+          const next = nextStore.links.find(link => link.id === linkId);
+          if (watch && orphanUnverified.has(linkId) && next && rounds.isMultiRoute(next)) {
+            watch.instance = recordInstance(next, nextStore.listenerPort);
+            watch.observeOnly = true;
+            for (const watched of watch.processes) delete watched.signal;
+          } else {
+            orphanWatches.delete(linkId);
+          }
+        }
+        // A removed link takes its block with it; a link added again later is settled from its pidfile below.
+        for (const linkId of recordInstances.keys()) {
+          if (nextInstances.has(linkId)) continue;
+          rounds.cancel(linkId);
+          orphanWatches.delete(linkId);
+          orphanUnverified.delete(linkId);
+          unreadablePidfiles.delete(linkId);
+        }
         for (const record of nextStore.links) if (!rounds.isMultiRoute(record)) orphanWatches.delete(record.id);
         store = nextStore;
-        // A one-route link flagged at start whose spawn never cleared the flag (ssh missing, say) now
-        // blocks its rounds: watch that pidfile as a multi-route orphan, or lift the flag when there is
-        // no earlier process left to watch. A pidfile that exists but cannot be read may still name the
-        // ssh holding the port, so it keeps the flag; only a missing one (ENOENT) lifts it.
+        // A one-route link that gains routes with no running child (its spawn failed: ssh missing, say)
+        // settles from its pidfile, flagged or not: removing a link drops its flag, so a re-added link
+        // may carry none. Watch an earlier process, or lift the flag when there is none (recheckPidfile:
+        // an unreadable pidfile keeps the flag).
         for (const record of gainedRoutes) {
-          if (!orphanUnverified.has(record.id) || orphanWatches.has(record.id)) continue;
-          let file: Pidfile | null;
-          try { file = loadPidfile(pidfilePath(record.id)); } catch {
-            warn(`[link] pidfile unreadable; link stays blocked link=${record.id}`);
-            continue;
-          }
-          if (file !== null && file.linkId === record.id) reapMultiRouteOrphan(record, file);
-          if (!orphanWatches.has(record.id)) orphanUnverified.delete(record.id);
+          if (orphanWatches.has(record.id) || children.has(record.id)) continue;
+          recheckPidfile(record);
         }
         if (routesEdited.some(record => rounds.isMultiRoute(record))) rounds.recheckClient();
         for (const record of routesEdited) if (rounds.isMultiRoute(record)) rounds.routesChanged(record);
@@ -758,6 +883,20 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
             orphanUnverified.delete(record.id);
           }
         }
+        for (const linkId of flaggedChanged) {
+          const record = nextStore.links.find(link => link.id === linkId);
+          if (!record || !rounds.isMultiRoute(record)) continue;
+          if (orphanWatches.has(linkId)) orphanUnverified.add(linkId);
+          else recheckPidfile(record, false);
+        }
+        for (const linkId of gainedOnChange) {
+          const record = nextStore.links.find(link => link.id === linkId);
+          if (!record || flaggedChanged.includes(linkId) || orphanWatches.has(linkId)) continue;
+          // Observe-only, as for a changed record (a route edit that restarts the child keeps its instance).
+          recheckPidfile(record, false);
+        }
+        // A link new to this process settles from its pidfile as it would at startup.
+        for (const record of nextStore.links) if (!knownBefore.has(record.id) && rounds.isMultiRoute(record)) recheckPidfile(record);
         for (const linkId of [...states.keys()]) {
           if (!nextInstances.has(linkId)) { history.forget(linkId); rounds.forget(linkId); }
         }
@@ -835,16 +974,24 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     async stop() {
       stopping = true;
       rounds.stop();
-      if (timer !== undefined) {
-        clearTimer(timer);
-        timer = undefined;
-      }
-      await runLifecycle(async () => {
-        await Promise.all([...children.keys()].map(stopChild));
-        for (const record of store.links) {
-          if (record.direction === "hub-initiated") put(record.id, IDLE);
+      try {
+        await runLifecycle(async () => {
+          // Every stop runs to its end, so one that fails cannot cut short another child's drain.
+          const results = await Promise.allSettled([...children.keys()].map(stopChild));
+          const failed = results.find(result => result.status === "rejected");
+          if (failed) throw failed.reason;
+          for (const record of store.links) {
+            if (record.direction === "hub-initiated") put(record.id, IDLE);
+          }
+        });
+      } finally {
+        // The timer runs until the stops above are done: it alone sends SIGKILL to a child that ignores
+        // SIGTERM. It goes even when a stop failed, so it never keeps the process alive.
+        if (timer !== undefined) {
+          clearTimer(timer);
+          timer = undefined;
         }
-      });
+      }
       try { await deps.flushDiagnostics?.(); } catch { /* best effort */ }
     },
   };

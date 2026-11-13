@@ -220,7 +220,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--context-mode` | string | With set: context (default) or question-only; question-only pauses automatic consultations. |
 
 - `status` (the default) reads the resolved settings; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, context mode, task limit, or timeout.
-- `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent and stops task-context transfer.
+- `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent: consultations not yet dispatched are blocked, but it cannot cancel a dispatched consultation or retract task context already sent.
 - The advisor model may be any routable model string: a bare native model, an explicit `provider/model`, or an account-qualified native model.
 - `policy: preflight` makes OpenCodex attempt one automatic consultation per task with a stable conversation identity once the task shows orientation evidence (an assistant tool call or a tool result after the latest user message). Without a stable identity, each eligible request may trigger another consultation. `policy: manual` consults only when the worker calls the synthetic `advisor` tool. Neither path sends task context without current context-sharing consent.
 - `policy: adaptive` adds evidence-based failed-repair consultation after the same validation fails, a file edit completes, and validation fails again. Automatic calls require a stable conversation identity. `set --max-consultations <1-3>` caps adaptive task attempts, including manual calls, in a durable 24-hour budget. No semantic stuck detection is claimed.
@@ -863,7 +863,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 ### `ocx v2 mode`
 
-Usage: `ocx v2 mode <v1|default|v2> [--live] [--json] [--acknowledge-surface-advisory]`
+Usage: `ocx v2 mode <v1|default|v2|v2-plaintext> [--live] [--json] [--acknowledge-surface-advisory] [--acknowledge-plaintext-agent-messages]`
 
 Set local model-catalog multi-agent mode.
 
@@ -878,6 +878,7 @@ State-changing: yes. JSON mode: `envelope`.
 | `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 | `--acknowledge-surface-advisory` | boolean | Explicit live mode only; never implicitly acknowledged. |
+| `--acknowledge-plaintext-agent-messages` | boolean | Required when entering v2-plaintext; task text may remain in history, provider requests and debug state. |
 
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
 - Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.

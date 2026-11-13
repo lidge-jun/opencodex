@@ -17,6 +17,7 @@ import { linkChildReportFeatures } from "../link/compatibility";
 import { childLinkTraffic, type LinkTrafficBook, type LinkTrafficFlow } from "../link/traffic";
 import { LINK_HOME_FEATURES_HEADER } from "../link/request-compression";
 import { recordLinkHomeFeatures } from "./link-home-features";
+import { applyLinkWebsocketAnswer, linkWebsocketAnswer, nextLinkPreflightSequence, type LinkWebsocketAnswer } from "./link-ws-advertisement";
 
 export interface BoundLinkRelayTarget {
   tunnelPort: number;
@@ -41,8 +42,11 @@ export class LinkRelayAuthTimeoutError extends Error {
   }
 }
 
-/** One physical connection, ever. A closed keep-alive socket cannot trigger a silent reconnect. */
-class SingleConnectionAgent extends Agent {
+/**
+ * One physical connection, ever. A closed keep-alive socket cannot trigger a silent reconnect.
+ * Exported for the link WebSocket's upgrade (link-ws-transport.ts), which runs on the same kind of connection.
+ */
+export class SingleConnectionAgent extends Agent {
   socket: Socket | undefined;
   private opened = false;
   private closeFlight?: Promise<void>;
@@ -67,7 +71,7 @@ class SingleConnectionAgent extends Agent {
   }
 }
 
-function requestOnConnection(
+export function requestOnConnection(
   url: URL, init: RequestInit, agent: SingleConnectionAgent, authenticatedSocket?: Socket, onSent?: (bytes: number) => void,
   onUploadSettled?: (finished: boolean) => void, onBodySettled?: () => void,
 ): Promise<IncomingMessage> {
@@ -241,23 +245,34 @@ export const linkResponseOnConnectionForTests = (incoming: IncomingMessage, clos
 
 let peerReport: Record<string, string> | undefined;
 
-/** The credential-free challenge for one connection; the proof binds this nonce to the link key. */
-function relayChallenge(target: BoundLinkRelayTarget, origin: URL) {
+/**
+ * The credential-free challenge for one connection; the proof binds this nonce to the link key. It
+ * takes its preflight number when it starts, which orders the Home's WebSocket advertisement.
+ */
+export function relayChallenge(target: BoundLinkRelayTarget, origin: URL) {
+  const preflight = nextLinkPreflightSequence();
   const challenge = linkRelayChallenge(serviceApiTokenFingerprint(target.admissionKey), target.apiKeyId!, target.linkId!);
   const probe = new URL(LINK_RELAY_AUTH_PATH, origin);
   probe.search = new URLSearchParams({ version: LINK_RELAY_AUTH_VERSION, key: target.apiKeyId!,
     link: target.linkId!, nonce: challenge.nonce, proof: challenge.caller }).toString();
   // The challenge also carries this Child's version and features for the Home's link status.
   peerReport ??= linkPeerReportHeaders(packageVersion("0.0.0"), linkChildReportFeatures(buildPeerFeatures()));
-  return { challenge, probe, headers: peerReport };
+  return { challenge, probe, headers: peerReport, preflight };
 }
 
 /**
  * Called only after the Home's relay proof verified. Keep its connection generation when its own
  * proof binds it to this nonce and key; otherwise the connection is unknown, never the old value.
+ * Its Responses WebSocket state is applied under the preflight ordering rule (link-ws-advertisement.ts)
+ * and returned, so an upgrade decides from its own answer.
  */
-function noteHomeConnection(target: BoundLinkRelayTarget, nonce: string, headers: IncomingMessage["headers"]): readonly string[] | null {
-  if (!target.linkId || !target.apiKeyId) return null;
+export function noteHomeConnection(
+  target: BoundLinkRelayTarget, nonce: string, headers: IncomingMessage["headers"], preflight: number,
+): { features: readonly string[] | null; websocket: LinkWebsocketAnswer } {
+  if (!target.linkId || !target.apiKeyId) return { features: null, websocket: "off" };
+  const fingerprint = serviceApiTokenFingerprint(target.admissionKey);
+  const websocket = linkWebsocketAnswer(headers, { fingerprint, keyId: target.apiKeyId, linkId: target.linkId, nonce });
+  applyLinkWebsocketAnswer(target.linkId, preflight, websocket);
   // What this Home serves, as it named it on this verified answer (#3023). Recorded for the next
   // request's decision and returned so this connection's own body can be chosen from it.
   const named = headers[LINK_HOME_FEATURES_HEADER];
@@ -265,12 +280,12 @@ function noteHomeConnection(target: BoundLinkRelayTarget, nonce: string, headers
   const generation = headers[LINK_RELAY_CONNECTION_HEADER];
   const proof = headers[LINK_RELAY_CONNECTION_PROOF_HEADER];
   const expected = typeof generation === "string"
-    ? linkConnectionProof(serviceApiTokenFingerprint(target.admissionKey), target.apiKeyId, target.linkId, nonce, generation)
+    ? linkConnectionProof(fingerprint, target.apiKeyId, target.linkId, nonce, generation)
     : null;
   if (typeof generation === "string" && typeof proof === "string" && linkRelayProofMatches(proof, expected)) {
     recordVerifiedHomeConnection(target.linkId, generation);
   } else forgetVerifiedHomeConnection(target.linkId);
-  return features;
+  return { features, websocket };
 }
 
 /**
@@ -303,7 +318,7 @@ export async function probeLinkRelayPreflight(
     }, agent);
     const proof = response.headers["x-opencodex-link-proof"];
     if (response.statusCode === 204 && typeof proof === "string" && linkRelayProofMatches(proof, request.challenge.expected)) {
-      noteHomeConnection(target, request.challenge.nonce, response.headers);
+      noteHomeConnection(target, request.challenge.nonce, response.headers, request.preflight);
       return "ok";
     }
     return response.statusCode === 404 ? "unrecognized" : "auth_failed";
@@ -344,7 +359,7 @@ export async function fetchBoundLinkRelay(
   if (!target.linkId || !target.apiKeyId) throw new LinkRelayAuthenticationError();
   const url = new URL(destination);
   if (url.origin !== `http://127.0.0.1:${target.tunnelPort}`) throw new LinkRelayAuthenticationError();
-  const { challenge, probe, headers: preflightHeaders } = relayChallenge(target, url);
+  const { challenge, probe, headers: preflightHeaders, preflight } = relayChallenge(target, url);
   const agent = new SingleConnectionAgent({ keepAlive: true, maxSockets: 1, maxFreeSockets: 1 });
   const deadline = clearableDeadline(authTimeoutMs, init.signal ?? undefined);
   let dataRequestStarted = false;
@@ -356,7 +371,7 @@ export async function fetchBoundLinkRelay(
     if (response.statusCode !== 204 || typeof proof !== "string" || !linkRelayProofMatches(proof, challenge.expected)) {
       throw new LinkRelayAuthenticationError(response.statusCode === 404);
     }
-    const homeFeatures = noteHomeConnection(target, challenge.nonce, response.headers);
+    const homeFeatures = noteHomeConnection(target, challenge.nonce, response.headers, preflight).features;
     // Drain the credential-free response before the Agent can reuse its socket.
     for await (const chunk of response) {
       if (chunk.length) throw new LinkRelayAuthenticationError();

@@ -76,6 +76,7 @@ export const RESPONSES_CORE_MODULES = [
   "passthrough-completion.ts",
   "opengateway-completion-guard.ts",
   "outbound-request-body.ts",
+  "bare-namespace-aliases.ts",
   "passthrough-observations.ts",
   "passthrough-key-rotation.ts",
   // Reached from passthrough/adapter dispatch, compact and runTurn: local spend-ledger refusal mapping.
@@ -105,7 +106,7 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-delivery.ts",
   "anthropic-thinking-recovery.ts",
   "advisor-slot.ts",
-  // Reached from advisor-slot.ts: clips the opt-in question-only consultation text (#7526).
+  // Reached from advisor-slot.ts: shared question bounds/clip helper for opt-in question-only consultation text (#7526).
   "advisor-question.ts",
   "advisor-retention.ts",
   "advisor-plan-slot.ts",

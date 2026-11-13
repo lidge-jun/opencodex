@@ -117,7 +117,7 @@ async function consent(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       contextSharingConsent: revoke ? null : ADVISOR_CONTEXT_SHARING_CONSENT_VERSION,
     }),
   }, deps), wantsJson, [revoke
-    ? "Advisor context-sharing consent removed. Consultations will not send task content."
+    ? "Advisor context-sharing consent removed. Consultations not yet dispatched will not send task content; a dispatched consultation cannot be cancelled and task content already sent cannot be retracted."
     : "Advisor context-sharing consent v1 recorded.",
   ]);
 }

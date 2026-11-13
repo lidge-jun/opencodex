@@ -41,6 +41,12 @@ export type StopSharedTeardownOutcome =
   | "failed"
   | "skipped";
 
+/**
+ * Why the checked Windows service stop did not succeed (#7771). Additive on ocx-stop/1:
+ * absent when the CLI has no reason to name, so older documents read unchanged.
+ */
+export type StopServiceReason = "access-denied" | "evidence-unreadable" | "unbound-wrapper" | "unverified-budget";
+
 /** Facts recorded where the stop path already decides them. */
 export interface StopRunRecord {
   /** What stopServiceIfInstalledDetailed returned, or "error" when it threw. */
@@ -53,6 +59,10 @@ export interface StopRunRecord {
   inheritedTeardownBlocks: boolean;
   /** A discharged receipt could not be removed from disk. */
   receiptClearFailed: boolean;
+  /** Windows checked stop: the reason a Part A or Part B result was not a success. */
+  serviceStopReason?: StopServiceReason;
+  /** Windows checked stop: Part B found another program on the port after ours were gone. */
+  portHeldByForeign?: boolean;
 }
 
 /** The internal booleans that already pick the process exit code. */
@@ -81,6 +91,10 @@ export interface StopSummaryJson {
    * run can name one. Additive on `ocx-stop/1`; absent on every other outcome.
    */
   detail?: string;
+  /** Additive (#7771): see StopRunRecord.serviceStopReason. Omitted when there is none. */
+  serviceStopReason?: StopServiceReason;
+  /** Additive (#7771): true or false once Part B ran, omitted otherwise; never null. */
+  portHeldByForeign?: boolean;
 }
 
 /** What handleStop returns: the pre-existing boolean plus the structured twin. */
@@ -126,6 +140,14 @@ function stopMessage(record: StopRunRecord, signals: StopRunSignals, outcome: St
   return "The stop failed.";
 }
 
+/** The additive #7771 fields of a record, omitted when unset (never null). */
+export function stopReasonFields(record: Partial<Pick<StopRunRecord, "serviceStopReason" | "portHeldByForeign">>): Pick<StopSummaryJson, "serviceStopReason" | "portHeldByForeign"> {
+  return {
+    ...(record.serviceStopReason ? { serviceStopReason: record.serviceStopReason } : {}),
+    ...(typeof record.portHeldByForeign === "boolean" ? { portHeldByForeign: record.portHeldByForeign } : {}),
+  };
+}
+
 /** Pure mapper from the recorded run to the wire document. */
 export function summarizeStopRun(record: StopRunRecord, signals: StopRunSignals): StopSummaryJson {
   const outcome = stopOutcome(record, signals);
@@ -139,6 +161,7 @@ export function summarizeStopRun(record: StopRunRecord, signals: StopRunSignals)
     proxy: record.proxy,
     sharedTeardown: record.sharedTeardown,
     message: stopMessage(record, signals, outcome),
+    ...stopReasonFields(record),
   };
 }
 
