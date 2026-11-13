@@ -616,6 +616,25 @@ describe("ocx disconnect --expect-link (a Home's revoke)", () => {
     expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
   });
 
+  test("a client-initiated link (its sidecar names the expected link) is refused with exit 5 before any change", async () => {
+    writeClient({ transport: "link" });
+    const { writeClientLinkState } = await import("../../src/client/link-state");
+    writeClientLinkState({ linkId: LINK_ID, alias: "home", hubHostKeyFingerprint: "SHA256:abcdefghijklmnop", peerListenerPort: 18181, tunnelPort: 2200 });
+    const before = readClientConnectionState();
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const lines: string[] = [];
+    const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+    let exit: number;
+    try {
+      exit = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog"], {
+        linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+      });
+    } finally { errors.mockRestore(); }
+    expect(exit).toBe(5);
+    expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "client_initiated_link" });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
   test("a machine connected to another link refuses with exit 5 and changes nothing", async () => {
     writeClient({ transport: "link" });
     const before = readClientConnectionState();

@@ -590,7 +590,7 @@ export async function handleDisconnectCommand(
   argv: string[],
   deps: Pick<ClientCommandDeps, "lifecycleLockDeps" | "linkTeardownDeps"> & { orphanRecoveryDeps?: OrphanTokenRecoveryDeps } = {},
 ): Promise<number> {
-  let mismatch: ClientSyncExpectationError | null = null;
+  let mismatch: { phase: string; reason: string } | null = null;
   const code = await runCliAction(async () => {
     const args = [...argv];
     const keepCatalog = takeFlag(args, "--keep-catalog");
@@ -613,6 +613,11 @@ export async function handleDisconnectCommand(
     // A Home's revoke names the link it means; checked before the client-link teardown touches anything,
     // and again inside disconnectClient under the locks it writes under.
     if (expectLink !== undefined) {
+      // A Home sends --expect-link only for Home-initiated links. A client-initiated one (its sidecar names this link)
+      // needs the client-link teardown this path skips, so it is refused before anything changes.
+      let sidecar: ReturnType<typeof readClientLinkState>;
+      try { sidecar = readClientLinkState(); } catch { mismatch = { phase: "child_link_mismatch", reason: "invalid_state" }; return; }
+      if (sidecar?.linkId === expectLink) { mismatch = { phase: "child_link_mismatch", reason: "client_initiated_link" }; return; }
       try { assertDisconnectExpectation(expectLink, deps); } catch (error) {
         if (error instanceof ClientSyncExpectationError) { mismatch = error; return; }
         throw error;
@@ -668,8 +673,8 @@ export async function handleDisconnectCommand(
   });
   if (mismatch) {
     // As ocx sync --expect-link: one human line, then the JSON a Home parses as the last stderr line.
-    const refused: ClientSyncExpectationError = mismatch;
-    console.error(`Disconnect refused (${refused.phase}: ${refused.reason}); nothing was changed.`);
+    const refused: { phase: string; reason: string } = mismatch;
+    console.error(`Disconnect refused (${refused.phase}: ${refused.reason}); nothing was changed.${refused.reason === "client_initiated_link" ? " This machine joined its Home itself; run ocx disconnect without --expect-link." : ""}`);
     console.error(JSON.stringify({ phase: refused.phase, reason: refused.reason }));
     return SYNC_EXPECTATION_MISMATCH_EXIT;
   }
