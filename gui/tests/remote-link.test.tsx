@@ -1273,6 +1273,52 @@ test("Ready-to-Plant, cached ephemeral, connected badges, conflict notices, and 
   await act(async () => { forceBtn.click(); });
   await flush();
   expect(calls.at(-1)).toEqual({ method: "DELETE", path: "/api/link/lnk_00000000000000e1", body: { force: true } });
+  // The dialog closes, but the link id and its recover command stay on the page until the operator dismisses them.
+  const notice = host.querySelector(".remote-link-force-removed");
+  expect(notice?.textContent).toContain("lnk_00000000000000e1");
+  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(["ocx link recover --link-id lnk_00000000000000e1"]);
+});
+
+test("a forced removal of a full Child leaves a notice that checks the Child's link before ocx disconnect", async () => {
+  const id = "lnk_00000000000000f2";
+  let listed = true;
+  globalThis.fetch = (async (_input, init) => {
+    if (init?.method === "DELETE") {
+      const body = init.body ? JSON.parse(String(init.body)) as { force?: boolean } : undefined;
+      if (body?.force !== true) return response({ error: { code: "remote_disconnect_failed" } }, 502);
+      listed = false;
+      return response({ linkId: id });
+    }
+    return response({ ...baseStatus, links: listed ? [{ id, alias: "devbox-full", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 24503, childKind: "full" }] : [] });
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { ([...host.querySelectorAll(".remote-link-row button")].find(item => item.textContent === "Disconnect") as HTMLButtonElement).click(); });
+  await flush();
+  const dialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
+  await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+  await flush();
+  await act(async () => { (dialog.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
+  await flush();
+  expect(host.querySelector(".remote-link-row")).toBeNull();
+  // The row is gone, so the notice carries the id the Child must still show before anyone disconnects it there.
+  const notice = host.querySelector(".remote-link-force-removed");
+  expect(notice?.textContent).toContain("Link: " + id);
+  expect(notice?.textContent).toContain("leave it as it is");
+  expect([...notice!.querySelectorAll("code.chip")].map(chip => chip.textContent)).toEqual(["ocx connect status", "ocx disconnect"]);
+  await act(async () => { ([...notice!.querySelectorAll("button")].find(item => item.textContent === "Dismiss") as HTMLButtonElement).click(); });
+  expect(host.querySelector(".remote-link-force-removed")).toBeNull();
+});
+
+test("every locale translates the forced-removal notice and keeps its command and link id slots", async () => {
+  const { DICTS } = await import("../src/i18n/catalogs");
+  for (const [locale, dict] of Object.entries(DICTS)) {
+    for (const key of ["remoteLink.forceRemoved.ephemeral", "remoteLink.forceRemoved.fullCheck", "remoteLink.forceRemoved.fullDisconnect"]) {
+      const text = (dict as Record<string, string>)[key];
+      expect(typeof text, locale + " " + key).toBe("string");
+      if (locale !== "en") expect(text, locale + " " + key).not.toBe((DICTS.en as Record<string, string>)[key]);
+      expect(text.includes("{cmd}") && text.includes("{linkId}"), locale + " " + key).toBe(true);
+    }
+  }
 });
 
 test("a refused --purge on a full install explains why instead of a generic failure", async () => {

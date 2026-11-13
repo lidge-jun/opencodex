@@ -11,7 +11,7 @@ import FallbackPanel from "../components/FallbackPanel";
 import { Button } from "@/components/ui-v2/button";
 import { Banner, PageHeader, StateBadge } from "../components/v2-startup/primitives";
 import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../components/v2-startup/remote-link-parts";
-import { RemoteLinkDisconnectDialog } from "./RemoteLinkDialogs";
+import { type ForceRemovedLink, RemoteLinkDisconnectDialog, RemoteLinkForceRemovedNotice } from "./RemoteLinkDialogs";
 import { RemoteLinkDiagnostics } from "./RemoteLinkDiagnostics";
 import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView, type LinkChildStep } from "./RemoteLinkSheet";
 import { getChildJob, jobHoldsLink, type ChildJobView, type ChildOp } from "../remote-link-child-ops-api";
@@ -198,6 +198,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
   const [confirming, setConfirming] = useState<{ row: LinkRowWire; force: boolean } | null>(null);
   const [purgeOnDisconnect, setPurgeOnDisconnect] = useState(false);
   const [forceError, setForceError] = useState<TKey | null>(null);
+  const [forceRemoved, setForceRemoved] = useState<ForceRemovedLink[]>([]);
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const sheetRef = useRef<HTMLDialogElement>(null);
   const confirmRef = useRef<HTMLDialogElement>(null);
@@ -466,7 +467,11 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
       : purgeOnDisconnect && pending.row.childKind === "ephemeral"
         ? { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ purge: true }) }
         : { method: "DELETE" };
-    try { await requestLinkJson<{ linkId: string }>(apiBase, `/api/link/${encodeURIComponent(pending.row.id)}`, deleteInit); closeConfirmation(); await refreshStatus(); }
+    try {
+      await requestLinkJson<{ linkId: string }>(apiBase, `/api/link/${encodeURIComponent(pending.row.id)}`, deleteInit);
+      if (pending.force) setForceRemoved(current => [...current.filter(item => item.id !== pending.row.id), { id: pending.row.id, alias: pending.row.alias, ephemeral: pending.row.childKind === "ephemeral" }]);
+      closeConfirmation(); await refreshStatus();
+    }
     catch (error) {
       if (!pending.force && error instanceof LinkApiError && error.code === "remote_disconnect_failed") setConfirming({ row: pending.row, force: true });
       else setForceError(errorKey(error));
@@ -535,6 +540,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
         </Banner>
       )}
       {statusError && <Banner tone="err" action={pairingRecoveryAction}><span className="remote-link-error">{t(statusError)}</span></Banner>}
+      {forceRemoved.map(removed => <RemoteLinkForceRemovedNotice key={removed.id} removed={removed} onDismiss={() => setForceRemoved(current => current.filter(item => item.id !== removed.id))} />)}
 
       {statusRows.length === 0 && uiState === "off" && <LinkIntro onTurnOn={() => setUiState("role-select")} />}
 

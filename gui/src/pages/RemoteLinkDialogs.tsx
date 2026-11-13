@@ -2,6 +2,7 @@ import type { ReactElement, RefObject } from "react";
 import type { LinkRowWire } from "../remote-link-api";
 import { Trans } from "../i18n/provider";
 import { type TKey, useT } from "../i18n/shared";
+import { Banner } from "../components/v2-startup/primitives";
 import { Button } from "@/components/ui-v2/button";
 
 export interface RemoteLinkDisconnectDialogProps {
@@ -13,6 +14,25 @@ export interface RemoteLinkDisconnectDialogProps {
   busy: boolean;
   onClose: () => void;
   onConfirm: () => void;
+}
+
+/** A link removed with Remove here only: its row is gone, so the notice keeps what the operator still needs on the Child. */
+export interface ForceRemovedLink { id: string; alias: string; ephemeral: boolean }
+
+export function RemoteLinkForceRemovedNotice({ removed, onDismiss }: { removed: ForceRemovedLink; onDismiss: () => void }): ReactElement {
+  const t = useT();
+  const vars = { alias: removed.alias, linkId: removed.id };
+  // The id passed the status parser's link-id check, so it is safe inside a copied command.
+  return (
+    <Banner tone="warn" className="remote-link-force-removed" action={<Button variant="ghost" size="sm" onClick={onDismiss}>{t("api.dismiss")}</Button>}>
+      {removed.ephemeral
+        ? <span className="block"><Trans k="remoteLink.forceRemoved.ephemeral" cmd={`ocx link recover --link-id ${removed.id}`} vars={vars} /></span>
+        : <>
+          <span className="block"><Trans k="remoteLink.forceRemoved.fullCheck" cmd="ocx connect status" vars={vars} /></span>
+          <span className="mt-1 block"><Trans k="remoteLink.forceRemoved.fullDisconnect" cmd="ocx disconnect" vars={vars} /></span>
+        </>}
+    </Banner>
+  );
 }
 
 export function RemoteLinkDisconnectDialog({
