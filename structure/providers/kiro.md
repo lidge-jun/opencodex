@@ -365,9 +365,9 @@ routes that rung to the emulated block instead.
 
 `KIRO_NATIVE_EFFORTS` is `low`, `medium`, `high`, `xhigh`, `max`. For `minimal`
 `buildKiroPayload` throws, and the request becomes HTTP 400 `invalid_request_error` before
-anything is sent, unless `kiroEmulatesUnsupportedEffort` accepts the model. The surface split
-described below for a pinned `ultra` applies here unchanged, because it is the same throw on the
-same path. `minimal` is the only outside-ladder value a caller's own request can deliver: the
+anything is sent, unless `kiroEmulatesUnsupportedEffort` accepts the model. Responses includes
+the adapter detail; Messages and Chat Completions use the fixed request-rejected message.
+`minimal` is the only outside-ladder value a caller's own request can deliver: the
 Responses parser folds `ultra` to `max` for both surfaces — the Messages translator copies
 `output_config.effort` through verbatim and hands the translated body to the same parser — and
 combo resolution draws from the catalog's `low`..`max` ladder. The emulation set is the seven
