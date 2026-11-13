@@ -5,7 +5,21 @@ description: "Qué impide la limitación de tareas cifradas de v2, por qué Open
 
 OpenCodex se instala con la interfaz de subagentes en **v1**. Las páginas Panel, Modelos y Subagentes solicitan confirmación antes de cambiar a **base** o **v2** y enlazan esta explicación. La CLI no solicita esa confirmación.
 
-El motivo es concreto: de forma predeterminada, en v2 un modelo enrutado no puede leer la tarea cifrada que recibe de un modelo nativo de ChatGPT. Esto afecta al caso habitual de un agente GPT que crea un subagente Grok, Claude o GLM. Las excepciones explícitas son `keepNativeChatGptOnV1`, que conserva los modelos nativos de ChatGPT en v1 mientras los enrutados usan v2; un destino autorizado que pueda procesar la tarea cifrada mediante `allowEncryptedV2AgentTasks: true`; o la recuperación experimental `agentTaskRecovery`, descritas más abajo.
+El motivo es concreto: de forma predeterminada, en v2 un modelo enrutado no puede leer la tarea cifrada que recibe de un modelo nativo de ChatGPT. Esto afecta al caso habitual de un agente GPT que crea un subagente Grok, Claude o GLM. Las excepciones explícitas son `keepNativeChatGptOnV1`, que conserva los modelos nativos de ChatGPT en v1 mientras los enrutados usan v2; un destino autorizado que pueda procesar la tarea cifrada mediante `allowEncryptedV2AgentTasks: true`; la recuperación experimental `agentTaskRecovery` o el modo experimental `v2-plaintext`, descritos más abajo.
+
+## V2 opcional con tareas en texto sin cifrar
+
+**V2 · tareas en texto sin cifrar** (`v2-plaintext`) selecciona V2 para chats nuevos mediante asignaciones del catálogo con la anulación global desactivada. Conserva nombres de tareas, jerarquía, seguimiento, cancelación y concurrencia de V2; reutiliza el compilador experimental para solicitudes Responses aptas dirigidas a ChatGPT por la ruta canónica. Los chats existentes conservan su selección, pero la compilación sigue la configuración actual también en sus solicitudes V2 aptas posteriores. Una actualización no selecciona este modo automáticamente. También puede activar el compilador el ajuste independiente `plaintextV2AgentMessages: true`.
+
+Mientras cualquiera de las dos opciones esté activada, las continuaciones locales por ID requieren el mismo principal de clave API de OpenCodex admitido y el `thread-id` propio de la solicitud; el hilo principal no da acceso a las tareas de un hijo. Sin cualquiera de las dos identidades, tras reiniciar el proxy o para entradas antiguas sin vínculo, envía la conversación completa sin `previous_response_id`. El estado vinculado mientras está activado permanece vinculado al desactivarlo. El modo predeterminado `v1` conserva la continuación por hilo principal para el estado no vinculado, incluso en loopback.
+
+En `v2-plaintext`, el panel exige aceptar que el texto puede conservarse en el historial de Codex, las solicitudes al proveedor y el estado local de respuesta o depuración, incluidas instantáneas y archivos en disco. HTTPS y la autenticación siguen activos. No se añade una llamada de recuperación, no se descifra el texto cifrado existente ni se reescribe el historial, y desactivar la compilación no elimina las copias retenidas. Un cliente o backend incompatible aún puede fallar.
+
+```bash
+ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
+```
+
+Para el destino local omite `--live`. Después consulta el mismo destino: `ocx v2 status --live --json` para el proxy activo o `ocx v2 status --json` para el destino local. La configuración y la convergencia del catálogo no prueban que una delegación real haya funcionado. Para salir, selecciona otro modo; se conserva el valor independiente de `plaintextV2AgentMessages`. La API de gestión exige `plaintextAgentMessagesAcknowledged` al entrar.
 
 <a id="what-you-see-when-it-happens"></a>
 
@@ -65,6 +79,7 @@ OpenCodex registró esta consecuencia en [#92](https://github.com/lidge-jun/open
 | **v1** (predeterminado) | Todos los modelos anuncian las herramientas clásicas de creación con espacio de nombres. Cada creación puede indicar otro modelo directamente. | Si delega entre proveedores. Es el valor incluido en la instalación. |
 | **base** | Respeta la asignación de Codex por modelo: Sol y Terra usan v2, Luna usa v1 y los modelos sin asignación siguen la opción de Codex. | Si desea la interfaz prevista por Codex y delega dentro de un mismo proveedor. |
 | **v2** | Todos los modelos anuncian las herramientas concurrentes sin espacio de nombres. | Si desea las sesiones concurrentes nuevas y ambos agentes están del mismo lado del límite entre proveedores. |
+| **v2-plaintext** | Asigna V2 a sesiones nuevas con la anulación global desactivada y compila las solicitudes aptas en texto sin cifrar. | Si acepta la conservación del texto y desea usar esta opción experimental. |
 
 base aparece en segundo lugar porque asigna v2 a Sol y Terra, modelos utilizados habitualmente como agentes principales. Para delegar de ChatGPT a un modelo enrutado, base tiene la misma limitación que v2.
 
@@ -85,7 +100,7 @@ El modo se aplica a las sesiones **nuevas** de Codex. Inicie otra sesión despu�
 
 ## Si prefiere utilizar v2
 
-Hay cuatro opciones, en el orden recomendado:
+Además de `v2-plaintext`, hay cuatro opciones:
 
 1. **Mantener ChatGPT en v1.** Dentro de v2, `keepNativeChatGptOnV1` conserva Sol y Terra en v1 para que puedan crear subagentes Grok o Claude; los agentes principales enrutados utilizan v2.
 2. **Delegar dentro del mismo proveedor.** Un agente enrutado que crea otro subagente enrutado utiliza texto sin cifrar en v2 y funciona normalmente.
@@ -104,7 +119,7 @@ Cuando Codex permita que un agente nativo de ChatGPT emita sin cifrar la tarea d
 
 ## Cambiar el modo
 
-Panel, Modelos y Subagentes comparten el selector v1/base/v2 y solicitan confirmación antes de pasar a base o v2. Desde la CLI:
+Panel, Modelos y Subagentes comparten el selector v1/base/v2/v2-plaintext y solicitan confirmación antes de pasar a base o v2; entrar en `v2-plaintext` requiere aceptar sus condiciones. Desde la CLI:
 
 ```bash
 ocx v2 status
