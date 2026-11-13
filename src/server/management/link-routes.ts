@@ -303,10 +303,12 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
   // for a force revoke) and before the tunnel stops, so ocx link recover can still reach and clean that machine;
   // without it, refuse with nothing touched.
   const tombstoned = force && record.direction === "hub-initiated" && record.childKind === "ephemeral" && Boolean(record.hostKeyFingerprint);
-  // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: a later
-  // ordinary revoke would otherwise leave one no recover can settle. Only that exact tombstone, and
-  // only while the link still exists: another process may have committed its own forced revoke.
+  // A revoke that does not commit keeps the link, so the tombstone it wrote must go too: beside a live link it would
+  // only count toward the cap (recover refuses it as link_present). Only that exact tombstone, and only while the link
+  // still exists: another process may have committed its own forced revoke. The finally below drops it on every way
+  // out before the commit, a throw included.
   let written: LinkTombstone | null = null;
+  let committed = false;
   const dropOwnTombstone = (): void => {
     if (!written) return;
     const own = written;
@@ -384,13 +386,9 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
       }
     }
     if (cleanup && !intend("key_revoked")) return journalFailed();
-    if (!revokeKeyIdempotent(ctx, record.apiKeyId)) {
-      dropOwnTombstone();
-      return fail("key_revoke_failed", "The link key could not be revoked.", 502);
-    }
+    if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
     journal.done("key_revoked");
-    // The link stays when its record cannot be marked for removal, so the tombstone this revoke wrote goes too.
-    if (!intend("record_removed")) { dropOwnTombstone(); return journalFailed(); }
+    if (!intend("record_removed")) return journalFailed();
     let next: LinkStore;
     try {
       next = withConfigMutationLockSync(() => {
@@ -400,9 +398,9 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
         return filtered;
       });
     } catch {
-      dropOwnTombstone();
       return fail("link_remove_failed", "The link record could not be removed.", 503);
     }
+    committed = true;
     journal.done("record_removed");
     // A revoke that cleaned the Child itself settles any tombstone an earlier forced revoke of this link left.
     if (!force) { try { withConfigMutationLockSync(() => { removeTombstone(id, tombstonesPath()); }); } catch { /* recover --list still shows it */ } }
@@ -414,6 +412,7 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     if (next.links.length === 0) await state.listener.close();
     return Response.json({ linkId: id });
   } finally {
+    if (!committed) dropOwnTombstone();
     // The hold goes before finish writes the outcome. A revoke that leaves the tunnel down drops its live mark first, so a
     // reload in between already finds its open entry suspended (revokeSuspendsLink); this is synchronous, nothing interleaves.
     if (!restarted) journal.release();

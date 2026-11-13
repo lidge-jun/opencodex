@@ -602,6 +602,13 @@ describe("final review follow-ups", () => {
     expect(tombstones()).toEqual([]);
   });
 
+  test("a throw after the early tombstone write (stopLink rejecting) drops that tombstone and keeps the link", async () => {
+    const h = harness([link()], { duringStop: () => { throw new Error("tunnel kill failed"); } });
+    await expect(h.request("DELETE", "/api/link/" + ID, { force: true })).rejects.toThrow("tunnel kill failed");
+    expect(h.store.links.map(l => l.id)).toEqual([ID]);
+    expect(tombstones()).toEqual([]);
+  });
+
   test("a journal write that fails before the link goes drops the tombstone the forced revoke wrote", async () => {
     const operationsPath = join(root, "operations.json");
     const h = harness([link()], { operationsPath, duringStop: () => { writeFileSync(operationsPath, "{ not json"); } });

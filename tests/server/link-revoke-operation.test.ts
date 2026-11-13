@@ -12,6 +12,7 @@ import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { readTombstones, tombstonesPath } from "../../src/link/tombstones";
 
 /**
  * O1: ocx link revoke --operation-id. Every Home-initiated revoke takes the alias lock, so a force revoke waits for a
@@ -333,6 +334,8 @@ describe("journal write failures during a revoke", () => {
     expect({ status: revoked.status, code: code(revoked), operationId: revoked.body.operationId }).toEqual({ status: 500, code: "operation_journal_failed", operationId: OP });
     expect(h.stops).toEqual([]);
     expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+    // The tombstone this force revoke of an ephemeral link wrote first goes again: the link stays.
+    expect(readTombstones(tombstonesPath()).tombstones).toEqual([]);
   });
 
   test("a failed record_removed completion still closes the link's sockets", async () => {
