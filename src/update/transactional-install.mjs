@@ -140,16 +140,21 @@ function resolveStoreLinkChain(path, store, alias, alternateRoot, alternateAlias
  * component marks the location as an isolated install; a .pnpm segment above it hides nothing.
  */
 function hasGlobalLinksComponent(path) {
+  return linksComponentState(path) === "links";
+}
+
+/** "none" without a v<N>/links component, "isolated" when a .pnpm store sits below the last one, else "links". */
+function linksComponentState(path) {
   const parts = String(path).split(/[\\/]+/);
   let links = -1;
   for (let i = 1; i < parts.length; i += 1) {
     if (/^links$/i.test(parts[i]) && /^v\d+$/i.test(parts[i - 1])) links = i;
   }
-  if (links < 0) return false;
+  if (links < 0) return "none";
   for (let i = links + 1; i < parts.length - 1; i += 1) {
-    if (/^node_modules$/i.test(parts[i]) && /^\.pnpm$/i.test(parts[i + 1])) return false;
+    if (/^node_modules$/i.test(parts[i]) && /^\.pnpm$/i.test(parts[i + 1])) return "isolated";
   }
-  return true;
+  return "links";
 }
 
 /** Retain intermediate spellings: realpath alone hides a links directory behind another symlink. */
@@ -160,7 +165,10 @@ function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
     if (store && (inside(path, store) || (storeAlias && inside(path, storeAlias)))) {
       resolveStoreLinkChain(path, store, storeAlias);
     }
-    found ||= isInPnpmGlobalStoreLinks(path, existsSync) || (store && inside(path, join(store, "links")));
+    // The isolated-install exception covers the default store/v<N>/links spelling too: a global-store link
+    // instance never contains node_modules/.pnpm below its links directory.
+    found ||= linksComponentState(path) !== "isolated"
+      && (isInPnpmGlobalStoreLinks(path, existsSync) || Boolean(store && inside(path, join(store, "links"))));
     const root = parse(path).root;
     const parts = path.slice(root.length).split(sep).filter(Boolean);
     let prefix = root, changed = false;

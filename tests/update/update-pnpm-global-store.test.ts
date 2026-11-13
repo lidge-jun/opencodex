@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
-import { verifyPnpmInstallTree } from "../../src/update/transactional-install.mjs";
+import { pnpmPackageUsesGlobalStoreLinks, verifyPnpmInstallTree } from "../../src/update/transactional-install.mjs";
 import { resolvePnpmGlobalOwner, runPnpmGlobalUpdate } from "../../src/update/pnpm-global-install.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -468,6 +468,37 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     expect(verifyPnpmInstallTree(pkg, "2.0.0")).toMatchObject({ ok: false, failures: ["pnpm global links are outside the selected store"] });
   });
   }
+
+  test("a store-like running package that no pnpm candidate lists is refused with the remedy", () => {
+    const layout = globalStoreLayout(root);
+    const run = layout.run;
+    layout.run = args => args[0] === "list" ? { status: 1 } : run(args);
+    expect(resolveOwner(layout)).toEqual(storeRefusal("no pnpm global installation owns the running package"));
+  });
+
+  test("markers of an enclosing store are found past a nested v<N> directory", () => {
+    // store/v11 carries pnpm's files and index markers; the package sits in a nested v2 directory below it.
+    const layout = globalStoreLayout(root);
+    mkdirSync(join(layout.store, "files"), { recursive: true });
+    writeFileSync(join(layout.store, "index.db"), "");
+    const group = join(layout.store, "custom", "v2", "slot", "node_modules"), pkg = join(group, ...PKG.split("/"));
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: PKG, version: "1.0.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(pkg, "bin", "ocx.mjs"), "x".repeat(2048));
+    for (const name of ["bun", "zod"]) {
+      mkdirSync(join(group, name), { recursive: true });
+      writeFileSync(join(group, name, "package.json"), JSON.stringify({ name }));
+    }
+    writeFileSync(join(group, "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
+    writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
+    unlinkSync(layout.exposed);
+    link(pkg, layout.exposed);
+    expect(pnpmPackageUsesGlobalStoreLinks(layout.exposed)).toBe(true);
+    // Classified, so the owner must come from pnpm's store answer; the package lies inside the named store.
+    const result = resolveOwner(layout);
+    expect(result).toMatchObject({ ok: true, owner: { globalStore: true, storePath: layout.store } });
+    expect(storeCalls(layout)).toEqual([["store", "path", "--dir=" + layout.home]]);
+  });
 
   test("owner refusals before the store proof also carry the remedy for a store-like install", () => {
     // pnpm reports a different global root than its listing: the group and bin directory cannot be bound.

@@ -27,10 +27,20 @@ export function isInPnpmGlobalStoreLinks(path, exists = () => false) {
     && ["index", "index.db", "index.fallback"].some(name => exists(`${customStore}/${name}`));
 }
 
-/** A configured alternate directory is evidence only when the enclosing store has pnpm markers. */
+/**
+ * A configured alternate directory is evidence only when an enclosing store has pnpm markers. Every
+ * versioned ancestor above the package's node_modules is checked, so a nested v<N> directory inside a
+ * marked store cannot hide the markers of the store that encloses it.
+ */
 export function isInMarkedPnpmCustomStore(path, exists = () => false) {
   const normalized = String(path).replaceAll("\\", "/");
-  const store = normalized.match(/^(.*\/v\d+)\/[^/]+\/(?:[^/]+\/)*node_modules\//i)?.[1];
-  return !!store && exists(`${store}/files`)
-    && ["index", "index.db", "index.fallback"].some(name => exists(`${store}/${name}`));
+  const lastModules = normalized.toLowerCase().lastIndexOf("/node_modules/");
+  if (lastModules < 0) return false;
+  const parts = normalized.slice(0, lastModules).split("/");
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    if (!/^v\d+$/i.test(parts[index])) continue;
+    const store = parts.slice(0, index + 1).join("/");
+    if (exists(`${store}/files`) && ["index", "index.db", "index.fallback"].some(name => exists(`${store}/${name}`))) return true;
+  }
+  return false;
 }

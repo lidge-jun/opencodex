@@ -626,6 +626,13 @@ export function resolvePnpmGlobalOwner({
 }) {
   if (!isAbsolutePath(packagePath, platform)) return { ok: false, reason: "running pnpm package path is not absolute" };
   let lastReason = "no pnpm global installation owns the running package";
+  // A running package that looks like a pnpm global store gets the remedy even when no pnpm candidate lists
+  // it (a failed listing, or another path), so every refusal of a store-like install says what to run.
+  let runningClassified;
+  try { runningClassified = requireStoreProof === true || pnpmPackageUsesGlobalStoreLinks(packagePath); }
+  catch { runningClassified = true; }
+  const withRunningHint = reason => runningClassified && typeof reason === "string" && !reason.endsWith(STORE_PROOF_HINT)
+    ? reason + STORE_PROOF_HINT : reason;
 
   for (const commandPath of commandPaths ?? []) {
     const list = listGlobalPackage(commandPath, packageName, runPnpm);
@@ -692,7 +699,7 @@ export function resolvePnpmGlobalOwner({
     }
     lastReason = refusal(active.reason);
   }
-  return { ok: false, reason: lastReason };
+  return { ok: false, reason: withRunningHint(lastReason) };
 }
 
 /**

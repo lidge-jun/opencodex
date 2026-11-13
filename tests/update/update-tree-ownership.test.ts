@@ -274,6 +274,13 @@ describe("#4202 install-tree dependency ownership", () => {
     const viaAlias = join(alias, "node_modules", ".pnpm", "pkg", "node_modules", ...PKG.split("/"));
     expect(verifyPnpmInstallTree(packageDir, "2.0.0")).toEqual({ ok: true, failures: [] });
     expect(verifyPnpmInstallTree(viaAlias, "2.0.0")).toEqual({ ok: true, failures: [] });
+    // An isolated install below a directory spelled like the default store/v<N>/links stays unclassified too.
+    const storeSpelled = join(root, "store", "v2", "links", "global", "node_modules", ".pnpm", "pkg", "node_modules");
+    const storeSpelledPackage = join(storeSpelled, ...PKG.split("/"));
+    writePackage(storeSpelledPackage, "2.0.0");
+    writeDependency(join(storeSpelled, "bun"), "bun");
+    writeDependency(join(storeSpelled, "zod"), "zod");
+    expect(verifyPnpmInstallTree(storeSpelledPackage, "2.0.0")).toEqual({ ok: true, failures: [] });
   });
 
   test("a sibling entry in the same virtual store cannot vouch for an unrelated group", () => {
