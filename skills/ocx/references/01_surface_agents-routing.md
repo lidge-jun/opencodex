@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 68.
+Declared capabilities: 71.
 
 ### `ocx agent subagents force`
 
@@ -1346,3 +1346,71 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the result as JSON. |
 
 - Alias of observe memory.
+
+### `ocx route to`
+
+Usage: `ocx route to <client> <on|off|inherit> [--device <alias|id|this>] [--accounts <all|none|userId,...>] [--model-names <alias|routed>] [--overwrite-conflict] [--local] [--json]`
+
+Set Home-default or per-device route intent, or opt out locally on a Child.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/route-to` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--device` | string | Home: alias, id, all or this. Child: this or its own link id only. |
+| `--json` | boolean | Emit the ocx.route-to/1 status matrix. |
+| `--overwrite-conflict` | boolean | Explicitly permit replacing conflicting managed blocks. |
+| `--local` | boolean | Child only: opt out with off, or clear the opt-out with inherit. |
+| `--accounts` | string | Aside on only: all, none, or comma-separated stable userIds; never u/N slots. |
+| `--model-names` | string | Hermes/Command Code on only: alias or routed model names. |
+
+- Clients: codex, claude, claude-desktop, grok and the supported file integrations. Without --device a Home updates its default and materializes itself; all is only for status/sync.
+- inherit requires --device unless clearing a Child --local opt-out. Child writes print the exact Home command with the Child link id; --local supports off/inherit only. --overwrite-conflict applies only to on or sync.
+- On the Home, codex, claude, grok and claude-desktop follow the Home's own native switches: a Home default or --device home write for them writes that switch (Home inherit sets it to the default).
+
+### `ocx route to status`
+
+Usage: `ocx route to status [--device <alias|id|all|this>] [--json]`
+
+Read per-device route intent, its source and actual client apply outcomes.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/route-to` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--device` | string | Home: alias, id, all or this. Child: this or its own link id only. |
+| `--json` | boolean | Emit the ocx.route-to/1 status matrix. |
+
+- On a Child this reads local receipts without a Home management relay. Intent and applied state are distinct; null applied means no recorded outcome.
+- Sources: builtin, default, device, local (Child opt-out) and native (a Home row governed by the Home's own switch). An outcome recorded for an earlier intent reads stale.
+- Intent unresolved appears only for Aside, while the Home's existing Aside profiles have no stable userIds and nothing decided Aside; warnings[] then names the fix (ocx route to aside on|off --device home).
+
+### `ocx route to sync`
+
+Usage: `ocx route to sync [--device <alias|id|all|this>] [--overwrite-conflict] [--json]`
+
+Reapply route intent on selected devices, or locally on a Child.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/route-to/sync` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--device` | string | Home: alias, id, all or this. Child: this or its own link id only. |
+| `--overwrite-conflict` | boolean | Explicitly permit replacing conflicting managed blocks. |
+| `--json` | boolean | Emit the ocx.route-to/1 status matrix. |
+
+- No conflict retry or implicit overwrite. Child sync calls its local materializer and sends no Home management write.
+- Home sync never changes the Home's native switches for codex, claude, grok or claude-desktop; it refreshes what each switch says.
+- On a Home whose Aside ownership is unresolved, sync applies every other client, leaves Aside unchanged, reports it unresolved and prints the warning; that alone does not fail the sync.

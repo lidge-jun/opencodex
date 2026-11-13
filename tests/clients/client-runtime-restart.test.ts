@@ -250,6 +250,23 @@ describe("client restart controller", () => {
     expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
   });
 
+  test("a restart whose syncs cannot be fenced stops nothing and keeps this runtime serving", async () => {
+    const { io, calls } = fakeIo({ fence: async () => false });
+    const controller = createClientRestartController(io);
+    expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
+    await controller.settled();
+    expect(calls).toEqual(["warn:[client] restart: in-flight syncs could not be fenced; this runtime keeps serving"]);
+    expect(controller.hasHandoff()).toBe(false);
+    const throwing = fakeIo({ fence: async () => { throw Object.assign(new Error("x"), { code: "SQLITE_BUSY" }); } });
+    const again = createClientRestartController(throwing.io);
+    await again.request();
+    await again.settled();
+    expect(throwing.calls).toEqual([
+      "warn:[client] restart: syncs could not be fenced (SQLITE_BUSY)",
+      "warn:[client] restart: in-flight syncs could not be fenced; this runtime keeps serving",
+    ]);
+  });
+
   test("only a rollback that cannot serve again exits, and it says so", async () => {
     const { io, calls } = fakeIo({
       spawnReplacement: async () => { throw Object.assign(new Error("x"), { code: "child_exit" }); },

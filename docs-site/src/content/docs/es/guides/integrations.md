@@ -32,6 +32,8 @@ La página **Conectar** escribe el bloque de proveedor de opencodex en el archiv
 | Factory Droid | `~/.factory/settings.json` ( `%USERPROFILE%\.factory\settings.json` en Windows) | JSON | inmediatamente a través de la observación de archivos | ninguno: bucle local sin clave |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (por defecto `~/.t3/userdata/settings.json`) | JSON | inmediatamente — T3 Code observa el archivo | marcador loopback no secreto |
 
+Desde la CLI, `ocx integration client enable|disable --client <id>` cambia solo esta máquina, igual que el interruptor del panel. En un Home de Remote Link que usa la intención de ruta, el cambio se registra como decisión propia del Home, de modo que `ocx sync` la conserva y los Children enlazados mantienen sus valores predeterminados. Para cambiar lo que heredan los Children, usa `ocx route to <client> on|off`. En un Child de Remote Link, un interruptor simple se rechaza e imprime el comando del Home para ese dispositivo; usa allí `ocx route to <client> off --local` para excluir ese Child. Consulta [Remote Link](/es/guides/remote-link/#route-clients-per-device).
+
 <a id="gentle-shell"></a>
 
 ## Gentle Shell
