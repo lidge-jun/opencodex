@@ -383,11 +383,18 @@ nothing ahead and marks its own output, so the chain reads as the client asks. O
 Link turn while the link WebSocket feature is on is paced (#8601, `remote-link.md`); its
 upstream chunks are also cut into 256 KiB views (`sliceChunks`), so each stage holds a slice
 rather than a whole source chunk. Unmarked streams keep every queue described above.
-A passthrough turn also keeps its outbound body only as the serialized text it sent
-(`src/server/responses/passthrough-dispatch.ts`): the parsed copy the undeclared-tool guard
-reads when the request is built is not kept, and the later readers (snapshot repair and Grok
-compatibility rewrites) parse that text again when they need it, so a large request is not held
-twice while its turn streams (#8601). A combo preflight's replay lets go of each buffered chunk as it hands it to the
+The slicer sits where delivery picks its relay (`passthrough-delivery.ts`), so the stages
+before it are not paced: terminal repair and the web-search bridge, which wrap the upstream
+body first, and the encrypted-output preflight in `passthrough-dispatch.ts` (through
+`combo-stream-preflight.ts`, bounded to 4 MiB before it commits) each keep their default
+queue of one upstream chunk on a paced turn. They are opt-in per provider or bounded, and
+marking them would need the paced decision before the exchange is built.
+A passthrough turn also keeps no parsed copy of its outbound body while it streams
+(`src/server/responses/passthrough-dispatch.ts`): the undeclared-tool guard parses it once when
+the request is built, and only its tool scope (`outboundToolScope` in
+`src/server/responses/outbound-request-body.ts`: the tool catalog, the selection, the parallel
+flag and the input items that declare tools) stays for the later readers, snapshot repair and
+the Grok tool scope, so a large request's input is not held twice (#8601). A combo preflight's replay lets go of each buffered chunk as it hands it to the
 client, and of all of them on cancel, so a committed child's prefix is not held for the rest of
 its turn.
 One tee branch's cancellation is never awaited by the wrapper, because that

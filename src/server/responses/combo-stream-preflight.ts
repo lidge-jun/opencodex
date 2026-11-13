@@ -488,7 +488,8 @@ function observedResponsesStage(state: {
 /** A released replay slot. */
 const EMPTY_CHUNK = new Uint8Array(0);
 
-function replayBufferedResponse(
+/** Exported for its regression tests (#8601). */
+export function replayBufferedResponse(
   response: Response,
   reader: ReadableStreamDefaultReader<Uint8Array>,
   buffered: Uint8Array[],

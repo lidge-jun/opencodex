@@ -62,7 +62,8 @@ import {
   collectFunctionCallRepairSchemas,
   repairFunctionCallsInJson,
 } from "../../responses/function-call-compat";
-import type { RoutedNamespaceToolAliases } from "../../responses/namespace-tool-compat";
+import { authorizedBareNamespaceToolAliases as authorizedBareNamespaceAliases } from "./bare-namespace-aliases";
+import { outboundToolScope } from "./outbound-request-body";
 import { hasResponsesSnapshotRepair, repairResponsesSnapshotJson } from "../responses-snapshot-repair";
 import { backfillResponsesFieldsJson } from "./responses-field-backfill";
 import type { AdapterRequest } from "../../adapters/base";
@@ -430,7 +431,8 @@ export async function preparePassthroughExchange(
     // `{model, input, stream}` with no tools and Copilot answers with a `custom_tool_call` for
     // `apply_patch`. Policing an absent catalog truncates that turn. An unreadable body lands there
     // too because the proxy cannot establish the caller's declared authorization boundary.
-    let outboundRequestText: string | undefined; // #8601: the parsed copy is rebuilt for each reader, never kept while the turn streams
+    // #8601: only the outbound body's tool scope (outbound-request-body.ts) stays with the turn, never a parsed copy of it.
+    let outboundRequestScope: Record<string, unknown> | undefined;
     const declaredWireToolNames = new Set<string>();
     const declaredBareWireToolNames = new Set<string>();
     const declaredNamelessClientCallTypes = new Set<string>();
@@ -441,22 +443,12 @@ export async function preparePassthroughExchange(
     // checks. `exec` uses separate handling: its bridge alias is copied into the declared set only
     // when the client itself declared bare `exec`, because otherwise code-mode normalization could
     // authorize the unrelated code-mode helper names.
-    const authorizedBareNamespaceToolAliases: RoutedNamespaceToolAliases = new Map(
-      [...toolBridgeMaps.toolNsMap].flatMap(([alias, identity]) =>
-        alias === identity.name
-          ? [[alias, {
-              namespace: identity.namespace,
-              name: identity.name,
-              kind: identity.freeform ? "custom" as const : "function" as const,
-            }] as const]
-          : []
-      ),
-    );
+    const authorizedBareNamespaceToolAliases = authorizedBareNamespaceAliases(toolBridgeMaps.toolNsMap);
     const restoreAuthorizedBareNamespaceToolCalls = (value: unknown): unknown =>
       restoreRoutedNamespaceCalls(value, authorizedBareNamespaceToolAliases).value;
     const normalizeFunctionCompletionJson = (text: string): string => {
       const snapshot = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
-        ? repairResponsesSnapshotJson(text, outboundRequestText === undefined ? undefined : parseOutboundRequestBody(outboundRequestText))
+        ? repairResponsesSnapshotJson(text, outboundRequestScope)
         : text;
       // Sparse gateways need completion status inferred before schema repair can
       // distinguish completed arguments from in-progress placeholders.
@@ -464,7 +456,8 @@ export async function preparePassthroughExchange(
     };
     let undeclaredToolGuardActive = false;
     const refreshUndeclaredToolGuard = (builtRequest: AdapterRequest): void => {
-      outboundRequestText = builtRequest.body; const outboundRequestBody = parseOutboundRequestBody(outboundRequestText);
+      const outboundRequestBody = parseOutboundRequestBody(builtRequest.body);
+      outboundRequestScope = outboundToolScope(outboundRequestBody);
       providerExecutedCallTypes.clear();
       if (isXaiResponsesDestination(route.provider)) {
         // Preserve the caller-declared authorization recognized by the original classifier, then
@@ -1969,10 +1962,10 @@ export async function preparePassthroughExchange(
     },
     functionRepairSchemas,
     get outboundRequestBody(): Record<string, unknown> | undefined {
-      return outboundRequestText === undefined ? undefined : parseOutboundRequestBody(outboundRequestText);
+      return outboundRequestScope;
     },
     set outboundRequestBody(value: Record<string, unknown> | undefined) {
-      outboundRequestText = value === undefined ? undefined : JSON.stringify(value);
+      outboundRequestScope = outboundToolScope(value);
     },
     declaredWireToolNames,
     declaredBareWireToolNames,

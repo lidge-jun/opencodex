@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as passthroughCompletion from "../../src/server/responses/passthrough-completion";
+import * as snapshotRepair from "../../src/server/responses-snapshot-repair";
 import { handleResponses } from "../../src/server/responses";
 import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import { LINK_TURN_HEADER, registerLinkTurnToken, type LinkTurnObserver } from "../../src/server/link-turn";
@@ -29,12 +30,12 @@ afterEach(() => { globalThis.fetch = savedFetch; releaseSpendHome?.(); releaseSp
 /** The fake upstream and every stream stage advance on promise jobs alone, so one event-loop turn settles them. */
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
-function upstream(): { pulls: number } {
+function upstream(upstreamFrames: readonly string[] = frames): { pulls: number } {
   const state = { pulls: 0 };
   globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
     pull(controller) {
-      if (state.pulls >= frames.length) { controller.close(); return; }
-      controller.enqueue(encoder.encode(frames[state.pulls++]!));
+      if (state.pulls >= upstreamFrames.length) { controller.close(); return; }
+      controller.enqueue(encoder.encode(upstreamFrames[state.pulls++]!));
     },
   }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
   return state;
@@ -46,9 +47,9 @@ const request = (headers: Record<string, string> = {}) => new Request("http://12
 });
 
 /** Pulls the upstream saw before the client read, and after each of its first reads; then the rest of the body. */
-async function stalledThenDrained(run: () => Promise<Response>) {
+async function stalledThenDrained(run: () => Promise<Response>, upstreamFrames: readonly string[] = frames) {
   releaseSpendHome = acquireOwnedSpendHome();
-  const state = upstream();
+  const state = upstream(upstreamFrames);
   const response = await run();
   await settle();
   const pulls = [state.pulls];
@@ -92,6 +93,18 @@ describe("upstream read-ahead under a stalled reader (#8601)", () => {
     run.pulls.forEach((pulls, reads) => expect(pulls).toBeLessThanOrEqual(reads + 1));
     expect(run.text).toBe(delivered);
   });
+  test("with upstream chunks smaller than a slice, no relay stage queues one ahead of the client", async () => {
+    // A stage that lost the paced mark would queue one more of these whole chunks, which the bound below catches.
+    const small = [
+      ...Array.from({ length: 64 }, (_, index) => "event: response.output_text.delta\ndata: "
+        + JSON.stringify({ type: "response.output_text.delta", index, delta: "y".repeat(16 * 1024) }) + "\n\n"),
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}\n\n',
+    ];
+    const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }, { linkTurn: observer(true) }), small);
+    // The client's chunk plus the one chunk the inspection branch may read ahead of it.
+    run.pulls.forEach((pulls, reads) => expect(pulls).toBeLessThanOrEqual(reads + 2));
+    expect(run.text).toBe(small.join("") + "data: [DONE]\n\n");
+  });
 });
 
 
@@ -102,7 +115,9 @@ describe("the eager relay under a stalled reader (#8601)", () => {
 
   test("a local request keeps the eager relay's queue", async () => {
     const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }));
+    // The eager queue (8 MiB), not the tee's 32 MiB allowance: the platform seam chose the eager relay.
     expect(run.pulls[0]).toBeGreaterThanOrEqual(8);
+    expect(run.pulls[0]).toBeLessThan(32);
     expect(run.text).toBe(delivered);
   });
 
@@ -115,31 +130,45 @@ describe("the eager relay under a stalled reader (#8601)", () => {
 
 
 describe("request copies under a stalled reader (#8601)", () => {
-  test("a streaming passthrough turn keeps no parsed copy of its outbound body while it streams", async () => {
-    // Every parse of the outbound body is watched; once the stream is under way, none may still be reachable.
-    const copies: Array<WeakRef<object>> = [];
-    const parseOutboundRequestBody = passthroughCompletion.parseOutboundRequestBody;
-    const parse = spyOn(passthroughCompletion, "parseOutboundRequestBody").mockImplementation(text => {
-      const body = parseOutboundRequestBody(text);
-      if (body) copies.push(new WeakRef(body));
-      // A descendant too: keeping a part of the parsed body (its input) would keep the copy that matters.
-      if (body && typeof body.input === "object" && body.input !== null) copies.push(new WeakRef(body.input));
-      return body;
-    });
+  // A provider whose readers need the outbound body after it was built: snapshot repair reads its tool defaults.
+  const repairing = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+    adapter: "openai-responses", baseUrl: "https://fixture.test/v1", authMode: "key", apiKey: "fixture-key", models: ["m"], responsesSnapshotRepair: true,
+  } } } as unknown as OcxConfig;
+  const tools = [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }];
+  const toolsItem = { type: "additional_tools", tools: [{ type: "function", name: "later", parameters: { type: "object", properties: {} } }] };
+  const body = (stream: boolean) => JSON.stringify({ model: "fixture/m", stream, tool_choice: "auto", tools, input: [{ role: "user", content: "ping" }, toolsItem] });
+
+  test("readers get the outbound body's tool scope, never its input, from one parse per build", async () => {
+    const parse = spyOn(passthroughCompletion, "parseOutboundRequestBody");
+    const rewrite = spyOn(snapshotRepair, "createResponsesSnapshotBlockRewrite");
     releaseSpendHome = acquireOwnedSpendHome();
     upstream();
     try {
-      const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "fixture/m", stream: true, input: [{ role: "user", content: "ping" }] }) }), config, { model: "", provider: "" });
+      const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: body(true) }),
+        repairing, { model: "", provider: "" });
       const reader = response.body!.getReader();
       await reader.read();
       await settle();
-      parse.mockClear(); // the spy records every result; only the pipeline may keep one
-      Bun.gc(true);
-      expect(copies.length).toBeGreaterThanOrEqual(2);
-      expect(copies.filter(copy => copy.deref() !== undefined)).toHaveLength(0);
+      expect(rewrite).toHaveBeenCalledTimes(1);
+      // The tool scope only: the catalog, the selection and the input items that declare tools.
+      expect(rewrite.mock.calls[0]![0]).toEqual({ tool_choice: "auto", tools, input: [toolsItem] });
+      expect(parse).toHaveBeenCalledTimes(1);
       await reader.cancel();
+    } finally { parse.mockRestore(); rewrite.mockRestore(); }
+  });
+
+  test("a non-streaming answer is repaired from the same single parse", async () => {
+    const parse = spyOn(passthroughCompletion, "parseOutboundRequestBody");
+    releaseSpendHome = acquireOwnedSpendHome();
+    globalThis.fetch = (async () => Response.json({ id: "r", object: "response", status: "completed", output: [] })) as unknown as typeof fetch;
+    try {
+      const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: body(false) }),
+        repairing, { model: "", provider: "" });
+      // Snapshot repair filled the request's defaults into the answer.
+      expect(await response.json()).toMatchObject({ status: "completed", tool_choice: "auto", tools });
+      expect(parse).toHaveBeenCalledTimes(1);
     } finally { parse.mockRestore(); }
   });
 });
+
 

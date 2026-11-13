@@ -200,7 +200,9 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         }
       } catch (error) {
         // Accounting that fails before dispatch still decides a pending body observation and returns the lease.
-        decideObservation?.(false); flow?.end(false); release(); throw error;
+        decideObservation?.(false);
+        try { flow?.end(false); } catch { /* the original failure is the one reported */ } finally { release(); }
+        throw error;
       }
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
@@ -263,7 +265,11 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           cancel,
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-      } catch (error) { decideObservation?.(false); req.signal.removeEventListener("abort", beforeHeadersAbort); flow?.end(false); release(); throw error; }
+      } catch (error) {
+        decideObservation?.(false); req.signal.removeEventListener("abort", beforeHeadersAbort);
+        try { flow?.end(false); } catch { /* the original failure is the one reported */ } finally { release(); }
+        throw error;
+      }
     },
   };
 }
