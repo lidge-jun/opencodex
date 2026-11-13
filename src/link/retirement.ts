@@ -74,6 +74,25 @@ export function claimLinkRetirement(link: LinkRecord, configDir: string = getCon
     return candidate;
   }, configDir);
 }
+/**
+ * Take an owned receipt over for a plain --force (#8416): rewrite the exact receipt (same nonce, link and mode) without
+ * its operation id, under the config mutation lock, before the force changes anything. From then on the original
+ * operation no longer owns it, so a later replay of that operation cannot resume it and be credited with the force's
+ * removal. Returns the rewritten receipt, or null when the receipt changed.
+ */
+export function disownLinkRetirement(expected: LinkRetirement, configDir: string = getConfigDir()): LinkRetirement | null {
+  const owner = parse(JSON.stringify(expected), expected.link.id);
+  assertNotRealHomeUnderTest(configDir);
+  return withConfigMutationLockSync(() => {
+    const current = readLinkRetirement(owner.link.id, configDir);
+    if (!current || current.nonce !== owner.nonce || !sameLink(current.link, owner.link)) return null;
+    if (current.operationId === undefined) return current;
+    const { operationId: _owner, ...unowned } = current;
+    const next = parse(JSON.stringify(unowned), owner.link.id);
+    atomicWriteFileNoFollow(pathFor(owner.link.id, configDir), JSON.stringify(next, null, 2) + "\n");
+    return next;
+  }, configDir);
+}
 /** Clear only the exact receipt previously read or claimed, under the config mutation lock. */
 export function clearLinkRetirement(expected: LinkRetirement, configDir: string = getConfigDir(), safeToClear?: () => boolean): boolean {
   const owner = parse(JSON.stringify(expected), expected.link.id);

@@ -543,3 +543,27 @@ test.each([true, false])("a plain --force finishes a receipt whose owner a dead 
   expect(h.journal().operations[0]!.state).toBe("unknown");
   expect((await h.revoke({ purge: true, operationId: OP })).body.outcome).toBe("unknown");
 });
+
+test("a plain --force that dies after removing the record leaves the open owner it took over unknown on replay", async () => {
+  const h = harness();
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
+  const at = new Date(NOW).toISOString();
+  // The owner marked its record removal and died before writing the store.
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "open",
+    effects: [{ effect: "key_revoked", phase: "intent", at }, { effect: "key_revoked", phase: "done", at }, { effect: "record_removed", phase: "intent", at }],
+  } as LinkOperation] });
+  // The force removes the record, then fails its post-commit cleanup: the receipt stays.
+  const intent = join(root, "route-intent.json");
+  writeFileSync(intent, "invalid");
+  expect((await h.revoke({ force: true })).status).toBe(503);
+  expect(h.store.links).toEqual([]);
+  expect(readLinkRetirement(LINK, root)?.operationId).toBeUndefined();
+  unlinkSync(intent);
+  const replay = await h.revoke({ force: true, operationId: OP });
+  expect(replay.body.outcome).toBe("unknown");
+  expect(h.journal().operations[0]!.state).toBe("unknown");
+  expect((await h.revoke({ force: true })).status).toBe(200);
+  expect(readLinkRetirement(LINK, root)).toBeNull();
+});

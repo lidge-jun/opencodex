@@ -9,7 +9,7 @@ import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-arg
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
-import { claimLinkRetirement, clearLinkRetirement, readLinkRetirement, type LinkRetirementMode } from "../../link/retirement";
+import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
@@ -266,10 +266,14 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         if (replay) return replay;
       }
       if (!operation && force) {
-        // A plain --force may finish any receipt (foreignRetirement); an owner a dead process left open is settled first.
+        // A plain --force may finish any receipt (foreignRetirement). An owner a dead process left open is settled first,
+        // then the receipt is disowned before anything changes, so the owner is never credited with this removal.
         try {
           const receipt = readLinkRetirement(id);
-          if (receipt) settleOpenRetirementOwner(ctx, receipt);
+          if (receipt) {
+            settleOpenRetirementOwner(ctx, receipt);
+            if (receipt.operationId !== undefined && !disownLinkRetirement(receipt)) return fail("link_changed", "The link changed during removal.", 409);
+          }
         } catch { return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500); }
       }
       const open = openRevokeConflict(ctx, id, operation?.id);
