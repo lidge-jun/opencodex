@@ -7,7 +7,7 @@ import type { OcxConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 const ID = "lnk_0123456789abcdef";
-const RECOVERY = "Run ocx disconnect on the remote client only if ocx connect status --json there shows this link's id or no connection, right after that check: an enrollment that lands between the two commands would be removed. If it shows another link, a hub or another Home, leave it as it is.";
+const RECOVERY = `Run ocx disconnect --expect-link ${ID} on the remote client once it answers: it disconnects only while the machine is connected to this link, so a newer link is never removed. An OpenCodex older than that flag refuses it as a usage error before it acts on the link; then check ocx connect status --json there and run ocx disconnect only if it shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed). If it shows another link, a hub or another Home, or its state cannot be read, leave it as it is.`;
 const nativeFetch = globalThis.fetch;
 let home: TempHome;
 let output: ReturnType<typeof spyOn>, errors: ReturnType<typeof spyOn>, network: ReturnType<typeof spyOn>;

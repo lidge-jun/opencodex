@@ -1541,11 +1541,14 @@ A forced success returns `{linkId,remoteCleanup:"skipped",recovery}`. Idempotent
 link-not-found instead reports `remoteCleanup:"unverified"`. Both can exit 0;
 these facts derive from CLI intent, not a server cleanup report. Neither means
 remote disconnect was attempted or confirmed. Follow the recovery instruction when
-that action is authorized: on a full Child, run `ocx disconnect` there only if
-`ocx connect status --json` shows this link's id or no connection, right after
-that check (an enrollment that lands between the two commands would be removed),
-and leave it if it shows another link, a hub or another Home; a lightweight Child
-uses `ocx link recover` (below).
+that action is authorized: on a full Child, run `ocx disconnect --expect-link <id>`
+there, which acts only while the machine is connected to this link. An OpenCodex
+older than that flag refuses it as a usage error before it acts on the link; then
+run `ocx disconnect` only if `ocx connect status --json` shows this link's id or no
+connection, right after that check (an enrollment that lands between the two
+commands would be removed), and leave it if it shows another link, a hub or
+another Home, or its state cannot be read. A lightweight Child uses
+`ocx link recover` (below).
 
 A forced revoke of a lightweight (`ocx-child`) Child that the Home reached over
 SSH leaves a tombstone on the Home naming the link, its alias and its pinned host

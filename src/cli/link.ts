@@ -61,7 +61,7 @@ ${LINK_OPERATIONS_USAGE.join("\n")}
 ${LINK_CHILD_OPS_USAGE.join("\n")}
 ${LINK_CAPTURE_USAGE.join("\n")}
 
-Forced revoke skips remote cleanup. On a full install run ocx disconnect there only if ocx connect status --json shows this link's id or no connection; for a lightweight Child run ocx link recover --link-id <id> on this Home.
+Forced revoke skips remote cleanup. On a full install run ocx disconnect --expect-link <id> there, which acts only while the machine is connected to this link; for a lightweight Child run ocx link recover --link-id <id> on this Home.
 An explicit route (--proxy-command, --ssh-user and --ssh-port, with --exclusive) reaches ssh on the command line for every command and tunnel of the link, so ssh_config cannot change it; an exclusive link refuses route edits.
 Recover cleans an ephemeral Child a forced revoke or an interrupted enrollment left behind, over the link's pinned SSH trust.
 Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
@@ -435,7 +435,9 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
       // Never a bare local disconnect: a forced revoke is also the remedy when the Child now belongs to another link, a hub or
       // another Home, and a disconnect run there would remove that link. The link-bound recover checks ownership itself.
       ? `Run ocx link recover --link-id ${linkId} once the machine answers: it cleans the machine only while it still belongs to this link.`
-      : "Run ocx disconnect on the remote client only if ocx connect status --json there shows this link's id or no connection, right after that check: an enrollment that lands between the two commands would be removed. If it shows another link, a hub or another Home, leave it as it is.";
+      // The bound disconnect (#8662) acts only while the machine is connected to this link, which closes the race between a check
+      // and a plain disconnect; an ocx older than the flag refuses it before it acts on the link, and then the check comes first.
+      : `Run ocx disconnect --expect-link ${linkId} on the remote client once it answers: it disconnects only while the machine is connected to this link, so a newer link is never removed. An OpenCodex older than that flag refuses it as a usage error before it acts on the link; then check ocx connect status --json there and run ocx disconnect only if it shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed). If it shows another link, a hub or another Home, or its state cannot be read, leave it as it is.`;
     printData({ linkId, remoteCleanup, recovery, ...(operationId !== undefined && recordedOutcome !== undefined ? { operationId, outcome: recordedOutcome } : {}) }, wantsJson, [
       remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,
       recovery,

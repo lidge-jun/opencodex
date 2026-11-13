@@ -137,11 +137,11 @@ Con `--operation-id`, vuelva a revocar con un identificador de operación nuevo 
 
 Una revocación nunca borra la lápida que dejó para ese enlace una revocación forzada anterior. Tras una limpieza confirmada, `ocx link recover --link-id <id>` la borra cuando el enlace ya no existe. Tras una limpieza sin comprobación de un Child más antiguo, la recuperación no puede probar que el equipo quedó limpio: revise el equipo y luego pida a una persona en el Home que ejecute `ocx link recover --forget --link-id <id> --yes`. Hasta entonces, la lápida cuenta para el límite de 256.
 
-Si el Home no puede alcanzar el Child para ejecutar su comando de desconexión, elija **Eliminar aquí solamente**. Esto elimina el túnel local, la clave y el registro. En un Child ligero, ejecute `ocx link recover --link-id <id>` en el Home cuando el equipo responda: limpia el equipo solo mientras siga perteneciendo a este enlace. En una instalación completa, compruebe el equipo con `ocx connect status --json` y ejecute allí `ocx disconnect` solo si muestra el identificador de este enlace o ninguna conexión, justo después de la comprobación: una inscripción que llegue entre los dos comandos se eliminaría. Si muestra otro enlace, un hub u otro Home, déjelo como está:
+Si el Home no puede alcanzar el Child para ejecutar su comando de desconexión, elija **Eliminar aquí solamente**. Esto elimina el túnel local, la clave y el registro. En un Child ligero, ejecute `ocx link recover --link-id <id>` en el Home cuando el equipo responda: limpia el equipo solo mientras siga perteneciendo a este enlace. En una instalación completa, ejecute allí `ocx disconnect --expect-link <id>`: solo desconecta mientras el equipo esté conectado a este enlace. Un OpenCodex anterior a esa opción la rechaza como error de uso antes de tocar el enlace; entonces compruebe el equipo con `ocx connect status --json` y ejecute `ocx disconnect` solo si muestra el identificador de este enlace o ninguna conexión, justo después de la comprobación (una inscripción que llegue entre los dos comandos se eliminaría). Si muestra otro enlace, un hub u otro Home, o su estado no se puede leer, déjelo como está:
 
 ```bash
-ocx link recover --link-id <id>   # on the Home, for a lightweight Child
-ocx connect status --json         # on a full install, then ocx disconnect only if it shows this link or no connection
+ocx link recover --link-id <id>     # on the Home, for a lightweight Child
+ocx disconnect --expect-link <id>   # on a full install
 ```
 
 Para desconectar un enlace iniciado por Child, ejecute `ocx disconnect` en el Child. Desconecta el túnel del cliente y revoca el enlace en Home sobre SSH. Si la revocación Home falla, se imprime: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`

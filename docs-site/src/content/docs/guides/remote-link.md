@@ -131,11 +131,11 @@ With `--operation-id`, revoke again under a new operation id when the answer rec
 
 A revoke never clears a tombstone an earlier forced revoke left for that link. After a confirmed cleanup, `ocx link recover --link-id <id>` clears it once the link is gone. After an unbound cleanup of an older Child, recover cannot prove the machine was cleaned: check the machine, then have a person on the Home run `ocx link recover --forget --link-id <id> --yes`. Until then the tombstone counts toward the 256 limit.
 
-If the Home cannot reach the Child to run its disconnect command, choose **Remove here only**. This removes the local tunnel, key, and record. For a lightweight Child, run `ocx link recover --link-id <id>` on the Home once the machine answers: it cleans the machine only while it still belongs to this link. For a full install, check the machine with `ocx connect status --json` and run `ocx disconnect` there only if it shows this link's id or no connection, right after the check: an enrollment that lands between the two commands would be removed. If it shows another link, a hub or another Home, leave it as it is:
+If the Home cannot reach the Child to run its disconnect command, choose **Remove here only**. This removes the local tunnel, key, and record. For a lightweight Child, run `ocx link recover --link-id <id>` on the Home once the machine answers: it cleans the machine only while it still belongs to this link. For a full install, run `ocx disconnect --expect-link <id>` there: it disconnects only while the machine is connected to this link. An OpenCodex older than that flag refuses it as a usage error before it acts on the link; then check the machine with `ocx connect status --json` and run `ocx disconnect` only if it shows this link's id or no connection, right after the check (an enrollment that lands between the two commands would be removed). If it shows another link, a hub or another Home, or its state cannot be read, leave it as it is:
 
 ```bash
-ocx link recover --link-id <id>   # on the Home, for a lightweight Child
-ocx connect status --json         # on a full install, then ocx disconnect only if it shows this link or no connection
+ocx link recover --link-id <id>     # on the Home, for a lightweight Child
+ocx disconnect --expect-link <id>   # on a full install
 ```
 
 To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disconnects the client tunnel and revokes the link on Home over SSH. If Home revocation fails, it prints: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
