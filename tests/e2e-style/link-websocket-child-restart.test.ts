@@ -29,7 +29,7 @@ import { completed, expectCompleted, gate, runGateCodex, toolCall, untilOrExit }
 // attempt. Variants model the two Child changes lane T6 proposed. Since #8682 the product's rule is try-when-unknown;
 // the old rule is kept for comparison, and close-at-drain is still only proposed:
 //   try-when-unknown: dev's rule since #8682: the replacement tries the Home unless it holds a cached "off", so with no
-//     answer seen since start it tries (the same expression as the relay's default advertised rule);
+//     answer seen since start it tries (the relay's default rule, run with no seam);
 //   old-rule: the rule before #8682: 503 for the drain phase, then refused, then the replacement answers 426 (not
 //     advertised) until a preflight teaches it the advertisement;
 //   old-rule+close-at-drain and try-when-unknown+close-at-drain: the listener closes when the drain starts, so the
@@ -121,6 +121,13 @@ async function measureRestart(variant: Variant, retries: number, restartMs: numb
     const gateA = stoppableTunnel();
     const listener = startMachineListener(port, {
       state: childConnection(linkPort, identity), linkKeySource: () => SECRET, linkTunnel: gateA.tunnel,
+      // Every upgrade request this listener answers is marked with its answer (101 when the socket was upgraded), seen
+      // around the listener's own fetch handler so the product's code runs unchanged.
+      serve: options => Bun.serve({ ...options, fetch: async (req: Request, bunServer: Server<unknown>) => {
+        const answer = await (options.fetch as (req: Request, server: Server<unknown>) => Promise<Response | undefined>)(req, bunServer);
+        if (req.headers.get("upgrade")?.toLowerCase() === "websocket") mark(name + " upgrade answered " + (answer?.status ?? 101));
+        return answer;
+      } } as Parameters<typeof Bun.serve>[0]),
       linkWebsocket: { ready: () => true, ...(advertised ? { advertised } : {}), diagnostic: (record: LinkDiagnosticRecord) => mark(name + " " + record.event + ":" + record.outcome) },
     });
     listeners.push(listener);
@@ -149,14 +156,9 @@ async function measureRestart(variant: Variant, retries: number, restartMs: numb
   // A restarted process remembers no advertisement.
   forgetLinkWebsocketAdvertisementsForTests();
   await delay(closeAtDrain ? restartMs : bindMs);
-  // Every upgrade the replacement judges is marked: "try" goes on to the Home, "426" is the Child's not-advertised answer
-  // (counted in memory only, so it is not in the diagnostics).
-  child("new", port, linkId => {
-    const cached = linkWebsocketAdvertisement(linkId);
-    const decision = tryWhenUnknown ? cached !== "off" : cached === "on";
-    mark("new upgrade judged: advertisement " + cached + " -> " + (decision ? "try" : "426"));
-    return decision;
-  });
+  // try-when-unknown is the product's rule since #8682 and runs through the relay's default path, with no seam. Only the
+  // old rule is injected (try only on a cached "on"); either way the replacement's answers are marked by the serve wrapper.
+  child("new", port, tryWhenUnknown ? undefined : linkId => linkWebsocketAdvertisement(linkId) === "on");
   mark("new listener bound");
   const result = await run;
   expectCompleted(result);
@@ -170,7 +172,7 @@ async function measureRestart(variant: Variant, retries: number, restartMs: numb
     refused_ms: closeAtDrain ? restartMs : bindMs, completed_on: completedOn, next_session: nextSession,
     // Counts for the turn under test only: everything marked before its Codex exited.
     draining_503s: firstSession.filter(([, what]) => what === "old link_ws_fallback:draining").length,
-    new_426s: firstSession.filter(([, what]) => what.endsWith("-> 426")).length, timeline }));
+    new_426s: firstSession.filter(([, what]) => what === "new upgrade answered 426").length, timeline }));
 }
 
 describe("link WebSocket release gate through the real Child: a Child restart under a running turn (measurement)", () => {
