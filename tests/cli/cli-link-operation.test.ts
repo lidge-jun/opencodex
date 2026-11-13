@@ -263,7 +263,7 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
       expect(printed).not.toContain("still belongs to this id");
       expect(printed).toContain("an unfinished removal holds this link");
       expect(printed).toContain("ocx link operations");
-      expect(printed).toContain("ocx link revoke --force without --operation-id");
+      expect(printed).toContain("ocx link revoke --force --yes without --operation-id");
       expect(printed).not.toContain("the refusal was recorded");
       expect(printed).not.toContain("if it reads failed_clean");
       expect(printed).not.toContain("Nothing was changed");
@@ -274,7 +274,7 @@ describe("a journalled revoke refused before anything ran says so (O1c-2)", () =
 
   // #8416's refusals for an interrupted removal: the owner and the way out live only in the server's message, which is dropped.
   test.each([
-    ["link_retirement_owned", ["unfinished removal holds this link", "ocx link operations", "without --operation-id"]],
+    ["link_retirement_owned", ["unfinished removal holds this link", "ocx link operations", "ocx link revoke --link-id <link id> --force --yes without --operation-id", "If no journalled operation owns it"]],
     ["link_retirement_mode_mismatch", ["interrupted after its cleanup ran", "the same options", "--force"]],
   ])("%s prints closed guidance that names the way out and makes no claim about state", async (code, parts) => {
     const h = harness([{ status: 409, body: { error: { code, message: "server-chosen text" } } }]); try {
