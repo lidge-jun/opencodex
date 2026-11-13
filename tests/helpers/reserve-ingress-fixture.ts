@@ -84,6 +84,8 @@ export async function reserveIngressFixture(options: {
   const counters: Counters = { wham: 0, credential: 0, tokenRead: 0, inference: [] };
   let liveConfig: OcxConfig | undefined;
   let server: ReturnType<typeof startServer> | undefined;
+  // Set when a failed start's rollback rejected: its listener or ledger lease may still hold the home.
+  let rollbackUncertain = false;
   let allowReserve = false;
   let holdUsage: ReturnType<typeof deferred<void>> | undefined;
   let usageStarted = deferred<void>();
@@ -107,7 +109,9 @@ export async function reserveIngressFixture(options: {
         for (const [name, value] of oldEnv) {
           if (value === undefined) delete process.env[name]; else process.env[name] = value;
         }
-        removeTreeWithRetry(root);
+        // A home whose failed start never confirmed its rollback is left in place rather than
+        // removed from under a listener or lease that may still be live.
+        if (!rollbackUncertain) removeTreeWithRetry(root);
       }
     }
     expect(unexpected).toEqual([]);
@@ -205,7 +209,10 @@ export async function reserveIngressFixture(options: {
         // Like the CLI's start: a failed start owns an asynchronous rollback (listeners, ledger
         // lease) that must settle before another attempt or before teardown removes the home.
         try { await waitForFailedStartRollback(error); }
-        catch (rollback) { throw new AggregateError([error, rollback], "Reserve ingress fixture start failed and its rollback did not settle"); }
+        catch (rollback) {
+          rollbackUncertain = true;
+          throw new AggregateError([error, rollback], `Reserve ingress fixture start failed and its rollback did not settle; home kept at ${root}`);
+        }
         const collided = isAddrInUse(error) || (error instanceof AuxiliaryListenerBindError && isAddrInUse(error.cause));
         if (!collided || attempt >= 3) throw error;
       }
@@ -281,5 +288,9 @@ export async function reserveIngressFixture(options: {
         expect(readFileSync(join(configHome, "config.json"), "utf8")).toBe(baselineDisk);
       },
     };
-  } catch (error) { await close(); throw error; }
+  } catch (error) {
+    // Teardown must not replace the failure that caused it.
+    try { await close(); } catch (closeError) { throw new AggregateError([error, closeError], "Reserve ingress fixture failed and then failed to close"); }
+    throw error;
+  }
 }
