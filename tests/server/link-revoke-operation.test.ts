@@ -47,6 +47,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: [{ id: "link-key", name: "link:" + ALIAS, key: "k", createdAt: "2026-11-13T00:00:00Z" }] };
   const journalPath = join(root, "operations.json");
+  let journalPathOf = () => journalPath;
   let store: LinkStore = { version: 1, listenerPort: 18181, links: [record()] };
   const ssh: string[][] = [];
   const state: LinkRouteState = {
@@ -68,7 +69,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   const deps: ManagementContext["deps"] = {
     now: () => NOW, sshRunner: runner,
     readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
-    linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => journalPath,
+    linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => journalPathOf(),
     linkAliasLock: { lockDir: join(root, "locks"), waitMs: options.lockWaitMs ?? 0, pollMs: 250, now: () => NOW, ...(options.sleep ? { sleep: options.sleep } : {}) },
     ...(options.markHook ? { linkOperationMarkHook: options.markHook } : {}),
     revokeApiKey: (cfg, id) => { const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
@@ -84,7 +85,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     const response = await handleLinkRoutes(context, state);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   }
-  return { revoke, ssh, config, journalPath, stops, closedSockets, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
+  return { revoke, ssh, config, journalPath, stops, closedSockets, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
@@ -194,6 +195,22 @@ test("before this Home ever journalled, a plain revoke takes no lock", async () 
   try {
     expect((await h.revoke({ force: true })).status).toBe(200);
   } finally { held.release(); }
+});
+
+test("a recorded revoke entry pruned between the read and the replay falls through to a normal revoke", async () => {
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  const gonePath = join(root, "operations-after-prune.json");
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{ operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: at, updatedAt: at, state: "committed", finishedAt: at, effects: [] }] });
+  writeOperationsJournal(gonePath, { version: 1, operations: [] });
+  // The first read sees the entry; every later one sees the journal after another write pruned it.
+  let reads = 0;
+  h.setJournalPath(() => (reads++ === 0 ? h.journalPath : gonePath));
+  const revoked = await h.revoke({ purge: true, operationId: OP });
+  expect(revoked.status).toBe(200);
+  expect(revoked.body).toMatchObject({ linkId: LINK, operationId: OP, outcome: "committed" });
+  expect(h.store.links).toEqual([]);
 });
 
 describe("journal write failures during a revoke", () => {

@@ -224,7 +224,13 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
     try { recordedAlias = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id)?.alias; } catch {
       return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
     }
-    if (recordedAlias !== undefined) return underAliasLock(ctx, recordedAlias, true, async () => (await replayOperation(ctx, state, operation, "revoke"))!);
+    if (recordedAlias !== undefined) {
+      // Another write may prune the entry between that read and the replay: then this is a first revoke after all,
+      // run below once the replay has released the alias lock.
+      const notRecorded = new Response(null, { status: 204 });
+      const replayed = await underAliasLock(ctx, recordedAlias, true, async () => (await replayOperation(ctx, state, operation, "revoke")) ?? notRecorded);
+      if (replayed !== notRecorded) return replayed;
+    }
   }
   const current = readStoreFor(ctx);
   const record = current.links.find(link => link.id === id);
