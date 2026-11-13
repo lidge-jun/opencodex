@@ -254,5 +254,6 @@
   "link-ws-unknown-try.test.ts": "clients",
   "link-ocx-child-ws-gate.test.ts": "clients",
   "link-ocx-child-ws-feature.test.ts": "clients",
-  "link-relay-wait-observer.test.ts": "clients"
+  "link-relay-wait-observer.test.ts": "clients",
+  "link-ws-autobahn.test.ts": "clients"
 }
