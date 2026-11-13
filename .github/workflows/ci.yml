@@ -355,9 +355,10 @@ jobs:
               - 'native/remote-workspace-helper/**'
             # The Rust lightweight Child (native/ocx-child). Nothing else in CI builds or tests it; its
             # job runs fmt, clippy and the crate's tests (including the process-level lifecycle suites)
-            # on Linux.
+            # on Linux. ci.yml is listed so an edit to the job verifies itself.
             ocx_child:
               - 'native/ocx-child/**'
+              - '.github/workflows/ci.yml'
             # docker-smoke and keyring-smoke on a pull request. Both used to run on every PR the
             # ci filter matched, which is nearly all of them, while each proves something narrow:
             # the image builds, starts and survives recreation with its volume; the OS keyring
