@@ -8,6 +8,7 @@
  *
  * Bodies are unchanged from their previous home; only `export` was added.
  */
+import { modelCapabilitySourceResolver, type ModelCapabilitySourceFields } from "./model-capability-sources";
 import type { CatalogModel } from "../../codex/catalog";
 import { antigravityFamilyDisabled } from "../../providers/antigravity-effort-families";
 import { observeModelCacheRevision } from "../../codex/model-cache";
@@ -99,6 +100,9 @@ export type ManagementModelRow = Partial<CatalogModel> & {
    * config — so this compares values against what the model would inherit anyway.
    */
   reasoningOverridden?: boolean;
+  /** Per-axis provenance and same-name estimates (`model-capability-sources.ts`); routed rows only. */
+  capabilitySources?: ModelCapabilitySourceFields["capabilitySources"];
+  inferredCapabilities?: ModelCapabilitySourceFields["inferredCapabilities"];
   /**
    * Tool support a canonical source positively asserts (native identity, a catalog row's
    * `"tools"` capability, or the parallel-call opt-in — the same evidence
@@ -457,6 +461,7 @@ export async function listManagementModelRows(
       ),
     };
   });
+  const capabilitySources = modelCapabilitySourceResolver(config);
   const dedupedRouted = publicModels.map((m): ManagementModelRow | null => {
     // Codex-facing slug (one "/", slug-codec); disabledModels compares tolerate both forms.
     const namespaced = catalogModelSlug(m);
@@ -476,6 +481,7 @@ export async function listManagementModelRows(
       : undefined;
     const inputModalitiesDeclared = routed ? declaredModelInputModalities(config, m.provider, m.id) : undefined;
     const contextWindowDeclared = routed ? config.providers[m.provider]?.modelContextWindows?.[m.id] : undefined;
+    const reasoningOverridden = routed ? reasoningOverrideFor(config, m.provider, m.id, catalogLadders) : undefined;
     return {
       ...m,
       ...displayName,
@@ -489,7 +495,8 @@ export async function listManagementModelRows(
       // here, where the config and the registry are both in hand.
       ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
       ...(defaultReasoningEffort !== undefined ? { defaultReasoningEffort } : {}),
-      ...(routed ? { reasoningOverridden: reasoningOverrideFor(config, m.provider, m.id, catalogLadders) } : {}),
+      ...(routed ? { reasoningOverridden } : {}),
+      ...(routed ? capabilitySources(m, { contextWindowDeclared, inputModalitiesDeclared, reasoningOverridden, reasoningEfforts }) : {}),
       ...(inputModalitiesDeclared !== undefined ? { inputModalitiesDeclared } : {}),
       ...(contextWindowDeclared !== undefined ? { contextWindowDeclared } : {}),
       // The authoritative export default is the GATHERED row's own declared default — never

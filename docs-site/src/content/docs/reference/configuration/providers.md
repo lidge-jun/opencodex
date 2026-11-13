@@ -1837,6 +1837,8 @@ contracts.
 
 The raw provider editor and provider API expose this map. POST/PUT replace an explicitly supplied map and reject null entries. PATCH merges individual axes; null clears a map, model, axis or video processing value, while `{}` makes no change. Omitted provider overwrites preserve the existing map. Malformed hand-edited files retain valid independent axes and treat malformed explicit input modalities as text-only, with a diagnostic.
 
+`modelCapabilityProbes` is written by the [capability probe](/reference/management-api/#capability-probe), not by hand. Keyed by model ID, each entry records `probedAt` (ISO 8601 UTC) and `inputModalities: true` and/or `reasoningEfforts: true` for the declarations (`modelCapabilities.<id>.inputModalities`, `modelReasoningEfforts.<id>`) that came from a live probe. A manual edit of that declaration through the dashboard or management API removes its label, a label is removed when its declaration is gone, and the field is absent when empty. A malformed value is dropped at load with a warning.
+
 An explicit `modelCapabilities.<id>.inputModalities` now takes precedence over legacy modality hints for that exact routed model. A text-only declaration uses the existing vision sidecar to replace images with descriptions; if no sidecar is available, the request receives an explicit omission marker before dispatch. Native Chat image requests divert through this path. The catalog can still advertise image attachment support because the proxy provides the description step. Context-tier and video processing declarations remain inert pending their transport support.
 
 An input-modality declaration on a **custom model row** — the Input modalities checkboxes in the
