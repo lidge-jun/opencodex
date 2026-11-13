@@ -20,5 +20,6 @@
   "responses-websocket-workflow-ceiling.test.ts": "responses",
   "ws-native-continuation-send-budget.test.ts": "responses",
   "responses-native-compact-ocx-envelope.test.ts": "responses",
-  "responses-reset-replay-chained.test.ts": "responses"
+  "responses-reset-replay-chained.test.ts": "responses",
+  "stalled-reader-memory.test.ts": "responses"
 }

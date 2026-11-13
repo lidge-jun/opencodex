@@ -11,7 +11,8 @@ import { randomBytes } from "node:crypto";
  * - continuation frames only inside a message, and a new data frame only outside one;
  * - minimal length encoding, with the top bit of a 64-bit length zero;
  * - UTF-8 validation of complete text messages and close reasons;
- * - close codes 1000-1003, 1007-1011 and 3000-4999 only;
+ * - close codes 1000-1003, 1007-1014 and 3000-4999 only (1012-1014 are registered: service restart, try
+ *   again later, bad gateway);
  * - client frames masked, server frames refused when masked;
  * - at most the maximum message plus 14 header bytes held (plus one control frame of at most 125 bytes
  *   between fragments): an unfragmented message gets its own buffer,
@@ -42,9 +43,9 @@ export class LinkWsProtocolError extends Error {
   }
 }
 
-/** A close code that may appear in a close frame on the wire. */
+/** A close code that may appear in a close frame on the wire (1004, 1005, 1006 and 1015 never may). */
 export function isWireCloseCode(code: number): boolean {
-  return Number.isInteger(code) && ((code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1011) || (code >= 3000 && code <= 4999));
+  return Number.isInteger(code) && ((code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || (code >= 3000 && code <= 4999));
 }
 
 // ignoreBOM: a leading U+FEFF is part of the text and is passed on unchanged.
@@ -80,9 +81,12 @@ export class LinkWsFrameReader {
     return (this.assembly?.length ?? 0) + own + this.headerLength;
   }
 
-  /** Feed bytes off the socket; returns every event they complete, in order. */
-  push(chunk: Uint8Array): LinkWsFrameEvent[] {
-    const events: LinkWsFrameEvent[] = [];
+  /**
+   * Feed bytes off the socket; returns every event they complete, in order. Events are appended to
+   * `events` as they complete, so a caller that passes its own array still has the events completed
+   * before a protocol error when push throws.
+   */
+  push(chunk: Uint8Array, events: LinkWsFrameEvent[] = []): LinkWsFrameEvent[] {
     let offset = 0;
     try {
       while (offset < chunk.length && !this.done) {

@@ -53,7 +53,7 @@ import {
 } from "../../providers/service-tier";
 import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../../providers/registry";
-import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
+import { discoveredAntigravityDefaultEffort, parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { captureAntigravityModelObservation, recordAntigravityAccountRoster } from "../../providers/antigravity-account-roster";
 import { antigravityActiveAccountCurrent, discoverAntigravitySiblings } from "./antigravity-discovery";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
@@ -819,7 +819,7 @@ export async function fetchProviderModelsWithAuth(
         ...(model.effortWireModelIds ? {
           antigravityEffortWireModelIds: model.effortWireModelIds,
           suppressSyntheticMax: true,
-          defaultReasoningEffort: model.effortWireModelIds.medium ? "medium" : "high",
+          defaultReasoningEffort: discoveredAntigravityDefaultEffort(model.id, !!model.effortWireModelIds.medium),
         } : {}),
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
