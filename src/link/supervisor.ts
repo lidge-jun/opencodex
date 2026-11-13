@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config/atomic-write";
 import { linkDir, linkKnownHostsPath, linkStorePath } from "./paths";
@@ -125,6 +125,8 @@ export interface LinkSupervisorDeps {
 }
 
 const TIMER_MS = 1_000;
+/** A pidfile is one short JSON line; a larger file is not one this process wrote, and reads as unreadable. */
+const PIDFILE_MAX_BYTES = 64 * 1024;
 const SPAWN_GRACE_MS = 5_000;
 /**
  * A retry runs while the network may still be down, and ssh can wait out its whole ConnectTimeout
@@ -213,10 +215,20 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const killProcess = deps.killProcess ?? defaultKillProcess;
   const processAlive = deps.processAlive ?? defaultProcessAlive;
   const loadPidfile = deps.readPidfile ?? ((path: string): Pidfile | null => {
-    let text: string;
-    try { text = readFileSync(path, "utf8"); } catch (error) {
+    let fd: number;
+    try { fd = openSync(path, "r"); } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
+    }
+    let text: string;
+    try {
+      // One bounded read: a blocked link reads its pidfile every tick.
+      const buffer = Buffer.alloc(PIDFILE_MAX_BYTES + 1);
+      const length = readSync(fd, buffer, 0, buffer.length, 0);
+      if (length > PIDFILE_MAX_BYTES) throw new Error("link pidfile too large");
+      text = buffer.subarray(0, length).toString("utf8");
+    } finally {
+      closeSync(fd);
     }
     const pidfile = parsePidfile(text);
     if (pidfile === null) throw new Error("link pidfile unreadable");
@@ -340,6 +352,15 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   /**
+   * Remove a pidfile whose process is gone. Such a file is harmless (the next start finds its process
+   * gone again), so a removal that fails (a read-only directory, a sharing lock) is warned and never
+   * stops the caller: a tick goes on to every other link, and the block it was lifting stays lifted.
+   */
+  const dropStalePidfile = (linkId: string): void => {
+    try { removePidfile(pidfilePath(linkId)); } catch { warn(`[link] stale pidfile could not be removed link=${linkId}`); }
+  };
+
+  /**
    * A multi-route link never starts a candidate while an earlier tunnel of it may live: the readiness
    * proof's attribution relies on that. Only a process proven to be the pidfile's own (pid, argv and
    * the start time written at spawn) is signalled, and its identity is re-read before every signal.
@@ -349,9 +370,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
    * instance's watch only observes, as no watch acts for a replaced instance.
    */
   const reapMultiRouteOrphan = (record: LinkRecord, pidfile: Pidfile, act = true): void => {
-    const path = pidfilePath(record.id);
     const watched: WatchedProcess = { pid: pidfile.pid, argv: pidfile.argv, ...(pidfile.startTime === undefined ? {} : { startTime: pidfile.startTime }) };
-    if (processGone(watched)) { if (act) removePidfile(path); return; }
+    if (processGone(watched)) { if (act) dropStalePidfile(record.id); return; }
     orphanUnverified.add(record.id);
     const identity = platform === "linux" && pidfile.startTime !== undefined ? processIdentity(pidfile.pid, pidfile.argv, pidfile.startTime) : "unreadable";
     if (act && identity === "same") {
@@ -431,7 +451,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           continue;
         }
         orphanUnverified.delete(linkId);
-        if (!watch.observeOnly && file !== null && file.linkId === linkId && sameFile(file, watch.file)) removePidfile(pidfilePath(linkId));
+        if (!watch.observeOnly && file !== null && file.linkId === linkId && sameFile(file, watch.file)) dropStalePidfile(linkId);
         // The link was waiting for this: start its first round now.
         const record = store.links.find(link => link.id === linkId);
         if (record && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
@@ -803,11 +823,12 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         }
         for (const record of nextStore.links) if (!rounds.isMultiRoute(record)) orphanWatches.delete(record.id);
         store = nextStore;
-        // A one-route link flagged at start whose spawn never cleared the flag (ssh missing, say) now
-        // blocks its rounds: watch that pidfile as a multi-route orphan, or lift the flag when there is
-        // no earlier process left to watch (recheckPidfile: an unreadable pidfile keeps the flag).
+        // A one-route link that gains routes with no running child (its spawn failed: ssh missing, say)
+        // settles from its pidfile, flagged or not: removing a link drops its flag, so a re-added link
+        // may carry none. Watch an earlier process, or lift the flag when there is none (recheckPidfile:
+        // an unreadable pidfile keeps the flag).
         for (const record of gainedRoutes) {
-          if (!orphanUnverified.has(record.id) || orphanWatches.has(record.id)) continue;
+          if (orphanWatches.has(record.id) || children.has(record.id)) continue;
           recheckPidfile(record);
         }
         if (routesEdited.some(record => rounds.isMultiRoute(record))) rounds.recheckClient();
