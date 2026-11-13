@@ -1,5 +1,138 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeAnthropicInputSchema } from "../src/adapters/anthropic-input-schema";
+import { createCommandCodeAdapter } from "../../src/adapters/command-code";
+import { normalizeAnthropicInputSchema } from "../../src/adapters/anthropic-input-schema";
+import type { OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
+
+const provider: OcxProviderConfig = {
+  adapter: "command-code",
+  baseUrl: "https://api.commandcode.ai",
+  authMode: "oauth",
+  apiKey: "secret-command-key",
+};
+
+function parsedRequest(tools: OcxTool[]): OcxParsedRequest {
+  return {
+    modelId: "anthropic/claude-sonnet-4.5",
+    stream: true,
+    options: {},
+    context: {
+      messages: [{ role: "user", content: "run the tool", timestamp: 0 }],
+      tools,
+    },
+  };
+}
+
+/** The schemas Command Code actually sends: buildRequest -> params.tools[].input_schema. */
+async function wiredSchemas(tools: OcxTool[]): Promise<Record<string, Record<string, unknown>>> {
+  const request = await createCommandCodeAdapter(provider).buildRequest(parsedRequest(tools));
+  const body = JSON.parse(request.body) as {
+    params: { tools: Array<{ name: string; input_schema: Record<string, unknown> }> };
+  };
+  return Object.fromEntries(body.params.tools.map(tool => [tool.name, tool.input_schema]));
+}
+
+describe("Command Code wireTools input_schema", () => {
+  test("normalizes root oneOf, anyOf, and allOf in the outbound request", async () => {
+    const schemas = await wiredSchemas([
+      {
+        name: "choice",
+        description: "choice",
+        parameters: {
+          oneOf: [
+            { type: "object", properties: { read: { type: "string" } }, required: ["read"] },
+            { type: "object", properties: { write: { type: "string" } }, required: ["write"] },
+          ],
+        },
+      },
+      {
+        name: "either",
+        description: "either",
+        parameters: {
+          anyOf: [
+            { type: "object", properties: { a: { type: "number" } } },
+            { type: "object", properties: { b: { type: "number" } } },
+          ],
+        },
+      },
+      {
+        name: "all",
+        description: "all",
+        parameters: {
+          allOf: [
+            { type: "object", properties: { limit: { type: "integer" } }, required: ["limit"] },
+            { type: "object", properties: { sort: { type: "string" } }, required: ["sort"] },
+          ],
+        },
+      },
+    ] as OcxTool[]);
+
+    expect(schemas.choice).toEqual({
+      type: "object",
+      properties: { read: { type: "string" }, write: { type: "string" } },
+    });
+    expect(schemas.either).toEqual({
+      type: "object",
+      properties: { a: { type: "number" }, b: { type: "number" } },
+    });
+    expect(schemas.all).toEqual({
+      type: "object",
+      properties: { limit: { type: "integer" }, sort: { type: "string" } },
+      required: ["limit", "sort"],
+    });
+  });
+
+  test("keeps referenced and sibling parameters and required members", async () => {
+    const [schema] = Object.values(await wiredSchemas([{
+      name: "patched",
+      description: "patched",
+      parameters: {
+        $defs: {
+          Base: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
+        },
+        allOf: [{
+          $ref: "#/$defs/Base",
+          properties: { mode: { type: "string" } },
+          required: ["mode"],
+        }],
+      },
+    } as OcxTool]));
+
+    expect(Object.keys(schema!.properties as Record<string, unknown>).sort()).toEqual(["mode", "path"]);
+    expect(schema!.required).toEqual(["path", "mode"]);
+  });
+
+  test("preserves nested composition inside an outbound property", async () => {
+    const nested = { anyOf: [{ type: "string" }, { type: "number" }] };
+    const [schema] = Object.values(await wiredSchemas([{
+      name: "nested",
+      description: "nested",
+      parameters: {
+        oneOf: [{ type: "object", properties: { value: nested } }],
+      },
+    } as OcxTool]));
+
+    expect((schema!.properties as Record<string, unknown>).value).toEqual(nested);
+  });
+
+  test("does not mutate the caller's tool schema", async () => {
+    const parameters = {
+      oneOf: [
+        { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+        { type: "object", properties: { mode: { type: "string" } } },
+      ],
+    };
+    const before = structuredClone(parameters);
+
+    await wiredSchemas([{ name: "sample", description: "sample", parameters } as OcxTool]);
+
+    expect(parameters).toEqual(before);
+    expect((parameters as Record<string, unknown>).type).toBeUndefined();
+  });
+});
 
 describe("normalizeAnthropicInputSchema", () => {
   test("flattens a root-level oneOf into a single object schema", () => {

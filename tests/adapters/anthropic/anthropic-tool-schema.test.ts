@@ -107,6 +107,60 @@ describe("anthropic tool input_schema normalization", () => {
     });
   });
 
+  test("resolves a local $ref allOf branch and keeps its required member", async () => {
+    const schema = await toolSchema({
+      $defs: {
+        Args: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+      allOf: [{ $ref: "#/$defs/Args" }],
+    });
+    expect(schema.properties).toEqual({ path: { type: "string" } });
+    expect(schema.required).toEqual(["path"]);
+  });
+
+  test("merges $ref siblings conjunctively and unions required members", async () => {
+    const schema = await toolSchema({
+      $defs: {
+        Base: {
+          type: "object",
+          properties: { path: { type: "string", minLength: 1 } },
+          required: ["path"],
+        },
+      },
+      allOf: [{
+        $ref: "#/$defs/Base",
+        properties: {
+          path: { type: "string", maxLength: 64 },
+          mode: { type: "string" },
+        },
+        required: ["mode"],
+      }],
+    });
+    const properties = schema.properties as Record<string, Record<string, unknown>>;
+    expect(Object.keys(properties).sort()).toEqual(["mode", "path"]);
+    expect(properties.path).toEqual({
+      allOf: [
+        { type: "string", minLength: 1 },
+        { type: "string", maxLength: 64 },
+      ],
+    });
+    expect(schema.required).toEqual(["path", "mode"]);
+  });
+
+  test("keeps the documented last-branch-wins loss for root alternatives", async () => {
+    const schema = await toolSchema({
+      oneOf: [
+        { type: "object", properties: { action: { enum: ["read"] } } },
+        { type: "object", properties: { action: { enum: ["write"] } } },
+      ],
+    });
+    expect((schema.properties as Record<string, unknown>).action).toEqual({ enum: ["write"] });
+  });
+
   test("strips Codex's Responses-only encrypted marker from collaboration schemas", async () => {
     const inputSchema = await toolSchema({
       type: "object",

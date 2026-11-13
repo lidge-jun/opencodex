@@ -3,11 +3,17 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 /**
  * Anthropic rejects a root-level missing `type` and root-level `oneOf`/`anyOf`/`allOf` in
  * `input_schema`. Normalize the root only: ensure `type:"object"` + `properties`, flatten root
- * composition while preserving nested schemas. Shared by the anthropic and command-code adapters.
+ * composition while preserving nested schemas, and inline local `#/$defs`/`#/definitions` refs
+ * before flattening so a referenced branch keeps its parameters and required members. A `$ref`
+ * with siblings merges both property maps, unions `required`, and keeps a property declared on
+ * both sides conjunctive under `allOf`. Shared by the anthropic and command-code adapters.
  *
- * The merge is lossy for alternatives: later branches win. A root `oneOf` whose branches declare
- * `action.enum: ["read"]` and `action.enum: ["write"]` yields a schema that permits only
- * `"write"`. Covered by tests/command-code-tool-schema.test.ts.
+ * Flattening root alternatives is lossy: later branches win for a same-named property, and
+ * `oneOf`/`anyOf` branch `required` members are not promoted because no branch is guaranteed.
+ * A root `oneOf` whose branches declare `action.enum: ["read"]` and `action.enum: ["write"]`
+ * yields a schema that permits only `"write"`. Covered by
+ * tests/providers/command-code-tool-schema.test.ts and
+ * tests/adapters/anthropic/anthropic-tool-schema.test.ts.
  */
 
 const LOCAL_REF_PREFIX = "#/";

@@ -286,8 +286,7 @@ Capacity waits use the same bounded queue and retryable queue-overload errors as
 
 Command Code effort defaults in `src/providers/command-code-efforts.ts` combine public-profile
 facts with the live API measurements from #5096. Both presets share the exact per-model rows;
-`xhigh` is preserved when accepted, and narrow ladders such as Laguna's `medium`-only row remain
-narrow. Rows without a verified profile URL still record rejected efforts but skip profile fetching.
+`xhigh` is preserved when accepted, and narrow ladders such as Laguna's `medium`-only row remain narrow. Rows without a verified profile URL still record rejected efforts but skip profile fetching.
 An explicit `modelReasoningEffortsAuthoritative` model row overrides the shipped ladder; seeded
 rows without that flag do not. `tests/providers/command-code-efforts.test.ts` covers the measured
 rows and wire values; `tests/providers/command-code-provider.test.ts` covers operator overrides.
@@ -314,6 +313,8 @@ soft on further work. Timed-out or admission-degraded loads are not cached, so a
 healthy request can retry; stable missing files still cache as empty. Symlinked skill
 directories pass through canonical confinement: inside-cwd targets load, outside targets
 do not. The 30-second, 128-entry cache rechecks capacity at insertion time.
+
+`src/adapters/command-code.ts` and `src/adapters/anthropic.ts` both send tool schemas through `src/adapters/anthropic-input-schema.ts`, because an Anthropic-style `input_schema` rejects a root without `type` and a root-level `oneOf`/`anyOf`/`allOf`. Normalization rewrites the root only: `wireTools` emits `type: "object"` with root composition flattened into one `properties` map, while nested composition is preserved. Local `#/$defs/...` and `#/definitions/...` references are inlined before flattening, and a `$ref` with siblings keeps both property maps, unions `required`, and conjoins a property declared on both sides under `allOf`. Root alternatives stay lossy by design: later branches win for a same-named property and `oneOf`/`anyOf` branch `required` members are not promoted. `tests/providers/command-code-tool-schema.test.ts` pins the outbound `params.tools[].input_schema` and the untouched caller schema; `tests/adapters/anthropic/anthropic-tool-schema.test.ts` covers the shared behavior through the Anthropic adapter.
 
 ## OpenGateway chat provider
 
