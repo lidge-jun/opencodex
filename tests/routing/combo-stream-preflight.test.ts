@@ -1631,7 +1631,9 @@ describe("combo preflight replay under a stalled reader (#8601)", () => {
     // Pre-output frames the preflight buffers, then the output that commits the child, then a stream that never ends.
     const chunks = [
       frame({ type: "response.created", response: { id: "r1", status: "in_progress" } }),
-      ...Array.from({ length: 6 }, (_, index) => frame({ type: "response.in_progress", response: { id: "r1", status: "in_progress" }, index, pad: "p".repeat(64 * 1024) })),
+      // Replayable prelude: the padding rides in a snapshot field the preflight accepts, so every frame is buffered.
+      ...Array.from({ length: 6 }, (_, index) => frame({ type: "response.in_progress", sequence_number: index + 1,
+        response: { id: "r1", status: "in_progress", instructions: "p".repeat(64 * 1024) } })),
       frame({ type: "response.output_text.delta", delta: "hello" }),
     ];
     let pulls = 0;
@@ -1649,7 +1651,7 @@ describe("combo preflight replay under a stalled reader (#8601)", () => {
     let result: Awaited<ReturnType<typeof preflightComboStreamResponse>>;
     try { result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" }); } finally { slice.mockRestore(); }
     expect(result.kind).toBe("accepted");
-    expect(copies.length).toBeGreaterThan(0);
+    expect(copies.length).toBeGreaterThanOrEqual(6);
     const reader = result.response.body!.getReader();
     for (let read = 0; read < chunks.length; read++) expect((await reader.read()).done).toBe(false);
     Bun.gc(true);
