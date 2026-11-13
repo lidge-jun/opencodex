@@ -1525,6 +1525,8 @@ ownership record written by an older `ocx-child`; run
 home, and nothing was changed. `--operation-id` recovers a Child that an
 interrupted enrollment left behind; it needs the link operation journal and
 otherwise answers `operation_journal_unavailable`.
+Automation can discover support with `ocx capabilities --contracts --json`: the
+`contracts` array contains `link.recover/1`.
 
 ## Observe Remote Workspace from the Hub
 

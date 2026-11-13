@@ -80,3 +80,16 @@ describe("ocx link recover", () => {
     },
   );
 });
+
+describe("ocx link recover contract", () => {
+  test("ocx capabilities --contracts --json advertises link.recover/1 beside the recover verb", async () => {
+    const { runCapabilities } = await import("../../src/cli/capabilities-command");
+    expect(await runCapabilities(["--contracts", "--json"])).toBe(0);
+    expect(JSON.parse(String(output.mock.calls.at(-1)![0])).contracts).toContain("link.recover/1");
+    output.mockClear();
+    expect(await runCapabilities(["--json"])).toBe(0);
+    const document = JSON.parse(String(output.mock.calls.at(-1)![0])) as { capabilities: Array<{ command: string[]; routes: Array<{ method: string; path: string }> }> };
+    const recover = document.capabilities.find(entry => entry.command.join(" ") === "link recover");
+    expect(recover?.routes).toEqual([{ method: "POST", path: "/api/link/recover" }]);
+  });
+});
