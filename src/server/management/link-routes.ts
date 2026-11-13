@@ -514,7 +514,9 @@ async function removeReserved(
       revokedAt: new Date((ctx.deps.now ?? Date.now)()).toISOString(),
       attempt: randomBytes(8).toString("hex"),
     };
-    try { withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())); written = tombstone; } catch (error) {
+    // A tombstone already there for this link (a forced revoke in flight in another runtime, or one that died) is kept,
+    // and this attempt owns none: it then has nothing to drop if it does not commit.
+    try { if (withConfigMutationLockSync(() => recordTombstone(tombstone, tombstonesPath())) === "recorded") written = tombstone; } catch (error) {
       if (error instanceof LinkTombstoneLimitError) {
         return fail("tombstone_limit", "The link and its key stay active: too many forced revokes are waiting for cleanup. Recover them, or have a person on this Home run ocx link recover --forget for machines that are gone.", 409);
       }

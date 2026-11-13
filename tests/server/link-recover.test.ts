@@ -10,7 +10,10 @@ import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { keyFingerprint } from "../../src/link/route-trust";
 import * as tombstonesModule from "../../src/link/tombstones";
-import { MAX_TOMBSTONES, recordTombstone, tombstonesPath } from "../../src/link/tombstones";
+import { MAX_TOMBSTONES, recordTombstone, removeTombstone, tombstonesPath } from "../../src/link/tombstones";
+
+/** Another writer swapping the tombstone for a link (recordTombstone itself keeps an existing one). */
+const replaceTombstone = (t: Parameters<typeof recordTombstone>[0]) => { removeTombstone(t.linkId); recordTombstone(t); };
 import { serialized } from "../../src/server/management/link-enrollment";
 import { registerOperationRecoveryResolver } from "../../src/link/operation-recovery-slot";
 import { POSIX_RECOVER_RECEIPT_SCRIPT, remoteManagedPurgeDisconnectArgv, remotePurgePlantedChildArgv, remoteRecoverReceiptArgv } from "../../src/link/remote-plant";
@@ -563,10 +566,32 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     // Identical to what this attempt writes except its random attempt token.
     const theirs = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, remotePlatform: "posix" as const,
       revokedAt: new Date(1_800_000_000_000).toISOString(), attempt: "0123456789abcdef" };
-    const h = harness([link()], { keyRevokeFails: true, duringKeyRevoke: other => { recordTombstone(theirs); if (linkGone) other.dropLink(); } });
+    const h = harness([link()], { keyRevokeFails: true, duringKeyRevoke: other => { replaceTombstone(theirs); if (linkGone) other.dropLink(); } });
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
     expect([res.status, (await errorOf(res)).code]).toEqual([502, "key_revoke_failed"]);
     expect(tombstones()).toEqual([theirs]);
+  });
+
+  // F0 (another runtime, no alias lock: it started with no journal and no tombstone) wrote T0 and has not committed;
+  // this runtime's forced revoke F1 then fails before its commit. Replacing T0 and dropping the replacement would
+  // leave F0's committed revoke with no tombstone, so F1 keeps T0 and owns nothing it could drop.
+  test("a failed forced revoke keeps the tombstone a forced revoke in flight elsewhere wrote", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, remotePlatform: "posix" as const,
+      revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    recordTombstone(t0);
+    const h = harness([link()], { keyRevokeFails: true });
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect([res.status, (await errorOf(res)).code]).toEqual([502, "key_revoke_failed"]);
+    expect(tombstones()).toEqual([t0]);
+  });
+
+  test("a forced revoke that commits beside an existing tombstone for its link keeps that one", async () => {
+    const t0 = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "fedcba9876543210" };
+    recordTombstone(t0);
+    const h = harness([link()]);
+    const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
+    expect(res.status).toBe(200);
+    expect(tombstones()).toEqual([t0]);
   });
 
   test("operations on one alias are serialized whatever its case", async () => {
@@ -675,7 +700,7 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     const fresh = { linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, revokedAt: "2026-11-13T00:00:00.000Z", attempt: "00112233aabbccdd" };
     const h = harness([link()], { ordinary: command => {
       if (!command.includes("--expect-link")) return undefined;
-      recordTombstone(fresh);
+      replaceTombstone(fresh);
       return ok();
     } });
     if (older) leftTombstone();
