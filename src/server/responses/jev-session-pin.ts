@@ -5,8 +5,9 @@
  * Keep the chosen target for an explicit client conversation. Native OpenAI Decisions has no idle
  * expiry by default; other methods require an explicit `sessionPin.ttlMs` and remain in memory.
  *
- * Identity. A pin is keyed by the admitted caller (the salted context principal of the matched
- * data-plane key, or `loopback`), the Combo id and the explicit session lane from
+ * Identity. A pin is keyed by the resolved caller (the salted context principal of a matched
+ * data-plane key, including a valid key presented on loopback, or anonymous `loopback`), the
+ * Combo id and the explicit session lane from
  * `sessionLaneIdFromRequest` (thread, session and parent-thread headers). A request without an
  * explicit session identity never pins, and a body field such as `prompt_cache_key` is never an
  * identity on its own.
@@ -59,7 +60,11 @@ let failureSequence = 0;
 /** `failureSequence` at the most recent fence eviction. */
 let fenceEvictedAt = 0;
 
-function callerNamespace(admission: DataPlaneAdmission | undefined): string {
+function callerNamespace(
+  admission: DataPlaneAdmission | undefined,
+  clientPrincipalId?: string,
+): string {
+  if (clientPrincipalId) return `principal:${clientPrincipalId}`;
   if (!admission) return "unadmitted";
   if (admission.kind === "loopback") return "loopback";
   if (admission.contextPrincipalId) return `principal:${admission.contextPrincipalId}`;
@@ -121,16 +126,19 @@ export function jevSessionPinScope(args: {
   openAIDecisions: boolean;
   comboId: string;
   admission: DataPlaneAdmission | undefined;
+  clientPrincipalId?: string;
   lane: string | undefined;
   now?: () => number;
 }): JevSessionPinScope | undefined {
   const ttlMs = args.combo.sessionPin === false ? undefined : args.combo.sessionPin?.ttlMs;
   if (args.combo.strategy !== "jev" || args.combo.sessionPin === false || !args.lane
     || !args.openAIDecisions && ttlMs === undefined) return undefined;
-  const key = `${callerNamespace(args.admission)}\u0000${args.comboId}\u0000${args.lane}`;
+  const key = `${callerNamespace(args.admission, args.clientPrincipalId)}\u0000`
+    + `${args.comboId}\u0000${args.lane}`;
   // The process-local generation cannot be compared across restarts. The normalized Combo
   // fingerprint detects edits while the proxy was down without persisting config or credentials.
   const comboFingerprint = args.openAIDecisions && args.admission?.kind === "loopback"
+    && !args.clientPrincipalId
     ? createHash("sha256").update(JSON.stringify(args.combo)).digest("hex")
     : undefined;
   const now = args.now ?? Date.now;

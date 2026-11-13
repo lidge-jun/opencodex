@@ -260,8 +260,9 @@ Validation accepts `false` for JEV and `{}` only for native OpenAI Decisions; sp
 default-on settings, omitted-field preservation supports older clients, and switching strategies
 removes the setting. Without a session lane, or when the selected method has no explicit timed pin,
 `src/server/responses/core-combo.ts` asks the chosen JEV method on each request.
-`src/server/responses/jev-session-pin.ts` keys a pin by the admitted caller (context principal,
-key id, or `loopback`), the Combo id and the explicit session lane from `sessionLaneIdFromRequest`; a request
+`src/server/responses/jev-session-pin.ts` keys a pin by the resolved caller principal (including
+a valid API key presented on loopback; otherwise the admitted key id or anonymous `loopback`),
+the Combo id and the explicit session lane from `sessionLaneIdFromRequest`; a request
 without a lane never pins and no body field is an identity. A pin is written only when the target of an applied
 (`gate: "apply"`) decision completes through the Combo callback gate, and every completion on that target
 (tool-loop continuations included) refreshes an explicitly configured idle timeout. Reuse runs after current eligibility: the pinned
@@ -275,7 +276,7 @@ attempts count every JEV-routed request, pinned or decided. The CLI projection r
 Besides a classified failure response, a non-cancellation dispatch, preflight or failure-read exception and a
 committed stream that ends `failed` also forget the pin; `incomplete` is an answer and keeps it. Each forget stamps a
 per-session failure fence, so a request already in flight on that session cannot write the pin back.
-Only native OpenAI Decisions loopback pins are stored in the private, single-writer-owned SQLite file
+Only native OpenAI Decisions anonymous-loopback pins are stored in the private, single-writer-owned SQLite file
 `jev-session-pins.sqlite`. It stores a keyed digest of the caller/session/Combo key rather than raw
 identity, plus the selected target, effort, decision backend and a normalized-Combo fingerprint;
 it stores no prompts, API keys or raw session identifiers. Pins restore only after clean shutdown,

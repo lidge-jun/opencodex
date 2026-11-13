@@ -714,6 +714,7 @@ export async function executeComboResponses(
         }),
         comboId,
         admission: options.admission,
+        clientPrincipalId: replayPrincipal.clientPrincipalId,
         lane: sessionLaneIdFromRequest(req.headers),
       });
 

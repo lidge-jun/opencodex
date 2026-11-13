@@ -19,6 +19,7 @@ import { createTempHome } from "../helpers/temp-home";
 const JEV_URL = "https://api.typesafe.ai/v1/systemone";
 const SOL = { provider: "sol", model: "gpt-5.6-sol" } as const;
 const LUNA = { provider: "luna", model: "gpt-5.6-luna" } as const;
+const LOOPBACK: DataPlaneAdmission = { kind: "loopback", source: "loopback" };
 
 function resetState(): void {
   clearComboSelectionState();
@@ -108,6 +109,7 @@ const served: Child = (body, complete) => {
 async function turn(config: OcxConfig, options: {
   session?: string | null;
   admission?: DataPlaneAdmission;
+  apiKey?: string;
   child?: Child;
   signal?: AbortSignal;
   log?: RequestLogContext;
@@ -115,6 +117,7 @@ async function turn(config: OcxConfig, options: {
 } = {}): Promise<Response> {
   const body = { model: "jev-auto", input: "Implement the next step.", stream: false };
   const headers: Record<string, string> = { "content-type": "application/json" };
+  if (options.apiKey) headers.authorization = `Bearer ${options.apiKey}`;
   if (options.session !== null) headers.session_id = options.session ?? "session-a";
   const request = new Request("http://127.0.0.1/v1/responses", { method: "POST", headers, body: JSON.stringify(body) });
   const budget = createTranslatorBudget();
@@ -213,6 +216,19 @@ describe("JEV session pin (#7525)", () => {
     expect(decisions).toHaveLength(5);
     await turn(config, { admission: alice });
     expect(decisions).toHaveLength(5);
+  });
+
+  test("loopback API-key callers do not share native OpenAI session pins", async () => {
+    const decisions: string[] = [];
+    const config = makeConfig("sol/gpt-5.6-sol:high", decisions, undefined, "openai");
+    config.apiKeys = [
+      { id: "alice", name: "Alice", key: "local-alice", createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "bob", name: "Bob", key: "local-bob", createdAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    await turn(config, { admission: LOOPBACK, apiKey: "local-alice" });
+    await turn(config, { admission: LOOPBACK, apiKey: "local-bob" });
+    await turn(config, { admission: LOOPBACK, apiKey: "local-alice" });
+    expect(decisions).toHaveLength(2);
   });
 
   test("a failed pinned send hops over and the next turn is decided afresh", async () => {

@@ -150,6 +150,27 @@ describe("JEV session pin scope", () => {
     expect(scope().reuse([sol]).decision?.pinned).toBe(true);
   });
 
+  test("authenticated loopback OpenAI pins are isolated and remain process-local", () => {
+    const home = createTempHome("ocx-jev-session-pin-authenticated-loopback-");
+    const settings = { strategy: "jev" as const };
+    const alice = { combo: settings, openAIDecisions: true, clientPrincipalId: "p-alice" };
+    const bob = { combo: settings, openAIDecisions: true, clientPrincipalId: "p-bob" };
+    let lease: ReturnType<typeof acquireSpendLedgerOwner> | undefined;
+    try {
+      lease = acquireSpendLedgerOwner();
+      scope(alice).complete(sol.key, applied, captureConfigGeneration());
+      expect(scope(alice).reuse([sol]).decision?.targetKey).toBe(sol.key);
+      expect(scope(bob).reuse([sol])).toEqual({});
+      lease.release();
+      clearJevSessionPinsForTests();
+      lease = acquireSpendLedgerOwner();
+      // Real caller principals are re-salted on restart, so authenticated pins are not restored.
+      expect(scope({ ...alice, clientPrincipalId: "p-alice-after-restart" }).reuse([sol])).toEqual({});
+    } finally {
+      try { lease?.release(); } finally { home.remove(); }
+    }
+  });
+
   test("an explicit idle window expires the pin and each completion on the pinned target renews it", () => {
     const pin = scope();
     pin.complete(sol.key, applied, captureConfigGeneration());
