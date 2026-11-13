@@ -954,7 +954,7 @@
   "history-ocx-compaction-recovery.test.ts": "codex-integration",
   "history-paginated-openai-compat.test.ts": "codex-integration",
   "history-paginated-transition-destinations.test.ts": "codex-integration", "hub-gated-local-clients.test.ts": "cli",
-  "hub-invite.test.ts": "cli", "hub-disable.test.ts": "cli", "hub-usage.test.ts": "server",
+  "hub-invite.test.ts": "cli", "hub-disable.test.ts": "cli", "hub-usage.test.ts": "server", "live-meter-handler.test.ts": "server",
   "hyperbolic-provider.test.ts": "providers", "identity-neutralize.test.ts": "adapters",
   "identity-subagent.test.ts": "adapters", "init-backup-cleanup.test.ts": "service",
   "init-eof.test.ts": "service", "initial-model-selection.test.ts": "providers",

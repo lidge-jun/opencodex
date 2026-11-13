@@ -405,6 +405,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (readyzPath !== undefined) {
           return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
         }
+        if (url.pathname === "/v1/usage/live") {
+          const preflight = (await import("../live-meter-handler")).liveMeterPreflight(req, policy);
+          if (preflight) return preflight;
+        }
         // The exact Ollama-compatible paths are data-plane routes and take data-plane CORS.
         const managementPreflight = url.pathname.startsWith("/api/") && !isOllamaNativePath(url.pathname);
         const allowed = managementPreflight
@@ -793,6 +797,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ),
           admission,
         );
+      }
+
+      if (url.pathname === "/v1/usage/live" && req.method === "GET") {
+        // Same admission as the model routes; the module adds only the Codex desktop origin for this read.
+        const { handleLiveMeterData } = await import("../live-meter-handler");
+        return handleLiveMeterData(req, policy);
       }
 
       if (url.pathname === "/v1/usage" && req.method === "GET") {
