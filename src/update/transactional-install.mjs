@@ -159,7 +159,11 @@ function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
         break;
       }
     }
-    if (!changed) return found;
+    // The package's final location classifies by the same v<N>/links rule as a symlink target, so a package
+    // pnpm lists directly inside such a directory must earn the store proof too (owner decision B). An isolated
+    // install that ends in pnpm's node_modules/.pnpm virtual store is not a global-store link.
+    if (!changed) return found || (!/(?:^|[\\/])node_modules[\\/]\.pnpm(?:[\\/]|$)/i.test(path)
+      && /(?:^|[\\/])v\d+[\\/]links(?:[\\/]|$)/i.test(path));
   }
   throw new Error("pnpm package symlink chain is too long");
 }

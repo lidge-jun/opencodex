@@ -433,6 +433,39 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     });
   }
 
+  test("a package pnpm lists directly inside a v<N>/links directory must earn the store proof (decision B)", () => {
+    // Same hoisted tree as the legacy v1/links case, but listed at its own path with no symlink in between.
+    const globalRoot = join(root, "v1", "links", "g"), bin = join(root, "bin");
+    const group = join(globalRoot, "node_modules"), pkg = join(group, ...PKG.split("/"));
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: PKG, version: "2.0.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(pkg, "bin", "ocx.mjs"), "x".repeat(2048));
+    for (const name of ["bun", "zod"]) {
+      mkdirSync(join(group, name), { recursive: true });
+      writeFileSync(join(group, name, "package.json"), JSON.stringify({ name }));
+    }
+    writeFileSync(join(group, "bun", "bun.exe"), Buffer.alloc(BUN_BYTES));
+    writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
+    const calls: Call[] = [];
+    const result = resolvePnpmGlobalOwner({
+      packageName: PKG, packagePath: pkg, commandPaths: [join(root, "pnpm")], env: { PNPM_HOME: join(root, "missing-home") },
+      runPnpm: (_command, args) => {
+        calls.push([...args]);
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: pkg } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "config" && args[2] === "global-dir") return { status: 0, stdout: join(root, "v1", "links") };
+        if (args[0] === "config" && args[2] === "global-bin-dir") return { status: 0, stdout: bin };
+        if (args[0] === "config") return { status: 0, stdout: "undefined" };
+        return { status: 1 };
+      },
+    });
+    expect(result).toEqual(storeRefusal("pnpm global-store behavior is not verified for this pnpm version"));
+    expect(calls.some(args => args[0] === "--version")).toBe(true);
+    expect(calls.some(args => args[0] === "store")).toBe(false);
+    expect(verifyPnpmInstallTree(pkg, "2.0.0")).toMatchObject({ ok: false, failures: ["pnpm global links are outside the selected store"] });
+  });
+
   test("owner refusals before the store proof also carry the remedy for a store-like install", () => {
     // pnpm reports a different global root than its listing: the group and bin directory cannot be bound.
     const unbound = globalStoreLayout(join(root, "unbound"));
