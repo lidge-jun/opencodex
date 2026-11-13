@@ -1720,6 +1720,8 @@
   "link-websocket-release-gate.test.ts": "e2e-style",
   "link-websocket-rss-child.test.ts": "e2e-style",
   "link-gate-codex-binary.test.ts": "e2e-style",
+  "link-websocket-child-gate.test.ts": "e2e-style",
+  "link-websocket-child-restart.test.ts": "e2e-style",
   "link-websocket-drain.test.ts": "server",
   "link-websocket-pump.test.ts": "server",
   "link-websocket-rss.test.ts": "e2e-style",
@@ -1738,5 +1740,6 @@
   "link-ws-unknown-try.test.ts": "clients",
   "link-ocx-child-ws-gate.test.ts": "clients",
   "link-ocx-child-ws-feature.test.ts": "clients",
-  "link-relay-wait-observer.test.ts": "clients"
+  "link-relay-wait-observer.test.ts": "clients",
+  "link-ws-autobahn.test.ts": "clients"
 }
