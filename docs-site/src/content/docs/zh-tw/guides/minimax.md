@@ -14,6 +14,11 @@ MiniMax 提供兩款不同的命令列產品。OpenCodex 依各自實際提供�
 
 ```bash
 ocx start
+```
+
+讓代理在此終端機中繼續執行。在另一個終端機中啟用整合並啟動 MiniMax Code：
+
+```bash
 ocx integration client enable --client mcode
 ocx mcode
 ```

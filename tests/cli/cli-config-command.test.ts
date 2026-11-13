@@ -1,6 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -208,5 +208,39 @@ test("config validate stdin exits 1 with a single JSON failure payload", () => {
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
     expect(result.stderr).toBe("");
+  } finally { removeTreeWithRetry(dir); }
+});
+
+test.each(["set", "normalized set", "import"])("config %s cannot enter plaintext mode without the dedicated transition", action => {
+  const dir = freshConfig();
+  const configPath = join(dir, "config.json");
+  const importPath = join(dir, "restore.json");
+  try {
+    const before = readFileSync(configPath, "utf8");
+    const candidate = { ...JSON.parse(before), multiAgentMode: "v2-plaintext", plaintextV2AgentMessages: true };
+    writeFileSync(importPath, JSON.stringify(candidate));
+    const args = action === "import" ? ["import", importPath, "--yes"]
+      : ["set", action === "normalized set" ? " . multiAgentMode . " : "multiAgentMode", "v2-plaintext"];
+    const refused = runCli(["config", ...args, "--json"], { OPENCODEX_HOME: dir });
+    expect(refused.status).toBe(2);
+    expect(refused.stdout + refused.stderr).toContain("ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages");
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+
+    // A previously acknowledged mode remains editable/restorable without a new transition.
+    writeFileSync(configPath, JSON.stringify(candidate));
+    const repeated = runCli(["config", ...args, "--json"], { OPENCODEX_HOME: dir });
+    expect(repeated.status).toBe(0);
+    expect(JSON.parse(readFileSync(configPath, "utf8"))).toMatchObject({
+      multiAgentMode: "v2-plaintext", plaintextV2AgentMessages: true,
+    });
+    expect(runCli(["config", "set", "port", "10123", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
+    expect(JSON.parse(readFileSync(configPath, "utf8")).port).toBe(10123);
+
+    // Leaving the mode never needs consent and never rewrites the independent legacy flag.
+    expect(runCli(["config", "unset", "multiAgentMode", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
+    const exited = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(exited.multiAgentMode).toBeUndefined();
+    expect(exited.plaintextV2AgentMessages).toBe(true);
+    expect(runCli(["config", "set", "multiAgentMode", "v2", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
   } finally { removeTreeWithRetry(dir); }
 });

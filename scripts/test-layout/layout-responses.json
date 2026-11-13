@@ -2,6 +2,7 @@
   "responses-forward-client-headers-live.test.ts": "responses",
   "pool-retry-client-metadata.test.ts": "responses",
   "chat-inbound-tool-strict-defaults.test.ts": "responses",
+  "responses-passive-key-limits.test.ts": "responses",
   "responses-direct-chat-tool-choice.test.ts": "responses",
   "responses-native-output-identity.test.ts": "responses",
   "graceful-max-output-tokens.test.ts": "responses",
@@ -10,6 +11,9 @@
   "model-custom-tool-capability.test.ts": "responses",
   "passthrough-media-type.test.ts": "responses",
   "passthrough-override.test.ts": "responses",
+  "response-replay-ownership.test.ts": "server",
+  "response-replay-combo-identity.test.ts": "server",
+  "responses-replay-owner-storage.test.ts": "responses",
   "passthrough-headers.test.ts": "responses",
   "passthrough-abort.test.ts": "responses",
   "codex-eager-tool-catalog.test.ts": "responses",
@@ -19,5 +23,6 @@
   "responses-websocket-workflow-ceiling.test.ts": "responses",
   "ws-native-continuation-send-budget.test.ts": "responses",
   "responses-native-compact-ocx-envelope.test.ts": "responses",
-  "responses-reset-replay-chained.test.ts": "responses"
+  "responses-reset-replay-chained.test.ts": "responses",
+  "stalled-reader-memory.test.ts": "responses"
 }

@@ -1,7 +1,7 @@
 import type { AdapterRequest } from "../../adapters/base";
 import { collectResponsesToolGroups } from "../../responses/tool-groups";
 import { requiredToolContractOf, type RequiredToolContract } from "./combo-required-tool-contract";
-import { parseOutboundRequestBody } from "./passthrough-completion";
+import { parseOutboundRequestBody } from "./outbound-request-body";
 
 type Item = Record<string, unknown>;
 const record = (value: unknown): Item | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Item : undefined;
@@ -48,8 +48,10 @@ export function requiredToolFulfillments(
     const identity = record(normalize({ ...substitution, type: "function_call" }));
     if (identity && intendedClient(identity) && wire?.hosted.has(substitution.callType)) hosted.add(substitution.callType);
   }
+  // Read once here: the predicate lives as long as the stream, so it keeps this answer and the wire declarations, never the parsed body (#8601).
+  const deniesAll = request !== undefined && (!outbound || outbound.tool_choice === "none");
   return (item, clientCall) => {
-    if (request && (outbound?.tool_choice === "none" || !outbound)) return false;
+    if (deniesAll) return false;
     if (!clientCall) return hosted.has(String(item.type)) && (!wire || wire.hosted.has(String(item.type)));
     // Sparse calls keep the existing uncertain-name policy; explicit identities must be declared.
     if (typeof item.name !== "string") return !wire || wire.clients.length > 0;

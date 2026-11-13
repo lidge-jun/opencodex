@@ -32,6 +32,7 @@ import {
 import {
   NESTED_LIVE_LOCK_RECEIPT_KEY,
 } from "../helpers/nested-test-run-lock-controller";
+import { repositoryGitEnv } from "../helpers/git-fixture";
 import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";
 import {
   acquireTestRunLock,
@@ -65,7 +66,7 @@ import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 
 function runGit(cwd: string, ...args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["git", ...args], { cwd, env: repositoryGitEnv(), stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) {
     throw new Error(new TextDecoder().decode(result.stderr));
   }

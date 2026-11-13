@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
+import { liveResidual } from "../../src/server/management/link-enrollment";
+import { residualRecovery } from "../../src/link/residual-recovery";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import type { LinkStore } from "../../src/link/store";
@@ -11,6 +13,7 @@ import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { remoteInspectRuntimeArgv, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { routeIntentStatePath } from "../../src/routing/route-intent-state";
 
 let root: string;
 let previousHome: string | undefined;
@@ -162,6 +165,8 @@ function buildHarness() {
     remotePlatform: "posix",
     ocxVersion: "2.98.0",
   });
+  // A real confirm-host also trusts the probed line; apply checks it is still the trusted one.
+  writeFileSync(knownHosts, "devbox ssh-ed25519 AAAA\nbarebox ssh-ed25519 AAAA\n");
 
   async function request(method: string, path: string, body?: unknown, principal: "admin-token" | "gui-session" = "admin-token") {
     const url = new URL(`http://127.0.0.1:10100${path}`);
@@ -198,6 +203,9 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     const body = await res.json() as { linkId: string };
     expect(body.linkId).toMatch(/^lnk_[0-9a-f]{16}$/);
     expect(h.store.links[0]?.childKind).toBe("ephemeral");
+    // An ephemeral ocx-child never reads route intent, so its enrollment saves none: no device
+    // policy, and no Home defaults that would make ocx sync apply route intent on the Home.
+    expect(existsSync(routeIntentStatePath())).toBe(false);
 
     const adminStatus = await (await h.request("GET", "/api/link/status", undefined, "admin-token")).json() as Record<string, unknown>;
     expect(adminStatus).not.toHaveProperty("homeCodexSettingsDigest");
@@ -225,6 +233,13 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     expect((await kept.json() as { error: { code: string; hint?: string } }).error).toMatchObject({ code: "remote_disconnect_failed", hint: "purge_incomplete" });
     expect(h.store.links).toHaveLength(1);
     expect(h.events).not.toContain("disconnectPurge");
+
+    // A binary kept because another Home's relay runs from it says so.
+    h.overrides.managedPurge = () => ok('{"restored":true,"outcome":"ExactRestore","daemonRunning":false,"purged":false}\n', 0, "ocx-purge-kept:binary_in_use\n");
+    const inUse = await h.request("DELETE", "/api/link/" + linkId, { purge: true });
+    expect(inUse.status).toBe(502);
+    expect((await inUse.json() as { error: { code: string; hint?: string } }).error).toMatchObject({ code: "remote_disconnect_failed", hint: "binary_in_use" });
+    expect(h.store.links).toHaveLength(1);
 
     h.overrides.managedPurge = () => ok("", 1, "ocx-purge-error:managed_child_missing\n");
     const missing = await h.request("DELETE", "/api/link/" + linkId, { purge: true });
@@ -259,7 +274,7 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
       alias: "barebox",
       fingerprint,
       keyType: "ED25519",
-      knownHostLine: "barebox ssh-ed25519 SECRET_LINE",
+      knownHostLine: "barebox ssh-ed25519 U0VDUkVUX0xJTkU",
       probedAt: 1_800_000_000_000,
       remotePlatform: "posix",
     });
@@ -332,10 +347,39 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     h2.overrides.purgePlant = () => { throw new Error("ssh dropped"); };
     const res2 = await h2.request("POST", "/api/link/apply", { alias: "barebox", plant: true });
     expect(res2.status).toBe(409);
-    const body2 = await res2.json() as { error: { code: string }; residual?: boolean; recovery?: string };
+    const body2 = await res2.json() as { error: { code: string }; residual?: boolean; recovery?: string; linkId?: string };
     expect(body2.error.code).toBe("child_port_busy");
     expect(body2.residual).toBe(true);
-    expect(body2.recovery).toContain("detach --purge");
+    // The plant failed before any link was stored, yet the answer names the attempt's link id, so the purge is bound to it:
+    // it removes the binary only while the Child's records name that link or nothing at all (#8691 final review).
+    expect(body2.linkId).toMatch(/^lnk_[0-9a-f]{16}$/);
+    expect(body2).toMatchObject({ residualKind: "plant", remotePlatform: "posix", recovery: residualRecovery("plant", body2.linkId, "posix") });
+    expect(body2.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + body2.linkId);
+  });
+
+  test("the live residual answer binds the Child's step to the attempt's link and names the closed words", () => {
+    const id = "lnk_00000000000000a1";
+    expect(liveResidual("plant", "windows", id)).toEqual({ residualKind: "plant", remotePlatform: "windows", linkId: id, recovery: residualRecovery("plant", id, "windows") });
+    expect(liveResidual("ephemeral", "windows", id)).toEqual({ residualKind: "enrollment", residualInstall: "ephemeral", remotePlatform: "windows", linkId: id, recovery: residualRecovery("ephemeral", id, "windows") });
+    expect(liveResidual("full", undefined, id)).toEqual({ residualKind: "enrollment", residualInstall: "full", linkId: id, recovery: residualRecovery("full", id) });
+    expect(residualRecovery("plant", id, "windows")).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + id);
+    expect(residualRecovery("plant", id, "windows")).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge --expect-link ' + id);
+    // The lightweight agent is named by its managed path, which need not be on PATH, with the copy placed by hand (#8694 review).
+    expect(residualRecovery("ephemeral", id, "posix")).toContain("Run ~/.cache/opencodex/bin/ocx-child detach --expect-link " + id + " on the Child");
+    expect(residualRecovery("ephemeral", id, "posix")).toContain("command -v ocx-child");
+    expect(residualRecovery("ephemeral", id, "windows")).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + id);
+    expect(residualRecovery("ephemeral", id, "windows")).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + id);
+    expect(residualRecovery("ephemeral", id, "windows")).toContain("where.exe ocx-child");
+    expect(residualRecovery("ephemeral", id)).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + id);
+    expect(residualRecovery("enrollment", id)).toContain("~/.cache/opencodex/bin/ocx-child detach --expect-link " + id);
+    for (const kind of ["ephemeral", "enrollment"] as const) expect(residualRecovery(kind, id)).not.toContain(" ocx-child detach --expect-link");
+    expect(residualRecovery("full", id)).toContain("ocx disconnect --expect-link " + id + " on the Child and, if it disconnected, ocx restart");
+    // Never a plain disconnect or detach without the link's id first.
+    for (const kind of ["plant", "ephemeral", "full", "enrollment"] as const) {
+      expect(residualRecovery(kind, id)).not.toMatch(/(ocx-child detach|ocx disconnect)( --purge)?( on| before| \(|,)/);
+    }
+    // No id, nothing can be bound: the Child is left.
+    expect(residualRecovery("full", undefined)).toBe("This answer does not name the attempt's link id, so no step on the Child can be bound to it: leave the Child as it is.");
   });
 
   test("reports hash_tool_unavailable when the Child cannot verify the planted binary's SHA-256", async () => {
@@ -405,10 +449,10 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     h.overrides.restart = () => ok("", 1, "bind error");
     const res = await h.request("POST", "/api/link/apply", { alias: "devbox" });
     expect(res.status).toBe(502);
-    const body = await res.json() as { residual: boolean; recovery: string };
+    const body = await res.json() as { residual: boolean; recovery: string; linkId: string };
     expect(body.residual).toBe(true);
-    expect(body.recovery).toBe("Run ocx-child detach (or ocx disconnect) on the Child before retrying.");
+    expect(body.recovery).toBe(residualRecovery("ephemeral", body.linkId, "posix"));
+    expect(body.recovery).toContain("~/.cache/opencodex/bin/ocx-child detach --expect-link " + body.linkId);
     expect(body.recovery).not.toContain("ocx restart");
   });
 });
-

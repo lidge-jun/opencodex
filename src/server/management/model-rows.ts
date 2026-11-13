@@ -40,6 +40,7 @@ import {
 } from "../../clients/config-export/contracts";
 import { customRowExportMetadata } from "./model-row-export-metadata";
 import { attachExportAliasSelectors } from "../../clients/config-export/alias-selectors";
+import { attachNestedSelectors } from "../../clients/config-export/nested-selectors";
 import { resolveExportReasoningAxes } from "../../clients/config-export/reasoning-metadata";
 import { providerContextCap } from "../../providers/context-cap";
 import { isVisionReasoningEffort, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -676,7 +677,7 @@ export async function loadExportModels(
   // Management deliberately lists the full roster so hidden models can be enabled.
   // A client picker must also honor the provider selection, not just its blocklist.
   const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), admitted));
-  const projected = attachExportAliasSelectors(admitted, rows.map(toExportModel));
+  const projected = attachNestedSelectors(admitted, attachExportAliasSelectors(admitted, rows.map(toExportModel)));
   const exported = projected.filter((_, index) => !rows[index]!.disabled && (rows[index]!.native || visibleRouted.has(rows[index]!)));
   // Retain the FINAL projection, not an input to it. A preview that rebuilt from raw provider
   // caches would miss static and forward providers, which never populate one, and would skip the

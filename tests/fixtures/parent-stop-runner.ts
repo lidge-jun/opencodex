@@ -21,6 +21,8 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
   managerCascades?: boolean;
   guarded?: boolean;
+  /** #7771: the guarded path on a simulated win32, with a bound scheduler manager (separate child stop). */
+  windowsGuarded?: boolean;
   orphan?: boolean;
   exitCleanup?: boolean;
   nativeSignal?: boolean;
@@ -51,6 +53,16 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   noRuntimeRecord?: boolean;
   /** Like the real readPid, report no PID once the process is gone (a manager stop exited it). */
   deadPidReadsNull?: boolean;
+  /** #7771: simulate win32 and answer Part A (and Part B) of the checked Windows stop. */
+  windowsPartA?: "stopped" | "absent" | "survived" | "denied" | "unknown" | "unverified-budget";
+  windowsPartB?: "freed" | "survived" | "port-held-by-foreign" | "unconfirmed" | "unknown";
+  /**
+   * #7771: run the REAL Part A while this stop runs under this home's wrapper, with no task and
+   * no WinSW service registered, so the own-wrapper refusal has to answer for itself.
+   */
+  windowsPartAUnderOwnWrapper?: boolean;
+  windowsWinswStopped?: boolean;
+  windowsPartAReject?: boolean;
 };
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
@@ -97,7 +109,11 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
 }));
 const endpoint = { hostname: "127.0.0.1", port: 10100 };
 const fakePid = 4242;
-const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0 };
+const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0, partB: 0, reclaim: 0 };
+/** The timeout each reclaimListenPort call asked for; #7771 makes a skipped 15 s wait visible. */
+const reclaimTimeouts: number[] = [];
+/** The Part A record each stop POST's receipt carried when the POST was sent (#7771). */
+const postPartA: unknown[] = [];
 let receiptBlocker: import("bun:sqlite").Database | undefined;
 const { Database } = await import("bun:sqlite");
 const { prepareConfigMutationDatabasePathForWrite } = await import("../../src/config");
@@ -137,7 +153,7 @@ const receipts = await import("../../src/config/pending-teardown");
 process.on("exit", () => {
   receiptBlocker?.close();
   writeFileSync(join(home, "parent-stop-result.json"), JSON.stringify({
-    calls, urls, probes, transports, unexpectedIo, nonce,
+    calls, reclaimTimeouts, urls, probes, transports, unexpectedIo, nonce, postPartA,
     receiptExists: nonce !== undefined && existsSync(receipts.pendingTeardownPathFor(nonce)),
   }));
 });
@@ -170,7 +186,9 @@ mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDeta
 } }));
 if (options.guarded) {
   const approval = { pid: fakePid, ...endpoint, configHome: home, cliVersion: "2.93.0", compatibilityToken: "fixture" };
-  const manager = { kind: "bound", pid: fakePid, managerPid: fakePid + 1, backend: "launchd" };
+  const manager = options.windowsGuarded
+    ? { kind: "bound", pid: fakePid, managerPid: fakePid + 1, backend: "scheduler", childNeedsSeparateStop: true }
+    : { kind: "bound", pid: fakePid, managerPid: fakePid + 1, backend: "launchd" };
   const stopApproval = await import("../../src/cli/stop-approval");
   mock.module("../../src/cli/stop-approval", () => ({ ...stopApproval,
     parseStopApproval: () => ({ ok: true, json: true, approval }),
@@ -179,7 +197,8 @@ if (options.guarded) {
   }));
   const guarded = await import("../../src/service/guarded-manager-target");
   mock.module("../../src/service/guarded-manager-target", () => ({ ...guarded,
-    inspectGuardedManagerTarget: () => manager, observeGuardedManagerStopped: () => "stopped",
+    inspectGuardedManagerTarget: () => manager,
+    observeGuardedManagerStopped: () => (options.windowsGuarded ? "inactive" : "stopped"),
   }));
 }
 if (options.orphan || options.alreadyStopped) {
@@ -225,7 +244,12 @@ mock.module("../../src/grok/inject", () => ({
 const systemEnv = await import("../../src/server/system-env");
 mock.module("../../src/server/system-env", () => ({ ...systemEnv, revertSystemEnv() {} }));
 const portReclaim = await import("../../src/server/port-reclaim");
-mock.module("../../src/server/port-reclaim", () => ({ ...portReclaim, reclaimListenPort: async () => {} }));
+mock.module("../../src/server/port-reclaim", () => ({ ...portReclaim,
+  reclaimListenPort: async (_port: number, _host: string, options?: { timeoutMs?: number }) => {
+    calls.reclaim += 1;
+    reclaimTimeouts.push(options?.timeoutMs ?? 0);
+  },
+}));
 // Only shim preflight is unrelated to this stop contract; parsing and dispatch stay real.
 mock.module("../../src/cli/codex-shim-autorestore", () => ({ async maybeAutoRestoreCodexShimAsync() {} }));
 
@@ -261,6 +285,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   }
   if (!url.startsWith("http://127.0.0.1:10100/api/stop")) return unexpected(`fetch(${url})`);
   urls.push(url);
+  postPartA.push(receipts.pendingTeardownPartA(new URL(url).searchParams.get("teardownNonce")));
   transports.push(viaDirect ? "direct" : "global");
   if (options.connectDuringPost) writeHubConnection();
   const body = options.serverTeardown && !options.apiFailure
@@ -290,6 +315,36 @@ mock.module("../../src/server/direct-local-http", () => ({ ...direct,
 }));
 
 process.argv = [process.execPath, "ocx", "stop", ...(options.json ? ["--json"] : [])];
+if (options.windowsPartA || options.windowsPartAReject) {
+  // The stop wiring acts for win32 while the host stays untouched: Part A and Part B answer here.
+  (await import("../../src/cli/stop-windows-checked")).resetOcxWindowsStopForTests("win32");
+  const { partAResult, partBResult } = await import("../helpers/windows-stop-caller-fixtures");
+  (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
+    partA: async () => { calls.service++; if (options.windowsPartAReject) throw new Error("wrapper watch rejected"); return partAResult(options.windowsPartA!); },
+    partB: async () => { calls.partB++; return partBResult(options.windowsPartB ?? "freed"); },
+    // The guarded inspection reads evidence before it asks the mocked manager; nothing may
+    // reach the host's process table.
+    ...(options.guarded ? { snapshot: async () => [], schedulePid: async () => null } : {}),
+  });
+}
+if (options.windowsPartAUnderOwnWrapper) {
+  // This stop runs under this home's wrapper: ocx stop <- cmd.exe (.cmd) <- wscript.exe (.vbs),
+  // with nothing registered. The real Part A answers the own-wrapper refusal.
+  (await import("../../src/cli/stop-windows-checked")).resetOcxWindowsStopForTests("win32");
+  const { PATHS, launcher, loop } = await import("../helpers/windows-checked-stop-fixtures");
+  const self = { pid: process.pid, parentPid: 30, name: "ocx.exe", commandLine: "ocx stop", startTime: 6_000 };
+  (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
+    liveDeps: () => ({
+      canonicalPaths: PATHS, childPid: null, selfPid: process.pid,
+      probeScheduler: () => { calls.service++; return { status: "absent" }; }, probeWinsw: () => options.windowsWinswStopped ? "stopped" : "nonexistent",
+      enumerate: () => [launcher(), loop(), self],
+      scheduleServicePid: () => null, endTask: () => unexpected("schtasks /end"), taskState: () => "not-running",
+      winswStop: () => "sent", winswState: () => "stopped", proxyAlive: () => false,
+      openWatch: () => ({ status: "gone" }),
+      terminate: () => unexpected("terminate"),
+    }),
+  });
+}
 if (options.handover) process.env.OCX_UPDATE_TEARDOWN_HANDOVER = "1";
 if (options.exitCleanup) {
   delete process.env.OCX_SERVICE;

@@ -19,6 +19,7 @@ import {
 } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 import { providerTlsFetch } from "../../lib/provider-tls-profile";
+import { inheritPassiveKeyProof, markPassiveKeyTransparent } from "../../lib/passive-key-fetch-proof";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { configuredOutboundFetch } from "../../lib/proxy-env";
 import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
@@ -59,12 +60,14 @@ export type AccountAutoPauseObserver = ((response: Response) => Promise<Response
   physical?: (sameDestination: boolean, headers: Headers) => void;
 };
 /** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
-export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void): Record<symbol, unknown> {
+export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void,
+  onFinalSend?: (sameDestination: boolean, headers: Headers) => void): Record<symbol, unknown> {
   const physical = observer?.physical;
   let noted = false;
-  return physical || onPhysicalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
+  return physical || onPhysicalSend || onFinalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
     if (onPhysicalSend && !noted) { onPhysicalSend(); noted = true; }
     physical?.(destination === target, headers);
+    onFinalSend?.(destination === target, headers);
   } } : {};
 }
 export function physicalSendGuardInit(guard: (destination: string, headers: Headers) => void): Record<symbol, unknown> {
@@ -239,7 +242,7 @@ export function sendWithConnectionPolicy(
     && isCanonicalCodexResponsesUrl(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
   (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_GUARD]?.(target, headers);
-  (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
+  (init as Record<symbol, ((body: BodyInit | null | undefined) => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.(body);
   (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_OBSERVER]?.(target, headers);
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
   // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
@@ -293,7 +296,7 @@ export interface ProviderFetchOptions {
   /** Synchronous admission at actual credential dispatch, after pacing/backoff. */
   beforeDispatch?: (headers: Headers) => void;
   /** One-shot receipt after final local HTTP admission, immediately before executor entry. */
-  onPhysicalDispatch?: () => void;
+  onPhysicalDispatch?: (body?: BodyInit | null) => void;
   /** Repeatable admission for native successor creates, after pacing and auth checks. */
   onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void;
   /**
@@ -332,6 +335,7 @@ export function providerFetch(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => configuredOutboundFetch(input, init),
     { preconnect: globalThis.fetch.preconnect?.bind(globalThis.fetch) },
   ) as typeof globalThis.fetch);
+  markPassiveKeyTransparent(configuredFetch);
   const base = customExecutor ?? configuredFetch;
   const transport = options.providerName ? providerTlsFetch(options.providerName, provider, base) : base;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
@@ -352,6 +356,7 @@ export function providerFetch(
       sendWithConnectionPolicy(transport, input, init, egressBinding),
     { preconnect },
   ) as typeof globalThis.fetch);
+  inheritPassiveKeyProof(dispatch, transport);
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
       reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>,
@@ -375,12 +380,12 @@ export function providerFetch(
       options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
       // No proxy option is attached here: a `dispatchOverride` may rebuild this request against
       // a different destination, so the route is decided at the physical send instead.
-      const sharedReceipt = (init as Record<symbol, (() => void) | undefined> | undefined)?.[WS_FALLBACK_RECEIPT];
+      const sharedReceipt = (init as Record<symbol, ((body: BodyInit | null | undefined) => void) | undefined> | undefined)?.[WS_FALLBACK_RECEIPT];
       let notified = false;
       const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0,
-        ...(options.onPhysicalDispatch ? { [PHYSICAL_DISPATCH]: () => {
-          if (sharedReceipt) sharedReceipt();
-          else if (!notified) { options.onPhysicalDispatch!(); notified = true; }
+        ...(options.onPhysicalDispatch ? { [PHYSICAL_DISPATCH]: (body: BodyInit | null | undefined) => {
+          if (sharedReceipt) sharedReceipt(body);
+          else if (!notified) { options.onPhysicalDispatch!(body); notified = true; }
         } } : {}),
       };
       return override
@@ -421,10 +426,10 @@ export function providerFetch(
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
       // there would silently negotiate a transport the operator ruled out.
       let notified = false;
-      const notifyOnce = (): void => {
+      const notifyOnce = (body: BodyInit | null | undefined): void => {
         if (notified) return;
+        options.onPhysicalDispatch?.(body);
         notified = true;
-        options.onPhysicalDispatch?.();
       };
       const fallback = ((url: Parameters<typeof globalThis.fetch>[0], fallbackInit?: RequestInit) =>
         httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit, reacquirePacing, null)) as typeof globalThis.fetch;

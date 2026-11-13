@@ -7,10 +7,44 @@ OpenCodex, alt ajan arayüzü **v1** olarak kurulur. Dashboard, Models ve Subage
 sayfaları **base** veya **v2** moduna geçmeden önce onay ister; bu sayfa da o
 onayın bağlantı hedefidir. CLI onay istemez.
 
-Nedeni dar ve nettir: v2'de ChatGPT yerel modelinden yönlendirilen modele
-devredilen görevi yönlendirilen model okuyamaz. İnsanların en sık kullandığı
-devir biçimi budur — GPT ebeveyninin Grok, Claude veya GLM çocuğu oluşturması —
-ve v2'de her seferinde başarısız olur.
+Değişmemiş şifreli v2 yolunda, ChatGPT yerel modelinden yönlendirilen modele
+devredilen okunamayan görev sağlayıcı sınırında başarısız olur. Aşağıdaki deneysel
+seçenek yeni görev mesajlarının üretimini değiştirir; mevcut şifreli mesajları çözmez.
+
+## Düz metin görev mesajlarıyla isteğe bağlı V2
+
+**V2 · düz metin görevler** (`v2-plaintext`), genel V2 zorlamasını kapalı tutarak
+yeni sohbetler için V2 katalog sabitlemelerini seçer. V2 görev adlarını, hiyerarşiyi,
+takip mesajlarını, iptali ve eşzamanlılığı korur; uygun kurallı ChatGPT Responses
+istekleri için deneysel düz metin derleyicisini kullanır. Mevcut sohbetler kayıtlı
+seçimlerini korur ve güncelleme bu açık seçeneği kendiliğinden seçmez. Derleyici,
+mevcut V2 oturumlarının sonraki uygun istekleri dahil, her uygun istekte geçerli
+ayarı izler.
+
+Bu modda yerel yanıt kimliğiyle devam, kabul edilmiş aynı opencodex API anahtarı
+kimliğini ve isteğin kendi `thread-id` değerini gerektirir; üst iş parçacığı kimliği
+çocuğun saklanan görevine erişim sağlamaz. Kimliklerden biri yoksa, proxy yeniden
+başlatıldıysa veya eski bağlı olmayan önbellek girdileri kullanılıyorsa konuşmanın
+tamamını `previous_response_id` olmadan yeniden gönderin. Bu modda saklanan durum,
+mod değiştikten sonra da bağlı kalır. Varsayılan `v1`, geri döngü çağıranları dahil
+bağlı olmayan durum için mevcut üst iş parçacığı kapsamındaki devamı korur.
+
+Kontrol paneli, görev metninin Codex geçmişinde, seçilen sağlayıcıya gönderilen
+isteklerde ve disk üzerindeki devam anlık görüntüleri veya taşmaları dahil yerel
+yanıt/hata ayıklama durumunda kalabileceğinin onaylanmasını ister. HTTPS ve kimlik
+doğrulama korunur; ek kurtarma modeli çağrısı yapılmaz. Mevcut şifreli metnin şifresi
+çözülmez, saklanan geçmiş yeniden yazılmaz ve devre dışı bırakma saklanan kopyaları
+silmez. Desteklenmeyen arka uç veya istemci davranışı yine başarısız olabilir. Normal
+v1 ve karma yerel-v1/yönlendirilmiş-v2 modları kullanılabilir.
+
+```bash
+ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
+```
+
+Canlı hedefi `ocx v2 status --live --json` ile kontrol edin. Yerel hedef için her iki komuttan `--live` seçeneğini çıkarın ve `ocx v2 status --json`
+ile durumu okuyun; yapılandırılan durum ve katalog yakınsaması, başarılı bir gerçek
+görev devriyle aynı şey değildir. Çıkmak için başka bir mod seçin; bağımsız olarak
+ayarlanmış `plaintextV2AgentMessages` değeri korunur.
 
 ## Bu durumda ne görürsünüz?
 
@@ -36,13 +70,15 @@ güvenle yanlış yanıt üretmesine yol açardı.
 v1'de ebeveyn çocuğun görevini düz metin olarak üretir. OpenCodex onu okur,
 yönlendirir ve yönlendirilen çocuk uygulanabilir bir görev alır.
 
-v2'de ebeveyn, ChatGPT arka ucunun ürettiği `encrypted_content` olarak görevi
+Şifreli v2 yolunda ebeveyn, ChatGPT arka ucunun ürettiği `encrypted_content` olarak görevi
 verir. Anahtar o arka uçta kalır. OpenCodex anahtara hiç sahip olmadığından
 proxy'nin çözebileceği veya yeniden yazabileceği bir şey yoktur: değer, bir
 bayrağın arkasındaki düz metin değil gerçekten şifreli metindir. Bu yüzden
-sorun yapılandırma hatası değil yapısaldır ve proxy tarafı ayarlarla çözülemez.
+mevcut şifreli metnin sorunu yapılandırma hatası değil yapısaldır; düz metin seçeneği onu çözmez, yeni mesajları farklı üretir.
 
-Üç topoloji etkilenmez; bu, hatanın şeklini açıklar:
+Hiçbir proxy ayarı yerel şifre çözmeyi etkinleştirmez. Deneysel `agentTaskRecovery`, uygun görevleri kurtarmak için ChatGPT arka ucuna başvurabilir; şifreli metni yerel olarak çözmez. Yukarıdaki yetkilendirme, uygunluk ve hata sınırları geçerlidir.
+
+Aşağıdaki karşılaştırma şifreli v2 yolu içindir; düz metin seçeneği uygun yeni görevleri farklı üretir:
 
 | Topoloji | v1 | v2 |
 | --- | --- | --- |
@@ -70,13 +106,14 @@ olarak kaydetti ve planlanmadığı için kapattı: bu depoda çözülecek bir �
 yoktur; konu, buradaki bakım sorumlularını bekleyen görev değil yukarı akış
 işine işarettir.
 
-## Üç mod şimdi ne yapıyor?
+## Modlar şimdi ne yapıyor?
 
 | Mod | Arayüz | Ne zaman seçilmeli? |
 | --- | --- | --- |
 | **v1** (varsayılan) | Her model klasik ad alanlı spawn araçlarını sunar. Spawn başka bir modeli doğrudan adlandırabilir. | Sağlayıcılar arasında görev devreden herkes. Sunulan varsayılan budur. |
 | **base** | Yukarı akış model sabitlemeleri: Sol ve Terra v2, Luna v1 kullanır; sabitlenmemiş modeller Codex'in kendi bayrağını izler. | Codex'in model başına amaçlanan arayüzünü ve yalnızca tek sağlayıcı içinde görev devrini istiyorsanız. |
 | **v2** | Her model düz eşzamanlı araçları sunar. | Yeni eşzamanlı oturum modelini istiyorsanız ve ebeveyn ile çocuk sınırın aynı tarafındaysa. |
+| **v2-plaintext** | Genel zorlama kapalıyken yeni oturumlar için V2; uygun ChatGPT görev mesajları düz metin. | Açık onayla deneysel düz metin iletimini istiyorsanız. |
 
 base ilk değil ikinci sıradadır, çünkü sabitlemeleri insanların en sık görev
 devrettiği iki model olan Sol ve Terra'yı v2'ye koyar. base bu sorun için ara
@@ -95,7 +132,7 @@ yanıtınızı bekler.
 Her iki yanıt da kaydedilir ve bildirim geri gelmez. Yanıtlamadan kapatırsanız
 kontrol panelini sonraki açışınızda yeniden görünür.
 
-Mod değişiklikleri **yeni** Codex oturumlarına uygulanır. Seçimden sonra yeni
+Katalog modu değişiklikleri **yeni** Codex oturumlarına uygulanır; düz metin derleyicisi mevcut V2 oturumlarının sonraki uygun isteklerini de etkiler. Seçimden sonra yeni
 oturum başlatın; uzun süredir çalışan bir App ana bilgisayarı eski arayüzü
 gösteriyorsa `ocx sync` çalıştırıp o Codex arayüzünü yeniden başlatın.
 

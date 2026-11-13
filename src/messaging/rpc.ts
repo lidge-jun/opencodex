@@ -1,8 +1,11 @@
+import { isAbsolute } from "node:path";
+import { realpathSync, statSync } from "node:fs";
 import { MessageBudget } from "./budget";
+import { isResumeProfile, verifyResumeProfile } from "./resume-permissions";
 import { localSocket, type LocalSocket } from "./socket";
 import { isRecord, isThreadId, LocalMessagingError, type LocalMetadataClient, type LocalThread } from "./types";
 
-type Method = "initialize" | "thread/loaded/list" | "thread/read" | "thread/queue/add";
+type Method = "initialize" | "thread/loaded/list" | "thread/read" | "thread/queue/add" | "configRequirements/read" | "permissionProfile/list";
 interface QueueResult {
   status: "not_sent" | "queued" | "unknown";
   error?: { code: string; message: string };
@@ -16,9 +19,11 @@ interface Pending {
   method: Method;
 }
 
-/** Metadata discovery plus one text-only queue method; no lifecycle/turn/permission mutation. */
+/** Default metadata/queue connection; lifecycle access requires a separate explicit factory. */
 export class LocalMessageRpc implements LocalMetadataClient {
   private nextId = 0;
+  private allowResume = false;
+  private serverHome: unknown;
   private readonly pending = new Map<number, Pending>();
   private closed = false;
   private readonly abort: () => void;
@@ -76,10 +81,44 @@ export class LocalMessageRpc implements LocalMetadataClient {
         capabilities: { experimentalApi: true },
       });
       if (!isRecord(result)) throw rpc.invalidMetadata();
+      rpc.serverHome = result.codexHome;
       budget.throwIfEnded();
       socket.send(JSON.stringify({ method: "initialized", params: {} }));
       return rpc;
     } catch (error) { rpc.close(); throw error; }
+  }
+
+  /** Grant only resume preflight on an explicitly selected trusted local server. */
+  static async connectForResume(url: string, budget: MessageBudget, codexHome: string): Promise<LocalMessageRpc> {
+    const rpc = await LocalMessageRpc.connect(url, budget);
+    try {
+      if (typeof rpc.serverHome !== "string" || !isAbsolute(rpc.serverHome) || !statSync(codexHome).isDirectory() || realpathSync(rpc.serverHome) !== realpathSync(codexHome)) {
+        throw new LocalMessagingError("resume_home_mismatch", "The selected server must report the configured Codex home.");
+      }
+      rpc.allowResume = true;
+      return rpc;
+    } catch (error) {
+      rpc.close();
+      throw error instanceof LocalMessagingError ? error : new LocalMessagingError("resume_home_unverified", "The selected server home could not be verified.");
+    }
+  }
+
+  /** Inspect the target but refuse execution until native conditional resume is available. */
+  async resumeThread(threadId: string, permissionProfile: string) {
+    try {
+      if (!this.allowResume || !isThreadId(threadId) || !isResumeProfile(permissionProfile)) throw new LocalMessagingError("resume_disabled", "An explicit resume grant, thread UUID and permission profile are required.");
+      const state = await this.request("thread/read", { threadId, includeTurns: false });
+      const target = this.projectThread(state, threadId);
+      if (target.status === "systemError") throw new LocalMessagingError("resume_target_unhealthy", "The target is unhealthy.");
+      if (target.status !== "notLoaded") return { status: "already_loaded" as const, observedStatus: target.status };
+      await verifyResumeProfile((method, params) => this.request(method, params), permissionProfile, (state as {thread: Record<string, unknown>}).thread.cwd);
+      // Codex 0.166.0 can replace an unsubscribed idle thread loaded after preflight.
+      // No atomic not-loaded condition exists in its resume API; never send an unconditional resume.
+      throw new LocalMessagingError("resume_atomicity_unsupported", "The server cannot enforce an unloaded-only resume; no resume was submitted.");
+    } catch (error) {
+      return { status: "not_resumed" as const,
+        error: error instanceof LocalMessagingError ? { code: error.code } : { code: "resume_unavailable" } };
+    }
   }
 
   /** Read up to 50 loaded UUIDs, rejecting malformed IDs and unbounded pagination cursors. */
@@ -97,6 +136,11 @@ export class LocalMessageRpc implements LocalMetadataClient {
   async readThread(id: string): Promise<LocalThread> {
     if (!isThreadId(id)) throw new LocalMessagingError("invalid_selector", "A valid Codex thread ID is required.");
     const raw = await this.request("thread/read", { threadId: id, includeTurns: false });
+    return this.projectThread(raw, id);
+  }
+
+  /** Metadata projection shared by normal reads and the resume-only preflight. */
+  private projectThread(raw: unknown, id: string): LocalThread {
     const thread = isRecord(raw) ? raw.thread : null;
     if (!isRecord(thread) || thread.id !== id || (thread.name !== undefined && thread.name !== null
       && (typeof thread.name !== "string" || thread.name.length > 4096)) || !isRecord(thread.status)

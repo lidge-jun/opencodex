@@ -150,26 +150,26 @@ existing request-wide send allowance. Explicit `retryOn429` settings, including
 keys by default; `promptCacheKey: false` disables forwarding. Cache affinity improves the
 chance of reuse, but does not guarantee a cache hit or remove token-throughput limits.
 
-Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances
-are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys);
-the proxy does not infer a subscription tier from the key. At `https://api.mistral.ai/v1`, the dashboard
-reads API and Vibe budgets from `/v1/billing/budget` and the plan from `/v1/billing/subscription`,
-using the inference credential and egress. Measured windows show usage, total and recognized plan name.
-Budgets are display-only: they do not rank keys, route or pause traffic, or enter the quota pool.
-Missing, malformed or non-positive budgets, malformed currencies and out-of-range percentages are unknown;
-unknown plan names are omitted. Fresh last-good readings survive 402, 408, 429, 5xx and transport failures,
-but 401, 403 and other non-retryable client refusals suppress them. For every model, explicit upstream
-`Retry-After` deadlines are shared between calls on the same credential and model. A 429
-without a retry time can activate a conservative 60-second recovery wait when valid minute
-counters show exhausted capacity, or the refused query's measured cost exceeds the remaining
-tokens while fitting the full advertised allowance. This is a local recovery policy, not an
-exact server-reset prediction. Healthy traffic never predicts the next query's cache or cost.
-After the wait, one recovery probe runs; success restores ordinary traffic. Missing, malformed,
-zero-entitlement, exhausted-monthly, or above-full-allowance evidence does not invent a reset or compact history.
-`requestPacing: { "enabled": false }` or `retryOn429: { "respectRetryAfter": false }`
-disables shared pacing. If Mistral's
-retry time exceeds `retryOn429.maxIntervalMs`, the proxy returns the 429 and retry hint rather
-than replaying early. Context windows and per-model compaction preferences remain independent.
+Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances are
+described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys),
+and the proxy does not infer a subscription tier from the key. At `https://api.mistral.ai/v1`, the
+dashboard reads API and Vibe budgets from `/v1/billing/budget` and the plan from
+`/v1/billing/subscription`, using the inference credential and egress. Measured windows show usage,
+total and recognized plan name. Budgets are
+display-only: they do not rank keys, route or pause traffic, or enter the quota pool. Missing,
+malformed or non-positive budgets, malformed currencies, out-of-range percentages and unknown plan
+names are unknown or omitted. Fresh last-good readings survive 402, 408, 429, 5xx and transport
+failures, but 401, 403 and other non-retryable client refusals suppress them.
+
+For every model, explicit upstream `Retry-After` deadlines are shared between calls on the same
+credential and model; [the `retryOn429` reference](/reference/configuration/providers/) covers the
+recovery wait after a 429 without one, its single probe, and the `requestPacing` and
+`respectRetryAfter` opt-outs. Context windows and per-model compaction preferences remain
+independent.
+
+The provider header also lists passively observed request and token limits for OpenAI, Anthropic,
+xAI, Groq and Mistral, per observed key and model; [the dashboard guide](/guides/web-dashboard/)
+covers those display-only readings, which never probe the OS keychain or affect routing.
 
 Mistral accepts a different set of `reasoning_effort` values for each model and refuses the
 rest with HTTP 400 (or 422 for `ultra`). The preset ships the accepted rungs as registry
@@ -273,15 +273,11 @@ default), and high thinking levels. Google offers it on the paid Gemini API tier
 tier. On `google-antigravity`, Argon is listed with the same three levels, which map to the
 `gemini-4-argon-low`, `-medium`, and `-high` wire models. Google limits it there to AI Ultra and
 eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigravity CLI client, so
-OpenCodex sends Argon requests and model discovery with the CLI User-Agent
-(`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
+OpenCodex sends every Gemini 4 model request and model discovery with the CLI User-Agent
+(`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model. Gemini 4 Hydrogen (low, medium, high by default, and xhigh) appears on `google-antigravity` only when your account's model list includes it, each level mapping to its `gemini-4-hydrogen-*` wire model; requesting `max` or `ultra` also selects xhigh.
 
-On Vertex AI, `gemini-4-argon` receives images returned by tools, such as screenshots, inside
-the matching function response. This avoids the upstream 400 error "Requests ending with a
-model turn are not supported" after an image-producing tool call while preserving the images.
-Images from duplicate results or results without a matching call are preserved in a separate
-message after the tool responses, with a marker explaining that they could not be paired.
-No configuration change is needed; this handling is specific to Vertex Argon.
+Vertex AI model discovery, its credential rules and how Gemini 4 Argon, Carbon and Hydrogen
+receive tool images are described in [Google Vertex AI](/guides/google-vertex/).
 
 For Gemini on Antigravity, including Argon, provider-marked thought summaries stay separate
 from the answer: Responses uses reasoning summary items, Chat Completions uses
@@ -763,7 +759,7 @@ an ambiguous token selection), when `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` redir
 from the live CLI store, or when an existing primary CLI database has no recognized token row.
 Repair or remove the unreadable database under the normal `kiro-cli` data path, unset those import
 selectors, then retry. Signing in from a machine with no existing `kiro-cli` session is unaffected.
-The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or regional AWS device-SSO hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success. Google and GitHub approval completes when Kiro reports `authorized` (or the legacy `approved` status) with valid tokens and a profile ARN.
+The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or regional AWS device-SSO hosts are opened as links, plus your organization's `<id>.awsapps.com/start` access portal on an IAM Identity Center sign-in; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success. Google and GitHub approval completes when Kiro reports `authorized` (or the legacy `approved` status) with valid tokens and a profile ARN.
 The account list marks Kiro accounts excluded from automatic selection with a reason, when available.
 
 ### DeepSeek API
@@ -785,7 +781,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
+opencodex ships 108 built-in presets: 87 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -838,7 +834,6 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Umans AI · Neuralwatt | `https://api.code.umans.ai` · `https://api.neuralwatt.com/v1` |
 | Mistral | `https://api.mistral.ai/v1` |
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
-
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
 | Chutes | `https://llm.chutes.ai/v1` |
@@ -862,6 +857,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Morph (Ultra plan) | `https://api.morphllm.com/v1` |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai` — Responses at `/api/v1/responses` by default; Chat Completions at `/api/coding/paas/v4/chat/completions` per model through `modelAdapters` |
@@ -904,7 +900,9 @@ The Qwen Cloud preset uses the separate Token Plan host that Qwen Cloud document
 See the [1017 model card](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017),
 [Chat reference](https://docs.qwencloud.com/api-reference/chat/openai-chat) and
 [Personal overview](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).
-
+**Morph (Ultra plan)** serves `https://api.morphllm.com/v1` and seeds only the Ultra-covered models, `morph-kimik31` (Kimi K3.1) and `morph-dsv41flash-1017` (DeepSeek V4.1 Flash, October 17 snapshot): every other Morph model bills per token, and `morph-dsv41flash-abliterated` is Ultra-covered only for accounts approved for privileged access.
+Both publish a 1,048,576-token window, accept text and images, and support tools, streaming and reasoning; Kimi takes `none`..`max` and DeepSeek Flash `none`/`low`/`high`/`xhigh`/`max` with `medium` folded onto `high`.
+Ultra removes the token meter but not the per-minute limits, so a `429` means retry after `Retry-After`. Create a key in the [Morph dashboard](https://www.morphllm.com/dashboard/api-keys), then run `ocx provider add morph`; live discovery stays off because `GET /v1/models` also lists per-token models the plan excludes.
 **OpenGateway** is an OpenAI-compatible gateway operated by Sionic AI at
 `https://apis.opengateway.ai/v1`. Its public catalog contains about 80 active models
 (as verified on 2026-10-02); the preset automatically refreshes the live model list from

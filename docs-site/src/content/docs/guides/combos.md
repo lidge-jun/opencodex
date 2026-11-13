@@ -385,8 +385,10 @@ models remain available in their normal picker groups.
 For headless setup, store the key explicitly or reference the TypeSafe environment variable:
 
 ```bash
-ocx provider add jev --api-key "${TYPESAFE_API_KEY}"
+ocx provider add jev --api-key '${TYPESAFE_API_KEY}'
 ```
+
+Keep the single quotes so the shell passes the reference instead of the secret. Set `TYPESAFE_API_KEY` in the proxy's startup environment and restart it if it is already running; a background service needs its own configured environment.
 
 When the provider has no saved key, the decision client also accepts `TYPESAFE_API_KEY` directly and
 the standard provider-derived alias `JEV_API_KEY` printed by `ocx provider add`.
@@ -699,6 +701,7 @@ provider, see [Fallback off](/guides/fallback-off/).
 | HTTP 410 with an explicit model end-of-life, retired, deprecated, sunset, decommissioned, or no-longer-available signal | Cool that target and hop. Unrelated 410 responses remain terminal. |
 | Classified authentication, subscription, quota, rate-limit, overload, or upstream-server error | Cool the target and hop, even when the status alone is not sufficient. |
 | Confirmed context-window overflow before output, including HTTP 400 | Try the next untried eligible target without cooling this target; another model may have a larger window. Exhaustion returns the first confirmed HTTP 400 context-length error; a context refusal sent with another status still advances but is not retained. |
+| HTTP 400 or 422 moderation verdict from the provider or a gateway (a structured `moderation_refusal` or `content_filter` code; moderation wording without such a code still stops) | Try the next target without cooling this one; another provider's filter may accept the prompt. A body that also carries a terminal refusal (cyber or bio policy, `invalid_prompt`, `content_policy_violation`, safety-system wording) still stops. |
 | Client cancellation (499), `origin_rejected`, cyber-policy refusal, or other invalid request | Stop and return the error; another target would not make the request valid. |
 | Exact HTTP 400 saying a model is not supported when using Codex with a ChatGPT account | Try the next declared target before output commitment. The message must be the whole refusal in `detail`, `error.message`, or bare text; competing `detail` and `error` envelopes stay terminal. This does not quarantine the account or cool every model on the provider. |
 | Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, model-scoped image input, or input media the route cannot read (`unsupported_input_modality`) | For an effort refusal, try the next lower published rung on the same target while the send budget allows; if no rung works, hop before output commitment without cooling if the refusal matches a recognized compatibility shape, otherwise stay terminal. Other listed mismatches hop without cooling; see request-local target compatibility below. |
@@ -942,8 +945,16 @@ A native parent can send a newly spawned worker's task only as ciphertext minted
 ChatGPT backend. An external provider cannot read that payload.
 
 For such a request, a combo filters its eligible targets to canonical native ChatGPT routes,
-including after a retryable failure. If the combo has no decrypt-capable target, opencodex stops
-before dispatch and returns HTTP 400:
+including after a retryable failure. Direct-key Responses routes explicitly trusted with
+`allowEncryptedV2AgentTasks: true` can also receive the encrypted task when selected directly,
+outside a combo; the opt-in does not make them eligible combo targets.
+If no canonical native target is selectable, or native attempts are exhausted, explicitly enabled
+`agentTaskRecovery` may recover an eligible spawned task and continue through an available routed
+combo target. The [encrypted v2 task delivery restrictions](/guides/sub-agent-surface/#encrypted-v2-task-delivery)
+still apply, including loopback-only operation, the incoming native credential and no plaintext
+persistence. If recovery is unavailable or fails and no native attempt has occurred, opencodex
+stops before dispatch and returns HTTP 400; after failed native attempts, their last error is retained.
+The initial unreadable-task response is:
 
 ```json
 {
@@ -995,7 +1006,7 @@ ocx combo remove <id> --yes
 ```
 
 `set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--allow-metered-targets on|off`, `--display-name`, `--description`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
+`--allow-metered-targets on|off`, `--cooldown-reprobe on|off`, `--cooldown-reprobe-interval`, `--display-name`, `--description`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
 value of `--effort`, `--alias`, `--display-name`, `--description`, `--decision-provider`, or `--decision-timeout` to
 clear that field. The two decision flags apply only when the effective strategy is JEV: `--strategy jev`, or a stored JEV combo when `--strategy` is omitted. On an existing combo, `--targets` replaces only
 the target list: without `--strategy` the stored strategy and its JEV settings stay as they are. `--native-alias` requires a currently supported bare native
@@ -1136,8 +1147,9 @@ failover budget; failures record fresh cooldowns. Account quota checks, disabled
 providers, request compatibility, metered-spend permissions and cancellation remain
 enforced. Explicit provider Retry-After values may therefore be retried early only
 when the operator enables this option. Preview/list operations never clear cooldowns.
-The interval is tracked per combo in memory and resets on proxy restart or combo
-selection-state reset. Existing cooldown-wait behavior is unchanged when disabled.
+Each recovery pass's interval reservation is tracked per combo in memory and resets on proxy
+restart or combo selection-state reset; the cooldowns themselves stay persisted. Existing
+cooldown-wait behavior is unchanged when disabled.
 
 A recovery pass belongs only to the request that reserved it; other requests still
 observe the saved cooldowns. That reservation follows the request through cooldown

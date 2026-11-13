@@ -3,7 +3,30 @@ import { buildClientConfig, buildClientConfigText, EXPORT_CLIENT_IDS } from "../
 import { previewRouteModel } from "../../src/router";
 import { parseSyntheticRowId } from "../../src/server/fast-row";
 import { loadExportModels } from "../../src/server/management/model-rows";
+import { attachNestedSelectors } from "../../src/clients/config-export/nested-selectors";
+import { staleModelNameRefusal } from "../../src/integrations/model-name-guard";
+import type { IntegrationWriteInput } from "../../src/integrations/mutation-plan";
+import type { OcxConfig } from "../../src/types";
 import { namingConfig, namingModels, exportedKeys, ALIAS_KEYS, ROUTED_KEYS } from "../helpers/export-model-names";
+
+describe("Pi nested selector write guard (#8172)", () => {
+  test("a Pi write refuses once the live configuration no longer proves a captured selector", () => {
+    const nested = (models: string[]) => ({ port: 10100, hostname: "127.0.0.1", defaultProvider: "acme", providers: {
+      acme: { adapter: "openai-chat", baseUrl: "https://acme.example.test/v1", models },
+    } }) as unknown as OcxConfig;
+    const warm = nested(["org/model"]);
+    const models = attachNestedSelectors(warm, [{ namespaced: "acme/org-model", provider: "acme", id: "org/model" }]);
+    expect(models[0]!.nestedNamespaced).toBe("acme/org/model");
+    const input = { clientId: "pi", models, config: warm, port: 10100 } as IntegrationWriteInput;
+    expect(staleModelNameRefusal(input, warm, "apply")).toBeNull();
+    expect(staleModelNameRefusal(input, nested([]), "apply")).toMatchObject({ ok: false, state: "conflict" });
+    expect(staleModelNameRefusal(input, nested([]), "overwrite")).toMatchObject({ ok: false, state: "conflict" });
+    // Disable writes no selector, and a roster without a proven selector has nothing to go stale.
+    expect(staleModelNameRefusal(input, nested([]), "disable")).toBeNull();
+    const unproven = { ...input, models: [{ namespaced: "acme/org-model", provider: "acme", id: "org/model" }] };
+    expect(staleModelNameRefusal(unproven, nested([]), "apply")).toBeNull();
+  });
+});
 
 describe("client export model names", () => {
   for (const client of ["hermes", "commandcode"] as const) {

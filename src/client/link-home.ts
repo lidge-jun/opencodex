@@ -7,7 +7,8 @@
  * process that took the tunnel port never sees the key.
  */
 import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { parseHomeRouteIntentDocument, parseRouteClientOutcomes, ROUTE_CLIENT_IDS, routeIntentDigest, routeClientOutcomesForPeer, type HomeRouteIntentDocument, type RouteClientOutcome } from "../link/route-intent";
 import { atomicWriteFile, isMissingPathError } from "../config/atomic-write";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
@@ -20,6 +21,7 @@ import {
 import { LINK_CHILD_PARITY_PATH, type LinkChildParityReport } from "../link/child-parity";
 import {
   LINK_CODEX_SETTINGS_PATH,
+  LINK_ROUTE_INTENT_PATH,
   LINK_MANAGEMENT_PREFIX,
   linkManagementReadAllowed,
 } from "../link/management-routes";
@@ -336,19 +338,22 @@ export function recordHomeCodexSettings(
 
 /**
  * Tell the Home what this Child last applied and when its runtime started (OCX-6). Resolves to
- * `"accepted"`, `"unsupported"` for a Home that predates the route, or `"failed"`.
+ * `"accepted"`, `"unsupported"` for a Home that predates the route, `"schema-rejected"`
+ * for a payload/schema refusal, or `"failed"` for every other refusal/transport failure.
  */
 export async function sendLinkChildParityReport(
   connection: LinkHomeConnection,
   admissionKey: string,
   report: LinkChildParityReport,
   deps: LinkHomeDeps = {},
-): Promise<"accepted" | "unsupported" | "failed"> {
+): Promise<"accepted" | "unsupported" | "schema-rejected" | "failed"> {
   let response: Response;
   try {
     const target = linkTarget(connection, admissionKey);
     const destination = `http://127.0.0.1:${target.tunnelPort}${LINK_CHILD_PARITY_PATH}`;
-    const body = JSON.stringify(report);
+    const body = JSON.stringify({ ...report, ...(report.routeClientOutcomes === undefined ? {} : {
+      routeClientOutcomes: routeClientOutcomesForPeer(report.routeClientOutcomes),
+    }) });
     const request: RequestInit = {
       method: "POST",
       headers: {
@@ -367,5 +372,88 @@ export async function sendLinkChildParityReport(
   }
   try { await response.body?.cancel(); } catch { /* best effort */ }
   if (response.status === 404) return "unsupported";
+  if ([400, 413, 422].includes(response.status)) return "schema-rejected";
   return response.status === 204 ? "accepted" : "failed";
+}
+
+export interface HomeRouteIntentRecord {
+  linkId: string;
+  fetchedAt: string;
+  appliedAt: string;
+  document: HomeRouteIntentDocument;
+  appliedRouteIntentDigest: string | null;
+  routeClientOutcomes: RouteClientOutcome[];
+}
+export function homeRouteIntentPath(): string { return join(linkDir(), "home-route-intent.json"); }
+function completedRouteIntentDigest(document: HomeRouteIntentDocument, outcomes: RouteClientOutcome[]): string | null {
+  return outcomes.length === ROUTE_CLIENT_IDS.length && new Set(outcomes.map(row => row.client)).size === ROUTE_CLIENT_IDS.length
+    && outcomes.every(row => row.outcome === "current" && !(row.source === "local" && document.clients[row.client].enabled))
+    ? routeIntentDigest(document) : null;
+}
+function parseHomeRouteIntentRecord(value: unknown, linkId: string): HomeRouteIntentRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const fields = ["linkId", "fetchedAt", "appliedAt", "document", "appliedRouteIntentDigest", "routeClientOutcomes"];
+  if (Object.keys(raw).length !== fields.length || Object.keys(raw).some(key => !fields.includes(key))
+    || raw.linkId !== linkId || !/^lnk_[0-9a-f]{16}$/.test(linkId) || !isIsoTimestamp(raw.fetchedAt) || !isIsoTimestamp(raw.appliedAt)) return null;
+  const document = parseHomeRouteIntentDocument(raw.document);
+  const outcomes = parseRouteClientOutcomes(raw.routeClientOutcomes);
+  if (!document || !outcomes || raw.appliedRouteIntentDigest !== completedRouteIntentDigest(document, outcomes)) return null;
+  return { linkId, fetchedAt: raw.fetchedAt, appliedAt: raw.appliedAt, document,
+    appliedRouteIntentDigest: raw.appliedRouteIntentDigest as string | null, routeClientOutcomes: outcomes };
+}
+export function readHomeRouteIntentRecord(linkId: string, path = homeRouteIntentPath()): HomeRouteIntentRecord | null {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > RECORD_MAX_BYTES) return null;
+    return parseHomeRouteIntentRecord(JSON.parse(readFileSync(path, "utf8")), linkId);
+  } catch { return null; }
+}
+export function writeHomeRouteIntentRecord(record: HomeRouteIntentRecord, path = homeRouteIntentPath()): void {
+  const parsed = parseHomeRouteIntentRecord(record, record.linkId);
+  if (!parsed) throw new Error("invalid Home route intent receipt");
+  const dir = dirname(path);
+  assertNotRealHomeUnderTest(dir);
+  const body = `${JSON.stringify(parsed, null, 2)}\n`;
+  if (Buffer.byteLength(body) > RECORD_MAX_BYTES) throw new Error("Home route intent receipt too large");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") hardenSecretDir(dir, { required: true });
+  else chmodSync(dir, 0o700);
+  atomicWriteFile(path, body);
+  if (process.platform !== "win32") chmodSync(path, 0o600);
+}
+export function clearHomeRouteIntentRecord(path = homeRouteIntentPath()): void {
+  assertNotRealHomeUnderTest(dirname(path));
+  try { unlinkSync(path); } catch (error) { if (!isMissingPathError(error)) throw error; }
+}
+/** Call only after the materializer has collected the outcomes; partial apply never claims the digest. */
+export function homeRouteIntentReceipt(
+  linkId: string, document: HomeRouteIntentDocument, fetchedAt: string, appliedAt: string, routeClientOutcomes: RouteClientOutcome[],
+  previous: HomeRouteIntentRecord | null = readHomeRouteIntentRecord(linkId),
+): HomeRouteIntentRecord {
+  const digest = completedRouteIntentDigest(document, routeClientOutcomes);
+  const unchanged = digest !== null && previous?.linkId === linkId && previous.appliedRouteIntentDigest === digest;
+  return { linkId, document, fetchedAt, appliedAt: unchanged ? previous.appliedAt : appliedAt,
+    appliedRouteIntentDigest: digest, routeClientOutcomes };
+}
+export type HomeRouteIntentFetch = { kind: "fresh"; document: HomeRouteIntentDocument } | { kind: "unsupported" } | { kind: "failed"; reason: string };
+export async function fetchHomeRouteIntent(connection: LinkHomeConnection, admissionKey: string, deps: LinkHomeDeps = {}): Promise<HomeRouteIntentFetch> {
+  let response: Response;
+  try {
+    const target = linkTarget(connection, admissionKey);
+    const destination = `http://127.0.0.1:${target.tunnelPort}${LINK_ROUTE_INTENT_PATH}`;
+    const request: RequestInit = { method: "GET", headers: { accept: "application/json", authorization: `Bearer ${admissionKey}` },
+      redirect: "manual", signal: AbortSignal.timeout(deps.timeoutMs ?? READ_TIMEOUT_MS) };
+    response = deps.fetchImpl ? await deps.fetchImpl(destination, request) : await fetchBoundLinkRelay(target, destination, request);
+  } catch { return { kind: "failed", reason: "the Home route intent is unreachable" }; }
+  if (!response.ok) {
+    try { await response.body?.cancel(); } catch { /* best effort */ }
+    return response.status === 404 ? { kind: "unsupported" } : { kind: "failed", reason: `the Home answered HTTP ${response.status}` };
+  }
+  try {
+    const read = await readBoundedResponseBytes(response, { maxBytes: SETTINGS_MAX_BYTES, signal: AbortSignal.timeout(deps.timeoutMs ?? READ_TIMEOUT_MS) });
+    if (read.oversized) return { kind: "failed", reason: "the Home route intent exceeded the allowed size" };
+    const document = parseHomeRouteIntentDocument(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(read.bytes)));
+    return document ? { kind: "fresh", document } : { kind: "failed", reason: "the Home returned an unreadable route intent document" };
+  } catch { return { kind: "failed", reason: "the Home returned an unreadable route intent document" }; }
 }

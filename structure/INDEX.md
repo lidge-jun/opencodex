@@ -165,7 +165,7 @@ Background service, docs, release, and design discipline.
 | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) | Durable Desktop ownership read, takeover-consent handling, live-supervision evidence, the Windows probe's trusted system-directory acquisition, and the supervision latch blocking contract consumed by service and update guards. |
 | [`ops/service-logging.md`](ops/service-logging.md) | Service-only console timestamps and bounded copy-truncate log retention. Producer bounds for combo positions, target providers and effort diagnostics. |
 | [`ops/service-health-recovery.md`](ops/service-health-recovery.md) | Opt-in sentinel that turns a hung but listening managed service proxy into an exit its manager restarts. |
-| [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) | Windows process evidence, the wrapper binding rule, and the checked manager stop and port confirmation that are not yet wired to a stop path. |
+| [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) | Windows process evidence, the wrapper binding rule, the checked manager stop and port confirmation, and their wiring into every Windows stop path (ocx stop, uninstall, /api/stop, service commands, install/switch, updater). |
 | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) | Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback. |
 | [`ops/plugins.md`](ops/plugins.md) | Plugin loading from OPENCODEX_HOME/plugins and the upstream rewrite slot plugins attach to. |
 | [`ops/docs-and-release.md`](ops/docs-and-release.md) | Docs site, workflow map, branch policy, release flow, and cross-platform CI. |
@@ -262,10 +262,13 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/link-child-ops.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/link-local-control.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/link-recover.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/link-status-child.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/status-link.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/stop-windows-checked.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/cli/telemetry.ts` | [`telemetry.md`](telemetry.md) |
 | `src/cli/update-restart.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
@@ -453,6 +456,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/index/link-websocket-limits.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/index/link-websocket.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/live-sideband.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index/local-control-listener.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/ollama-routes.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
@@ -460,6 +465,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/index/startup-warnings.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/index/websocket-handler.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/inference/advisor-diagnostics.ts` | [`advisor.md`](advisor.md) |
+| `src/server/link-turn.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/live.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/management/` | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md) |
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
@@ -468,6 +474,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/consent-session.ts` | [`telemetry.md`](telemetry.md) |
 | `src/server/management/link-child-ops-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/link-enrollment.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/management/link-recover-route.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/management/link-route-edit.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/logs-usage-routes.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
@@ -510,10 +518,12 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/safe-response-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/search.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/sse-payload-rewrite.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/stop-service-route.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/server/ws-bridge.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/service-manager-probe.ts` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/service.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/service/` | [`runtime.md`](runtime.md) |
+| `src/service/cli-windows-stop.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/service/cli.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-command-guard.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-recovery-process.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
@@ -530,12 +540,15 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/service/logging.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
 | `src/service/orchestration.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/repair.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/service/windows-checked-stop-live.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/service/windows-checked-stop.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/service/windows-process-evidence.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/service/windows-process-native.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
+| `src/service/windows-service-stop.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/service/windows-stop-binding.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/service/windows-stop-budget.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/service/windows-stop-confirm.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
+| `src/service/windows-stop-deadline.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/sidecar/` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/sidecar/anthropic-binding.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/stall-timeout.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`runtime.md`](runtime.md) |
@@ -565,6 +578,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/usage/client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/cost.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/error-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/usage/link-log-fields.ts` | [`remote-link.md`](remote-link.md) |
 | `src/usage/source-filter.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/summary.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/timeline.ts` | [`gui-and-management-api.md`](gui-and-management-api.md) |

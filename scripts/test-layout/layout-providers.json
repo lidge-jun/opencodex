@@ -1,17 +1,22 @@
 {
   "cursor-auto-tool-result-replay.test.ts": "providers/cursor",
   "provider-alias-template.test.ts": "providers",
+  "provider-passive-wire-model.test.ts": "providers",
+  "passive-key-observation.test.ts": "providers",
   "claude-chat-gateway-tool-schema.test.ts": "providers",
   "provider-anthropic-usage-windows.test.ts": "providers",
   "provider-anthropic-pool-capacity.test.ts": "providers",
   "xai-additional-tools.test.ts": "providers/xai",
   "xai-replay-provenance.test.ts": "providers/xai",
+  "xai-device-login.test.ts": "providers/xai",
   "xai-loaded-tool-provenance.test.ts": "providers/xai",
   "free-directory-runcrate.test.ts": "providers",
   "cc-switch-import.test.ts": "providers",
   "kiro-completion-with-real-tools.test.ts": "providers/kiro",
   "mistral-image-limit.test.ts": "providers",
+  "passive-key-limits.test.ts": "providers",
   "meta-muse-plan-refusal.test.ts": "providers",
   "model-discovery-skip-invalid-rows.test.ts": "providers",
-  "management-provider-model-discovery.test.ts": "server"
+  "management-provider-model-discovery.test.ts": "server",
+  "claude-cli-fixture-stdout-flush.test.ts": "providers"
 }
