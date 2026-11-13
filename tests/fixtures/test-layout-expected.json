@@ -1292,7 +1292,7 @@
   "reserve-availability.test.ts": "codex-integration", "reserve-catalog-lifecycle.test.ts": "codex-integration",
   "reserve-catalog.test.ts": "codex-integration", "reserve-claude-policy.test.ts": "server",
   "reserve-dispatch-ws.test.ts": "responses", "reserve-dispatch.test.ts": "codex-integration",
-  "reserve-helper-boundary.test.ts": "codex-integration", "reserve-ingress.test.ts": "server",
+  "reserve-helper-boundary.test.ts": "codex-integration", "reserve-ingress.test.ts": "server", "reserve-ingress-fixture-port-race.test.ts": "server",
   "reserve-passive-revocation.test.ts": "codex-integration", "reserve-quota-scope.test.ts": "codex-integration",
   "resolved-model-policy-consumers.test.ts": "routing", "resolved-model-policy.test.ts": "providers",
   "response-log-inspection.test.ts": "server", "response-model-identity.test.ts": "server",
