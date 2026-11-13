@@ -363,7 +363,10 @@ export function coolComboTargetForCommittedTerminal(facts: CommittedTerminalCool
     : COMMITTED_TERMINAL_COOLDOWN_MS[facts.failureDetailCode];
   if (cooldownMs === undefined) return;
   const attempt = facts.servingAttempt;
-  if (!attempt || attempt.locallyAnswered === true || attempt.status >= 400) return;
+  // The incomplete terminal is itself proof the target ran: a late stall surfaces to
+  // the client as a 5xx attempt status, so gating on status < 400 would silence exactly
+  // the case this cooldown exists for.
+  if (!attempt || attempt.locallyAnswered === true) return;
   coolComboTarget(facts.comboId, { provider: attempt.provider, model: attempt.model }, {
     cooldownMs,
     status: facts.httpStatus,

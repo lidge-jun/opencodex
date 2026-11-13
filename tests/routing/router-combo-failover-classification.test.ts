@@ -1898,7 +1898,7 @@ describe("committed-terminal combo cooldown", () => {
       comboId: "free",
       terminalStatus: "incomplete",
       failureDetailCode: "stall_timeout",
-      servingAttempt: committed,
+      servingAttempt: { ...committed, status: 502 },
       httpStatus: 502,
     });
     expect(isComboTargetInCooldown("free", first, now + 30_000)).toBe(true);
@@ -1934,7 +1934,6 @@ describe("committed-terminal combo cooldown", () => {
       failureDetailCode: "output_limit",
       httpStatus: 200,
     };
-    coolComboTargetForCommittedTerminal({ ...base, servingAttempt: { ...committed, status: 502 } });
     coolComboTargetForCommittedTerminal({ ...base, servingAttempt: { ...committed, locallyAnswered: true } });
     coolComboTargetForCommittedTerminal({ ...base });
     coolComboTargetForCommittedTerminal({ ...base, comboId: undefined, servingAttempt: committed });
