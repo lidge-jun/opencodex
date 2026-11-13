@@ -1,7 +1,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { HomeLeg, type LinkWebsocketTimers } from "../../src/client/link-websocket";
 import { LINK_CHILD_WS_LIMITS } from "../../src/client/link-websocket-limits";
@@ -24,10 +24,15 @@ setDefaultTimeout(1_800_000);
 const BASE = process.env.OCX_LINK_WS_AUTOBAHN_URL ?? "";
 const REPORTS = process.env.OCX_LINK_WS_AUTOBAHN_REPORTS ?? "";
 const ENABLED = BASE !== "" && REPORTS !== "";
-const AGENT = "ocx-child-link-leg";
+// One of the two set is a misconfigured run, not an opt-out: it fails and names the missing variable.
+const PARTIAL = (BASE !== "") !== (REPORTS !== "");
+// A fresh agent name per run: the verdict is read from this run's own report, never from an earlier one in the same directory.
+const AGENT = "ocx-child-link-leg-" + Date.now().toString(36) + "-" + randomBytes(3).toString("hex");
+const EXPECTATIONS_FILE = fixturePath("link-ws-autobahn-expectations.json");
 
 interface Rule { cases: string[]; expect: "pass" | "unimplemented" | { closeCode: number }; why: string }
-const EXPECT = JSON.parse(readFileSync(fixturePath("link-ws-autobahn-expectations.json"), "utf8")) as { rules: Rule[] };
+const EXPECTATIONS_TEXT = readFileSync(EXPECTATIONS_FILE, "utf8");
+const EXPECT = JSON.parse(EXPECTATIONS_TEXT) as { rules: Rule[] };
 const timers: LinkWebsocketTimers = { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) };
 const wsBase = () => BASE.replace(/^http/, "ws");
 
@@ -37,7 +42,8 @@ function control(path: string): Promise<string> {
     const ws = new WebSocket(wsBase() + path);
     let text = "";
     ws.onmessage = event => { text += String(event.data); };
-    ws.onclose = () => resolve(text);
+    // Only a normal close (1000) ends a control exchange; anything else (a dropped server, an error) fails the run.
+    ws.onclose = event => { if (event.code === 1000) resolve(text); else reject(new Error("fuzzingserver control " + path + " closed " + event.code)); };
     ws.onerror = () => reject(new Error("fuzzingserver control " + path + " failed"));
   });
 }
@@ -93,6 +99,16 @@ function matches(pattern: string, id: string): boolean {
   return id === pattern;
 }
 
+test.skipIf(!PARTIAL)("the Autobahn run is configured completely (both OCX_LINK_WS_AUTOBAHN_URL and OCX_LINK_WS_AUTOBAHN_REPORTS)", () => {
+  throw new Error("set " + (BASE ? "OCX_LINK_WS_AUTOBAHN_REPORTS" : "OCX_LINK_WS_AUTOBAHN_URL") + " too: one without the other runs nothing");
+});
+
+interface CaseReport {
+  behavior: string; behaviorClose: string; remoteCloseCode: number | null; wasClean: boolean;
+  wasCloseHandshakeTimeout: boolean; wasOpenHandshakeTimeout: boolean; wasServerConnectionDropTimeout: boolean;
+  rxFrameStats: Record<string, number>;
+}
+
 describe.skipIf(!ENABLED)("link WebSocket Child leg: Autobahn fuzzingserver client conformance (design 3.3)"
   + (ENABLED ? "" : " [skipped: set OCX_LINK_WS_AUTOBAHN_URL and OCX_LINK_WS_AUTOBAHN_REPORTS to a running fuzzingserver]"), () => {
   test("every case lands in the class its reviewed expectation names", async () => {
@@ -104,23 +120,34 @@ describe.skipIf(!ENABLED)("link WebSocket Child leg: Autobahn fuzzingserver clie
       ends[reason] = (ends[reason] ?? 0) + 1;
     }
     await control("/updateReports?agent=" + AGENT);
-    const index = JSON.parse(readFileSync(join(REPORTS, "clients", "index.json"), "utf8")) as Record<string, Record<string, { behavior: string; behaviorClose: string; remoteCloseCode: number | null }>>;
+    const index = JSON.parse(readFileSync(join(REPORTS, "clients", "index.json"), "utf8")) as Record<string, Record<string, { reportfile: string }>>;
+    // This run's agent only: a report left in the directory by an earlier run has another agent name.
     const results = index[AGENT] ?? {};
     expect(Object.keys(results).length).toBe(count);
     const mismatches: string[] = [];
     const byClass: Record<string, number> = {};
-    for (const [id, result] of Object.entries(results)) {
+    for (const [id, entry] of Object.entries(results)) {
+      const report = JSON.parse(readFileSync(join(REPORTS, "clients", entry.reportfile), "utf8")) as CaseReport;
       const rule = EXPECT.rules.find(candidate => candidate.cases.some(pattern => matches(pattern, id)))!;
       const want = rule.expect;
+      // The close itself, for every class: completed cleanly, with no handshake or connection-drop timeout.
+      const cleanClose = report.wasClean && !report.wasCloseHandshakeTimeout && !report.wasOpenHandshakeTimeout && !report.wasServerConnectionDropTimeout;
       let ok: boolean;
-      if (want === "pass") ok = ["OK", "NON-STRICT", "INFORMATIONAL"].includes(result.behavior) && ["OK", "INFORMATIONAL"].includes(result.behaviorClose);
-      else if (want === "unimplemented") ok = ["UNIMPLEMENTED", "OK", "NON-STRICT", "INFORMATIONAL"].includes(result.behavior);
-      else ok = result.remoteCloseCode === want.closeCode;
+      if (want === "pass") ok = ["OK", "NON-STRICT", "INFORMATIONAL"].includes(report.behavior) && ["OK", "INFORMATIONAL"].includes(report.behaviorClose);
+      else if (want === "unimplemented") ok = report.behavior === "UNIMPLEMENTED" && report.behaviorClose === "OK" && cleanClose;
+      else {
+        // A refusal: the expected close code, nothing but a close frame received from the Child (no echoed or other
+        // application data before it), and a clean close. Autobahn itself reports these as FAILED: it expected an echo.
+        const dataFrames = Object.entries(report.rxFrameStats ?? {}).filter(([opcode]) => Number(opcode) < 8).reduce((sum, [, n]) => sum + n, 0);
+        ok = report.remoteCloseCode === want.closeCode && dataFrames === 0 && cleanClose;
+      }
       const label = typeof want === "string" ? want : "close " + want.closeCode;
       byClass[label + (ok ? "" : " MISMATCH")] = (byClass[label + (ok ? "" : " MISMATCH")] ?? 0) + 1;
-      if (!ok) mismatches.push(id + ": expected " + label + ", got " + result.behavior + "/" + result.behaviorClose + " close " + result.remoteCloseCode);
+      if (!ok) mismatches.push(id + ": expected " + label + ", got " + report.behavior + "/" + report.behaviorClose + " close " + report.remoteCloseCode
+        + " clean " + report.wasClean + " frames from the Child " + JSON.stringify(report.rxFrameStats));
     }
-    console.info("[autobahn] " + JSON.stringify({ cases: count, byClass, legEnds: ends }));
+    const expectationsSha256 = createHash("sha256").update(EXPECTATIONS_TEXT).digest("hex");
+    console.info("[autobahn] " + JSON.stringify({ agent: AGENT, server: BASE, cases: count, expectationsSha256, byClass, legEnds: ends }));
     expect(mismatches).toEqual([]);
   });
 });
