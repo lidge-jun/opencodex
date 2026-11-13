@@ -64,7 +64,8 @@ test.skipIf(process.platform === "win32")("orchestrated pnpm update of a global 
     cpSync(repoPath("src"), join(real, "src"), { recursive: true }); cpSync(repoPath("bin"), join(real, "bin"), { recursive: true });
     const manifest = JSON.parse(readFileSync(repoPath("package.json"), "utf8")); manifest.version = "2.0.0";
     writeFileSync(join(real, "package.json"), JSON.stringify(manifest));
-    cpSync(repoPath("node_modules"), join(real, "node_modules"), { recursive: true, verbatimSymlinks: true });
+    // Copy the real tree even when node_modules is itself a link, so the fixture never writes into the checkout.
+    cpSync(realpathSync(repoPath("node_modules")), join(real, "node_modules"), { recursive: true, verbatimSymlinks: true });
     linkHoistedDependenciesIntoNestedGroups(join(real, "node_modules"));
     symlinkSync(real, exposed, "dir");
     writeFileSync(join(home, "config.json"), JSON.stringify({ port: 1 }));
