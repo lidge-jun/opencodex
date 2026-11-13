@@ -130,7 +130,7 @@ describe("pool WHAM monthly-window retirement (#8067)", () => {
   });
 });
 
-describe("main observations keep their monthly retention rules", () => {
+describe("main WHAM monthly-window retirement (#8596)", () => {
   const mainIdentity = "monthly-retire-main-fixture";
   const publish = (data: WhamUsageResponse) => setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined,
     captureMainQuotaWriter(mainIdentity), parseMainPolicyUsageQuota(data));
@@ -161,6 +161,65 @@ describe("main observations keep their monthly retention rules", () => {
     publish(malformed);
     for (const quota of caches()) expect(quota?.monthlyPercent).toBe(100);
     expect(isCodexQuotaExhausted(getAccountQuota(MAIN), "prolite")).toBe(true);
+  });
+
+  // The #8596 payload: Plus, weekly primary, secondary_window null and no tertiary key at all.
+  const plusWeeklyOnly = (rate: Record<string, unknown> = {}) => ({ plan_type: "plus",
+    rate_limit: { allowed: true, limit_reached: false, primary_window: weekly(1), secondary_window: null, ...rate } });
+  const exhaustMonthly = () => publish({ plan_type: "free", rate_limit: { allowed: false, primary_window: monthly(), secondary_window: null } });
+
+  test("a complete allowed weekly-only read retires the carried monthly tuple in both caches", () => {
+    observeMainQuotaIdentity(mainIdentity);
+    exhaustMonthly();
+    expect(isCodexQuotaExhausted(getAccountQuota(MAIN), "plus")).toBe(true);
+    expect(parseMainPolicyUsageQuota(plusWeeklyOnly())?.monthlyWindowAbsent).toBe(true);
+    publish(plusWeeklyOnly());
+    for (const quota of caches()) {
+      expect(quota?.weeklyPercent).toBe(1);
+      expect(quota?.monthlyPercent).toBeUndefined();
+      expect(quota?.monthlyResetAt).toBeUndefined();
+      expect(quota?.monthlyIsPrimaryWindow).toBeUndefined();
+      expect(quota).not.toHaveProperty("monthlyWindowAbsent");
+    }
+    expect(isCodexQuotaExhausted(getAccountQuota(MAIN), "plus")).toBe(false);
+    // An explicit null tertiary is the same complete topology.
+    exhaustMonthly();
+    publish(plusWeeklyOnly({ tertiary_window: null }));
+    for (const quota of caches()) expect(quota?.monthlyPercent).toBeUndefined();
+  });
+
+  test("a present monthly window replaces the reading instead of retiring it", () => {
+    observeMainQuotaIdentity(mainIdentity);
+    exhaustMonthly();
+    publish(plusWeeklyOnly({ tertiary_window: monthly(40) }));
+    expect(getAccountQuota(MAIN)?.monthlyPercent).toBe(40);
+    exhaustMonthly();
+    publish({ plan_type: "free", rate_limit: { allowed: true, primary_window: monthly(30), secondary_window: null } });
+    for (const quota of caches()) {
+      expect(quota?.monthlyPercent).toBe(30);
+      expect(quota?.monthlyIsPrimaryWindow).toBe(true);
+    }
+  });
+
+  test("partial, invalid, header-only and writerless main reads keep the carried tuple", () => {
+    observeMainQuotaIdentity(mainIdentity);
+    exhaustMonthly();
+    publish({ plan_type: "plus", rate_limit: { primary_window: weekly(1) } });
+    for (const quota of caches()) expect(quota?.monthlyPercent).toBe(100);
+    publish({ plan_type: "plus", rate_limit: { primary_window: weekly(1), secondary_window: null } });
+    for (const quota of caches()) expect(quota?.monthlyPercent).toBe(100);
+    publish(plusWeeklyOnly({ primary_window: { ...weekly(), used_percent: -1 } }));
+    for (const quota of caches()) expect(quota?.monthlyPercent).toBe(100);
+    publish(plusWeeklyOnly({ primary_window: { ...weekly(), used_percent: "n/a" } }));
+    for (const quota of caches()) expect(quota?.monthlyPercent).toBe(100);
+    applyAccountQuotaFromUpstreamHeaders(MAIN, new Headers({
+      "x-codex-primary-used-percent": "1", "x-codex-primary-window-minutes": "10080",
+    }));
+    expect(getAccountQuota(MAIN)?.monthlyPercent).toBe(100);
+    const data = plusWeeklyOnly();
+    setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined, undefined, parseMainPolicyUsageQuota(data));
+    expect(getAccountQuota(MAIN)?.monthlyPercent).toBe(100);
+    expect(isCodexQuotaExhausted(getAccountQuota(MAIN), "plus")).toBe(true);
   });
 });
 
