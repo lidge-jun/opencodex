@@ -524,7 +524,11 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
     let stops = 0, keyRevokes = 0;
     const h = harness([link()], { duringStop: () => { stops += 1; }, duringKeyRevoke: () => { keyRevokes += 1; } });
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
-    expect([res.status, (await errorOf(res)).code]).toEqual([409, "tombstone_limit"]);
+    const refusal = await errorOf(res);
+    expect([res.status, refusal.code]).toEqual([409, "tombstone_limit"]);
+    // A resumed revoke may take its receipt back before the limit, so the message names only what holds on both paths.
+    expect(refusal.message).toContain("did not touch the link, its key or the Child");
+    expect(refusal.message).not.toContain("before its own effects");
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
     expect(tombstones()).toHaveLength(MAX_TOMBSTONES);
     expect({ stops, keyRevokes }).toEqual({ stops: 0, keyRevokes: 0 });
