@@ -197,7 +197,8 @@ on Linux). The updater accepts such an install only when pnpm itself names the s
 A store-like path, marker files or `.modules.yaml` are never enough on their own.
 
 If that check cannot be made when the updater first identifies your install, the update stops before
-it changes anything. The message includes `this install's path looks like a pnpm global store`
+it installs or removes anything (pnpm's store query itself may create an empty store folder). The
+message includes `this install's path looks like a pnpm global store`
 and then the command to run instead. The updater repeats the store check after `pnpm add`; if pnpm's
 store answer no longer passes at that point, the update stops without a rollback, because the updater
 can no longer confirm which store a rollback would write to. Check `ocx --version`, then use the
@@ -209,6 +210,8 @@ Common causes:
   `pnpm --version`.
 - `PNPM_HOME`, or a folder above it, is a symbolic link, or pnpm prints a store path that is
   not a single absolute `v<N>` folder.
+- On Windows, the pnpm home, the global folders or the store path contain one of `"%!^&|<>`, which
+  cmd.exe cannot pass to pnpm safely.
 - The global group sits under a folder whose name merely looks like a store (a `v<N>/links`
   folder, or pnpm's `files` and `index` markers) without being the store pnpm reports.
 

@@ -684,10 +684,10 @@ export function resolvePnpmGlobalOwner({
       return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version,
         ...(globalStore ? { store: active.store, storePath: active.storePath, virtualStoreDirs: active.virtualStoreDirs, homeAnchor: active.homeAnchor } : {}) } };
     }
-    // A path that looks like a pnpm global store is accepted only on pnpm's own store answer. Say so, so
-    // a user whose group merely sits under a store-like directory knows why and what to run instead.
-    const storeRefusal = isStoreProofFailure(active.reason) || /outside the selected store/.test(active.reason ?? "");
-    lastReason = globalStore && storeRefusal ? active.reason + STORE_PROOF_HINT : active.reason;
+    // A path that looks like a pnpm global store is accepted only on pnpm's own store answer. Every refusal of
+    // such an install says so, so a user whose group merely sits under a store-like directory, or whose pnpm
+    // home cannot be passed safely, knows why and what to run instead. The original reason stays the prefix.
+    lastReason = globalStore && typeof active.reason === "string" ? active.reason + STORE_PROOF_HINT : active.reason;
   }
   return { ok: false, reason: lastReason };
 }

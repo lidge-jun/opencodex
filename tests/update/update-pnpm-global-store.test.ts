@@ -101,7 +101,7 @@ function resolveOwner(layout: Layout, packagePath = layout.exposed) {
   });
 }
 
-/** A refusal for a store-like install ends with guidance on why and what to run (owner decision B on #8331). */
+/** Every refusal of a store-like install carries guidance on why and what to run (owner decision B on #8331). */
 const STORE_HINT = "; this install's path looks like a pnpm global store (a store links directory or pnpm store markers), "
   + "so the updater accepts it only when pnpm 11 or 12 names that store. Update with pnpm itself: "
   + "pnpm add -g @bitkyc08/opencodex@latest";
@@ -221,7 +221,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
       expect(resolvePnpmGlobalOwner({
         packageName: PKG, packagePath: layout.exposed, commandPaths: [join(layout.root, "pnpm")],
         runPnpm: (_command, args) => layout.run(args), env: layout.env, platform: "win32",
-      })).toEqual({ ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" });
+      })).toEqual(storeRefusal("pnpm path contains a character cmd.exe cannot pass safely"));
       expect(storeCalls(layout)).toEqual([]);
       // No owner-pinned pnpm argv (list --global-dir=..., --version, store path) may carry the character.
       expect(layout.calls.filter(args => args.some(arg => /["%!^&|<>]/.test(arg)))).toEqual([]);
@@ -235,7 +235,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
       packageName: PKG, packagePath: layout.exposed, commandPaths: [join(layout.root, "pnpm")],
       runPnpm: (_command, args) => layout.run(args), env: layout.env, platform: "win32",
     });
-    expect(result).toEqual({ ok: false, reason: "pnpm path contains a character cmd.exe cannot pass safely" });
+    expect(result).toEqual(storeRefusal("pnpm path contains a character cmd.exe cannot pass safely"));
     expect(storeCalls(layout)).toHaveLength(1);
   });
 
@@ -351,7 +351,7 @@ describe("pnpm global virtual-store owner (#8183)", () => {
       : run(args);
     expect(verifyPnpmInstallTree(dotted, "1.0.0", layout.store, layout.globalRoot))
       .toEqual({ ok: false, failures: ["pnpm package path is not canonical"] });
-    expect(resolveOwner(layout, dotted)).toEqual({ ok: false, reason: "pnpm package path is not canonical" });
+    expect(resolveOwner(layout, dotted)).toEqual(storeRefusal("pnpm package path is not canonical"));
   });
 
   test("an unmarked layout under a store directory keeps the released legacy verifier (rule 5)", () => {
@@ -548,6 +548,6 @@ describe("pnpm global virtual-store owner (#8183)", () => {
     const { renameSync } = require("node:fs") as typeof import("node:fs");
     renameSync(other.globalRoot, realGroup);
     link(realGroup, other.globalRoot);
-    expect(resolveOwner(other)).toEqual({ ok: false, reason: "pnpm global group has a symbolic link component" });
+    expect(resolveOwner(other)).toEqual(storeRefusal("pnpm global group has a symbolic link component"));
   });
 });
