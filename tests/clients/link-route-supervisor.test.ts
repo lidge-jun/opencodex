@@ -1412,3 +1412,28 @@ test("a reload that gives routes while a stopped, unrecorded one-route tunnel is
   // Only now does the first round start, at the first route.
   expect(h.runs.find(run => run.kind === "probe")?.destination).toBe("alpha-lan");
 });
+
+test.each(["a running child", "a child the tick already stopped"] as const)("a reload that stops %s which ignores SIGTERM sends SIGKILL after the grace", async kind => {
+  let current = oneRouteStore();
+  const opts: Parameters<typeof harness>[0] = { store: () => current, stubborn: true, ...(kind === "a running child" ? {} : { writePidfile: readOnlyPidfile }) };
+  const h = start(opts);
+  await flush();
+  if (kind !== "a running child") {
+    await h.tick();
+    expect(h.tunnels[0]!.signals).toEqual(["SIGTERM"]);
+  }
+  current = { ...current, links: [] };
+  const reload = h.supervisor.reload();
+  await flush();
+  expect(h.tunnels[0]!.signals.at(-1)).toBe("SIGTERM");
+  await h.advance(1_000);
+  expect(h.tunnels[0]!.signals).not.toContain("SIGKILL");
+  // The reload is still draining that tunnel; the tick escalates it all the same.
+  await h.advance(1_000);
+  expect(h.tunnels[0]!.signals.at(-1)).toBe("SIGKILL");
+  expect(h.tunnels[0]!.signals.filter(signal => signal === "SIGKILL")).toHaveLength(1);
+  opts.stubborn = false;
+  h.tunnels[0]!.exit(137);
+  await reload;
+  expect(h.supervisor.status()).toEqual([]);
+});

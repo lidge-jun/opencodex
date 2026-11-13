@@ -249,6 +249,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const states = new Map<string, TunnelState>();
   /** stopAt/killed: a failed link's child the tick stopped, kept until its exit is seen. */
   const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number; stopAt?: number; killed?: boolean }>();
+  /** One-route children a stop sent SIGTERM and is awaiting; the tick sends SIGKILL after the grace. */
+  const draining = new Set<{ child: SshChild; stopAt: number; killed: boolean }>();
   /** Per-link generation, advanced by spawns and explicit stop/removal reservations. */
   const generations = new Map<string, number>();
   /** The process-unique connection name of each link's current ssh child, minted at spawn. */
@@ -632,6 +634,12 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     if (stopping) return;
     // Route deadlines run even while lifecycle work is pending, so a stuck reload cannot stretch a probe.
     for (const record of store.links) if (rounds.isMultiRoute(record) && !holds.has(record.id)) rounds.tick(record.id);
+    // So does the SIGKILL for a one-route child a stop is draining: a reload never waits on an ssh that ignores SIGTERM.
+    for (const drain of draining) {
+      if (drain.killed || now() - drain.stopAt < CANDIDATE_KILL_GRACE_MS) continue;
+      drain.killed = true;
+      try { drain.child.kill("SIGKILL"); } catch { /* already gone */ }
+    }
     if (lifecycleFlight) return;
     const current = now();
     tickOrphanWatches(current);
@@ -725,7 +733,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     const generation = generations.get(linkId);
     children.delete(linkId);
     current.child.kill("SIGTERM");
-    await current.child.exited;
+    // A child the tick already stopped keeps its stop time and its SIGKILL.
+    const drain = { child: current.child, stopAt: current.stopAt ?? now(), killed: current.killed === true };
+    draining.add(drain);
+    try { await current.child.exited; } finally { draining.delete(drain); }
     conditionalRemovePidfile(linkId, current.child.pid);
     // A stop or removal reservation made while this child exited owns the next state.
     if (generations.get(linkId) === generation) put(linkId, IDLE);
