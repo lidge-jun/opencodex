@@ -22,7 +22,7 @@ function fixture() {
     config: { port: 18274, providers: {}, apiKeys: [] }, version: "test", deps: {
       readLinkStore: () => store, writeLinkStore: (next: LinkStore) => { store = next; }, revokeApiKey: () => true,
     } } as unknown as ManagementContext;
-  const state = { pendingHosts: new Map(), supervisor: { stopLink: async () => {}, reload: async () => {} }, listener: { close: async () => {} } } as unknown as LinkRouteState;
+  const state = { pendingHosts: new Map(), supervisor: { stopLink: async () => {}, reload: async () => {} }, listener: { close: async () => {}, ensureStarted: async () => {}, status: () => ({ state: "listening" }) } } as unknown as LinkRouteState;
   return { ctx, state, record, store: () => store };
 }
 function preserved() {

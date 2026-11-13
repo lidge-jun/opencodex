@@ -1314,7 +1314,9 @@ export async function disconnectClient(
 }> {
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   if (!options.expectedOwner) {
-    const drained = drainLoneNativeIntentOriginals(deps.lifecycleLockDeps);
+    // It restores config-root switches under the lifecycle lock, so it admits after overlapping
+    // config-root ACL work like both phases below (#7815).
+    const drained = await withConfigDirHardeningSettled(getConfigDir(), () => drainLoneNativeIntentOriginals(deps.lifecycleLockDeps));
     if (drained) return drained;
   }
   const keepCatalog = options.keepCatalog === true;

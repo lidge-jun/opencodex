@@ -98,13 +98,15 @@ describe("explicit forced link revoke", () => {
     expect(output).not.toHaveBeenCalled(); expect(errors.mock.calls.flat().join(" ")).not.toContain("private-canary");
   });
   test("real owner force removes only local link/key without an SSH attempt; retry is unverified", async () => {
-    const cfg: OcxConfig = { port: 15100, defaultProvider: "fixture", providers: {}, runtimeRole: "hub", apiKeys: [] };
+    // The link's issued key is listed, as in a real Home; revoking removes it.
+    const cfg = { port: 15100, defaultProvider: "fixture", providers: {}, runtimeRole: "hub", apiKeys: [{ id: "fixture-key" }] } as unknown as OcxConfig;
+    // A stored Home-initiated record always carries its confirmed host key; the retirement journal validates it.
     let store: LinkStore = { version: 1, listenerPort: 18181, links: [{ id: ID, alias: "fixture-peer", direction: "hub-initiated",
-      tunnelPort: 19200, apiKeyId: "fixture-key", createdAt: "2026-10-01T00:00:00.000Z" }] };
+      hostKeyFingerprint: "SHA256:" + "A".repeat(43), tunnelPort: 19200, apiKeyId: "fixture-key", createdAt: "2026-10-01T00:00:00.000Z" }] };
     const events: string[] = [];
     const owner: ManagementApiDeps = {
       readLinkStore: () => store, writeLinkStore: next => { store = next; events.push("store"); },
-      revokeApiKey: (_cfg, id) => { expect(id).toBe("fixture-key"); events.push("revoke"); return true; },
+      revokeApiKey: (_cfg, id) => { expect(id).toBe("fixture-key"); events.push("revoke"); cfg.apiKeys = (cfg.apiKeys ?? []).filter(key => key.id !== id); return true; },
       linkKnownHostsPath: () => home.path("known_hosts"),
       linkSupervisor: () => ({ start() {}, ensureStarted: async () => {}, reload: async () => {}, stop: async () => {},
         stopLink: async id => { expect(id).toBe(ID); events.push("stop"); }, status: () => [] }),
