@@ -1,4 +1,5 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { clearComboSelectionState, getCombo, noteComboSuccess, pickComboTarget, targetKey } from "../../src/combos";
 import { clampComboCallerEffort, comboCapabilityGate, type ComboTargetRouter } from "../../src/combos/request-capability";
 import { normalizeComboConfig } from "../../src/combos/types";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -76,6 +77,35 @@ describe("combo capabilityPolicy: request filtering", () => {
     expect(gate.eligible(first)).toBe(true);
     expect(comboCapabilityGate(cfg, union, imageBody, () => undefined).eligible(first)).toBe(true);
   });
+});
+
+describe("combo capabilityPolicy: selection under each strategy", () => {
+  afterEach(() => clearComboSelectionState());
+
+  for (const strategy of ["failover", "round-robin"] as const) {
+    test(`${strategy} never picks a member unable to take the image, and still uses it for text`, () => {
+      const cfg = config({
+        visionSidecar: { enabled: false },
+        providers: {
+          sub: { ...textOnly, apiKey: "k", models: ["text-model"], liveModels: false },
+          key: { ...vision, apiKey: "k", models: ["vision-model"], liveModels: false },
+        },
+        combos: { u: { strategy, capabilityPolicy: "union", targets: [{ provider: "sub", model: "text-model" }, { provider: "key", model: "vision-model" }] } },
+      });
+      const combo = getCombo(cfg, "u")!;
+      const picks = (body: unknown) => {
+        const gate = comboCapabilityGate(cfg, combo, body, router(cfg));
+        return Array.from({ length: 4 }, () => {
+          const pick = pickComboTarget(cfg, "u", { eligible: gate.eligible })!;
+          noteComboSuccess("u", combo, pick.target);
+          return targetKey(pick.target);
+        });
+      };
+      expect(new Set(picks(imageBody))).toEqual(new Set(["key/vision-model"]));
+      clearComboSelectionState();
+      expect(picks(textBody)).toContain("sub/text-model");
+    });
+  }
 });
 
 describe("combo capabilityPolicy: effort clamp", () => {

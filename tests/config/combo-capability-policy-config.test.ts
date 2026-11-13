@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { comboConfigIssues } from "../../src/combos";
-import { saveConfig } from "../../src/config";
+import { getConfigPath, saveConfig } from "../../src/config";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
@@ -74,9 +74,19 @@ describe("combo capabilityPolicy config", () => {
     await comboApi(config, "PUT", { id: "u", combo: { targets, strategy: "round-robin" } });
     expect(config.combos?.u).toMatchObject({ strategy: "round-robin", capabilityPolicy: "union", onUnservable: "reject" });
 
+    // A combo created with both defaults spelled out stores neither key and echoes neither.
+    const plain = await comboApi(config, "PUT", { id: "plain", combo: { targets, capabilityPolicy: "intersection", onUnservable: "degrade" } });
+    expect(plain.combo).not.toHaveProperty("capabilityPolicy");
+    expect(plain.combo).not.toHaveProperty("onUnservable");
+    expect(config.combos?.plain).not.toHaveProperty("capabilityPolicy");
+    expect(config.combos?.plain).not.toHaveProperty("onUnservable");
+
     // Explicit defaults clear the stored keys instead of pinning them.
     await comboApi(config, "PUT", { id: "u", combo: { targets, capabilityPolicy: "intersection", onUnservable: "degrade" } });
     expect(config.combos?.u).not.toHaveProperty("capabilityPolicy");
     expect(config.combos?.u).not.toHaveProperty("onUnservable");
+    const onDisk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(onDisk.combos?.u).not.toHaveProperty("capabilityPolicy");
+    expect(onDisk.combos?.plain).not.toHaveProperty("onUnservable");
   });
 });
