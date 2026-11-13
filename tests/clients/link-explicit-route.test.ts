@@ -229,6 +229,18 @@ test("the supervisor starts an exclusive link's tunnel over its explicit route",
   expect(argv.at(-1)).toBe("pen-7f3a9c");
 });
 
+test("the supervisor's tunnel and link status use the identity file of a keyed route (O7)", () => {
+  const KEY = "/home/hub/.ssh/goat_hub_ed25519";
+  const keyed = { ...ROUTE, identityFile: KEY };
+  const argv = startedTunnel([record({ explicitRoute: keyed, exclusive: true })]);
+  expect({ only: options(argv, "IdentitiesOnly"), agent: options(argv, "IdentityAgent"), file: options(argv, "IdentityFile") }).toEqual({ only: ["yes"], agent: ["none"], file: [KEY] });
+  // The path is not a secret: link status names it, and the CLI accepts it.
+  const value: LinkStore = { version: 1, listenerPort: 19001, links: [record({ explicitRoute: keyed, exclusive: true })] };
+  const dto = projectLinkStatus(value, [], { state: "listening", port: 19001 }, { runtimeRole: "hub" }, { version: 1, entries: {} });
+  expect(dto.links[0]).toMatchObject({ explicitRoute: keyed });
+  expect(validateStatus(JSON.parse(JSON.stringify(dto))).links[0]).toMatchObject({ explicitRoute: keyed });
+});
+
 test("the supervisor starts a link without an explicit route exactly as before", () => {
   const argv = startedTunnel([record()]);
   expect(options(argv, "ProxyCommand")).toEqual([]);
