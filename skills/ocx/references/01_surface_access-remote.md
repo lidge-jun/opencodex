@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 50.
+Declared capabilities: 51.
 
 ### `ocx link probe`
 
@@ -160,6 +160,32 @@ State-changing: yes. JSON mode: `envelope`.
 - Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.
 - If forced cleanup was needed, run ocx disconnect on the remote client. No new enrollment, SSH trust or credential action is implied.
 
+### `ocx link recover`
+
+Usage: `ocx link recover (--link-id <id> | --operation-id <id>) [--json] | --list [--json] | --forget --link-id <id> --yes [--json]`
+
+Clean an ephemeral Child that a forced revoke or an interrupted enrollment left behind.
+
+State-changing: yes. JSON mode: `envelope`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/recover` |
+| GET | `/api/link/recover` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Force-revoked ephemeral link whose tombstone names the machine; exactly one of --link-id or --operation-id. |
+| `--operation-id` | string | Link operation whose journal entry names the machine; needs the link operation journal. |
+| `--list` | boolean | List the forced revokes still waiting for cleanup (link id, alias, revokedAt); takes no other option. |
+| `--forget` | boolean | Drop the tombstone for --link-id without contacting its machine, for a machine gone for good; runs on the Home, refused while the link exists and from an agent or CI runner. |
+| `--yes` | boolean | Confirms --forget. |
+| `--json` | boolean | Emit the {linkId, outcome, purged} receipt, the {tombstones} list or the {linkId, outcome} forget answer as JSON. |
+
+- Runs the managed planted ocx-child's disconnect --purge --expect-link <id> over the link's alias with its pinned host key, never a sibling route. The Child restores only when its state and its CODEX_HOME ownership record both name that link.
+- Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; a residual one needs ocx-child detach on that machine.
+- A forced revoke of a Home-initiated ephemeral link writes the tombstone; a link that still exists answers link_present. Without a link operation journal, --operation-id answers operation_journal_unavailable.
+
 ### `ocx link reconnect`
 
 Usage: `ocx link reconnect --link-id <id> [--json]`
@@ -179,7 +205,8 @@ State-changing: yes. JSON mode: `envelope`.
 
 - Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.
 - A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.
-- Always emits {linkId} JSON.
+- A link that an unsettled journalled revoke keeps down (ocx link status: failed, reason revoke_unsettled) is refused with link_suspended (exit 5) and nothing is stopped; the message names the revoke's operation id and the next step (ocx link operations resolve, or first repeat a revoke the Home stopped during).
+- Emits {linkId} JSON when the tunnel was restarted.
 
 ### `ocx link cleanup`
 
@@ -984,7 +1011,7 @@ State-changing: no. JSON mode: `payload`.
 | `--operation-id` | string | Read one operation. |
 | `--json` | boolean | Emit {operations} or the one entry as JSON. |
 
-- Each entry names its reserved link and key ids, the intent and completion of every effect and its outcome: open, committed, failed_clean, residual (the Child may still hold an enrollment or a plant) or unknown. Committed and failed_clean entries stay 30 days; residual and unknown entries stay until resolved, then 30 days. Requires loopback admin authority on the Home.
+- Each entry names its reserved link and key ids, the intent and completion of every effect and its outcome: open, committed, failed_clean, residual (the Child may still hold an enrollment or a plant) or unknown. Committed and failed_clean entries stay 30 days; residual and unknown entries stay until resolved, then 30 days. Past 256 settled entries the oldest go early, never before a day plus the alias-lock wait, so a retry within a day replays its operation id; at 256 open or unresolved residual or unknown entries a new journalled operation is refused (operation_journal_full) until some are resolved, and so is one after 1024 operations settled within a day and three minutes. Requires loopback admin authority on the Home.
 
 ### `ocx link operations resolve`
 
@@ -1005,6 +1032,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the resolved entry as JSON. |
 
 - Changes nothing on the Child or in links.json: it records the resolution, and the entry's 30 days of retention start then. operation_not_resolvable (exit 5) for any other state, operation_not_found (exit 4). Requires loopback admin authority on the Home.
+- A journalled revoke that reached the Child and ended unknown, or that the Home stopped during (open), keeps that link's tunnel down across restarts (ocx link status: reason revoke_unsettled; ocx link reconnect: link_suspended). Resolving the revoke reloads the tunnels, so the link reconnects. An open revoke cannot be resolved: repeat it with the same --operation-id and the same --purge flag, then resolve it if it ends unknown.
 
 ### `ocx link activity clear`
 

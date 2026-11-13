@@ -261,6 +261,9 @@ function stateDetails(
   if (!status || status.state === "client-owned") {
     return { state: "idle", since: record.createdAt, reason: null };
   }
+  // An unsettled revoke keeps the tunnel down until it is resolved (src/link/operations-journal.ts, revokeSuspendsLink).
+  // It comes first: resolving it is the step to take, and an orphan of that link is reaped like any other meanwhile.
+  if (status.suspended) return { state: "failed", since: status.suspended.since, reason: "revoke_unsettled" };
   if (status.orphan === "orphan-unverified") {
     return { state: "failed", since: record.createdAt, reason: "stale tunnel may hold the port" };
   }

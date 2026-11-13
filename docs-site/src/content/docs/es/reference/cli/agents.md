@@ -101,9 +101,9 @@ ocx effort set --subagent -
 
 Status conserva los valores de límite de entorno de ejecución/almacenados existentes e informa de los valores no admitidos en `warnings` (una matriz vacía cuando no se admite ninguna). Las mismas advertencias aparecen en la salida humana y nombran el campo que se ignora con un comando de corrección. El estado nunca repara o reescribe esos valores. Un campo de subagente ignorado no elimina un límite principal válido. `ocx effort clear` limpia ambos límites mientras retiene la configuración de esfuerzo de inyección separada. Véase [Superficies de los subagentes](/es/guides/sub-agent-surface/) para las superficies de solicitud donde se aplican los límites.
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
-Administre el indicador de características Codex `multi_agent_v2` y el modo de superficie multiagente de tres estados. Estos funcionan localmente por defecto. `--live` utiliza el proxy de ejecución seleccionado sin respaldo local; ambos objetivos admiten `--json`. Vuelva a leer el estado en el mismo objetivo después de un cambio y distinga la configuración almacenada del comportamiento de la nueva sesión.
+Administre el indicador de características Codex `multi_agent_v2` y el modo de superficie multiagente. Estos funcionan localmente por defecto. `--live` utiliza el proxy de ejecución seleccionado sin respaldo local; ambos objetivos admiten `--json`. Vuelva a leer el estado en el mismo objetivo después de un cambio y distinga la configuración almacenada del comportamiento de la nueva sesión.
 
 | Subcomando | Medidas adoptadas |
 | --- | --- |
@@ -113,6 +113,7 @@ Administre el indicador de características Codex `multi_agent_v2` y el modo de 
 | `mode v1` | Forzar a todos los modelos a v1, deshabilitar v2 nativo y preservar el límite de subproceso activo. |
 | `mode default` | Respete los pines de superficie del modelo aguas arriba. |
 | `mode v2` | Forzar los modelos a v2 y preservar el límite de rosca activa. Con `keep-native-v1` desactivado, habilite la v2 nativa global; con ella, deshabilite la anulación global y use pines de catálogo. |
+| `mode v2-plaintext` | Asigna V2 mediante el catálogo con la anulación global desactivada y activa la entrega experimental de tareas en texto sin cifrar. Requiere `--acknowledge-plaintext-agent-messages`. |
 | `keep-native-v1 on\|off` | Bajo `mode v2`, mantenga los modelos nativos ChatGPT en v1 y los modelos enrutados en v2. Habilitarlo desactiva la anulación global de V2 antes de la sincronización del catálogo. |
 | `threads <n>` | Establezca el límite de hilo v1/v2 activo en un número entero de al menos 1. |
 | `mode-hint <text>` | Establezca la sugerencia de delegación proactiva (modo Ultra) para cada modelo y esfuerzo. |
@@ -132,7 +133,7 @@ El subcomando `mode` escribe `multiAgentMode` a la configuración opencodex y vu
 
 Codex resuelve una anulación global habilitada de `multi_agent_v2` antes del pin de catálogo del modelo seleccionado. Por lo tanto, el contrato híbrido `keep-native-v1` mantiene esa anulación global apagada; de lo contrario, una fila nativa estampada `v1` aún comenzaría en V2 y produciría tareas secundarias cifradas en el backend.
 
-`mode-hint` escribe `features.multi_agent_v2.multi_agent_mode_hint_text` en el `$CODEX_HOME/config.toml` de Codex incluso cuando `multi_agent_v2` está actualmente deshabilitado. El comando solo persiste la anulación; no habilita ni deshabilita la función, por lo que la sugerencia tiene efecto cuando una superficie coincidente Codex está activa. La sugerencia anula la política multiagente derivada de esfuerzo de codex-rs, por lo que cualquier modelo y cualquier esfuerzo de razonamiento recibe el mensaje de delegación proactiva. **no** cambia el esfuerzo de razonamiento en sí. Se rechaza un argumento faltante o un valor de solo espacio en blanco; solo `--clear` elimina la sugerencia. El modo Ultra **on** del panel de Subagents tiene una puerta más estricta: requiere que la función nativa esté habilitada con una superficie v2 explícita ( `ocx v2 mode v2` ); `ocx v2 on` por sí solo no satisface esa puerta del tablero.
+`mode-hint` escribe `features.multi_agent_v2.multi_agent_mode_hint_text` en el `$CODEX_HOME/config.toml` de Codex incluso cuando `multi_agent_v2` está actualmente deshabilitado. El comando solo persiste la anulación; no habilita ni deshabilita la función, por lo que la sugerencia tiene efecto cuando una superficie coincidente Codex está activa. La sugerencia anula la política multiagente derivada de esfuerzo de codex-rs, por lo que cualquier modelo y cualquier esfuerzo de razonamiento recibe el mensaje de delegación proactiva. **no** cambia el esfuerzo de razonamiento en sí. Se rechaza un argumento faltante o un valor de solo espacio en blanco; solo `--clear` elimina la sugerencia. El modo Ultra **on** del panel de Subagents tiene una puerta más estricta: requiere la función nativa habilitada con una superficie v2 explícita (`ocx v2 mode v2`) o `v2-plaintext`, que usa asignaciones del catálogo con la anulación global desactivada; `ocx v2 on` por sí solo no satisface esa puerta del tablero.
 
 <a id="explicit-v2-target-and-outcome"></a>
 

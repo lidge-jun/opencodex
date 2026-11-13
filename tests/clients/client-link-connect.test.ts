@@ -23,6 +23,7 @@ import { buildServiceShellCommand } from "../../src/service/definition";
 import { inspectOrphanServiceAdmission } from "../../src/client/orphan-token-recovery";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 const linkId = "lnk_0123456789abcdef";
 const key = `ocx_data_${"a".repeat(40)}`;
@@ -93,7 +94,10 @@ describe("client link connection contracts", () => {
     expect(chunk.every(byte => byte === 0)).toBe(true);
   });
 
-  async function withLinkHome(run: (home: string, codexHome: string) => Promise<void>): Promise<void> {
+  async function withLinkHome(
+    run: (home: string, codexHome: string) => Promise<void>,
+    removeTree: typeof removeTreeAfterBackgroundWork = removeTreeAfterBackgroundWork,
+  ): Promise<void> {
     const home = mkdtempSync(join(tmpdir(), "ocx-client-link-contract-"));
     const codexHome = mkdtempSync(join(tmpdir(), "ocx-client-link-contract-codex-"));
     const previousHome = process.env.OPENCODEX_HOME;
@@ -107,12 +111,14 @@ describe("client link connection contracts", () => {
     setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
     setIcaclsRunnerForTests(aclSuccess);
     setAsyncIcaclsRunnerForTests(async () => aclSuccess());
+    let runSucceeded = false;
     try {
       const config = getDefaultConfig();
       config.port = 10100;
       saveConfig(config);
       await run(home, codexHome);
       if (process.platform === "win32") expect(aclCalls).toBeGreaterThan(0);
+      runSucceeded = true;
     } finally {
       setIcaclsRunnerForTests(null);
       setAsyncIcaclsRunnerForTests(null);
@@ -121,9 +127,40 @@ describe("client link connection contracts", () => {
       else process.env.OPENCODEX_HOME = previousHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
-      rmSync(home, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
+      const cleanupErrors: unknown[] = [];
+      for (const path of [home, codexHome]) {
+        try { await removeTree(path); } catch (error) { cleanupErrors.push(error); }
+      }
+      // Keep the original body/assertion error when cleanup also fails.
+      if (runSucceeded && cleanupErrors.length > 0) throw cleanupErrors[0];
     }
+  }
+
+  for (const runFails of [false, true]) {
+    test(`link fixture cleanup attempts both removals after body ${runFails ? "failure" : "success"}`, async () => {
+      const previousHome = process.env.OPENCODEX_HOME, previousCodexHome = process.env.CODEX_HOME;
+      const bodyFailure = new Error("synthetic fixture body failure");
+      const cleanupFailure = new Error("synthetic first removal failure");
+      let homes: string[] = [];
+      const attempted: string[] = [];
+      try {
+        await expect(withLinkHome(async (home, codexHome) => {
+          homes = [home, codexHome];
+          if (runFails) throw bodyFailure;
+        }, async path => {
+          attempted.push(path);
+          if (path === homes[0]) throw cleanupFailure;
+          await removeTreeAfterBackgroundWork(path);
+        })).rejects.toBe(runFails ? bodyFailure : cleanupFailure);
+        expect(attempted).toEqual(homes);
+        expect(process.env.OPENCODEX_HOME).toBe(previousHome);
+        expect(process.env.CODEX_HOME).toBe(previousCodexHome);
+        expect(existsSync(homes[0]!)).toBe(true);
+        expect(existsSync(homes[1]!)).toBe(false);
+      } finally {
+        for (const path of homes) if (existsSync(path)) await removeTreeAfterBackgroundWork(path);
+      }
+    });
   }
 
   function linkOptions() {
@@ -778,16 +815,7 @@ describe("client link connection contracts", () => {
   });
 
   test("connects through the link credential strategy without issuing a hub key", async () => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-client-link-connect-"));
-    const codexHome = mkdtempSync(join(tmpdir(), "ocx-client-link-codex-"));
-    const previousHome = process.env.OPENCODEX_HOME;
-    const previousCodexHome = process.env.CODEX_HOME;
-    process.env.OPENCODEX_HOME = home;
-    process.env.CODEX_HOME = codexHome;
-    try {
-      const config = getDefaultConfig();
-      config.port = 10100;
-      saveConfig(config);
+    await withLinkHome(async (home, codexHome) => {
       writeFileSync(join(codexHome, "config.toml"), 'model_provider = "openai"\n');
       const calls: Array<{ url: string; key?: string }> = [];
       const fetchImpl: typeof fetch = async (input, init = {}) => {
@@ -829,13 +857,6 @@ describe("client link connection contracts", () => {
       expect(calls[0]?.key).toBe(key);
       expect(calls[1]?.key).toBe(key);
       expect(calls.some(call => call.url.includes("/api/keys"))).toBe(false);
-    } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = previousCodexHome;
-      rmSync(home, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
-    }
+    });
   });
 });

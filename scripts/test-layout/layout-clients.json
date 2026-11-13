@@ -195,6 +195,7 @@
   "link-ocx-child-conformance.test.ts": "clients",
   "link-ephemeral-child-discovery.test.ts": "clients",
   "link-enrollment-ephemeral-child.test.ts": "server",
+  "link-recover.test.ts": "server",
   "link-ocx-child-e2e.test.ts": "clients",
   "link-child-plant-foundations.test.ts": "clients",
   "link-gated-ocx-argv.test.ts": "clients",
@@ -231,6 +232,7 @@
   "link-ws-relay.test.ts": "clients",
   "link-ws-fallback.test.ts": "clients",
   "link-ws-child-home.test.ts": "e2e-style",
+  "link-ws-child-status.test.ts": "clients",
   "link-explicit-route.test.ts": "clients",
   "link-explicit-route-paths.test.ts": "clients",
   "link-route-edit-exclusive.test.ts": "server",
@@ -242,5 +244,6 @@
   "link-revoke-operation.test.ts": "server",
   "link-operations-routes.test.ts": "server",
   "cli-link-operation.test.ts": "cli",
-  "link-operations-journal.test.ts": "clients"
+  "link-operations-journal.test.ts": "clients",
+  "link-revoke-suspend.test.ts": "clients"
 }

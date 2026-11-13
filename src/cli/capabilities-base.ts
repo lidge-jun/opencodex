@@ -87,6 +87,16 @@ export const CAPABILITIES: readonly Capability[] = [
     usage: "ocx link revoke --link-id <id> [--force --yes] [--operation-id <id>] [--json]",
   },
   {
+    command: ["link","recover"],
+    summary: "Clean an ephemeral Child that a forced revoke or an interrupted enrollment left behind.",
+    routes: [{"method":"POST","path":"/api/link/recover"},{"method":"GET","path":"/api/link/recover"}],
+    flags: [{"name":"--link-id","value":"string","summary":"Force-revoked ephemeral link whose tombstone names the machine; exactly one of --link-id or --operation-id."},{"name":"--operation-id","value":"string","summary":"Link operation whose journal entry names the machine; needs the link operation journal."},{"name":"--list","value":"boolean","summary":"List the forced revokes still waiting for cleanup (link id, alias, revokedAt); takes no other option."},{"name":"--forget","value":"boolean","summary":"Drop the tombstone for --link-id without contacting its machine, for a machine gone for good; runs on the Home, refused while the link exists and from an agent or CI runner."},{"name":"--yes","value":"boolean","summary":"Confirms --forget."},{"name":"--json","value":"boolean","summary":"Emit the {linkId, outcome, purged} receipt, the {tombstones} list or the {linkId, outcome} forget answer as JSON."}],
+    mutates: true,
+    json: "envelope",
+    usage: "ocx link recover (--link-id <id> | --operation-id <id>) [--json] | --list [--json] | --forget --link-id <id> --yes [--json]",
+    details: ["Runs the managed planted ocx-child's disconnect --purge --expect-link <id> over the link's alias with its pinned host key, never a sibling route. The Child restores only when its state and its CODEX_HOME ownership record both name that link.","Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; a residual one needs ocx-child detach on that machine.","A forced revoke of a Home-initiated ephemeral link writes the tombstone; a link that still exists answers link_present. Without a link operation journal, --operation-id answers operation_journal_unavailable."],
+  },
+  {
     command: ["link","reconnect"],
     summary: "Restart a Home-initiated link's SSH tunnel now.",
     routes: [{"method":"POST","path":"/api/link/{id}/reconnect"}],
@@ -94,7 +104,7 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "envelope",
     usage: "ocx link reconnect --link-id <id> [--json]",
-    details: ["Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.","A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.","Always emits {linkId} JSON."],
+    details: ["Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.","A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.","A link that an unsettled journalled revoke keeps down (ocx link status: failed, reason revoke_unsettled) is refused with link_suspended (exit 5) and nothing is stopped; the message names the revoke's operation id and the next step (ocx link operations resolve, or first repeat a revoke the Home stopped during).","Emits {linkId} JSON when the tunnel was restarted."],
   },
   {
     command: ["link","cleanup"],

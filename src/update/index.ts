@@ -9,7 +9,7 @@ import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
 import { decidePostStopUpdate } from "./stop-decision.mjs";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getConfigDir, getConfigPath, loadConfig } from "../config";
 import { runConfigPreflight } from "./config-preflight";
 import { readPid, readRuntimePort, getRuntimePortPath } from "../config/process-state";
@@ -29,6 +29,7 @@ import type {
 } from "./install-detection.d.mts";
 import {
   pnpmOwnerInvocation,
+  pnpmOwnerEnvironment,
   readPnpmGlobalPackage,
   resolvePnpmGlobalOwner,
   runPnpmGlobalUpdate,
@@ -118,18 +119,19 @@ function runPnpmCandidate(
   capture = false,
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
   probeEnv: NodeJS.ProcessEnv = process.env,
+  owner?: PnpmGlobalOwner,
 ): { status: number | null; stdout?: string | null; stderr?: string | null } {
-  const invocation = pnpmInvocationForPath(commandPath, args);
+  const invocation = owner ? pnpmOwnerInvocation(owner, args, process.platform, probeEnv) : pnpmInvocationForPath(commandPath, args);
   if (!invocation) return { status: 1 };
-  return probeSpawn(invocation.file, invocation.args, {
+  return withPnpmCommandCwd(args, cwd => probeSpawn(invocation.file, invocation.args, {
     stdio: capture ? "pipe" : "ignore",
     encoding: "utf8",
     timeout: 20_000,
     windowsHide: true,
-    cwd: PNPM_READ_CWD,
-    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(probeEnv)),
+    cwd,
+    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(owner ? pnpmOwnerEnvironment(owner, probeEnv) : probeEnv)),
     ...invocation.options,
-  });
+  }));
 }
 
 /** Resolve the exact pnpm executable/group/bin that own this package. */
@@ -143,7 +145,8 @@ export function resolveCurrentPnpmGlobalOwner(
     packagePath: packageRoot(),
     commandPaths: deps.commandPaths ?? resolvePnpmCommands(),
     runningShimPath: runningPnpmShimPath(invoked),
-    runPnpm: (commandPath, args, capture) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env),
+    runPnpm: (commandPath, args, capture, owner) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env, owner),
+    env: deps.env ?? process.env,
   });
 }
 
@@ -167,7 +170,9 @@ export function runOwnedPnpm(
   capture: boolean,
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
-  authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? ""),
+  authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? "")
+    || (args[0] === "store" && args[1] === "path" && args.length === 3
+      && args[2]?.startsWith("--dir=") === true && isAbsolute(args[2].slice("--dir=".length))),
   session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence" | "noteUntrackedInstaller" | "confirmInstallerExit">,
   markerPath = join(getConfigDir(), "update-orchestrated.json"),
 ): { status: number | null; stdout?: string | null; stderr?: string | null; processTreeExited?: boolean } {
@@ -209,6 +214,7 @@ export function runOwnedPnpm(
 
 /** Re-read the owning group's active package and return its verified launcher. */
 export function resolvePnpmActiveLauncher(owner: PnpmGlobalOwner): string | null {
+  if (owner.globalStore && !Array.isArray(owner.virtualStoreDirs)) return null;
   const active = readPnpmGlobalPackage(
     PKG,
     (args, capture = false) => runOwnedPnpm(owner, args, capture),

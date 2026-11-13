@@ -166,7 +166,12 @@ export function startMachineListener(
   // Link mode only: Codex's upgrade is carried over the link only once the Child's release gate is
   // open and the Home advertised the feature; until then every upgrade keeps today's 426.
   const linkWebsocket = linkMode
-    ? createLinkWebsocketRelay({ tunnel: deps.linkTunnel, diagnostic: recordLinkDiagnostic, ...deps.linkWebsocket })
+    ? createLinkWebsocketRelay({
+      tunnel: deps.linkTunnel, diagnostic: recordLinkDiagnostic,
+      // D4: read once at start, like the rest of this listener's config.
+      optOut: () => config.linkResponsesWebsocketOptOut === true,
+      ...deps.linkWebsocket,
+    })
     : null;
   const linkIngress: LinkIngress | null = linkMode
     ? {
@@ -296,7 +301,9 @@ export function startMachineListener(
               undefined, sidecar === null ? linkHomeName(connection, () => null) : null)];
             attachLinkTraffic(status, id => childLinkTraffic.snapshot(id));
           }
-          return Response.json({ ...status, joinAvailable: false }, { headers: { "Cache-Control": "no-store" } });
+          // Opt-in (design 9.3): this Child's own link WebSocket counters.
+          const transport = url.searchParams.get("transport") === "1" && linkWebsocket ? { websocket: linkWebsocket.counters() } : {};
+          return Response.json({ ...status, joinAvailable: false, ...transport }, { headers: { "Cache-Control": "no-store" } });
         }
         return await handleMachineApi(req, url, connection, machineApiDeps) ?? json404(req);
       }
