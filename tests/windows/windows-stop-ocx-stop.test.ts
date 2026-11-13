@@ -88,6 +88,14 @@ describe("plain ocx stop on Windows: Part A holds the child stop", () => {
 
 describe("plain ocx stop on Windows: Part B after a stopped Part A", () => {
 
+  test("stopped WinSW and own wrapper: unknown and no POST", () => {
+    const run = runStop(undefined, undefined, { windowsPartAUnderOwnWrapper: true, windowsWinswStopped: true });
+    expect(run.urls).toEqual([]);
+    expect(run.calls.native).toBe(0);
+    expect(run.exitCode).toBe(1);
+    expect(run.summary).toMatchObject({ service: "state-unknown", proxy: "unknown", sharedTeardown: "skipped" });
+  });
+
   test("under this home's wrapper with nothing registered: unknown, no POST, no shared teardown", () => {
     // The real Part A refuses: this stop runs under this home's .cmd/.vbs wrapper and no
     // service is registered. Reading that as absent would stop the child and restore shared

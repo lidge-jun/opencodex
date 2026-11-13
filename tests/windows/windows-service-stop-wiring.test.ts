@@ -67,6 +67,16 @@ function machine(overrides: Partial<WindowsCheckedStopDeps> & { gate?: () => boo
 }
 
 describe("Part A through the caller wiring", () => {
+  test("WinSW registered and stopped still checks the caller's wrapper ancestry", async () => {
+    const under = entry(70, 30, "ocx.exe", "ocx stop", 6_000);
+    const fake = machine({ selfPid: 70, probeScheduler: () => ({ status: "absent" }),
+      probeWinsw: () => "stopped", extra: [under] });
+    setWindowsServiceStopHooksForTests({ liveDeps: () => fake.deps });
+    const result = await runWindowsServiceStopPartA();
+    expect(result.outcome).toBe("unknown");
+    expect(result.detail).toBe(UNDER_OWN_WRAPPER_DETAIL);
+    expect(result.changed).toBe(false);
+  });
   test("ends the bound wrappers with the live-style deps", async () => {
     const fake = machine();
     setWindowsServiceStopHooksForTests({ liveDeps: () => fake.deps });

@@ -257,7 +257,7 @@ export async function stopWindowsServiceChecked(
     }
 
     // Step 2: bind.
-    if (taskRegistered) {
+    if (taskRegistered || winswRegistered) {
       let processes = options.bindSnapshot ?? null;
       if (processes === null) {
         const snapshot = await runCapped(clock, C.enumeration, deps.enumerate);
@@ -267,7 +267,7 @@ export async function stopWindowsServiceChecked(
         processes = snapshot.value;
       }
       binding = bindWindowsStopWrappers({
-        ...bindContext, processes, taskRegistered: true, managerRegistered: true,
+        ...bindContext, processes, taskRegistered, managerRegistered: true,
         scheduleServicePid: schedulePid,
       });
     }

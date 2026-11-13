@@ -65,7 +65,9 @@ deepest first and carry pid, creation time, image and a SHA-256 digest of the co
 external effect is injected. It probes registration (2 s each). An unreadable answer is `unknown`
 with nothing changed. With nothing registered it enumerates once for a stray wrapper of a deleted
 task; an unreadable table or no wrapper is `absent`. With a task registered or a stray sweep
-running, it reads the Schedule host PID (2 s). Admission then compares the time left on the
+running, it reads the Schedule host PID (2 s). A WinSW-only registration also binds against a
+process enumeration, including when WinSW is stopped, so ancestry and stray-wrapper evidence
+are checked before a stop can be confirmed. Admission then compares the time left on the
 caller's deadline, which already excludes these first steps, with the worst case still to come,
 and returns `unverified-budget` without changing anything when it does not fit. It binds, ends
 the task (`schtasks /end`, 2 s) or stops WinSW (a
@@ -95,7 +97,7 @@ configured port.
 
 `src/service/windows-stop-budget.ts` holds the caps and the admission arithmetic. With default
 settings the minimum is 48.5 s for a guarded Task Scheduler stop, 56.5 s for a snapshotless one
-and 42.5 s for WinSW. Each includes the 0.5 s closing port sample that Part B can take past its
+and 50.5 s for WinSW. Each includes the 0.5 s closing port sample that Part B can take past its
 window.
 
 ## Callers

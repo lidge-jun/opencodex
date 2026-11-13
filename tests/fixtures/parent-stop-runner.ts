@@ -61,6 +61,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
    * no WinSW service registered, so the own-wrapper refusal has to answer for itself.
    */
   windowsPartAUnderOwnWrapper?: boolean;
+  windowsWinswStopped?: boolean;
   windowsPartAReject?: boolean;
 };
 if (options.proxyProbePort) {
@@ -335,7 +336,7 @@ if (options.windowsPartAUnderOwnWrapper) {
   (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
     liveDeps: () => ({
       canonicalPaths: PATHS, childPid: null, selfPid: process.pid,
-      probeScheduler: () => { calls.service++; return { status: "absent" }; }, probeWinsw: () => "nonexistent",
+      probeScheduler: () => { calls.service++; return { status: "absent" }; }, probeWinsw: () => options.windowsWinswStopped ? "stopped" : "nonexistent",
       enumerate: () => [launcher(), loop(), self],
       scheduleServicePid: () => null, endTask: () => unexpected("schtasks /end"), taskState: () => "not-running",
       winswStop: () => "sent", winswState: () => "stopped", proxyAlive: () => false,

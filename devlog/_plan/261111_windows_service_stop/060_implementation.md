@@ -99,5 +99,5 @@ PR2 wires every caller listed above; `structure/ops/windows-checked-stop.md` ("C
 ## Open questions
 
 - Is the closing-sample accounting acceptable, or should the hold be measured differently, for example by shortening the final enumeration to 4.5 s to keep 030's totals?
-- Should a WinSW-only stop also sweep a stray scheduler wrapper (that would add an enumeration and 3 s to the WinSW row)?
+- WinSW-only stops enumerate and bind wrappers as well; the WinSW row includes the enumeration and termination window.
 - `GetLastError` after a failed `OpenProcess` through Bun FFI separates "gone" from "denied". If the runtime clobbers it, the answer degrades to "unavailable" (`unknown`). The live x64 test in `tests/windows/windows-process-evidence.test.ts` checks this on the Windows CI lane.
