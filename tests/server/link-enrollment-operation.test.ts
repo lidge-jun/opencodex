@@ -135,7 +135,7 @@ function harness() {
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
-const digest = (extra: { plant?: boolean } = {}) => enrollOperationDigest({ alias: ALIAS, fingerprint, plant: extra.plant === true, route: { explicitRoute: null, exclusive: false }, requireEphemeral: false });
+const digest = () => enrollOperationDigest({ alias: ALIAS, fingerprint, route: { explicitRoute: null, exclusive: false }, requireEphemeral: false });
 
 describe("a live enrollment with an operation id", () => {
   test("reserves the ids before any effect, marks every Home effect, commits and replays without SSH", async () => {
@@ -166,7 +166,7 @@ describe("a live enrollment with an operation id", () => {
     const h = harness();
     await h.enroll();
     const calls = h.ssh.length;
-    for (const body of [{ alias: ALIAS, fingerprint, operationId: OP, plant: true }, { alias: ALIAS, fingerprint: "SHA256:zzzzzzzzzzzzzzzz", operationId: OP }]) {
+    for (const body of [{ alias: ALIAS, fingerprint, operationId: OP, requireEphemeral: true }, { alias: ALIAS, fingerprint: "SHA256:zzzzzzzzzzzzzzzz", operationId: OP }, { alias: ALIAS, fingerprint, operationId: OP, exclusive: true }]) {
       const refused = await h.call("apply", body);
       expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "operation_mismatch" });
     }

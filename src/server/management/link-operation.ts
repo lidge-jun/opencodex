@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { AliasLockError, withAliasLock } from "../../link/alias-lock";
 import type { ExplicitRoute } from "../../link/explicit-route";
-import { findOperation, hasEffect, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, updateOperationsJournal,
+import { findOperation, hasEffect, isOperationId, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
   type EnrollEffect, type LinkOperation, type OperationState, type RevokeEffect } from "../../link/operations-journal";
 import { newLinkId } from "../../link/store";
 import type { ManagementContext } from "./context";
@@ -26,8 +26,12 @@ export function journalPathFor(ctx: ManagementContext): string {
 const nowOf = (ctx: ManagementContext) => (ctx.deps.now ?? Date.now)();
 const iso = (ctx: ManagementContext) => new Date(nowOf(ctx)).toISOString();
 
-export function enrollOperationDigest(params: { alias: string; fingerprint?: string; plant: boolean; route: RouteRequest; requireEphemeral: boolean }): string {
-  return operationDigest({ kind: "enroll", alias: params.alias, fingerprint: params.fingerprint ?? null, plant: params.plant,
+/**
+ * The parameters that name an enrollment. plant is left out: it follows from what the probe found, and a repeat
+ * replays without probing, so it cannot restate it.
+ */
+export function enrollOperationDigest(params: { alias: string; fingerprint?: string; route: RouteRequest; requireEphemeral: boolean }): string {
+  return operationDigest({ kind: "enroll", alias: params.alias, fingerprint: params.fingerprint ?? null,
     explicitRoute: params.route.explicitRoute, exclusive: params.route.exclusive, requireEphemeral: params.requireEphemeral });
 }
 
@@ -224,4 +228,36 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
       return Response.json({ ...body, ...outcomeBody(op), ...(op.state === "committed" && op.receipt ? { purged: true } : {}) }, { status: response.status, headers: response.headers });
     },
   };
+}
+
+/** GET /api/link/operations[/{id}] and POST /api/link/operations/{id}/resolve (structure/remote-link.md, "Operation journal"). */
+export function handleLinkOperationRoutes(ctx: ManagementContext): Response | null {
+  const { url, req } = ctx;
+  const read = () => readOperationsJournal(journalPathFor(ctx));
+  const headers = { "cache-control": "no-store" };
+  if (url.pathname === "/api/link/operations" && req.method === "GET") {
+    try { return Response.json({ operations: read().operations }, { headers }); } catch {
+      return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+    }
+  }
+  const one = /^\/api\/link\/operations\/([^/]+)(\/resolve)?$/.exec(url.pathname);
+  if (!one) return null;
+  let id: string;
+  try { id = decodeURIComponent(one[1]!); } catch { return fail("invalid_operation_id", "The operation id is invalid.", 400); }
+  if (!isOperationId(id)) return fail("invalid_operation_id", "The operation id is invalid.", 400);
+  if (!one[2] && req.method === "GET") {
+    let op: LinkOperation | undefined;
+    try { op = findOperation(read(), id); } catch { return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500); }
+    return op ? Response.json(op, { headers }) : fail("operation_not_found", "No operation has this id.", 404);
+  }
+  if (one[2] && req.method === "POST") {
+    let resolved: ReturnType<typeof resolveLinkOperation>;
+    try { resolved = resolveLinkOperation(journalPathFor(ctx), id, nowOf(ctx)); } catch {
+      return fail("operation_journal_failed", "The link operation journal could not be written.", 500);
+    }
+    if (resolved === null) return fail("operation_not_found", "No operation has this id.", 404);
+    if (resolved === "not_resolvable") return fail("operation_not_resolvable", "Only a residual or unknown operation can be resolved.", 409);
+    return Response.json(resolved, { headers });
+  }
+  return null;
 }

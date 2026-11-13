@@ -245,3 +245,20 @@ export function openEnrollmentFor(journal: OperationsJournal, alias: string, exc
   const wanted = alias.toLowerCase();
   return journal.operations.find(op => op.kind === "enroll" && op.state === "open" && op.operationId !== except && op.alias.toLowerCase() === wanted);
 }
+
+/**
+ * Mark a residual or unknown entry resolved: O5 proved the Child clean, or a person accepted the loss. Its 30 days
+ * of retention start now. An entry in any other state is not resolvable; a missing one is null.
+ */
+export function resolveLinkOperation(path: string, operationId: string, nowMs: number): LinkOperation | "not_resolvable" | null {
+  return updateOperationsJournal(path, nowMs, journal => {
+    const op = findOperation(journal, operationId);
+    if (!op) return null;
+    if (op.state !== "residual" && op.state !== "unknown") return "not_resolvable";
+    if (op.resolvedAt === undefined) {
+      op.resolvedAt = new Date(nowMs).toISOString();
+      op.updatedAt = op.resolvedAt;
+    }
+    return structuredClone(op);
+  });
+}

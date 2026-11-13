@@ -240,7 +240,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
   const resolveBinary = ctx.deps.resolveChildBinarySource ?? resolveChildBinarySource;
   // ocx link add --operation-id (structure/remote-link.md, "Operation journal"): replay, recovery and the reserved ids.
   const operation = typeof body.operationId === "string" ? { id: body.operationId, digest: enrollOperationDigest({ alias,
-    ...(typeof body.fingerprint === "string" ? { fingerprint: body.fingerprint } : {}), plant: body.plant === true, route: wanted, requireEphemeral: body.requireEphemeral === true }) } : null;
+    ...(typeof body.fingerprint === "string" ? { fingerprint: body.fingerprint } : {}), route: wanted, requireEphemeral: body.requireEphemeral === true }) } : null;
   return underAliasLock(ctx, alias, async () => {
   if (operation) {
     const replay = await replayOperation(ctx, state, operation, "enroll");

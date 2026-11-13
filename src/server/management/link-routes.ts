@@ -424,6 +424,13 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     if (denied) return denied;
     return issue(ctx);
   }
+  // Before the DELETE matcher, which would read "operations" as a link id.
+  if (path === "/api/link/operations" || path.startsWith("/api/link/operations/")) {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    const { handleLinkOperationRoutes } = await import("./link-operation");
+    return handleLinkOperationRoutes(ctx);
+  }
   // Before the reconnect and DELETE matchers, which would read "children" as a link id.
   if (path.startsWith("/api/link/children/")) {
     const { handleLinkChildOpsRoutes } = await import("./link-child-ops-routes");
