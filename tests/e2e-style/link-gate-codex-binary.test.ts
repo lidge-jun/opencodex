@@ -40,10 +40,16 @@ describe("the pinned Codex binary of the release gate: what is hashed is what ru
     root = mkdtempSync(join(tmpdir(), "ocx-gate-binary-"));
     const cwd = join(root, "work"); const onPath = join(root, "bin"); const scratch = join(root, "scratch");
     const hashed = fakeCodex(cwd);
-    fakeCodex(onPath);
+    // The codex on PATH has other bytes than the hashed file, so the digest tells the two apart. It is executable
+    // (0755) but never has to run: the gate must not reach it.
+    mkdirSync(onPath);
+    const onPathFile = join(onPath, NAME);
+    writeFileSync(onPathFile, "another codex on PATH, not the hashed one\n");
+    chmodSync(onPathFile, 0o755);
     mkdirSync(scratch);
     const prepared = preparePinnedCodex(NAME, { cwd, scratch })!;
     expect(prepared.digest).toBe(sha256(hashed));
+    expect(prepared.digest).not.toBe(sha256(onPathFile));
     // The executable that runs is the file the gate names (the copy of the hashed file), never the codex on PATH.
     expect(await whoRan(prepared.path, cwd, onPath)).toBe(realpathSync(resolve(cwd, prepared.path)));
     expect(isAbsolute(prepared.path)).toBe(true);
@@ -61,6 +67,22 @@ describe("the pinned Codex binary of the release gate: what is hashed is what ru
     expect(sha256(prepared.path)).toBe(prepared.digest);
     // The copy that runs is read-only.
     if (process.platform !== "win32") expect(statSync(prepared.path).mode & 0o222).toBe(0);
+  });
+
+  test("the copy never replaces an existing file: a second copy into the same scratch directory is refused", () => {
+    root = mkdtempSync(join(tmpdir(), "ocx-gate-binary-"));
+    const cwd = join(root, "work"); const scratch = join(root, "scratch");
+    const original = fakeCodex(cwd);
+    mkdirSync(scratch);
+    const prepared = preparePinnedCodex(original, { cwd, scratch })!;
+    // Writable again, so only the exclusive flag (not the copy's 0555 mode) can refuse the second copy.
+    chmodSync(prepared.path, 0o755);
+    writeFileSync(original, "other bytes for the second copy");
+    chmodSync(original, 0o755);
+    let refused: unknown = null;
+    try { preparePinnedCodex(original, { cwd, scratch }); } catch (error) { refused = error; }
+    expect((refused as NodeJS.ErrnoException | null)?.code).toBe("EEXIST");
+    expect(sha256(prepared.path)).toBe(prepared.digest);
   });
 
   test("a value that names no file is refused", () => {
