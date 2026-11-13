@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import {
   LinkApiError, parseRemoteLinkConfirmation, parseRemoteLinkStatus, readRuntimeHealth, requestLinkJson, waitForChildRuntime, type ChildRestartWaitDeps, type LinkCandidateView, type LinkConfirmHostView,
-  type LinkErrorCode, type LinkJoinDenied, type LinkProbeView, type LinkResidualStep, type LinkRowWire, type LinkWireState, type RemoteLinkStatusWire,
+  type LinkErrorCode, type LinkJoinDenied, type LinkProbeView, type LinkResidual, type LinkRowWire, type LinkWireState, type RemoteLinkStatusWire,
 } from "../remote-link-api";
 import { IconPlus, IconRefresh, IconTrash } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
@@ -151,25 +151,36 @@ function paritySynced(homeDigest: string | null, childDigest: string | null): bo
 }
 
 /**
- * The Child's recovery step for each residual variant. A single command is a chip ({cmd}); the full
- * install's step names two commands, which one Trans chip cannot hold, so it stays prose.
+ * The Child's recovery step for each residual variant, bound to the attempt's link id (src/link/residual-recovery.ts): every
+ * command carries --expect-link, so it leaves a Child that another link joined since. One command per chip ({cmd}); further
+ * lines name the bound rule and what a build older than the flag does. Without an id nothing can be bound.
  */
 const POSIX_PURGE = "~/.cache/opencodex/bin/ocx-child detach --purge";
 const WINDOWS_PURGE = '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge';
 // Where the plant puts the binary on a Windows Child without LOCALAPPDATA.
-const WINDOWS_FALLBACK = { key: "remoteLink.residual.purgeWindowsFallback", cmd: '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge' } as const;
-const RESIDUAL_STEP: Record<LinkResidualStep, LinkChildStep> = {
-  purge: { key: "remoteLink.residual.purge", cmd: POSIX_PURGE },
-  purgeWindows: { key: "remoteLink.residual.purgeWindows", cmd: WINDOWS_PURGE, more: [WINDOWS_FALLBACK] },
-  purgeAny: { key: "remoteLink.residual.purgeAny", cmd: POSIX_PURGE, more: [{ key: "remoteLink.residual.purgeAnyWindows", cmd: WINDOWS_PURGE }, WINDOWS_FALLBACK] },
-  ephemeral: { key: "remoteLink.residual.ephemeral", cmd: "ocx-child detach" },
-  full: { key: "remoteLink.residual.full" },
-  unknown: { key: "remoteLink.residual.unknown" },
-};
+const WINDOWS_FALLBACK_PURGE = '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge';
+function residualChildStep(residual: LinkResidual): LinkChildStep {
+  const id = residual.linkId;
+  if (id === null || residual.step === "noLink") return { key: "remoteLink.residual.noLink" };
+  const bound = (cmd: string) => cmd + " --expect-link " + id;
+  const vars = { linkId: id };
+  const boundLine = { key: "remoteLink.residual.bound", vars } as const;
+  const olderFull = { key: "remoteLink.residual.olderFull", cmd: "ocx connect status --json", vars } as const;
+  const olderLightweight = { key: "remoteLink.residual.olderLightweight" } as const;
+  const fallback = { key: "remoteLink.residual.purgeWindowsFallback", cmd: bound(WINDOWS_FALLBACK_PURGE) } as const;
+  switch (residual.step) {
+    case "purge": return { key: "remoteLink.residual.purge", cmd: bound(POSIX_PURGE), more: [boundLine] };
+    case "purgeWindows": return { key: "remoteLink.residual.purgeWindows", cmd: bound(WINDOWS_PURGE), more: [fallback, boundLine] };
+    case "purgeAny": return { key: "remoteLink.residual.purgeAny", cmd: bound(POSIX_PURGE), more: [{ key: "remoteLink.residual.purgeAnyWindows", cmd: bound(WINDOWS_PURGE) }, fallback, boundLine] };
+    case "ephemeral": return { key: "remoteLink.residual.ephemeral", cmd: bound("ocx-child detach"), more: [boundLine, olderLightweight] };
+    case "full": return { key: "remoteLink.residual.full", cmd: bound("ocx disconnect"), more: [boundLine, olderFull] };
+    case "unknown": return { key: "remoteLink.residual.unknown", cmd: bound("ocx disconnect"), more: [{ key: "remoteLink.residual.unknownLightweight", cmd: bound("ocx-child detach") }, boundLine, olderLightweight, olderFull] };
+  }
+}
 
 function linkActionError(error: unknown): LinkActionErrorView {
   if (!(error instanceof LinkApiError)) return { key: errorKey(error), hint: null };
-  return { key: errorKey(error), hint: error.hint, childStep: error.residual ? RESIDUAL_STEP[error.residual] : null };
+  return { key: errorKey(error), hint: error.hint, childStep: error.residual ? residualChildStep(error.residual) : null };
 }
 
 export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
