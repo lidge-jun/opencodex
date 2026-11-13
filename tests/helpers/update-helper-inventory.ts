@@ -56,7 +56,7 @@ export function helperControlInventory(parser?: API) {
       const visit = (node: ts.Node) => {
         if (ts.isCallExpression(node) && !["spawnFailure", "registrySpawnTarget"].includes(compact(node.expression))
           && !(ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "trim")
-          && (capabilityCalls.has(node) || /[sS]pawn|execFile|guardedRun|guardedRename|guardedKill|guardedExecFile|ownedArtifact|^native$|^operation$|(?:^|\.)kill$|^run$|^runPnpm$|^io\.(?:stop|start)$|^(?:removePid|removeRuntimePort|dropWindowsTcpRowsForLocalPort|stopWinswService|stopWindows|killWindowsSchedulerWrappers|stopWindowsTray)$|(?:^|\.)(?:rename(?:WithRetry)?|rm|unlink|writeFile|copyFile)(?:Sync)?$/.test(compact(node.expression)))) {
+          && (capabilityCalls.has(node) || /[sS]pawn|execFile|guardedRun|guardedRename|guardedKill|guardedExecFile|ownedArtifact|^native$|^operation$|(?:^|\.)kill$|^run$|^runPnpm$|^io\.(?:stop|start)$|^(?:removePid|removeRuntimePort|dropWindowsTcpRowsForLocalPort|stopWinswService|stopWindows|killWindowsSchedulerWrappers|runWindowsServiceStopPartA|stopWindowsTray)$|(?:^|\.)(?:rename(?:WithRetry)?|rm|unlink|writeFile|copyFile)(?:Sync)?$/.test(compact(node.expression)))) {
           let context = "<module>";
           for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
             if (ts.isFunctionDeclaration(p) && p.name) { context = p.name.text; break; }

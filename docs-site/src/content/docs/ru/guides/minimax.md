@@ -17,6 +17,11 @@ OpenCodex и подключите обратимую файловую интег
 
 ```bash
 ocx start
+```
+
+Оставьте прокси работать в этом терминале. Во втором терминале включите интеграцию и запустите MiniMax Code:
+
+```bash
 ocx integration client enable --client mcode
 ocx mcode
 ```

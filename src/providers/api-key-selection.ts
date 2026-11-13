@@ -10,32 +10,74 @@ import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, XAI_GROK_COMPATIBILITY, type OcxProviderTransport } from "./xai-transport";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 import { vertexEnvironmentKeyIsCurrent } from "./vertex-environment-authority";
+import { cacheAffinityApplies } from "./cache-affinity";
+import { currentCacheAffinityIdentity } from "./cache-affinity-identity";
 
 export { captureProviderApiKeySelection } from "./api-key-selection-capture";
 
-function matchesSelection(provider: OcxProviderConfig, expected: ProviderApiKeySelection): boolean {
-  if (expected.distributed) return provider.apiKeySelectionRevision === expected.revision
+export function affinitySelectionIsCurrent(name: string, provider: OcxProviderConfig, expected: ProviderApiKeySelection): boolean {
+  return !!expected.cacheAffinityGeneration && !!expected.entryId
+    && expected.cacheAffinityGeneration === currentCacheAffinityIdentity(name, provider, expected.entryId);
+}
+
+/** A stale affinity generation cannot authorize paced readmission onto another credential. */
+export function providerAffinityGenerationIsCurrent(config: OcxConfig, name: string, routed: OcxProviderConfig): boolean {
+  const selection = routed._apiKeyAttempt;
+  return !selection?.cacheAffinity || !!config.providers[name]
+    && affinitySelectionIsCurrent(name, config.providers[name]!, selection);
+}
+
+function matchesSelection(name: string, provider: OcxProviderConfig, expected: ProviderApiKeySelection): boolean {
+  if (expected.distributed && !expected.cacheAffinity) return provider.apiKeySelectionRevision === expected.revision
     && provider.requestPacing?.enabled === true && provider.requestPacing.keySelection === "round-robin"
     && !!provider.apiKeyPool?.some(entry => !entry.disabled && entry.id === expected.entryId && entry.key === expected.reference);
+  if (expected.cacheAffinity === true) {
+    // Affinity picks are fenced on credential/destination generation, not selection revision.
+    // commitProviderApiKeySelection bumps the revision on EVERY committed key
+    // change — automatic rotation included — so a revision fence cannot tell
+    // an operator's re-selection from another conversation's rotation, and
+    // telling them apart is not affinity's job: the conversation keeps its
+    // credential while its generation lives, and the provider's cacheAffinity mode
+    // is the operator's override. (Ordinary captured selections keep the
+    // revision fence below: a permit for the previously committed key must
+    // not dispatch after a manual replacement.)
+    return cacheAffinityApplies(provider) && affinitySelectionIsCurrent(name, provider, expected) && !!expected.entryId && !!expected.reference
+      && (provider.apiKeyPool ?? []).some(entry => !entry.disabled && entry.id === expected.entryId && entry.key === expected.reference);
+  }
   const current = captureProviderApiKeySelection(provider);
-  return current.entryId === expected.entryId && current.reference === expected.reference
-    && current.revision === expected.revision;
+  if (current.revision !== expected.revision) return false;
+  return current.entryId === expected.entryId && current.reference === expected.reference;
 }
 
 function currentKeyProvider(config: OcxConfig, name: string, selection?: ProviderApiKeySelection, allowCooling = false): OcxProviderConfig | null {
   const configured = config.providers[name];
   if (!configured || configured.disabled) return null;
+  if (selection?.cacheAffinity && !cacheAffinityApplies(configured)) return null;
+  if (selection?.cacheAffinity && !affinitySelectionIsCurrent(name, configured, selection)) return null;
   let row = configured;
   if (selection?.distributed) {
     const entry = configured.apiKeyPool?.find(key => key.id === selection.entryId && key.key === selection.reference);
-    if (!entry || entry.disabled || (!allowCooling && isKeyInCooldown(name, entry.id)) || configured.apiKeySelectionRevision !== selection.revision
+    if (!entry || entry.disabled || (!allowCooling && isKeyInCooldown(name, entry.id)) || (!selection.cacheAffinity && configured.apiKeySelectionRevision !== selection.revision)
       || !configured.requestPacing?.enabled || configured.requestPacing.keySelection !== "round-robin") return null;
     row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
+  }
+  else if (selection?.cacheAffinity && selection.entryId && selection.reference) {
+    // A request-captured pool selection (cache affinity picks one without
+    // committing it globally) survives this re-read while its generation is live:
+    // present with the captured key, enabled, and out of cooldown. It is
+    // deliberately NOT fenced on the selection revision — that revision bumps
+    // on every committed change, automatic rotation included, so it cannot
+    // supersede a pick whose whole purpose is to outlast committed movement.
+    // An invalidated captured pick cannot authorize a different credential.
+    const entry = configured.apiKeyPool?.find(key => key.id === selection.entryId && key.key === selection.reference);
+    if (entry && !entry.disabled && (allowCooling || !isKeyInCooldown(name, entry.id))) {
+      row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
+    } else return null;
   }
   const hasPausedActiveReference = row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
     && !row.apiKeyPool?.some(entry => !entry.disabled && entry.key === row.apiKey);
   if (hasPausedActiveReference || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
-  const current = routedProviderConfig(name, { ...row, _apiKeyAttempt: selection?.distributed ? selection : undefined });
+  const current = routedProviderConfig(name, { ...row, _apiKeyAttempt: row === configured ? undefined : selection });
   if (current.authMode === "oauth" || current.authMode === "forward") return null;
   if (current.authMode === "key" && !current.keyOptional && !current.apiKey?.trim()
     && !(current.adapter === "google" && current.googleMode === "vertex")) return null;
@@ -65,7 +107,7 @@ function matchesConfiguredSelection(
   const current = currentKeyProvider(config, name, expected, allowCooling);
   return current !== null && expected !== undefined
     && vertexEnvironmentKeyIsCurrent(expected, current)
-    && (expected.distributed === true || matchesSelection(config.providers[name]!, expected))
+    && (expected.distributed === true || matchesSelection(name, config.providers[name]!, expected))
     && current.apiKey === routedProvider.apiKey
     && current.authMode === routedProvider.authMode
     && current.baseUrl === routedProvider.baseUrl
@@ -83,7 +125,7 @@ export function resolveCurrentProviderApiKeyTransport(
   // A permit acquired for one key cannot authorize a different key after a manual edit.
   if (routedProvider.requestPacing?.enabled && routedProvider.requestPacing.keys
     && routedProvider._apiKeyAttempt && config.providers[name]
-    && !routedProvider._apiKeyAttempt.distributed && !matchesSelection(config.providers[name]!, routedProvider._apiKeyAttempt)) return null;
+    && !routedProvider._apiKeyAttempt.distributed && !matchesSelection(name, config.providers[name]!, routedProvider._apiKeyAttempt)) return null;
   const current = currentKeyProvider(config, name, routedProvider._apiKeyAttempt);
   if (!current) return null;
   const runtime = routedProvider as OcxProviderTransport;
@@ -122,7 +164,7 @@ export function commitProviderApiKeySelection<T>(
     if (!provider || provider.authMode === "oauth" || provider.authMode === "forward") {
       return { changed: false, value: { status: "unavailable" } };
     }
-    if (expectedSelection && !matchesSelection(provider, expectedSelection)) {
+    if (expectedSelection && !matchesSelection(name, provider, expectedSelection)) {
       return { changed: false, value: { status: "superseded", provider: structuredClone(provider) } };
     }
     const before = provider.apiKey;

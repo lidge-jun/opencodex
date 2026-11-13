@@ -1,5 +1,5 @@
 ---
-title: 子代理介面（v1 / base / v2）
+title: 子代理介面（v1 / base / v2 / v2-plaintext）
 description: 全域控制 Codex 在所有模型上生成和管理子代理的方式。
 ---
 
@@ -19,9 +19,10 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 
 | 模式 | 介面 | 行為 |
 | --- | --- | --- |
-| **v1** | `multi_agent_v1` | 使用經典的名稱空間代理工具，以及 `send_input` / `close_agent` / `resume_agent`。`spawn_agent` 的模型覆蓋可以在其他模型上生成子代理。 |
-| **base**（預設） | 上游固定值 | 恢復上游模型的固定值：gpt-5.6-sol、gpt-5.6-terra 和 gpt-6.1-terra 使用 v2，gpt-5.6-luna 使用 v1；未固定的模型遵循 Codex 的 `multi_agent_v2` 功能開關。生成行為取決於該模型最終使用的介面。 |
+| **v1**（全新安裝的預設值） | `multi_agent_v1` | 使用經典的名稱空間代理工具，以及 `send_input` / `close_agent` / `resume_agent`。`spawn_agent` 的模型覆蓋可以在其他模型上生成子代理。 |
+| **base** | 上游固定值 | 恢復上游模型的固定值：gpt-5.6-sol、gpt-5.6-terra 和 gpt-6.1-terra 使用 v2，gpt-5.6-luna 使用 v1；未固定的模型遵循 Codex 的 `multi_agent_v2` 功能開關。生成行為取決於該模型最終使用的介面。 |
 | **v2** | `multi_agent_v2` | 使用扁平的 `spawn_agent` 工具、併發會話，以及 `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`。全量歷史 fork 時子代理繼承父模型；`fork_turns: "none"`（或部分 fork）時接受 `model` / `reasoning_effort` 覆蓋。如果原生→路由子代理只收到後端加密的任務內容，未明確信任的外部路由會回傳 `unreadable_encrypted_agent_task`；明確信任的直接金鑰驗證 Responses 路由可以原樣接收，而混合組合仍優先選擇可解密的原生目標（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。 |
+| **v2-plaintext** | V2 | 為新工作階段選擇 V2、關閉全域強制，並以明文傳遞符合條件的工作。進入需要 `--acknowledge-plaintext-agent-messages`。 |
 
 ## 運作原理
 
@@ -29,6 +30,7 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 
 - **v1 模式**：強制所有條目使用 `multi_agent_version = "v1"`，覆蓋上游固定值。
 - **base 模式**：恢復上游預設值。已固定的模型使用快照值；未固定的模型不寫入該欄位，交由 Codex 功能開關決定。
+- **v2-plaintext 模式**：為新工作階段將所有目錄條目固定為 V2，關閉全域強制並啟用合格請求的明文編譯。
 - **v2 模式**：強制所有條目使用 `multi_agent_version = "v2"`，覆蓋上游固定值；但啟用 **讓 ChatGPT 保持 v1** 時例外：ChatGPT 原生條目維持 `"v1"`，路由/組合條目仍為 `"v2"`。
 
 無論是即時 `/v1/models` 目錄回應，還是磁碟目錄同步，這項覆蓋都會作為最後一步執行。因此，無論條目原本如何生成，新會話都會使用一致的模式。
@@ -149,11 +151,17 @@ opencodex 會安全失敗，而不是轉發空或無法讀取的任務：
 恢復此格式，但會消耗配額、增加延遲，並依賴非公開後端行為。任何失敗都保留原本的
 `unreadable_encrypted_agent_task` 錯誤。詳見[英文設定參考](/reference/configuration/agents/#encrypted-v2-task-recovery)。
 
+## 明文 v2 任務訊息
+
+新設定中的 `plaintextV2AgentMessages` 預設未設定。明確設為 `true` 或選擇 `v2-plaintext` 模式都會啟用編譯器；離開模式不會改變獨立的布林值。它只處理 Responses 呼叫，且最終目的地必須是標準 ChatGPT Codex forward 路徑：`adapter: "openai-responses"`、`authMode: "forward"` 和 `https://chatgpt.com/backend-api/codex`。OpenAI API 金鑰 provider、自訂閘道、其他最終 provider 及非 Responses 呼叫不受改寫。
+
+啟用後也會處理既有 V2 工作階段的後續合格請求；既有密文不會解密，已儲存歷史不會改寫，停用不會刪除已保留的副本。詳見[代理設定](/zh-tw/reference/configuration/agents/#plaintext-v2-agent-messages)。
+
 ## 更改模式
 
 ### GUI
 
-- **Dashboard** → 第一個狀態單元：選擇 **v1**、**base** 或 **v2**。
+- **Dashboard** → 第一個狀態單元：選擇 **v1**、**base**、**v2** 或 **v2-plaintext**；進入明文模式需要在 GUI 中確認。
 - **Models** 頁面 → 使用頂部的分段控制元件。
 - 兩個頁面都有 **?** 按鈕，可開啟幫助彈窗並返回本文。
 - **Dashboard** → **子代理委託**：選擇首選模型和可選的推理強度。在 v2 上，注入的指引會要求以 `fork_turns: "none"` 生成，使模型覆蓋得以應用。如果原生→路由子代理只收到加密任務內容，請使用原生目標、v1，或明確信任的直接金鑰驗證 Responses relay；其他僅外部目標的傳輸會明確回傳 `unreadable_encrypted_agent_task`（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。
@@ -164,6 +172,7 @@ opencodex 會安全失敗，而不是轉發空或無法讀取的任務：
 ocx v2 mode v1       # 強制所有模型使用 v1
 ocx v2 mode default  # 恢復上游固定值
 ocx v2 mode v2       # 強制所有模型使用 v2
+ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages # 選用明文任務
 ocx v2 status        # 顯示目前模式和 Codex 功能開關
 ```
 
@@ -179,7 +188,7 @@ curl -X PUT http://localhost:10100/api/v2 \
   -d '{"multiAgentMode": "v2"}'
 ```
 
-`/api/v2` 的 PUT 端點還接受 `enabled`（布林值，Codex 功能開關）和 `maxConcurrentThreadsPerSession`（整數）。它會驗證請求、儲存模式、重新同步目錄，並提示模式更改從新會話開始生效。
+首次進入 `v2-plaintext` 時，`PUT /api/v2` 必須同時提供 `plaintextAgentMessagesAcknowledged: true`。`/api/v2` 的 PUT 端點還接受 `enabled`（布林值，Codex 功能開關）和 `maxConcurrentThreadsPerSession`（整數）。它會驗證請求、儲存模式、重新同步目錄，並提示模式更改從新會話開始生效。
 
 委託選擇器使用另一個端點：
 
@@ -227,7 +236,7 @@ Codex 依 priority 從目錄填入最多五個列出位置。設定的模型少�
 
 ### 模式變更會影響執行中的工作階段嗎？
 
-不會。變更模式後請開啟新的 Codex 工作階段。若長時間執行的 App host 仍顯示過時的目錄狀態，請執行
+目錄介面選擇適用於新工作階段；但啟用明文編譯後，既有 V2 工作階段的後續合格請求也會受影響。變更目錄介面後請開啟新的 Codex 工作階段。若長時間執行的 App host 仍顯示過時的目錄狀態，請執行
 `ocx sync` 並重新啟動該 Codex 介面。
 
 ### 當 opencodex 無法信任目錄時會發生什麼？

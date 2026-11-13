@@ -124,12 +124,9 @@ ocx logout <provider>
 
 Google Antigravity 계정·제공자 할당량 확인은 모델 목록 폴백을 포함해 고정된 Google 회계 엔드포인트를 사용합니다. 해당 목적지의 투명 Fake-IP DNS를 지원하며 TLS 검증, 리다이렉트 거부, 사설 주소 검사는 유지합니다. 사용자 지정 base URL은 모델 요청에만 적용되며 할당량 목적지는 바꾸지 않습니다. `NO_PROXY`는 기존 직접 연결 정책을 유지합니다.
 
-Vertex AI의 `gemini-4-argon`에는 스크린샷 같은 도구 결과 이미지를 해당 함수 응답 안에 담아
-전송합니다. 이미지가 있는 도구 호출 뒤에 발생하는 400 오류
-"Requests ending with a model turn are not supported"를 방지하며 이미지를 보존합니다.
-중복된 결과나 일치하는 호출이 없는 결과의 이미지는 도구 응답 뒤의 별도 메시지로 보존하고,
-호출과 연결할 수 없었다는 표시를 남깁니다.
-별도의 설정 변경은 필요하지 않으며, 이 처리는 Vertex Argon에만 적용됩니다.
+Vertex AI의 `gemini-4-argon`, `gemini-4-carbon`, `gemini-4-hydrogen`은 스크린샷 같은 도구 결과 이미지를
+해당 함수 응답 안에 담아 받습니다. Vertex AI 모델 탐색, 자격 증명 규칙과 이 처리 방식은
+[Google Vertex AI](/ko/guides/google-vertex/)에 설명되어 있습니다.
 
 ### Google 도구 스키마 손실 진단
 

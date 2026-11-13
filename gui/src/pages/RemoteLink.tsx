@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import {
   LinkApiError, parseRemoteLinkConfirmation, parseRemoteLinkStatus, readRuntimeHealth, requestLinkJson, waitForChildRuntime, type ChildRestartWaitDeps, type LinkCandidateView, type LinkConfirmHostView,
-  type LinkErrorCode, type LinkJoinDenied, type LinkProbeView, type LinkRowWire, type LinkWireState, type RemoteLinkStatusWire,
+  type LinkErrorCode, type LinkJoinDenied, type LinkProbeView, type LinkResidualStep, type LinkRowWire, type LinkWireState, type RemoteLinkStatusWire,
 } from "../remote-link-api";
 import { IconPlus, IconRefresh, IconTrash } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
@@ -13,7 +13,7 @@ import { Banner, PageHeader, StateBadge } from "../components/v2-startup/primiti
 import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../components/v2-startup/remote-link-parts";
 import { RemoteLinkDisconnectDialog } from "./RemoteLinkDialogs";
 import { RemoteLinkDiagnostics } from "./RemoteLinkDiagnostics";
-import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView } from "./RemoteLinkSheet";
+import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView, type LinkChildStep } from "./RemoteLinkSheet";
 import { getChildJob, jobHoldsLink, type ChildJobView, type ChildOp } from "../remote-link-child-ops-api";
 import { ChildBulkBar, ChildJobProgress, ChildPolicyPanel, ChildRowActions, ChildRowBadges } from "./RemoteLinkChildActions";
 import "../styles-remote-link.css";
@@ -98,6 +98,11 @@ const ERROR_TKEY: Record<LinkErrorCode, TKey> = {
   standalone_required: "remoteLink.error.standalone_required",
   tailscale_session_refused: "remoteLink.error.tailscale_session_refused",
   version_probe_failed: "remoteLink.error.version_probe_failed",
+  link_pin_conflict: "remoteLink.error.link_pin_conflict",
+  host_key_changed: "remoteLink.error.host_key_changed",
+  trust_file_unexpected: "remoteLink.error.trust_file_unexpected",
+  key_cleanup_failed: "remoteLink.error.key_cleanup_failed",
+  link_cleanup_uncertain: "remoteLink.error.link_cleanup_uncertain",
 };
 const REASON_TKEY: Record<string, TKey> = {
   auth: "remoteLink.reason.auth",
@@ -144,7 +149,27 @@ function paritySynced(homeDigest: string | null, childDigest: string | null): bo
   return homeDigest !== null && childDigest !== null ? homeDigest === childDigest : null;
 }
 
-function linkActionError(error: unknown): LinkActionErrorView { return { key: errorKey(error), hint: error instanceof LinkApiError ? error.hint : null }; }
+/**
+ * The Child's recovery step for each residual variant. A single command is a chip ({cmd}); the full
+ * install's step names two commands, which one Trans chip cannot hold, so it stays prose.
+ */
+const POSIX_PURGE = "~/.cache/opencodex/bin/ocx-child detach --purge";
+const WINDOWS_PURGE = '"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --purge';
+// Where the plant puts the binary on a Windows Child without LOCALAPPDATA.
+const WINDOWS_FALLBACK = { key: "remoteLink.residual.purgeWindowsFallback", cmd: '"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --purge' } as const;
+const RESIDUAL_STEP: Record<LinkResidualStep, LinkChildStep> = {
+  purge: { key: "remoteLink.residual.purge", cmd: POSIX_PURGE },
+  purgeWindows: { key: "remoteLink.residual.purgeWindows", cmd: WINDOWS_PURGE, more: [WINDOWS_FALLBACK] },
+  purgeAny: { key: "remoteLink.residual.purgeAny", cmd: POSIX_PURGE, more: [{ key: "remoteLink.residual.purgeAnyWindows", cmd: WINDOWS_PURGE }, WINDOWS_FALLBACK] },
+  ephemeral: { key: "remoteLink.residual.ephemeral", cmd: "ocx-child detach" },
+  full: { key: "remoteLink.residual.full" },
+  unknown: { key: "remoteLink.residual.unknown" },
+};
+
+function linkActionError(error: unknown): LinkActionErrorView {
+  if (!(error instanceof LinkApiError)) return { key: errorKey(error), hint: null };
+  return { key: errorKey(error), hint: error.hint, childStep: error.residual ? RESIDUAL_STEP[error.residual] : null };
+}
 
 export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
   const t = useT();

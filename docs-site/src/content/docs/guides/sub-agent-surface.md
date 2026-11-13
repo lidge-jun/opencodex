@@ -165,9 +165,10 @@ developer item exists in that prefix. When guidance changes, leading tool protoc
 the replacement is inserted before current conversational input.
 
 These are instructions to the main agent, not a proxy-side spawn router. On v2, a full-history fork
-inherits the parent model and rejects model or effort overrides. Guidance therefore tells Codex to
-use `fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
-`reasoning_effort`, and to make the task message self-contained.
+inherits the parent model and rejects model or effort overrides. The generated guidance names the
+preferred model and roster but does not prescribe `fork_turns`; when you want that combination
+yourself, the spawn must set `fork_turns: "none"` (or a positive partial turn count such as `"3"`)
+alongside `model` or `reasoning_effort`, with a self-contained task message.
 
 Custom `injectionPrompt` text can use all four placeholders:
 
@@ -429,8 +430,7 @@ tier that Codex converts to `max`; opencodex then maps or clamps the value for t
 The model context cap is independent of sub-agent mode. Configure it on the Models page; native
 OpenAI models retain their real context windows.
 
-The experimental `plaintextV2AgentMessages` field is unset in a fresh config and runs only when set
-to `true`. The caller must use the Responses wire, and the final destination must use
+The experimental `plaintextV2AgentMessages` field is unset in a fresh config. Explicit `true` or the separately selected `v2-plaintext` mode enables the compiler. That mode also selects V2 for new chats without enabling the global override; leaving it preserves the independent field. Compilation follows the current setting on subsequent eligible requests, including existing V2 sessions. Existing ciphertext is not decrypted or stored history rewritten, and disabling does not delete retained copies. The caller must use the Responses wire, and the final destination must use
 `adapter: "openai-responses"`, `authMode: "forward"`, and the exact base URL
 `https://chatgpt.com/backend-api/codex`. OpenAI API-key providers, custom compatible gateways,
 routes to other providers, and non-Responses callers are excluded. For an eligible new native

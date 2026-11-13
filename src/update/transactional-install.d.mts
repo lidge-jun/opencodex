@@ -1,6 +1,8 @@
 export type InstallTreeVerification = { ok: boolean; failures: string[] };
 export function verifyInstallTree(packageDir: string, expectedVersion?: string): InstallTreeVerification;
-export function verifyPnpmInstallTree(packageDir: string, expectedVersion?: string): InstallTreeVerification;
+export function verifyPnpmInstallTree(packageDir: string, expectedVersion?: string, store?: string, globalRoot?: string, lexicalStore?: string): InstallTreeVerification;
+/** Classifies which proof is required; never accepts a package. Throws on an unreadable link chain. */
+export function pnpmPackageUsesGlobalStoreLinks(packageDir: string): boolean;
 export function bootRestoreProbe(
   packageDir: string,
   deps?: { rename?: (from: string, to: string) => void },

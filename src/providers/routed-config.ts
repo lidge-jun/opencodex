@@ -131,6 +131,7 @@ function snapshotVertexEnvironment(provider: OcxProviderConfig): OcxProviderConf
   };
 }
 
+/** Resolve registry defaults, destination capability maps, and credential snapshots for a provider row. */
 export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   provider = { ...provider, _apiKeyAttempt: provider._apiKeyAttempt ?? captureProviderApiKeySelection(provider) };
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
@@ -156,6 +157,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       ...provider,
       ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(destination?.modelReasoningEfforts ? {
+        modelReasoningEfforts: mapFill(destination.modelReasoningEfforts, provider.modelReasoningEfforts)[0],
+      } : {}),
       ...(destination?.modelDefaultReasoningEfforts ? {
         modelDefaultReasoningEfforts: mapFill(destination.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts)[0],
       } : {}),

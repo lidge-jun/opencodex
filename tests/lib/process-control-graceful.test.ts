@@ -5,6 +5,24 @@ function okResponse(): Response {
   return new Response(JSON.stringify({ success: true, sharedTeardown: "performed" }), { status: 200 });
 }
 
+/**
+ * A live process this test owns, for the pid-taking stop paths.
+ *
+ * `spawn("sleep", ...)` depends on a POSIX `sleep` on PATH and, worse, waits forever when
+ * the spawn itself fails: the `spawn` event never fires and the `error` event is unhandled.
+ * The runtime's own binary is always present, and a failed start now rejects instead of
+ * hanging the suite.
+ */
+async function spawnIdleChild(): Promise<import("node:child_process").ChildProcess> {
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], { stdio: "ignore" });
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", () => resolve());
+    child.once("error", reject);
+  });
+  return child;
+}
+
 describe("gracefulStopHost", () => {
   test("loopback aliases and wildcard binds answer on IPv4 loopback", () => {
     for (const host of [undefined, "", "  ", "localhost", "LOCALHOST", "127.0.0.1", "0.0.0.0", "::", "[::]"]) {
@@ -351,6 +369,97 @@ describe("409 refusal reporting", () => {
     expect((thrown as ProxyOwnershipRefusedError).code).toBe("respawnable_service");
     // The server's own message still wins, unchanged.
     expect((thrown as ProxyOwnershipRefusedError).message).toBe("wrapper owns it");
+  });
+
+  test("a caller that forbids the forced fallback never reaches the kill ladder", async () => {
+    // #7771 round 7 (B): uninstall's proxy step runs after a Part A that did not prove the
+    // manager stopped. The graceful POST is still worth sending; taskkill /T /F under a
+    // wrapper that could respawn the proxy is exactly what the checked stop prevents.
+    //
+    // The pid is a real live process this test owns, and the ladder is injected: the rule
+    // is "was the ladder entered", which a mock of the whole stop could not show.
+    const child = await spawnIdleChild();
+    const failing = (async () => new Response("nope", { status: 500 })) as typeof fetch;
+    try {
+      const forbidden: number[] = [];
+      const unconfirmed = await stopProxy(child.pid!, {
+        readRuntime: () => null, fetchFn: failing, waitExit: () => true, env: {},
+        allowForcedFallback: false, forceKill: pid => { forbidden.push(pid); },
+      });
+      expect(unconfirmed).toBe(false);
+      expect(forbidden).toEqual([]);
+
+      // Default behaviour is unchanged: an unconfirmed graceful stop still falls back.
+      const fallback: number[] = [];
+      await stopProxy(child.pid!, {
+        readRuntime: () => null, fetchFn: failing, waitExit: () => true, env: {},
+        forceKill: pid => { fallback.push(pid); },
+      });
+      expect(fallback).toEqual([child.pid!]);
+
+      // A 409 refusal is never forced, with or without the option.
+      for (const allowForcedFallback of [true, false]) {
+        const refused: number[] = [];
+        await expect(stopProxy(child.pid!, {
+          readRuntime: () => ({ port: 10100 }),
+          fetchFn: (async () => new Response(
+            JSON.stringify({ success: false, code: "respawnable_service", message: "wrapper owns it" }),
+            { status: 409, headers: { "content-type": "application/json" } },
+          )) as typeof fetch,
+          waitExit: () => true, env: {}, allowForcedFallback,
+          forceKill: pid => { refused.push(pid); },
+        })).rejects.toBeInstanceOf(ProxyOwnershipRefusedError);
+        expect(refused).toEqual([]);
+      }
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  test("a forbidden fallback's port wait never kills a verified listener", async () => {
+    // #7771 round 8: `waitForStoppedPort` reclaimed the port with `killOcxHolders` and
+    // `onlyKillPids: [pid]` even when the caller had forbidden the forced ladder. A
+    // verified-but-still-live listener was then killed through `killProxy` — the forced
+    // stop the caller had just refused. The wait is observational in that mode: it runs,
+    // it just may not terminate anything.
+    const { reclaimListenPort } = await import("../../src/server/port-reclaim");
+    const child = await spawnIdleChild();
+    const kills: number[] = [];
+    const pid = child.pid!;
+    const reclaimed: unknown[] = [];
+    const unconfirmed = await stopProxy(pid, {
+      runtimeEndpoint: { hostname: "127.0.0.1", port: 45999 },
+      fetchFn: (async () => new Response("nope", { status: 500 })) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+      allowForcedFallback: false,
+      forceKill: target => { kills.push(target); },
+      reclaimPort: async (port, hostname, opts) => {
+        reclaimed.push({ port, hostname, killOcxHolders: opts.killOcxHolders, onlyKillPids: opts.onlyKillPids });
+        return reclaimListenPort(port, hostname, {
+          ...opts,
+          timeoutMs: 30,
+          intervalMs: 5,
+          scanIntervalMs: 0,
+          sleepMs: async () => {},
+          isAvailableFn: async () => false,
+          listListenPidsFn: () => ({ ok: true, pids: [pid] }),
+          isAliveFn: () => true,
+          verifyOcxFn: candidate => candidate,
+          killFn: target => { kills.push(target); },
+          dropTcpFn: () => {},
+        });
+      },
+    });
+    try {
+      expect(unconfirmed).toBe(false);
+      // The wait ran against the resolved endpoint (it is not silently skipped)...
+      expect(reclaimed).toEqual([{ port: 45999, hostname: "127.0.0.1", killOcxHolders: false, onlyKillPids: [] }]);
+      // ...and a verified listener that was still alive survived it.
+      expect(kills).toEqual([]);
+    } finally {
+      child.kill("SIGKILL");
+    }
   });
 
   test("no next step sends the operator back to the command that just refused", () => {
