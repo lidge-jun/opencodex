@@ -605,6 +605,17 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     expect(performance.now() - startedAt).toBeLessThan(1_500);
   });
 
+  test("a prefix shared by absent self-overlapping credentials keeps the rest of a terminal", () => {
+    // Every self-overlapping credential started a full scan at its 8-character prefix, present or
+    // not, so ten keys sharing "sk-proj-" exhausted the budget and blanked an ordinary message.
+    const headers = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`x-api-key-${i}`, `sk-proj-${i}-abcdefghijklmnop-s`]));
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers);
+    const message = `sk-proj- is a project key prefix. ${"ordinary text ".repeat(12_000)}END-OF-MESSAGE`;
+    const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message } } };
+    const out = rewrite(`event: response.failed\ndata: ${JSON.stringify(failed)}`).join("\n");
+    expect([out.includes("is a project key prefix"), out.includes("END-OF-MESSAGE")]).toEqual([true, true]);
+  });
+
   test("classifying an untyped envelope stays linear in its message size", () => {
     // Pattern redaction of the full message rescanned an unterminated line from every multipart
     // candidate, so a 176 KB message stalled the boundary for seconds.

@@ -232,17 +232,19 @@ function markSubstringSpans(text: string, substrings: Iterable<string>, initial:
         selfOverlapping = hasBorder(secret);
         bordered.set(secret, selfOverlapping);
       }
+      budget.steps -= secret.length;
+      if (budget.steps < 0) return covered.fill(1);
+      if (!text.startsWith(secret, at)) continue;
       if (selfOverlapping) {
-        // A self-overlapping secret is found from here on by one Knuth-Morris-Pratt scan.
+        // A confirmed self-overlapping secret is found from here on by one Knuth-Morris-Pratt scan,
+        // so a prefix shared by many secrets that are absent never starts a scan.
         scanned.add(secret);
         budget.steps -= n - at + secret.length;
         if (budget.steps < 0) return covered.fill(1);
         markOverlappingOccurrences(text, secret, at, covered);
         continue;
       }
-      budget.steps -= secret.length;
-      if (budget.steps < 0) return covered.fill(1);
-      if (text.startsWith(secret, at)) covered.fill(1, at, at + secret.length);
+      covered.fill(1, at, at + secret.length);
     }
   }
   return covered;
