@@ -859,7 +859,8 @@ export function resolveAntigravityEffortWireModel(
   if (effortMap) {
     const suffixTiered = ANTIGRAVITY_SUFFIX_TIER_MODELS.has(modelId);
     // Normalize FIRST for suffix-tiered models. The discovery path clamps max/xhigh/ultra to
-    // `high` before its own lookup, so a static path that skipped the clamp answered `medium`
+    // `high` for a family without a discovered xhigh tier (a family that has one selects it, see
+    // ANTIGRAVITY_ABOVE_HIGH_EFFORTS), so a static path that skipped the clamp answered `medium`
     // for the same request: one input, two tiers, decided by whether discovery happened to run.
     const requested = suffixTiered && effort
       ? resolveAntigravityThinkingLevel(effort) ?? effort
