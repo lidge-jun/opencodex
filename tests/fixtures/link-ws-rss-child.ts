@@ -7,10 +7,11 @@
  * reset the high-water mark to the current RSS, and arm the settle check), "peak", "stop".
  *
  * The stall is the Child's own. For the WebSocket, every link leg toward Codex has paused its Home leg (more than 1 MiB
- * waits toward Codex; the relay's onDownlinkPause seam). A leg that ends never reports "resumed", so the fixture also
- * counts the relay's releases (onReleased): the idle reading waits for the warm-up socket's release (30 s at most, else
- * the run is invalid), and a release after it and before the stall is announced reports the run invalid, so a dead leg
- * can never count as a held one. For HTTP, every relayed response waits for its reader
+ * waits toward Codex; the relay's onDownlinkPause seam). A paused leg that ends reports "resumed" as it finishes, which
+ * drops the count; the fixture also counts the relay's releases (onReleased, once a leg's Home connection has closed and
+ * its slot is freed): the idle reading waits for the warm-up socket's release (30 s at most, else the run is invalid),
+ * and a release after it and before the stall is announced reports the run invalid, so a load that lost a leg can never
+ * settle. For HTTP, every relayed response waits for its reader
  * (setLinkChildRelayWaitObserverForTests, #8680): the reader holds a chunk and the relay may hold one more queued, since
  * the relay reads one Home chunk ahead. The observer reports every relayed response, management reads included, so the
  * fixture counts every transition from the start: the idle reading reports how many waits are open (the test requires
