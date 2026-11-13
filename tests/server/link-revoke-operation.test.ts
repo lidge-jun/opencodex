@@ -40,7 +40,7 @@ function record(): LinkRecord {
     createdAt: "2026-11-13T00:00:00.000Z", remotePlatform: "posix", childKind: "ephemeral", explicitRoute: ROUTE, exclusive: true };
 }
 
-function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void } = {}) {
+function harness(options: { operationsPath?: () => string | undefined; onReload?: () => void; purgeReport?: string; lockWaitMs?: number; sleep?: (ms: number) => Promise<void>; gate?: Promise<void>; onRun?: () => void } = {}) {
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: [{ id: "link-key", name: "link:" + ALIAS, key: "k", createdAt: "2026-11-13T00:00:00Z" }] };
   const journalPath = join(root, "operations.json");
@@ -49,7 +49,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   const state: LinkRouteState = {
     pendingHosts: new Map(), confirmedHosts: new Map(), operations: new Set(),
     listener: { ensureStarted: async () => {}, status: () => ({ state: "listening", port: 18181, reason: null }), close: async () => {}, onAuthenticatedCatalog: () => () => {} },
-    supervisor: { start() {}, ensureStarted: async () => {}, reload: async () => {}, stopLink: async () => {}, reconnect: async () => true, status: () => [], stop: async () => {} },
+    supervisor: { start() {}, ensureStarted: async () => {}, reload: async () => { options.onReload?.(); }, stopLink: async () => {}, reconnect: async () => true, status: () => [], stop: async () => {} },
   };
   const runner: SshRunner = {
     async run(argv) {
@@ -64,7 +64,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   const deps: ManagementContext["deps"] = {
     now: () => NOW, sshRunner: runner,
     readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
-    linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => journalPath,
+    linkKnownHostsPath: () => join(root, "known_hosts"), linkOperationsPath: () => options.operationsPath?.() ?? journalPath,
     linkAliasLock: { lockDir: join(root, "locks"), waitMs: options.lockWaitMs ?? 0, pollMs: 250, now: () => NOW, ...(options.sleep ? { sleep: options.sleep } : {}) },
     revokeApiKey: (cfg, id) => { const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
   };
@@ -233,7 +233,7 @@ test("a journalled revoke whose cleanup failed after its commit finishes that cl
 test("a journalled revoke interrupted after its record removal finishes its retirement before replaying committed", async () => {
   const h = harness();
   // The process died between the record removal and the post-commit cleanup: the receipt and the open entry remain.
-  claimLinkRetirement(record(), root, () => h.store, "force");
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
   h.store = { ...h.store, links: [] };
   const at = new Date(NOW).toISOString();
   writeOperationsJournal(h.journalPath, { version: 1, operations: [{
@@ -264,7 +264,7 @@ test("a retry of an interrupted removal with another cleanup mode is refused bef
 test("a journalled revoke that died after claiming its receipt, with the link still listed, finishes and settles committed", async () => {
   const h = harness();
   // The process died between the receipt claim and the key revoke: the record, the key and the receipt remain.
-  claimLinkRetirement(record(), root, () => h.store, "force");
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
   const at = new Date(NOW).toISOString();
   writeOperationsJournal(h.journalPath, { version: 1, operations: [{
     operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
@@ -295,7 +295,7 @@ test("a resolved unknown revoke whose cleanup then finishes on repeat settles co
 
 test("a recorded revoke does not resume its retirement while a Child job holds the link", async () => {
   const h = harness();
-  claimLinkRetirement(record(), root, () => h.store, "force");
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
   const at = new Date(NOW).toISOString();
   writeOperationsJournal(h.journalPath, { version: 1, operations: [{
     operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
@@ -310,4 +310,44 @@ test("a recorded revoke does not resume its retirement while a Child job holds t
   const after = await h.revoke({ force: true, operationId: OP });
   expect({ status: after.status, outcome: after.body.outcome }).toEqual({ status: 200, outcome: "committed" });
   expect(h.store.links).toEqual([]);
+});
+
+test("a recorded purge does not finish another removal's receipt and is not credited with it", async () => {
+  // The purge's Child never reported purged:true, so it is unknown and the link stays.
+  const h = harness({ purgeReport: '{"restored":true,"outcome":"Restored","daemonRunning":false}\n' });
+  expect((await h.revoke({ purge: true, operationId: OP })).body.outcome).toBe("unknown");
+  // A later forced removal under another operation claimed its receipt and died before removing the record.
+  claimLinkRetirement(record(), root, () => h.store, "force", "other-op");
+  const ssh = h.ssh.length;
+  const replayed = await h.revoke({ purge: true, operationId: OP });
+  expect({ status: replayed.status, outcome: replayed.body.outcome }).toEqual({ status: 502, outcome: "unknown" });
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  expect(h.config.apiKeys?.map(key => key.id)).toEqual(["link-key"]);
+  expect(readLinkRetirement(LINK, root)?.operationId).toBe("other-op");
+  expect(h.ssh.length).toBe(ssh);
+});
+
+test("a resumed retirement settles its entry before clearing the receipt, so a failed settle is resumed again", async () => {
+  // The journal becomes unwritable after the commit and its cleanup (at the tunnel reload), before the settle.
+  let broken = false;
+  writeFileSync(join(root, "not-a-dir"), "");
+  const h = harness({ operationsPath: () => broken ? join(root, "not-a-dir", "operations.json") : undefined, onReload: () => { broken = true; } });
+  claimLinkRetirement(record(), root, () => h.store, "force", OP);
+  h.store = { ...h.store, links: [] };
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{
+    operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "unknown", finishedAt: at, error: { code: "link_remove_failed", status: 503 },
+    effects: [{ effect: "key_revoked", phase: "intent", at }, { effect: "key_revoked", phase: "done", at }, { effect: "record_removed", phase: "intent", at }],
+  } as LinkOperation] });
+  const failed = await h.revoke({ force: true, operationId: OP });
+  expect({ status: failed.status, code: code(failed) }).toEqual({ status: 500, code: "operation_journal_failed" });
+  expect(readLinkRetirement(LINK, root)).not.toBeNull();
+  expect(h.journal().operations[0]!.state).toBe("unknown");
+  broken = false;
+  const h2 = harness();
+  h2.store = { ...h2.store, links: [] };
+  const again = await h2.revoke({ force: true, operationId: OP });
+  expect({ status: again.status, outcome: again.body.outcome }).toEqual({ status: 200, outcome: "committed" });
+  expect(readLinkRetirement(LINK, root)).toBeNull();
 });

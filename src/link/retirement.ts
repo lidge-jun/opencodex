@@ -7,11 +7,16 @@ import { getConfigDir } from "../config/paths";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir } from "../lib/windows-secret-acl";
 import { linkDir, linkStorePath } from "./paths";
+import { isOperationId } from "./operations-journal";
 import { parseLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
 
 /** How the removal that claimed the receipt cleaned up its Child before the commit: a retry must ask for the same. */
 export type LinkRetirementMode = "force" | "disconnect" | "purge";
-export interface LinkRetirement { version: 1; link: LinkRecord; nonce: string; mode?: LinkRetirementMode }
+/**
+ * operationId names the journalled revoke that claimed the receipt: only that operation's replay resumes it (#8416),
+ * so a recorded revoke is never credited with, or skips its own cleanup through, another removal's receipt.
+ */
+export interface LinkRetirement { version: 1; link: LinkRecord; nonce: string; mode?: LinkRetirementMode; operationId?: string }
 export class LinkRetirementError extends Error {
   constructor(message: string) { super(message); this.name = "LinkRetirementError"; }
 }
@@ -27,16 +32,19 @@ function parse(text: string, id: string): LinkRetirement {
   try { raw = JSON.parse(text); } catch { throw new LinkRetirementError("invalid retirement JSON"); }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new LinkRetirementError("invalid retirement record");
   const value = raw as Record<string, unknown>;
-  const keys = Object.keys(value).sort().join(",");
-  if ((keys !== "link,nonce,version" && keys !== "link,mode,nonce,version") || value.version !== 1 || typeof value.nonce !== "string" || !NONCE.test(value.nonce)
-    || (value.mode !== undefined && value.mode !== "force" && value.mode !== "disconnect" && value.mode !== "purge")) {
+  const keys = Object.keys(value);
+  const allowed = new Set(["version", "link", "nonce", "mode", "operationId"]);
+  if (keys.some(key => !allowed.has(key)) || !("link" in value) || value.version !== 1 || typeof value.nonce !== "string" || !NONCE.test(value.nonce)
+    || (value.mode !== undefined && value.mode !== "force" && value.mode !== "disconnect" && value.mode !== "purge")
+    || (value.operationId !== undefined && !isOperationId(value.operationId))) {
     throw new LinkRetirementError("invalid retirement record");
   }
   let link: LinkRecord;
   try { link = parseLinkStore(JSON.stringify({ version: 1, listenerPort: null, links: [value.link] })).links[0]!; }
   catch { throw new LinkRetirementError("invalid retirement link"); }
   if (link.id !== id) throw new LinkRetirementError("retirement id mismatch");
-  return { version: 1, link, nonce: value.nonce, ...(value.mode === undefined ? {} : { mode: value.mode as LinkRetirementMode }) };
+  return { version: 1, link, nonce: value.nonce, ...(value.mode === undefined ? {} : { mode: value.mode as LinkRetirementMode }),
+    ...(value.operationId === undefined ? {} : { operationId: value.operationId as string }) };
 }
 function sameLink(a: LinkRecord, b: LinkRecord): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -49,8 +57,8 @@ export function readLinkRetirement(id: string, configDir: string = getConfigDir(
   return parse(text, id);
 }
 /** Claims only the still-current full link. A competing or damaged receipt is never replaced. */
-export function claimLinkRetirement(link: LinkRecord, configDir: string = getConfigDir(), readStore?: () => LinkStore, mode?: LinkRetirementMode): LinkRetirement {
-  const candidate = parse(JSON.stringify({ version: 1, link, nonce: randomBytes(32).toString("hex"), ...(mode ? { mode } : {}) }), link.id);
+export function claimLinkRetirement(link: LinkRecord, configDir: string = getConfigDir(), readStore?: () => LinkStore, mode?: LinkRetirementMode, operationId?: string): LinkRetirement {
+  const candidate = parse(JSON.stringify({ version: 1, link, nonce: randomBytes(32).toString("hex"), ...(mode ? { mode } : {}), ...(operationId ? { operationId } : {}) }), link.id);
   assertNotRealHomeUnderTest(configDir);
   return withConfigMutationLockSync(() => {
     const path = pathFor(candidate.link.id, configDir);

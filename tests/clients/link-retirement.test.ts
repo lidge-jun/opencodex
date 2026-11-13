@@ -103,3 +103,17 @@ test("corrupt or mismatched records refuse reads, claims and clears without chan
   }
   expect(() => readLinkRetirement("../escape", dir)).toThrow(LinkRetirementError);
 });
+
+test("a receipt keeps the operation that claimed it, refuses a malformed one, and still reads without one", () => {
+  const dir = setup();
+  const receipt = claimLinkRetirement(link, dir, undefined, "purge", "detach-0001");
+  expect(readLinkRetirement(link.id, dir)).toEqual({ ...receipt, mode: "purge", operationId: "detach-0001" });
+  const stored = JSON.parse(readFileSync(receiptPath(dir), "utf8")) as Record<string, unknown>;
+  writeFileSync(receiptPath(dir), JSON.stringify({ ...stored, operationId: "bad id with spaces" }));
+  expect(() => readLinkRetirement(link.id, dir)).toThrow(LinkRetirementError);
+  writeFileSync(receiptPath(dir), JSON.stringify({ ...stored, operationId: "detach-0001", extra: true }));
+  expect(() => readLinkRetirement(link.id, dir)).toThrow(LinkRetirementError);
+  const { mode: _mode, operationId: _operationId, ...legacy } = stored;
+  writeFileSync(receiptPath(dir), JSON.stringify(legacy));
+  expect(readLinkRetirement(link.id, dir)).toEqual({ version: 1, link, nonce: receipt.nonce });
+});

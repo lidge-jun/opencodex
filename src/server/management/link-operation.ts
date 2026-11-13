@@ -197,15 +197,23 @@ export function settleRevokeAfterRetirement(ctx: ManagementContext, operationId:
  * The journal of a recorded revoke resuming its interrupted retirement (#8416): the resumed key revoke and record
  * removal are marked on that same entry, so a crash after the resumed removal still settles it as committed.
  * Used only while the link record is present, so a record another removal already took is never credited here.
+ * The entry settles before the receipt is cleared: a crash between them leaves the receipt for the next repeat to
+ * resume, never a finished removal whose entry stays unknown with nothing left to resume.
  */
-export function resumedRevokeJournal(ctx: ManagementContext, operationId: string): RevokeJournal {
+export function resumedRevokeJournal(ctx: ManagementContext, operationId: string, markEffects: boolean): RevokeJournal {
   const mark = (effect: RevokeEffect, phase: "intent" | "done") => updateOperationsJournal(journalPathFor(ctx), nowOf(ctx), journal => {
+    if (!markEffects) return;
     const op = findOperation(journal, operationId);
     if (!op) throw new Error("the revoke operation is no longer journalled");
     op.effects.push({ effect, phase, at: iso(ctx) });
     op.updatedAt = iso(ctx);
   });
-  return { intent: effect => mark(effect, "intent"), done: effect => mark(effect, "done"), finish: async response => response };
+  return {
+    operationId,
+    intent: effect => mark(effect, "intent"), done: effect => mark(effect, "done"),
+    beforeReceiptCleared: () => settleRevokeAfterRetirement(ctx, operationId),
+    finish: async response => response,
+  };
 }
 
 export interface EnrollJournal {
@@ -271,9 +279,13 @@ export function revokeOperationDigest(params: { linkId: string; purge: boolean; 
 }
 
 export interface RevokeJournal {
+  /** The journalled revoke this removal runs under; its retirement receipt names it. */
+  readonly operationId?: string;
   intent(effect: RevokeEffect): void;
   /** remote_cleanup done with the Child's purged:true for this link id records the receipt. */
   done(effect: RevokeEffect, receipt?: { purged: true; linkId: string }): void;
+  /** Runs after the post-commit cleanup and before the retirement receipt is cleared; a throw keeps the receipt. */
+  beforeReceiptCleared?(): void;
   finish(response: Response): Promise<Response>;
 }
 
@@ -291,6 +303,7 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
     op.updatedAt = iso(ctx);
   });
   return {
+    operationId: request.id,
     intent: effect => change(op => { op.effects.push({ effect, phase: "intent", at: iso(ctx) }); }),
     done: (effect, receipt) => change(op => { op.effects.push({ effect, phase: "done", at: iso(ctx) }); if (receipt) op.receipt = receipt; }),
     async finish(response) {
