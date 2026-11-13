@@ -96,11 +96,14 @@ export const OPERATION_REPLAY_MIN_MS = 24 * 60 * 60 * 1000;
  */
 export const OPERATION_PRUNE_FLOOR_MS = OPERATION_REPLAY_MIN_MS + ALIAS_LOCK_WAIT_MS + 60_000;
 /**
- * At this many entries settled within OPERATION_PRUNE_FLOOR_MS a new operation is refused until the oldest is older: a
- * burst no working fleet reaches (ten machines run a handful of operations each), so a runaway loop that retries with a
- * fresh id after each failure is held for at most a day instead of locking the Home out for 30 days. With the three
- * bounds the file holds about 256 unsettled plus 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at
- * most about 1.5 MiB in such a burst, so every whole-file rewrite under the config mutation lock stays small.
+ * At this many entries settled within OPERATION_PRUNE_FLOOR_MS (a day and three minutes) a new operation is refused until
+ * the oldest is older. That is a throughput limit as much as a runaway guard: a burst of 1024, and about 42 journalled
+ * operations per hour sustained (1024 / 24.05 h). Churn, not machine count, decides whether it is reached: ten disposable
+ * machines that each live ten minutes make about 120 add and revoke operations per hour and reach it in about 8.5 hours,
+ * then wait for entries to age out. A runaway loop that retries with a fresh id after each failure is held for at most
+ * that window instead of locking the Home out for 30 days. With the three bounds the file holds about 256 unsettled plus
+ * 256 older settled entries (about 0.5 MiB at roughly 1 KiB each), and at most about 1.5 MiB at the limit, so every
+ * whole-file rewrite under the config mutation lock stays small.
  */
 export const OPERATION_JOURNAL_MAX_RECENT_SETTLED = 1024;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
