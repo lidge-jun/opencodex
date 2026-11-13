@@ -24,7 +24,7 @@ import { readManagementJsonBodyOr } from "./body";
 import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
-import { journalPathFor, NO_REVOKE_JOURNAL, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
+import { journalInUse, journalPathFor, NO_REVOKE_JOURNAL, openRevokeConflict, openRevokeJournal, replayOperation, revokeOperationDigest, underAliasLock, type RevokeJournal } from "./link-operation";
 import { findOperation, isOperationId, readOperationsJournal } from "../../link/operations-journal";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -224,7 +224,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
     try { recordedAlias = findOperation(readOperationsJournal(journalPathFor(ctx)), operation.id)?.alias; } catch {
       return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
     }
-    if (recordedAlias !== undefined) return underAliasLock(ctx, recordedAlias, async () => (await replayOperation(ctx, state, operation, "revoke"))!);
+    if (recordedAlias !== undefined) return underAliasLock(ctx, recordedAlias, true, async () => (await replayOperation(ctx, state, operation, "revoke"))!);
   }
   const current = readStoreFor(ctx);
   const record = current.links.find(link => link.id === id);
@@ -238,11 +238,13 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   if (!releaseLink) return fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409);
   try {
     // Enrollment and revoke of one alias are serialized: a force revoke cannot run between a purge and its receipt.
-    return await underAliasLock(ctx, record.alias, async () => {
+    return await underAliasLock(ctx, record.alias, operation !== null || journalInUse(ctx), async () => {
       if (operation) {
         const replay = await replayOperation(ctx, state, operation, "revoke");
         if (replay) return replay;
       }
+      const open = openRevokeConflict(ctx, id, operation?.id);
+      if (open) return open;
       const fresh = readStoreFor(ctx).links.find(link => link.id === id);
       if (!fresh) return fail("link_not_found", "The link was not found.", 404);
       let journal: RevokeJournal = NO_REVOKE_JOURNAL;

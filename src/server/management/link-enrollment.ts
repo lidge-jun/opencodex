@@ -16,7 +16,7 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
 import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
-import { enrollOperationDigest, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
+import { enrollOperationDigest, journalInUse, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
 import { isOperationId } from "../../link/operations-journal";
 import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason, childHealthRefusalHint, childRoleRefusalHint } from "./link-child-preflight";
 
@@ -241,7 +241,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
   // ocx link add --operation-id (structure/remote-link.md, "Operation journal"): replay, recovery and the reserved ids.
   const operation = typeof body.operationId === "string" ? { id: body.operationId, digest: enrollOperationDigest({ alias,
     ...(typeof body.fingerprint === "string" ? { fingerprint: body.fingerprint } : {}), route: wanted, requireEphemeral: body.requireEphemeral === true }) } : null;
-  return underAliasLock(ctx, alias, async () => {
+  return underAliasLock(ctx, alias, operation !== null || journalInUse(ctx), async () => {
   if (operation) {
     const replay = await replayOperation(ctx, state, operation, "enroll");
     if (replay) return replay;
@@ -386,7 +386,15 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       phase = "home_setup";
       const id = journal.reservedLinkId ?? newLinkId();
       journal.intent("key_issued");
-      const issued = issueKey(ctx, "link:" + alias, journal.reservedKeyId);
+      let issued: ReturnType<typeof issueKey>;
+      if (journal.reservedKeyId === undefined) issued = issueKey(ctx, "link:" + alias);
+      else {
+        // The config may be saved before issuing throws (a reconcile that fails afterwards), leaving the reserved key
+        // durable while memory says it is absent: never settle that as clean.
+        try { issued = issueKey(ctx, "link:" + alias, journal.reservedKeyId); } catch {
+          return fail("key_issue_uncertain", "Issuing the link key failed after it may have been saved; whether the reserved key exists is unknown.", 500);
+        }
+      }
       unvalidatedKeyId = issued.id;
       if (journal.reservedKeyId !== undefined && issued.id !== journal.reservedKeyId) return await failed(fail("key_reservation_failed", "The link key was not issued under its reserved id.", 500));
       journal.done("key_issued");

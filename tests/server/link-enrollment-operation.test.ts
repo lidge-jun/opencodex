@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
-import { enrollOperationDigest } from "../../src/server/management/link-operation";
+import { enrollOperationDigest, openEnrollJournal } from "../../src/server/management/link-operation";
 import { acquireAliasLock, type AliasLockDeps } from "../../src/link/alias-lock";
 import { readOperationsJournal, updateOperationsJournal, writeOperationsJournal, type LinkOperation } from "../../src/link/operations-journal";
 import type { OcxConfig } from "../../src/types";
@@ -54,6 +54,7 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
   let keyId = "";
   let clock = NOW;
   let revokeWorks = true;
+  let issueWorks = true;
   const callbacks = new Set<(id: string) => void>();
   const ssh: Array<{ step: Step; argv: readonly string[] }> = [];
   const overrides: Partial<Record<Step, () => SshRunResult>> = {};
@@ -106,7 +107,7 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
     linkKnownHostsPath: () => knownHosts, liveListenPort: () => 10100,
     linkOperationsPath: () => journalPath,
     linkAliasLock: { lockDir: join(root, "locks"), waitMs: 0, ...lock },
-    issueApiKey: (cfg, name, id) => { const key = { id: id ?? "unreserved-key", name, key: "fixture-child-key", createdAt: "2026-11-13T00:00:00Z" }; cfg.apiKeys = [...(cfg.apiKeys ?? []), key]; return key; },
+    issueApiKey: (cfg, name, id) => { if (!issueWorks) throw new Error("reconcile failed after the save"); const key = { id: id ?? "unreserved-key", name, key: "fixture-child-key", createdAt: "2026-11-13T00:00:00Z" }; cfg.apiKeys = [...(cfg.apiKeys ?? []), key]; return key; },
     revokeApiKey: (cfg, id) => { if (!revokeWorks) return false; const before = cfg.apiKeys ?? []; cfg.apiKeys = before.filter(key => key.id !== id); return before.length !== cfg.apiKeys.length; },
   };
   async function call(route: string, body: unknown) {
@@ -130,7 +131,7 @@ function harness(lock: Partial<AliasLockDeps> = {}) {
     call, enroll, ssh, state, config, overrides, journalPath,
     get store() { return store; }, set store(value: LinkStore) { store = value; },
     journal: () => readOperationsJournal(journalPath),
-    advance: (ms: number) => { clock += ms; }, breakRevoke: () => { revokeWorks = false; },
+    advance: (ms: number) => { clock += ms; }, breakRevoke: () => { revokeWorks = false; }, failIssue: () => { issueWorks = false; },
   };
 }
 
@@ -334,6 +335,54 @@ describe("--require-ephemeral", () => {
     const h = harness();
     await h.enroll();
     expect(h.ssh.map(call => call.step)).not.toContain("census");
+  });
+});
+
+describe("review round 1", () => {
+  test("a key issue that throws after the config may have been saved settles unknown, never clean", async () => {
+    const h = harness();
+    h.failIssue();
+    const applied = await h.enroll();
+    expect({ code: code(applied), outcome: applied.body.outcome }).toEqual({ code: "key_issue_uncertain", outcome: "unknown" });
+    expect(h.journal().operations[0]!.state).toBe("unknown");
+  });
+
+  test.each([
+    ["a transport failure", { error: { code: "remote_plant_failed", message: "x" } }, "residual"],
+    ["a nonzero exit without a reason", { error: { code: "remote_plant_failed", message: "x", hint: "Permission denied" } }, "residual"],
+    ["the script's own refusal before installing", { error: { code: "remote_plant_failed", message: "x", hint: "hash_tool_unavailable" } }, "failed_clean"],
+  ] as const)("an unfinished plant after %s settles %s", async (_label, body, outcome) => {
+    const journalPath = join(root, "operations.json");
+    const ctx = { deps: { now: () => NOW, linkOperationsPath: () => journalPath } } as unknown as ManagementContext;
+    const journal = openEnrollJournal(ctx, { id: OP, digest: digest() }, ALIAS, {});
+    journal.intent("plant");
+    const finished = await journal.finish(Response.json(body, { status: 502 }));
+    expect((await finished.json() as { outcome: string }).outcome).toBe(outcome);
+  });
+
+  test("without an operation id and before this Home ever journalled, apply takes no lock and reads no journal", async () => {
+    const h = harness();
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+    const held = await acquireAliasLock(ALIAS, { lockDir: join(root, "elsewhere") });
+    held.release();
+    writeFileSync(h.journalPath + ".unrelated", "");
+    const applied = await h.call("apply", { alias: ALIAS, fingerprint });
+    expect(applied.status).toBe(202);
+    expect(existsSync(join(root, "locks"))).toBe(false);
+    expect(existsSync(h.journalPath)).toBe(false);
+  });
+
+  test("once this Home has a journal, a plain apply takes the alias lock too", async () => {
+    const h = harness();
+    writeOperationsJournal(h.journalPath, { version: 1, operations: [] });
+    expect((await h.call("probe", { alias: ALIAS, includeVersion: true })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+    const held = await acquireAliasLock(ALIAS, { lockDir: join(root, "locks") });
+    try {
+      const busy = await h.call("apply", { alias: ALIAS, fingerprint });
+      expect({ status: busy.status, code: code(busy) }).toEqual({ status: 409, code: "link_operation_in_progress" });
+    } finally { held.release(); }
   });
 });
 

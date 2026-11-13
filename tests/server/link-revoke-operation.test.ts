@@ -113,6 +113,8 @@ test("a force revoke cannot slip in while a purge holds the alias lock: it waits
   let release: (() => void) | undefined;
   const sleeps: number[] = [];
   const h = harness({ lockWaitMs: 10_000, sleep: async ms => { sleeps.push(ms); if (sleeps.length === 2) release?.(); } });
+  // The purge holding the lock is a journalled operation, so this Home has a journal and every revoke locks.
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [] });
   const held = await acquireAliasLock(ALIAS, { lockDir: join(root, "locks") });
   release = () => held.release();
   const forced = await h.revoke({ force: true });
@@ -123,11 +125,49 @@ test("a force revoke cannot slip in while a purge holds the alias lock: it waits
 
 test("past the wait the force revoke is refused and the link stays", async () => {
   const h = harness();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [] });
   const held = await acquireAliasLock(ALIAS, { lockDir: join(root, "locks") });
   try {
     const forced = await h.revoke({ force: true });
     expect({ status: forced.status, code: code(forced) }).toEqual({ status: 409, code: "link_operation_in_progress" });
     expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+  } finally { held.release(); }
+});
+
+test("a force revoke that died after revoking the key, with the link still listed, settles unknown", async () => {
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{ operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),
+    createdAt: at, updatedAt: at, state: "open", effects: [{ effect: "key_revoked", phase: "intent", at }] }] });
+  expect((await h.revoke({ force: true, operationId: OP })).body.outcome).toBe("unknown");
+});
+
+test("a link removed by something else while this revoke had marked nothing is not credited as this revoke's commit", async () => {
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{ operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: at, updatedAt: at, state: "open", effects: [] }] });
+  h.store = { version: 1, listenerPort: 18181, links: [] };
+  expect((await h.revoke({ purge: true, operationId: OP })).body.outcome).toBe("unknown");
+});
+
+test("an open revoke entry for a link refuses every other revoke of it", async () => {
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  writeOperationsJournal(h.journalPath, { version: 1, operations: [{ operationId: "other-op", kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: true, force: false }),
+    createdAt: at, updatedAt: at, state: "open", effects: [{ effect: "remote_cleanup", phase: "intent", at }] }] });
+  for (const body of [{ force: true }, { force: true, operationId: OP }]) {
+    const refused = await h.revoke(body);
+    expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "link_operation_open" });
+  }
+  expect(h.store.links.map(link => link.id)).toEqual([LINK]);
+});
+
+test("before this Home ever journalled, a plain revoke takes no lock", async () => {
+  const h = harness();
+  const held = await acquireAliasLock(ALIAS, { lockDir: join(root, "locks") });
+  try {
+    expect((await h.revoke({ force: true })).status).toBe(200);
   } finally { held.release(); }
 });
 

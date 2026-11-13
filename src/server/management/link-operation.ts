@@ -4,6 +4,7 @@
  * the replay of a recorded outcome, and the recovery of an entry whose process died before it finished.
  */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { AliasLockError, withAliasLock } from "../../link/alias-lock";
 import type { ExplicitRoute } from "../../link/explicit-route";
 import { findOperation, hasEffect, isOperationId, openEnrollmentFor, operationDigest, operationsJournalPath, readOperationsJournal, resolveLinkOperation, updateOperationsJournal,
@@ -14,7 +15,7 @@ import { compensateNewLink, fail, readStoreFor, revokeKeyIdempotent, type LinkRo
 import type { RouteRequest } from "./link-route-request";
 
 /** Compensation that could not finish: whether anything this operation created remains is unknown. */
-const UNKNOWN_CODES = new Set(["compensation_failed", "key_cleanup_failed", "link_cleanup_uncertain"]);
+const UNKNOWN_CODES = new Set(["compensation_failed", "key_cleanup_failed", "link_cleanup_uncertain", "key_issue_uncertain"]);
 const RESIDUAL_RECOVERY = "The Child may still be enrolled; run ocx-child detach --purge (or ocx disconnect) on the Child before retrying.";
 
 export interface OperationRequest { id: string; digest: string }
@@ -35,8 +36,20 @@ export function enrollOperationDigest(params: { alias: string; fingerprint?: str
     explicitRoute: params.route.explicitRoute, exclusive: params.route.exclusive, requireEphemeral: params.requireEphemeral });
 }
 
-/** Every Home-initiated apply and revoke runs under its alias's lock; a holder past the wait answers 409. */
-export async function underAliasLock(ctx: ManagementContext, alias: string, action: () => Promise<Response>): Promise<Response> {
+/**
+ * Has this Home ever journalled an operation? Until it has, an apply or revoke without an operation id behaves
+ * exactly as before: no lock file, no journal read, no new refusal.
+ */
+export function journalInUse(ctx: ManagementContext): boolean {
+  return existsSync(journalPathFor(ctx));
+}
+
+/**
+ * Apply and revoke run under their alias's lock when required (an operation id, or a Home that has a journal); a
+ * holder past the wait answers 409. Not required: the action runs as it always did.
+ */
+export async function underAliasLock(ctx: ManagementContext, alias: string, required: boolean, action: () => Promise<Response>): Promise<Response> {
+  if (!required) return await action();
   try { return await withAliasLock(alias, ctx.deps.linkAliasLock ?? {}, action); } catch (error) {
     if (error instanceof AliasLockError) {
       return error.code === "link_alias_lock_busy"
@@ -47,8 +60,19 @@ export async function underAliasLock(ctx: ManagementContext, alias: string, acti
   }
 }
 
+/** An open revoke entry of another operation for this link refuses every other revoke of it. */
+export function openRevokeConflict(ctx: ManagementContext, linkId: string, except?: string): Response | null {
+  if (!journalInUse(ctx)) return null;
+  let open: LinkOperation | undefined;
+  try { open = readOperationsJournal(journalPathFor(ctx)).operations.find(op => op.kind === "revoke" && op.state === "open" && op.linkId === linkId && op.operationId !== except); } catch {
+    return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
+  }
+  return open ? fail("link_operation_open", "An unfinished revoke holds this link; repeat it with its operation id to settle it.", 409) : null;
+}
+
 /** An open enroll entry of another operation for this alias refuses every other enrollment. */
 export function openEnrollmentConflict(ctx: ManagementContext, alias: string, except?: string): Response | null {
+  if (!journalInUse(ctx)) return null;
   let open: LinkOperation | undefined;
   try { open = openEnrollmentFor(readOperationsJournal(journalPathFor(ctx)), alias, except); } catch {
     return fail("operation_journal_unreadable", "The link operation journal could not be read.", 500);
@@ -125,12 +149,18 @@ async function recoverEnroll(ctx: ManagementContext, state: LinkRouteState, op: 
   return settle(ctx, op.operationId, childTouched ? "residual" : "failed_clean", interrupted);
 }
 
-/** A revoke whose process died: what it reached is unknown until someone looks; the link state says the rest. */
+/**
+ * A revoke whose process died, settled from its own marks only. Its link counts as removed by it only after its own
+ * removal intent: every other revoke of the link was refused while this entry was open, so a record gone after that
+ * mark went by this operation's write, and a record gone before it went some other way (unknown). With the record
+ * still there, any started effect (cleanup on the Child, the key revoke, the removal) leaves it unknown.
+ */
 function recoverRevoke(ctx: ManagementContext, op: LinkOperation): LinkOperation {
   const removed = !readStoreFor(ctx).links.some(link => link.id === op.linkId);
-  const cleanupAsked = hasEffect(op, "remote_cleanup", "intent"), cleanupDone = hasEffect(op, "remote_cleanup", "done");
-  if (removed && (!cleanupAsked || cleanupDone)) return settle(ctx, op.operationId, "committed");
-  return settle(ctx, op.operationId, removed || cleanupAsked ? "unknown" : "failed_clean", { code: "operation_interrupted", status: 409 });
+  const removalStarted = hasEffect(op, "record_removed", "intent");
+  if (removed && removalStarted) return settle(ctx, op.operationId, "committed");
+  const touched = removalStarted || hasEffect(op, "remote_cleanup", "intent") || hasEffect(op, "key_revoked", "intent");
+  return settle(ctx, op.operationId, removed || touched ? "unknown" : "failed_clean", { code: "operation_interrupted", status: 409 });
 }
 
 export interface EnrollJournal {
@@ -170,12 +200,14 @@ export function openEnrollJournal(ctx: ManagementContext, request: OperationRequ
       let body: Record<string, unknown> = {};
       try { body = await response.clone().json() as Record<string, unknown>; } catch { /* a body that is not JSON keeps its status */ }
       const errorCode = typeof (body.error as { code?: unknown } | undefined)?.code === "string" ? (body.error as { code: string }).code : "apply_failed";
-      // A plant that timed out may have installed the binary anyway; the response cannot say, so neither can this.
+      // A plant that did not report completion may have installed the binary anyway (a timeout, a lost connection, an
+      // exit after the install). Only the script's own refusal before installing (hash_tool_unavailable) proves none.
       let plantUnsettled = false;
       try { const op = findOperation(readOperationsJournal(path), request.id); plantUnsettled = !!op && hasEffect(op, "plant", "intent") && !hasEffect(op, "plant", "done"); } catch { plantUnsettled = true; }
+      const hint = (body.error as { hint?: unknown } | undefined)?.hint;
       const outcome: OperationState = response.status === 202 ? "committed"
         : UNKNOWN_CODES.has(errorCode) ? "unknown"
-          : body.residual === true || (plantUnsettled && errorCode === "remote_plant_timeout") ? "residual" : "failed_clean";
+          : body.residual === true || (plantUnsettled && hint !== "hash_tool_unavailable") ? "residual" : "failed_clean";
       let op: LinkOperation;
       try { op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "apply_failed", status: response.status }); } catch {
         // The live outcome stands; the open entry is recovered by the next repeat.
@@ -219,9 +251,9 @@ export function openRevokeJournal(ctx: ManagementContext, request: OperationRequ
       const errorCode = typeof (body.error as { code?: unknown } | undefined)?.code === "string" ? (body.error as { code: string }).code : "revoke_failed";
       let current: LinkOperation | undefined;
       try { current = findOperation(readOperationsJournal(path), request.id); } catch { current = undefined; }
-      // Clean only when neither the Child nor the record was touched: a cleanup that started (finished or not) or a
-      // record removal that started may have changed something the failed response does not describe.
-      const touched = !current || hasEffect(current, "remote_cleanup", "intent") || hasEffect(current, "record_removed", "intent");
+      // Clean only when nothing was touched: a cleanup on the Child, a key revoke or a record removal that started
+      // (finished or not) may have changed something the failed response does not describe.
+      const touched = !current || hasEffect(current, "remote_cleanup", "intent") || hasEffect(current, "key_revoked", "intent") || hasEffect(current, "record_removed", "intent");
       const outcome: OperationState = response.status === 200 ? "committed" : touched ? "unknown" : "failed_clean";
       let op: LinkOperation;
       try { op = settle(ctx, request.id, outcome, { code: /^[a-z][a-z0-9_]{0,63}$/.test(errorCode) ? errorCode : "revoke_failed", status: response.status }); } catch { return response; }
