@@ -27,6 +27,8 @@ import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
 import { AccountProbeButton, AccountProbeResultLine } from "./AccountProbe";
 import { ACCOUNT_PROBE_PROVIDERS, useAccountProbe } from "../../hooks/useAccountProbe";
+import { AccountQuotaTable } from "./AccountQuotaTable";
+import { accountQuotaFromReport } from "../../provider-workspace/report";
 import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
 import { AnthropicGrantBadge, AnthropicResetGrantModal } from "./AnthropicResetGrants";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
@@ -298,6 +300,21 @@ export default function ProviderAuthPanel({
       <section className="pwi-section pwi-auth-section" aria-label={t("pws.availableAccounts")}>
         <h3 className="pwi-section-title">{t("pws.availableAccounts")}</h3>
         <div className="pwi-auth-body">
+          {codexController && codexController.accounts.length > 1 && (
+            <AccountQuotaTable
+              accounts={codexController.accounts.map(account => ({
+                id: account.id, label: account.alias ?? (account.email || t("codexAuth.mainAccount")), plan: account.plan ?? null,
+                active: account.id === codexController.activeId, paused: account.paused, needsReauth: account.needsReauth, health: account.health,
+                quota: account.quota && {
+                  ...account.quota,
+                  fiveHourPercent: account.quota.fiveHourPercent ?? account.quota.shortPercent,
+                  fiveHourResetAt: account.quota.fiveHourResetAt ?? account.quota.shortResetAt,
+                },
+              }))}
+              onTogglePause={(id, paused) => { void codexController.setAccountPaused(id, paused); }}
+              pauseDisabled={codexController.pauseUpdatingId !== null || codexController.switchingId !== null}
+            />
+          )}
           <CodexAccountPool
             apiBase={apiBase}
             targetKey={targetKey}
@@ -595,6 +612,28 @@ export default function ProviderAuthPanel({
                   </button>
                 )}
               </div>
+            )}
+            {accounts.length > 1 && (
+              <AccountQuotaTable
+                accounts={accounts.map(account => {
+                  const probe = accountProbe.entries[account.id];
+                  return {
+                    id: account.id, label: oauthAccountDisplayLabel(accounts, account, t), plan: account.plan,
+                    planLabel: isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : undefined,
+                    active: account.active, paused: account.paused === true, needsReauth: accountShowsReauth(account),
+                    health: account.health, quota: accountQuotaFromReport({ quota: account.quota }), quotaUnavailable: account.quotaUnavailable,
+                    ...(probe && "result" in probe ? { probe: { status: probe.result.status, latencyMs: probe.result.latencyMs } } : {}),
+                  };
+                })}
+                onTogglePause={authHandlers.onPauseAccount ? (id, paused) => {
+                  const account = accounts.find(row => row.id === id);
+                  if (account) void authHandlers.onPauseAccount!(item.name, account, paused);
+                } : undefined}
+                pauseDisabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
+                renderProbe={probeEnabled ? account => (
+                  <AccountProbeButton controller={accountProbe} accountId={account.id} label={account.label} disabled={accountProbe.allPending} />
+                ) : undefined}
+              />
             )}
             {accounts.length > 0 && (
               <ul className="pwi-auth-list">
