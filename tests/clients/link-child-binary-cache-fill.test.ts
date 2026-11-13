@@ -36,13 +36,19 @@ function shipDigests(lines: string, into = packageRoot): void {
   writeFileSync(join(into, CHILD_RELEASE_DIGESTS_PATH), lines);
 }
 const bothDigests = () => shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n" + sha(macBuild) + "  ocx-child-darwin-arm64\n");
-const recordPath = () => join(home, "cache", "ocx-child", ".home-version");
-/** The evidence of an upgrade: this Home last completed a fill as `version`. */
+const versionsDir = () => join(home, "cache", "ocx-child", ".versions");
+/** The evidence of an upgrade: this Home last completed a fill as `version` (or ran it, "<version> baseline"). */
 function ranBefore(version = "2.99.0"): void {
-  mkdirSync(join(home, "cache", "ocx-child"), { recursive: true, mode: 0o700 });
-  writeFileSync(recordPath(), version + "\n", { mode: 0o600 });
+  mkdirSync(versionsDir(), { recursive: true, mode: 0o700 });
+  const [v, kind] = version.split(" ");
+  writeFileSync(join(versionsDir(), v + "." + (kind ?? "filled")), "", { mode: 0o600 });
 }
-const recorded = () => readFileSync(recordPath(), "utf8").trim();
+/** The newest recorded version, "<version>" when its fill completed, "<version> baseline" otherwise. */
+function recorded(): string {
+  const markers = readdirSync(versionsDir()).map(name => /^(.+)\.(baseline|filled)$/.exec(name)!).filter(Boolean);
+  const newest = markers.map(m => m[1]!).reduce((a, b) => (compareReleaseVersions(a, b) === 1 ? a : b));
+  return markers.some(m => m[1] === newest && m[2] === "filled") ? newest : newest + " baseline";
+}
 
 function release(assets: Record<string, Uint8Array | number>, during?: () => void) {
   const requested: string[] = [];
@@ -177,7 +183,7 @@ describe("filling the ocx-child cache for the running version", () => {
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
     expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(requested).toEqual([]);
-    expect(readdirSync(join(home, "cache", "ocx-child"))).toEqual([".home-version"]);
+    expect(readdirSync(join(home, "cache", "ocx-child"))).toEqual([".versions"]);
     expect(recorded()).toBe(VERSION + " baseline");
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "artifact_not_found" });
   });
@@ -191,6 +197,31 @@ describe("filling the ocx-child cache for the running version", () => {
     const again = release({});
     expect(await fill(again.fetchImpl)).toEqual({ kind: "filled", cached: ["ocx-child-darwin-arm64", "ocx-child-linux-x64"], fetched: [], failed: [] });
     expect([again.requested, resolve("darwin-arm64").ok, recorded()]).toEqual([[], true, VERSION]);
+  });
+
+  test("a same-version start never downloads: a lost manifest only re-lists the builds still verified on disk", async () => {
+    bothDigests();
+    ranBefore();
+    await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
+    rmSync(join(cacheDir(), "SHA256SUMS"));
+    rmSync(join(cacheDir(), "ocx-child-darwin-arm64"));
+    const again = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+    expect(await fill(again.fetchImpl)).toEqual({ kind: "filled", cached: ["ocx-child-linux-x64"], fetched: [], failed: ["ocx-child-darwin-arm64"] });
+    expect([again.requested, resolve("linux-x64").ok, resolve("darwin-arm64").ok, recorded()]).toEqual([[], true, false, VERSION]);
+  });
+
+  test("an older fill that finishes after a newer version was recorded never lowers the record", async () => {
+    bothDigests();
+    ranBefore();
+    // While this 2.100.0 fill downloads, a 2.101.0 Home records its completed fill.
+    const { fetchImpl } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }, () => ranBefore("2.101.0"));
+    expect(await fill(fetchImpl)).toMatchObject({ kind: "filled", failed: [] });
+    expect(recorded()).toBe("2.101.0");
+    expect(readdirSync(versionsDir()).sort()).toEqual(["2.100.0.filled", "2.101.0.filled", "2.99.0.filled"]);
+    // A start of the newer version is a restart, not an upgrade: it downloads nothing.
+    const restart = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+    expect(await fill(restart.fetchImpl, "2.101.0")).toMatchObject({ fetched: [] });
+    expect(restart.requested).toEqual([]);
   });
 
   test("a completed fill whose manifest still covers the package fetches nothing, even with a build deleted", async () => {
@@ -223,7 +254,7 @@ describe("filling the ocx-child cache for the running version", () => {
     shipDigests(digests);
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
     expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "invalid_digests" });
-    expect([requested, recorded(), readdirSync(join(home, "cache", "ocx-child"))]).toEqual([[], "2.99.0", [".home-version"]]);
+    expect([requested, recorded(), readdirSync(join(home, "cache", "ocx-child"))]).toEqual([[], "2.99.0", [".versions"]]);
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     expect(await fill(fetchImpl)).toMatchObject({ kind: "filled", fetched: ["ocx-child-linux-x64"], failed: [] });
     expect(recorded()).toBe(VERSION);
@@ -459,7 +490,7 @@ describe("startup", () => {
     const out = { log: (line: string) => { logs.push(line); }, warn: (line: string) => { logs.push(line); } };
     expect(await fillChildBinaryCacheOnStart({ packageRoot, opencodexHome: home }, out)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(logs).toEqual([]);
-    expect([readdirSync(join(home, "cache", "ocx-child")), recorded()]).toEqual([[".home-version"], VERSION + " baseline"]);
+    expect([readdirSync(join(home, "cache", "ocx-child")), recorded()]).toEqual([[".versions"], VERSION + " baseline"]);
   });
 });
 

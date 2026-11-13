@@ -16,9 +16,10 @@ import { detectInstallFromPath } from "../update/install-detection.mjs";
  * running package tree, which its installer verified, and each binary, fetched from the GitHub
  * release of exactly that version, is cached only when its SHA-256 equals that digest. Nothing is
  * fetched without that file, from a source checkout, on Windows, or without evidence of an upgrade:
- * cache/ocx-child/.home-version records the last version whose fill completed, or "<version> baseline"
- * for a version that ran and fetched nothing (a first start, or a package without digests, silently,
- * so the first release that ships them sees an upgrade), and only a running version newer than it fills. A first start (no record: a fresh install) records
+ * cache/ocx-child/.versions/ holds one marker per version, "<version>.filled" when its fill completed
+ * and "<version>.baseline" when it ran and fetched nothing (a first start, or a package without
+ * digests, silently, so the first release that ships them sees an upgrade); markers are only added,
+ * so the newest can never go down, and only a running version newer than it fills. A first start (no record: a fresh install) records
  * its version and fetches nothing, a restart of the same version fetches nothing, and a record or
  * cache directory for a newer version means a downgrade. A listed build that cannot be verified loses its manifest line,
  * so it can never stay trusted under an older manifest, but its file is left in place (it may be an
@@ -26,8 +27,8 @@ import { detectInstallFromPath } from "../update/install-detection.mjs";
  * A digest file that is there but unreadable or unusable is not an absent one: nothing is written and
  * the record stays, so a repaired package still fills. Overlapping fills cannot lose a build: the
  * manifest is rebuilt from the builds verified on disk when it is written, and a completed record
- * whose manifest no longer covers the package's digests is repaired on the next start (re-listing
- * verified files, downloading only what is missing). cache/ocx-child/.fill.lock (reclaimed once its
+ * whose manifest no longer covers the package's digests is repaired on the next start by re-listing
+ * the builds still verified on disk; a same-version start never downloads. cache/ocx-child/.fill.lock (reclaimed once its
  * process is gone or after an hour) keeps concurrent starts from downloading twice; it is not the guarantee.
  *
  * Nobody else can substitute a build: each of cache, cache/ocx-child and the version
@@ -49,7 +50,7 @@ export const CHILD_CACHE_ARTIFACT_FILES = Object.freeze([
 const MAX_CHILD_BINARY_BYTES = 32 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
-const VERSION_RECORD = ".home-version";
+const VERSIONS_DIR = ".versions";
 const POSIX = process.platform !== "win32";
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
@@ -175,15 +176,27 @@ function unpublish(dir, identity, name) {
 }
 
 /**
- * "<version>": that version's fill completed; "<version> baseline": that version ran and fetched
- * nothing (a first start, or a package without digests). null: absent or unreadable, no evidence.
+ * The record is one empty marker per version in cache/ocx-child/.versions/: "<version>.filled" when
+ * that version's fill completed, "<version>.baseline" when it ran and fetched nothing (a first start,
+ * or a package without digests). Markers are only ever added, so the newest version recorded can never
+ * go down, whichever fill writes last. null: no marker (or an unreadable directory), no evidence.
  */
-function readVersionRecord(dir) {
-  let bytes;
-  try { bytes = readRegular(join(dir, VERSION_RECORD), 256); } catch { return null; }
-  const [version, kind, ...rest] = (bytes?.toString("utf8") ?? "").trim().split(/\s+/);
-  if (!parseVersion(version) || rest.length > 0 || (kind !== undefined && kind !== "baseline")) return null;
-  return { version, filled: kind === undefined };
+function readVersionRecord(root) {
+  let names;
+  try {
+    const st = lstatSync(join(root, VERSIONS_DIR));
+    if (!st.isDirectory() || st.isSymbolicLink()) return null;
+    names = readdirSync(join(root, VERSIONS_DIR));
+  } catch { return null; }
+  let newest = null;
+  for (const name of names) {
+    const match = /^(.+)\.(baseline|filled)$/.exec(name);
+    if (!match || compareReleaseVersions(match[1], match[1]) === null) continue;
+    const order = newest === null ? 1 : compareReleaseVersions(match[1], newest.version);
+    if (order === 1) newest = { version: match[1], filled: match[2] === "filled" };
+    else if (order === 0 && match[2] === "filled") newest.filled = true;
+  }
+  return newest;
 }
 
 /** The release builds verified on disk right now: what a manifest may list, whoever wrote them. */
@@ -338,7 +351,11 @@ export async function fillChildBinaryCacheForVersion(options) {
     throw error;
   }
   try {
-    const record = kind => { assertFillLockHeld(lock); publish(root, rootIdentity, VERSION_RECORD, Buffer.from(options.version + (kind === "baseline" ? " baseline" : "") + "\n")); };
+    const record = kind => {
+      assertFillLockHeld(lock);
+      const versions = join(root, VERSIONS_DIR);
+      publish(versions, realDirectory(versions), options.version + "." + kind, Buffer.alloc(0));
+    };
     if (!digests) {
       // The baseline a later digest-bearing release needs to recognise its start as an upgrade.
       if (recorded === null || compareReleaseVersions(options.version, recorded.version) === 1) { try { record("baseline"); } catch { /* best effort */ } }
@@ -348,8 +365,10 @@ export async function fillChildBinaryCacheForVersion(options) {
     const order = compareReleaseVersions(options.version, recorded.version);
     if (order === -1) return { kind: "skipped", reason: "downgrade" };
     const dir = childBinaryCacheDir(home, options.version);
-    // The same version again: nothing to do, unless its completed fill lost manifest lines (overlapping fills).
-    if (order === 0 && (!recorded.filled || manifestCovers(dir, digests))) return { kind: "skipped", reason: "not_an_upgrade" };
+    // The same version again fetches nothing. If its completed fill's manifest lost lines (fills that
+    // overlapped), the builds still verified on disk are listed again; nothing is downloaded.
+    const sameVersion = order === 0;
+    if (sameVersion && (!recorded.filled || manifestCovers(dir, digests))) return { kind: "skipped", reason: "not_an_upgrade" };
     const identity = realDirectory(dir);
     const fetchImpl = options.fetchImpl ?? fetch;
     const timeoutMs = options.timeoutMs ?? 60_000;
@@ -358,6 +377,7 @@ export async function fillChildBinaryCacheForVersion(options) {
     for (const [file, expected] of [...digests].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       const present = readCachedBuild(join(dir, file));
       if (present && sha256Hex(present) === expected) continue;
+      if (sameVersion) { failed.push(file); continue; }
       const bytes = await download(childReleaseAssetUrl(options.version, file), fetchImpl, timeoutMs);
       if (bytes && sha256Hex(bytes) === expected) {
         publish(dir, identity, file, bytes);
