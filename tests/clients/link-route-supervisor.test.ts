@@ -875,17 +875,6 @@ test("a pidfile that becomes readable on a later tick is signalled there when it
   });
 });
 
-test("a pidfile larger than 64 KiB is unreadable: the link is blocked and warned", async () => {
-  await withPidfileDir(async (dir, path) => {
-    const body = JSON.stringify({ version: 1, linkId: LINK, pid: 5858, argv: ["ssh"] });
-    writeFileSync(path, body + " ".repeat(64 * 1024) + "\n");
-    const h = await started({ pidfileDir: dir, processAlive: () => false });
-    expect(h.state().orphan).toBe("orphan-unverified");
-    expect(h.warns.filter(line => line.includes("pidfile unreadable"))).toHaveLength(1);
-    expect(h.removed).toEqual([]);
-  });
-});
-
 
 test("the readiness budget runs from the grant: a slow route granted late still has the full budget to prove", async () => {
   // A relay route to a slow Child can spend much of 30 s before its listener is granted.

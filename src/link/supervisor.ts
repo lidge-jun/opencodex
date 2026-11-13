@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, unlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config/atomic-write";
 import { linkDir, linkKnownHostsPath, linkStorePath } from "./paths";
@@ -125,8 +125,6 @@ export interface LinkSupervisorDeps {
 }
 
 const TIMER_MS = 1_000;
-/** A pidfile is one short JSON line; a larger file is not one this process wrote, and reads as unreadable. */
-const PIDFILE_MAX_BYTES = 64 * 1024;
 const SPAWN_GRACE_MS = 5_000;
 /**
  * A retry runs while the network may still be down, and ssh can wait out its whole ConnectTimeout
@@ -215,20 +213,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const killProcess = deps.killProcess ?? defaultKillProcess;
   const processAlive = deps.processAlive ?? defaultProcessAlive;
   const loadPidfile = deps.readPidfile ?? ((path: string): Pidfile | null => {
-    let fd: number;
-    try { fd = openSync(path, "r"); } catch (error) {
+    let text: string;
+    try { text = readFileSync(path, "utf8"); } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
-    }
-    let text: string;
-    try {
-      // One bounded read: a blocked link reads its pidfile every tick.
-      const buffer = Buffer.alloc(PIDFILE_MAX_BYTES + 1);
-      const length = readSync(fd, buffer, 0, buffer.length, 0);
-      if (length > PIDFILE_MAX_BYTES) throw new Error("link pidfile too large");
-      text = buffer.subarray(0, length).toString("utf8");
-    } finally {
-      closeSync(fd);
     }
     const pidfile = parsePidfile(text);
     if (pidfile === null) throw new Error("link pidfile unreadable");
