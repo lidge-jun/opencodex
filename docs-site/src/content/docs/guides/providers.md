@@ -150,26 +150,26 @@ existing request-wide send allowance. Explicit `retryOn429` settings, including
 keys by default; `promptCacheKey: false` disables forwarding. Cache affinity improves the
 chance of reuse, but does not guarantee a cache hit or remove token-throughput limits.
 
-Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances
-are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys);
-the proxy does not infer a subscription tier from the key. At `https://api.mistral.ai/v1`, the dashboard
-reads API and Vibe budgets from `/v1/billing/budget` and the plan from `/v1/billing/subscription`,
-using the inference credential and egress. Measured windows show usage, total and recognized plan name.
-Budgets are display-only: they do not rank keys, route or pause traffic, or enter the quota pool.
-Missing, malformed or non-positive budgets, malformed currencies and out-of-range percentages are unknown;
-unknown plan names are omitted. Fresh last-good readings survive 402, 408, 429, 5xx and transport failures,
-but 401, 403 and other non-retryable client refusals suppress them. For every model, explicit upstream
-`Retry-After` deadlines are shared between calls on the same credential and model. A 429
-without a retry time can activate a conservative 60-second recovery wait when valid minute
-counters show exhausted capacity, or the refused query's measured cost exceeds the remaining
-tokens while fitting the full advertised allowance. This is a local recovery policy, not an
-exact server-reset prediction. Healthy traffic never predicts the next query's cache or cost.
-After the wait, one recovery probe runs; success restores ordinary traffic. Missing, malformed,
-zero-entitlement, exhausted-monthly, or above-full-allowance evidence does not invent a reset or compact history.
-`requestPacing: { "enabled": false }` or `retryOn429: { "respectRetryAfter": false }`
-disables shared pacing. If Mistral's
-retry time exceeds `retryOn429.maxIntervalMs`, the proxy returns the 429 and retry hint rather
-than replaying early. Context windows and per-model compaction preferences remain independent.
+Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances are
+described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys),
+and the proxy does not infer a subscription tier from the key. At `https://api.mistral.ai/v1`, the
+dashboard reads API and Vibe budgets from `/v1/billing/budget` and the plan from
+`/v1/billing/subscription`, using the inference credential and egress. Measured windows show usage,
+total and recognized plan name. Budgets are
+display-only: they do not rank keys, route or pause traffic, or enter the quota pool. Missing,
+malformed or non-positive budgets, malformed currencies, out-of-range percentages and unknown plan
+names are unknown or omitted. Fresh last-good readings survive 402, 408, 429, 5xx and transport
+failures, but 401, 403 and other non-retryable client refusals suppress them.
+
+For every model, explicit upstream `Retry-After` deadlines are shared between calls on the same
+credential and model; [the `retryOn429` reference](/reference/configuration/providers/) covers the
+recovery wait after a 429 without one, its single probe, and the `requestPacing` and
+`respectRetryAfter` opt-outs. Context windows and per-model compaction preferences remain
+independent.
+
+The provider header also lists passively observed request and token limits for OpenAI, Anthropic,
+xAI, Groq and Mistral, per observed key and model; [the dashboard guide](/guides/web-dashboard/)
+covers those display-only readings, which never probe the OS keychain or affect routing.
 
 Mistral accepts a different set of `reasoning_effort` values for each model and refuses the
 rest with HTTP 400 (or 422 for `ultra`). The preset ships the accepted rungs as registry

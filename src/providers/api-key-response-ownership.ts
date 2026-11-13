@@ -1,5 +1,6 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
+import { inheritPassiveKeyProof } from "../lib/passive-key-fetch-proof";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
 import { providerApiKeySelectionOwnsFailure } from "./api-key-selection";
 import { recordDistributedKeyFailure } from "./key-failover";
@@ -33,6 +34,7 @@ export function distributedKeyPhysicalFetch(
     owners.set(response, owners.has(response) ? null : owner);
     return response;
   }) as typeof globalThis.fetch;
+  inheritPassiveKeyProof(wrapped, physicalFetch);
   return isEgressTransparentExecutor(physicalFetch) ? markEgressTransparentExecutor(wrapped) : wrapped;
 }
 

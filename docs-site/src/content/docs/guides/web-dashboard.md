@@ -166,7 +166,19 @@ is visible) and never forces an upstream refresh.
   popover and returns focus to the chip when focus was inside the popover.
 - The bar always stays on one line. When the chips do not fit, scroll it sideways or use the « and
   » buttons at either end.
-- Providers that report no quota window are left out. The bar is hidden when no provider reports one.
+- After an eligible proxied API-key response from OpenAI, xAI, Groq, Anthropic, or Mistral, separate
+  key and model chips show the expected request and token dimensions. Missing header fields appear
+  as **Unknown**, including when the response has no rate-limit headers. Prior measured values
+  retain their original observation time and become stale at their reset; the server retains each
+  observation for at most 24 hours. A failed dashboard poll can still show the previous snapshot.
+  These display-only readings do not trigger probes or affect routing. For a keychain-backed key,
+  the reading is tied to the credential already cached by routing and is withheld when that identity
+  cannot be verified. An external keychain replacement is not visible until routing's cache is
+  invalidated; until then routing and the reading still use the cached credential. When that cache
+  is cleared, readings are withheld until routing rereads each key. A matching reread can restore
+  retained readings; responses received while the key is unverified are discarded.
+- Providers with neither a quota report nor a retained passive key observation are left out. The bar
+  is hidden when neither is available.
 - The right edge shows when the dashboard last read the reports. It turns amber when the latest
   read failed and the previous reading is still shown.
 

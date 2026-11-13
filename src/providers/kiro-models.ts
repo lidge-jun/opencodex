@@ -12,12 +12,10 @@ export const KIRO_MODELS = [
   "gpt-6.1-sol",
   // 261027 preemptive: GPT-6.1 Terra (mirrors Kiro's GPT-6.1 Sol seed; provider listing unverified).
   "gpt-6.1-terra",
-  // 260929 preemptive: Claude Sonnet 5.5 added ahead of Kiro's catalog (kiro.dev did not list it on
-  // 2026-09-29). Mirrors claude-sonnet-5; calls fail upstream until Kiro ships the model.
+  // Listed on kiro.dev/docs/models (2026-10-24).
   "claude-sonnet-5.5",
   "claude-sonnet-5",
-  // 260923 preemptive: Claude Opus 5.5 added ahead of Kiro's catalog (kiro.dev did not list it on
-  // 2026-09-23). Mirrors claude-opus-5; calls fail upstream until Kiro ships the model.
+  // Listed on kiro.dev/docs/models (2026-10-24).
   "claude-opus-5.5",
   "claude-opus-5",
   "claude-opus-4.8",
@@ -27,7 +25,7 @@ export const KIRO_MODELS = [
   "claude-sonnet-4.6",
   "claude-sonnet-4.5",
   "claude-sonnet-4.0",
-  // 261008 preemptive: Haiku 5.5; calls fail upstream until Kiro ships it.
+  // Listed on kiro.dev/docs/models (2026-10-24); two-tier pricing above 100K input tokens.
   "claude-haiku-5.5",
   "claude-haiku-4.5",
   "deepseek-3.2",
