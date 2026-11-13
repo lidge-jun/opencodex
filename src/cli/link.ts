@@ -301,7 +301,7 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
 
 const OPERATION_OUTCOMES = new Set(["committed", "failed_clean", "residual", "unknown"]);
 
-function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string; operationState?: "open" | "unknown"; bound?: "unsettled" | "recent" } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string; residualInstall?: "ephemeral" | "full"; linkId?: string; remotePlatform?: "posix" | "windows"; operationState?: "open" | "unknown"; bound?: "unsettled" | "recent" } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
   if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
@@ -315,12 +315,17 @@ function errorCodeBody(body: unknown): { error: { code: string; hint?: string; c
   const operationId = typeof body.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.operationId) ? body.operationId : undefined;
   const outcome = typeof body.outcome === "string" && OPERATION_OUTCOMES.has(body.outcome) ? body.outcome : undefined;
   const residualKind = body.residualKind === "plant" || body.residualKind === "enrollment" ? body.residualKind : undefined;
+  // A residual's Child step is bound to the attempt's link id: a link id shape, the install and the platform as closed words.
+  const residualInstall = body.residualInstall === "ephemeral" || body.residualInstall === "full" ? body.residualInstall : undefined;
+  const linkId = typeof body.linkId === "string" && LINK_ID.test(body.linkId) ? body.linkId : undefined;
+  const remotePlatform = body.remotePlatform === "posix" || body.remotePlatform === "windows" ? body.remotePlatform : undefined;
   // link_suspended names whether the revoke that keeps the link down is open (it did not record its outcome) or unknown.
   const operationState = body.operationState === "open" || body.operationState === "unknown" ? body.operationState : undefined;
   // operation_journal_full names which bound it hit.
   const bound = body.bound === "unsettled" || body.bound === "recent" ? body.bound : undefined;
   return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}),
-    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}), ...(operationState ? { operationState } : {}), ...(bound ? { bound } : {}) };
+    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}), ...(residualInstall ? { residualInstall } : {}),
+    ...(linkId ? { linkId } : {}), ...(remotePlatform ? { remotePlatform } : {}), ...(operationState ? { operationState } : {}), ...(bound ? { bound } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {

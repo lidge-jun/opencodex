@@ -59,11 +59,12 @@ test("a recorded failure keeps its outcome in the error", async () => {
 });
 
 test("a replayed residual plant gets the CLI's own purge guidance for both platforms, never the disconnect step", async () => {
-  const h = harness([{ body: { operationId: OP, state: "unknown" } }, { status: 500, body: { error: { code: "key_issue_uncertain", message: "server text" }, operationId: OP, outcome: "unknown", residual: true, residualKind: "plant", recovery: "server recovery text" } }]); try {
+  const h = harness([{ body: { operationId: OP, state: "unknown" } }, { status: 500, body: { error: { code: "key_issue_uncertain", message: "server text" }, operationId: OP, outcome: "unknown", residual: true, residualKind: "plant", linkId: LINK, recovery: "server recovery text" } }]); try {
     expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP], h.deps)).toBe(1);
     const message = h.err.join("\n");
-    expect(message).toContain("~/.cache/opencodex/bin/ocx-child detach --purge");
-    expect(message).toContain('ocx-child.exe" detach --purge');
+    // Bound to the reserved link id the replay names (#8691 final review).
+    expect(message).toContain("~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + LINK);
+    expect(message).toContain('ocx-child.exe" detach --purge --expect-link ' + LINK);
     // %VAR% and a bare quoted path are Command Prompt syntax; PowerShell would need & and $env:.
     expect(message).toContain("in Command Prompt");
     expect(message).not.toContain("ocx disconnect");
@@ -73,10 +74,10 @@ test("a replayed residual plant gets the CLI's own purge guidance for both platf
 });
 
 test.each(["child_port_busy", "child_external_provider_conflict"])("a %s answer whose plant rollback failed gives purge guidance, not 'no Child files were modified'", async errorCode => {
-  const h = harness([notFound, { body: probe }, { body: confirm }, { status: 409, body: { error: { code: errorCode, message: "server text" }, operationId: OP, outcome: "residual", residual: true, residualKind: "plant" } }]); try {
+  const h = harness([notFound, { body: probe }, { body: confirm }, { status: 409, body: { error: { code: errorCode, message: "server text" }, operationId: OP, outcome: "residual", residual: true, residualKind: "plant", linkId: LINK } }]); try {
     expect(await runLinkCommand(["add", ALIAS, "--expect-fingerprint", fingerprint, "--operation-id", OP], h.deps)).toBe(1);
     const message = h.err.join("\n");
-    expect(message).toContain("ocx-child detach --purge");
+    expect(message).toContain("ocx-child detach --purge --expect-link " + LINK);
     expect(message).toContain("%USERPROFILE%");
     expect(message).not.toContain("no Child files were modified");
     expect(message).toContain("operation " + OP + ": residual");

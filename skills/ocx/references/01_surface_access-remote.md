@@ -58,7 +58,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the verified link result as JSON. |
 
 - Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.
-- Preflights bound Child restart support and curl, connects, restarts once and verifies a fresh authenticated catalog relay before success. Post-connect failures can leave Child config; run ocx disconnect and ocx restart there before retrying.
+- Preflights bound Child restart support and curl, connects, restarts once and verifies a fresh authenticated catalog relay before success. Post-connect failures can leave Child config; the failure names the attempt's link id, so run ocx disconnect --expect-link <id> there (ocx-child detach --expect-link <id> on a lightweight Child) and, if it disconnected, ocx restart, before retrying: it acts only while the Child belongs to that link.
 
 ### `ocx link port`
 
