@@ -253,7 +253,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
    * Tunnel children (one-route tunnels, multi-route candidates and proven tunnels) a stop sent SIGTERM
    * and is awaiting; the tick sends SIGKILL after the grace.
    */
-  const draining = new Set<{ child: SshChild; stopAt: number; killed: boolean }>();
+  const draining = new Set<{ linkId: string; child: SshChild; stopAt: number; killed: boolean; warned: boolean }>();
   /** Per-link generation, advanced by spawns and explicit stop/removal reservations. */
   const generations = new Map<string, number>();
   /** The process-unique connection name of each link's current ssh child, minted at spawn. */
@@ -639,9 +639,15 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     // (A candidate route-rounds already stopped gets a fresh stop time here; one it already halted with
     // SIGKILL gets a second, harmless one on the same unreaped process.)
     for (const drain of draining) {
-      if (drain.killed || now() - drain.stopAt < CANDIDATE_KILL_GRACE_MS) continue;
-      drain.killed = true;
-      try { drain.child.kill("SIGKILL"); } catch { /* already gone */ }
+      const age = now() - drain.stopAt;
+      if (!drain.killed && age >= CANDIDATE_KILL_GRACE_MS) {
+        drain.killed = true;
+        try { drain.child.kill("SIGKILL"); } catch { /* already gone */ }
+      } else if (drain.killed && !drain.warned && age >= 2 * CANDIDATE_KILL_GRACE_MS) {
+        // Its exit is still unseen, so the stop holds the lifecycle queue: say so once.
+        drain.warned = true;
+        warn(`[link] tunnel exit unconfirmed link=${drain.linkId}`);
+      }
     }
     if (stopping) return;
     // Route deadlines run even while lifecycle work is pending, so a stuck reload cannot stretch a probe.
@@ -744,7 +750,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     children.delete(linkId);
     current.child.kill("SIGTERM");
     // A child the tick already stopped keeps its stop time and its SIGKILL.
-    const drain = { child: current.child, stopAt: current.stopAt ?? now(), killed: current.killed === true };
+    const drain = { linkId, child: current.child, stopAt: current.stopAt ?? now(), killed: current.killed === true, warned: current.warned === true };
     draining.add(drain);
     try { await current.child.exited; } finally { draining.delete(drain); }
     conditionalRemovePidfile(linkId, current.child.pid);
