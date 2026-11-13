@@ -638,4 +638,21 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     expect(evidence?.verdict.terminalStatus).toBe(429);
     expect(performance.now() - startedAt).toBeLessThan(1_500);
   });
+
+  test("checking an untyped envelope against the registry is one pass, not one per recorded value", () => {
+    // The registry check ran one includes() per recorded value over the whole message, so a ~4 MB
+    // message against tens of thousands of values took seconds.
+    const registry = new OutboundCredentialRegistry({ maxEntries: 40_000, maxBytes: 4 << 20 });
+    for (let i = 0; i < 20_000; i++) registry.remember({ [`x-meta-${i}`]: `value-${String(i).padStart(8, "0")}` });
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      const startedAt = performance.now();
+      const evidence = reduceBareUpstreamEvidence(undefined, { error: { code: "mystery_code", message: "y".repeat(3_900_000) } });
+      expect(evidence?.verdict.terminalStatus).toBe(502);
+      expect(performance.now() - startedAt).toBeLessThan(1_500);
+      expect([registry.matches("echo value-00012345 here"), registry.matches("value-0001234")]).toEqual([true, false]);
+    } finally {
+      restore();
+    }
+  });
 });

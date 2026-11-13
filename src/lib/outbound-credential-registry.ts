@@ -271,6 +271,31 @@ function markSubstringSpans(text: string, index: SecretIndex, initial: Uint8Arra
 const MATCH_WORK_PER_CHAR = 8;
 const MATCH_WORK_FLOOR = 256;
 
+/**
+ * Whether text contains any indexed secret, in one pass over text with the same charged walk as
+ * {@link maskSecretSpans}: it stops at the first confirmed occurrence, and reports true once the
+ * budget runs out (fail closed), so a check of a long upstream message against many values is linear.
+ */
+export function containsIndexedSecret(text: string, index: SecretIndex): boolean {
+  const n = text.length;
+  for (const [length, group] of index.shortByLength) {
+    for (let at = 0; at + length <= n; at++) if (group.has(text.slice(at, at + length))) return true;
+  }
+  if (index.byPrefix.size === 0) return false;
+  let budget = MATCH_WORK_PER_CHAR * n + MATCH_WORK_FLOOR;
+  for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= n; at++) {
+    const group = index.byPrefix.get(text.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
+    if (group === undefined) continue;
+    for (const secret of group) {
+      if (secret.length > n - at) break;
+      budget -= secret.length;
+      if (budget < 0) return true;
+      if (text.startsWith(secret, at)) return true;
+    }
+  }
+  return false;
+}
+
 /** Whether a proper prefix of the secret is also its suffix, so two occurrences can overlap. */
 function hasBorder(secret: string): boolean {
   return borderTable(secret)[secret.length - 1]! > 0;
@@ -402,12 +427,28 @@ export function credentialComponents(value: string): string[] {
 }
 
 /** Exact equality at any length at or above minLength; containment for values of 8+ characters. */
-export function credentialSetMatches(values: Iterable<string>, has: (value: string) => boolean, value: string, minLength = 1): boolean {
+export function credentialSetMatches(
+  values: Iterable<string>,
+  has: (value: string) => boolean,
+  value: string,
+  minLength = 1,
+  index?: SecretIndex,
+): boolean {
   if (value.length >= minLength && has(value)) return true;
+  // An index of the containment-eligible values makes the check one pass over value, however many
+  // values there are; it must hold exactly the values of max(minLength, 8)+ characters.
+  if (index !== undefined) return containsIndexedSecret(value, index);
   for (const secret of values) {
     if (secret.length >= Math.max(minLength, CREDENTIAL_SUBSTRING_MIN_LENGTH) && value.includes(secret)) return true;
   }
   return false;
+}
+
+/** The containment-eligible index {@link credentialSetMatches} takes for these values. */
+export function credentialContainmentIndex(values: Iterable<string>, minLength = 1): SecretIndex {
+  const eligible: string[] = [];
+  for (const secret of values) if (secret.length >= Math.max(minLength, CREDENTIAL_SUBSTRING_MIN_LENGTH)) eligible.push(secret);
+  return new SecretIndex(eligible);
 }
 
 export interface OutboundCredentialRegistryOptions {
@@ -420,6 +461,7 @@ export interface OutboundCredentialRegistryOptions {
 class BoundedValueSet {
   readonly values = new Map<string, number>();
   private totalBytes = 0;
+  private index: SecretIndex | undefined;
   complete = true;
   constructor(private readonly maxEntries: number, private readonly maxBytes: number, private readonly maxValueBytes: number) {}
 
@@ -437,6 +479,7 @@ class BoundedValueSet {
     }
     this.values.set(value, bytes);
     this.totalBytes += bytes;
+    this.index = undefined;
     while (this.values.size > this.maxEntries || this.totalBytes > this.maxBytes) {
       const oldest = this.values.keys().next().value as string;
       this.totalBytes -= this.values.get(oldest)!;
@@ -446,7 +489,9 @@ class BoundedValueSet {
   }
 
   matches(value: string, minLength: number): boolean {
-    return credentialSetMatches(this.values.keys(), candidate => this.values.has(candidate), value, minLength);
+    // Each set is always matched with the same minLength; the index is rebuilt after the set changes.
+    this.index ??= credentialContainmentIndex(this.values.keys(), minLength);
+    return credentialSetMatches(this.values.keys(), candidate => this.values.has(candidate), value, minLength, this.index);
   }
 }
 

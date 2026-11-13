@@ -38,6 +38,7 @@ import {
   credentialComponents,
   credentialExcerptWindows,
   credentialSetMatches,
+  credentialContainmentIndex,
 } from "../lib/outbound-credential-registry";
 import { SENSITIVE_KEY_PATTERN } from "../lib/redact";
 
@@ -191,9 +192,10 @@ function build(configRead: StoreRead, authRead: StoreRead, signature: string, no
   if (isRecord(auth.value)) walkAuth(auth.value, 0);
 
   const names = [...envNames].sort();
+  const containment = credentialContainmentIndex(values);
   const view: ConfiguredCredentials = Object.freeze({
     complete,
-    matches: (value: string) => credentialSetMatches(values, candidate => values.has(candidate), value),
+    matches: (value: string) => credentialSetMatches(values, candidate => values.has(candidate), value, 1, containment),
   });
   return {
     view,
