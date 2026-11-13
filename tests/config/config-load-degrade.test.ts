@@ -58,6 +58,16 @@ test("invalid provider cache affinity degrades on load but is rejected on write"
   } finally { warning.mockRestore(); }
 });
 
+test("config set rejects invalid cache affinity without changing the provider", () => {
+  const raw = { ...candidate(undefined), providers: { xai: { ...candidate(undefined).providers.xai, apiKey: "fixture-key" } } };
+  writeFileSync(getConfigPath(), JSON.stringify(raw));
+  const before = readFileSync(getConfigPath(), "utf8");
+  const result = Bun.spawnSync([process.execPath, "run", "src/cli/index.ts", "config", "set", "providers.xai.cacheAffinity", "bogus"], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr.toString()).toContain("cacheAffinity");
+  expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+});
+
 function writeCandidate(modelDisplayNames: unknown, provider = "xai"): void {
   const config = candidate(modelDisplayNames);
   config.defaultProvider = provider;
