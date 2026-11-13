@@ -730,24 +730,24 @@ fn serve_foreground_inner(
                 continue;
             }
             let control_shared = Arc::clone(&shared);
-            let control_count = Arc::clone(&control_active);
+            let control_slot = ControlSlot(Arc::clone(&control_active));
             thread::spawn(move || {
+                // Returned however the thread ends, a panic included.
+                let _slot = control_slot;
                 let _ = handle_client_connection(
                     client_stream,
                     &control_shared,
                     ConnectionMode::ControlOnly,
                 );
-                control_count.fetch_sub(1, Ordering::SeqCst);
             });
             continue;
         }
         let worker_shared = Arc::clone(&shared);
+        let permit = WorkerPermit(sem_clone);
         thread::spawn(move || {
+            // Returned however the worker ends, a panic included, so a panic never shrinks the pool.
+            let _permit = permit;
             let _ = handle_client_connection(client_stream, &worker_shared, ConnectionMode::Full);
-            let (lock, cv) = &*sem_clone;
-            let mut active = lock.lock().unwrap_or_else(|e| e.into_inner());
-            *active = active.saturating_sub(1);
-            cv.notify_one();
         });
     }
 
@@ -756,6 +756,27 @@ fn serve_foreground_inner(
     crate::link_ws::stop_all();
     let _ = parity_handle.join();
     Ok(())
+}
+
+/// One of the `MAX_CONCURRENT_WORKERS` admissions, returned when the worker thread ends.
+struct WorkerPermit(Arc<(Mutex<usize>, Condvar)>);
+
+impl Drop for WorkerPermit {
+    fn drop(&mut self) {
+        let (lock, cv) = &*self.0;
+        let mut active = lock.lock().unwrap_or_else(|e| e.into_inner());
+        *active = active.saturating_sub(1);
+        cv.notify_one();
+    }
+}
+
+/// One of the `MAX_CONTROL_CONNECTIONS` control slots, returned when the control thread ends.
+struct ControlSlot(Arc<AtomicUsize>);
+
+impl Drop for ControlSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn run_parity_loop(shared: Arc<SharedServerState>) {
@@ -1364,4 +1385,35 @@ fn relay_request(
     };
     let _ = stream_upstream_to_chunked_client(&mut upstream.reader, client_writer, up_framing, cap);
     Ok(())
+}
+
+#[cfg(test)]
+mod worker_permit_tests {
+    use super::*;
+
+    #[test]
+    fn a_worker_that_panics_still_returns_its_admission_permit() {
+        let sem = Arc::new((Mutex::new(1usize), Condvar::new()));
+        let permit = WorkerPermit(Arc::clone(&sem));
+        let joined = thread::spawn(move || {
+            let _permit = permit;
+            panic!("panic injected by a test");
+        })
+        .join();
+        assert!(joined.is_err());
+        assert_eq!(*sem.0.lock().unwrap_or_else(|e| e.into_inner()), 0);
+    }
+
+    #[test]
+    fn a_control_thread_that_panics_still_returns_its_slot() {
+        let count = Arc::new(AtomicUsize::new(1));
+        let slot = ControlSlot(Arc::clone(&count));
+        let joined = thread::spawn(move || {
+            let _slot = slot;
+            panic!("panic injected by a test");
+        })
+        .join();
+        assert!(joined.is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
 }
