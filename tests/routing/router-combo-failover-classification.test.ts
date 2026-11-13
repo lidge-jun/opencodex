@@ -1952,7 +1952,10 @@ describe("committed-terminal combo cooldown", () => {
       servingAttempt: committed,
       httpStatus: 200,
     });
-    // output_limit caps at 10 minutes; the 1h server Retry-After must survive intact.
+    // output_limit caps at 10 minutes; the original 1h server Retry-After expiry
+    // and its 429 status must both survive the committed-terminal report.
     expect(isComboTargetInCooldown("free", first, now + 11 * 60_000)).toBe(true);
+    expect(isComboTargetInCooldown("free", first, now + 59 * 60_000)).toBe(true);
+    expect(isComboTargetInCooldown("free", first, now + 61 * 60_000)).toBe(false);
   });
 });
