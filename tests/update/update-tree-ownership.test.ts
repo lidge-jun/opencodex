@@ -268,6 +268,12 @@ describe("#4202 install-tree dependency ownership", () => {
     mkdirSync(join(exposed, ".."), { recursive: true });
     symlinkSync(packageDir, exposed, "dir");
     expect(verifyPnpmInstallTree(exposed, "2.0.0", store, exposingGroup(exposed))).toEqual({ ok: true, failures: [] });
+    // The same isolated install reached through a link to its group classifies the same way as the direct path.
+    const alias = join(root, "group-alias");
+    symlinkSync(join(root, "releases", "v2", "links", "global"), alias, "dir");
+    const viaAlias = join(alias, "node_modules", ".pnpm", "pkg", "node_modules", ...PKG.split("/"));
+    expect(verifyPnpmInstallTree(packageDir, "2.0.0")).toEqual({ ok: true, failures: [] });
+    expect(verifyPnpmInstallTree(viaAlias, "2.0.0")).toEqual({ ok: true, failures: [] });
   });
 
   test("a sibling entry in the same virtual store cannot vouch for an unrelated group", () => {

@@ -805,7 +805,7 @@ export function runPnpmGlobalUpdate({
       activePath: after.path,
       globalDir: owner.globalDir,
       globalBinDir: owner.globalBinDir,
-      error: `${installReason}; previous version remains active`,
+      error: storeOwnerRefusal(`${installReason}; previous version remains active`),
     };
   }
 
@@ -839,9 +839,11 @@ export function runPnpmGlobalUpdate({
       activePath: restored.path,
       globalDir: owner.globalDir,
       globalBinDir: owner.globalBinDir,
-      error: `${installReason}; previous version restored`,
+      error: storeOwnerRefusal(`${installReason}; previous version restored`),
     };
   }
+  // Keep the readback's own reason (a store-proof failure included) so the user sees why.
+  const unverified = restored.ok ? "" : `: ${restored.reason}`;
   return {
     ok: false,
     phase: "rollback",
@@ -850,6 +852,6 @@ export function runPnpmGlobalUpdate({
     ...(restored.ok ? { activePath: restored.path } : {}),
     globalDir: owner.globalDir,
     globalBinDir: owner.globalBinDir,
-    error: `${installReason}; previous version could not be verified after rollback`,
+    error: storeOwnerRefusal(`${installReason}; previous version could not be verified after rollback${unverified}`),
   };
 }

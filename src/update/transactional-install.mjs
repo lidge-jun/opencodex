@@ -169,9 +169,10 @@ function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
       if (lstatSync(prefix).isSymbolicLink()) {
         const target = resolve(dirname(prefix), readlinkSync(prefix));
         const remaining = parts.slice(i + 1);
-        found ||= hasGlobalLinksComponent(target)
-          || (/(?:^|[\\/])v\d+$/i.test(target) && remaining[0]?.toLowerCase() === "links");
+        // Judge the effective spelling (target plus the rest of the path), so a package reached through a
+        // group link classifies exactly as the same location reached directly.
         path = resolve(target, ...remaining);
+        found ||= hasGlobalLinksComponent(path);
         changed = true;
         break;
       }

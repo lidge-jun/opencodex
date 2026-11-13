@@ -705,6 +705,24 @@ describe("pnpm global update", () => {
     expect(result).toMatchObject({ ok: false, rolledBack: false, error: "pnpm store path could not be resolved" + STORE_HINT });
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
   });
+  test("a store failure in the final rollback readback keeps its reason and the remedy", () => {
+    const owner = storeOwnerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const run = fakePnpm(state, owner); let lists = 0, stores = 0;
+    const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
+      runPnpm: (args, capture) => {
+        // Post-install listing fails, the rollback store recheck passes, and the readback's store query does not.
+        if (args[0] === "list" && ++lists === 2) return { status: 1 };
+        if (args[0] === "store" && ++stores === 3) return { status: 0, stdout: "undefined" };
+        return run(args, capture);
+      }, verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
+    expect(result).toMatchObject({ ok: false, phase: "rollback", rolledBack: false });
+    if (!result.ok) {
+      expect(result.error.startsWith("pnpm update completed but the active package failed verification: pnpm global package listing failed;"
+        + " previous version could not be verified after rollback: pnpm store path")).toBe(true);
+      expect(result.error.endsWith(STORE_HINT)).toBe(true);
+    }
+    expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(2);
+  });
   test("unconfirmed installer exit stops before inspection or rollback", () => {
     const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     const run = fakePnpm(state, owner);
