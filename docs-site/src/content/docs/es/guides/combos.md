@@ -210,9 +210,9 @@ Al activar esta opción, se envían los niveles de cuota y, cuando están dispon
 
 ### Fijación de sesión para JEV
 
-Un combo JEV decide el destino de cada solicitud; los turnos de una conversación pueden cambiar de proveedor y empezar con su caché de instrucciones vacía. `sessionPin` es una opción por combo JEV, **desactivada por defecto**, que mantiene la sesión en el destino elegido mientras siga activa:
+Un combo JEV que usa el servicio nativo OpenAI Decisions fija por defecto el primer destino y esfuerzo decidido con éxito durante el resto de esa conversación. Los turnos posteriores reutilizan la fijación sin otra llamada a OpenAI Decisions. Solo se aplica a un proveedor configurado `jev-decision` que usa `https://api.openai.com/v1/decisions`; TypeSafe, otros servicios de decisión y JEV con decisiones de modelo siguen sin fijación, salvo que se configure explícitamente un plazo.
 
-En el dashboard, abre **Decision method** en el editor del combo JEV y activa **Keep a session on its decided target**. Configura **Idle window (ms)** y guarda. El intervalo válido es 60000–86400000 ms (un minuto–24 horas); al activar una fijación nueva, empieza en 60000 ms. Para desactivarla, desmarca la casilla y guarda. Un intervalo vacío o inválido impide guardar mientras la opción esté activa. Si falla el guardado, se conservan las ediciones para reintentarlo. Las respuestas antiguas que omiten este ajuste lo mantienen omitido hasta que lo cambies.
+En el dashboard, abre **Decision method** en el editor del combo JEV. Al seleccionar OpenAI Decisions, **Keep a session on its decided target** viene activado y un plazo vacío significa que no caduca. Configura entre 60000 y 86400000 ms (un minuto–24 horas) para establecer un plazo de inactividad, o desmarca la casilla para desactivarlo. Con otros métodos JEV, la casilla sigue desactivada por defecto; al activarla, empieza en un minuto y puede ajustarse dentro de ese intervalo. Si falla el guardado, se conservan las ediciones para reintentarlo.
 
 ```bash
 ocx combo set jev-auto --session-pin 20m --json
@@ -222,7 +222,9 @@ ocx combo set jev-auto --session-pin 20m --json
 { "strategy": "jev", "sessionPin": { "ttlMs": 1200000 } }
 ```
 
-La primera solicitud se decide normalmente. Cuando el destino aplicado por JEV completa una respuesta, las solicitudes siguientes de la sesión reutilizan ese destino y esfuerzo sin otra llamada de decisión. `ttlMs`, entre un minuto y 24 horas, es un plazo de inactividad: cada turno completado en el destino fijado, incluidas las continuaciones de herramientas, lo reinicia. Si la sesión permanece inactiva más tiempo, se decide de nuevo.
+La primera solicitud se decide normalmente. Cuando el destino aplicado por JEV completa una respuesta, las solicitudes siguientes de la sesión reutilizan ese destino y esfuerzo sin otra llamada de decisión. `{ "ttlMs": 1200000 }` activa cualquier método JEV con un plazo de inactividad de 20m. Cada turno completado en el destino fijado, incluidas las continuaciones de herramientas, reinicia el plazo. Para OpenAI Decisions, `false` desactiva la fijación predeterminada y un plazo explícito la sustituye. Si se omite `sessionPin`, los demás métodos JEV siguen sin fijación; sus fijaciones con plazo solo viven en memoria y no sobreviven al reinicio del proxy.
+
+`--session-pin on` restablece el valor predeterminado de OpenAI Decisions, sin caducidad, y no se acepta con otros métodos de decisión. `--session-pin -` desactiva la fijación; un plazo como `20m` establece un tiempo de inactividad.
 
 La identidad combina el encabezado de sesión del cliente (`thread-id`, `session_id` o `session-id`, `x-codex-parent-thread-id`, o un `x-session-id` promovido), la clave API que admitió la solicitud y el combo. No se fijan solicitudes sin encabezado de sesión, `prompt_cache_key` nunca sirve como identidad de sesión y dos claves API nunca comparten una fijación.
 
@@ -234,13 +236,26 @@ JEV decide de nuevo y sustituye la fijación cuando:
 - Falla cualquier envío de la sesión fijada; esa solicitud conserva la recuperación habitual mediante otros destinos.
 - La configuración cambió después de guardar la fijación.
 
-Cancelar una solicitud conserva la fijación. Una decisión que usa la alternativa fail-open por tiempo agotado, clave ausente o respuesta inválida no crea una. Las fijaciones viven en memoria, con un máximo de 512 sesiones, y se pierden al reiniciar.
+Cancelar una solicitud conserva la fijación. Una decisión que usa la alternativa fail-open por tiempo agotado, clave ausente o respuesta inválida no crea una. Solo las fijaciones de loopback de OpenAI Decisions se guardan de forma privada y se restauran tras un reinicio limpio del proxy. Las solicitudes autenticadas de OpenAI y las demás fijaciones JEV solo viven en memoria.
 
 Los registros de uso marcan los turnos reutilizados con `jevDecision.pinned: true` y `pinReason: "session"`. Una decisión que sustituye una fijación liberada registra el motivo en `pinReason`: `expired`, `config_changed`, `target_unavailable`, `effort_unavailable` o `quota_nearly_exhausted`. `ocx combo stats` cuenta las solicitudes fijadas aparte de las decisiones; siguen contando para solicitudes correctas, cambios de modelo por fallo y tokens por modelo.
 
 La fijación permite reutilizar la caché, pero el acierto real depende del proveedor, la cuenta y un prefijo de instrucciones estable. `--session-pin -`, o `null` en la API, la desactiva. Cambiar a otra estrategia la elimina; guardar desde el editor del dashboard la conserva.
 
 <a id="decision-method"></a>
+
+### OpenAI Decisions
+
+El preset **OpenAI Decisions** envía las decisiones de enrutamiento directamente a OpenAI con tu clave API. Usa la misma ruta de enrutamiento de combos que los demás servicios de decisión; el modelo elegido sigue ejecutándose mediante su conexión de proveedor existente.
+
+1. En **Providers → Add provider**, selecciona **OpenAI Decisions**. Conserva el endpoint `https://api.openai.com/v1/decisions` y el modelo de decisión `gpt-6-luna`.
+2. Añade tu clave API de OpenAI. Basta con una clave restringida con permiso **Decisions → Write**; el servicio de decisiones no necesita permisos para listar modelos ni para Responses.
+3. Selecciona **Test connection** y después **Create OpenAI router**. Revisa los modelos objetivo y los esfuerzos de razonamiento permitidos y guarda el combo.
+4. Selecciona el combo guardado en tu cliente. Las decisiones de enrutamiento usan OpenAI; las solicitudes a los objetivos usan los proveedores elegidos en el combo.
+
+El iniciador `openai-auto` propone GPT-6 Astra → GPT-6.1 Sol → GPT-6.1 Terra → GPT-6 Luna cuando esos modelos están disponibles en proveedores elegibles. Puedes añadir, quitar o reordenar los objetivos antes de guardar. Crearlo no cambia tu modelo predeterminado ni los combos existentes. Cada objetivo incluye notas de capacidad editables adaptadas de la [guía de modelos de OpenAI](https://learn.chatgpt.com/docs/models#where-each-model-shines). Ayudan al router a distinguir los modelos; puedes editarlas o borrarlas en los ajustes de objetivos del combo. Al crear el combo, se guardan como `targets[].modelProfile`.
+
+También puedes seleccionar este proveedor en **Decision method** de un combo JEV existente. La configuración conserva `strategy: "jev"` y nombra el proveedor en `decisionProvider`. El preset usa internamente el adaptador compartido `jev-decision`. El modelo de decisión se puede editar en los ajustes del proveedor; usa un modelo compatible con la [API Decisions de OpenAI](https://developers.openai.com/api/docs/guides/decisions).
 
 ### Método de decisión
 
