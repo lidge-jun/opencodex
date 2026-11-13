@@ -1966,8 +1966,9 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
     };
     let owner = guard.owner_record();
     // Every link the records name. More than one means an attach replaced another link's
-    // attachment; an interrupted one (phase attaching, or a rollback left) is the owner's to
-    // finish with a plain detach, and any other mix is a conflict.
+    // attachment. An interrupted one (phase attaching, or a rollback left) that also names this
+    // link is residual: a plain detach would restore that other link and then remove it, so the
+    // bound detach leaves it. Any other mix is a conflict.
     let mut named: Vec<(&'static str, PathBuf, String)> = Vec::new();
     if let StateReadOutcome::Valid(st) = &state {
         named.push(("child-state", state_path.clone(), st.link_id.clone()));
