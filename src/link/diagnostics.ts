@@ -7,13 +7,19 @@ import { linkDir } from "./paths";
 import type { TunnelState } from "./tunnel-state";
 
 export type LinkDiagnosticRecord = {
-  event: "owner_lookup" | "relay_retry" | "relay_failure" | "relay_recovered" | "tunnel_transition";
+  event: "owner_lookup" | "relay_retry" | "relay_failure" | "relay_recovered" | "tunnel_transition"
+    // The Child's link WebSocket (src/client/link-websocket.ts): opened, closed (why), or answered for HTTP (why).
+    | "link_ws_open" | "link_ws_close" | "link_ws_fallback";
   outcome: "match" | "mismatch" | "lookup_error" | "deadline" | "stale" | "unavailable"
     | "identity_unknown" | "identity_mismatch" | "auth_timeout" | "auth_failed"
     | "transport_error" | "client_abort" | "header_timeout" | "recovered"
     // tunnel_transition: the Home's -R tunnel changed state, and why (src/link/tunnel-history.ts).
     | "connected" | "spawned" | "stopped" | "auth" | "hostkey" | "forward" | "remote_forward_conflict"
-    | "timeout" | "network" | "unknown" | "spawn_failed" | "listener_unavailable";
+    | "timeout" | "network" | "unknown" | "spawn_failed" | "listener_unavailable"
+    // link_ws_fallback and link_ws_close reasons.
+    | "origin" | "credential" | "cap" | "memory" | "tunnel_failed" | "tunnel_connecting_timeout" | "preflight"
+    | "not_advertised" | "home_refused" | "handshake" | "aborted"
+    | "client" | "home" | "home_dropped" | "binary" | "protocol" | "overload";
   requestId?: string;
   checkId?: string;
   generation?: number;
@@ -26,12 +32,15 @@ export type LinkDiagnosticRecord = {
 };
 export type LinkDiagnosticSink = (record: LinkDiagnosticRecord) => void;
 
-const EVENTS = new Set(["owner_lookup", "relay_retry", "relay_failure", "relay_recovered", "tunnel_transition"]);
+const EVENTS = new Set(["owner_lookup", "relay_retry", "relay_failure", "relay_recovered", "tunnel_transition", "link_ws_open", "link_ws_close", "link_ws_fallback"]);
 const OUTCOMES = new Set([
   "match", "mismatch", "lookup_error", "deadline", "stale", "unavailable", "identity_unknown",
   "identity_mismatch", "auth_timeout", "auth_failed", "transport_error", "client_abort", "header_timeout", "recovered",
   "connected", "spawned", "stopped", "auth", "hostkey", "forward", "remote_forward_conflict", "timeout", "network",
   "unknown", "spawn_failed", "listener_unavailable",
+  "origin", "credential", "cap", "memory", "tunnel_failed", "tunnel_connecting_timeout", "preflight",
+  "not_advertised", "home_refused", "handshake", "aborted",
+  "client", "home", "home_dropped", "binary", "protocol", "overload",
 ]);
 const STATES = new Set<TunnelState["kind"]>(["idle", "connecting", "connected", "reconnecting", "failed"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

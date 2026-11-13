@@ -6,7 +6,7 @@ import { LINK_RELAY_SESSION_HEADER, linkRelayProofMatches } from "../link/relay-
 import {
   noteHomeConnection, relayChallenge, requestOnConnection, SingleConnectionAgent, type BoundLinkRelayTarget,
 } from "./link-relay-transport";
-import { LINK_CHILD_WS_LIMITS } from "./link-websocket-limits";
+import { LINK_CHILD_WS_LIMITS, linkWebsocketChildReady } from "./link-websocket-limits";
 
 /**
  * The Home leg of a link WebSocket, design T4 3.2 steps 6 to 9: one relay-auth preflight and the
@@ -24,7 +24,7 @@ import { LINK_CHILD_WS_LIMITS } from "./link-websocket-limits";
  * Every failure is a closed word the caller maps to 426; nothing here retries or writes a frame.
  */
 
-export type LinkWebsocketSetupFailure = "credential" | "preflight" | "not_advertised" | "home_refused" | "handshake" | "aborted";
+export type LinkWebsocketSetupFailure = "disabled" | "credential" | "preflight" | "not_advertised" | "home_refused" | "handshake" | "timeout" | "aborted";
 
 export type LinkWebsocketSetup =
   | { ok: true; socket: Socket; head: Buffer }
@@ -92,14 +92,28 @@ function upgradeOnConnection(
   });
 }
 
+export interface LinkWebsocketSetupTimers {
+  setTimeout(callback: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+const realTimers: LinkWebsocketSetupTimers = {
+  setTimeout(callback, ms) { const handle = setTimeout(callback, ms); (handle as { unref?: () => void }).unref?.(); return handle; },
+  clearTimeout(handle) { clearTimeout(handle as ReturnType<typeof setTimeout>); },
+};
+
 /**
  * Open the Home leg. `headers` are the caller's forwarded headers with the link key already set as
- * the Bearer (the relay builds them); `signal` is the caller's abort and setup budget together.
+ * the Bearer (the relay builds them); `signal` is the caller's abort. The Child's release gate is
+ * checked here, before any I/O, and the upgrade has its own bound (the setup budget), so neither
+ * depends on the caller.
  */
 export async function openLinkWebsocket(
-  target: BoundLinkRelayTarget, headers: Headers, options: { signal: AbortSignal; preflightMs?: number },
+  target: BoundLinkRelayTarget, headers: Headers,
+  options: { signal: AbortSignal; preflightMs?: number; upgradeMs?: number; timers?: LinkWebsocketSetupTimers; ready?: () => boolean },
 ): Promise<LinkWebsocketSetup> {
   const { signal } = options;
+  if (!(options.ready ?? linkWebsocketChildReady)()) return { ok: false, reason: "disabled" };
   if (!target.linkId || !target.apiKeyId) return { ok: false, reason: "credential" };
   const origin = new URL("http://127.0.0.1:" + target.tunnelPort);
   let challenge: ReturnType<typeof relayChallenge>;
@@ -137,9 +151,21 @@ export async function openLinkWebsocket(
     upgradeHeaders.set("sec-websocket-version", "13");
     upgradeHeaders.set("sec-websocket-key", key);
     upgradeHeaders.set(LINK_RELAY_SESSION_HEADER, challenge.challenge.nonce);
-    const result = await upgradeOnConnection(new URL("/v1/responses", origin), upgradeHeaders, agent, socket, key, signal);
+    // The upgrade's own bound: a Home that proved itself and then never answers cannot hold the connection.
+    const timers = options.timers ?? realTimers;
+    const upgradeDeadline = new AbortController();
+    const timer = timers.setTimeout(() => upgradeDeadline.abort(new DOMException("link websocket upgrade deadline", "TimeoutError")),
+      options.upgradeMs ?? LINK_CHILD_WS_LIMITS.setupBudgetMs);
+    let result: LinkWebsocketSetup;
+    try {
+      result = await upgradeOnConnection(new URL("/v1/responses", origin), upgradeHeaders, agent, socket, key, AbortSignal.any([signal, upgradeDeadline.signal]));
+    } finally { timers.clearTimeout(timer); }
+    if (!result.ok && result.reason === "aborted" && !signal.aborted && upgradeDeadline.signal.aborted) result = { ok: false, reason: "timeout" };
     if (result.ok) {
       handedOff = true;
+      // Node drops its own error listener on upgrade: until the caller adds one, an error is recorded, never unhandled.
+      const upgraded = result.socket as Socket & { linkError?: unknown };
+      upgraded.on("error", error => { upgraded.linkError ??= error; });
       result.socket.setTimeout(0);
       result.socket.setNoDelay(true);
     }
